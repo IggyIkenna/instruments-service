@@ -49,6 +49,14 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
     JSON with match-level xG, goals, and team metadata.
     """
 
+    def __init__(self, api_key: str | None = None) -> None:
+        super().__init__(api_key)
+        # Tracks per-call fetch failures so callers can distinguish between
+        # genuine empty results (no fixtures scheduled) and error-caused empty
+        # (e.g. season not yet indexed → HTTP 404). Reset at the start of
+        # get_fixtures() and get_match_ids_for_date().
+        self._fetch_error_count: int = 0
+
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
@@ -93,6 +101,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
             month = 1
         season = season_year if month >= 8 else season_year - 1
 
+        self._fetch_error_count = 0
         fixtures: list[CanonicalFixture] = []
         for league in _UNDERSTAT_LEAGUES:
             league_fixtures = await self._fetch_league_fixtures(league, season, date)
@@ -120,8 +129,9 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
             async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, headers=headers)
         except Exception as exc:
-            error_code = self._classify_error(exc)
+            error_code = self._classify_error(exc, status=getattr(exc, "status", None))
             self._emit_fetch_failed(error_code, exc)
+            self._fetch_error_count += 1
             return []
 
         matches = _extract_dates_from_json(raw_response)
@@ -195,6 +205,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
             month = 1
         season = season_year if month >= 8 else season_year - 1
 
+        self._fetch_error_count = 0
         result: list[tuple[str, str]] = []
         async with self._make_session() as session:
             for league in _UNDERSTAT_LEAGUES:
@@ -211,8 +222,9 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
                             if mid is not None:
                                 result.append((str(mid), league))
                 except Exception as exc:
-                    error_code = self._classify_error(exc)
+                    error_code = self._classify_error(exc, status=getattr(exc, "status", None))
                     self._emit_fetch_failed(error_code, exc)
+                    self._fetch_error_count += 1
         logger.info("get_match_ids_for_date: found %d matches for date=%s", len(result), date)
         return result
 
@@ -230,8 +242,9 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
             async with self._make_session() as session:
                 raw = await self._get_with_retry(session, url, headers=headers)
         except Exception as exc:
-            error_code = self._classify_error(exc)
+            error_code = self._classify_error(exc, status=getattr(exc, "status", None))
             self._emit_fetch_failed(error_code, exc)
+            self._fetch_error_count += 1
             return []
 
         if not isinstance(raw, dict):

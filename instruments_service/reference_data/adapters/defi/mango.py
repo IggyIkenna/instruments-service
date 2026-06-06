@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from decimal import Decimal
-from typing import cast
 
 import aiohttp
 from unified_api_contracts import classify_venue_error
@@ -28,6 +27,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ...utils.defi_utils import extract_rest_list_or_raise
 from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
@@ -130,13 +130,7 @@ class MangoReferenceDataAdapter(BaseReferenceDataAdapter):
             logger.error("Mango V4 markets/perp request failed after retries: %s", exc)
             raise
 
-        if isinstance(data, list):
-            return cast(list[dict[str, object]], data)
-        raw = cast(dict[str, object], data) if isinstance(data, dict) else cast(dict[str, object], {})
-        markets = raw.get("markets") or raw.get("data")
-        if isinstance(markets, list):
-            return cast(list[dict[str, object]], markets)
-        return []
+        return extract_rest_list_or_raise(data, venue=self.venue, keys=("markets", "data"))
 
     def _build_perp_record(
         self,

@@ -103,7 +103,7 @@ size (not filtered count) to ensure all pages are fetched even when most markets
 Instruments are written by `instruments-service` to:
 
 ```
-gs://instruments-store-prediction-{project}/
+gs://instruments-store-pred-{env}-{project}/
   instrument_availability/
     by_date/
       day={YYYY-MM-DD}/

@@ -26,7 +26,6 @@ from unified_api_contracts import InstrumentType, build_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, MarketCategory
 from unified_trading_library import DataSink, get_data_sink, get_write_bucket_name
 
-from instruments_service.config import get_config
 from instruments_service.engine.orchestrator import get_venues_for_asset_groups
 from instruments_service.engine.urdi_reference_provider import fetch_instruments_for_all_venues
 
@@ -215,17 +214,13 @@ class CatalogueBuilder:
         if self._bucket_resolver is not None:
             return self._bucket_resolver(asset_group)
 
-        cfg = get_config()
-        project = cfg.gcp_project_id or "test-project"
-        try:
-            return get_write_bucket_name("instruments", asset_group, project)
-        except (ImportError, AttributeError):
-            cat_lower = asset_group.lower() if asset_group else None
-            prefix = cfg.instruments_bucket_prefix
-            prod_bucket = f"{prefix}-{cat_lower}-{project}" if cat_lower else f"{prefix}-{project}"
-            if not cfg.is_test_run:
-                return prod_bucket
-            return prod_bucket.replace(f"-{project}", f"-test-{project}", 1)
+        # No explicit project_id → delegates to the cloud-providers.yaml SSOT and
+        # returns the env-tiered ``instruments-store-{asset_group}-prd-{pid}``
+        # canonical form (IS_TEST_RUN-aware via get_write_bucket_name), never the
+        # legacy no-env bucket decommissioned at the asset_group's legacy-bucket
+        # cutover. ``get_write_bucket_name`` is a hard module-level UTL import, so
+        # the prior inline no-env try/except fallback was dead + dead-bucket-prone.
+        return get_write_bucket_name("instruments", asset_group)
 
 
 def _records_to_dataframe(records: list[InstrumentRecord]) -> pd.DataFrame:

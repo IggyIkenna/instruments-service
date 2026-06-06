@@ -89,6 +89,12 @@ _TYPE_MAP: dict[str, InstrumentType] = {
     "combo": InstrumentType.COMBO,
 }
 
+# Exchanges that are derivatives-only (no spot trading).
+# Instruments from these venues with unknown/None type must NOT default to
+# SPOT_PAIR — that causes HTTP 400s when MTDS requests spot symbols from a
+# venue that carries only futures/options/perps. Skip unknowns instead.
+_DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset({"deribit"})
+
 # Quote currencies for symbol splitting (longest first for correct prefix matching)
 # Extended from instruments-service/engine/processors/symbol_parser.py _ALL_QUOTE_SUFFIXES
 _QUOTE_CURRENCIES: list[str] = [
@@ -246,6 +252,26 @@ def _parse_yymmdd_symbol_expiry(raw_id: str) -> datetime | None:
     """
     parts = raw_id.split("-")
     # Try last segment first (covers both BASE-QUOTE-YYMMDD and BASE-YYMMDD)
+    for idx in (-1, -2):
+        if abs(idx) > len(parts):
+            continue
+        seg = parts[idx]
+        if len(seg) == 6 and seg.isdigit():
+            try:
+                yy, mm, dd = int(seg[:2]), int(seg[2:4]), int(seg[4:6])
+                return datetime(2000 + yy, mm, dd, tzinfo=UTC)
+            except ValueError:
+                continue
+    return None
+
+
+def _parse_underscore_yymmdd_symbol_expiry(raw_id: str) -> datetime | None:
+    """Parse expiry from Kraken-Futures-style symbol: FI_XBTUSD_240329.
+
+    The last segment (underscore-separated) is a 6-digit YYMMDD date string.
+    Perpetuals (e.g. ``PF_XBTUSD_PERP``) return None — non-digit suffix.
+    """
+    parts = raw_id.split("_")
     for idx in (-1, -2):
         if abs(idx) > len(parts):
             continue
@@ -445,12 +471,26 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch all instruments from the venue."""
         api_key = self._optional_api_key()
         results: list[InstrumentRecord] = []
+        failures: list[str] = []
         async with self._make_session() as session:
             for exchange in self._exchanges:
-                batch = await self._fetch_exchange_instruments(session, api_key, exchange)
+                try:
+                    batch = await self._fetch_exchange_instruments(session, api_key, exchange)
+                except RuntimeError as exc:
+                    # CF-11: isolate a per-exchange failure (don't abort sibling
+                    # exchanges) but TRACK it. A genuine fetch failure must not be
+                    # silently dropped — if the venue ends up empty BECAUSE of
+                    # failures, re-raise below so urdi_reference_provider._fetch_one
+                    # routes tardis into failed[] (→ attempted_failed) instead of a
+                    # clean-empty silent universe shrink (A8 false-complete).
+                    logger.error("Tardis exchange %r failed: %s", exchange, exc)
+                    failures.append(exchange)
+                    continue
                 if instrument_type is not None:
                     batch = [r for r in batch if r.instrument_type == instrument_type]
                 results.extend(batch)
+        if not results and failures:
+            raise RuntimeError(f"Tardis: all requested exchange(s) failed ({failures}); no instruments fetched")
         return results
 
     async def get_instruments_cached(
@@ -930,7 +970,13 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                             "retry_safe": retry_safe,
                         },
                     )
-                    return []
+                    # CF-11: re-raise so get_instruments tracks this exchange as
+                    # failed (→ venue failed[] if it leaves the universe empty),
+                    # not a silent clean-empty. Mirrors the tradfi databento fix.
+                    raise RuntimeError(
+                        f"Tardis {exchange!r}: all {_TARDIS_RETRY_ATTEMPTS} attempts failed "
+                        f"(error_code={error_code}): {exc}"
+                    ) from exc
 
         if instruments_list is None:
             logger.error(
@@ -939,7 +985,11 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                 _TARDIS_RETRY_ATTEMPTS,
                 last_exc,
             )
-            return []
+            # CF-11: no parseable response after both API paths is a genuine
+            # fetch failure — raise (not return []) so the venue threads state.
+            raise RuntimeError(
+                f"Tardis {exchange!r}: no instruments after {_TARDIS_RETRY_ATTEMPTS} attempts (last={last_exc})"
+            )
 
         # Parse instruments with diagnostic logging
         api_count = len(instruments_list)
@@ -970,8 +1020,18 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         raw_id = item.id
         if not raw_id:
             return None
-        tardis_type = item.type or "spot"
+        tardis_type = item.type
+        if tardis_type is None:
+            if exchange in _DERIVATIVES_ONLY_EXCHANGES:
+                # deribit has no spot instruments; skip instruments with unknown
+                # type rather than defaulting to SPOT_PAIR (which causes HTTP 400
+                # from MTDS when it requests spot symbols from a derivatives-only venue).
+                return None
+            tardis_type = "spot"
         instrument_type: InstrumentType = _TYPE_MAP.get(tardis_type, InstrumentType.SPOT_PAIR)
+        if instrument_type == InstrumentType.SPOT_PAIR and exchange in _DERIVATIVES_ONLY_EXCHANGES:
+            # Guard: recognised-as-spot on a derivatives-only venue is also invalid.
+            return None
 
         # Resolve canonical venue name from UAC VenueMapping (e.g. "binance" → "BINANCE-SPOT")
         canonical_venue = _VENUE_MAPPING.tardis_to_venue.get(exchange, exchange.upper())
@@ -1004,6 +1064,9 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         # OKX symbol format: BTC-USD-260626 → parse YYMMDD from last segment
         if expiry is None and "-" in raw_id:
             expiry = _parse_yymmdd_symbol_expiry(raw_id)
+        # Kraken Futures symbol format: FI_XBTUSD_240329 → parse YYMMDD from last underscore segment
+        if expiry is None and "_" in raw_id:
+            expiry = _parse_underscore_yymmdd_symbol_expiry(raw_id)
 
         strike, opt_type = _resolve_option_fields(item, instrument_type, raw_id)
 

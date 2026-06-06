@@ -43,6 +43,7 @@ from instruments_service.reference_data.adapters.cefi.tardis import (
     _parse_deribit_combo_legs,
     _parse_deribit_symbol_expiry,
     _parse_expiry,
+    _parse_underscore_yymmdd_symbol_expiry,
     _parse_yymmdd_symbol_expiry,
     _passes_asset_filter,
     _resolve_base_quote,
@@ -262,6 +263,33 @@ class TestTardisHelperFunctions:
     def test_parse_yymmdd_invalid_date(self) -> None:
         # 13th month should fail
         assert _parse_yymmdd_symbol_expiry("BTC-USD-261332") is None
+
+    # ── _parse_underscore_yymmdd_symbol_expiry ────────────────────────────
+
+    def test_parse_underscore_yymmdd_kraken_future(self) -> None:
+        result = _parse_underscore_yymmdd_symbol_expiry("FI_XBTUSD_240329")
+        assert result is not None
+        assert result.year == 2024
+        assert result.month == 3
+        assert result.day == 29
+
+    def test_parse_underscore_yymmdd_kraken_pf_style(self) -> None:
+        result = _parse_underscore_yymmdd_symbol_expiry("PF_XBTUSD_241227")
+        assert result is not None
+        assert result.year == 2024
+        assert result.month == 12
+        assert result.day == 27
+
+    def test_parse_underscore_yymmdd_kraken_perp_returns_none(self) -> None:
+        # Perpetuals use PERP suffix — not a date
+        assert _parse_underscore_yymmdd_symbol_expiry("PF_XBTUSD_PERP") is None
+
+    def test_parse_underscore_yymmdd_no_underscore(self) -> None:
+        assert _parse_underscore_yymmdd_symbol_expiry("BTCUSDT") is None
+
+    def test_parse_underscore_yymmdd_invalid_date(self) -> None:
+        # 13th month should fail
+        assert _parse_underscore_yymmdd_symbol_expiry("FI_XBTUSD_261332") is None
 
     # ── _resolve_base_quote ───────────────────────────────────────────────
 
@@ -791,6 +819,51 @@ class TestTardisAdapter:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_parse_tardis_instrument_deribit_none_type_returns_none(self) -> None:
+        """Deribit is derivatives-only; instruments with type=None must be skipped, not defaulted to SPOT_PAIR."""
+        from unified_api_contracts import TardisInstrumentDetail
+
+        adapter = TardisReferenceDataAdapter()
+        item = TardisInstrumentDetail(
+            id="BTC",
+            type=None,
+            baseCurrency="BTC",
+        )
+        result = adapter._parse_tardis_instrument(item, "deribit")
+        assert result is None, "type=None on deribit must return None, not a SPOT_PAIR record"
+
+    @pytest.mark.asyncio
+    async def test_parse_tardis_instrument_deribit_spot_type_returns_none(self) -> None:
+        """An explicit type='spot' on deribit must also be rejected (deribit has no spot trading)."""
+        from unified_api_contracts import TardisInstrumentDetail
+
+        adapter = TardisReferenceDataAdapter()
+        item = TardisInstrumentDetail(
+            id="BTC-USD",
+            type="spot",
+            baseCurrency="BTC",
+            quoteCurrency="USD",
+        )
+        result = adapter._parse_tardis_instrument(item, "deribit")
+        assert result is None, "type='spot' on deribit must return None"
+
+    @pytest.mark.asyncio
+    async def test_parse_tardis_instrument_non_derivatives_only_spot_allowed(self) -> None:
+        """Spot instruments on non-derivatives-only venues (binance) are still accepted."""
+        from unified_api_contracts import TardisInstrumentDetail
+
+        adapter = TardisReferenceDataAdapter()
+        item = TardisInstrumentDetail(
+            id="BTCUSDT",
+            type=None,
+            baseCurrency="BTC",
+            quoteCurrency="USDT",
+        )
+        result = adapter._parse_tardis_instrument(item, "binance")
+        assert result is not None, "type=None on binance should default to SPOT_PAIR, not be skipped"
+        assert result.instrument_type == InstrumentType.SPOT_PAIR
+
+    @pytest.mark.asyncio
     async def test_parse_tardis_instrument_with_spec_fields(self) -> None:
         from unified_api_contracts import TardisInstrumentDetail
 
@@ -1277,11 +1350,14 @@ class TestAsterAdapterComprehensive:
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
+        """HTTP 500 must raise, not return [] (CF-11 regression)."""
         adapter = AsterReferenceDataAdapter()
         mock_session = _make_aiohttp_session_mock(resp_status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            results = await adapter.get_instruments()
-        assert results == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
+        ):
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_get_instruments_skips_non_dict_symbols(self) -> None:
@@ -1475,11 +1551,14 @@ class TestHyperliquidAdapterComprehensive:
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
+        """HTTP 500 must raise, not return [] (CF-11 regression)."""
         adapter = HyperliquidReferenceDataAdapter()
         mock_session = _make_aiohttp_session_mock(resp_status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            results = await adapter.get_instruments()
-        assert results == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
+        ):
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
@@ -2854,21 +2933,27 @@ class TestDeribitComboAdapter:
         assert "FUTURE" in exc_info.value.capability
 
     @pytest.mark.asyncio
-    async def test_get_instruments_http_error_returns_partial(self) -> None:
-        """HTTP error for one currency is isolated — other currencies succeed (shard isolation)."""
+    async def test_get_instruments_http_error_all_currencies_raises(self) -> None:
+        """CF-11: when EVERY currency HTTP-fails, get_instruments MUST raise RuntimeError
+        (→ attempted_failed via _fetch_one), NOT ``return []``. A clean empty would land
+        DERIBIT in _non_error_venues and silently vanish from coverage. Per-currency shard
+        isolation (partial success) is covered by
+        test_deribit_combo_adapter.py::test_get_instruments_partial_success_does_not_raise.
+        Completes the cross-AG CF-11 sweep (slot-6 e2e008f0 fixed aster/hyperliquid/tardis
+        but missed the DeribitCombo adapter).
+        """
         from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
             DeribitComboReferenceDataAdapter,
         )
 
         adapter = DeribitComboReferenceDataAdapter()
-        # Simulate HTTP 500 from Deribit
+        # Simulate HTTP 500 from Deribit for every currency.
         mock_session = _make_aiohttp_session_mock(resp_status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            # Should NOT raise — shard-level failure isolation absorbs per-currency errors
-            results = await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
-        assert isinstance(results, list)
-        # All currencies failed → empty result, but no exception raised
-        assert results == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="no instruments fetched"),
+        ):
+            await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
 
     @pytest.mark.asyncio
     async def test_get_instruments_empty_result_list(self) -> None:
