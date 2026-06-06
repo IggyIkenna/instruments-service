@@ -317,9 +317,9 @@ graph TB
 │          │                                                              │
 │          ├─▶ Get category-specific bucket                              │
 │          │   category_bucket = get_bucket_for_category(category)      │
-│          │   # CEFI → "instruments-store-cefi"                         │
-│          │   # TRADFI → "instruments-store-tradfi"                     │
-│          │   # DEFI → "instruments-store-defi"                         │
+│          │   # CEFI → "instruments-store-cefi-{env}"                   │
+│          │   # TRADFI → "instruments-store-tradfi-{env}"               │
+│          │   # DEFI → "instruments-store-defi-{env}"                   │
 │          │                                                              │
 │          ├─▶ Create category CloudTarget                               │
 │          │   category_target = CloudTarget(                            │
@@ -484,15 +484,15 @@ graph TB
 │  ┌──────────────────────────────────────────────────────────────┐     │
 │  │  GCS Storage                                                  │     │
 │  │                                                               │     │
-│  │  gs://instruments-store-cefi-{project_id}/                   │     │
+│  │  gs://instruments-store-cefi-{env}-{project_id}/               │     │
 │  │    instrument_availability/by_date/day=2023-05-23/           │     │
 │  │      └─▶ instruments.parquet                                 │     │
 │  │                                                               │     │
-│  │  gs://instruments-store-tradfi-{project_id}/                 │     │
+│  │  gs://instruments-store-tradfi-{env}-{project_id}/           │     │
 │  │    instrument_availability/by_date/day=2023-05-23/           │     │
 │  │      └─▶ instruments.parquet                                 │     │
 │  │                                                               │     │
-│  │  gs://instruments-store-defi-{project_id}/                   │     │
+│  │  gs://instruments-store-defi-{env}-{project_id}/             │     │
 │  │    instrument_availability/by_date/day=2023-05-23/           │     │
 │  │      └─▶ instruments.parquet                                 │     │
 │  └──────────────────────────────────────────────────────────────┘     │
@@ -540,10 +540,10 @@ graph TB
 
 4. GET CATEGORY BUCKET
    └─▶ get_bucket_for_category("CEFI")
-       └─▶ Returns: "instruments-store-cefi"
+       └─▶ Returns: "instruments-store-cefi-{env}"
 
 5. UPLOAD TO GCS
-   └─▶ gs://instruments-store-cefi-{project_id}/
+   └─▶ gs://instruments-store-cefi-{env}-{project_id}/
        instrument_availability/by_date/day=2023-05-23/
        instruments.parquet
 
@@ -617,7 +617,7 @@ for category in categories:
 # Category-specific CloudTarget
 category_target = CloudTarget(
     project_id="{project_id}",  # Replace with actual project ID
-    gcs_bucket="instruments-store-cefi-{project_id}",  # Category-specific; bucket name comes from config
+    gcs_bucket="instruments-store-cefi-{env}-{project_id}",  # Category-specific; bucket name comes from config
     bigquery_dataset="instruments",
     bigquery_location="asia-northeast1",
 )

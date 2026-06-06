@@ -187,6 +187,16 @@ _TARDIS_VENUE_EXCHANGES: dict[str, list[str]] = {
     "binance": ["binance-futures"],
     "bybit": ["bybit"],
     "deribit": ["deribit"],
+    # OKX is 3 distinct Tardis exchanges — each suffixed venue must resolve to its
+    # OWN exchange (matches UAC venue_mapping.to_tardis_exchanges). Without these,
+    # the lookup fell through to the adapter default ("okex" spot), so OKX-FUTURES /
+    # OKX-SWAP discovery emitted spot-style symbols (e.g. BTC-USDT) instead of the
+    # native dated/perp ids — Tardis then rejected the historical download with
+    # HTTP 400 "use the okex-futures exchanges API for allowed values".
+    # (deployment_scripts… / running_vm_fleet_status OKX symbol-mapping bug, 2026-06-02.)
+    "okx-spot": ["okex"],
+    "okx-swap": ["okex-swap"],
+    "okx-futures": ["okex-futures"],
     "tardis": [],  # empty → TardisReferenceDataAdapter uses its own default
 }
 

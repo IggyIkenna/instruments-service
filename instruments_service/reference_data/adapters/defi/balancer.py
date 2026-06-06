@@ -24,7 +24,11 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
-from ...utils.defi_utils import classify_graph_error, parse_created_timestamp
+from ...utils.defi_utils import (
+    assert_subgraph_payload,
+    classify_graph_error,
+    parse_created_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +181,13 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
                     )
                     raise ConnectionError(str(exc)) from exc
 
-                page = raw.get("data", {}).get("poolGetPools", [])
+                # DeFi-plan A8 / operator 2026-05-07: a soft 200-with-`errors` (GraphQL error /
+                # rate-limit / indexing lag) must NOT be silently treated as an empty universe — that
+                # masks a transient fetch failure as zero instruments. assert_subgraph_payload RAISES
+                # ConnectionError on a missing-`data` / `errors` body → the discovery caller records the
+                # venue/day attempted_failed instead of dropping it from the coverage denominator.
+                data_field = assert_subgraph_payload(raw, venue="BALANCER", chain=self._chain)
+                page = data_field.get("poolGetPools", []) or []
                 if not page:
                     break
 
@@ -254,7 +264,7 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
-            if inst.raw_symbol == symbol or inst.symbol == symbol:
+            if inst.raw_symbol == symbol or inst.instrument_key.endswith(f":{symbol}"):
                 return inst
         return None
 

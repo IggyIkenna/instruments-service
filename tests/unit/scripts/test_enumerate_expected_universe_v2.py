@@ -812,6 +812,48 @@ def test_defi_v2_legacy_mode_alive_date_skipped() -> None:
     assert rows == []
 
 
+def test_defi_v2_denominator_is_could_exist_universe_not_just_manifest() -> None:
+    """Plan defi_manifest item 7 — the coverage DENOMINATOR is the COULD-EXIST universe, not just rows
+    already in the manifest. Two alive DeFi instruments, ONE captured (in present_set): the enumerator
+    seeds ``expected_unattempted`` for the un-captured one and SKIPS the captured one — so the seeded
+    universe UNION manifest = {captured-cell, expected_unattempted-cell} is a SUPERSET of (or equal to)
+    the manifest. Adding a catalog instrument can only GROW the denominator (seed a new owed cell),
+    never shrink it / drop a captured cell. This is the regression that locks deployment-api's honest
+    4-state denominator to the IS could-exist universe (active-but-uncaptured instruments are counted,
+    diluting completion %)."""
+    captured = _make_defi_entry(
+        instrument_id="ETH-USDC", venue="AAVE_V3", chain="ARBITRUM", available_from="2022-01-01"
+    )
+    uncaptured = _make_defi_entry(
+        instrument_id="WBTC-USDC", venue="AAVE_V3", chain="ARBITRUM", available_from="2022-01-01"
+    )
+    date_axis = _date_axis("2024-06-01")
+    present_set = {
+        _row_key_from_dict(
+            {
+                "venue": "AAVE_V3",
+                "chain": "ARBITRUM",
+                "data_type": "lending_indices",
+                "instrument_type": "SPOT",
+                "instrument_id": "ETH-USDC",
+                "league_id": "",
+                "date": "2024-06-01",
+            }
+        )
+    }
+    rows = list(
+        enumerator_module._enumerate_v2_defi(
+            [captured, uncaptured], date_axis, ["lending_indices"], present_set=present_set
+        )
+    )
+    # exactly ONE owed cell — the un-captured instrument; the captured one is skipped (not dropped)
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].instrument_id == "WBTC-USDC"
+    # denominator (captured 1 + expected_unattempted 1) ≥ manifest captured (1) — never shrinks
+    assert 1 + len(rows) >= len(present_set)
+
+
 def test_tradfi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
     """TradFi alive instrument date absent from manifest → expected_unattempted."""
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]

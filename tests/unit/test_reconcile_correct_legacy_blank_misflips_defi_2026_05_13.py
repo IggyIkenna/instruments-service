@@ -421,6 +421,10 @@ class TestApplyFlipsFixture:
         class _FakeClient:
             def __init__(self, *_args: object, **_kwargs: object) -> None: ...
 
+            @classmethod
+            def from_service_account_json(cls, *_args: object, **_kwargs: object) -> _FakeClient:
+                return cls()
+
             def bucket(self, _name: str) -> _FakeBucket:
                 return _FakeBucket()
 
@@ -462,6 +466,7 @@ class TestIdempotencyRerun:
         mod = _load_corrector_module()
         df = _already_corrected_manifest()
         monkeypatch.setattr(mod, "_download_manifest", _fixed_download(df, str(tmp_path / "manifest.parquet")))
+        monkeypatch.setattr(mod, "load_instrument_lifecycle", lambda *_a, **_kw: {})
         monkeypatch.setattr(
             sys,
             "argv",
@@ -499,6 +504,10 @@ class TestIdempotencyRerun:
 
         class _FakeClient:
             def __init__(self, *_args: object, **_kwargs: object) -> None: ...
+
+            @classmethod
+            def from_service_account_json(cls, *_args: object, **_kwargs: object) -> _FakeClient:
+                return cls()
 
             def bucket(self, _name: str) -> _FakeBucket:
                 return _FakeBucket()

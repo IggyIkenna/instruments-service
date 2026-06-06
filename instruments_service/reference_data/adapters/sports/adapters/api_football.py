@@ -215,6 +215,72 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         logger.info("Fetched %d fixtures for date=%s", len(fixtures), date)
         return fixtures
 
+    async def get_fixtures_with_raw(
+        self,
+        date: str,
+        league_ids: list[int] | None = None,
+    ) -> list[tuple[CanonicalFixture, dict[str, object]]]:
+        """Fetch fixtures paired with their RAW api-football response item.
+
+        Same fetch path as :meth:`get_fixtures` but returns each
+        ``CanonicalFixture`` alongside the raw ``{"fixture":…, "goals":…,
+        "score":…, "league":…, "teams":…}`` response item. The raw dict is what
+        ``unified_trading_library.fixtures.extract_match_lifecycle`` consumes to
+        populate the Q5/Q6 HT/ET/PEN phase-timestamp + score-distinction columns
+        at FIXTURES write-time (the canonical model drops ``periods`` /
+        ``score.extratime`` / ``score.penalty``). Additive — ``get_fixtures``
+        is unchanged for callers that don't need the lifecycle columns.
+
+        Returns:
+            ``[(canonical_fixture, raw_af_item), …]`` for every fixture that
+            parsed + normalised. Order matches ``get_fixtures``.
+        """
+        url = f"{_BASE_URL}/fixtures"
+        ref_date = date_.fromisoformat(date)
+        params: dict[str, str] = {"date": date}
+        if league_ids:
+            season_year = _effective_season_for_league(league_ids[0], reference_date=ref_date)
+            params["league"] = str(league_ids[0])
+            params["season"] = str(season_year)
+
+        try:
+            async with self._make_session() as session:
+                raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            raise
+
+        paired = _parse_fixture_list_with_raw(_extract_response(raw_response))
+
+        if league_ids and len(league_ids) > 1:
+            for lid in league_ids[1:]:
+                paired.extend(await self._fetch_league_fixtures_with_raw(date, lid))
+
+        logger.info("Fetched %d fixtures (with raw) for date=%s", len(paired), date)
+        return paired
+
+    async def _fetch_league_fixtures_with_raw(
+        self, date: str, league_id: int
+    ) -> list[tuple[CanonicalFixture, dict[str, object]]]:
+        """Single-league variant of :meth:`get_fixtures_with_raw` (multi-league fan-out)."""
+        url = f"{_BASE_URL}/fixtures"
+        ref_date = date_.fromisoformat(date)
+        season_year = _effective_season_for_league(league_id, reference_date=ref_date)
+        params: dict[str, str] = {
+            "date": date,
+            "league": str(league_id),
+            "season": str(season_year),
+        }
+        try:
+            async with self._make_session() as session:
+                raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            return []
+        return _parse_fixture_list_with_raw(_extract_response(raw_response))
+
     async def get_live_fixtures(self) -> list[CanonicalFixture]:
         """Fetch all currently live/in-play fixtures from API Football.
 
@@ -587,18 +653,32 @@ def _parse_fixture_response(item: dict[str, object]) -> ApiFootballFixture | Non
 
 def _parse_fixture_list(response_list: list[dict[str, object]]) -> list[CanonicalFixture]:
     """Parse and normalize a list of raw API Football fixture responses."""
-    fixtures: list[CanonicalFixture] = []
+    return [canonical for canonical, _raw in _parse_fixture_list_with_raw(response_list)]
+
+
+def _parse_fixture_list_with_raw(
+    response_list: list[dict[str, object]],
+) -> list[tuple[CanonicalFixture, dict[str, object]]]:
+    """Parse + normalize fixtures, pairing each with its RAW response item.
+
+    The raw item is retained so the FIXTURES writer can pass it to
+    ``extract_match_lifecycle`` for the Q5/Q6 HT/ET/PEN + score-distinction
+    columns (the canonical model drops ``periods`` / ``score.extratime`` /
+    ``score.penalty``). ``_parse_fixture_list`` is a thin wrapper that drops the
+    raw half for back-compat callers.
+    """
+    paired: list[tuple[CanonicalFixture, dict[str, object]]] = []
     for item in response_list:
         fixture_raw = _parse_fixture_response(item)
         if fixture_raw is None:
             continue
         try:
             canonical = normalize_api_football_fixture(fixture_raw)
-            fixtures.append(canonical)
+            paired.append((canonical, item))
         except Exception as exc:
             fixture_id = item.get("fixture", {}).get("id", "unknown") if isinstance(item, dict) else "unknown"
             logger.warning("Failed to normalize fixture %s: %s", fixture_id, exc)
-    return fixtures
+    return paired
 
 
 def _parse_teams(teams_data: dict[str, object]) -> dict[str, object] | None:

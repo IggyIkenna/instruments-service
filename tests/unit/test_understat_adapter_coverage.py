@@ -544,3 +544,120 @@ class TestParseUnderstatMatchEdge:
         ):
             result = _parse_understat_match({"id": "1", "datetime": "2026-09-15"})
         assert result is None
+
+
+class TestUnderstatFetchErrorTracking:
+    """Tests for _fetch_error_count — distinguishes genuine no-fixtures from HTTP errors.
+
+    The orchestrator uses adapter._fetch_error_count > 0 to decide whether to
+    record attempted_failed (errors) vs empty_confirmed (honest absence).
+    """
+
+    def test_initial_fetch_error_count_is_zero(self) -> None:
+        adapter = UnderstatAdapter()
+        assert adapter._fetch_error_count == 0
+
+    @pytest.mark.asyncio
+    async def test_fetch_league_fixtures_404_increments_error_count(self) -> None:
+        """A 404 on getLeagueData increments _fetch_error_count."""
+        adapter = UnderstatAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                AsyncMock(side_effect=Exception("HTTP 404")),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            result = await adapter._fetch_league_fixtures("EPL", 2019, "2019-10-05")
+        assert result == []
+        assert adapter._fetch_error_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_fixtures_resets_error_count(self) -> None:
+        """get_fixtures resets _fetch_error_count before each call."""
+        adapter = UnderstatAdapter()
+        adapter._fetch_error_count = 99  # pre-set to dirty value
+        raw = {"dates": []}
+        mock_session = _make_aiohttp_mock(raw)
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            await adapter.get_fixtures("2026-09-15")
+        # After a clean call with no errors, error count reflects this call only
+        assert adapter._fetch_error_count == 0
+
+    @pytest.mark.asyncio
+    async def test_get_fixtures_all_leagues_404_sets_error_count_6(self) -> None:
+        """When all 6 leagues return errors, _fetch_error_count == 6."""
+        adapter = UnderstatAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                AsyncMock(side_effect=Exception("HTTP 404")),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            fixtures = await adapter.get_fixtures("2019-10-05")
+        assert fixtures == []
+        assert adapter._fetch_error_count == 6
+
+    @pytest.mark.asyncio
+    async def test_get_match_ids_for_date_resets_error_count(self) -> None:
+        """get_match_ids_for_date resets _fetch_error_count before each call."""
+        adapter = UnderstatAdapter()
+        adapter._fetch_error_count = 99
+        raw = {"dates": []}
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(adapter, "_get_with_retry", AsyncMock(return_value=raw)),
+        ):
+            await adapter.get_match_ids_for_date("2026-09-15")
+        assert adapter._fetch_error_count == 0
+
+    @pytest.mark.asyncio
+    async def test_get_match_ids_for_date_404_increments_error_count(self) -> None:
+        """A per-league 404 in get_match_ids_for_date increments _fetch_error_count."""
+        adapter = UnderstatAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                AsyncMock(side_effect=Exception("HTTP 404")),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            result = await adapter.get_match_ids_for_date("2019-10-05")
+        assert result == []
+        assert adapter._fetch_error_count == 6
+
+    @pytest.mark.asyncio
+    async def test_get_match_shots_404_increments_error_count(self) -> None:
+        """A 404 on getMatch increments _fetch_error_count."""
+        adapter = UnderstatAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                AsyncMock(side_effect=Exception("HTTP 404")),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            shots = await adapter.get_match_shots("12345")
+        assert shots == []
+        assert adapter._fetch_error_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_match_shots_success_does_not_increment_error_count(self) -> None:
+        """A successful getMatch call does not change _fetch_error_count."""
+        raw = {"h": [], "a": []}
+        adapter = UnderstatAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(adapter, "_get_with_retry", AsyncMock(return_value=raw)),
+        ):
+            await adapter.get_match_shots("12345")
+        assert adapter._fetch_error_count == 0

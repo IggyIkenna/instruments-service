@@ -23,7 +23,6 @@ from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
 from .adapters.defi.beefy import BeefyReferenceDataAdapter
 from .adapters.defi.benqi import BenqiReferenceDataAdapter
-from .adapters.defi.cambrian import CambrianReferenceDataAdapter
 from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.defi.convex import ConvexReferenceDataAdapter
 from .adapters.defi.curve import CurveReferenceDataAdapter
@@ -50,7 +49,6 @@ from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
 from .adapters.defi.pacifica import PacificaReferenceDataAdapter
 from .adapters.defi.pendle import PendleReferenceDataAdapter
-from .adapters.defi.picasso import PicassoReferenceDataAdapter
 from .adapters.defi.puffer import PufferReferenceDataAdapter
 from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
@@ -58,7 +56,6 @@ from .adapters.defi.renzo import RenzoReferenceDataAdapter
 from .adapters.defi.rocket_pool import RocketPoolReferenceDataAdapter
 from .adapters.defi.sanctum import SanctumReferenceDataAdapter
 from .adapters.defi.solana_native_staking import SolanaNativeStakingAdapter
-from .adapters.defi.solayer import SolayerReferenceDataAdapter
 from .adapters.defi.solblaze import SolblazeReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
 from .adapters.defi.symbiotic import SymbioticReferenceDataAdapter
@@ -187,10 +184,8 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "MANGO-SOLANA": "mango",
     "ZETA-SOLANA": "zeta",
     "FLASH-SOLANA": "flash_trade",
-    # Solana restaking venues (Plan E 2026-05-13)
-    "SOLAYER-SOLANA": "solayer",
-    "PICASSO-SOLANA": "picasso",
-    "CAMBRIAN-SOLANA": "cambrian",
+    # SOLAYER/PICASSO/CAMBRIAN-SOLANA removed 2026-06-02 (operator decision; no usable/decodable
+    # DeFi data source). SSOT: plans/active/issues/issue_docs_remediation_sweep_2026_06_02.md.
 }
 
 # Dynamically add multi-chain DeFi venues from SUBGRAPH_IDS (SSOT in UAC).
@@ -212,8 +207,12 @@ _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL: dict[str, str] = {
     "SUSHISWAP_V3": "sushiswap_v3",
     "AERODROME_V3": "aerodrome_v3",
     "CAMELOT_V3": "camelot_v3",
-    # Messari-schema DEXes — use UniV3 adapter (Messari fallback query)
+    # Messari-schema DEXes — use UniV3 adapter (Messari fallback query).
+    # Canonical underscore form (2026-06-01) + legacy glued forms (back-compat
+    # during the venue-canonicalisation migration window).
+    "VELODROME_V2": "velodrome_v2",
     "VELODROMEV2": "velodrome_v2",
+    "TRADER_JOE_V2": "trader_joe_v2",
     "TRADER_JOEV2": "trader_joe_v2",
     "GMX": "gmx",
     # Messari lending (Spark = Aave V3 fork, same schema)
@@ -274,7 +273,6 @@ _CANONICAL_VENUE_TO_CCXT_EXCHANGE: dict[str, str] = {
 _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aave_v3": AaveV3ReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
-    "cambrian": CambrianReferenceDataAdapter,
     "aster": AsterReferenceDataAdapter,
     "deribit_combo": DeribitComboReferenceDataAdapter,
     "balancer": BalancerReferenceDataAdapter,
@@ -311,7 +309,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "orca": OrcaReferenceDataAdapter,
     "pacifica": PacificaReferenceDataAdapter,
     "pendle": PendleReferenceDataAdapter,
-    "picasso": PicassoReferenceDataAdapter,
     "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
@@ -322,7 +319,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "sanctum": SanctumReferenceDataAdapter,
     "solana_native": SolanaNativeStakingAdapter,
     "solblaze": SolblazeReferenceDataAdapter,
-    "solayer": SolayerReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
     "symbiotic": SymbioticReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
@@ -417,10 +413,8 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "pendle": "",
     # Jito Restaking (Solana NCN-vault primitive) — curated VRT registry.
     "jito_restaking": "",
-    # Solana restaking adapters (Plan E 2026-05-13) — curated static vault registries.
-    "solayer": "",
-    "picasso": "",
-    "cambrian": "",
+    # solayer + picasso + cambrian removed 2026-06-02 (operator decision; no usable/decodable
+    # DeFi data source). SSOT: plans/active/issues/issue_docs_remediation_sweep_2026_06_02.md.
 }
 
 

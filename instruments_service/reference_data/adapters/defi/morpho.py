@@ -23,7 +23,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
-from ...utils.defi_utils import classify_graph_error
+from ...utils.defi_utils import assert_subgraph_payload, classify_graph_error
 from ...utils.evm_creation_resolver import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
@@ -138,18 +138,15 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
             )
             raise ConnectionError(str(exc)) from exc
 
-        # Safely navigate the GraphQL response — any layer could be None
-        raw_data: dict[str, object] = data if isinstance(data, dict) else {}
-        response_data_val: object = raw_data.get("data")
-        response_dict: dict[str, object] = response_data_val if isinstance(response_data_val, dict) else {}
+        # A 200-with-``{"errors":[...]}`` / missing-``data`` response is a TRANSIENT FETCH FAILURE, not an
+        # empty universe — raise so discovery records it ``attempted_failed`` rather than masking it as zero
+        # markets (DeFi-plan A8 / operator 2026-05-07). ConnectionError → per-venue NETWORK/retryable.
+        response_dict = assert_subgraph_payload(data, venue="MORPHO", chain=self._chain)
         markets_data_val: object = response_dict.get("markets")
         if markets_data_val is None:
-            logger.warning(
-                "Morpho %s: API returned no markets data (response keys: %s)",
-                self._chain,
-                list(raw_data.keys()),
+            raise ConnectionError(
+                f"MORPHO-{self._chain}: subgraph 'data' missing 'markets' key — transient fetch failure"
             )
-            return []
 
         markets_dict: dict[str, object] = markets_data_val if isinstance(markets_data_val, dict) else {}
         markets_items: object = markets_dict.get("items", [])
@@ -244,7 +241,7 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
-            if inst.raw_symbol == symbol or inst.symbol == symbol:
+            if inst.raw_symbol == symbol or inst.instrument_key.endswith(f":{symbol}"):
                 return inst
         return None
 

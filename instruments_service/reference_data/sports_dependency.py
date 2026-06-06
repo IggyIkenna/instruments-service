@@ -18,14 +18,27 @@ whole point is to fail loud before any shard starts processing. Shard-level
 failure isolation (see ``codex/04-architecture/shard-level-failure-isolation.md``)
 applies to in-loop adapter calls, not to pre-flight dependency gates.
 
+Also provides :func:`check_sports_manifest_v9_columns` — a gated regression
+guard that verifies the upstream sports manifest ``_index`` carries the
+canonical v9 schema columns (``asset_group``, ``source``, ``pipeline_mode``,
+``available_at``). This guard is safe to land pre-migration because it is
+only enforced when ``SPORTS_V9_ENFORCED=true`` (via
+:class:`~instruments_service.config.InstrumentsServiceConfig`) OR when the
+manifest's own ``schema_version`` column reads 9. Pre-cutover (v8 data, flag
+off) it logs a one-line WARNING and passes.
+
 SSOT: ``unified-trading-pm/codex/02-data/sports-adapter-dependency-order.md``
+       ``unified-trading-pm/plans/active/sports_manifest_canonicalisation_2026_06_01.md`` §P2
 """
 
 from __future__ import annotations
 
 import logging
+import os
+from typing import cast
 
-from unified_trading_library import DependencyError, get_storage_client, get_write_bucket_name
+import pandas as pd
+from unified_trading_library import DependencyError, get_storage_client, resolve_bucket_name
 
 from instruments_service.config import get_config
 
@@ -48,28 +61,42 @@ _API_FOOTBALL_DEPENDENT_VENUES: frozenset[str] = frozenset(
 
 _FIXTURES_PATH_TEMPLATE: str = "sports_reference/by_date/day={date}/entity=api_football/api_football.parquet"
 _CANONICAL_FIXTURES_PATH_TEMPLATE: str = "sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+# The IS writer + the v9 migration write FIXTURES per-league under a pipeline_mode= hive segment:
+#   canonical (post-migration): sports_reference/by_date/day={date}/pipeline_mode=batch_api_football/entity=fixtures/league={L}/fixtures.parquet
+#   legacy   (pre-migration):   sports_reference/by_date/day={date}/entity=fixtures/league={L}/fixtures.parquet
+# fixtures source = api_football → pipeline_mode_for_sports_entity("fixtures") = batch_api_football.
+# A bare-blob exact probe at entity=fixtures/fixtures.parquet matches NEITHER per-league layout, so
+# the dependency check must list these PREFIXES (any object present = fixtures captured for the day).
+_CANONICAL_FIXTURES_PREFIX_TEMPLATE: str = (
+    "sports_reference/by_date/day={date}/pipeline_mode=batch_api_football/entity=fixtures/"
+)
+_LEGACY_FIXTURES_PREFIX_TEMPLATE: str = "sports_reference/by_date/day={date}/entity=fixtures/"
 
 
 def _resolve_sports_bucket() -> str:
-    """Resolve the sports-reference bucket honouring ``IS_TEST_RUN``.
+    """Resolve the sports instruments-store bucket honouring ``IS_TEST_RUN``.
 
     Mirrors ``instruments_service.engine.orchestrator._get_instruments_bucket``
-    for the SPORTS category so the pre-flight check reads from the same bucket
-    the orchestrator writes to. TEST-mode uses the canonical ``-test-`` in
-    middle (inserted between category and project_id) — SSOT:
-    ``codex/02-data/per-category-bucket-layouts.md``. Delegates to UTL
-    ``get_write_bucket_name``.
+    exactly so the pre-flight check reads from the same env-tiered bucket the
+    orchestrator WRITES to. Delegates to UTL ``resolve_bucket_name`` backed by
+    ``deployment-service/configs/cloud-providers.yaml`` — the canonical SSOT.
+
+    - DEPLOYMENT_ENV=prod  → ``instruments-store-sports-prd-{pid}``
+    - DEPLOYMENT_ENV=dev   → ``instruments-store-sports-dev-{pid}``
+    - IS_TEST_RUN=true     → DEPLOYMENT_ENV=test → ``instruments-store-sports-test-{pid}``
     """
     cfg = get_config()
-    project = cfg.gcp_project_id or "test-project"
-    try:
-        return get_write_bucket_name("instruments", "SPORTS", project)
-    except (ImportError, AttributeError):
-        prefix = cfg.instruments_bucket_prefix
-        prod_bucket = f"{prefix}-sports-{project}"
-        if not cfg.is_test_run:
-            return prod_bucket
-        return prod_bucket.replace(f"-{project}", f"-test-{project}", 1)
+    if cfg.is_test_run:
+        prev = os.environ.get("DEPLOYMENT_ENV")
+        os.environ["DEPLOYMENT_ENV"] = "test"
+        try:
+            return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+        finally:
+            if prev is None:
+                os.environ.pop("DEPLOYMENT_ENV", None)
+            else:
+                os.environ["DEPLOYMENT_ENV"] = prev
+    return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
 
 
 def _blob_exists(bucket: str, path: str) -> bool:
@@ -89,6 +116,29 @@ def _blob_exists(bucket: str, path: str) -> bool:
             "sports dep-check: storage probe failed bucket=%s path=%s: %s",
             bucket,
             path,
+            exc,
+        )
+        return False
+
+
+def _prefix_has_object(bucket: str, prefix: str) -> bool:
+    """Return True if at least one object exists under the given GCS prefix.
+
+    FIXTURES are written per-league (``…/entity=fixtures/league={L}/fixtures.parquet``) under a
+    canonical ``pipeline_mode=`` hive segment, so a single exact-blob probe cannot detect them —
+    we list the prefix and short-circuit on the first object. Returns False on any client error
+    (the caller surfaces a clear ``DependencyError`` rather than leaking the underlying exception).
+    """
+    try:
+        client = get_storage_client()
+        for _blob in client.list_blobs(bucket, prefix=prefix):
+            return True
+        return False
+    except Exception as exc:
+        logger.warning(
+            "sports dep-check: prefix probe failed bucket=%s prefix=%s: %s",
+            bucket,
+            prefix,
             exc,
         )
         return False
@@ -130,7 +180,26 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
 
     canonical_path = _CANONICAL_FIXTURES_PATH_TEMPLATE.format(date=date)
     raw_path = _FIXTURES_PATH_TEMPLATE.format(date=date)
+    canonical_prefix = _CANONICAL_FIXTURES_PREFIX_TEMPLATE.format(date=date)
+    legacy_prefix = _LEGACY_FIXTURES_PREFIX_TEMPLATE.format(date=date)
 
+    # Per-league fixtures under the canonical pipeline_mode= prefix (post-migration), then the
+    # legacy per-league prefix (pre-migration). Either present = fixtures captured for the day.
+    if _prefix_has_object(resolved_bucket, canonical_prefix):
+        logger.debug(
+            "sports dep-check OK: canonical per-league fixtures present under gs://%s/%s",
+            resolved_bucket,
+            canonical_prefix,
+        )
+        return
+    if _prefix_has_object(resolved_bucket, legacy_prefix):
+        logger.debug(
+            "sports dep-check OK: legacy per-league fixtures present under gs://%s/%s",
+            resolved_bucket,
+            legacy_prefix,
+        )
+        return
+    # Bare date-aggregate fixtures.parquet (oldest layout) — exact blob.
     if _blob_exists(resolved_bucket, canonical_path):
         logger.debug(
             "sports dep-check OK: canonical fixtures present at gs://%s/%s",
@@ -153,3 +222,74 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
 def venue_requires_api_football(venue: str) -> bool:
     """Return True if the given sports venue depends on api-football reference data."""
     return venue.lower() in _API_FOOTBALL_DEPENDENT_VENUES
+
+
+# ---------------------------------------------------------------------------
+# v9 schema-column regression guard (Task 2 — sports_manifest_canonicalisation
+# §P2, 2026-06-02).  Gated so it is safe to land pre-migration.
+# ---------------------------------------------------------------------------
+
+_V9_REQUIRED_COLUMNS: frozenset[str] = frozenset({"asset_group", "source", "pipeline_mode", "available_at"})
+
+
+def check_sports_manifest_v9_columns(manifest_df: pd.DataFrame) -> None:
+    """Assert that the upstream sports manifest ``_index`` carries v9 columns.
+
+    This is a **gated regression guard** — safe to land before the
+    single-walk canonicalisation walk completes.  Enforcement logic:
+
+    1. If ``SPORTS_V9_ENFORCED=true`` (via ``InstrumentsServiceConfig``),
+       OR the manifest's ``schema_version`` column is present and equals 9,
+       RAISE ``DependencyError`` when any of
+       (``asset_group``, ``source``, ``pipeline_mode``, ``available_at``)
+       are missing from the DataFrame columns.
+
+    2. Otherwise (default — pre-migration, v8 data, flag off):
+       LOG a one-line WARNING and PASS.  This keeps the write-path healthy
+       until the walk promotes all rows to v9.
+
+    Args:
+        manifest_df: The sports ``_index`` DataFrame read at preflight.
+            Must be a pandas DataFrame (empty is fine — column set is what
+            matters, not row count).
+
+    Raises:
+        DependencyError: Only when enforcement is active (see above) and
+            one or more required v9 columns are absent.
+    """
+    present_cols = set(manifest_df.columns)
+    missing = _V9_REQUIRED_COLUMNS - present_cols
+
+    if not missing:
+        # All v9 columns present — always pass.
+        return
+
+    cfg = get_config()
+
+    # Determine whether to enforce.  Two activation paths:
+    # (a) explicit env flag  SPORTS_V9_ENFORCED=true
+    # (b) the manifest itself already claims schema_version=9 but is missing cols
+    #     (should never happen after a correct walk — defensive guard).
+    schema_version_is_9 = False
+    if "schema_version" in present_cols and not manifest_df.empty:
+        try:
+            sv_raw: object = cast(object, manifest_df["schema_version"].dropna().iloc[0])
+            schema_version_is_9 = int(str(sv_raw)) == 9
+        except (IndexError, TypeError, ValueError):
+            pass
+
+    enforce = cfg.sports_v9_enforced or schema_version_is_9
+
+    if enforce:
+        raise DependencyError(
+            f"Sports manifest _index is missing v9 schema columns: {sorted(missing)}. "
+            "Run the sports canonicalisation walk "
+            "(sports_manifest_canonicalisation_2026_06_01.md §E1-E8) before enabling SPORTS_V9_ENFORCED."
+        )
+
+    logger.warning(
+        "sports v9-column preflight: upstream manifest missing %s "
+        "— enforcement off (SPORTS_V9_ENFORCED=false, schema_version≠9); "
+        "set SPORTS_V9_ENFORCED=true post-canonicalisation walk to enforce.",
+        sorted(missing),
+    )

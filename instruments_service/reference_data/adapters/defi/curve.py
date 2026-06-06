@@ -134,7 +134,15 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
             )
             raise ConnectionError(str(exc)) from exc
 
-        pool_data: list[dict[str, object]] = raw.get("data", {}).get("poolData", [])
+        # DeFi-plan A8 / operator 2026-05-07: Curve REST returns {"success": true, "data": {"poolData": [...]}}.
+        # A soft 200 with success=false / a missing-`data` body is a TRANSIENT FETCH FAILURE, not an empty
+        # pool universe — raise so discovery records it attempted_failed rather than dropping the venue/day
+        # from the coverage denominator. A legit empty universe is {"data": {"poolData": []}} → returns [].
+        if not isinstance(raw, dict) or raw.get("success") is False or not isinstance(raw.get("data"), dict):
+            raise ConnectionError(f"CURVE-{self._chain}: malformed getPools response — transient fetch failure")
+        _curve_data: dict[str, object] = raw["data"]
+        pool_data_val: object = _curve_data.get("poolData", [])
+        pool_data: list[dict[str, object]] = pool_data_val if isinstance(pool_data_val, list) else []
         results: list[InstrumentRecord] = []
 
         deploy_date = _CURVE_DEPLOY_DATES.get(self._chain, datetime(2020, 1, 20, tzinfo=UTC))
@@ -196,7 +204,7 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
-            if inst.raw_symbol == symbol or inst.symbol == symbol:
+            if inst.raw_symbol == symbol or inst.instrument_key.endswith(f":{symbol}"):
                 return inst
         return None
 
