@@ -276,7 +276,13 @@ class TestPolymarketAdapterExtended:
         assert isinstance(result, list)
 
     @pytest.mark.asyncio
-    async def test_network_error_returns_empty_page(self) -> None:
+    async def test_network_error_raises_not_truncates(self) -> None:
+        """A live-mode Gamma page network error must RAISE (→ attempted_failed),
+        NOT return an empty/truncated universe. Updated from the pre-CF-11
+        return-empty contract (which encoded the silent-truncation bug) per
+        prediction_manifest_canonicalisation_2026_06_01 § CF-11 IS write-path
+        (sibling of the CLOB-scan fix); see test_live_page_failure_raises_not_truncates.
+        """
         import aiohttp as _aiohttp
 
         adapter = PolymarketReferenceDataAdapter()
@@ -288,9 +294,8 @@ class TestPolymarketAdapterExtended:
         mock_session_cm = MagicMock()
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
-        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments()
-        assert results == []
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm), pytest.raises(_aiohttp.ClientError):
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_clob_scan_midscan_failure_raises_not_truncates(self) -> None:
@@ -332,6 +337,42 @@ class TestPolymarketAdapterExtended:
             pytest.raises(_aiohttp.ClientError),
         ):
             await adapter.get_instruments(date="2025-03-14")
+        assert "ADAPTER_FETCH_FAILED" in events
+
+    @pytest.mark.asyncio
+    async def test_live_page_failure_raises_not_truncates(self) -> None:
+        """A live-mode (Gamma) page failure must RAISE (→ attempted_failed) + emit
+        ADAPTER_FETCH_FAILED, NOT return ``[]``. Returning ``[]`` makes the
+        ``get_instruments`` live-mode pagination loop break (page < _PAGE_LIMIT) →
+        a transient failure masquerades as a complete (empty/smaller) universe with
+        ZERO failure signal. Regression for
+        prediction_manifest_canonicalisation_2026_06_01 § CF-11 IS-side write-path
+        (sibling of the CLOB-scan truncation fix).
+        """
+        import aiohttp as _aiohttp
+
+        adapter = PolymarketReferenceDataAdapter()
+
+        # Live mode (date=None) → first Gamma page fails.
+        fail_cm = MagicMock()
+        fail_cm.__aenter__ = AsyncMock(side_effect=_aiohttp.ClientError("gamma page 0 down"))
+        fail_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=fail_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        events: list[str] = []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+            patch(
+                "instruments_service.reference_data.adapters.prediction.polymarket.log_event",
+                side_effect=lambda name, **_kw: events.append(name),
+            ),
+            pytest.raises(_aiohttp.ClientError),
+        ):
+            await adapter.get_instruments(date=None)
         assert "ADAPTER_FETCH_FAILED" in events
 
     @pytest.mark.asyncio
