@@ -58,8 +58,37 @@ from unified_trading_library import (
     StorageClient,
     get_config,
     get_storage_client,
-    get_write_bucket_name,
+    resolve_bucket_name,
 )
+
+
+def _instruments_store_bucket_for(asset_group: str) -> str:
+    """Resolve the instruments-store bucket via the bucket-name SSOT.
+
+    Prediction is a dedicated FLAT kind ``instruments-store-prediction``
+    (→ ``instruments-store-pred-{env}-{pid}``); the SSOT (cloud-providers.yaml)
+    omits a ``PREDICTION`` entry from the per-asset_group ``instruments-store``
+    dict, so the prior ``get_write_bucket_name("instruments", "prediction")``
+    (→ ``resolve_bucket_name(kind="instruments-store", asset_group="prediction")``)
+    raised ``BucketNamingError`` and the prediction catalogue roll-up crashed at
+    bucket resolution before reaching the roll-up. Mirrors the IS engine SSOT
+    ``resolve_instruments_store_kind`` + ``enumerate_expected_universe._default_bucket_for``.
+    Identical to the prior ``get_write_bucket_name`` for every OTHER AG (both resolve
+    the per-AG ``instruments-store`` dict). ``resolve_bucket_name``'s ``asset_group``
+    is a ``Literal`` — narrow by equality so the call is type-clean.
+    """
+    if asset_group == "prediction":
+        return resolve_bucket_name(cloud="gcp", kind="instruments-store-prediction")
+    if asset_group == "sports":
+        return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+    if asset_group == "cefi":
+        return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="cefi")
+    if asset_group == "defi":
+        return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="defi")
+    if asset_group == "tradfi":
+        return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="tradfi")
+    raise ValueError(f"Unknown asset_group for instruments catalogue: {asset_group!r}")
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -698,7 +727,7 @@ def run_rollup(
     run_id = f"catalogue-rollup-{asset_group}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
     storage = storage or get_storage_client()
     _tune_download_pool(storage, MAX_DOWNLOAD_WORKERS)
-    bucket = get_write_bucket_name("instruments", asset_group)
+    bucket = _instruments_store_bucket_for(asset_group)
     env = get_config("DEPLOYMENT_ENV", "prod")
 
     if max_blobs is not None and not dry_run:
