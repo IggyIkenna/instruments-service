@@ -102,6 +102,18 @@ def _run_coverage_status(argv: list[str] | None = None) -> None:  # pragma: no c
 
 def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pragma: no cover
     parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help=(
+            "Override the reference-data source for TradFi venues. "
+            "Default (unset/'databento') uses Databento; '--source massive' routes "
+            "CME/NASDAQ/NYSE/CBOE/ICE/FX to the Massive (Polygon.io-compatible) "
+            "adapter and fetches MASSIVE_API_KEY. Same canonical InstrumentRecord "
+            "output regardless of source (UAC normalisers)."
+        ),
+    )
+    parser.add_argument(
         "--sports-entity",
         type=str,
         default=None,

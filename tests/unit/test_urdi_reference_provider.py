@@ -156,7 +156,7 @@ async def test_fetch_multiple_venues_flat_list():
 
     call_count = 0
 
-    def _adapter_factory(venue: str, api_key=None, date=None, extra_api_keys=None, mode="batch"):
+    def _adapter_factory(venue: str, api_key=None, date=None, extra_api_keys=None, mode="batch", source=None):
         nonlocal call_count
         call_count += 1
         return mock1 if call_count == 1 else mock2

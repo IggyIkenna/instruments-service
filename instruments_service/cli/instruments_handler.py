@@ -84,6 +84,11 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # calling api_football, and the per-league parquet writes use
         # read-modify-write semantics to preserve existing fixtures' rows.
         self._recovery_fixture_ids: frozenset[int] | None = None
+        # Reference-data source override (--source). When "massive", TradFi venues
+        # route to the Massive adapter (instead of Databento) + the MASSIVE_API_KEY
+        # is fetched via a MASSIVE pseudo-venue added to the key reloader. None ⇒
+        # default (Databento for TradFi).
+        self._source: str | None = None
         # Live-mode trigger name (Phase A.7 of instruments_master).
         # When set under --mode live, names which entity-type subset to refresh +
         # which source adapter to invoke. Closed-set per-asset-group taxonomy lives
@@ -111,6 +116,11 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._wire_cli_filters_from_args()
 
         active_venues = get_venues_for_asset_groups(asset_groups)
+        # When --source massive, add the MASSIVE pseudo-venue so the key reloader
+        # fetches MASSIVE_API_KEY (keyed as the "massive" data source) alongside
+        # the venue keys. UAC VENUE_TO_DATA_SOURCE["MASSIVE"]="massive".
+        if self._source == "massive":
+            active_venues = [*active_venues, "MASSIVE"]
         self._start_key_reloader(active_venues)
 
     def _wire_cli_filters_from_args(self) -> None:
@@ -148,6 +158,11 @@ class InstrumentsHandler(UnifiedServiceHandler):
         recovery_path_arg: str | None = getattr(self.args, "recovery_fixture_ids", None) if self.args else None
         if recovery_path_arg:
             self._recovery_fixture_ids = self._load_recovery_fixture_ids(recovery_path_arg)
+
+        source_arg: str | None = getattr(self.args, "source", None) if self.args else None
+        if source_arg:
+            self._source = source_arg.strip().lower()
+            logger.info("Reference-data source override from CLI: %s", self._source)
 
         trigger_arg: str | None = getattr(self.args, "trigger", None) if self.args else None
         if trigger_arg:
@@ -265,6 +280,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
             league_filter=self._league_filter,
             season_override=self._season_override,
             recovery_fixture_ids=self._recovery_fixture_ids,
+            source=self._source,
         )
 
     async def cleanup(self) -> None:
