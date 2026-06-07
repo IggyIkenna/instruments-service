@@ -449,3 +449,47 @@ def test_cefi_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(r
     assert by_key[("BTC", "2024-06-04")].capture_status == "expected_unattempted"
     # OLDCOIN after available_to (d1) → DELISTED
     assert by_key[("OLDCOIN", "2024-06-02")].reason == "EXPECTED_INSTRUMENT_DELISTED"
+
+
+# ---------------------------------------------------------------------------
+# _tune_download_pool — enlarge GCS HTTP pool (best-effort, guarded)
+# ---------------------------------------------------------------------------
+
+
+class _FakeHttp:
+    def __init__(self) -> None:
+        self.mounted: dict[str, object] = {}
+
+    def mount(self, prefix: str, adapter: object) -> None:
+        self.mounted[prefix] = adapter
+
+
+class _FakeNativeClient:
+    def __init__(self) -> None:
+        self._http = _FakeHttp()
+
+
+class _FakeGcpStorage:
+    provider_name = "gcp"
+
+    def __init__(self) -> None:
+        self._client = _FakeNativeClient()
+
+
+class _FakeAwsStorage:
+    provider_name = "aws"
+
+
+def test_tune_download_pool_mounts_adapter_on_gcp(rollup: ModuleType) -> None:
+    storage = _FakeGcpStorage()
+    rollup._tune_download_pool(storage, 16)
+    assert set(storage._client._http.mounted) == {"https://", "http://"}
+    # pool sized to the worker count
+    adapter = storage._client._http.mounted["https://"]
+    assert getattr(adapter, "_pool_maxsize", 16) == 16
+
+
+def test_tune_download_pool_noop_on_non_gcp(rollup: ModuleType) -> None:
+    # No provider / non-gcp / missing native client must not raise.
+    rollup._tune_download_pool(_FakeAwsStorage(), 16)
+    rollup._tune_download_pool(object(), 16)  # no provider_name / _client at all
