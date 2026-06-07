@@ -493,3 +493,34 @@ def test_tune_download_pool_noop_on_non_gcp(rollup: ModuleType) -> None:
     # No provider / non-gcp / missing native client must not raise.
     rollup._tune_download_pool(_FakeAwsStorage(), 16)
     rollup._tune_download_pool(object(), 16)  # no provider_name / _client at all
+
+
+def test_instruments_store_bucket_for_prediction_uses_flat_kind(
+    rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prediction resolves the dedicated FLAT kind ``instruments-store-prediction``.
+
+    Regression for the catalogue-rollup crash (slot-5 2026-06-07): the per-AG
+    ``instruments-store`` dict has NO ``PREDICTION`` entry, so the prior
+    ``get_write_bucket_name("instruments", "prediction")`` raised ``BucketNamingError``
+    and the prediction roll-up crashed at bucket resolution before any walk.
+    """
+    captured: list[tuple[str, str | None]] = []
+
+    def _fake(*, cloud: str, kind: str, asset_group: str | None = None) -> str:
+        _ = cloud
+        captured.append((kind, asset_group))
+        return f"bkt-{kind}-{asset_group or 'flat'}"
+
+    monkeypatch.setattr(rollup, "resolve_bucket_name", _fake)
+    assert rollup._instruments_store_bucket_for("prediction") == "bkt-instruments-store-prediction-flat"
+    assert ("instruments-store-prediction", None) in captured
+    # Every OTHER AG uses the per-AG instruments-store dict (unchanged behaviour).
+    captured.clear()
+    rollup._instruments_store_bucket_for("cefi")
+    assert ("instruments-store", "cefi") in captured
+
+
+def test_instruments_store_bucket_for_unknown_raises(rollup: ModuleType) -> None:
+    with pytest.raises(ValueError, match="Unknown asset_group"):
+        rollup._instruments_store_bucket_for("bogus")
