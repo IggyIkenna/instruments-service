@@ -103,6 +103,13 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
             "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/pipeline_mode=batch_tardis/asset_group=cefi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
+            # hyperliquid: source=hyperliquid (R4 2026-06-07). Probe BOTH the new
+            # canonical batch_hyperliquid/ shape AND the legacy batch_hyperliquid_rest/
+            # shape — on-disk objects keep the legacy form until the GATED DeFi
+            # migrator rewrites them, so the audit must match both (else false
+            # phantoms; CLAUDE.md "prefix_tpls must cover the new shape before --apply").
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid/asset_group=cefi/venue={venue}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid_rest/asset_group=cefi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/asset_group=cefi/venue={venue}/"
@@ -124,6 +131,10 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
             "raw_tick_data/by_date/day={date}/pipeline_mode=batch_onchain_rpc/asset_group=defi/venue={venue}/"
             "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/pipeline_mode=batch_onchain_subgraph/asset_group=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
+            # hyperliquid (R4): new canonical batch_hyperliquid/ + legacy
+            # batch_hyperliquid_rest/ (on-disk until the gated DeFi migrator rewrites).
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid/asset_group=defi/venue={venue}/"
             "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid_rest/asset_group=defi/venue={venue}/"
             "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",

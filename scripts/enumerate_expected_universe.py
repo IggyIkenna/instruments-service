@@ -62,7 +62,15 @@ from typing import NamedTuple
 
 import pandas as pd
 from google.cloud import storage
-from unified_api_contracts import DATA_TYPES_BY_ASSET_GROUP, VENUES_BY_ASSET_GROUP
+from unified_api_contracts import (
+    DATA_TYPES_BY_ASSET_GROUP,
+    VENUES_BY_ASSET_GROUP,
+    Mode,
+    default_transport_for_source,
+    external_sources_for,
+    has_source_priority,
+    pipeline_mode_for_source,
+)
 from unified_api_contracts.registry.chain_env import (
     CHAIN_GENESIS_DATES,
     PROTOCOL_LAUNCH_DATES,
@@ -148,6 +156,46 @@ def _emit_event(event: str, /, **details: object) -> None:
     """Best-effort structured event log (mirrors RECONCILER_* shape)."""
     payload = {"event": event, "ts": datetime.now(UTC).isoformat(), **details}
     logger.info("EVENT %s", payload)
+
+
+def _derive_pm_source_transport(asset_group: str, data_type: str) -> tuple[str, str, str]:
+    """Return ``(pipeline_mode, source, transport)`` for a seeded expected row.
+
+    #4 (``pipeline_mode_source_batch_live_replay_standardisation_2026_06_05`` +
+    catalogue C-#2/C-TRANSPORT): the ``expected_unattempted`` /
+    ``empty_confirmed`` seeds the enumerator materialises MUST carry the same
+    ``pipeline_mode`` + ``source`` (+ ``transport``) as the real rows they will
+    be reconciled against — else the denominator-seed rows diverge from real
+    rows (CF-3 reads blank corpus-wide). Derived from the cell's primary EXTERNAL
+    source in UAC ``SOURCE_PRIORITY``:
+
+    * ``source`` = the top external source for ``(asset_group, data_type)``.
+    * ``pipeline_mode`` = ``pipeline_mode_for_source(source, Mode.BATCH)`` — the
+      seed denominator is a BATCH expectation (the T+1 floor we owe).
+    * ``transport`` = ``default_transport_for_source(source)`` (the column SSOT).
+
+    Computed/service-only + unregistered cells (no external source) get
+    ``("", "", "")`` — they are exempt (no external vendor to owe data from).
+    Sports data_types are registered upper-case in ``SOURCE_PRIORITY`` while the
+    enumerator carries them lower-case, so both are tried.
+    """
+    ag = asset_group.lower() if asset_group else ""
+    if not ag or not data_type:
+        return "", "", ""
+    external: list[str] = []
+    for dt in (data_type, data_type.upper(), data_type.lower()):
+        if has_source_priority(ag, dt):
+            external = external_sources_for(ag, dt)
+            if external:
+                break
+    if not external:
+        return "", "", ""
+    source = external[0]
+    try:
+        pipeline_mode = pipeline_mode_for_source(source, Mode.BATCH).value
+    except ValueError:
+        return "", "", ""
+    return pipeline_mode, source, default_transport_for_source(source)
 
 
 # ---------------------------------------------------------------------------
@@ -1321,6 +1369,9 @@ def _write_absent_rows(
 
     new_rows_records: list[dict[str, object]] = []
     for r in absent_rows:
+        # #4 — stamp pipeline_mode + source + transport so seeded denominator
+        # rows match the real rows they reconcile against (else CF-3 reads blank).
+        pipeline_mode, source, transport = _derive_pm_source_transport(asset_group, r.data_type)
         record: dict[str, object] = {
             "asset_group": asset_group,
             "venue": r.venue,
@@ -1338,6 +1389,9 @@ def _write_absent_rows(
             "row_count": 0,
             "service_name": "instruments-service",
             "enumerator_run_id": run_id,
+            "pipeline_mode": pipeline_mode,
+            "source": source,
+            "transport": transport,
         }
         new_rows_records.append(record)
 
