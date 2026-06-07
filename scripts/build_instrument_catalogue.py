@@ -569,6 +569,100 @@ def build_sports_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFram
 
 
 # ---------------------------------------------------------------------------
+# Sports LEAGUE-GRAIN roll-up — FROM THE MANIFEST (the namespace-correct universe)
+# ---------------------------------------------------------------------------
+
+
+def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFrame:
+    """Build the sports LEAGUE-grain could-exist catalogue from the MANIFEST.
+
+    Supersedes :func:`build_sports_catalogue_dataframe` (the ``entity=leagues``
+    roll-up) as the sports could-exist source. **Why** (slot-4 re-diagnosis
+    2026-06-07, measured on real prod): the ``entity=leagues`` slice carries RAW
+    NUMERIC api-football ``league_id``s (``"4"`` / ``"21"`` / …), but the captured
+    manifest atom uses the **canonical** sports league namespace, and
+    ``canonicalize_league_id()`` is a NO-OP on the numeric ids — so the
+    entity=leagues roll-up covered only **131 / 606** distinct manifest
+    current-data_type leagues and an ``--apply-write`` would MASSIVELY OVER-seed
+    false ``expected_unattempted`` for numeric leagues that match no manifest row.
+
+    The reliable, namespace-correct superset is the MANIFEST itself: every league
+    that was captured for a **current** data_type provably could-exist. So this
+    producer emits one catalogue row per distinct manifest ``league_id`` (scoped to
+    the current ``SPORTS_DATA_TYPE_TO_SOURCE`` data_types — the retired
+    ``LEAGUES`` / ``TRANSFERMARKT_LEAGUES`` / ``SFI_LEAGUES`` numeric/hex namespaces
+    are excluded), with ``available_from`` = first captured date and
+    ``available_to`` = ``None`` (active — the v2 enumerator applies each source's
+    coverage-start window + per-entity league coverage). This guarantees the
+    catalogue league set ⊇ the manifest league set by construction.
+
+    Honest residual delta (a follow-up, NOT a silent drop): api-football leagues
+    that are LISTED (``entity=leagues``) but were never captured for any current
+    data_type are not added here — adding them needs a numeric→canonical
+    ``api_football_id`` map (``canonicalize_league_id`` does not provide it) and is
+    gated on the IS instrument backfill regardless.
+
+    Args:
+        manifest_df: the canonical sports ``_index`` (needs ``league_id`` /
+            ``data_type`` / ``date`` columns). Read via
+            :func:`_read_sports_manifest_index`.
+
+    Returns:
+        A DataFrame with :data:`CATALOG_COLUMNS`, one row per distinct current
+        canonical league, sorted by ``league_id`` for deterministic output.
+    """
+    cols = list(CATALOG_COLUMNS)
+    needed = {"league_id", "data_type", "date"}
+    if manifest_df.empty or not needed.issubset(manifest_df.columns):
+        return pd.DataFrame(columns=cols)
+
+    from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE
+
+    current = frozenset(SPORTS_DATA_TYPE_TO_SOURCE)
+    df = manifest_df.loc[:, ["league_id", "data_type", "date"]].copy()
+    df["league_id"] = df["league_id"].fillna("").astype(str)
+    df["data_type"] = df["data_type"].fillna("").astype(str)
+    df = df[(df["league_id"] != "") & (df["data_type"].isin(current))]
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    df["date"] = df["date"].astype(str)
+    first_seen = df.groupby("league_id")["date"].min()
+
+    rows: list[dict[str, str | None]] = [
+        {
+            "instrument_id": lid,
+            "instrument_type": SPORTS_LEAGUE_INSTRUMENT_TYPE,
+            "venue": "",
+            "chain": "",
+            "league_id": lid,
+            "available_from": first_seen[lid],
+            "available_to": None,
+            "market_created_at": None,
+            "settlement_time": None,
+            "data_type": None,
+        }
+        for lid in sorted(first_seen.index)
+    ]
+    return pd.DataFrame(rows, columns=cols)
+
+
+def _read_sports_manifest_index(storage: StorageClient, bucket: str) -> pd.DataFrame:
+    """Read the canonical sports ``_index`` for the manifest-derived league universe.
+
+    Reads the consolidated ``_index/availability_index.parquet`` DIRECTLY (NOT
+    ``read_availability_index`` — its per-VM-consolidated view has been observed
+    to return 0 rows mid-rewrite; slot-4 2026-06-07). Returns an empty frame when
+    the index is absent (→ empty catalogue, never a silent crash).
+    """
+    blob_path = "_index/availability_index.parquet"
+    if not storage.blob_exists(bucket, blob_path):
+        logger.warning("Sports manifest _index absent at gs://%s/%s — empty catalogue", bucket, blob_path)
+        return pd.DataFrame()
+    payload = storage.download_bytes(bucket, blob_path)
+    return pd.read_parquet(io.BytesIO(payload), columns=["league_id", "data_type", "date"])
+
+
+# ---------------------------------------------------------------------------
 # Monotonic-guard decision (pure — unit-tested directly)
 # ---------------------------------------------------------------------------
 
@@ -937,11 +1031,12 @@ def run_rollup(
             _iter_prediction_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs)
         )
     elif asset_group == "sports":
-        # League-grain roll-up: one row per league from the entity=leagues slice
-        # (the captured sports manifest atom is per-(league_id, data_type, date)).
-        df = build_sports_catalogue_dataframe(
-            _iter_sports_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs)
-        )
+        # League-grain could-exist universe — derived from the canonical MANIFEST
+        # (the namespace-correct superset), NOT the entity=leagues slice (whose RAW
+        # NUMERIC api-football league_ids do not match the manifest's canonical
+        # namespace → 131/606 coverage + numeric over-seed; slot-4 2026-06-07).
+        # The captured manifest atom is per-(league_id, data_type, date).
+        df = build_sports_catalogue_from_manifest(_read_sports_manifest_index(storage, bucket))
     else:
         df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
     logger.info("Rolled up %d catalogue rows", len(df))
