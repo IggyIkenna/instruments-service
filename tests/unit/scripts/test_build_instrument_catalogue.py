@@ -275,6 +275,150 @@ def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleTy
 
 
 # ---------------------------------------------------------------------------
+# build_sports_catalogue_dataframe — LEAGUE-grain roll-up (entity=leagues)
+# ---------------------------------------------------------------------------
+
+
+def _league_snap(rows: list[dict[str, object]]) -> pd.DataFrame:
+    return pd.DataFrame(rows)
+
+
+def test_sports_rollup_one_row_per_league_with_lifecycle(rollup: ModuleType) -> None:
+    """One league-grain row per league_id; available_from/to track first/last day seen."""
+    d1, d2, d3 = date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)
+    snapshots = [
+        (d1, _league_snap([{"league_id": "39", "name": "Premier League", "country": "England"}])),
+        (d2, _league_snap([{"league_id": "39", "name": "Premier League", "country": "England"}])),
+        # league 39 absent on d3 → delisted; league 140 present on latest → still active.
+        (d3, _league_snap([{"league_id": "140", "name": "La Liga", "country": "Spain"}])),
+    ]
+    df = rollup.build_sports_catalogue_dataframe(snapshots)
+    by_id = {row["league_id"]: row for row in df.to_dict("records")}
+
+    assert set(by_id) == {"39", "140"}
+    # instrument_id mirrors league_id; instrument_type="league"; venue blank (matches captured atom).
+    assert by_id["39"]["instrument_id"] == "39"
+    assert by_id["39"]["instrument_type"] == rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE
+    assert by_id["39"]["venue"] == ""
+    assert by_id["39"]["data_type"] is None  # data_type axis handled by the enumerator
+    assert by_id["39"]["available_from"] == "2024-01-01"
+    assert by_id["39"]["available_to"] == "2024-01-02"  # delisted before the latest day
+    assert by_id["140"]["available_from"] == "2024-01-03"
+    assert by_id["140"]["available_to"] is None  # present on latest day → still active
+
+
+def test_sports_rollup_skips_blank_league_ids_and_empty_frames(rollup: ModuleType) -> None:
+    d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
+    snapshots = [
+        (d1, _league_snap([{"league_id": "39"}, {"league_id": ""}, {"league_id": None}])),
+        (d2, pd.DataFrame()),  # empty frame still advances the latest-day axis
+    ]
+    df = rollup.build_sports_catalogue_dataframe(snapshots)
+    assert list(df["league_id"]) == ["39"]
+    assert df.to_dict("records")[0]["available_to"] == "2024-01-01"  # delisted vs empty latest day
+
+
+def test_sports_rollup_empty_input_returns_catalog_columns(rollup: ModuleType) -> None:
+    df = rollup.build_sports_catalogue_dataframe([])
+    assert list(df.columns) == list(rollup.CATALOG_COLUMNS)
+    assert df.empty
+
+
+def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(rollup: ModuleType) -> None:
+    """End-to-end: producer → _catalog_from_dataframe → enumerate_v2(sports).
+
+    Seeds expected_unattempted at LEAGUE-grain for missing (league, data_type, date)
+    cells, SKIPS captured cells, and SKIPS pre-source-coverage dates (owned by v1).
+    """
+    enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_v2_sports_verify")
+    # api_football FIXTURES source coverage starts 2018-01-01 → use 2024 dates (in-coverage).
+    d1, d2, d3 = date(2024, 6, 1), date(2024, 6, 2), date(2024, 6, 3)
+    df = rollup.build_sports_catalogue_dataframe(
+        [
+            (d1, _league_snap([{"league_id": "39", "name": "PL"}])),
+            (d2, _league_snap([{"league_id": "39", "name": "PL"}])),
+            (d3, _league_snap([{"league_id": "39", "name": "PL"}])),
+        ]
+    )
+    catalog = enumerator._catalog_from_dataframe(df)
+    assert len(catalog) == 1
+    assert catalog[0].league_id == "39"
+
+    # League-grain present_set: league 39 FIXTURES captured on d2 only.
+    present_cols = ["data_type", "league_id", "date"]
+    present_set = {("FIXTURES", "39", "2024-06-02")}
+
+    rows = list(
+        enumerator.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=[d1, d2, d3],
+            data_types=["FIXTURES"],
+            present_set=present_set,
+            present_cols=present_cols,
+        )
+    )
+    by_date = {r.date: r for r in rows}
+    # d2 captured → NOT emitted; d1 + d3 alive + missing → expected_unattempted, league-grain blanks.
+    assert "2024-06-02" not in by_date
+    assert by_date["2024-06-01"].capture_status == "expected_unattempted"
+    assert by_date["2024-06-01"].league_id == "39"
+    assert by_date["2024-06-01"].instrument_id == ""  # blanked → matches captured atom grain
+    assert by_date["2024-06-01"].venue == ""
+    assert by_date["2024-06-03"].capture_status == "expected_unattempted"
+
+
+def test_sports_enumerator_skips_pre_source_coverage_dates(rollup: ModuleType) -> None:
+    """Dates before the data_type's source coverage start are owned by v1 → v2 emits nothing."""
+    enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_v2_sports_precov")
+    # XG → understat, coverage starts 2015-01-16. 2015-01-01 is pre-coverage.
+    d_pre = date(2015, 1, 1)
+    df = rollup.build_sports_catalogue_dataframe([(d_pre, _league_snap([{"league_id": "39"}]))])
+    catalog = enumerator._catalog_from_dataframe(df)
+    rows = list(
+        enumerator.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=[d_pre],
+            data_types=["XG"],
+            present_set=set(),
+            present_cols=["data_type", "league_id", "date"],
+        )
+    )
+    assert rows == []  # pre-coverage → skipped (no double-emit with v1)
+
+
+def test_sports_could_exist_denominator_never_shrinks(rollup: ModuleType) -> None:
+    """Regression: a captured cell is ALWAYS in the present_set → never re-seeded.
+
+    The could-exist universe (catalogue x data_types x dates) is a SUPERSET of the
+    captured manifest cells, so the enumerator never emits for a captured cell —
+    the coverage denominator can only grow, never shrink below captured.
+    """
+    enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_v2_sports_superset")
+    d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
+    df = rollup.build_sports_catalogue_dataframe(
+        [(d1, _league_snap([{"league_id": "39"}])), (d2, _league_snap([{"league_id": "39"}]))]
+    )
+    catalog = enumerator._catalog_from_dataframe(df)
+    present_cols = ["data_type", "league_id", "date"]
+    # Every (FIXTURES, 39, date) is captured → present_set covers the whole could-exist universe.
+    present_set = {("FIXTURES", "39", "2024-06-01"), ("FIXTURES", "39", "2024-06-02")}
+    rows = list(
+        enumerator.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=[d1, d2],
+            data_types=["FIXTURES"],
+            present_set=present_set,
+            present_cols=present_cols,
+        )
+    )
+    # No expected_unattempted for already-captured cells → denominator == captured (no shrink).
+    assert [r for r in rows if r.capture_status == "expected_unattempted"] == []
+
+
+# ---------------------------------------------------------------------------
 # evaluate_monotonic_guard
 # ---------------------------------------------------------------------------
 
