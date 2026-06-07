@@ -1101,17 +1101,19 @@ class TestG1EnumCefiFilter:
         rows = self._run("COMBO")
         assert rows == [], f"Expected zero rows for cefi COMBO, got {len(rows)}"
 
-    def test_options_chain_bundle_emits_options_chain_only(self) -> None:
-        """cefi options_chain instrument → only 'options_chain' data_type."""
+    def test_options_chain_bundle_emits_trades_only(self) -> None:
+        """ERA-B: the cefi options_chain instrument_type's market data_type is
+        trades (not the chain name) → only 'trades' emitted."""
         rows = self._run("options_chain")
         data_types_emitted = {r.data_type for r in rows}
-        assert data_types_emitted == {"options_chain"}
+        assert data_types_emitted == {"trades"}
 
-    def test_futures_chain_bundle_emits_futures_chain_only(self) -> None:
-        """cefi futures_chain instrument → only 'futures_chain' data_type."""
+    def test_futures_chain_bundle_emits_trades_only(self) -> None:
+        """ERA-B: the cefi futures_chain instrument_type's market data_type is
+        trades → only 'trades' emitted."""
         rows = self._run("futures_chain")
         data_types_emitted = {r.data_type for r in rows}
-        assert data_types_emitted == {"futures_chain"}
+        assert data_types_emitted == {"trades"}
 
 
 class TestG1EnumDefiFilter:
@@ -1258,8 +1260,8 @@ def test_cefi_v2_combo_leaf_yields_no_per_contract_candidate() -> None:
 
 def test_cefi_v2_options_chain_bundle_yields_exactly_one_per_underlying() -> None:
     """The per-underlying options_chain bundle catalogue entry produces exactly
-    ONE options_chain candidate per date (the bundle grain) — not the full
-    cefi data_type cross-product."""
+    ONE candidate per date (the bundle grain) with data_type=trades (Era-B) —
+    not the full cefi data_type cross-product, not data_type=options_chain."""
     catalog = [
         _make_cefi_entry(
             instrument_id="BTC",
@@ -1273,7 +1275,7 @@ def test_cefi_v2_options_chain_bundle_yields_exactly_one_per_underlying() -> Non
     dates = _date_axis("2024-06-01", "2025-06-01")
     rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
     assert len(rows) == 1, "bundle entry must yield exactly one candidate per underlying/date"
-    assert rows[0].data_type == "options_chain"
+    assert rows[0].data_type == "trades"  # ERA-B: chain bundle's market data_type is trades
     assert rows[0].instrument_id == "BTC"
 
 
@@ -1292,13 +1294,15 @@ def test_cefi_v2_bundle_grain_matches_uac_grain_axis() -> None:
 
 
 # ---------------------------------------------------------------------------
-# G1-ENUM bundle-grain ROLLUP via enumerate_v2 (slot-7 2026-06-07)
+# G1-ENUM bundle-grain ROLLUP via enumerate_v2 (slot-7 2026-06-07, ERA-B)
 #
-# The end-to-end acceptance bar: OPTION/COMBO leaves collapse to ONE
-# options_chain candidate per underlying (NOT one per leaf contract); the
-# futures_chain bundle entry yields one candidate per underlying; impossible
+# The end-to-end acceptance bar: OPTION/COMBO leaves collapse to ONE candidate
+# per underlying with instrument_type=options_chain AND data_type=trades (Era-B;
+# NOT one per leaf contract, NOT data_type=options_chain); the futures_chain
+# bundle entry yields one candidate per underlying (data_type=trades); impossible
 # pairs (PERPETUAL x options_chain) stay excluded. Generalises slot-4's
-# league-grain rollup (driven by the UAC GRAIN + bundle_data_type registry).
+# league-grain rollup (driven by the UAC GRAIN + bundle_instrument_type registry +
+# the validity matrix options_chain/futures_chain → trades).
 # ---------------------------------------------------------------------------
 
 
@@ -1326,11 +1330,13 @@ def test_enumerate_v2_option_leaves_collapse_to_one_per_underlying() -> None:
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")  # pre-listing date + alive date
     rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
-    # Exactly one options_chain candidate per underlying — NOT one per contract.
-    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "options_chain"), ("ETH", "options_chain")}
+    # Era-B: exactly one candidate per underlying, data_type=trades — NOT one per
+    # contract, NOT data_type=options_chain.
+    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "trades"), ("ETH", "trades")}
     assert all(r.instrument_type == "options_chain" for r in rows)
-    # No per-contract OPTION candidates leaked through.
+    # No per-contract OPTION candidates and no data_type=options_chain leaked through.
     assert not any(r.instrument_type == "OPTION" for r in rows)
+    assert not any(r.data_type == "options_chain" for r in rows)
 
 
 def test_enumerate_v2_combo_leaves_roll_up_to_options_chain() -> None:
@@ -1340,23 +1346,25 @@ def test_enumerate_v2_combo_leaves_roll_up_to_options_chain() -> None:
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
     rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
-    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "options_chain")}
+    # Era-B: instrument_type=options_chain bundle, data_type=trades.
+    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "options_chain", "trades")}
 
 
 def test_enumerate_v2_underlying_derived_when_field_blank() -> None:
     catalog = [_opt_entry("BTC-29MAR24-50000-C")]  # underlying="" → derive "BTC"
     dates = _date_axis("2024-06-01", "2025-06-01")
     rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
-    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "options_chain")}
+    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "trades")}
 
 
 def test_enumerate_v2_futures_chain_bundle_entry_yields_one_per_underlying() -> None:
     """A futures_chain bundle entry (per-underlying) passes through the rollup and
-    yields exactly one futures_chain candidate (the 'one futures_chain' arm)."""
+    yields exactly one candidate — instrument_type=futures_chain, data_type=trades
+    (Era-B; the chain name is the instrument_type, the market data_type is trades)."""
     catalog = [_opt_entry("BTC", "BTC", instrument_type="futures_chain")]
     dates = _date_axis("2024-06-01", "2025-06-01")
     rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
-    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "futures_chain")}
+    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
 
 
 def test_enumerate_v2_perpetual_does_not_produce_options_chain() -> None:
@@ -1378,7 +1386,8 @@ def test_enumerate_v2_tradfi_option_leaves_roll_up() -> None:
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
     rows = list(enumerator_module.enumerate_v2(asset_group="tradfi", catalog=catalog, date_axis=dates))
-    assert {(r.instrument_id, r.data_type) for r in rows} == {("ES", "options_chain")}
+    # Era-B: instrument_type=options_chain bundle, data_type=trades.
+    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("ES", "options_chain", "trades")}
 
 
 def test_enumerate_v2_non_bundle_instruments_unchanged() -> None:
