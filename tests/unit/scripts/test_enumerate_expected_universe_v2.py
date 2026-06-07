@@ -1210,3 +1210,82 @@ class TestG1EnumTradfiFilter:
         assert "trades" not in data_types_emitted
         # at least one ohlcv must be present
         assert any("ohlcv" in dt for dt in data_types_emitted)
+
+
+# ---------------------------------------------------------------------------
+# G1-ENUM bundle-grain rollup (slot-7 2026-06-07)
+#
+# Leaf OPTION/COMBO contracts roll UP into a per-underlying options_chain /
+# futures_chain bundle: ZERO per-contract candidates (the pre-G1-ENUM over-fan
+# was one candidate per leaf contract x data_type), and the per-underlying
+# bundle catalogue entry carries exactly ONE candidate. Pins the contract so a
+# regression cannot reintroduce the per-leaf fan.
+# ---------------------------------------------------------------------------
+
+_CEFI_DATA_TYPES = ["trades", "book_snapshot_5", "ohlcv_1m", "options_chain"]
+
+
+def test_cefi_v2_option_leaf_yields_no_per_contract_candidate() -> None:
+    """A leaf OPTION contract must produce NO per-contract expected_unattempted
+    rows — it is captured at the options_chain bundle grain (frozenset() in the
+    validity matrix). This kills the 72K-OPTION x N-data_type over-fan."""
+    catalog = [
+        _make_cefi_entry(
+            instrument_id="BTC-29MAR24-50000-C",
+            instrument_type="OPTION",
+            venue="DERIBIT",
+            available_from="2025-01-01",
+        )
+    ]
+    dates = _date_axis("2024-06-01", "2025-06-01")  # 2024-06-01 pre-listing, 2025-06-01 alive
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
+    assert rows == [], "leaf OPTION must not fan per-contract candidates"
+
+
+def test_cefi_v2_combo_leaf_yields_no_per_contract_candidate() -> None:
+    catalog = [
+        _make_cefi_entry(
+            instrument_id="BTC-COMBO-XYZ",
+            instrument_type="COMBO",
+            venue="DERIBIT",
+            available_from="2025-01-01",
+        )
+    ]
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
+    assert rows == [], "leaf COMBO must not fan per-contract candidates"
+
+
+def test_cefi_v2_options_chain_bundle_yields_exactly_one_per_underlying() -> None:
+    """The per-underlying options_chain bundle catalogue entry produces exactly
+    ONE options_chain candidate per date (the bundle grain) — not the full
+    cefi data_type cross-product."""
+    catalog = [
+        _make_cefi_entry(
+            instrument_id="BTC",
+            instrument_type="options_chain",
+            venue="DERIBIT",
+            available_from="2025-01-01",
+        )
+    ]
+    # Two-date window (alive date keeps the lifecycle-overlap filter from
+    # skipping the instrument); only the pre-listing date yields a candidate.
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
+    assert len(rows) == 1, "bundle entry must yield exactly one candidate per underlying/date"
+    assert rows[0].data_type == "options_chain"
+    assert rows[0].instrument_id == "BTC"
+
+
+def test_cefi_v2_bundle_grain_matches_uac_grain_axis() -> None:
+    """The enumerator's per-leaf-skip must agree with the UAC GRAIN SSOT."""
+    from unified_api_contracts import GRAIN_BUNDLE_BY_UNDERLYING, grain_for_instrument_type
+
+    assert grain_for_instrument_type("cefi", "OPTION") == GRAIN_BUNDLE_BY_UNDERLYING
+    # SPOT is leaf → it DOES fan (one row per kept data_type) so the two agree
+    # only for the bundle-grain types.
+    spot_catalog = [_make_cefi_entry(instrument_type="SPOT", venue="BINANCE", available_from="2025-01-01")]
+    spot_rows = list(
+        enumerator_module._enumerate_v2_cefi(spot_catalog, _date_axis("2024-06-01", "2025-06-01"), _CEFI_DATA_TYPES)
+    )
+    assert len(spot_rows) > 0, "leaf SPOT must still fan per-data_type"
