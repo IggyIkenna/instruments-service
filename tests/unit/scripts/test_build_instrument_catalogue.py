@@ -324,6 +324,81 @@ def test_sports_rollup_empty_input_returns_catalog_columns(rollup: ModuleType) -
     assert df.empty
 
 
+# ---------------------------------------------------------------------------
+# build_sports_catalogue_from_manifest — the namespace-correct could-exist source
+# ---------------------------------------------------------------------------
+
+
+def test_sports_catalogue_from_manifest_superset_and_excludes_retired(rollup: ModuleType) -> None:
+    """One row per distinct CURRENT-data_type canonical league; retired/blank excluded.
+
+    Regression for the CF-14 fix (slot-4 2026-06-07): the could-exist universe is
+    the MANIFEST's own canonical leagues (a captured league provably could-exist),
+    NOT the raw-numeric entity=leagues roll-up. Retired data_types
+    (LEAGUES/TRANSFERMARKT_LEAGUES/SFI_LEAGUES) + blank league_ids are excluded.
+    """
+    manifest = pd.DataFrame(
+        [
+            {"league_id": "ENG_PREMIER", "data_type": "FIXTURES", "date": "2024-01-05"},
+            {"league_id": "ENG_PREMIER", "data_type": "XG", "date": "2024-02-01"},
+            {"league_id": "ITA_SERIE_A", "data_type": "MATCHES", "date": "2023-08-01"},
+            {"league_id": "99", "data_type": "LEAGUES", "date": "2020-01-01"},  # RETIRED data_type
+            {"league_id": "", "data_type": "FIXTURES", "date": "2024-01-01"},  # blank league
+        ]
+    )
+    df = rollup.build_sports_catalogue_from_manifest(manifest)
+    by_id = {row["league_id"]: row for row in df.to_dict("records")}
+    # ⊇ manifest CURRENT leagues; retired-only numeric league + blank dropped.
+    assert set(by_id) == {"ENG_PREMIER", "ITA_SERIE_A"}
+    assert by_id["ENG_PREMIER"]["instrument_type"] == rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE
+    assert by_id["ENG_PREMIER"]["venue"] == ""
+    assert by_id["ENG_PREMIER"]["data_type"] is None
+    # available_from = earliest captured date across that league's current data_types.
+    assert by_id["ENG_PREMIER"]["available_from"] == "2024-01-05"
+    assert by_id["ENG_PREMIER"]["available_to"] is None  # active (enumerator applies coverage window)
+
+
+def test_sports_catalogue_from_manifest_empty_or_missing_cols(rollup: ModuleType) -> None:
+    assert rollup.build_sports_catalogue_from_manifest(pd.DataFrame()).empty
+    # missing required columns → empty (never a crash)
+    bad = pd.DataFrame([{"league_id": "ENG_PREMIER"}])
+    out = rollup.build_sports_catalogue_from_manifest(bad)
+    assert out.empty
+    assert list(out.columns) == list(rollup.CATALOG_COLUMNS)
+
+
+def test_sports_enumerator_skips_league_outside_entity_coverage(rollup: ModuleType) -> None:
+    """XG (Understat) must NOT seed expected_unattempted for a non-Understat league.
+
+    Regression for the entity-coverage gate: get_entity_league_coverage("XG") is the
+    Understat 5-league subset; a league outside it gets no XG seed (the source
+    legitimately doesn't cover it — not an honest owed cell).
+    """
+    enumerator = _load_script_module("enumerate_expected_universe.py", "_enum_v2_sports_cov")
+    d = date(2024, 6, 1)
+    # EPL IS in Understat coverage; A_RANDOM_LEAGUE is NOT.
+    manifest = pd.DataFrame(
+        [
+            {"league_id": "EPL", "data_type": "XG", "date": "2024-05-01"},
+            {"league_id": "A_RANDOM_LEAGUE", "data_type": "MATCHES", "date": "2024-05-01"},
+        ]
+    )
+    catalog = enumerator._catalog_from_dataframe(rollup.build_sports_catalogue_from_manifest(manifest))
+    rows = list(
+        enumerator.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=[d],
+            data_types=["XG"],
+            present_set=set(),
+            present_cols=["data_type", "league_id", "date"],
+        )
+    )
+    seeded_leagues = {r.league_id for r in rows if r.capture_status == "expected_unattempted"}
+    assert "EPL" in seeded_leagues  # covered by Understat → seeded
+    assert "A_RANDOM_LEAGUE" not in seeded_leagues  # NOT covered → no false seed
+
+
 def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(rollup: ModuleType) -> None:
     """End-to-end: producer → _catalog_from_dataframe → enumerate_v2(sports).
 
