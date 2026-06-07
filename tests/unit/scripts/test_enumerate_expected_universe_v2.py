@@ -1289,3 +1289,102 @@ def test_cefi_v2_bundle_grain_matches_uac_grain_axis() -> None:
         enumerator_module._enumerate_v2_cefi(spot_catalog, _date_axis("2024-06-01", "2025-06-01"), _CEFI_DATA_TYPES)
     )
     assert len(spot_rows) > 0, "leaf SPOT must still fan per-data_type"
+
+
+# ---------------------------------------------------------------------------
+# G1-ENUM bundle-grain ROLLUP via enumerate_v2 (slot-7 2026-06-07)
+#
+# The end-to-end acceptance bar: OPTION/COMBO leaves collapse to ONE
+# options_chain candidate per underlying (NOT one per leaf contract); the
+# futures_chain bundle entry yields one candidate per underlying; impossible
+# pairs (PERPETUAL x options_chain) stay excluded. Generalises slot-4's
+# league-grain rollup (driven by the UAC GRAIN + bundle_data_type registry).
+# ---------------------------------------------------------------------------
+
+
+def _opt_entry(instrument_id: str, underlying: str = "", *, instrument_type: str = "OPTION", venue: str = "DERIBIT"):
+    return InstrumentCatalogEntry(
+        instrument_id=instrument_id,
+        instrument_type=instrument_type,
+        venue=venue,
+        chain="",
+        league_id="",
+        available_from="2025-01-01",
+        available_to=None,
+        market_created_at=None,
+        settlement_time=None,
+        underlying=underlying,
+    )
+
+
+def test_enumerate_v2_option_leaves_collapse_to_one_per_underlying() -> None:
+    catalog = [
+        _opt_entry("BTC-29MAR24-50000-C", "BTC"),
+        _opt_entry("BTC-29MAR24-60000-P", "BTC"),
+        _opt_entry("BTC-26APR24-50000-C", "BTC"),
+        _opt_entry("ETH-29MAR24-3000-C", "ETH"),
+    ]
+    dates = _date_axis("2024-06-01", "2025-06-01")  # pre-listing date + alive date
+    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    # Exactly one options_chain candidate per underlying — NOT one per contract.
+    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "options_chain"), ("ETH", "options_chain")}
+    assert all(r.instrument_type == "options_chain" for r in rows)
+    # No per-contract OPTION candidates leaked through.
+    assert not any(r.instrument_type == "OPTION" for r in rows)
+
+
+def test_enumerate_v2_combo_leaves_roll_up_to_options_chain() -> None:
+    catalog = [
+        _opt_entry("BTC-COMBO-1", "BTC", instrument_type="COMBO"),
+        _opt_entry("BTC-COMBO-2", "BTC", instrument_type="COMBO"),
+    ]
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "options_chain")}
+
+
+def test_enumerate_v2_underlying_derived_when_field_blank() -> None:
+    catalog = [_opt_entry("BTC-29MAR24-50000-C")]  # underlying="" → derive "BTC"
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "options_chain")}
+
+
+def test_enumerate_v2_futures_chain_bundle_entry_yields_one_per_underlying() -> None:
+    """A futures_chain bundle entry (per-underlying) passes through the rollup and
+    yields exactly one futures_chain candidate (the 'one futures_chain' arm)."""
+    catalog = [_opt_entry("BTC", "BTC", instrument_type="futures_chain")]
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "futures_chain")}
+
+
+def test_enumerate_v2_perpetual_does_not_produce_options_chain() -> None:
+    """Impossible pair PERPETUAL x options_chain must stay excluded (a PERP leaf
+    is per-contract and never rolls up to a chain bundle)."""
+    catalog = [_opt_entry("BTC-USDT-PERP", "BTC", instrument_type="PERP", venue="BINANCE")]
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    assert not any(r.data_type == "options_chain" for r in rows)
+    # PERP stays per-contract (its own valid data_types), instrument_id unchanged.
+    assert all(r.instrument_id == "BTC-USDT-PERP" for r in rows)
+
+
+def test_enumerate_v2_tradfi_option_leaves_roll_up() -> None:
+    """Generalisation: tradfi option leaves roll up identically (no special-case)."""
+    catalog = [
+        _opt_entry("ES-OPT-1", "ES", instrument_type="OPTION", venue="CME"),
+        _opt_entry("ES-OPT-2", "ES", instrument_type="OPTION", venue="CME"),
+    ]
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module.enumerate_v2(asset_group="tradfi", catalog=catalog, date_axis=dates))
+    assert {(r.instrument_id, r.data_type) for r in rows} == {("ES", "options_chain")}
+
+
+def test_enumerate_v2_non_bundle_instruments_unchanged() -> None:
+    """SPOT (leaf) is untouched by the rollup — still per-instrument."""
+    catalog = [_opt_entry("BTC-USDT", instrument_type="SPOT", venue="BINANCE", underlying="BTC")]
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    assert all(r.instrument_id == "BTC-USDT" for r in rows)
+    assert not any(r.data_type == "options_chain" for r in rows)
