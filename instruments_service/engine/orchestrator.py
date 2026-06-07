@@ -1273,6 +1273,7 @@ async def process_instruments(
     league_filter: list[str] | None = None,
     season_override: int | None = None,
     recovery_fixture_ids: frozenset[int] | None = None,
+    source: str | None = None,
 ) -> dict[str, int]:
     """Process instruments for a single date and set of asset groups.
 
@@ -1867,7 +1868,7 @@ async def process_instruments(
     if non_defi_active:
         with SolanaCacheSession():
             non_defi_result = await fetch_instruments_for_all_venues(
-                non_defi_active, api_keys=api_keys, date=date, mode=mode
+                non_defi_active, api_keys=api_keys, date=date, mode=mode, source=source
             )
         records.extend(non_defi_result.records)
         _retryable_venues.extend(non_defi_result.retryable_venues)
@@ -3038,6 +3039,7 @@ async def process_instruments(
                 api_keys=api_keys,
                 date=date,
                 mode=mode,
+                source=source,
             )
         retry_records = retry_result.records
         # Update retryable set from this attempt's failures
@@ -3373,6 +3375,14 @@ def _write_venue(
                     _rk: dict[str, str] = {"date": date, "venue": manifest_venue}
                     if manifest_chain:
                         _rk["chain"] = manifest_chain
+                    # NOTE: instrument-definition rows are PRODUCER-emitted
+                    # (pipeline_mode=BATCH_INSTRUMENTS_SERVICE). Per the C-#6
+                    # source⇔pipeline_mode contract (2026-06-07) a BATCH row's
+                    # explicit source must equal source_string_for(pipeline_mode),
+                    # so we do NOT stamp the vendor (massive/databento) here — the
+                    # source auto-resolves (blank/instruments_service). Which vendor
+                    # served the snapshot is the adapter's routing concern, not a
+                    # per-row manifest tag for producer rows.
                     manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key=_rk,
                         df=_stamped_venue_df,
