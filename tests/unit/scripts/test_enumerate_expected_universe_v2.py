@@ -907,20 +907,19 @@ def test_sports_v2_alive_date_not_in_present_set_yields_expected_unattempted() -
 
 
 def test_sports_v2_alive_date_in_present_set_skipped() -> None:
+    """League-grain present match: the captured atom is (data_type, league_id, date) —
+    venue / instrument_id / instrument_type are blank-tolerant (excluded from the key)."""
     catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="PL")]
     date_axis = _date_axis("2024-01-12")
-    key = _row_key_from_dict(
-        {
-            "venue": "api_football",
-            "chain": "",
-            "data_type": "lineups",
-            "instrument_type": "FIXTURE",
-            "instrument_id": "FIX-1234",
-            "league_id": "PL",
-            "date": "2024-01-12",
-        }
+    present_cols = ["data_type", "league_id", "date"]
+    # Captured row carries blank venue/instrument_id (the real sports manifest atom),
+    # yet the league-grain key still matches the catalogue league.
+    key = tuple({"data_type": "lineups", "league_id": "PL", "date": "2024-01-12"}[c] for c in present_cols)
+    rows = list(
+        enumerator_module._enumerate_v2_sports(
+            catalog, date_axis, ["lineups"], present_set={key}, present_cols=present_cols
+        )
     )
-    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["lineups"], present_set={key}))
     assert rows == []
 
 
