@@ -910,6 +910,7 @@ def _enumerate_v2_sports(
     """
     from unified_api_contracts.sports import (
         SPORTS_DATA_TYPE_TO_SOURCE,
+        get_entity_league_coverage,
         get_source_coverage_start,
     )
 
@@ -919,10 +920,18 @@ def _enumerate_v2_sports(
 
     # Pre-resolve each data_type's source coverage start once (None = unmapped).
     coverage_starts: dict[str, pd.Timestamp | None] = {}
+    # Pre-resolve each data_type's per-LEAGUE entity coverage once. ``None`` = the
+    # source covers ALL leagues; a frozenset = the source covers ONLY those
+    # canonical leagues (e.g. XG / XG_SHOTS → Understat's ~5 leagues). Seeding a
+    # data_type for a league outside its coverage is a FALSE expected_unattempted
+    # (the source legitimately doesn't cover that league) — gate it out below.
+    entity_coverage: dict[str, frozenset[str] | None] = {}
     for dt in data_types:
         source = SPORTS_DATA_TYPE_TO_SOURCE.get(dt)
         cov = get_source_coverage_start(source, dt) if source is not None else None
         coverage_starts[dt] = pd.Timestamp(cov) if cov is not None else None
+        _ec = get_entity_league_coverage(dt)
+        entity_coverage[dt] = frozenset(x.upper() for x in _ec) if _ec is not None else None
 
     for instr in catalog:
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
@@ -937,6 +946,12 @@ def _enumerate_v2_sports(
         if not row_dts:
             continue  # unmapped sports instrument type → skip entirely
         for dt in row_dts:
+            # Per-league entity coverage: skip a data_type whose source does NOT
+            # cover this league (e.g. XG for a non-Understat league) — seeding it
+            # would be a false expected_unattempted, not an honest owed cell.
+            _cov_leagues = entity_coverage.get(dt)
+            if _cov_leagues is not None and league_id.upper() not in _cov_leagues:
+                continue
             cov_ts = coverage_starts.get(dt)
             for d in date_axis:
                 d_ts = pd.Timestamp(d)
