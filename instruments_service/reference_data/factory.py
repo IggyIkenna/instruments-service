@@ -71,6 +71,7 @@ from .adapters.sports.adapters.api_football_reference import ApiFootballReferenc
 from .adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
 from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
+from .adapters.tradfi.massive import MassiveReferenceDataAdapter
 from .adapters.tradfi.polygon import PolygonReferenceDataAdapter
 from .adapters.tradfi.tradfi_live import TradFiLiveReferenceDataAdapter
 from .base_adapter import BaseReferenceDataAdapter
@@ -301,6 +302,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "karak": KarakReferenceDataAdapter,
     "mango": MangoReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
+    "massive": MassiveReferenceDataAdapter,
     "ibkr": IBKRReferenceDataAdapter,
     "kalshi": KalshiReferenceDataAdapter,
     "lighter": LighterReferenceDataAdapter,
@@ -339,6 +341,7 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "aster": "aster",
     "tardis": "tardis",
     "databento": "databento",
+    "massive": "massive",
     "ibkr": "ibkr",
     "polygon": "polygon",
     "polymarket": "polymarket",
@@ -431,6 +434,47 @@ def clear_adapter_pool() -> None:
     _adapter_pool.clear()
 
 
+#: TradFi reference adapter keys sharing the target_date + venue_filter contract
+#: (both emit the canonical InstrumentRecord; Massive is Polygon.io-API compatible
+#: — the sanctioned alt to Databento whose re-runs are billing-blocked 2026-06).
+_DATE_AWARE_TRADFI_ADAPTER_KEYS: frozenset[str] = frozenset({"databento", "massive"})
+
+
+def _resolve_source_aware_adapter_key(adapter_key: str, source: str | None) -> str:
+    """Source-aware routing: ``source="massive"`` re-points a TradFi venue that
+    defaults to Databento → the Massive adapter (Databento re-runs billing-blocked
+    2026-06; Massive refills ``by_date/``). Same canonical InstrumentRecord output."""
+    if source == "massive" and adapter_key == "databento":
+        return "massive"
+    return adapter_key
+
+
+def _build_date_aware_tradfi_adapter(
+    adapter_key: str,
+    *,
+    project_id: str | None,
+    api_key: str | None,
+    date: str | None,
+    canonical_venue: str,
+) -> BaseReferenceDataAdapter:
+    """Build a Databento/Massive adapter — date + venue filter so each venue only
+    fetches its own instruments (target_date baked in at init)."""
+    target = date_type.fromisoformat(date) if date else None
+    if adapter_key == "massive":
+        return MassiveReferenceDataAdapter(
+            project_id=project_id,
+            api_key=api_key,
+            target_date=target,
+            venue_filter=canonical_venue,
+        )
+    return DatabentoReferenceDataAdapter(
+        project_id=project_id,
+        api_key=api_key,
+        target_date=target,
+        venue_filter=canonical_venue,
+    )
+
+
 def get_adapter_for_canonical_venue(
     canonical_venue: str,
     api_key: str | None = None,
@@ -438,6 +482,7 @@ def get_adapter_for_canonical_venue(
     date: str | None = None,
     extra_api_keys: dict[str, str] | None = None,
     mode: str = "batch",
+    source: str | None = None,
 ) -> BaseReferenceDataAdapter:
     """Create a reference data adapter for a UAC canonical venue name.
 
@@ -467,6 +512,8 @@ def get_adapter_for_canonical_venue(
             f"No URDI adapter for canonical venue {canonical_venue!r}. "
             f"Add an entry to CANONICAL_VENUE_TO_ADAPTER. Supported: {supported}"
         )
+
+    adapter_key = _resolve_source_aware_adapter_key(adapter_key, source)
 
     # Live mode: route CeFi Tardis venues to CCXT (real-time public endpoints).
     # Tardis is historical-only and can't provide live instrument definitions.
@@ -509,7 +556,7 @@ def get_adapter_for_canonical_venue(
     # Check pool — reuse existing adapter if same key + credentials + venue + date
     # Include canonical_venue in pool key so AAVE_V3-ARBITRUM != AAVE_V3-ETHEREUM
     # Include date for Databento (target_date baked into adapter at init time)
-    pool_date = date if adapter_key == "databento" else None
+    pool_date = date if adapter_key in ("databento", "massive") else None
     pool_key = (adapter_key, api_key, canonical_venue, pool_date)
     if pool_key in _adapter_pool:
         return _adapter_pool[pool_key]
@@ -605,14 +652,13 @@ def get_adapter_for_canonical_venue(
             api_key=api_key,
             exchanges=[tardis_exchange],
         )
-    elif adapter_key == "databento":
-        # Databento: pass date + venue filter so each venue only fetches its instruments
-        target = date_type.fromisoformat(date) if date else None
-        adapter = DatabentoReferenceDataAdapter(
+    elif adapter_key in _DATE_AWARE_TRADFI_ADAPTER_KEYS:
+        adapter = _build_date_aware_tradfi_adapter(
+            adapter_key,
             project_id=project_id,
             api_key=api_key,
-            target_date=target,
-            venue_filter=canonical_venue,
+            date=date,
+            canonical_venue=canonical_venue,
         )
     elif adapter_key == "polymarket" and extra_api_keys:
         # Polymarket: pass API-Football key for fixture cross-referencing
