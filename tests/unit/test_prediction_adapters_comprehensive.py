@@ -616,7 +616,12 @@ class TestPolymarketFetchPageErrorPaths:
 
     @pytest.mark.asyncio
     async def test_fetch_page_client_error(self) -> None:
-        """Client error in _fetch_page returns empty list."""
+        """Client error in _fetch_page RAISES (→ attempted_failed), not return [].
+
+        Updated from the pre-CF-11 return-empty contract (which let a transient
+        failure truncate the live universe to a silent-complete empty) per
+        prediction_manifest_canonicalisation_2026_06_01 § CF-11 IS write-path.
+        """
         adapter = PolymarketReferenceDataAdapter()
         mock_session_obj = MagicMock()
         mock_cm = MagicMock()
@@ -624,8 +629,8 @@ class TestPolymarketFetchPageErrorPaths:
         mock_cm.__aexit__ = AsyncMock(return_value=None)
         mock_session_obj.get = MagicMock(return_value=mock_cm)
         now = datetime.now(UTC)
-        result = await adapter._fetch_page(mock_session_obj, 0, now)
-        assert result == []
+        with pytest.raises(aiohttp.ClientError):
+            await adapter._fetch_page(mock_session_obj, 0, now)
 
     @pytest.mark.asyncio
     async def test_fetch_page_validation_error_skipped(self) -> None:

@@ -778,7 +778,15 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
                     "retry_safe": retry_safe,
                 },
             )
-            return []
+            # A mid-pagination page failure must NOT silently truncate the live
+            # universe. The caller (`get_instruments` live-mode loop) breaks when a
+            # page yields fewer than ``_PAGE_LIMIT`` records — so a transient ``[]``
+            # here would masquerade as a COMPLETE (but smaller / empty) universe with
+            # ZERO failure signal (CF-11 / A8). RAISE so the per-venue handler records
+            # the cell ``attempted_failed`` instead. Single-venue pagination loop (NOT
+            # a per-venue/per-shard loop) → raising respects shard-level failure
+            # isolation; mirrors ``_fetch_all_raw_clob_markets``.
+            raise
 
         raw_list = cast(list[object], raw_json)
         results: list[InstrumentRecord] = []
