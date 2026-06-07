@@ -102,9 +102,24 @@ logger = logging.getLogger(__name__)
 
 #: GCS prefix the per-date instrument definitions live under, for cefi / defi /
 #: tradfi / prediction. (Sports fixtures use ``sports_reference/by_date`` with an
-#: ``entity=`` key — overridable via ``--by-date-prefix``; the sports slice is
-#: tracked as Phase 3 of the plan.)
+#: ``entity=`` key — see :data:`SPORTS_BY_DATE_PREFIX`; overridable via
+#: ``--by-date-prefix``.)
 DEFAULT_BY_DATE_PREFIX = "instrument_availability/by_date"
+
+#: GCS prefix the per-date SPORTS reference definitions live under. The sports
+#: writer partitions ``sports_reference/by_date/day={date}/entity={entity}/`` with
+#: one parquet per entity (leagues / fixtures / teams / standings / …). The
+#: could-exist catalogue rolls up the ``entity=leagues`` slice ONLY — the sports
+#: captured manifest atom is per-(league_id, data_type, date) (slot-4 finding
+#: 2026-06-07: league_id populated 97.6% / venue ~blank / instrument_id blank on
+#: the canonical _index), so the could-exist grain is per-LEAGUE, NOT per-fixture.
+SPORTS_BY_DATE_PREFIX = "sports_reference/by_date"
+
+#: The ``entity=leagues`` slice the sports league-grain roll-up consumes.
+SPORTS_LEAGUE_ENTITY = "leagues"
+
+#: The ``instrument_type`` stamped on every sports league catalogue row.
+SPORTS_LEAGUE_INSTRUMENT_TYPE = "league"
 
 #: The canonical catalogue filename the launcher + v2 enumerator read.
 CATALOG_FILENAME = "catalog.parquet"
@@ -134,6 +149,9 @@ MAX_DOWNLOAD_WORKERS = 16
 
 #: Extract the ISO ``day=`` partition from a ``by_date`` blob path.
 _DAY_RE = re.compile(r"(?:^|/)day=(\d{4}-\d{2}-\d{2})(?:/|$)")
+
+#: Extract the ``entity=`` partition from a sports ``by_date`` blob path.
+_ENTITY_RE = re.compile(r"(?:^|/)entity=([^/]+)(?:/|$)")
 
 #: Extract the ``venue=`` / ``canonical_question_group=`` partitions (prediction).
 #: The prediction writer (instruments-service ``orchestrator.py``) partitions
@@ -443,6 +461,114 @@ def build_prediction_catalogue_dataframe(
 
 
 # ---------------------------------------------------------------------------
+# Sports LEAGUE-GRAIN roll-up (entity=leagues)
+# ---------------------------------------------------------------------------
+
+
+def _league_id_of(row: dict[str, object]) -> str | None:
+    """Return the league identifier for an ``entity=leagues`` row, or None.
+
+    The sports ``leagues`` parquet carries a raw provider ``league_id`` column
+    (api-football numeric id, as a string) — NOT the ``instrument_key`` /
+    ``instrument_id`` the generic :func:`build_catalogue_dataframe` requires
+    (which is why a plain ``--asset-group sports`` run yields a 0-row catalogue).
+    """
+    raw = row.get("league_id")
+    if raw is None:
+        return None
+    try:
+        if pd.isna(raw):  # pyright: ignore[reportArgumentType]
+            return None
+    except (TypeError, ValueError):
+        pass
+    text = str(raw).strip()
+    return text or None
+
+
+def build_sports_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) -> pd.DataFrame:
+    """Roll the per-date ``entity=leagues`` definitions up into a LEAGUE-grain catalogue.
+
+    The sports captured manifest atom is per-``(league_id, data_type, date)``
+    (slot-4 finding 2026-06-07 on the canonical ``instruments-store-sports-prd``
+    ``_index``: ``league_id`` populated 97.6% / ``venue`` blank 97.7% /
+    ``instrument_id`` blank ~100%), so the could-exist universe is per-LEAGUE,
+    not per-fixture. A fixture-grain catalogue would never match the league-grain
+    manifest present-set → every cell would seed ``expected_unattempted`` →
+    massively inflated coverage denominator.
+
+    So this producer emits ONE catalogue row per league. The data_type axis is
+    NOT bound here (``data_type=None``): the v2 sports enumerator iterates the
+    captured sports data_types itself and applies each source's
+    ``SOURCE_COVERAGE_START`` / ``DATA_TYPE_COVERAGE_START`` window
+    (``enumerate_expected_universe._enumerate_v2_sports``).
+
+    ``venue`` / ``instrument_id`` / ``instrument_type`` are deliberately written
+    so the seeded ``expected_unattempted`` atom matches the captured atom:
+    ``venue=""`` (captured venue is blank), ``instrument_id=league_id`` (a stable
+    per-row identity for the monotonic guard; the enumerator blanks it on the
+    yielded row so it does NOT participate in the league-grain present-set match),
+    ``instrument_type="league"``, ``league_id=<league_id>``.
+
+    Args:
+        snapshots: iterable of ``(day, frame)`` pairs — one per
+            ``sports_reference/by_date/day={day}/entity=leagues/leagues.parquet``
+            slice. Each frame holds that day's league definitions (``league_id``
+            / ``name`` / ``country`` / …; one row per league).
+
+    Returns:
+        A DataFrame with :data:`CATALOG_COLUMNS`, one row per distinct league:
+        ``available_from`` = first day the league appears; ``available_to`` =
+        last day present, or ``None`` when present on the latest snapshot day
+        (still active). Rows are sorted by ``league_id`` for deterministic output.
+    """
+    first_day: dict[str, date] = {}
+    last_day: dict[str, date] = {}
+    all_days: set[date] = set()
+
+    for day, frame in snapshots:
+        all_days.add(day)
+        if frame.empty:
+            continue
+        records: list[dict[str, object]] = frame.to_dict("records")  # pyright: ignore[reportAssignmentType]
+        for row in records:
+            lid = _league_id_of(row)
+            if lid is None:
+                continue
+            if lid not in first_day or day < first_day[lid]:
+                first_day[lid] = day
+            if lid not in last_day or day > last_day[lid]:
+                last_day[lid] = day
+
+    if not all_days:
+        return pd.DataFrame(columns=list(CATALOG_COLUMNS))
+
+    latest_day = max(all_days)
+
+    rows: list[dict[str, str | None]] = []
+    for lid in sorted(first_day):
+        available_to = None if last_day[lid] >= latest_day else last_day[lid].isoformat()
+        rows.append(
+            {
+                "instrument_id": lid,
+                "instrument_type": SPORTS_LEAGUE_INSTRUMENT_TYPE,
+                # Blank venue → matches the venue-blank captured manifest atom.
+                "venue": "",
+                "chain": "",
+                "league_id": lid,
+                "available_from": first_day[lid].isoformat(),
+                "available_to": available_to,
+                "market_created_at": None,
+                "settlement_time": None,
+                # Single-grain-per-league: the enumerator iterates the sports
+                # data_types (source-coverage-aware), so leave data_type unbound.
+                "data_type": None,
+            }
+        )
+
+    return pd.DataFrame(rows, columns=list(CATALOG_COLUMNS))
+
+
+# ---------------------------------------------------------------------------
 # Monotonic-guard decision (pure — unit-tested directly)
 # ---------------------------------------------------------------------------
 
@@ -618,6 +744,55 @@ def _iter_prediction_by_date_snapshots(
         yield from pool.map(_load, targets)
 
 
+def _iter_sports_by_date_snapshots(
+    storage: StorageClient,
+    bucket: str,
+    prefix: str,
+    *,
+    max_blobs: int | None = None,
+    max_workers: int = MAX_DOWNLOAD_WORKERS,
+) -> Iterator[tuple[date, pd.DataFrame]]:
+    """Yield ``(day, frame)`` for every ``entity=leagues`` parquet under ``prefix``.
+
+    The sports ``by_date`` tree carries ~17 entities per day (leagues / fixtures
+    / teams / standings / …); the league-grain catalogue rolls up the
+    ``entity=leagues`` slice ONLY. Non-leagues entities + parquets with no
+    ``day=`` partition are skipped (the latter with a warning). Downloads run
+    concurrently (``max_workers`` threads), mirroring :func:`_iter_by_date_snapshots`.
+
+    ``max_blobs`` truncates the path-sorted walk for a DIAGNOSTIC smoke-test
+    (forces dry-run upstream — a truncated walk is never promotable).
+    """
+    walk_prefix = prefix.rstrip("/") + "/"
+    targets: list[tuple[date, str]] = []
+    for blob in storage.list_blobs(bucket, prefix=walk_prefix):
+        name = blob.name
+        if not name.endswith(".parquet"):
+            continue
+        entity_m = _ENTITY_RE.search(name)
+        if entity_m is None or entity_m.group(1) != SPORTS_LEAGUE_ENTITY:
+            continue  # not the leagues slice — skip silently (other entities)
+        day_m = _DAY_RE.search(name)
+        if day_m is None:
+            logger.warning("Skipping sports leagues blob with no day= partition: %s", name)
+            continue
+        targets.append((date.fromisoformat(day_m.group(1)), name))
+
+    targets.sort(key=lambda item: item[1])
+    if max_blobs is not None:
+        targets = targets[:max_blobs]
+    logger.info("Found %d sports leagues by_date parquet(s) to roll up (workers=%d)", len(targets), max_workers)
+
+    def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame]:
+        day, name = item
+        payload = storage.download_bytes(bucket, name)
+        return day, pd.read_parquet(io.BytesIO(payload))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        # pool.map preserves order and re-raises the first worker exception.
+        yield from pool.map(_load, targets)
+
+
 def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str) -> int | None:
     """Return the row count of the current canonical catalogue, or None when absent."""
     if not storage.blob_exists(bucket, blob_path):
@@ -730,6 +905,11 @@ def run_rollup(
     bucket = _instruments_store_bucket_for(asset_group)
     env = get_config("DEPLOYMENT_ENV", "prod")
 
+    # Sports per-date definitions live under a different prefix (the leagues
+    # entity slice), so default to it when the caller did not override.
+    if asset_group == "sports" and by_date_prefix == DEFAULT_BY_DATE_PREFIX:
+        by_date_prefix = SPORTS_BY_DATE_PREFIX
+
     if max_blobs is not None and not dry_run:
         # A truncated walk yields an incomplete catalogue → never promotable.
         logger.warning("--max-blobs is diagnostic-only — forcing --dry-run (truncated walk is not promotable)")
@@ -755,6 +935,12 @@ def run_rollup(
         # trades/market_lifecycle are per-conditionId. Parse the cqg from the path.
         df = build_prediction_catalogue_dataframe(
             _iter_prediction_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs)
+        )
+    elif asset_group == "sports":
+        # League-grain roll-up: one row per league from the entity=leagues slice
+        # (the captured sports manifest atom is per-(league_id, data_type, date)).
+        df = build_sports_catalogue_dataframe(
+            _iter_sports_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs)
         )
     else:
         df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
