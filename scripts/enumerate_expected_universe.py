@@ -69,10 +69,13 @@ import pandas as pd
 from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
+    GRAIN_BUNDLE_BY_UNDERLYING,
     VENUES_BY_ASSET_GROUP,
     Mode,
+    bundle_data_type_for_instrument_type,
     default_transport_for_source,
     external_sources_for,
+    grain_for_instrument_type,
     has_source_priority,
     pipeline_mode_for_source,
     valid_data_types_for_instrument_type,
@@ -549,6 +552,9 @@ class InstrumentCatalogEntry(NamedTuple):
     market_created_at: str | None
     settlement_time: str | None
     data_type: str | None = None
+    # Underlying asset for derivatives (G1-ENUM bundle-grain roll-up key). Read
+    # from the instruments-store ``underlying`` column; "" for non-derivatives.
+    underlying: str = ""
 
 
 def _row_data_types(
@@ -1112,6 +1118,95 @@ _V2_ENUMERATORS: dict[
 }
 
 
+def _derive_underlying(instrument_id: str) -> str:
+    """Fallback underlying derivation when the catalogue ``underlying`` column is
+    blank — the base asset is the token before the first ``-`` separator
+    (``BTC-29MAR24-50000-C`` → ``BTC``; ``BTC-29MAR24`` → ``BTC``). Returns "" if
+    no separator (cannot key a bundle → caller skips rather than mis-key)."""
+    iid = instrument_id.strip()
+    if "-" not in iid:
+        return ""
+    return iid.split("-", 1)[0]
+
+
+def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str) -> list[InstrumentCatalogEntry]:
+    """Roll bundle-grain LEAF instruments up to ONE synthetic per-underlying
+    bundle entry (G1-ENUM).
+
+    For instrument_types the UAC GRAIN axis marks ``bundle_by_underlying`` AND
+    that map to a bundle data_type (``option``/``combo`` → ``options_chain``),
+    every leaf contract of an ``(venue, chain, underlying)`` collapses into ONE
+    synthetic catalogue entry — ``instrument_type`` = the bundle data_type,
+    ``instrument_id`` = the underlying, ``data_type`` = the bundle data_type
+    (grain-bound so the enumerator emits exactly that one candidate), lifecycle =
+    the UNION of the leaves' ``[available_from, available_to]`` windows. So the
+    enumerator yields ONE could-exist candidate per underlying instead of one per
+    leaf contract (the slot-3/slot-6 over-fan: 72K OPTION + 64.8K COMBO leaves).
+
+    Generalises slot-4's league-grain roll-up (the sports catalogue is built at
+    league grain; here the read-side pre-pass rolls option/combo leaves to the
+    chain-bundle grain) — driven entirely by the UAC registry, no per-AG
+    special-casing. Non-bundle-leaf instruments (incl. the ``options_chain`` /
+    ``futures_chain`` bundle entries themselves) pass through unchanged.
+    """
+    passthrough: list[InstrumentCatalogEntry] = []
+    # key (venue, chain, underlying, bundle_dt) → [min available_from, max available_to (None = open)]
+    bundles: dict[tuple[str, str, str, str], list[str | None]] = {}
+    saw_open_end: set[tuple[str, str, str, str]] = set()
+    for instr in catalog:
+        bundle_dt = bundle_data_type_for_instrument_type(asset_group, instr.instrument_type)
+        is_bundle_leaf = (
+            grain_for_instrument_type(asset_group, instr.instrument_type) == GRAIN_BUNDLE_BY_UNDERLYING
+            and bundle_dt is not None
+        )
+        if not is_bundle_leaf:
+            passthrough.append(instr)
+            continue
+        underlying = instr.underlying or _derive_underlying(instr.instrument_id)
+        if not underlying:
+            # Cannot key the bundle (no underlying) → drop the leaf rather than
+            # mis-key a candidate (under-seed beats false over-seed). Logged once.
+            logger.warning(
+                "G1-ENUM bundle-grain: no underlying for %s leaf %r (venue=%s) — dropped from roll-up",
+                asset_group,
+                instr.instrument_id,
+                instr.venue,
+            )
+            continue
+        key = (instr.venue, instr.chain, underlying, bundle_dt)  # pyright: ignore[reportArgumentType]
+        if key not in bundles:
+            bundles[key] = [instr.available_from, instr.available_to]
+            if instr.available_to is None:
+                saw_open_end.add(key)
+        else:
+            cur = bundles[key]
+            if instr.available_from is not None and (cur[0] is None or instr.available_from < cur[0]):
+                cur[0] = instr.available_from
+            # available_to: an open end (None) on ANY leaf means the bundle is open.
+            if instr.available_to is None:
+                saw_open_end.add(key)
+            elif key not in saw_open_end and (cur[1] is None or instr.available_to > cur[1]):
+                cur[1] = instr.available_to
+    synthetic: list[InstrumentCatalogEntry] = []
+    for (venue, chain, underlying, bundle_dt), (af, at_) in sorted(bundles.items()):
+        synthetic.append(
+            InstrumentCatalogEntry(
+                instrument_id=underlying,
+                instrument_type=bundle_dt,
+                venue=venue,
+                chain=chain,
+                league_id="",
+                available_from=af,
+                available_to=None if (venue, chain, underlying, bundle_dt) in saw_open_end else at_,
+                market_created_at=None,
+                settlement_time=None,
+                data_type=bundle_dt,  # grain-bind → enumerator emits exactly this one data_type
+                underlying=underlying,
+            )
+        )
+    return passthrough + synthetic
+
+
 def enumerate_v2(
     *,
     asset_group: str,
@@ -1175,6 +1270,10 @@ def enumerate_v2(
         raise ValueError(
             f"enumerate_v2: unsupported asset_group={asset_group!r}; must be one of {sorted(_V2_ENUMERATORS)}"
         )
+    # G1-ENUM bundle-grain roll-up: collapse option/combo leaves → ONE synthetic
+    # per-underlying options_chain entry BEFORE per-AG enumeration (no-op for
+    # asset_groups/instrument_types without bundle-grain leaves).
+    catalog = _rollup_bundle_grain(catalog, asset_group)
     if data_types:
         resolved_data_types = data_types
     elif asset_group == "sports":
@@ -1247,6 +1346,7 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
                 market_created_at=_opt_date(row_dict.get("market_created_at")),
                 settlement_time=_opt_date(row_dict.get("settlement_time")),
                 data_type=(_safe_str(row_dict.get("data_type", "")) or None),
+                underlying=_safe_str(row_dict.get("underlying", "")),
             )
         )
     return entries

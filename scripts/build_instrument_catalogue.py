@@ -139,6 +139,10 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     "market_created_at",
     "settlement_time",
     "data_type",
+    # G1-ENUM bundle-grain roll-up key — base asset for derivatives (Deribit
+    # options/futures). Propagated from the instruments-store ``underlying``
+    # column so enumerate's roll-up keys options_chain candidates per underlying.
+    "underlying",
 )
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
@@ -293,6 +297,7 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 # Single-grain AGs leave data_type empty → the enumerator iterates
                 # the full DATA_TYPES_BY_ASSET_GROUP list (legacy behaviour).
                 "data_type": None,
+                "underlying": agg.meta.get("underlying") or "",
             }
         )
 
@@ -308,6 +313,7 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         "league_id": _str_field(row, "league_id"),
         "market_created_at": _opt_field(row, "market_created_at"),
         "settlement_time": _opt_field(row, "settlement_time"),
+        "underlying": _str_field(row, "underlying"),
     }
 
 
