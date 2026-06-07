@@ -72,7 +72,7 @@ from unified_api_contracts import (
     GRAIN_BUNDLE_BY_UNDERLYING,
     VENUES_BY_ASSET_GROUP,
     Mode,
-    bundle_data_type_for_instrument_type,
+    bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
     grain_for_instrument_type,
@@ -1131,33 +1131,38 @@ def _derive_underlying(instrument_id: str) -> str:
 
 def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str) -> list[InstrumentCatalogEntry]:
     """Roll bundle-grain LEAF instruments up to ONE synthetic per-underlying
-    bundle entry (G1-ENUM).
+    bundle entry (G1-ENUM, ERA-B).
 
     For instrument_types the UAC GRAIN axis marks ``bundle_by_underlying`` AND
-    that map to a bundle data_type (``option``/``combo`` → ``options_chain``),
+    that map to a bundle INSTRUMENT_TYPE (``option``/``combo`` → ``options_chain``),
     every leaf contract of an ``(venue, chain, underlying)`` collapses into ONE
-    synthetic catalogue entry — ``instrument_type`` = the bundle data_type,
-    ``instrument_id`` = the underlying, ``data_type`` = the bundle data_type
-    (grain-bound so the enumerator emits exactly that one candidate), lifecycle =
-    the UNION of the leaves' ``[available_from, available_to]`` windows. So the
-    enumerator yields ONE could-exist candidate per underlying instead of one per
-    leaf contract (the slot-3/slot-6 over-fan: 72K OPTION + 64.8K COMBO leaves).
+    synthetic catalogue entry — ``instrument_type`` = the bundle instrument_type
+    (``options_chain`` / ``futures_chain``), ``instrument_id`` = the underlying,
+    ``data_type`` = None so the enumerator resolves the bundle's data_type from the
+    UAC validity matrix (``options_chain``/``futures_chain`` → ``trades``, Era-B) —
+    emitting ONE candidate with data_type=trades, NOT data_type=options_chain.
+    Lifecycle = the UNION of the leaves' ``[available_from, available_to]`` windows.
+    So the enumerator yields ONE could-exist candidate per underlying instead of
+    one per leaf contract (the slot-3/slot-6 over-fan: 72K OPTION + 64.8K COMBO
+    leaves; tradfi ~563K false candidates).
 
     Generalises slot-4's league-grain roll-up (the sports catalogue is built at
     league grain; here the read-side pre-pass rolls option/combo leaves to the
     chain-bundle grain) — driven entirely by the UAC registry, no per-AG
     special-casing. Non-bundle-leaf instruments (incl. the ``options_chain`` /
-    ``futures_chain`` bundle entries themselves) pass through unchanged.
+    ``futures_chain`` bundle entries themselves) pass through unchanged; a
+    passed-through bundle entry's data_type is likewise resolved to trades via the
+    validity matrix.
     """
     passthrough: list[InstrumentCatalogEntry] = []
-    # key (venue, chain, underlying, bundle_dt) → [min available_from, max available_to (None = open)]
+    # key (venue, chain, underlying, bundle_it) → [min available_from, max available_to (None = open)]
     bundles: dict[tuple[str, str, str, str], list[str | None]] = {}
     saw_open_end: set[tuple[str, str, str, str]] = set()
     for instr in catalog:
-        bundle_dt = bundle_data_type_for_instrument_type(asset_group, instr.instrument_type)
+        bundle_it = bundle_instrument_type_for_leaf(asset_group, instr.instrument_type)
         is_bundle_leaf = (
             grain_for_instrument_type(asset_group, instr.instrument_type) == GRAIN_BUNDLE_BY_UNDERLYING
-            and bundle_dt is not None
+            and bundle_it is not None
         )
         if not is_bundle_leaf:
             passthrough.append(instr)
@@ -1173,7 +1178,7 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
                 instr.venue,
             )
             continue
-        key = (instr.venue, instr.chain, underlying, bundle_dt)  # pyright: ignore[reportArgumentType]
+        key = (instr.venue, instr.chain, underlying, bundle_it)  # pyright: ignore[reportArgumentType]
         if key not in bundles:
             bundles[key] = [instr.available_from, instr.available_to]
             if instr.available_to is None:
@@ -1188,19 +1193,22 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
             elif key not in saw_open_end and (cur[1] is None or instr.available_to > cur[1]):
                 cur[1] = instr.available_to
     synthetic: list[InstrumentCatalogEntry] = []
-    for (venue, chain, underlying, bundle_dt), (af, at_) in sorted(bundles.items()):
+    for (venue, chain, underlying, bundle_it), (af, at_) in sorted(bundles.items()):
         synthetic.append(
             InstrumentCatalogEntry(
                 instrument_id=underlying,
-                instrument_type=bundle_dt,
+                instrument_type=bundle_it,
                 venue=venue,
                 chain=chain,
                 league_id="",
                 available_from=af,
-                available_to=None if (venue, chain, underlying, bundle_dt) in saw_open_end else at_,
+                available_to=None if (venue, chain, underlying, bundle_it) in saw_open_end else at_,
                 market_created_at=None,
                 settlement_time=None,
-                data_type=bundle_dt,  # grain-bind → enumerator emits exactly this one data_type
+                # ERA-B: data_type=None → enumerator resolves it from the validity
+                # matrix (options_chain/futures_chain → trades), emitting exactly
+                # one candidate with data_type=trades (NOT data_type=options_chain).
+                data_type=None,
                 underlying=underlying,
             )
         )
@@ -1270,8 +1278,9 @@ def enumerate_v2(
         raise ValueError(
             f"enumerate_v2: unsupported asset_group={asset_group!r}; must be one of {sorted(_V2_ENUMERATORS)}"
         )
-    # G1-ENUM bundle-grain roll-up: collapse option/combo leaves → ONE synthetic
-    # per-underlying options_chain entry BEFORE per-AG enumeration (no-op for
+    # G1-ENUM bundle-grain roll-up (Era-B): collapse option/combo leaves → ONE
+    # synthetic per-underlying options_chain instrument entry (data_type resolved
+    # to trades via the validity matrix) BEFORE per-AG enumeration (no-op for
     # asset_groups/instrument_types without bundle-grain leaves).
     catalog = _rollup_bundle_grain(catalog, asset_group)
     if data_types:
