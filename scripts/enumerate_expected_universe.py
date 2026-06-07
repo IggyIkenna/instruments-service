@@ -75,6 +75,7 @@ from unified_api_contracts import (
     external_sources_for,
     has_source_priority,
     pipeline_mode_for_source,
+    valid_data_types_for_instrument_type,
 )
 from unified_api_contracts.registry.chain_env import (
     CHAIN_GENESIS_DATES,
@@ -550,6 +551,50 @@ class InstrumentCatalogEntry(NamedTuple):
     data_type: str | None = None
 
 
+def _row_data_types(
+    asset_group: str,
+    instr: InstrumentCatalogEntry,
+    data_types: list[str],
+) -> list[str]:
+    """Return the data_types to emit for a single catalogue entry.
+
+    Resolution order:
+    1. If ``instr.data_type`` is set (prediction per-row grain binding) → emit
+       ONLY that one data_type (already validated at catalogue-build time).
+    2. Otherwise call the UAC validity matrix for ``(asset_group, instrument_type)``.
+       - ``None`` returned (unmapped instrument type) → log a warning and fall
+         back to ALL ``data_types`` (legacy behaviour; the row is never silently
+         dropped for unknown types — only known-invalid cross-products are filtered).
+       - ``frozenset`` returned → keep each data_type where EITHER it is in the
+         valid set OR it is not in the asset group's canonical data types at all
+         (the latter preserves test/non-standard data_types that are not part of
+         the G1-ENUM matrix — only real cross-products are filtered out).
+         May return empty list for bundle-only instrument types (e.g. cefi OPTION
+         → frozenset()) where ALL canonical data_types are excluded.
+    """
+    if instr.data_type is not None:
+        return [instr.data_type]
+
+    valid = valid_data_types_for_instrument_type(asset_group, instr.instrument_type)
+    if valid is None:
+        logger.warning(
+            "G1-ENUM: unmapped instrument_type=%r for asset_group=%r (instrument=%r) "
+            "— falling back to all data_types. Add a matrix entry to "
+            "unified_api_contracts.registry.market_data_categories to suppress.",
+            instr.instrument_type,
+            asset_group,
+            instr.instrument_id,
+        )
+        return list(data_types)
+
+    # The canonical data_types for this asset group — used to distinguish
+    # real cross-products (known AG data_type NOT in valid) from
+    # test/non-standard data_types (not in ANY valid set → pass through).
+    known_ag_dts = frozenset(DATA_TYPES_BY_ASSET_GROUP.get(asset_group.lower(), []))
+
+    return [dt for dt in data_types if dt in valid or dt not in known_ag_dts]
+
+
 def _enumerate_v2_cefi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -588,6 +633,10 @@ def _enumerate_v2_cefi(
             continue  # not yet listed when window ended
         venue_launch_str = CEFI_VENUE_LAUNCH_DATES.get(instr.venue)
         venue_launch_ts = pd.Timestamp(venue_launch_str) if venue_launch_str else None
+        # G1-ENUM: filter data_types to those valid for this instrument's shape.
+        row_dts = _row_data_types("cefi", instr, data_types)
+        if not row_dts:
+            continue  # e.g. cefi OPTION leaf → frozenset() → skip entirely
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -602,7 +651,7 @@ def _enumerate_v2_cefi(
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
                 # alive + manifest-aware: yield expected_unattempted for missing rows
-                for dt in data_types:
+                for dt in row_dts:
                     row_key = tuple(
                         {
                             "venue": instr.venue,
@@ -629,7 +678,7 @@ def _enumerate_v2_cefi(
                             capture_status="expected_unattempted",
                         )
                 continue
-            for dt in data_types:
+            for dt in row_dts:
                 yield ExpectedRow(
                     asset_group="cefi",
                     venue=instr.venue,
@@ -678,6 +727,10 @@ def _enumerate_v2_defi(
         chain_upper = instr.chain.upper() if instr.chain else ""
         chain_genesis_str = CHAIN_GENESIS_DATES.get(chain_upper)
         chain_genesis_ts = pd.Timestamp(chain_genesis_str) if chain_genesis_str else None
+        # G1-ENUM: filter data_types to those valid for this instrument's shape.
+        row_dts = _row_data_types("defi", instr, data_types)
+        if not row_dts:
+            continue  # instrument type not in PROTOCOL_CAPABILITIES → skip entirely
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -691,7 +744,7 @@ def _enumerate_v2_defi(
             else:
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
-                for dt in data_types:
+                for dt in row_dts:
                     row_key = tuple(
                         {
                             "venue": instr.venue,
@@ -718,7 +771,7 @@ def _enumerate_v2_defi(
                             capture_status="expected_unattempted",
                         )
                 continue
-            for dt in data_types:
+            for dt in row_dts:
                 yield ExpectedRow(
                     asset_group="defi",
                     venue=instr.venue,
@@ -762,6 +815,10 @@ def _enumerate_v2_tradfi(
             continue  # fully delisted before window started
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
             continue  # not yet listed when window ended
+        # G1-ENUM: filter data_types to those valid for this instrument's shape.
+        row_dts = _row_data_types("tradfi", instr, data_types)
+        if not row_dts:
+            continue  # e.g. unknown TradFi instrument type → skip entirely
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -772,7 +829,7 @@ def _enumerate_v2_tradfi(
             else:
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
-                for dt in data_types:
+                for dt in row_dts:
                     row_key = tuple(
                         {
                             "venue": instr.venue,
@@ -799,7 +856,7 @@ def _enumerate_v2_tradfi(
                             capture_status="expected_unattempted",
                         )
                 continue
-            for dt in data_types:
+            for dt in row_dts:
                 yield ExpectedRow(
                     asset_group="tradfi",
                     venue=instr.venue,
@@ -875,7 +932,11 @@ def _enumerate_v2_sports(
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
             continue  # league not yet listed when window ended
         league_id = instr.league_id or instr.instrument_id
-        for dt in data_types:
+        # G1-ENUM: filter data_types to those valid for this league instrument's shape.
+        row_dts = _row_data_types("sports", instr, data_types)
+        if not row_dts:
+            continue  # unmapped sports instrument type → skip entirely
+        for dt in row_dts:
             cov_ts = coverage_starts.get(dt)
             for d in date_axis:
                 d_ts = pd.Timestamp(d)
@@ -968,7 +1029,11 @@ def _enumerate_v2_prediction(
         # prediction multi-grain catalogue — cqg bundle vs per-conditionId
         # trades). When set, emit for THAT data_type only at this row's grain;
         # otherwise fall back to the full passed list (legacy / other AGs).
-        row_dts: list[str] = [instr.data_type] if instr.data_type else data_types
+        # G1-ENUM: _row_data_types handles the instr.data_type path + any
+        # future prediction matrix entries; for now prediction uses the
+        # instr.data_type grain-binding path (which _row_data_types returns
+        # as-is) or falls back to all data_types (unmapped → None → all).
+        row_dts: list[str] = _row_data_types("prediction", instr, data_types)
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()

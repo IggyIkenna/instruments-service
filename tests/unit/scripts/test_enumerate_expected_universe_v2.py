@@ -19,6 +19,7 @@ import sys
 from datetime import date
 from pathlib import Path
 from types import ModuleType
+from typing import ClassVar
 
 import pandas as pd
 import pytest
@@ -76,7 +77,7 @@ def _make_cefi_entry(
 
 def _make_defi_entry(
     instrument_id: str = "ETH-USDC",
-    instrument_type: str = "SPOT",
+    instrument_type: str = "LENDING",  # lending_indices is the defi test data_type
     venue: str = "AAVE_V3",
     chain: str = "ARBITRUM",
     available_from: str | None = "2022-01-01",
@@ -794,7 +795,7 @@ def test_defi_v2_alive_date_in_present_set_skipped() -> None:
             "venue": "AAVE_V3",
             "chain": "ARBITRUM",
             "data_type": "lending_indices",
-            "instrument_type": "SPOT",
+            "instrument_type": "LENDING",
             "instrument_id": "ETH-USDC",
             "league_id": "",
             "date": "2024-06-01",
@@ -834,7 +835,7 @@ def test_defi_v2_denominator_is_could_exist_universe_not_just_manifest() -> None
                 "venue": "AAVE_V3",
                 "chain": "ARBITRUM",
                 "data_type": "lending_indices",
-                "instrument_type": "SPOT",
+                "instrument_type": "LENDING",
                 "instrument_id": "ETH-USDC",
                 "league_id": "",
                 "date": "2024-06-01",
@@ -1038,3 +1039,174 @@ def test_empty_confirmed_rows_still_have_typed_reason_when_present_set_given() -
     not_listed = [r for r in rows if r.capture_status == "empty_confirmed"]
     assert len(not_listed) == 1
     assert not_listed[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
+
+
+# ---------------------------------------------------------------------------
+# G1-ENUM regression tests — instrument-type x data_type validity filter
+# ---------------------------------------------------------------------------
+
+
+class TestG1EnumCefiFilter:
+    """cefi enumerator must respect the VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE matrix."""
+
+    _ALL_CEFI_DTS: ClassVar[list[str]] = [
+        "trades",
+        "book_snapshot_5",
+        "derivative_ticker",
+        "liquidations",
+        "ohlcv_1m",
+        "options_chain",
+        "futures_chain",
+    ]
+
+    def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
+        catalog = [_make_cefi_entry(instrument_type=instrument_type)]
+        return list(
+            enumerator_module._enumerate_v2_cefi(
+                catalog,
+                _date_axis("2024-01-15"),
+                data_types or self._ALL_CEFI_DTS,
+                present_set=set(),
+            )
+        )
+
+    def test_perpetual_has_trades_not_options_chain(self) -> None:
+        rows = self._run("PERPETUAL")
+        data_types_emitted = {r.data_type for r in rows}
+        assert "trades" in data_types_emitted
+        assert "derivative_ticker" in data_types_emitted
+        assert "options_chain" not in data_types_emitted
+        assert "futures_chain" not in data_types_emitted
+
+    def test_perpetual_alias_perp_works(self) -> None:
+        rows = self._run("PERP")
+        data_types_emitted = {r.data_type for r in rows}
+        assert "trades" in data_types_emitted
+        assert "options_chain" not in data_types_emitted
+
+    def test_spot_has_trades_not_derivative_ticker(self) -> None:
+        rows = self._run("SPOT")
+        data_types_emitted = {r.data_type for r in rows}
+        assert "trades" in data_types_emitted
+        assert "derivative_ticker" not in data_types_emitted
+        assert "options_chain" not in data_types_emitted
+
+    def test_option_leaf_yields_zero_rows(self) -> None:
+        """cefi OPTION leaf → frozenset() → no rows emitted at all."""
+        rows = self._run("OPTION")
+        assert rows == [], f"Expected zero rows for cefi OPTION, got {len(rows)}"
+
+    def test_combo_leaf_yields_zero_rows(self) -> None:
+        """cefi COMBO multi-leg → frozenset() → no rows emitted."""
+        rows = self._run("COMBO")
+        assert rows == [], f"Expected zero rows for cefi COMBO, got {len(rows)}"
+
+    def test_options_chain_bundle_emits_options_chain_only(self) -> None:
+        """cefi options_chain instrument → only 'options_chain' data_type."""
+        rows = self._run("options_chain")
+        data_types_emitted = {r.data_type for r in rows}
+        assert data_types_emitted == {"options_chain"}
+
+    def test_futures_chain_bundle_emits_futures_chain_only(self) -> None:
+        """cefi futures_chain instrument → only 'futures_chain' data_type."""
+        rows = self._run("futures_chain")
+        data_types_emitted = {r.data_type for r in rows}
+        assert data_types_emitted == {"futures_chain"}
+
+
+class TestG1EnumDefiFilter:
+    """defi enumerator must derive valid data_types from PROTOCOL_CAPABILITIES."""
+
+    _ALL_DEFI_DTS: ClassVar[list[str]] = [
+        "lending_indices",
+        "liquidations",
+        "risk_params",
+        "dex_pool_state",
+        "dex_pool_swaps",
+        "perp_funding",
+    ]
+
+    def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
+        catalog = [_make_defi_entry(instrument_type=instrument_type, chain="ETHEREUM")]
+        return list(
+            enumerator_module._enumerate_v2_defi(
+                catalog,
+                _date_axis("2024-01-15"),
+                data_types or self._ALL_DEFI_DTS,
+                present_set=set(),
+            )
+        )
+
+    def test_pool_emits_only_valid_data_types(self) -> None:
+        """defi POOL instrument → must emit only data_types from the UAC matrix.
+
+        The G1-ENUM benefit: data_types that NO pool protocol ever uses are filtered.
+        ``risk_params`` is LENDING-exclusive (only in _LENDING_DATA, not any _POOL
+        protocol) → key invariant.
+        ``lending_indices`` is in one hybrid POOL protocol (line ~592 in _defi.py) so
+        it legitimately appears in the POOL union — NOT a cross-product there.
+        ``perp_funding`` is in GMX which uses _POOL → also legitimately in the union.
+        """
+        rows = self._run("POOL")
+        data_types_emitted = {r.data_type for r in rows}
+        # key G1-ENUM invariant: risk_params is LENDING-only (no POOL protocol uses it)
+        assert "risk_params" not in data_types_emitted, (
+            f"POOL emitted risk_params — this is a true cross-product: {data_types_emitted}"
+        )
+        # And there must be at least one DEX data_type (the POOL's primary data)
+        assert "dex_pool_state" in data_types_emitted or "dex_pool_swaps" in data_types_emitted
+
+    def test_lending_has_no_dex_pool_state(self) -> None:
+        """defi LENDING instrument → should NOT emit dex_pool_state."""
+        rows = self._run("LENDING")
+        data_types_emitted = {r.data_type for r in rows}
+        assert "dex_pool_state" not in data_types_emitted, (
+            f"LENDING emitted dex_pool_state — false cross-product: {data_types_emitted}"
+        )
+        assert "dex_pool_swaps" not in data_types_emitted
+
+
+class TestG1EnumTradfiFilter:
+    """tradfi enumerator must respect the validity matrix."""
+
+    _ALL_TRADFI_DTS: ClassVar[list[str]] = [
+        "trades",
+        "ohlcv_1m",
+        "ohlcv_15m",
+        "ohlcv_24h",
+        "tbbo",
+        "mbp_10",
+        "corporate_action_confirmed",
+        "earnings_result",
+        "macro_result",
+    ]
+
+    def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
+        catalog = [_make_tradfi_entry(instrument_type=instrument_type)]
+        return list(
+            enumerator_module._enumerate_v2_tradfi(
+                catalog,
+                _date_axis("2024-01-15"),
+                data_types or self._ALL_TRADFI_DTS,
+                present_set=set(),
+            )
+        )
+
+    def test_etf_has_no_earnings_result(self) -> None:
+        rows = self._run("ETF")
+        data_types_emitted = {r.data_type for r in rows}
+        assert "trades" in data_types_emitted
+        assert "earnings_result" not in data_types_emitted
+
+    def test_equity_has_earnings_result(self) -> None:
+        rows = self._run("EQUITY")
+        data_types_emitted = {r.data_type for r in rows}
+        assert "earnings_result" in data_types_emitted
+        assert "corporate_action_confirmed" in data_types_emitted
+
+    def test_index_only_ohlcv(self) -> None:
+        rows = self._run("INDEX")
+        data_types_emitted = {r.data_type for r in rows}
+        assert "trades" not in data_types_emitted
+        # at least one ohlcv must be present
+        assert any("ohlcv" in dt for dt in data_types_emitted)
