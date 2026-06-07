@@ -480,6 +480,13 @@ def _classify_bento_error(exc: db.common.error.BentoError) -> str:
     return "UNKNOWN"
 
 
+# Public aliases so sibling TradFi adapters (e.g. Massive) reuse the SAME
+# trading-hours/holiday session-metadata logic instead of duplicating it —
+# single SSOT for TradFi session enrichment across reference-data sources.
+EXCHANGE_HOURS = _EXCHANGE_HOURS
+get_session_metadata = _get_session_metadata
+
+
 class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
     """Databento reference data adapter using the official SDK.
 
