@@ -462,6 +462,33 @@ def evaluate_monotonic_guard(
 # ---------------------------------------------------------------------------
 
 
+def _tune_download_pool(storage: StorageClient, size: int) -> None:
+    """Best-effort: enlarge the GCS client's HTTP connection pool to ``size``.
+
+    The native ``google.cloud.storage`` client defaults to a small (~8-10) urllib3
+    connection pool, which throttles the concurrent by_date download below the
+    ``max_workers`` count (the "Connection pool is full, discarding connection"
+    warning) — the full-corpus walk then runs at ~half the intended concurrency.
+    Mounting a larger ``HTTPAdapter`` on the client's session lifts that cap.
+
+    No-op on a non-GCS client or when the native client does not expose a mountable
+    session (guarded via ``getattr``/``hasattr`` — degrades to the default pool,
+    never raises).
+    """
+    if getattr(storage, "provider_name", "") != "gcp":
+        return
+    native = getattr(storage, "_client", None)
+    http = getattr(native, "_http", None)
+    if http is None or not hasattr(http, "mount"):
+        return
+    from requests.adapters import HTTPAdapter
+
+    adapter = HTTPAdapter(pool_connections=size, pool_maxsize=size)
+    http.mount("https://", adapter)
+    http.mount("http://", adapter)
+    logger.info("Tuned GCS HTTP connection pool to %d (matches download workers)", size)
+
+
 def _iter_by_date_snapshots(
     storage: StorageClient,
     bucket: str,
@@ -670,6 +697,7 @@ def run_rollup(
     """Roll up the per-date definitions for ``asset_group`` and promote the catalogue."""
     run_id = f"catalogue-rollup-{asset_group}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
     storage = storage or get_storage_client()
+    _tune_download_pool(storage, MAX_DOWNLOAD_WORKERS)
     bucket = get_write_bucket_name("instruments", asset_group)
     env = get_config("DEPLOYMENT_ENV", "prod")
 
