@@ -75,12 +75,14 @@ Perf contract (``codex/05-infrastructure/gcs-object-operations.md`` §): the obj
 ``gcs_copy_object`` is server-side (path-only, no egress), per-object ``try/except … continue`` isolation,
 unbuffered progress (``python -u``, counter every ~2000).
 
-Usage:
-    # DRY-RUN (read-only) — report v8→v9 delta + sample rewritten rows for one AG:
-    python -u -m instruments_service.scripts.migrate_instruments_store_v9 --asset-group cefi
-    # APPLY (GATED) — rewrite _index + copy objects to canonical paths on a VM:
-    python -u -m instruments_service.scripts.migrate_instruments_store_v9 \
-        --asset-group cefi --workers 64 --apply
+Usage (run from the instruments-service repo root; the canonical bucket env vars
+``DEPLOYMENT_ENV``/``GCP_PROJECT_ID`` must be set so ``resolve_bucket_name`` resolves the env-split bucket):
+    # DRY-RUN (read-only) — report v8→v9 delta + sample rewritten rows for one AG (index-only shown):
+    python -u scripts/migrate_instruments_store_v9.py --asset-group cefi --skip-objects
+    # DRY-RUN incl. the object-path walk (lists objects, plans copies, writes nothing):
+    python -u scripts/migrate_instruments_store_v9.py --asset-group cefi
+    # APPLY (GATED, on a VM) — rewrite _index + copy objects to canonical paths:
+    python -u scripts/migrate_instruments_store_v9.py --asset-group cefi --workers 64 --apply
 """
 
 from __future__ import annotations
