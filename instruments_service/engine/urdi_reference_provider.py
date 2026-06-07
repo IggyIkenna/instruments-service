@@ -76,6 +76,7 @@ async def fetch_instruments_for_all_venues(
     api_keys: dict[str, str] | None = None,
     date: str | None = None,
     mode: str = "batch",
+    source: str | None = None,
 ) -> VenueFetchResult:
     """Fetch canonical InstrumentRecord[] for all configured venues via URDI.
 
@@ -134,7 +135,11 @@ async def fetch_instruments_for_all_venues(
     async def _fetch_one(canonical: str, adapter_key: str) -> list[InstrumentRecord]:
         async with sem:
             try:
-                data_source = ADAPTER_DATA_SOURCES.get(adapter_key, "")
+                # Source-aware credential routing: when source="massive", a TradFi
+                # venue that defaults to Databento needs the MASSIVE key, not the
+                # Databento key — resolve the data_source against the effective source.
+                effective_key = "massive" if (source == "massive" and adapter_key == "databento") else adapter_key
+                data_source = ADAPTER_DATA_SOURCES.get(effective_key, "")
                 api_key = (api_keys or {}).get(data_source) if data_source else None
                 adapter = get_adapter_for_canonical_venue(
                     canonical,
@@ -142,6 +147,7 @@ async def fetch_instruments_for_all_venues(
                     date=date,
                     extra_api_keys=api_keys,
                     mode=mode,
+                    source=source,
                 )
                 # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
                 records = await adapter.get_instruments_cached(instrument_type=instrument_type, date=date)
