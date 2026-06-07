@@ -23,9 +23,14 @@ Per-asset-group implementation status (2026-05-07):
 * TradFi: FULL — calendar pre-skip via UAC ``non_trading_day_reason``.
 * DeFi:   FULL — chain pre-genesis + protocol pre-launch via UAC
   ``CHAIN_GENESIS_DATES`` + ``PROTOCOL_LAUNCH_DATES``.
-* Sports: PARTIAL — pre-source-coverage-start via UAC
-  ``SOURCE_COVERAGE_START``. Per-league enumeration deferred (needs
-  sports leagues catalog read).
+* Sports: FULL (v2) — per-LEAGUE could-exist enumeration from the
+  ``build_instrument_catalogue.py`` league-grain roll-up
+  (``build_sports_catalogue_dataframe``). The captured atom is
+  ``(league_id, data_type, date)``; the v2 enumerator iterates the captured
+  sports data_types (``SPORTS_DATA_TYPE_TO_SOURCE``) per league, applying each
+  source's ``SOURCE_COVERAGE_START`` / ``DATA_TYPE_COVERAGE_START`` window
+  (pre-coverage dates stay owned by the v1 ``_enumerate_sports`` rows).
+  v1 still emits the per-source pre-coverage slice.
 * CeFi:   STUB — needs instruments-service catalog with per-instrument
   lifecycle (``available_from`` / ``available_to`` / ``expiry``).
   See plan Phase 3.D.4 CeFi sub-task.
@@ -92,6 +97,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 PROJECT_ID = "central-element-323112"
+
+# Sports could-exist denominator is per-LEAGUE, not per-fixture/instrument
+# (slot-4 finding 2026-06-07: the canonical instruments-store-sports-prd _index
+# captured atom is (league_id, data_type, date) — league_id populated 97.6% but
+# venue ~blank / instrument_id ~blank / instrument_type ~blank). So the
+# present-set match + the seeded expected_unattempted atom are LEAGUE-grain:
+# (data_type, league_id, date) ONLY — venue / instrument_id / instrument_type are
+# blank-tolerant (excluded from the key) or a fixture-grain catalogue would never
+# match the league-grain manifest → every cell would inflate the denominator.
+_SPORTS_PRESENT_COLS: list[str] = ["data_type", "league_id", "date"]
+
+# Full per-instrument present-set columns for cefi / defi / tradfi / prediction.
+_DEFAULT_PRESENT_COLS: list[str] = [
+    "venue",
+    "chain",
+    "data_type",
+    "instrument_type",
+    "instrument_id",
+    "league_id",
+    "date",
+]
+
+
+def _present_cols_for(asset_group: str, available_in_df: list[str]) -> list[str]:
+    """Return the manifest present-set column grain for ``asset_group``.
+
+    Sports is LEAGUE-grain (``_SPORTS_PRESENT_COLS``); every other group is the
+    full per-instrument grain (``_DEFAULT_PRESENT_COLS``). Intersected with the
+    columns actually present in the manifest so the present-set tuples and the
+    enumerator row-keys line up.
+    """
+    base = _SPORTS_PRESENT_COLS if asset_group == "sports" else _DEFAULT_PRESENT_COLS
+    return [c for c in base if c in available_in_df]
+
+
+def _sports_data_types() -> list[str]:
+    """Return the captured sports manifest data_types (source-coverage-bearing).
+
+    The could-exist sports denominator iterates the data_types that actually
+    appear in the captured manifest AND carry a UAC source-coverage window —
+    i.e. the keys of ``SPORTS_DATA_TYPE_TO_SOURCE`` (FIXTURES / STANDINGS / XG /
+    …). This is a DIFFERENT axis from ``DATA_TYPES_BY_ASSET_GROUP["sports"]``
+    (the MTDS market-data odds types) — the reference-data league manifest is
+    keyed by these provider data_types, verified on the canonical _index
+    (slot-4 2026-06-07). Sorted for deterministic output.
+    """
+    from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE
+
+    return sorted(SPORTS_DATA_TYPE_TO_SOURCE.keys())
+
 
 # Asset groups this enumerator supports. The canonical MANIFEST bucket per group is
 # resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
@@ -766,50 +821,83 @@ def _enumerate_v2_sports(
     present_set: set[tuple[str, ...]] | None = None,
     present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
-    """Per-fixture/league sports v2 enumerator.
+    """Per-LEAGUE sports v2 enumerator (league-grain — NOT per-fixture).
 
-    Sports instruments map to (league_id, fixture_id) pairs. For fixtures
-    with explicit lifecycle bounds, dates outside those bounds yield
-    EXPECTED_INSTRUMENT_NOT_LISTED (fixture not yet created) or
-    EXPECTED_INSTRUMENT_DELISTED (fixture settled/archived).
+    The captured sports manifest atom is per-``(league_id, data_type, date)``
+    (slot-4 finding 2026-06-07 on the canonical ``instruments-store-sports-prd``
+    ``_index``): ``league_id`` populated 97.6%, ``venue`` / ``instrument_id`` /
+    ``instrument_type`` ~blank. So the present-set match + the seeded
+    ``expected_unattempted`` atom are LEAGUE-grain (``_SPORTS_PRESENT_COLS`` =
+    ``data_type, league_id, date``); ``venue`` / ``instrument_id`` /
+    ``instrument_type`` are blanked on the yielded row so the seeded atom is
+    indistinguishable from the captured atom (a fixture-grain row would never
+    match → every cell inflates the coverage denominator).
 
-    Leagues without per-fixture bounds fall through (covered by v1 source-coverage rows).
-    Paused leagues emit EXPECTED_PAUSED_LEAGUE per the reason taxonomy.
+    Per (league, data_type, date), with the league's lifecycle bounds from the
+    catalogue (``available_from`` = first day the league appears,
+    ``available_to`` = last day / ``None`` if still active):
 
-    * date < available_from    → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
+    * date < the data_type's source coverage start → SKIP — those dates are
+      owned by the v1 ``_enumerate_sports`` pre-coverage rows
+      (``EXPECTED_PRE_SOURCE_COVERAGE_START``, league_id="" grain). v2 must NOT
+      re-emit them or the (data_type, date) cell is double-counted at two grains.
+    * date < available_from   → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
     * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
     * alive AND no manifest row (present_set provided) → expected_unattempted
     * alive AND present_set not provided → skip (legacy mode)
+
+    ``data_types`` is the captured sports data_types axis (``_sports_data_types()``
+    = ``SPORTS_DATA_TYPE_TO_SOURCE`` keys) — passed in by ``enumerate_v2`` /
+    ``main``. A data_type with no source mapping (e.g. a test stub) gets no
+    coverage filter.
     """
-    _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+    from unified_api_contracts.sports import (
+        SPORTS_DATA_TYPE_TO_SOURCE,
+        get_source_coverage_start,
+    )
+
+    _pcols = present_cols or list(_SPORTS_PRESENT_COLS)
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
+
+    # Pre-resolve each data_type's source coverage start once (None = unmapped).
+    coverage_starts: dict[str, pd.Timestamp | None] = {}
+    for dt in data_types:
+        source = SPORTS_DATA_TYPE_TO_SOURCE.get(dt)
+        cov = get_source_coverage_start(source, dt) if source is not None else None
+        coverage_starts[dt] = pd.Timestamp(cov) if cov is not None else None
+
     for instr in catalog:
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
         if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
-            continue  # fully delisted before window started
+            continue  # league fully delisted before window started
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
-            continue  # not yet listed when window ended
-        for d in date_axis:
-            d_ts = pd.Timestamp(d)
-            iso = d.isoformat()
-            if af_ts is not None and d_ts < af_ts:
-                reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
-            elif at_ts is not None and d_ts > at_ts:
-                reason = "EXPECTED_INSTRUMENT_DELISTED"
-            else:
-                if present_set is None:
-                    continue  # legacy mode: alive on this day — skip
-                for dt in data_types:
+            continue  # league not yet listed when window ended
+        league_id = instr.league_id or instr.instrument_id
+        for dt in data_types:
+            cov_ts = coverage_starts.get(dt)
+            for d in date_axis:
+                d_ts = pd.Timestamp(d)
+                iso = d.isoformat()
+                # Pre-source-coverage dates are owned by v1 (league_id="" grain).
+                if cov_ts is not None and d_ts < cov_ts:
+                    continue
+                if af_ts is not None and d_ts < af_ts:
+                    reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
+                elif at_ts is not None and d_ts > at_ts:
+                    reason = "EXPECTED_INSTRUMENT_DELISTED"
+                else:
+                    if present_set is None:
+                        continue  # legacy mode: alive on this day — skip
                     row_key = tuple(
                         {
-                            "venue": instr.venue,
+                            "venue": "",
                             "chain": "",
                             "data_type": dt,
-                            "instrument_type": instr.instrument_type,
-                            "instrument_id": instr.instrument_id,
-                            "league_id": instr.league_id,
+                            "instrument_type": "",
+                            "instrument_id": "",
+                            "league_id": league_id,
                             "date": iso,
                         }.get(c, "")
                         for c in _pcols
@@ -817,26 +905,25 @@ def _enumerate_v2_sports(
                     if row_key not in present_set:
                         yield ExpectedRow(
                             asset_group="sports",
-                            venue=instr.venue,
+                            venue="",
                             chain="",
                             data_type=dt,
-                            instrument_type=instr.instrument_type,
-                            instrument_id=instr.instrument_id,
-                            league_id=instr.league_id,
+                            instrument_type="",
+                            instrument_id="",
+                            league_id=league_id,
                             date=iso,
                             reason="",
                             capture_status="expected_unattempted",
                         )
-                continue
-            for dt in data_types:
+                    continue
                 yield ExpectedRow(
                     asset_group="sports",
-                    venue=instr.venue,
+                    venue="",
                     chain="",
                     data_type=dt,
-                    instrument_type=instr.instrument_type,
-                    instrument_id=instr.instrument_id,
-                    league_id=instr.league_id,
+                    instrument_type="",
+                    instrument_id="",
+                    league_id=league_id,
                     date=iso,
                     reason=reason,
                 )
@@ -1008,7 +1095,15 @@ def enumerate_v2(
         raise ValueError(
             f"enumerate_v2: unsupported asset_group={asset_group!r}; must be one of {sorted(_V2_ENUMERATORS)}"
         )
-    resolved_data_types: list[str] = data_types or [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
+    if data_types:
+        resolved_data_types = data_types
+    elif asset_group == "sports":
+        # Sports denominator iterates the captured provider data_types
+        # (SPORTS_DATA_TYPE_TO_SOURCE), NOT DATA_TYPES_BY_ASSET_GROUP["sports"]
+        # (the MTDS odds types) — see _sports_data_types().
+        resolved_data_types = _sports_data_types()
+    else:
+        resolved_data_types = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
     enumerator_func = _V2_ENUMERATORS[asset_group]
     yield from enumerator_func(
         catalog,
@@ -1116,14 +1211,17 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
 
 
 def _build_present_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ...]]:
-    """Build the set of (venue, chain, data_type, ..., date) tuples already in manifest."""
+    """Build the set of present manifest row-key tuples at the per-asset_group grain.
+
+    Sports uses LEAGUE-grain (``data_type, league_id, date``); every other group
+    uses the full per-instrument grain — see :func:`_present_cols_for`.
+    """
     if df.empty:
         return set()
-    cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
-    available = [c for c in cols if c in df.columns]
     if "date" not in df.columns:
         logger.warning("Manifest missing 'date' column — cannot build present-set")
         return set()
+    available = _present_cols_for(asset_group, list(df.columns))
     df_subset = df[available].fillna("").astype(str)
     return {tuple(row) for row in df_subset.itertuples(index=False, name=None)}
 
@@ -1525,12 +1623,17 @@ def main() -> int:
             v2_present_set = _build_present_set(v2_manifest_df, asset_group)
             logger.info("v2 manifest present-set size: %d", len(v2_present_set))
             # Column order used in _build_present_set (must match present_set tuples).
-            _possible_cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
-            v2_present_cols = [c for c in _possible_cols if c in v2_manifest_df.columns]
+            v2_present_cols = _present_cols_for(asset_group, list(v2_manifest_df.columns))
             # Build date_axis as list[date]
             date_axis_ts = pd.date_range(start_date, end_date, freq="D")
             date_axis: list[date] = [d.date() for d in date_axis_ts]
-            data_types_list: list[str] = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
+            # Sports denominator iterates the captured provider data_types
+            # (SPORTS_DATA_TYPE_TO_SOURCE), NOT the MTDS odds types in
+            # DATA_TYPES_BY_ASSET_GROUP["sports"] — see _sports_data_types().
+            if asset_group == "sports":
+                data_types_list = _sports_data_types()
+            else:
+                data_types_list = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
             # Wrap enumerate_v2 in an adapter that matches the absent_rows list
             # the existing write-path expects (list[ExpectedRow])
             v2_absent: list[ExpectedRow] = []
@@ -1597,17 +1700,9 @@ def main() -> int:
         present_set = _build_present_set(df, asset_group)
         logger.info("Manifest present-set size: %d", len(present_set))
 
-        # Determine which manifest columns exist for present-set comparison.
-        possible_cols = [
-            "venue",
-            "chain",
-            "data_type",
-            "instrument_type",
-            "instrument_id",
-            "league_id",
-            "date",
-        ]
-        available_cols = [c for c in possible_cols if c in df.columns]
+        # Determine which manifest columns exist for present-set comparison
+        # (LEAGUE-grain for sports — must match _build_present_set above).
+        available_cols = _present_cols_for(asset_group, list(df.columns))
 
         # Step 2: enumerate expected universe; filter to absent tuples.
         enumerator = _ENUMERATORS[asset_group]
