@@ -1433,3 +1433,47 @@ def test_enumerate_v2_non_bundle_instruments_unchanged() -> None:
     rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
     assert all(r.instrument_id == "BTC-USDT" for r in rows)
     assert not any(r.data_type == "options_chain" for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# F2 — VENUE-aware FUTURE bundle-grain rollup (slot-7 2026-06-07)
+#
+# Bare FUTURE leaves bundle to a per-underlying futures_chain ONLY at DERIBIT/OKX
+# (the bulk-chain venues); at BYBIT (+ every other per-contract venue) a FUTURE
+# leaf stays per-contract. Venue-blind bundling over-seeds BYBIT; venue-blind leaf
+# over-seeds DERIBIT/OKX with ~700 false per-contract FUTURE candidates (the cefi
+# F2 residual). Driven by the UAC FUTURE_BUNDLE_VENUES overlay.
+# ---------------------------------------------------------------------------
+
+
+def test_enumerate_v2_future_leaf_bundles_at_deribit() -> None:
+    """A bare FUTURE leaf at DERIBIT rolls up to ONE per-underlying futures_chain
+    candidate (data_type=trades) — the same shape as its options_chain."""
+    catalog = [
+        _opt_entry("BTC-27JUN25", "BTC", instrument_type="FUTURE", venue="DERIBIT"),
+        _opt_entry("BTC-26SEP25", "BTC", instrument_type="FUTURE", venue="DERIBIT"),
+    ]
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
+    assert not any(r.instrument_type == "FUTURE" for r in rows)
+
+
+def test_enumerate_v2_future_leaf_bundles_at_okx() -> None:
+    """OKX (and OKX-FUTURES via the base-venue token) also bundles FUTURE."""
+    catalog = [_opt_entry("BTC-27JUN25", "BTC", instrument_type="FUTURE", venue="OKX-FUTURES")]
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
+
+
+def test_enumerate_v2_future_leaf_stays_per_contract_at_bybit() -> None:
+    """A FUTURE leaf at BYBIT is captured per-contract — it must NOT collapse into a
+    futures_chain bundle (BYBIT is a per-contract futures venue)."""
+    catalog = [_opt_entry("BTC-27JUN25", "BTC", instrument_type="FUTURE", venue="BYBIT")]
+    dates = _date_axis("2024-06-01", "2025-06-01")
+    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    # Stays per-contract: instrument_id unchanged, no futures_chain rollup.
+    assert all(r.instrument_id == "BTC-27JUN25" for r in rows)
+    assert not any(r.instrument_type == "futures_chain" for r in rows)
+    assert rows, "BYBIT FUTURE leaf must still fan per-contract candidates"
