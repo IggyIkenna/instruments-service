@@ -1159,9 +1159,12 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
     bundles: dict[tuple[str, str, str, str], list[str | None]] = {}
     saw_open_end: set[tuple[str, str, str, str]] = set()
     for instr in catalog:
-        bundle_it = bundle_instrument_type_for_leaf(asset_group, instr.instrument_type)
+        # Venue-aware (F2): a bare FUTURE leaf bundles to futures_chain only at
+        # DERIBIT/OKX; at BYBIT (+ venue-unknown) it stays a per-contract leaf.
+        # option/combo bundle venue-agnostically (the venue arg is a no-op there).
+        bundle_it = bundle_instrument_type_for_leaf(asset_group, instr.instrument_type, instr.venue)
         is_bundle_leaf = (
-            grain_for_instrument_type(asset_group, instr.instrument_type) == GRAIN_BUNDLE_BY_UNDERLYING
+            grain_for_instrument_type(asset_group, instr.instrument_type, instr.venue) == GRAIN_BUNDLE_BY_UNDERLYING
             and bundle_it is not None
         )
         if not is_bundle_leaf:
