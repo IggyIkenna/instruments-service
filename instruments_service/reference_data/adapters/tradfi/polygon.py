@@ -18,7 +18,9 @@ from typing import ClassVar, cast
 
 import aiohttp
 from pydantic import BaseModel
+from unified_api_contracts import BAR_TIMEFRAMES, BarTimeframe
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
+from unified_trading_library.availability_stamping import compute_bar_close_boundary  # noqa: qg-deep-import
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -234,7 +236,11 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         ts_raw = bar.get("t")
         if ts_raw is None:
             return None
-        ts = datetime.fromtimestamp(int(str(ts_raw)) / 1000, tz=UTC)
+        # Polygon aggregate "t" = bar open time ms (left/open edge).
+        # Stamp the close/right edge to avoid look-ahead leakage.
+        open_ts = datetime.fromtimestamp(int(str(ts_raw)) / 1000, tz=UTC)
+        tf: BarTimeframe | None = cast(BarTimeframe, interval) if interval in BAR_TIMEFRAMES else None
+        ts = compute_bar_close_boundary(open_ts, tf)[1] if tf is not None else open_ts
         return OHLCVRef(
             venue=self.venue,
             symbol=symbol,
