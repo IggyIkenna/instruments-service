@@ -681,6 +681,27 @@ class TestPolygonAdapterExtended:
         result = adapter._parse_polygon_bar({"o": "100.0"}, "AAPL", "1d")
         assert result is None
 
+    def test_parse_polygon_bar_stamps_close_edge(self) -> None:
+        """_parse_polygon_bar must produce a timestamp at the close/right edge of the bar.
+
+        bar_edge fix 2026-06-08: Polygon aggregate 't' = bar open time ms (left edge).
+        The fix applies compute_bar_close_boundary to stamp the close/right edge.
+
+        For a 1d bar with open at 2026-06-07 00:00:00 UTC, the close edge is
+        2026-06-08 00:00:00 UTC (strictly-after rule: t_open + 1d).
+        """
+        adapter = PolygonReferenceDataAdapter()
+        # 2026-06-07 00:00:00 UTC in ms
+        open_ts_ms = int(datetime(2026, 6, 7, 0, 0, 0, tzinfo=UTC).timestamp() * 1000)
+        bar = {"t": open_ts_ms, "o": "100.0", "h": "110.0", "l": "90.0", "c": "105.0", "v": "500000"}
+        result = adapter._parse_polygon_bar(bar, "AAPL", "1d")
+        assert result is not None
+        expected_close_ts = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
+        assert result.timestamp == expected_close_ts, (
+            f"Expected close-edge {expected_close_ts!r}, got {result.timestamp!r}. "
+            "Polygon 't' is open time — compute_bar_close_boundary must be used."
+        )
+
     @pytest.mark.asyncio
     async def test_get_options_chain_with_options(self) -> None:
         """get_options_chain filters calls and puts, collects strikes."""
