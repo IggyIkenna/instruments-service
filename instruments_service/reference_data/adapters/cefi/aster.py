@@ -369,10 +369,11 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
         results: list[OHLCVRef] = []
 
         for candle_raw in candles:
-            if not isinstance(candle_raw, list) or len(candle_raw) < 6:
+            if not isinstance(candle_raw, list) or len(candle_raw) < 7:
                 continue
-            # Binance kline format: [openTime, open, high, low, close, volume, ...]
-            ts = datetime.fromtimestamp(int(str(candle_raw[0])) / 1000, tz=UTC)
+            # Binance kline format: [openTime, open, high, low, close, volume, closeTime, ...]
+            # Use closeTime (index 6) — the right/close edge — to avoid look-ahead leakage.
+            ts = datetime.fromtimestamp(int(str(candle_raw[6])) / 1000, tz=UTC)
             results.append(
                 OHLCVRef(
                     venue=self.venue,
