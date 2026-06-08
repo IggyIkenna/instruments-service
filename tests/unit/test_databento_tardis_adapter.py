@@ -713,3 +713,43 @@ class TestTardisInstrumentsCacheContract:
             adapter._instruments_cache["PERPETUAL"] = (records, _ts - 90000.0)
             await adapter.get_instruments_cached(instrument_type="PERPETUAL")
             assert fetch_count == 2, "Cache should re-fetch after TTL expiry"
+
+
+# ---------------------------------------------------------------------------
+# Regression: IS Tardis reference universe must track the canonical SSOT, not a
+# hand-maintained subset (slot-3 pre-apply audit 2026-06-08, CF-14 ⑧).
+# The prior 8-exchange list silently DRIFTED below VenueMapping.all_tardis_exchanges
+# and omitted kraken / cryptofacilities (=KRAKEN-FUTURES) / bitfinex / bitget — venues
+# MTDS captures via Tardis replay — so the IS catalogue was NOT ⊇ the captured present-
+# set (falsely-high coverage). These tests fail if the default universe drifts again.
+# ---------------------------------------------------------------------------
+
+
+def test_default_exchanges_track_ssot_no_drift() -> None:
+    from unified_api_contracts import VenueMapping
+
+    from instruments_service.reference_data.adapters.cefi.tardis import _DEFAULT_EXCHANGES
+
+    assert list(VenueMapping().all_tardis_exchanges) == _DEFAULT_EXCHANGES, (
+        "IS Tardis _DEFAULT_EXCHANGES must equal the canonical SSOT "
+        "VenueMapping.all_tardis_exchanges (no hand-maintained subset / drift)."
+    )
+
+
+def test_default_exchanges_cover_captured_cefi_venues() -> None:
+    """The Tardis exchange ids behind the CeFi venues MTDS actually captures must be in
+    the default universe — KRAKEN-SPOT (kraken) + KRAKEN-FUTURES (cryptofacilities) +
+    BITFINEX-SPOT (bitfinex) + BITGET (bitget). Their absence is the exact CF-14 gap."""
+    from instruments_service.reference_data.adapters.cefi.tardis import _DEFAULT_EXCHANGES
+
+    for exch in ("kraken", "cryptofacilities", "bitfinex", "bitget", "lighter-zksync"):
+        assert exch in _DEFAULT_EXCHANGES, f"captured-venue Tardis exchange {exch!r} missing from IS reference universe"
+
+
+def test_derivatives_only_classifies_kraken_futures() -> None:
+    """cryptofacilities (Kraken Futures) + the other derivatives-only Tardis exchanges
+    must be classified so unknown-type instruments are skipped, not defaulted to SPOT."""
+    from instruments_service.reference_data.adapters.cefi.tardis import _DERIVATIVES_ONLY_EXCHANGES
+
+    for exch in ("cryptofacilities", "okex-futures", "okex-swap", "huobi-dm", "bitfinex-derivatives", "bitget-futures"):
+        assert exch in _DERIVATIVES_ONLY_EXCHANGES, f"derivatives-only Tardis exchange {exch!r} not classified"
