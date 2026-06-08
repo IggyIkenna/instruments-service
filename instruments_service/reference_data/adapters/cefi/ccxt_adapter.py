@@ -7,7 +7,9 @@ from decimal import Decimal
 from typing import cast
 
 import ccxt.async_support as ccxta
+from unified_api_contracts import BAR_TIMEFRAMES, BarTimeframe
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType, OptionType
+from unified_trading_library.availability_stamping import compute_bar_close_boundary  # noqa: qg-deep-import
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -293,11 +295,21 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
             await exchange.close()
 
         results: list[OHLCVRef] = []
+        # ccxt OHLCV format: [timestamp_open_ms, open, high, low, close, volume]
+        # No close-time field — compute it from the open timestamp + bar width.
+        # Only supported timeframes can be passed to compute_bar_close_boundary.
+        tf: BarTimeframe | None = cast(BarTimeframe, interval) if interval in BAR_TIMEFRAMES else None
         for bar in raw_bars:
             if len(bar) < 6:
                 continue
             ts_ms = int(str(bar[0]))
-            ts = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
+            open_ts = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
+            if tf is not None:
+                # Use the canonical close boundary (right/close edge of bar).
+                _, ts, _ = compute_bar_close_boundary(open_ts, tf)
+            else:
+                # Unsupported timeframe: fall back to open edge (logs left for future fix).
+                ts = open_ts
             results.append(
                 OHLCVRef(
                     venue=self.venue,
