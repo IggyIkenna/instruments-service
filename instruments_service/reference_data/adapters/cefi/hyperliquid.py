@@ -252,7 +252,9 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
         if not isinstance(candle_raw, dict):
             return None
         candle: dict[str, object] = candle_raw
-        ts_raw = candle.get("t") or candle.get("T") or 0
+        # T = close-time ms (right/close edge of bar); t = open-time ms (left edge).
+        # Always stamp the close edge to avoid look-ahead leakage.
+        ts_raw = candle.get("T") or candle.get("t") or 0
         ts = datetime.fromtimestamp(int(str(ts_raw)) / 1000, tz=UTC)
         return OHLCVRef(
             venue=self.venue,
