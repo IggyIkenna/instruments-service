@@ -180,13 +180,29 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
     "tradfi": {
         "index": "_index/availability_index.parquet",
         # Axis-10 (2026-05-19): Phase-3 migration prepended pipeline_mode=
-        # before asset_group=; TradFi data source is Databento exclusively.
-        # GCS confirmed: raw_tick_data/by_date/day=*/pipeline_mode=batch_databento/
-        # asset_group=tradfi/ exists post-migration; old asset_group=tradfi/ is gone.
+        # before asset_group=. TradFi is MULTI-SOURCE, source-aware (operator
+        # 2026-06-08): Databento (primary) + MASSIVE (polygon.io-compatible BACKFILL
+        # for the series Databento credits no longer cover — IDENTICAL schema, the
+        # pipeline_mode is the differentiator) + the venue-override sources Barchart /
+        # Yahoo (VIX 15m, tradfi_massive_dual_source) + EIA (energy/commodity).
+        # ``migrate_tradfi_to_v9_canonical`` derives the path via
+        # ``derive_pipeline_mode_for_row`` → ``batch_{databento,massive,barchart,yahoo,eia}``;
+        # EVERY one needs a prefix here, else the phantom ``--apply`` mis-classifies that
+        # source's real captured rows as phantoms and flips them captured→attempted_failed
+        # (CLAUDE.md: "prefix_tpls must cover the new shape before --apply"). Manifest
+        # venues BARCHART + YAHOO_FINANCE are present today; massive/eia future-proof the
+        # backfill swap. (Pre-pipeline_mode bare ``asset_group=tradfi/`` is the on-disk
+        # shape TODAY — the migrator inserts pipeline_mode= at --apply — so it stays too.)
         "prefix_tpls": [
             "raw_tick_data/by_date/day={date}/pipeline_mode=batch_databento/asset_group=tradfi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_tardis/asset_group=tradfi/venue={venue}/"
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_massive/asset_group=tradfi/venue={venue}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_barchart/asset_group=tradfi/venue={venue}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_yahoo/asset_group=tradfi/venue={venue}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_eia/asset_group=tradfi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/asset_group=tradfi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
