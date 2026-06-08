@@ -68,17 +68,16 @@ _TARDIS_RETRY_ATTEMPTS: int = 3
 _TARDIS_RETRY_BASE_DELAY: float = 2.0  # seconds; doubles on each retry
 _TARDIS_RETRYABLE_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
-_DEFAULT_EXCHANGES: list[str] = [
-    # Tier 1 — primary CeFi venues
-    "binance",  # Binance spot
-    "binance-futures",  # Binance USDT-M + COIN-M futures
-    "bybit",  # Bybit spot + derivatives
-    "okex",  # OKX spot + derivatives
-    "deribit",  # Deribit options + futures (BTC/ETH)
-    "coinbase",  # Coinbase spot (coinbase premium)
-    # Tier 2
-    "upbit",  # Upbit spot (kimchi premium)
-]
+# Default exchange universe = the canonical SSOT `VenueMapping.all_tardis_exchanges`
+# (NOT a local subset). The prior hand-maintained 8-exchange list silently DRIFTED
+# below the SSOT: it omitted kraken / cryptofacilities (=KRAKEN-FUTURES) / bitfinex /
+# bitget / lighter-zksync etc., so the IS reference universe under-covered venues MTDS
+# actively captures via Tardis replay → the catalogue was NOT ⊇ the captured present-set
+# → falsely-high coverage (slot-3 pre-apply audit 2026-06-08, CF-14: KRAKEN-SPOT 75,714 +
+# KRAKEN-FUTURES 31,582 captured rows had no could-exist denominator). Deriving from the
+# SSOT makes the IS reference universe track the canonical Tardis venue set automatically
+# (no future drift). `cefi_manifest_canonicalisation_2026_06_01.md` § "PRE-APPLY AUDIT" ⑧.
+_DEFAULT_EXCHANGES: list[str] = list(VenueMapping().all_tardis_exchanges)
 
 # Tardis instrument type → canonical InstrumentType
 _TYPE_MAP: dict[str, InstrumentType] = {
@@ -93,7 +92,22 @@ _TYPE_MAP: dict[str, InstrumentType] = {
 # Instruments from these venues with unknown/None type must NOT default to
 # SPOT_PAIR — that causes HTTP 400s when MTDS requests spot symbols from a
 # venue that carries only futures/options/perps. Skip unknowns instead.
-_DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset({"deribit"})
+# Extended 2026-06-08 (slot-3 ⑧ fix): now that _DEFAULT_EXCHANGES tracks the full
+# SSOT, classify the newly-included derivatives-only Tardis exchange ids (unambiguous
+# -futures / -swap / -derivatives / -dm / cryptofacilities-=-Kraken-Futures suffixes)
+# so their unknown-type instruments are skipped, not mis-defaulted to SPOT_PAIR.
+_DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset(
+    {
+        "deribit",
+        "binance-futures",
+        "okex-futures",
+        "okex-swap",
+        "huobi-dm",
+        "bitfinex-derivatives",
+        "bitget-futures",
+        "cryptofacilities",  # Kraken Futures (Tardis legacy id) — derivatives only
+    }
+)
 
 # Quote currencies for symbol splitting (longest first for correct prefix matching)
 # Extended from instruments-service/engine/processors/symbol_parser.py _ALL_QUOTE_SUFFIXES
