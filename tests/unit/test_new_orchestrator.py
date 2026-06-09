@@ -197,7 +197,7 @@ async def test_process_instruments_proceeds_to_write_stage():
         patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
     ):
 
-        def _write_side_effect(venue_str, df, date, bucket, sink, counts, sampler):
+        def _write_side_effect(venue_str, df, date, bucket, sink, counts, sampler, manifest=None):
             counts[venue_str] = len(df)
 
         mock_write.side_effect = _write_side_effect
