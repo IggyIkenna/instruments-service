@@ -56,6 +56,43 @@ class TestKalshiAdapter:
         assert results[0].venue == "kalshi"
 
     @pytest.mark.asyncio
+    async def test_get_instruments_401_raises_not_swallowed(self) -> None:
+        """CF-11 regression: a 401 on the first page must RAISE (→ attempted_failed),
+        never return [] (which urdi_reference_provider would record as a silent
+        honest-empty / drop from the expected denominator)."""
+        adapter = KalshiReferenceDataAdapter()
+        mock_resp = AsyncMock()
+        mock_resp.status = 401
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm), pytest.raises(RuntimeError):
+            await adapter.get_instruments()
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_transport_error_raises_not_swallowed(self) -> None:
+        """CF-11 regression: an aiohttp transport error on the first page must RAISE
+        (as a RuntimeError caught by urdi _fetch_one → attempted_failed), not return []."""
+        import aiohttp
+
+        adapter = KalshiReferenceDataAdapter()
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(side_effect=aiohttp.ClientError("connection reset"))
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm), pytest.raises(RuntimeError):
+            await adapter.get_instruments()
+
+    @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
         adapter = KalshiReferenceDataAdapter()
         mock_resp = AsyncMock()

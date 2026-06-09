@@ -881,8 +881,9 @@ class TestKalshiFetchMarketsPage:
     """Tests for _fetch_markets_page edge cases."""
 
     @pytest.mark.asyncio
-    async def test_401_returns_empty(self) -> None:
-        """401 response returns ([], None) without raising."""
+    async def test_401_raises(self) -> None:
+        """CF-11: a 401 RAISES (event still emitted), not swallowed into ([], None) — so
+        get_instruments records the venue attempted_failed instead of a silent honest-empty."""
         adapter = KalshiReferenceDataAdapter(api_key="bad-key")
         mock_resp = AsyncMock()
         mock_resp.status = 401
@@ -891,22 +892,20 @@ class TestKalshiFetchMarketsPage:
         mock_cm.__aexit__ = AsyncMock(return_value=None)
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=mock_cm)
-        records, cursor = await adapter._fetch_markets_page(mock_session, None, datetime.now(UTC))
-        assert records == []
-        assert cursor is None
+        with pytest.raises(RuntimeError):
+            await adapter._fetch_markets_page(mock_session, None, datetime.now(UTC))
 
     @pytest.mark.asyncio
-    async def test_client_error_returns_empty(self) -> None:
-        """Client error returns ([], None) with event emission."""
+    async def test_client_error_raises(self) -> None:
+        """CF-11: a client/transport error RAISES (event still emitted), not swallowed into ([], None)."""
         adapter = KalshiReferenceDataAdapter()
         mock_cm = MagicMock()
         mock_cm.__aenter__ = AsyncMock(side_effect=aiohttp.ClientError("connection refused"))
         mock_cm.__aexit__ = AsyncMock(return_value=None)
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=mock_cm)
-        records, cursor = await adapter._fetch_markets_page(mock_session, None, datetime.now(UTC))
-        assert records == []
-        assert cursor is None
+        with pytest.raises(RuntimeError):
+            await adapter._fetch_markets_page(mock_session, None, datetime.now(UTC))
 
     @pytest.mark.asyncio
     async def test_cursor_pagination(self) -> None:
