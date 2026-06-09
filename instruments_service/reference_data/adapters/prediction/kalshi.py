@@ -125,12 +125,29 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         self._last_markets = []
         now = datetime.now(UTC)
         cursor: str | None = None
+        fetch_failed = False
         async with self._make_session() as session:
             for _page in range(_MAX_PAGES):
-                batch, cursor = await self._fetch_markets_page(session, cursor, now)
+                try:
+                    batch, cursor = await self._fetch_markets_page(session, cursor, now)
+                except RuntimeError:
+                    # Page fetch failed — ADAPTER_FETCH_FAILED already emitted in
+                    # _fetch_markets_page. Per shard-isolation, keep pages already
+                    # fetched; the all-failed case re-raises below so the venue is
+                    # recorded attempted_failed (NOT a silent honest-empty / CF-11).
+                    fetch_failed = True
+                    break
                 results.extend(batch)
                 if cursor is None or len(batch) < _PAGE_LIMIT:
                     break
+        if fetch_failed and not results:
+            # All pages failed with zero records → raise so
+            # urdi_reference_provider._fetch_one records this venue as
+            # attempted_failed instead of dropping it as fetched-OK-empty.
+            raise RuntimeError(
+                "Kalshi get_instruments: market fetch failed with no records "
+                "(see ADAPTER_FETCH_FAILED) — recording attempted_failed, not empty"
+            )
         return results
 
     async def _fetch_markets_page(
@@ -166,7 +183,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
                             "retry_safe": False,
                         },
                     )
-                    return [], None
+                    raise RuntimeError("Kalshi markets fetch failed: HTTP 401 Unauthorized")
                 resp.raise_for_status()
                 raw_json: object = cast(object, await resp.json())
         except aiohttp.ClientError as exc:
@@ -192,7 +209,12 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
                     "retry_safe": retry_safe,
                 },
             )
-            return [], None
+            # CF-11: surface the fetch failure (don't swallow into []) so
+            # get_instruments re-raises on all-failed → venue records
+            # attempted_failed, not a silent honest-empty. RuntimeError is in
+            # urdi_reference_provider._fetch_one's catchable set (a bare
+            # aiohttp.ClientError would escape it and crash the gather).
+            raise RuntimeError(f"Kalshi markets fetch failed: {exc}") from exc
 
         raw_dict = cast(dict[str, object], raw_json)
         markets_raw = raw_dict.get("markets")
