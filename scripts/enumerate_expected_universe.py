@@ -1804,7 +1804,24 @@ def main() -> int:
             return 4
         logger.info("v2 enumerator: loading catalog from %s", catalog_path)
         if catalog_path.startswith("gs://"):
-            catalog_df = pd.read_parquet(catalog_path, storage_options={"token": "cloud"})
+            # Download via the google-cloud-storage client (ADC) — the same path
+            # _download_manifest uses. NOT gcsfs ``token="cloud"`` (which is the
+            # GCE metadata-server credential ONLY → fails on any non-GCE host, e.g.
+            # a laptop run with ``ValueError: Invalid gcloud credentials``). ADC
+            # resolves to the metadata server on a VM and to the application-default
+            # credentials on a workstation, so this is portable laptop + VM + AWS.
+            _gs_bucket, _gs_blob = catalog_path[len("gs://") :].split("/", 1)
+            _cat_client = storage.Client(project=PROJECT_ID)
+            _cat_bucket = _cat_client.bucket(_gs_bucket)
+            _cat_blob = _cat_bucket.blob(_gs_blob)
+            with tempfile.NamedTemporaryFile(
+                prefix=f"enum-univ-catalog-{asset_group}-",
+                suffix=".parquet",
+                delete=False,
+            ) as _cat_tf:
+                _cat_local = _cat_tf.name
+            _cat_blob.download_to_filename(_cat_local, timeout=600)
+            catalog_df = pd.read_parquet(_cat_local)
         else:
             catalog_df = pd.read_parquet(catalog_path)
         logger.info("v2 catalog loaded: %d instruments", len(catalog_df))
