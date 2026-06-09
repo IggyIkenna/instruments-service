@@ -10,6 +10,8 @@ Tests here verify the correct URL constant is used.
 from __future__ import annotations
 
 import contextlib
+from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -173,3 +175,68 @@ class TestAsterAdapter:
         adapter = AsterReferenceDataAdapter()
         with contextlib.suppress(NotImplementedError, RuntimeError):
             await adapter.get_ohlcv("BTC")
+
+    @pytest.mark.asyncio
+    async def test_get_ohlcv_stamps_close_edge(self) -> None:
+        """get_ohlcv must stamp closeTime (kline index 6), not openTime (index 0).
+
+        bar_edge fix 2026-06-08: Binance kline format is
+        [openTime, open, high, low, close, volume, closeTime, ...].
+        The old code used index 0 (openTime) — look-ahead leakage.
+        The fix uses index 6 (closeTime) — the right/close edge.
+        """
+        adapter = AsterReferenceDataAdapter()
+
+        open_ms = int(datetime(2026, 6, 7, 0, 0, 0, tzinfo=UTC).timestamp() * 1000)
+        close_ms = int(datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC).timestamp() * 1000)
+        # Binance kline: [openTime, open, high, low, close, vol, closeTime, ...]
+        kline = [open_ms, "50000", "51000", "49000", "50500", "1000", close_ms, "50500000", 100, "500", "25000000", "0"]
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(return_value=[kline])
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
+            results = await adapter.get_ohlcv("BTCUSDT", interval="1d", limit=1)
+
+        assert len(results) == 1
+        expected_close_ts = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
+        assert results[0].timestamp == expected_close_ts, (
+            f"Expected close-edge {expected_close_ts!r}, got {results[0].timestamp!r}. "
+            "Binance kline closeTime (index 6) must be used, not openTime (index 0)."
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_ohlcv_skips_short_klines(self) -> None:
+        """Klines with fewer than 7 elements must be silently skipped (need index 6)."""
+        adapter = AsterReferenceDataAdapter()
+        # Only 6 fields — old format or truncated response; no closeTime available.
+        open_ms = int(datetime(2026, 6, 7, 0, 0, 0, tzinfo=UTC).timestamp() * 1000)
+        short_kline = [open_ms, "100", "110", "90", "105", "500"]  # only 6 fields
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(return_value=[short_kline])
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
+            results = await adapter.get_ohlcv("BTCUSDT", interval="1d", limit=1)
+
+        assert results == [], "Short klines (len < 7) must be skipped — no closeTime available."
