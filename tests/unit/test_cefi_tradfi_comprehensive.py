@@ -1181,6 +1181,37 @@ class TestCCXTAdapterComprehensive:
         assert results[0].open == Decimal("50000")
 
     @pytest.mark.asyncio
+    async def test_get_ohlcv_stamps_close_edge(self) -> None:
+        """get_ohlcv must stamp the close/right edge, not the open edge from bar[0].
+
+        bar_edge fix 2026-06-08: ccxt OHLCV format is
+        [timestamp_open_ms, open, high, low, close, volume] — NO close-time field.
+        The fix calls compute_bar_close_boundary(open_ts, timeframe) to derive t_close.
+
+        For a 1d bar with open at 2026-01-01 00:00:00 UTC, the close edge is
+        2026-01-02 00:00:00 UTC.
+        """
+        adapter = CCXTReferenceDataAdapter(venue="bybit")
+        open_ts = datetime(2026, 1, 1, tzinfo=UTC)
+        ts_ms = int(open_ts.timestamp() * 1000)
+        mock_exchange = MagicMock()
+        mock_exchange.load_markets = AsyncMock(return_value={})
+        mock_exchange.fetch_ohlcv = AsyncMock(
+            return_value=[
+                [ts_ms, "50000", "51000", "49000", "50500", "100"],
+            ]
+        )
+        mock_exchange.close = AsyncMock()
+        with patch.object(adapter, "_get_exchange", return_value=mock_exchange):
+            results = await adapter.get_ohlcv("BTC/USDT", interval="1d", limit=1)
+        assert len(results) == 1
+        expected_close_ts = datetime(2026, 1, 2, tzinfo=UTC)
+        assert results[0].timestamp == expected_close_ts, (
+            f"Expected close-edge {expected_close_ts!r}, got {results[0].timestamp!r}. "
+            "ccxt has no close-time field — compute_bar_close_boundary must be used."
+        )
+
+    @pytest.mark.asyncio
     async def test_get_options_chain_empty(self) -> None:
         adapter = CCXTReferenceDataAdapter(venue="deribit")
         with patch.object(adapter, "get_instruments", return_value=[]):

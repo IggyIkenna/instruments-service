@@ -1415,15 +1415,36 @@ def test_enumerate_v2_perpetual_does_not_produce_options_chain() -> None:
 
 
 def test_enumerate_v2_tradfi_option_leaves_roll_up() -> None:
-    """Generalisation: tradfi option leaves roll up identically (no special-case)."""
+    """tradfi option leaves roll up to the per-underlying options_chain bundle, which
+    admits the chain's OWN captured market-data data_types — NOT cefi-parity
+    trades-only.
+
+    The grain mechanism is identical to cefi (option/combo leaves → one synthetic
+    per-underlying options_chain entry), but the bundle's emitted data_types come
+    from the operator-ratified tradfi validity matrix (T-OLD-2b, slot-6 verified vs
+    the market-data-tick-tradfi present-set): ``("tradfi","options_chain")`` admits
+    ``{trades, ohlcv_1m}`` of the canonical tradfi data_types (the databento chain
+    captures). The matrix also carries the non-canonical ``options_chain`` snapshot
+    data_type (mark_iv/greeks), but the enumerator cross-joins only the canonical
+    ``DATA_TYPES_BY_ASSET_GROUP["tradfi"]`` (where ``options_chain`` is an
+    instrument_type, not a data_type) so it is correctly NOT emitted here — that
+    snapshot cell is materialised by the per-AG v8→v9 migrator relabel, not the
+    could-exist enumerator. cefi's clean ``{trades}`` is the cefi slice; tradfi's
+    broader admit-set is deliberate (a trades-only tradfi slice marked ~12K real
+    captured chain cells "impossible").
+    """
     catalog = [
         _opt_entry("ES-OPT-1", "ES", instrument_type="OPTION", venue="CME"),
         _opt_entry("ES-OPT-2", "ES", instrument_type="OPTION", venue="CME"),
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
     rows = list(enumerator_module.enumerate_v2(asset_group="tradfi", catalog=catalog, date_axis=dates))
-    # Era-B: instrument_type=options_chain bundle, data_type=trades.
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("ES", "options_chain", "trades")}
+    # Era-B: instrument_type=options_chain bundle; tradfi admits trades + ohlcv_1m
+    # (the captured chain market-data data_types — UAC validity matrix T-OLD-2b).
+    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {
+        ("ES", "options_chain", "trades"),
+        ("ES", "options_chain", "ohlcv_1m"),
+    }
 
 
 def test_enumerate_v2_non_bundle_instruments_unchanged() -> None:
