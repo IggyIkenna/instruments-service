@@ -58,6 +58,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
 import pandas as pd
+from unified_api_contracts import canonical_path_templates
 from unified_trading_library import StorageClient, get_storage_client, resolve_bucket_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -85,156 +86,29 @@ _BUCKET_KIND_MAP: dict[str, tuple[str, str | None]] = {
     "prediction": ("market-data-tick-prediction", None),
 }
 
+# Asset-group → {index blob, GCS prefix templates}. The prefix templates are now
+# DERIVED from the canonical possible-manifest registry
+# (``unified_api_contracts.canonical_path_templates`` — CF-15/V0, 2026-06-10), the
+# SINGLE SSOT for GCS path shapes. This replaces the hand-maintained per-AG
+# ``prefix_tpls`` lists that previously lived inline here (the Axis-10 drift bug: a
+# newly-added ``pipeline_mode=batch_<source>`` had to be hand-copied into this list or
+# the phantom ``--apply`` false-flagged that source's real captured rows
+# captured→attempted_failed). The registry generates a prefix for every external batch
+# source of the AG (canonical pipeline_mode-keyed shapes) + the transitional legacy
+# hive vocabularies (bare ``asset_group=``, legacy ``category=``, top-level ``day=``,
+# the DeFi combined ``venue=PROTOCOL-CHAIN`` overload, the ``hyperliquid_rest`` legacy
+# token). Verified byte-identical to the prior hand-list at landing (the historical
+# Axis-10 incident notes — cefi 130k 2026-05-03, AAVE_V3 29,782 2026-05-07, EIGENLAYER
+# 597 2026-05-04 — now live in ``possible_manifest.py`` + ``codex/02-data/
+# pipeline-mode-partition.md``). Sports keeps its own UAC ``candidate_parquet_paths``
+# dispatch (``canonical_path_templates('sports')`` → ``[]``; the ``[""]`` sentinel is
+# preserved so ``_audit_sports`` routes correctly).
 ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
-    "cefi": {
+    ag: {
         "index": "_index/availability_index.parquet",
-        # 4 path shapes coexist on disk; ALL must be probed:
-        #   (a) raw_tick_data/by_date prefix + asset_group= hive (canonical)
-        #   (b) raw_tick_data/by_date prefix + category= hive (legacy)
-        #   (c) top-level + asset_group= hive (Tardis adapter via build_partition_path)
-        #   (d) top-level + category= hive (older Tardis adapter)
-        # Earlier audit only probed (a) + (b) and false-positived 130k rows
-        # whose data lives at (c)/(d). 2026-05-03: extended to all 4 shapes.
-        # Axis-10 (2026-05-19): Phase-3 GCS migration prepended pipeline_mode=
-        # before asset_group=; probe canonical + legacy hive-key under each
-        # batch pipeline_mode used for CeFi data sources.
-        "prefix_tpls": [
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_databento/asset_group=cefi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_tardis/asset_group=cefi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            # hyperliquid: source=hyperliquid (R4 2026-06-07). Probe BOTH the new
-            # canonical batch_hyperliquid/ shape AND the legacy batch_hyperliquid_rest/
-            # shape — on-disk objects keep the legacy form until the GATED DeFi
-            # migrator rewrites them, so the audit must match both (else false
-            # phantoms; CLAUDE.md "prefix_tpls must cover the new shape before --apply").
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid/asset_group=cefi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid_rest/asset_group=cefi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/asset_group=cefi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/category=cefi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "day={date}/asset_group=cefi/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
-            "day={date}/category=cefi/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
-        ],
-    },
-    "defi": {
-        "index": "_index/availability_index.parquet",
-        # DeFi layout has venue + chain (no instrument_type segment in older
-        # paths). Probe new + legacy hive keys + no-asset-group + top-level
-        # (no raw_tick_data/by_date/ prefix) variants.
-        # Axis-10 (2026-05-19): Phase-3 migration prepended pipeline_mode=
-        # before asset_group=; DeFi uses onchain/subgraph/REST batch sources.
-        "prefix_tpls": [
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_onchain_rpc/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_onchain_subgraph/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            # hyperliquid (R4): new canonical batch_hyperliquid/ + legacy
-            # batch_hyperliquid_rest/ (on-disk until the gated DeFi migrator rewrites).
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid_rest/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_chainlink/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_pyth_hermes/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_helius_rpc/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_solana_rpc/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/category=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            # 2024-05-era DeFi paths skipped the asset-group hive segment.
-            "raw_tick_data/by_date/day={date}/venue={venue}/chain={chain}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "day={date}/asset_group=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            "day={date}/category=defi/venue={venue}/"
-            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
-            # Legacy ``venue=PROTOCOL-CHAIN`` overload — pre-2026-04-29
-            # EIGENLAYER restaking + a few other DeFi adapters wrote
-            # ``venue=EIGENLAYER-ETHEREUM`` (no separate ``chain=`` segment).
-            # ``rebuild_defi_manifest.py`` decomposes that back to
-            # ``(venue=EIGENLAYER, chain=ETHEREUM)`` in manifest rows; the
-            # audit must also probe the combined layout so those rows aren't
-            # false-flagged as phantoms.  Verified 2026-05-04: 597 EIGENLAYER
-            # restaking rewards live at this layout.
-            "raw_tick_data/by_date/day={date}/asset_group=defi/venue={venue}-{chain}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/category=defi/venue={venue}-{chain}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-        ],
-    },
-    "sports": {
-        "index": "_index/availability_index.parquet",
-        # Sports has its own SSOT (per-league + bare paths) — handled
-        # separately via the unified UAC dispatcher below.
-        "prefix_tpls": [""],
-    },
-    "tradfi": {
-        "index": "_index/availability_index.parquet",
-        # Axis-10 (2026-05-19): Phase-3 migration prepended pipeline_mode=
-        # before asset_group=. TradFi is MULTI-SOURCE, source-aware (operator
-        # 2026-06-08): Databento (primary) + MASSIVE (polygon.io-compatible BACKFILL
-        # for the series Databento credits no longer cover — IDENTICAL schema, the
-        # pipeline_mode is the differentiator) + the venue-override sources Barchart /
-        # Yahoo (VIX 15m, tradfi_massive_dual_source) + EIA (energy/commodity).
-        # ``migrate_tradfi_to_v9_canonical`` derives the path via
-        # ``derive_pipeline_mode_for_row`` → ``batch_{databento,massive,barchart,yahoo,eia}``;
-        # EVERY one needs a prefix here, else the phantom ``--apply`` mis-classifies that
-        # source's real captured rows as phantoms and flips them captured→attempted_failed
-        # (CLAUDE.md: "prefix_tpls must cover the new shape before --apply"). Manifest
-        # venues BARCHART + YAHOO_FINANCE are present today; massive/eia future-proof the
-        # backfill swap. (Pre-pipeline_mode bare ``asset_group=tradfi/`` is the on-disk
-        # shape TODAY — the migrator inserts pipeline_mode= at --apply — so it stays too.)
-        "prefix_tpls": [
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_databento/asset_group=tradfi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_massive/asset_group=tradfi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_barchart/asset_group=tradfi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_yahoo/asset_group=tradfi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_eia/asset_group=tradfi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/asset_group=tradfi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/category=tradfi/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "day={date}/asset_group=tradfi/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
-            "day={date}/category=tradfi/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
-        ],
-    },
-    "prediction": {
-        "index": "_index/availability_index.parquet",
-        # Polymarket parquets live under a 9-segment hive layout that puts
-        # ``data_source=POLYMARKET_CLOB`` BETWEEN ``category=prediction``
-        # and ``venue=``, with ``market_category`` / ``underlying`` /
-        # ``market_type`` / ``resolution_period`` segments between
-        # ``chain=`` and ``data_type=``.  ``instrument_type=prediction_market``
-        # is a manifest-row attribute, NOT a hive segment on disk.
-        # We list at the day-level prediction prefix; the substring-match
-        # logic below verifies ``venue={V}/`` + ``data_type={DT}/`` membership
-        # (instrument_type check is skipped for ``prediction_market`` rows
-        # because the segment doesn't exist on disk).
-        # Axis-10 (2026-05-19): Phase-3 migration prepended pipeline_mode=
-        # before asset_group=; Polymarket sources are CLOB + Gamma API.
-        "prefix_tpls": [
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_polymarket_clob/asset_group=prediction/",
-            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_polymarket_gamma_api/asset_group=prediction/",
-            "raw_tick_data/by_date/day={date}/asset_group=prediction/",
-            "raw_tick_data/by_date/day={date}/category=prediction/",
-            "day={date}/asset_group=prediction/",
-            "day={date}/category=prediction/",
-        ],
-    },
+        "prefix_tpls": canonical_path_templates(ag) if ag != "sports" else [""],
+    }
+    for ag in ("cefi", "defi", "sports", "tradfi", "prediction")
 }
 
 
