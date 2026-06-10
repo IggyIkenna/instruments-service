@@ -17,7 +17,7 @@ SOURCE_DIR="instruments_service"
 # 78 once instruments-service adds coverage for a currently-untested branch
 # (e.g. reference_data/sports dependency fallback paths). See QG-residual
 # cleanup report 2026-04-21.
-MIN_COVERAGE=77
+MIN_COVERAGE=88
 RUN_INTEGRATION=false
 PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()

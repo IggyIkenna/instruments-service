@@ -1,15 +1,21 @@
-"""Tests for orchestrator helper functions — no cloud/network dependencies."""
+"""Tests for orchestrator helper functions - no cloud/network dependencies."""
 
 from __future__ import annotations
 
+import io
+import tempfile
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 from unified_api_contracts.internal import InstrumentRecord
 
 from instruments_service.engine.orchestrator import (
     _build_defi_venues,
+    _extract_fixture_venue_ids,
     _get_instruments_bucket,
+    _load_venue_coordinates,
+    _validate_predictions_null_rates,
     _write_catalogue_record,
     _write_fixture_mapping,
     _write_venue,
@@ -114,9 +120,9 @@ class TestIsVenueAvailable:
             if launch_date is not None and launch_date > "2010-01-01":
                 assert is_venue_available(venue, "2010-01-01") is False
                 return
-        # If no known venue resolved (unexpected), fail loud — UAC drift signal.
+        # If no known venue resolved (unexpected), fail loud - UAC drift signal.
         raise AssertionError(
-            "No probed venue resolved a discovery-start date via VenueMapping — "
+            "No probed venue resolved a discovery-start date via VenueMapping - "
             "either UAC venue_start_dates regressed or every probed venue launched pre-2010."
         )
 
@@ -128,7 +134,7 @@ class TestIsVenueAvailable:
             if _VENUE_MAPPING.get_instrument_discovery_start(venue) is not None:
                 assert is_venue_available(venue, "2030-01-01") is True
                 return
-        raise AssertionError("No probed venue resolved a discovery-start date via VenueMapping — UAC drift.")
+        raise AssertionError("No probed venue resolved a discovery-start date via VenueMapping - UAC drift.")
 
 
 # ---------------------------------------------------------------------------
@@ -398,12 +404,12 @@ class TestWriteFixtureMapping:
 
 
 # ---------------------------------------------------------------------------
-# Bug 2 regression — UnboundLocalError on get_leagues_needing_refresh
+# Bug 2 regression - UnboundLocalError on get_leagues_needing_refresh
 # ---------------------------------------------------------------------------
 
 
 class TestGetLeaguesNeedingRefreshImportScope:
-    """Regression for Bug 2 — forward-poll VM ``af-backfill-20260421-142640``.
+    """Regression for Bug 2 - forward-poll VM ``af-backfill-20260421-142640``.
 
     A conditional ``from unified_api_contracts.sports import
     get_leagues_needing_refresh`` inside the TRANSFERMARKT branch of
@@ -423,7 +429,7 @@ class TestGetLeaguesNeedingRefreshImportScope:
         from instruments_service.engine import orchestrator
 
         assert hasattr(orchestrator, "get_leagues_needing_refresh"), (
-            "get_leagues_needing_refresh must be imported at module scope — "
+            "get_leagues_needing_refresh must be imported at module scope - "
             "a local import would re-introduce Bug 2 (UnboundLocalError)."
         )
         assert callable(orchestrator.get_leagues_needing_refresh)
@@ -458,13 +464,13 @@ class TestGetLeaguesNeedingRefreshImportScope:
         filtered_src = "\n".join(filtered_lines)
         assert "import get_leagues_needing_refresh" not in filtered_src, (
             "No function-local import of get_leagues_needing_refresh is "
-            "permitted — it caused Bug 2 UnboundLocalError. Keep the "
+            "permitted - it caused Bug 2 UnboundLocalError. Keep the "
             "symbol imported once at module scope."
         )
 
 
 # ---------------------------------------------------------------------------
-# Bug 3 regression — recovery_fixture_ids ignored by zero-fixture fast paths
+# Bug 3 regression - recovery_fixture_ids ignored by zero-fixture fast paths
 # ---------------------------------------------------------------------------
 
 
@@ -500,7 +506,7 @@ class TestRecoveryFixtureIdsBypassBug:
         src = inspect.getsource(orchestrator)
         assert "not gcs_fixture_ids and not recovery_fixture_ids" in src, (
             "The _skip_urdi early-exit must guard against recovery_fixture_ids. "
-            "Pattern 'not gcs_fixture_ids and not recovery_fixture_ids' missing — "
+            "Pattern 'not gcs_fixture_ids and not recovery_fixture_ids' missing - "
             "restores Bug 3 bypass (recovery mode ignored when GCS fixtures empty)."
         )
 
@@ -519,7 +525,7 @@ class TestRecoveryFixtureIdsBypassBug:
         src = inspect.getsource(orchestrator)
         assert "list(recovery_fixture_ids) if recovery_fixture_ids else []" in src, (
             "Zero-fixture path must use recovery_fixture_ids as fixture_ids_override. "
-            "Pattern 'list(recovery_fixture_ids) if recovery_fixture_ids else []' missing — "
+            "Pattern 'list(recovery_fixture_ids) if recovery_fixture_ids else []' missing - "
             "restores Bug 3 bypass (recovery IDs ignored on zero-fixture dates)."
         )
 
@@ -572,3 +578,291 @@ class TestWriteVenueCanonicalPartition:
         # CeFi venue (no DeFi chain) must NOT be rewritten.
         captured = self._run("BINANCE")
         assert captured["partition"]["venue"] == "BINANCE"  # type: ignore[index]
+
+
+# ---------------------------------------------------------------------------
+# _validate_predictions_null_rates
+# ---------------------------------------------------------------------------
+
+
+class TestValidatePredictionsNullRates:
+    """Tests for _validate_predictions_null_rates (lines 5773-5821)."""
+
+    def test_empty_df_returns_no_violations(self) -> None:
+        df = pd.DataFrame(columns=["fixture_id", "source", "kickoff_utc"])
+        result = _validate_predictions_null_rates(df, "2026-01-15")
+        assert result == []
+
+    def test_all_core_cols_present_and_filled_no_violations(self) -> None:
+        df = pd.DataFrame(
+            {
+                "fixture_id": ["f1", "f2"],
+                "source": ["fs", "fs"],
+                "kickoff_utc": ["2026-01-15T15:00:00Z", "2026-01-15T17:00:00Z"],
+                "home_team": ["Arsenal", "Chelsea"],
+                "away_team": ["Man City", "Liverpool"],
+            }
+        )
+        result = _validate_predictions_null_rates(df, "2026-01-15")
+        assert result == []
+
+    def test_missing_core_column_adds_violation(self) -> None:
+        df = pd.DataFrame(
+            {
+                "source": ["fs", "fs"],
+                "kickoff_utc": ["2026-01-15T15:00:00Z", "2026-01-15T17:00:00Z"],
+                "home_team": ["Arsenal", "Chelsea"],
+                "away_team": ["Man City", "Liverpool"],
+            }
+        )
+        violations = _validate_predictions_null_rates(df, "2026-01-15")
+        assert any("fixture_id missing from schema" in v for v in violations)
+
+    def test_high_null_rate_in_core_col_adds_violation(self) -> None:
+        # 2 out of 2 rows have null fixture_id → 100% null > 5% threshold
+        df = pd.DataFrame(
+            {
+                "fixture_id": [None, None],
+                "source": ["fs", "fs"],
+                "kickoff_utc": ["2026-01-15T15:00:00Z", "2026-01-15T17:00:00Z"],
+                "home_team": ["Arsenal", "Chelsea"],
+                "away_team": ["Man City", "Liverpool"],
+            }
+        )
+        violations = _validate_predictions_null_rates(df, "2026-01-15")
+        assert any("fixture_id" in v and "null rate" in v for v in violations)
+
+    def test_potential_col_null_rate_exceeds_threshold_adds_violation(self) -> None:
+        # btts_potential: 3 nulls out of 3 rows → 100% > 20%
+        df = pd.DataFrame(
+            {
+                "fixture_id": ["f1", "f2", "f3"],
+                "source": ["fs", "fs", "fs"],
+                "kickoff_utc": ["2026-01-15T15:00:00Z"] * 3,
+                "home_team": ["A", "B", "C"],
+                "away_team": ["D", "E", "F"],
+                "btts_potential": [None, None, None],
+            }
+        )
+        violations = _validate_predictions_null_rates(df, "2026-01-15")
+        assert any("btts_potential" in v for v in violations)
+
+    def test_potential_col_absent_no_violation(self) -> None:
+        # Missing potential columns are skipped (optional)
+        df = pd.DataFrame(
+            {
+                "fixture_id": ["f1"],
+                "source": ["fs"],
+                "kickoff_utc": ["2026-01-15T15:00:00Z"],
+                "home_team": ["Arsenal"],
+                "away_team": ["Man City"],
+            }
+        )
+        violations = _validate_predictions_null_rates(df, "2026-01-15")
+        assert violations == []
+
+
+# ---------------------------------------------------------------------------
+# _load_venue_coordinates
+# ---------------------------------------------------------------------------
+
+
+class TestLoadVenueCoordinates:
+    """Tests for _load_venue_coordinates (lines 7409-7441)."""
+
+    def test_blob_not_found_returns_empty(self) -> None:
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = False
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+            result = _load_venue_coordinates("test-bucket")
+        assert result == {}
+
+    def test_parquet_missing_venue_id_column_returns_empty(self, tmp_path) -> None:
+        df = pd.DataFrame({"latitude": [53.43], "longitude": [-2.96]})
+        local_path = str(tmp_path / "venues.parquet")
+        df.to_parquet(local_path)
+
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            result = _load_venue_coordinates("test-bucket")
+        assert result == {}
+
+    def test_parquet_missing_lat_lon_columns_returns_empty(self, tmp_path) -> None:
+        df = pd.DataFrame({"venue_id": ["v1"]})
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            result = _load_venue_coordinates("test-bucket")
+        assert result == {}
+
+    def test_valid_parquet_returns_coords(self, tmp_path) -> None:
+        df = pd.DataFrame(
+            {
+                "venue_id": ["v1", "v2"],
+                "latitude": [53.43, 51.5],
+                "longitude": [-2.96, -0.12],
+            }
+        )
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            result = _load_venue_coordinates("test-bucket")
+        assert "v1" in result
+        assert result["v1"] == (53.43, -2.96)
+        assert "v2" in result
+
+    def test_zero_coords_skipped(self, tmp_path) -> None:
+        df = pd.DataFrame(
+            {
+                "venue_id": ["v_zero"],
+                "latitude": [0.0],
+                "longitude": [0.0],
+            }
+        )
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            result = _load_venue_coordinates("test-bucket")
+        assert "v_zero" not in result
+
+    def test_gcs_exception_returns_empty(self) -> None:
+        with patch(
+            "instruments_service.engine.orchestrator.get_storage_client",
+            side_effect=RuntimeError("GCS down"),
+        ):
+            result = _load_venue_coordinates("test-bucket")
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _extract_fixture_venue_ids
+# ---------------------------------------------------------------------------
+
+
+class TestExtractFixtureVenueIds:
+    """Tests for _extract_fixture_venue_ids (lines 7444-7479)."""
+
+    def test_no_blob_returns_empty(self) -> None:
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = False
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
+        assert result == []
+
+    def test_venue_dict_ids_extracted(self, tmp_path) -> None:
+        df = pd.DataFrame({"venue": [{"venue_id": "V1"}, {"venue_id": "V2"}]})
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
+        assert result == ["V1", "V2"]
+
+    def test_venue_string_ids_extracted(self, tmp_path) -> None:
+        df = pd.DataFrame({"venue": ["ANFIELD", "OLD_TRAFFORD"]})
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
+        assert result == ["ANFIELD", "OLD_TRAFFORD"]
+
+    def test_duplicate_venue_ids_deduplicated(self, tmp_path) -> None:
+        df = pd.DataFrame({"venue": ["ANFIELD", "ANFIELD", "OLD_TRAFFORD"]})
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
+        assert result == ["ANFIELD", "OLD_TRAFFORD"]
+
+    def test_no_venue_column_returns_empty(self, tmp_path) -> None:
+        df = pd.DataFrame({"fixture_id": ["f1", "f2"]})
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
+        assert result == []
+
+    def test_gcs_exception_returns_empty(self) -> None:
+        with patch(
+            "instruments_service.engine.orchestrator.get_storage_client",
+            side_effect=RuntimeError("GCS down"),
+        ):
+            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
+        assert result == []
+
+    def test_venue_dict_without_venue_id_key_skipped(self, tmp_path) -> None:
+        df = pd.DataFrame({"venue": [{"other_key": "xyz"}, {"venue_id": "V1"}]})
+        mock_storage = MagicMock()
+        mock_blob = MagicMock()
+        mock_blob.exists.return_value = True
+        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
+        mock_storage.bucket.return_value.blob.return_value = mock_blob
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
+        ):
+            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
+        assert result == ["V1"]
