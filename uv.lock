@@ -3009,7 +3009,7 @@ wheels = [
 
 [[package]]
 name = "unified-api-contracts"
-version = "0.3.0"
+version = "0.2.0"
 source = { editable = "../unified-api-contracts" }
 dependencies = [
     { name = "bandit" },
@@ -3076,7 +3076,7 @@ requires-dist = [
 
 [[package]]
 name = "unified-trading-library"
-version = "0.4.0"
+version = "0.3.167"
 source = { editable = "../unified-trading-library" }
 dependencies = [
     { name = "aiohttp" },

@@ -9,7 +9,6 @@ from instruments_service.reference_data.adapters.prediction.polymarket import Po
 from instruments_service.reference_data.adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from instruments_service.reference_data.adapters.tradfi.databento import DatabentoReferenceDataAdapter
 from instruments_service.reference_data.adapters.tradfi.ibkr import IBKRReferenceDataAdapter
-from instruments_service.reference_data.adapters.tradfi.polygon import PolygonReferenceDataAdapter
 from instruments_service.reference_data.router import (
     ReferenceDataSourceConfig,
     _resolve_tardis_exchanges,
@@ -37,11 +36,6 @@ class TestRouter:
         config = ReferenceDataSourceConfig(venue="polymarket", data_source="direct")
         adapter = create_reference_data_adapter_for_source(config)
         assert isinstance(adapter, PolymarketReferenceDataAdapter)
-
-    def test_route_direct_polygon(self) -> None:
-        config = ReferenceDataSourceConfig(venue="polygon", data_source="direct")
-        adapter = create_reference_data_adapter_for_source(config)
-        assert isinstance(adapter, PolygonReferenceDataAdapter)
 
     def test_route_direct_unsupported_raises(self) -> None:
         config = ReferenceDataSourceConfig(venue="notavenue", data_source="direct")
@@ -110,11 +104,6 @@ class TestRouter:
         config = ReferenceDataSourceConfig(venue="cme_futures", data_source="ibkr")
         adapter = create_reference_data_adapter_for_source(config)
         assert isinstance(adapter, IBKRReferenceDataAdapter)
-
-    def test_route_polygon(self) -> None:
-        config = ReferenceDataSourceConfig(venue="apple", data_source="polygon")
-        adapter = create_reference_data_adapter_for_source(config)
-        assert isinstance(adapter, PolygonReferenceDataAdapter)
 
     def test_route_betfair(self) -> None:
         config = ReferenceDataSourceConfig(venue="betfair", data_source="betfair")
