@@ -264,7 +264,7 @@ class TestCanonicalVenueMapping:
 class TestCreateReferenceDataAdapter:
     def test_all_known_adapter_keys(self) -> None:
         """All keys in ADAPTER_DATA_SOURCES should be creatable (if not DeFi/Tardis)."""
-        simple_adapters = ["hyperliquid", "aster", "polygon", "kalshi", "betfair"]
+        simple_adapters = ["hyperliquid", "aster", "kalshi", "betfair"]
         for key in simple_adapters:
             adapter = create_reference_data_adapter(key)
             assert adapter is not None
@@ -397,11 +397,6 @@ class TestRouterSimpleSources:
 
     def test_ibkr_source(self) -> None:
         config = ReferenceDataSourceConfig(venue="ibkr", data_source="ibkr")
-        adapter = create_reference_data_adapter_for_source(config)
-        assert adapter is not None
-
-    def test_polygon_source(self) -> None:
-        config = ReferenceDataSourceConfig(venue="polygon", data_source="polygon")
         adapter = create_reference_data_adapter_for_source(config)
         assert adapter is not None
 

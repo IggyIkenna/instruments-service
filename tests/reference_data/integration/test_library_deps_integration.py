@@ -254,7 +254,6 @@ def test_urdi_factory_creates_adapter_with_correct_venue() -> None:
     expected_venues = {
         "hyperliquid": "HYPERLIQUID",
         "tardis": "tardis",
-        "polygon": "polygon",
         "api_football": "API_FOOTBALL",
     }
     for factory_key, expected_venue in expected_venues.items():
