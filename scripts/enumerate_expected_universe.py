@@ -31,12 +31,18 @@ Per-asset-group implementation status (2026-05-07):
   source's ``SOURCE_COVERAGE_START`` / ``DATA_TYPE_COVERAGE_START`` window
   (pre-coverage dates stay owned by the v1 ``_enumerate_sports`` rows).
   v1 still emits the per-source pre-coverage slice.
-* CeFi:   STUB — needs instruments-service catalog with per-instrument
-  lifecycle (``available_from`` / ``available_to`` / ``expiry``).
-  See plan Phase 3.D.4 CeFi sub-task.
-* Prediction: STUB — blocked on UAC ``PREDICTION_GROUPS`` registry which
-  is empty pending the canonical_question_group SSOT
-  (``predictions_master.md``).
+* CeFi:   FULL (v2) — per-instrument lifecycle from the
+  ``build_instrument_catalogue.py`` roll-up (``available_from`` /
+  ``available_to``); the G1-ENUM shape-aware producer (2026-06-07) filters
+  each instrument to its valid ``(instrument_type x data_type)`` cells via the
+  UAC validity matrix + bundle-grain roll-up. The v1 ``_enumerate_cefi`` below
+  retains only the pre-venue-launch slice. (CF-16: the former STUB is closed —
+  the v2 ``_enumerate_v2_cefi`` is the live path.)
+* Prediction: FULL (v2) — per-market lifecycle (``market_created_at`` /
+  ``settlement_time``) with per-row data_type grain-binding (cqg bundle vs
+  per-conditionId trades) from the prediction catalogue. (CF-16: the former
+  ``PREDICTION_GROUPS`` STUB is closed — the v2 ``_enumerate_v2_prediction`` is
+  the live path; the catalogue carries the grain.)
 
 Example::
 
