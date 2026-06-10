@@ -19,7 +19,6 @@ Crypto
 
 TradFi equities
   apple     / databento → DatabentoReferenceDataAdapter(datasets=["XNAS.ITCH"])
-  apple     / polygon   → PolygonReferenceDataAdapter
   apple     / ibkr      → IBKRReferenceDataAdapter
   nasdaq    / databento → DatabentoReferenceDataAdapter(datasets=["XNAS.ITCH"])
   nyse      / databento → DatabentoReferenceDataAdapter(datasets=["XNYS.PILLAR"])
@@ -31,12 +30,10 @@ TradFi futures
 
 TradFi options
   cboe_options / databento → DatabentoReferenceDataAdapter(datasets=["OPRA.PILLAR"])
-  cboe_options / polygon   → PolygonReferenceDataAdapter
 
 Generic data-source-only
   databento / databento → DatabentoReferenceDataAdapter (default datasets)
   tardis    / tardis    → TardisReferenceDataAdapter (default exchanges)
-  polygon   / polygon   → PolygonReferenceDataAdapter
 
 DeFi protocols
   uniswap_v3  / direct    → UniswapV3ReferenceDataAdapter
@@ -97,7 +94,6 @@ from .adapters.sports.adapters.api_football_reference import ApiFootballReferenc
 from .adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
 from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
-from .adapters.tradfi.polygon import PolygonReferenceDataAdapter
 from .base_adapter import BaseReferenceDataAdapter
 
 _logger = logging.getLogger(__name__)
@@ -143,7 +139,7 @@ class ReferenceDataSourceConfig(BaseModel):  # CORRECT-LOCAL — service routing
         venue: Logical venue identifier (e.g. "binance", "apple", "betfair").
                Does not need to match the adapter's internal venue string.
         data_source: Data provider to use (e.g. "direct", "databento", "tardis",
-                     "ibkr", "polygon", "ccxt", "betfair", "polymarket").
+                     "ibkr", "ccxt", "betfair", "polymarket").
         dataset: For Databento: dataset code (e.g. "XNAS.ITCH", "GLBX.MDP3").
                  When set, overrides default dataset selection.
         exchange: For Tardis or CCXT: exchange slug (e.g. "binance-futures", "bybit").
@@ -248,7 +244,6 @@ def create_reference_data_adapter_for_source(
     simple_source_map: dict[str, type[BaseReferenceDataAdapter]] = {
         "api_football": ApiFootballReferenceDataAdapter,
         "ibkr": IBKRReferenceDataAdapter,
-        "polygon": PolygonReferenceDataAdapter,
         "betfair": BetfairReferenceDataAdapter,
         "polymarket": PolymarketReferenceDataAdapter,
         "kalshi": KalshiReferenceDataAdapter,
@@ -257,7 +252,7 @@ def create_reference_data_adapter_for_source(
     if adapter_class is not None:
         return adapter_class(project_id=project_id, api_key=api_key)
 
-    supported = "direct, databento, tardis, ccxt, api_football, ibkr, polygon, betfair, polymarket, kalshi"
+    supported = "direct, databento, tardis, ccxt, api_football, ibkr, betfair, polymarket, kalshi"
     msg = f"Unsupported data_source {source!r} for venue {venue!r}. Supported: {supported}."
     raise ValueError(msg)
 
@@ -340,7 +335,6 @@ def _route_direct(
         "kalshi": KalshiReferenceDataAdapter,
         "lido": LidoReferenceDataAdapter,
         "morpho": MorphoReferenceDataAdapter,
-        "polygon": PolygonReferenceDataAdapter,
         "polymarket": PolymarketReferenceDataAdapter,
         "radiant": RadiantReferenceDataAdapter,
         "uniswap_v2": UniswapV2ReferenceDataAdapter,
