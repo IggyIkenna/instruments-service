@@ -1,0 +1,767 @@
+"""Coverage boost for sports reference data adapters.
+
+Targets uncovered lines in:
+- api_football.py: get_fixtures_with_raw, _fetch_league_fixtures_with_raw,
+  get_live_fixtures, _fetch_league_fixtures (normalize exception),
+  get_leagues (exception), _parse_fixture_list_with_raw (normalize exception)
+- footystats.py: get_fixtures (exception + None match + league filter + normalize exc),
+  get_leagues (exception), get_teams (exception)
+
+All tests are credential-free and network-free — the HTTP layer is mocked
+via patch on ``aiohttp.ClientSession`` or ``_get_with_retry``.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Helpers: minimal fixture raw item and mock session builders
+# ---------------------------------------------------------------------------
+
+
+def _minimal_fixture_item(fixture_id: int = 100) -> dict:
+    return {
+        "fixture": {
+            "id": fixture_id,
+            "date": "2026-03-22T15:00:00+00:00",
+            "status": {"long": "Not Started", "short": "NS"},
+        },
+        "league": {"id": 39, "name": "Premier League", "season": 2025},
+        "teams": {
+            "home": {"id": 40, "name": "Liverpool"},
+            "away": {"id": 33, "name": "Manchester United"},
+        },
+        "goals": None,
+        "score": None,
+    }
+
+
+def _make_session_cm(json_return: object) -> MagicMock:
+    """Build a mock aiohttp.ClientSession context manager returning json_return."""
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json = AsyncMock(return_value=json_return)
+    mock_resp.headers = {}
+
+    resp_cm = MagicMock()
+    resp_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    resp_cm.__aexit__ = AsyncMock(return_value=None)
+
+    session_obj = MagicMock()
+    session_obj.get = MagicMock(return_value=resp_cm)
+
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session_obj)
+    session_cm.__aexit__ = AsyncMock(return_value=None)
+    return session_cm
+
+
+# ---------------------------------------------------------------------------
+# ApiFootballAdapter — get_fixtures_with_raw
+# ---------------------------------------------------------------------------
+
+
+class TestApiFootballGetFixturesWithRaw:
+    """Lines 238-261: get_fixtures_with_raw method."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_single_league_success(self) -> None:
+        """Lines 238-261: single league returns paired (canonical, raw) tuples."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        raw_response = {"response": [_minimal_fixture_item()]}
+        session_cm = _make_session_cm(raw_response)
+
+        with patch("aiohttp.ClientSession", return_value=session_cm):
+            result = await adapter.get_fixtures_with_raw("2026-03-22", league_ids=[39])
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        _canonical_fx, raw_item = result[0]
+        assert raw_item == _minimal_fixture_item()
+
+    @pytest.mark.asyncio
+    async def test_multi_league_fan_out(self) -> None:
+        """Lines 256-259: multi-league triggers _fetch_league_fixtures_with_raw fan-out."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        raw_response = {"response": [_minimal_fixture_item()]}
+        session_cm = _make_session_cm(raw_response)
+
+        with patch("aiohttp.ClientSession", return_value=session_cm):
+            result = await adapter.get_fixtures_with_raw("2026-03-22", league_ids=[39, 140])
+
+        # First batch (league 39) + fan-out for league 140
+        assert isinstance(result, list)
+
+    @pytest.mark.asyncio
+    async def test_exception_reraises(self) -> None:
+        """Lines 249-252: HTTP exception re-raises after emit_fetch_failed."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+
+        with (
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                side_effect=RuntimeError("network error"),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+            pytest.raises(RuntimeError, match="network error"),
+        ):
+            await adapter.get_fixtures_with_raw("2026-03-22", league_ids=[39])
+
+
+# ---------------------------------------------------------------------------
+# ApiFootballAdapter — _fetch_league_fixtures_with_raw
+# ---------------------------------------------------------------------------
+
+
+class TestApiFootballFetchLeagueFixturesWithRaw:
+    """Lines 267-282: _fetch_league_fixtures_with_raw (single-league fan-out)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_success_returns_pairs(self) -> None:
+        """Lines 267-282: success path returns paired list."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        raw_response = {"response": [_minimal_fixture_item(200)]}
+        session_cm = _make_session_cm(raw_response)
+
+        with patch("aiohttp.ClientSession", return_value=session_cm):
+            result = await adapter._fetch_league_fixtures_with_raw("2026-03-22", 39)
+
+        assert isinstance(result, list)
+
+    @pytest.mark.asyncio
+    async def test_exception_returns_empty_list(self) -> None:
+        """Lines 278-281: exception → returns [] instead of raising."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+
+        with (
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                side_effect=RuntimeError("fail"),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            result = await adapter._fetch_league_fixtures_with_raw("2026-03-22", 39)
+
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# ApiFootballAdapter — get_live_fixtures
+# ---------------------------------------------------------------------------
+
+
+class TestApiFootballGetLiveFixtures:
+    """Lines 290-302: get_live_fixtures method."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_success_returns_fixture_list(self) -> None:
+        """Lines 290-302: GET /fixtures?live=all returns canonical fixture list."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        raw_response = {"response": [_minimal_fixture_item(301)]}
+        session_cm = _make_session_cm(raw_response)
+
+        with patch("aiohttp.ClientSession", return_value=session_cm):
+            result = await adapter.get_live_fixtures()
+
+        assert isinstance(result, list)
+
+    @pytest.mark.asyncio
+    async def test_exception_returns_empty_list(self) -> None:
+        """Lines 295-298: exception → returns [] instead of raising."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+
+        with (
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                side_effect=RuntimeError("live fail"),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            result = await adapter.get_live_fixtures()
+
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# ApiFootballAdapter — _fetch_league_fixtures (normalize exception path)
+# ---------------------------------------------------------------------------
+
+
+class TestApiFootballFetchLeagueFixturesNormalize:
+    """Lines 331-333: normalize exception inside per-item loop logs warning + continues."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_normalize_exception_skips_and_continues(self) -> None:
+        """Lines 328-333: normalize_api_football_fixture raises → warning + continue."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        raw_response = {"response": [_minimal_fixture_item(999)]}
+        session_cm = _make_session_cm(raw_response)
+
+        with (
+            patch("aiohttp.ClientSession", return_value=session_cm),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.normalize_api_football_fixture",
+                side_effect=ValueError("bad data"),
+            ),
+        ):
+            result = await adapter._fetch_league_fixtures("2026-03-22", 39)
+
+        # Exception swallowed, returns empty
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# ApiFootballAdapter — get_leagues (exception)
+# ---------------------------------------------------------------------------
+
+
+class TestApiFootballGetLeaguesException:
+    """Lines 346-349: get_leagues() re-raises after emit_fetch_failed."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_exception_reraises(self) -> None:
+        """Lines 346-349: exception → emit_fetch_failed + re-raise."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+
+        with (
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                side_effect=RuntimeError("leagues fail"),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+            pytest.raises(RuntimeError, match="leagues fail"),
+        ):
+            await adapter.get_leagues()
+
+
+# ---------------------------------------------------------------------------
+# _parse_fixture_list_with_raw — normalize exception path
+# ---------------------------------------------------------------------------
+
+
+def test_parse_fixture_list_with_raw_normalize_exception_skips() -> None:
+    """Lines 678-680: normalize_api_football_fixture raises → fixture skipped with warning."""
+    from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+        _parse_fixture_list_with_raw,
+    )
+
+    item = _minimal_fixture_item(777)
+
+    with patch(
+        "instruments_service.reference_data.adapters.sports.adapters.api_football.normalize_api_football_fixture",
+        side_effect=ValueError("bad normalize"),
+    ):
+        result = _parse_fixture_list_with_raw([item])
+
+    assert result == []
+
+
+# ===========================================================================
+# FootyStats adapter
+# ===========================================================================
+
+
+class TestFootystatsGetFixtures:
+    """Lines 85-107: get_fixtures error paths."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_exception_reraises(self) -> None:
+        """Lines 85-88: HTTP exception re-raises after emit_fetch_failed."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+
+        with (
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                side_effect=RuntimeError("footystats fail"),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+            pytest.raises(RuntimeError, match="footystats fail"),
+        ):
+            await adapter.get_fixtures("2026-03-22")
+
+    @pytest.mark.asyncio
+    async def test_match_none_skipped(self) -> None:
+        """Line 96: _parse_match returning None skips the item (continue branch)."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        raw_response = {"data": [{"match_id": 1}]}
+        session_cm = _make_session_cm(raw_response)
+
+        with (
+            patch("aiohttp.ClientSession", return_value=session_cm),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._parse_match",
+                return_value=None,
+            ),
+        ):
+            result = await adapter.get_fixtures("2026-03-22")
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_league_filter_skips_non_matching(self) -> None:
+        """Line 99: league_ids filter skips matches with different competition_id."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        raw_response = {"data": [{"match_id": 1}]}
+        session_cm = _make_session_cm(raw_response)
+
+        mock_match = MagicMock()
+        mock_match.competition_id = 999  # won't match league_ids=[1]
+
+        with (
+            patch("aiohttp.ClientSession", return_value=session_cm),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._parse_match",
+                return_value=mock_match,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats.normalize_footystats_match",
+                return_value=MagicMock(),
+            ),
+        ):
+            result = await adapter.get_fixtures("2026-03-22", league_ids=[1])
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_normalize_exception_continues(self) -> None:
+        """Lines 101-107: normalize exception logs warning and continues loop."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        raw_response = {"data": [{"match_id": 1}]}
+        session_cm = _make_session_cm(raw_response)
+
+        mock_match = MagicMock()
+        mock_match.competition_id = 1
+
+        with (
+            patch("aiohttp.ClientSession", return_value=session_cm),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._parse_match",
+                return_value=mock_match,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats.normalize_footystats_match",
+                side_effect=ValueError("bad data"),
+            ),
+        ):
+            result = await adapter.get_fixtures("2026-03-22")
+
+        assert result == []
+
+
+class TestFootystatsGetLeagues:
+    """Lines 124-127: get_leagues exception re-raises."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_exception_reraises(self) -> None:
+        """Lines 124-127: HTTP exception re-raises after emit_fetch_failed."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+
+        with (
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                side_effect=RuntimeError("leagues fail"),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+            pytest.raises(RuntimeError, match="leagues fail"),
+        ):
+            await adapter.get_leagues()
+
+
+class TestFootystatsGetTeams:
+    """Lines 172-175: get_teams exception re-raises."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_exception_reraises(self) -> None:
+        """Lines 172-175: HTTP exception re-raises after emit_fetch_failed."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+
+        with (
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                side_effect=RuntimeError("teams fail"),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+            pytest.raises(RuntimeError, match="teams fail"),
+        ):
+            await adapter.get_teams(league_id=1)
+
+
+# ===========================================================================
+# Footystats — non-dict items + exception branches (lines 133, 144-146,
+#              181, 194-196, 230-233, 241, 260-266, 294-297, 305, 316-322,
+#              483-485)
+# ===========================================================================
+
+
+def _make_footystats_session_cm() -> MagicMock:
+    """Async context manager that yields any mock session."""
+    mock_sess = MagicMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=mock_sess)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm
+
+
+class TestFootystatsGetLeaguesEdgeCases:
+    """Lines 133, 144-146: non-dict item skipped, CanonicalLeague exception continues."""
+
+    @pytest.mark.asyncio
+    async def test_non_dict_item_skipped(self) -> None:
+        """Line 133: _extract_data returns a non-dict item → silently skipped."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, return_value={}),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._extract_data",
+                return_value=["not_a_dict", 42],
+            ),
+        ):
+            result = await adapter.get_leagues()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_canonical_league_exception_continues(self) -> None:
+        """Lines 144-146: CanonicalLeague constructor raises → logs warning and continues."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, return_value={}),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._extract_data",
+                return_value=[{"id": "1", "name": "EPL"}],
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats.CanonicalLeague",
+                side_effect=ValueError("bad league"),
+            ),
+        ):
+            result = await adapter.get_leagues()
+        assert result == []
+
+
+class TestFootystatsGetTeamsEdgeCases:
+    """Lines 181, 194-196: non-dict item + CanonicalTeam exception."""
+
+    @pytest.mark.asyncio
+    async def test_non_dict_item_skipped(self) -> None:
+        """Line 181: non-dict item skipped."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, return_value={}),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._extract_data",
+                return_value=["not_a_dict"],
+            ),
+        ):
+            result = await adapter.get_teams(league_id=1)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_canonical_team_exception_continues(self) -> None:
+        """Lines 194-196: CanonicalTeam raises → logs and continues."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, return_value={}),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._extract_data",
+                return_value=[{"id": "1", "clean_name": "Arsenal"}],
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats.CanonicalTeam",
+                side_effect=ValueError("bad team"),
+            ),
+        ):
+            result = await adapter.get_teams(league_id=1)
+        assert result == []
+
+
+class TestFootystatsGetFixturePredictionsEdgeCases:
+    """Lines 230-233, 241, 260-266: exception paths in get_fixture_predictions."""
+
+    @pytest.mark.asyncio
+    async def test_http_exception_reraises(self) -> None:
+        """Lines 230-233: HTTP exception re-raises."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
+            patch.object(adapter, "_emit_fetch_failed"),
+            pytest.raises(RuntimeError, match="fail"),
+        ):
+            await adapter.get_fixture_predictions("2026-03-22")
+
+    @pytest.mark.asyncio
+    async def test_parse_match_none_skips(self) -> None:
+        """Line 241: _parse_match returns None → item skipped."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, return_value={}),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._extract_data",
+                return_value=[{"id": "1"}],
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._parse_match",
+                return_value=None,
+            ),
+        ):
+            result = await adapter.get_fixture_predictions("2026-03-22")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_normalize_exception_continues(self) -> None:
+        """Lines 260-266: normalize_footystats_predictions raises → logged, continues."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        mock_match = MagicMock()
+        mock_match.competition_id = 39
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, return_value={}),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._extract_data",
+                return_value=[{"id": "1", "match_id": "1"}],
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._parse_match",
+                return_value=mock_match,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats.normalize_footystats_predictions",
+                side_effect=ValueError("bad norm"),
+            ),
+        ):
+            result = await adapter.get_fixture_predictions("2026-03-22")
+        assert result == []
+
+
+class TestFootystatsGetFixtureOddsSnapshotEdgeCases:
+    """Lines 294-297, 305, 316-322: exception paths in get_fixture_odds_snapshot."""
+
+    @pytest.mark.asyncio
+    async def test_http_exception_reraises(self) -> None:
+        """Lines 294-297: HTTP exception re-raises."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, side_effect=RuntimeError("odds fail")),
+            patch.object(adapter, "_emit_fetch_failed"),
+            pytest.raises(RuntimeError, match="odds fail"),
+        ):
+            await adapter.get_fixture_odds_snapshot("2026-03-22")
+
+    @pytest.mark.asyncio
+    async def test_parse_match_none_skips(self) -> None:
+        """Line 305: _parse_match returns None → item skipped."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, return_value={}),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._extract_data",
+                return_value=[{"id": "1"}],
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._parse_match",
+                return_value=None,
+            ),
+        ):
+            result = await adapter.get_fixture_odds_snapshot("2026-03-22")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_normalize_exception_continues(self) -> None:
+        """Lines 316-322: normalize_footystats_odds_snapshot raises → continues."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+            FootystatsAdapter,
+        )
+
+        adapter = FootystatsAdapter(api_key="test-key")
+        mock_match = MagicMock()
+        mock_match.competition_id = 39
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_footystats_session_cm()),
+            patch.object(adapter, "_get_with_retry", new_callable=AsyncMock, return_value={}),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._extract_data",
+                return_value=[{"id": "1", "match_id": "1"}],
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats._parse_match",
+                return_value=mock_match,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.footystats.normalize_footystats_odds_snapshot",
+                side_effect=ValueError("bad odds"),
+            ),
+        ):
+            result = await adapter.get_fixture_odds_snapshot("2026-03-22")
+        assert result == []
+
+
+class TestFootystatsParseMatchException:
+    """Lines 483-485: _parse_match with non-int id → returns None."""
+
+    def test_non_int_match_id_returns_none(self) -> None:
+        """Lines 483-485: FootyStatsMatch construction fails on 'not-an-int' → None."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import _parse_match
+
+        result = _parse_match({"id": "not_an_int"})
+        assert result is None
+
+    def test_none_match_id_returns_none(self) -> None:
+        """Lines 356-357: match_id is None → returns None."""
+        from instruments_service.reference_data.adapters.sports.adapters.footystats import _parse_match
+
+        result = _parse_match({"other_key": "value"})
+        assert result is None

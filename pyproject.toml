@@ -157,7 +157,7 @@ source = ["instruments_service"]
 branch = true
 
 [tool.coverage.report]
-fail_under = 77
+fail_under = 88
 show_missing = true
 skip_covered = false
 precision = 1
