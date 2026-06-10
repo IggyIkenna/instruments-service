@@ -72,7 +72,6 @@ from .adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
 from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
 from .adapters.tradfi.massive import MassiveReferenceDataAdapter
-from .adapters.tradfi.polygon import PolygonReferenceDataAdapter
 from .adapters.tradfi.tradfi_live import TradFiLiveReferenceDataAdapter
 from .base_adapter import BaseReferenceDataAdapter
 
@@ -126,8 +125,6 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     # Prediction markets
     "POLYMARKET": "polymarket",
     "KALSHI": "kalshi",
-    # Data aggregators
-    "POLYGON": "polygon",
     # DeFi — LST/Yield protocols (Ethereum-only, no subgraph multi-chain)
     "LIDO-ETHEREUM": "lido",
     "ETHERFI-ETHEREUM": "etherfi",
@@ -311,7 +308,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "orca": OrcaReferenceDataAdapter,
     "pacifica": PacificaReferenceDataAdapter,
     "pendle": PendleReferenceDataAdapter,
-    "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
     "puffer": PufferReferenceDataAdapter,
@@ -343,7 +339,6 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "databento": "databento",
     "massive": "massive",
     "ibkr": "ibkr",
-    "polygon": "polygon",
     "polymarket": "polymarket",
     "kalshi": "kalshi",
     "uniswap_v2": "thegraph",
@@ -684,7 +679,7 @@ def create_reference_data_adapter(
 
     Args:
         venue: Venue identifier (aster, hyperliquid, ibkr, databento, tardis,
-               ccxt, betfair, polymarket, polygon, kalshi, api_football,
+               ccxt, betfair, polymarket, kalshi, api_football,
                or any DeFi protocol key).
         project_id: Deprecated. Retained for call-site compatibility but no
                     longer used for internal Secret Manager lookups.
