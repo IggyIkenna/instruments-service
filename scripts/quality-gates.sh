@@ -31,9 +31,11 @@ MAX_DURATION=600
 
 # Imports inside functions: adapters with conditional/lazy imports (registry data, codecs, asyncio)
 IMPORT_INSIDE_EXCLUDE_GLOBS=(
-    "!**/reference_data/adapters/tradfi/databento.py"
+    # databento/polymarket split into packages 2026-06-12 (codex ratchet plan) — same
+    # conditional/lazy-import justification carries to the package modules.
+    "!**/reference_data/adapters/tradfi/databento/*.py"
     "!**/reference_data/adapters/api_football.py"
-    "!**/reference_data/adapters/prediction/polymarket.py"
+    "!**/reference_data/adapters/prediction/polymarket/*.py"
     "!**/reference_data/adapters/defi/raydium.py"
     "!**/reference_data/adapters/defi/orca.py"
     "!**/reference_data/adapters/defi/kamino.py"
@@ -73,6 +75,11 @@ BE_EXCLUDE_GLOBS=(
 
 # Empty string fallbacks: adapter JSON parsing (e.g. .get("symbol", ""))
 EMPTY_STR_EXCLUDE_GLOBS=(
+    # 2026-06-12: adapters split into packages (codex ratchet plan) — same adapter-layer
+    # parsing-guard justification carries one level down.
+    "!**/reference_data/adapters/cefi/tardis/*.py"
+    "!**/reference_data/adapters/tradfi/databento/*.py"
+    "!**/reference_data/adapters/prediction/polymarket/*.py"
     "!**/reference_data/adapters/*.py"
     "!**/reference_data/adapters/cefi/*.py"
     "!**/reference_data/adapters/defi/*.py"
@@ -95,6 +102,11 @@ EMPTY_STR_EXCLUDE_GLOBS=(
 
 # Empty dict/list fallbacks: adapter GraphQL/JSON nested access (e.g. .get("data", {}).get("pools", []))
 EMPTY_DICT_LIST_EXCLUDE_GLOBS=(
+    # 2026-06-12: adapters split into packages (codex ratchet plan) — same adapter-layer
+    # parsing-guard justification carries one level down.
+    "!**/reference_data/adapters/cefi/tardis/*.py"
+    "!**/reference_data/adapters/tradfi/databento/*.py"
+    "!**/reference_data/adapters/prediction/polymarket/*.py"
     "!**/reference_data/adapters/*.py"
     "!**/reference_data/adapters/cefi/*.py"
     "!**/reference_data/adapters/defi/*.py"
@@ -107,6 +119,11 @@ EMPTY_DICT_LIST_EXCLUDE_GLOBS=(
 # unified_api_contracts.internal (InstrumentRecord, FeeScheduleEntry, MarginType)
 # and unified_api_contracts.registry (SUBGRAPH_IDS, get_subgraph_id, etc.)
 DEEP_IMPORT_EXCLUDE_GLOBS=(
+    # 2026-06-12: adapters split into packages (codex ratchet plan) — same adapter-layer
+    # parsing-guard justification carries one level down.
+    "!**/reference_data/adapters/cefi/tardis/*.py"
+    "!**/reference_data/adapters/tradfi/databento/*.py"
+    "!**/reference_data/adapters/prediction/polymarket/*.py"
     "!**/engine/urdi_reference_provider.py"
     "!**/reference_data/base_adapter.py"
     "!**/reference_data/schemas.py"

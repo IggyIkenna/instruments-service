@@ -1,67 +1,63 @@
-"""Tardis reference data adapter — historical tick data provider.
+"""Tardis REST adapter class + venue universe constants.
 
-Tardis provides historical trades/orderbook data for crypto derivatives.
-This adapter retrieves instrument metadata via the public exchanges REST endpoint.
-API key optional for public instrument listing; required for higher rate limits.
+Cohesion module of the ``adapters.cefi.tardis`` package (split from the former
+monolithic ``adapters/cefi/tardis.py``; plan:
+``unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md``).
 
-API key: store in Secret Manager as TARDIS_API_KEY.
-Auth: Authorization: Bearer {api_key} (header).
-Base URL: https://api.tardis.dev/v1
-
-Supported exchanges (configurable):
-  binance-futures, bybit, okex, deribit
-
-Not applicable: crypto funding rates (historical; use tardis-client library),
-OHLCV bars (requires /replay endpoint — out of scope for URDI REST adapter).
+Shared collaborators (``log_event``, ``classify_venue_error``, the parsing /
+combo helpers and the Tardis pydantic detail models) resolve through
+``_tardis`` — the live package namespace — so ``unittest.mock.patch(
+"instruments_service.reference_data.adapters.cefi.tardis.<name>")`` targets and
+cross-module monkeypatching behave exactly as they did before the split.
 """
 
+# Package-internal access: the tardis package is ONE logical namespace split
+# across cohesion modules; underscore symbols are package-internal.
+# pyright: reportPrivateUsage=false
+
+from __future__ import annotations
+
 import asyncio
-import contextlib
 import json
-import logging
-import re
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import aiohttp
-from unified_api_contracts import (
-    CEFI_ACCEPTED_QUOTE_ASSETS,
-    CEFI_BASE_ASSET_UNIVERSE,
-    CEFI_OPTIONS_UNDERLYINGS,
-    TardisExchangeDetail,
-    TardisInstrumentDetail,
-    VenueMapping,
-    classify_venue_error,
-)
-from unified_api_contracts.internal import InstrumentLeg, InstrumentRecord, InstrumentType, MarginType, OptionType
-from unified_trading_library import log_event
+from unified_api_contracts import VenueMapping
+from unified_api_contracts.internal import InstrumentType, OptionType
 
-from ...base_adapter import BaseReferenceDataAdapter
-from ...schemas import (
+from ....base_adapter import BaseReferenceDataAdapter
+from ....schemas import (
     CanonicalExpiryCalendar,
     CanonicalOptionsChain,
     FundingRateRef,
     OHLCVRef,
 )
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from unified_api_contracts import TardisInstrumentDetail
+    from unified_api_contracts.internal import InstrumentLeg, InstrumentRecord, MarginType
+
+    from instruments_service.reference_data.adapters.cefi import tardis as _tardis
+else:  # pragma: no cover - runtime namespace indirection
+    from instruments_service.reference_data.adapters.cefi.tardis._pkg_ref import tardis_namespace as _tardis
+
+__all__ = [
+    "_DEFAULT_EXCHANGES",
+    "_DERIVATIVES_ONLY_EXCHANGES",
+    "_TARDIS_BASE",
+    "_TARDIS_RETRYABLE_CODES",
+    "_TARDIS_RETRY_ATTEMPTS",
+    "_TARDIS_RETRY_BASE_DELAY",
+    "_TYPE_MAP",
+    "_VENUE_MAPPING",
+    "TardisReferenceDataAdapter",
+    "_classify_tardis_error",
+]
 
 _TARDIS_BASE = "https://api.tardis.dev/v1"
-
-
-def _normalize_option_type(raw: str | None) -> OptionType | None:
-    """Normalize option type to OptionType enum, or None if unrecognised."""
-    if not raw:
-        return None
-    upper = raw.strip().upper()
-    if upper in ("CALL", "C"):
-        return OptionType.CALL
-    if upper in ("PUT", "P"):
-        return OptionType.PUT
-    return None
-
 
 # Retry configuration for Tardis instrument listing requests
 _TARDIS_RETRY_ATTEMPTS: int = 3
@@ -109,80 +105,6 @@ _DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset(
     }
 )
 
-# Quote currencies for symbol splitting (longest first for correct prefix matching)
-# Extended from instruments-service/engine/processors/symbol_parser.py _ALL_QUOTE_SUFFIXES
-_QUOTE_CURRENCIES: list[str] = [
-    "USDT",
-    "USDC",
-    "BUSD",
-    "TUSD",
-    "USDE",
-    "BRZ",
-    "IDRT",
-    "BIDR",
-    "USD",
-    "BTC",
-    "ETH",
-    "BNB",
-    "XRP",
-    "TRX",
-    "ADA",
-    "SOL",
-    "LTC",
-    "DOT",
-    "LINK",
-    "UNI",
-    "AVAX",
-    "DOGE",
-    "SHIB",
-    "PEPE",
-    "FLOKI",
-    "WIF",
-    "BONK",
-    "MEME",
-    "KRW",
-    "EUR",
-    "GBP",
-    "JPY",
-    "AUD",
-    "TRY",
-    "BRL",
-    "RUB",
-    "NGN",
-    "ZAR",
-    "DAI",
-    "VAI",
-    "GEL",
-    "CZK",
-    "MXN",
-    "ARS",
-    "COP",
-    "CLP",
-    "PEN",
-    "VES",
-    "UAH",
-    "PLN",
-    "RON",
-    "CNY",
-    "HKD",
-    # 2026-05-03: extra fiats spotted on OKX-SPOT (Middle East, SE Asia, S Asia).
-    # Without these, BTC-{AED,SAR,MYR,...} fell through to USD and collided into
-    # the same instrument_key as BTC-USD.
-    "AED",
-    "SAR",
-    "MYR",
-    "SGD",
-    "IDR",
-    "PHP",
-    "THB",
-    "INR",
-    "VND",
-    "TWD",
-]
-
-# Set version for O(1) lookup in _split_symbol
-_QUOTE_CURRENCIES_SET: frozenset[str] = frozenset(_QUOTE_CURRENCIES)
-
 # Singleton venue mapping for exchange→canonical venue resolution
 _VENUE_MAPPING = VenueMapping()
 
@@ -203,249 +125,6 @@ def _classify_tardis_error(exc: Exception, status: int | None = None) -> str:
     if "500" in msg or "internal" in msg or "server" in msg:
         return "500"
     return "UNKNOWN"
-
-
-def _parse_expiry(s: str | None) -> datetime | None:
-    """Parse ISO date/datetime string (with optional Z suffix) to UTC datetime."""
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(UTC)
-    except ValueError:
-        return None
-
-
-_DERIBIT_MONTHS = {
-    "JAN": 1,
-    "FEB": 2,
-    "MAR": 3,
-    "APR": 4,
-    "MAY": 5,
-    "JUN": 6,
-    "JUL": 7,
-    "AUG": 8,
-    "SEP": 9,
-    "OCT": 10,
-    "NOV": 11,
-    "DEC": 12,
-}
-
-
-def _parse_deribit_symbol_expiry(raw_id: str) -> datetime | None:
-    """Parse expiry from Deribit symbol format: BTC-27MAR26-190000-C.
-
-    The second segment is DDMMMYY (e.g. 27MAR26 = 2026-03-27).
-    Also handles futures like BTC-27MAR26 (no strike/option segments).
-    """
-    parts = raw_id.split("-")
-    if len(parts) < 2 or len(parts[1]) < 5:
-        return None
-    return _parse_ddmmmyy(parts[1])
-
-
-def _parse_ddmmmyy(date_part: str) -> datetime | None:
-    """Parse DDMMMYY string (e.g. '27MAR26') into a UTC datetime."""
-    try:
-        m = re.match(r"(\d{1,2})([A-Z]{3})(\d{2})", date_part.upper())
-        if not m:
-            return None
-        day, month_str, year_str = int(m.group(1)), m.group(2), int(m.group(3))
-        month = _DERIBIT_MONTHS.get(month_str)
-        if not month:
-            return None
-        return datetime(2000 + year_str, month, day, tzinfo=UTC)
-    except (ValueError, IndexError):
-        return None
-
-
-def _parse_yymmdd_symbol_expiry(raw_id: str) -> datetime | None:
-    """Parse expiry from OKX-style symbol: BASE-QUOTE-YYMMDD (e.g. BTC-USD-260626).
-
-    The last segment is a 6-digit YYMMDD date string.  Also handles the
-    shorter BASE-YYMMDD variant used by some exchanges.
-    """
-    parts = raw_id.split("-")
-    # Try last segment first (covers both BASE-QUOTE-YYMMDD and BASE-YYMMDD)
-    for idx in (-1, -2):
-        if abs(idx) > len(parts):
-            continue
-        seg = parts[idx]
-        if len(seg) == 6 and seg.isdigit():
-            try:
-                yy, mm, dd = int(seg[:2]), int(seg[2:4]), int(seg[4:6])
-                return datetime(2000 + yy, mm, dd, tzinfo=UTC)
-            except ValueError:
-                continue
-    return None
-
-
-def _parse_underscore_yymmdd_symbol_expiry(raw_id: str) -> datetime | None:
-    """Parse expiry from Kraken-Futures-style symbol: FI_XBTUSD_240329.
-
-    The last segment (underscore-separated) is a 6-digit YYMMDD date string.
-    Perpetuals (e.g. ``PF_XBTUSD_PERP``) return None — non-digit suffix.
-    """
-    parts = raw_id.split("_")
-    for idx in (-1, -2):
-        if abs(idx) > len(parts):
-            continue
-        seg = parts[idx]
-        if len(seg) == 6 and seg.isdigit():
-            try:
-                yy, mm, dd = int(seg[:2]), int(seg[2:4]), int(seg[4:6])
-                return datetime(2000 + yy, mm, dd, tzinfo=UTC)
-            except ValueError:
-                continue
-    return None
-
-
-def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str) -> tuple[str, str]:
-    """Parse base/quote from Tardis metadata or fall back to symbol splitting.
-
-    For derivatives without an explicit quote suffix (e.g. BTC-PERPETUAL,
-    BTC-27MAR26-190000-C), the settlement currency is inferred from the
-    exchange context:
-      - deribit: USD (inverse) or USDC (linear)
-      - okex coin-margined (-USD_UM-): USD
-      - binance-futures COIN-M: USD
-      - all others: USD as safe default for derivatives
-    """
-    base = item.baseCurrency or ""
-    quote = item.quoteCurrency or ""
-    if base and quote:
-        return base, quote
-
-    upper_id = raw_id.upper()
-    # Bitfinex derivatives use ``<BASE>F0:<QUOTE>F0`` — ``F0`` is Bitfinex's
-    # "perpetual" marker, not a currency suffix. Examples:
-    #   BTCF0:USTF0  → base=BTC,  quote=USDT (USDT-margined linear perp)
-    #   ETHF0:BTCF0  → base=ETH,  quote=BTC  (BTC-margined inverse perp)
-    #   XAUTF0:BTCF0 → base=XAUT, quote=BTC
-    # Strip the F0 marker on both sides; map the Bitfinex pseudo-codes
-    # (``UST``→``USDT``) back to canonical currency tickers.
-    if exchange == "bitfinex-derivatives" and ":" in upper_id:
-        left, right = upper_id.split(":", 1)
-        base = left[:-2] if left.endswith("F0") else left
-        quote = right[:-2] if right.endswith("F0") else right
-        # Bitfinex pseudo-tickers → canonical
-        bfx_quote_aliases = {"UST": "USDT"}
-        return base, bfx_quote_aliases.get(quote, quote)
-    if "-" in upper_id:
-        parts = upper_id.split("-")
-        # UPBIT uses QUOTE-BASE format: KRW-BTC, BTC-DOT, USDT-SOL
-        if exchange == "upbit" and len(parts) >= 2:
-            return parts[1], parts[0]
-        # Use the full curated quote set (~50 currencies, fiat + crypto + stables)
-        # so spot pairs like BTC-TRY / BTC-BRL / BTC-AUD / BTC-AED keep their
-        # actual quote currency. Pre-2026-05-03 a hard-coded 7-currency subset
-        # collapsed every "exotic" fiat to USD via the derivative-fallback below
-        # → 4 distinct OKX-SPOT pairs all collided into BTC-USD.
-        if len(parts) >= 2 and parts[1] in _QUOTE_CURRENCIES_SET:
-            return parts[0], parts[1]
-        # Derivatives without explicit quote suffix — infer settlement currency.
-        # Deribit USDC-denominated instruments contain "USDC" in the symbol.
-        derived_base = parts[0]
-        derived_quote = _infer_derivative_quote(upper_id, exchange)
-        # Handle underscore-separated base: BTC_USDC → base=BTC, quote=USDC
-        # Deribit linear instruments use BASE_QUOTE format (BTC_USDC-PERPETUAL)
-        if "_" in derived_base:
-            sub_parts = derived_base.split("_", 1)
-            if sub_parts[1] in ("USDC", "USDT", "USD", "BUSD"):
-                derived_base = sub_parts[0]
-                derived_quote = sub_parts[1]
-        return derived_base, derived_quote
-
-    # Concatenated: BTCUSDT, ETHUSDT → split by known quote suffix
-    return _split_symbol(upper_id)
-
-
-def _infer_derivative_quote(upper_id: str, exchange: str) -> str:
-    """Infer the quote/settlement currency for a derivative without explicit quote suffix.
-
-    Returns the most specific match based on symbol patterns and exchange conventions.
-    """
-    # USDC-denominated: symbol contains USDC (e.g. BTC_USDC-PERPETUAL on deribit)
-    if "USDC" in upper_id:
-        return "USDC"
-    # USDT-denominated: symbol contains USDT (e.g. BTCUSDT_PERP on some exchanges)
-    if "USDT" in upper_id:
-        return "USDT"
-    # OKX coin-margined: BTC-USD_UM-SWAP, BTC-USD_UM-260626
-    if "USD_UM" in upper_id or "USD_CM" in upper_id:
-        return "USD"
-    # Everything else: crypto derivatives default to USD settlement
-    # (deribit inverse, binance COIN-M, generic perpetuals/futures)
-    return "USD"
-
-
-def _infer_margin_type(
-    instrument_type: InstrumentType,
-    quote: str,
-    raw_id: str,
-    exchange: str,
-) -> MarginType | None:
-    """Infer margin type for derivative instruments.
-
-    INVERSE: coin-margined (settled in base asset — USD quote but crypto settlement).
-    LINEAR: USDT/USDC-margined or crypto-margined with stable quote.
-    None: spot instruments.
-
-    Coin-margined patterns:
-      - quote == "USD" on binance-futures (COIN-M), deribit (inverse), OKX (USD_UM)
-      - Deribit has both inverse (USD-settled) and linear (USDC-settled) — distinguish by quote
-    """
-    if instrument_type not in (InstrumentType.FUTURE, InstrumentType.PERPETUAL, InstrumentType.OPTION):
-        return None
-    upper_id = raw_id.upper()
-    # OKX coin-margined: symbol contains USD_UM or USD_CM
-    if "USD_UM" in upper_id or "USD_CM" in upper_id:
-        return MarginType.INVERSE
-    # Binance COIN-M futures: exchange is "binance-futures" and quote is USD (not USDT/USDC)
-    if exchange == "binance-futures" and quote.upper() == "USD":
-        return MarginType.INVERSE
-    # Deribit inverse: settled in BTC/ETH (USD quote but coin-margined)
-    if exchange == "deribit" and quote.upper() == "USD":
-        return MarginType.INVERSE
-    # All other derivatives with stable quote (USDT, USDC) or default → linear
-    return MarginType.LINEAR
-
-
-def _passes_asset_filter(base: str, quote: str, instrument_type: str) -> bool:
-    """Check if the instrument passes the curated asset universe filter."""
-    base_upper = base.upper()
-    quote_upper = quote.upper() if quote else ""
-    if base_upper not in CEFI_BASE_ASSET_UNIVERSE:
-        return False
-    # Derivatives (perps, futures, options) have no quote — allow them through
-    if quote_upper and quote_upper not in CEFI_ACCEPTED_QUOTE_ASSETS:
-        return False
-    # Options: only BTC and ETH underlyings (too much data otherwise)
-    return not (instrument_type == "OPTION" and base_upper not in CEFI_OPTIONS_UNDERLYINGS)
-
-
-def _resolve_option_fields(
-    item: TardisInstrumentDetail, instrument_type: str, raw_id: str
-) -> tuple[Decimal | None, str | None]:
-    """Extract strike price and option type from Tardis item metadata.
-
-    Falls back to parsing Deribit-style option symbol names
-    (e.g. BTC-27MAR26-190000-C).
-    """
-    strike_raw = item.strikePrice
-    strike = Decimal(str(strike_raw)) if strike_raw is not None else None
-    opt_type_raw = item.optionType
-    opt_type = _normalize_option_type(opt_type_raw)
-
-    if instrument_type.upper() == "OPTION" and (strike is None or opt_type is None):
-        parts = raw_id.split("-")
-        if len(parts) >= 4:
-            if strike is None:
-                with contextlib.suppress(Exception):
-                    strike = Decimal(parts[-2])
-            if opt_type is None and parts[-1] in ("C", "P"):
-                opt_type = _normalize_option_type(parts[-1])
-
-    return strike, opt_type
 
 
 class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
@@ -497,7 +176,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                     # failures, re-raise below so urdi_reference_provider._fetch_one
                     # routes tardis into failed[] (→ attempted_failed) instead of a
                     # clean-empty silent universe shrink (A8 false-complete).
-                    logger.error("Tardis exchange %r failed: %s", exchange, exc)
+                    _tardis.logger.error("Tardis exchange %r failed: %s", exchange, exc)
                     failures.append(exchange)
                     continue
                 if instrument_type is not None:
@@ -640,7 +319,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         rate_raw = last_rate.get("fundingRate", "0") or "0"
         ts_raw = last_rate.get("timestamp")
         next_funding_time = datetime.fromtimestamp(int(str(ts_raw)) / 1000, tz=UTC) if ts_raw else now
-        logger.debug("Tardis funding rate %s/%s: %s", last_exchange, symbol, rate_raw)
+        _tardis.logger.debug("Tardis funding rate %s/%s: %s", last_exchange, symbol, rate_raw)
         return FundingRateRef(
             venue=self.venue,
             symbol=symbol,
@@ -717,18 +396,18 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         try:
             text = await self._fetch_datafeed_text(session, exchange, from_ts, to_ts, filter_json, headers)
         except aiohttp.ClientError as exc:
-            error_code = _classify_tardis_error(exc)
-            classification = classify_venue_error("tardis", error_code)
+            error_code = _tardis._classify_tardis_error(exc)
+            classification = _tardis.classify_venue_error("tardis", error_code)
             action = classification.action.value if classification else "fail"
             retry_safe = classification.retry_safe if classification else False
-            logger.warning(
+            _tardis.logger.warning(
                 "Tardis funding fetch failed for %s: %s (classified: %s, action: %s)",
                 exchange,
                 exc,
                 error_code,
                 action,
             )
-            log_event(
+            _tardis.log_event(
                 "ADAPTER_FETCH_FAILED",
                 details={
                     "venue": "tardis",
@@ -746,7 +425,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         for line in reversed(text.strip().splitlines()):
             if not line.strip():
                 continue
-            msg: dict[str, object] = cast(dict[str, object], json.loads(line))
+            msg: dict[str, object] = cast("dict[str, object]", json.loads(line))
             if msg.get("fundingRate") is not None:
                 return msg
         return None
@@ -766,18 +445,18 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         try:
             text = await self._fetch_datafeed_text(session, exchange, from_ts, to_ts, filter_json, headers)
         except aiohttp.ClientError as exc:
-            error_code = _classify_tardis_error(exc)
-            classification = classify_venue_error("tardis", error_code)
+            error_code = _tardis._classify_tardis_error(exc)
+            classification = _tardis.classify_venue_error("tardis", error_code)
             action = classification.action.value if classification else "fail"
             retry_safe = classification.retry_safe if classification else False
-            logger.warning(
+            _tardis.logger.warning(
                 "Tardis OHLCV fetch failed for %s: %s (classified: %s, action: %s)",
                 exchange,
                 exc,
                 error_code,
                 action,
             )
-            log_event(
+            _tardis.log_event(
                 "ADAPTER_FETCH_FAILED",
                 details={
                     "venue": "tardis",
@@ -796,7 +475,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         for line in text.strip().splitlines():
             if not line.strip():
                 continue
-            msg: dict[str, object] = cast(dict[str, object], json.loads(line))
+            msg: dict[str, object] = cast("dict[str, object]", json.loads(line))
             bar = self._parse_ohlcv_line(msg, symbol, interval)
             if bar is not None:
                 results.append(bar)
@@ -891,15 +570,15 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                 async with session.get(url, headers=headers) as resp:
                     if resp.status == 401:
                         # Pro subscription required — fall back to /v1/exchanges
-                        logger.debug(
+                        _tardis.logger.debug(
                             "Tardis %r: /v1/instruments requires pro tier, falling back to /v1/exchanges", exchange
                         )
                         break
                     if resp.status == 404:
-                        logger.warning("Tardis exchange %r not found — skipping", exchange)
+                        _tardis.logger.warning("Tardis exchange %r not found — skipping", exchange)
                         return []
                     if resp.status in _TARDIS_RETRYABLE_CODES:
-                        logger.warning(
+                        _tardis.logger.warning(
                             "Tardis %r: HTTP %d (attempt %d/%d, retry in %.0fs)",
                             exchange,
                             resp.status,
@@ -912,15 +591,15 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                             continue
                         resp.raise_for_status()
                     resp.raise_for_status()
-                    raw_json: object = cast(object, await resp.json())
+                    raw_json: object = cast("object", await resp.json())
                     if isinstance(raw_json, list):
-                        instruments_list = [TardisInstrumentDetail.model_validate(item) for item in raw_json]
+                        instruments_list = [_tardis.TardisInstrumentDetail.model_validate(item) for item in raw_json]
                         used_instruments_api = True
                     break
             except aiohttp.ClientError as exc:
                 last_exc = exc
                 if attempt < _TARDIS_RETRY_ATTEMPTS - 1:
-                    logger.warning(
+                    _tardis.logger.warning(
                         "Tardis %r: %s (attempt %d/%d, retry in %.0fs)",
                         exchange,
                         exc,
@@ -931,7 +610,9 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                     await asyncio.sleep(delay)
                     continue
                 # Final attempt failed — fall back to /v1/exchanges
-                logger.debug("Tardis %r: /v1/instruments failed, falling back to /v1/exchanges: %s", exchange, exc)
+                _tardis.logger.debug(
+                    "Tardis %r: /v1/instruments failed, falling back to /v1/exchanges: %s", exchange, exc
+                )
                 break
 
         # Fallback: /v1/exchanges/{exchange} (free tier — basic availability, no tick sizes)
@@ -942,7 +623,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                 try:
                     async with session.get(url, headers=headers) as resp:
                         if resp.status == 404:
-                            logger.warning("Tardis exchange %r not found — skipping", exchange)
+                            _tardis.logger.warning("Tardis exchange %r not found — skipping", exchange)
                             return []
                         if resp.status in _TARDIS_RETRYABLE_CODES:
                             if attempt < _TARDIS_RETRY_ATTEMPTS - 1:
@@ -950,8 +631,8 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                                 continue
                             resp.raise_for_status()
                         resp.raise_for_status()
-                        raw_json = cast(object, await resp.json())
-                        exchange_detail = TardisExchangeDetail.model_validate(raw_json)
+                        raw_json = cast("object", await resp.json())
+                        exchange_detail = _tardis.TardisExchangeDetail.model_validate(raw_json)
                         instruments_list = exchange_detail.instruments
                         break
                 except aiohttp.ClientError as exc:
@@ -959,11 +640,11 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                     if attempt < _TARDIS_RETRY_ATTEMPTS - 1:
                         await asyncio.sleep(delay)
                         continue
-                    error_code = _classify_tardis_error(exc)
-                    classification = classify_venue_error("tardis", error_code)
+                    error_code = _tardis._classify_tardis_error(exc)
+                    classification = _tardis.classify_venue_error("tardis", error_code)
                     action = classification.action.value if classification else "fail"
                     retry_safe = classification.retry_safe if classification else False
-                    logger.error(
+                    _tardis.logger.error(
                         "Tardis request failed for exchange %r after %d attempts: %s "
                         "(classified: %s, action: %s, retry=%s)",
                         exchange,
@@ -973,7 +654,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                         action,
                         retry_safe,
                     )
-                    log_event(
+                    _tardis.log_event(
                         "ADAPTER_FETCH_FAILED",
                         details={
                             "venue": "tardis",
@@ -993,7 +674,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                     ) from exc
 
         if instruments_list is None:
-            logger.error(
+            _tardis.logger.error(
                 "Tardis %r: no response after %d attempts (last error: %s)",
                 exchange,
                 _TARDIS_RETRY_ATTEMPTS,
@@ -1016,7 +697,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             else:
                 filtered_count += 1
         api_label = "instruments" if used_instruments_api else "exchanges"
-        logger.info(
+        _tardis.logger.info(
             "Tardis %s: API /%s returned %d symbols, parsed %d instruments, filtered %d",
             exchange,
             api_label,
@@ -1051,10 +732,10 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         canonical_venue = _VENUE_MAPPING.tardis_to_venue.get(exchange, exchange.upper())
 
         # Parse base/quote — prefer Tardis metadata, fall back to symbol splitting
-        base, quote = _resolve_base_quote(item, raw_id, exchange)
+        base, quote = _tardis._resolve_base_quote(item, raw_id, exchange)
 
         # Filter: base must be in curated universe, quote (if present) must be accepted
-        if not _passes_asset_filter(base, quote, instrument_type):
+        if not _tardis._passes_asset_filter(base, quote, instrument_type):
             return None
 
         # Canonical symbol: BASE-QUOTE for spot/perp (one per pair),
@@ -1067,22 +748,22 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         available_since = item.availableSince
         available_to = item.availableTo
         is_active = available_to is None
-        available_since_dt = _parse_expiry(available_since) if available_since else None
-        available_to_dt = _parse_expiry(available_to) if available_to else None
-        expiry = _parse_expiry(item.expiry)
+        available_since_dt = _tardis._parse_expiry(available_since) if available_since else None
+        available_to_dt = _tardis._parse_expiry(available_to) if available_to else None
+        expiry = _tardis._parse_expiry(item.expiry)
         if expiry is None and not is_active and available_to:
-            expiry = _parse_expiry(available_to)
+            expiry = _tardis._parse_expiry(available_to)
         # Deribit symbol format: BTC-27MAR26-190000-C → parse expiry from 2nd segment
         if expiry is None and "-" in raw_id:
-            expiry = _parse_deribit_symbol_expiry(raw_id)
+            expiry = _tardis._parse_deribit_symbol_expiry(raw_id)
         # OKX symbol format: BTC-USD-260626 → parse YYMMDD from last segment
         if expiry is None and "-" in raw_id:
-            expiry = _parse_yymmdd_symbol_expiry(raw_id)
+            expiry = _tardis._parse_yymmdd_symbol_expiry(raw_id)
         # Kraken Futures symbol format: FI_XBTUSD_240329 → parse YYMMDD from last underscore segment
         if expiry is None and "_" in raw_id:
-            expiry = _parse_underscore_yymmdd_symbol_expiry(raw_id)
+            expiry = _tardis._parse_underscore_yymmdd_symbol_expiry(raw_id)
 
-        strike, opt_type = _resolve_option_fields(item, instrument_type, raw_id)
+        strike, opt_type = _tardis._resolve_option_fields(item, instrument_type, raw_id)
 
         # underlying: required for CeFi derivatives (FUTURE/OPTION), not for COMBO
         underlying: str | None = None
@@ -1117,13 +798,13 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         # Skip combos where legs can't be resolved — no placeholders.
         legs: list[InstrumentLeg] | None = None
         if is_combo:
-            legs = _parse_deribit_combo_legs(raw_id, canonical_venue)
+            legs = _tardis._parse_deribit_combo_legs(raw_id, canonical_venue)
             if not legs:
                 return None
 
-        margin_type = _infer_margin_type(instrument_type, quote, raw_id, exchange)
+        margin_type: MarginType | None = _tardis._infer_margin_type(instrument_type, quote, raw_id, exchange)
 
-        return InstrumentRecord(
+        return _tardis.InstrumentRecord(
             instrument_key=instrument_key,
             venue=canonical_venue,
             raw_symbol=raw_id,
@@ -1143,206 +824,3 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             available_to_datetime=available_to_dt,
             timezone="UTC",
         )
-
-
-# ---------------------------------------------------------------------------
-# Deribit combo/spread symbol parser
-# ---------------------------------------------------------------------------
-# Deribit encodes legs deterministically in the symbol name.
-# Format: BASE-CODE-EXPIRY-STRIKES  (single-expiry)
-#         BASE-CODE-EXP1_EXP2-STRIKES  (calendar/diagonal)
-# Where CODE is one of 33 structure codes.  Strikes separated by _.
-# PERP in expiry position → BASE-PERPETUAL instrument name.
-
-# Maps structure code → list of (option_type, side, ratio) per leg position.
-# option_type: "C", "P", or None (future/perp leg).
-# side: "BUY" or "SELL".  ratio: int multiplier.
-_DERIBIT_COMBO_STRUCTURES: dict[str, list[tuple[str | None, str, int]]] = {
-    # --- Future spreads (2 legs) ---
-    "FS": [(None, "BUY", 1), (None, "SELL", 1)],
-    # --- Vanilla option spreads (2 legs, same expiry) ---
-    "CS": [("C", "BUY", 1), ("C", "SELL", 1)],
-    "PS": [("P", "BUY", 1), ("P", "SELL", 1)],
-    "STRD": [("C", "BUY", 1), ("P", "BUY", 1)],
-    "STRG": [("P", "BUY", 1), ("C", "BUY", 1)],
-    "RR": [("P", "BUY", 1), ("C", "SELL", 1)],
-    "RRITM": [("P", "BUY", 1), ("C", "SELL", 1)],
-    "GUTS": [("C", "BUY", 1), ("P", "BUY", 1)],
-    "REV": [("C", "BUY", 1), ("P", "SELL", 1)],
-    # --- 3-leg (butterflies, ladders) ---
-    "CBUT": [("C", "BUY", 1), ("C", "SELL", 2), ("C", "BUY", 1)],
-    "PBUT": [("P", "BUY", 1), ("P", "SELL", 2), ("P", "BUY", 1)],
-    "CBUT111": [("C", "BUY", 1), ("C", "SELL", 1), ("C", "BUY", 1)],
-    "PBUT111": [("P", "BUY", 1), ("P", "SELL", 1), ("P", "BUY", 1)],
-    "CLAD": [("C", "BUY", 1), ("C", "SELL", 1), ("C", "SELL", 1)],
-    "PLAD": [("P", "BUY", 1), ("P", "SELL", 1), ("P", "SELL", 1)],
-    # --- 4-leg (condors, iron butterflies, boxes) ---
-    "IBUT": [("P", "BUY", 1), ("C", "SELL", 1), ("P", "SELL", 1), ("C", "BUY", 1)],
-    "ICOND": [("P", "BUY", 1), ("P", "SELL", 1), ("C", "SELL", 1), ("C", "BUY", 1)],
-    "CCOND": [("C", "BUY", 1), ("C", "SELL", 1), ("C", "SELL", 1), ("C", "BUY", 1)],
-    "PCOND": [("P", "BUY", 1), ("P", "SELL", 1), ("P", "SELL", 1), ("P", "BUY", 1)],
-    "BOX": [("C", "BUY", 1), ("P", "SELL", 1), ("C", "SELL", 1), ("P", "BUY", 1)],
-    # --- Calendar / diagonal (2 expiries) ---
-    "CCAL": [("C", "BUY", 1), ("C", "SELL", 1)],
-    "PCAL": [("P", "BUY", 1), ("P", "SELL", 1)],
-    "CDIAG": [("C", "BUY", 1), ("C", "SELL", 1)],
-    "PDIAG": [("P", "BUY", 1), ("P", "SELL", 1)],
-    "STDC": [("C", "BUY", 1), ("P", "BUY", 1), ("C", "SELL", 1), ("P", "SELL", 1)],
-    "DSTDC": [("C", "BUY", 1), ("P", "BUY", 1), ("C", "SELL", 1), ("P", "SELL", 1)],
-    # --- Ratio spreads (2 legs, unequal ratios) ---
-    "CSR12": [("C", "BUY", 1), ("C", "SELL", 2)],
-    "CSR13": [("C", "BUY", 1), ("C", "SELL", 3)],
-    "CSR23": [("C", "BUY", 2), ("C", "SELL", 3)],
-    "PSR12": [("P", "BUY", 1), ("P", "SELL", 2)],
-    "PSR13": [("P", "BUY", 1), ("P", "SELL", 3)],
-    "PSR23": [("P", "BUY", 2), ("P", "SELL", 3)],
-    # --- Jelly roll (4 legs, 2 expiries) ---
-    "JR": [("C", "BUY", 1), ("P", "SELL", 1), ("C", "SELL", 1), ("P", "BUY", 1)],
-}
-
-# Codes that use two expiries (calendar/diagonal families)
-_DERIBIT_DUAL_EXPIRY_CODES = frozenset(
-    {
-        "CCAL",
-        "PCAL",
-        "CDIAG",
-        "PDIAG",
-        "STDC",
-        "DSTDC",
-        "JR",
-    }
-)
-
-
-def _parse_deribit_combo_legs(raw_id: str, venue: str) -> list[InstrumentLeg]:
-    """Parse Deribit combo symbol into InstrumentLeg list.
-
-    Symbol format examples:
-        BTC-FS-25APR26_PERP          → future spread
-        BTC-CS-25APR26-90000_100000  → call spread
-        BTC-CBUT-25APR26-80000_90000_100000  → call butterfly
-        ETH_USDC-FS-25APR26_PERP    → linear future spread
-        BTC-CCAL-25APR26_3APR26-90000 → call calendar
-
-    Returns empty list if symbol can't be parsed (caller skips the combo).
-    """
-    # Split: BASE-CODE-REST
-    # Base may contain underscore (BTC_USDC), so find the structure code.
-    parts = raw_id.split("-")
-    if len(parts) < 3:
-        return []
-
-    # Find the structure code — it's the first part that matches a known code.
-    code_idx = -1
-    code = ""
-    for i, p in enumerate(parts):
-        if p in _DERIBIT_COMBO_STRUCTURES:
-            code_idx = i
-            code = p
-            break
-
-    if code_idx < 0:
-        return []
-
-    base = "-".join(parts[:code_idx])  # e.g. "BTC" or "BTC_USDC" or "ETH"
-    rest = parts[code_idx + 1 :]  # everything after the code
-    structure = _DERIBIT_COMBO_STRUCTURES[code]
-    is_dual_expiry = code in _DERIBIT_DUAL_EXPIRY_CODES
-
-    # --- Future spread (FS): BASE-FS-EXP1_EXP2 ---
-    if code == "FS":
-        if not rest:
-            return []
-        expiry_part = rest[0]  # e.g. "25APR26_PERP" or "25APR26_3APR26"
-        expiries = expiry_part.split("_")
-        legs: list[InstrumentLeg] = []
-        for i, (_, side, ratio) in enumerate(structure):
-            if i >= len(expiries):
-                break
-            exp = expiries[i]
-            # PERP → BASE-PERPETUAL, else BASE-EXPIRY (Deribit future format)
-            if exp == "PERP":
-                leg_name = f"{base}-PERPETUAL"
-                leg_type = InstrumentType.PERPETUAL
-            else:
-                leg_name = f"{base}-{exp}"
-                leg_type = InstrumentType.FUTURE
-            legs.append(
-                InstrumentLeg(
-                    instrument_key=f"{venue}:{leg_type}:{leg_name}",
-                    side=side,
-                    ratio=ratio,
-                )
-            )
-        return legs
-
-    # --- Calendar/diagonal (dual expiry): BASE-CODE-EXP1_EXP2-STRIKES ---
-    if is_dual_expiry:
-        if not rest:
-            return []
-        expiry_part = rest[0]
-        expiries = expiry_part.split("_")
-        if len(expiries) < 2:
-            return []
-        exp_far, exp_near = expiries[0], expiries[1]
-        strikes_part = rest[1] if len(rest) > 1 else ""
-        strikes = strikes_part.split("_") if strikes_part else []
-
-        legs = []
-        half = len(structure) // 2
-        for leg_idx, (opt_type, side, ratio) in enumerate(structure):
-            # Alternate expiries: first half = far, second half = near
-            exp = exp_far if leg_idx < half else exp_near
-            strike = strikes[leg_idx % len(strikes)] if strikes else ""
-            suffix = f"-{strike}-{opt_type}" if opt_type and strike else ""
-            leg_name = f"{base}-{exp}{suffix}"
-            legs.append(
-                InstrumentLeg(
-                    instrument_key=f"{venue}:OPTION:{leg_name}" if opt_type else f"{venue}:FUTURE:{leg_name}",
-                    side=side,
-                    ratio=ratio,
-                )
-            )
-        return legs
-
-    # --- Single-expiry option combos: BASE-CODE-EXPIRY-K1_K2[_K3[_K4]] ---
-    if not rest:
-        return []
-
-    expiry = rest[0]
-    strikes_part = rest[1] if len(rest) > 1 else ""
-    strikes = strikes_part.split("_") if strikes_part else []
-
-    # For STRD (straddle): single strike, two legs (C + P at same strike)
-    legs = []
-    for i, (opt_type, side, ratio) in enumerate(structure):
-        # Map strike index: for structures with fewer strikes than legs,
-        # reuse strikes (e.g. STRD has 1 strike, 2 legs).
-        strike = strikes[min(i, len(strikes) - 1)] if strikes else ""
-        suffix = f"-{strike}-{opt_type}" if opt_type and strike else ""
-        leg_name = f"{base}-{expiry}{suffix}"
-        legs.append(
-            InstrumentLeg(
-                instrument_key=f"{venue}:OPTION:{leg_name}" if opt_type else f"{venue}:FUTURE:{leg_name}",
-                side=side,
-                ratio=ratio,
-            )
-        )
-    return legs
-
-
-def _split_symbol(symbol: str) -> tuple[str, str]:
-    """Split a concatenated symbol like BNBBTC into (BNB, BTC) using known quote currencies.
-
-    Also handles underscore-separated symbols: BTC_USDC → (BTC, USDC).
-    """
-    # Underscore-separated: BTC_USDC, ETH_USDT, STETH_ETH
-    if "_" in symbol:
-        sub_parts = symbol.split("_", 1)
-        if sub_parts[1] in _QUOTE_CURRENCIES_SET:
-            return sub_parts[0], sub_parts[1]
-    # Concatenated suffix match: BTCUSDT → (BTC, USDT)
-    for quote in _QUOTE_CURRENCIES:
-        if symbol.endswith(quote) and len(symbol) > len(quote):
-            return symbol[: -len(quote)], quote
-    return symbol, ""
