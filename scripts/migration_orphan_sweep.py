@@ -51,17 +51,40 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import logging
 import sys
 import time
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from unified_api_contracts import ShardKey, canonical_path_templates, is_valid_shard_key
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+_PARSER_CACHE: list[object] = []
+
+
+def _backfill_parser() -> "Callable[[str, str], tuple[str, str, str, str] | None]":
+    """The pre-hive instrument-key parser, loaded from the sibling backfill script so
+    the path grammar stays single-source (``scripts/`` is not a package — same
+    importlib pattern as ``tests/scripts/``)."""
+    if not _PARSER_CACHE:
+        spec = importlib.util.spec_from_file_location(
+            "backfill_orphan_class_e", Path(__file__).parent / "backfill_orphan_class_e.py"
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("cannot load sibling backfill_orphan_class_e.py")
+        mod = importlib.util.module_from_spec(spec)
+        # dataclass field resolution requires the module registered BEFORE exec
+        sys.modules.setdefault("backfill_orphan_class_e", mod)
+        spec.loader.exec_module(mod)
+        _PARSER_CACHE.append(mod._parse_instrument_key_shape)
+    return _PARSER_CACHE[0]  # type: ignore[return-value]
 
 
 class ObjectClass(StrEnum):
@@ -282,6 +305,25 @@ def classify_object(
     # 3. unparseable / out-of-space hive-key → junk.
     if not key.data_type or not day:
         return ObjectClass.JUNK, key, "missing data_type/day hive segment"
+    # 3.5 pre-hive blank-venue derivation (R1 close-out 2026-06-11): paths like
+    # ``data_type=ohlcv_15m/indices/CBOE/CBOE:INDEX:VIX-USD.parquet`` carry no
+    # ``venue=`` segment, so the hive parse leaves venue blank — and a blank-venue
+    # object can NEVER read as covered (venue is identity, never object-wildcarded),
+    # making E==0 unreachable even after the backfill manifests its canonical twin
+    # cell. Derive (venue, instrument_type) from the non-hive tail with the SAME
+    # parser the backfill characterizer uses (single-source via importlib —
+    # ``scripts/`` is not a package), so post-backfill these flip to class B.
+    if not key.venue:
+        parsed = _backfill_parser()(object_path, key.data_type)
+        if parsed is not None:
+            p_venue, p_it, _class_segment, _underlying = parsed
+            key = ShardKey(
+                asset_group=key.asset_group,
+                venue=p_venue,
+                chain=key.chain,
+                instrument_type=canonical_match_instrument_type(ag, p_it),
+                data_type=key.data_type,
+            )
     if not is_valid_shard_key(ag, key):
         return ObjectClass.JUNK, key, "hive-key outside valid could-exist space"
     # 4. is the object covered by a manifest row? (grain-aware: blank manifest fields
