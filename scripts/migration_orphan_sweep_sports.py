@@ -112,13 +112,24 @@ def _hive_sweep() -> ModuleType:
 
 
 class SportsObjectClass(StrEnum):
-    """The hive sweep's forced taxonomy + the sports-only B2 archive disposition."""
+    """The hive sweep's forced taxonomy + the sports-only B2/C3 dispositions."""
 
     CANONICAL_MANIFESTED = "A_canonical_manifested"
     LEGACY_DUPLICATE = "B_legacy_duplicate"
     V1_ARCHIVE_SUPERSEDED = "B2_v1_archive_superseded"
     MANIFEST_INFRA = "C_manifest_infra"
     NON_DATA = "C2_non_data"
+    PRE_LAUNCH_WINDOW = "C3_pre_launch_window"
+    """Real data whose ``(data_type, day)`` is BEFORE the UAC sports coverage window
+    (``SOURCE_COVERAGE_START`` / ``DATA_TYPE_COVERAGE_START``): the manifest
+    CONTRACTUALLY excludes it — ``ManifestWriter`` silently refuses such rows (the
+    pre-launch guard, born of the 2026-05-04 229,224-phantom-purge incident), so a
+    ``record_captured`` backfill is structurally impossible without first extending
+    the UAC window (an operator-gated contract change — tracked plan todo; the
+    corpus is the 2026-04/05 footystats HISTORICAL fetches over 2018 days + the
+    api_football fixture sub-entities before their 2020-06-06 window). Understood,
+    labelled, NEVER deleted — and deliberately NOT class (E): E means "the manifest
+    SHOULD cover this and doesn't"; this is "the manifest REFUSES this by design"."""
     JUNK = "D_junk"
     ORPHAN_REAL = "E_orphan_real"
 
@@ -168,6 +179,22 @@ def canonical_league_token(league: str) -> str:
 
 # Object suffixes that are manifest-infra regardless of prefix (mirrors the hive set).
 _INFRA_SUFFIXES: tuple[str, ...] = (".tmp", ".partial", "_SUCCESS", ".lock")
+
+_PRE_LAUNCH_REASON = (
+    "pre-launch-window data — manifest contractually excludes (UAC coverage SSOT + "
+    "ManifestWriter pre-launch guard); window extension is a tracked operator-gated todo"
+)
+
+
+def _is_pre_launch(data_type: str, day: str) -> bool:
+    """UAC sports coverage-window check (``is_pre_launch_date``); non-sports-registry
+    data_types and the ``day=all`` sentinel return False."""
+    if not data_type or not day or day == "all":
+        return False
+    from unified_api_contracts.sports import is_pre_launch_date
+
+    return bool(is_pre_launch_date(data_type, day))
+
 
 # ---------------------------------------------------------------------------
 # Per-bucket prefix taxonomy (CF-17: every top-level prefix labelled; 0 unknown bar)
@@ -372,6 +399,8 @@ def classify_odds_object(
         return SportsObjectClass.JUNK, fields, "missing data_type/day segment"
     if is_covered_sports(index, day=day, data_type=dt, league=league, venue=venue, source=source, timeframe=tf):
         return SportsObjectClass.CANONICAL_MANIFESTED, fields, "canonical+manifested"
+    if _is_pre_launch(dt, day):
+        return SportsObjectClass.PRE_LAUNCH_WINDOW, fields, _PRE_LAUNCH_REASON
     if row_count == 0:
         return SportsObjectClass.JUNK, fields, "zero-row object with no manifest row (footer-read)"
     return SportsObjectClass.ORPHAN_REAL, fields, "real data (rows>0) with NO covering manifest row"
@@ -415,6 +444,8 @@ def classify_reference_object(
             # day-less FLAT singleton (venues/venues.parquet) IS the SSOT shape (A)
             cls = SportsObjectClass.CANONICAL_MANIFESTED if not day else SportsObjectClass.LEGACY_DUPLICATE
             return cls, fields, "FLAT singleton manifested" if not day else "legacy flat-by-day twin of manifested cell"
+        if _is_pre_launch(dt, day):
+            return SportsObjectClass.PRE_LAUNCH_WINDOW, fields, _PRE_LAUNCH_REASON
         if row_count == 0:
             return SportsObjectClass.JUNK, fields, "zero-row object with no manifest row (footer-read)"
         return SportsObjectClass.ORPHAN_REAL, fields, "real data (rows>0) with NO covering manifest row"
@@ -435,6 +466,8 @@ def classify_reference_object(
     if is_covered_sports(index, day=day, data_type=dt, league=league):
         cls = SportsObjectClass.CANONICAL_MANIFESTED if is_canonical_tree else SportsObjectClass.LEGACY_DUPLICATE
         return cls, fields, "canonical+manifested" if is_canonical_tree else "v2 staging twin of manifested cell"
+    if _is_pre_launch(dt, day):
+        return SportsObjectClass.PRE_LAUNCH_WINDOW, fields, _PRE_LAUNCH_REASON
     if row_count == 0:
         return SportsObjectClass.JUNK, fields, "zero-row object with no manifest row (footer-read)"
     return SportsObjectClass.ORPHAN_REAL, fields, "real data (rows>0) with NO covering manifest row"
@@ -571,6 +604,7 @@ def run_sweep(
             SportsObjectClass.ORPHAN_REAL,
             SportsObjectClass.LEGACY_DUPLICATE,
             SportsObjectClass.V1_ARCHIVE_SUPERSEDED,
+            SportsObjectClass.PRE_LAUNCH_WINDOW,
         ):
             actionable.append(obj)
         if seen % 50000 == 0:
