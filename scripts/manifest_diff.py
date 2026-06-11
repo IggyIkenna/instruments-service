@@ -289,12 +289,20 @@ def diff_cell_indexes(projected: CellIndex, current: CellIndex) -> ManifestDiff:
     for (day, dt), patterns in sorted(projected.items()):
         for pattern, new_status in sorted(patterns.items()):
             old_status = lookup_status(current, day, dt, pattern)
+            # Compare EFFECTIVE statuses on BOTH sides: a coarse pattern's raw status
+            # (e.g. a re-emitted blank-IT attempted_failed row) is not the cell's
+            # status when finer captured rows of the SAME projected cell dominate —
+            # comparing raw-projected vs union-resolved-current manufactured 6,600
+            # false captured→failed transitions (2026-06-11). Fine patterns resolve
+            # to their own row via the 8-way fast path, so this only changes coarse
+            # patterns.
+            new_eff = new_status if "" not in pattern else (lookup_status(projected, day, dt, pattern) or new_status)
             cell = CellRef(day, dt, *pattern)
             if old_status is None:
                 diff.added.append(cell)
-            elif old_status != new_status:
-                diff.changed.append((cell, old_status, new_status))
-                diff.transitions[f"{old_status}->{new_status}"] += 1
+            elif old_status != new_eff:
+                diff.changed.append((cell, old_status, new_eff))
+                diff.transitions[f"{old_status}->{new_eff}"] += 1
             else:
                 diff.unchanged += 1
     for (day, dt), patterns in sorted(current.items()):
