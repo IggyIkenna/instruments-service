@@ -136,161 +136,23 @@ async def fetch_instruments_for_all_venues(
     # are requested, keep all and let each venue claim its own tagged records.
     batch_venues: set[str] = {c.upper() for c, _k in fetch_list}
 
-    async def _fetch_one(canonical: str, adapter_key: str) -> list[InstrumentRecord]:
-        async with sem:
-            try:
-                # Source-aware credential routing: when source="massive", a TradFi
-                # venue that defaults to Databento needs the MASSIVE key, not the
-                # Databento key — resolve the data_source against the effective source.
-                effective_key = "massive" if (source == "massive" and adapter_key == "databento") else adapter_key
-                data_source = ADAPTER_DATA_SOURCES.get(effective_key, "")
-                api_key = (api_keys or {}).get(data_source) if data_source else None
-                adapter = get_adapter_for_canonical_venue(
-                    canonical,
-                    api_key=api_key,
-                    date=date,
-                    extra_api_keys=api_keys,
-                    mode=mode,
-                    source=source,
-                )
-                # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
-                records = await adapter.get_instruments_cached(instrument_type=instrument_type, date=date)
-                logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
-                # Venue-tag filtering: keep only instruments tagged for this venue.
-                # Instruments tagged for sibling venues in the same batch are silently
-                # skipped here — the sibling's _fetch_one call will claim them.
-                # Only log a warning for instruments tagged for venues NOT in the batch
-                # (indicates a real adapter bug).
-                matched: list[InstrumentRecord] = []
-                sibling_routed = 0
-                unknown_venues: set[str] = set()
-                for r in records:
-                    tag = getattr(r, "venue", "").upper()
-                    if tag == canonical.upper():
-                        matched.append(r)
-                    elif tag in batch_venues:
-                        sibling_routed += 1  # will be claimed by sibling fetch
-                    else:
-                        unknown_venues.add(tag)
-                if sibling_routed:
-                    logger.debug(
-                        "URDI[%s]: %d instruments tagged for sibling venues (will be claimed by their fetch)",
-                        canonical,
-                        sibling_routed,
-                    )
-                if unknown_venues:
-                    logger.warning(
-                        "URDI[%s]: dropping %d instruments tagged for unknown venues %s",
-                        canonical,
-                        len([r for r in records if getattr(r, "venue", "").upper() in unknown_venues]),
-                        sorted(unknown_venues),
-                    )
-                return matched
-            except NotImplementedError:
-                logger.debug("URDI[%s]: instrument_type=%r not supported", canonical, instrument_type)
-                failed.append(
-                    VenueErrorClassification(
-                        venue=canonical,
-                        error_code="UNSUPPORTED",
-                        retry_safe=False,
-                        reconnect=False,
-                        action=ErrorAction.SKIP,
-                        description=f"instrument_type={instrument_type!r} not supported",
-                    )
-                )
-                return []
-            except TimeoutError as exc:
-                logger.warning("URDI[%s]: TIMEOUT (retryable): %s", canonical, exc)
-                failed.append(
-                    VenueErrorClassification(
-                        venue=canonical,
-                        error_code="TIMEOUT",
-                        retry_safe=True,
-                        reconnect=False,
-                        action=ErrorAction.RETRY,
-                        description=str(exc),
-                    )
-                )
-                return []
-            except ConnectionError as exc:
-                logger.warning("URDI[%s]: NETWORK error (retryable): %s", canonical, exc)
-                failed.append(
-                    VenueErrorClassification(
-                        venue=canonical,
-                        error_code="NETWORK",
-                        retry_safe=True,
-                        reconnect=True,
-                        action=ErrorAction.RECONNECT,
-                        description=str(exc),
-                    )
-                )
-                return []
-            except OSError as exc:
-                # OSError covers network-level failures (socket errors, DNS, etc.)
-                logger.warning("URDI[%s]: NETWORK error (retryable): %s", canonical, exc)
-                failed.append(
-                    VenueErrorClassification(
-                        venue=canonical,
-                        error_code="NETWORK",
-                        retry_safe=True,
-                        reconnect=True,
-                        action=ErrorAction.RECONNECT,
-                        description=str(exc),
-                    )
-                )
-                return []
-            except RuntimeError as exc:
-                # _get_with_retry raises RuntimeError after exhausting retries.
-                # The underlying cause is typically rate limiting or server errors.
-                msg = str(exc).lower()
-                if "429" in msg or "rate" in msg:
-                    error_code = "RATE_LIMIT"
-                elif "503" in msg or "502" in msg or "500" in msg:
-                    error_code = "SERVER_ERROR"
-                else:
-                    error_code = "RETRY_EXHAUSTED"
-                logger.warning("URDI[%s]: %s (retryable): %s", canonical, error_code, exc)
-                failed.append(
-                    VenueErrorClassification(
-                        venue=canonical,
-                        error_code=error_code,
-                        retry_safe=True,
-                        reconnect=False,
-                        action=ErrorAction.RETRY,
-                        description=str(exc),
-                    )
-                )
-                return []
-            except ValueError as exc:
-                # Pydantic ValidationError is multi-line; compress to single line for log visibility
-                err_oneline = " | ".join(str(exc).splitlines()[:3])
-                logger.error("URDI[%s]: ADAPTER_ERROR (permanent): %s", canonical, err_oneline)
-                failed.append(
-                    VenueErrorClassification(
-                        venue=canonical,
-                        error_code="ADAPTER_ERROR",
-                        retry_safe=False,
-                        reconnect=False,
-                        action=ErrorAction.FAIL,
-                        description=err_oneline,
-                    )
-                )
-                return []
-            except (AttributeError, KeyError, TypeError) as exc:
-                logger.error("URDI[%s]: PARSE_ERROR (permanent): %s", canonical, exc)
-                failed.append(
-                    VenueErrorClassification(
-                        venue=canonical,
-                        error_code="PARSE_ERROR",
-                        retry_safe=False,
-                        reconnect=False,
-                        action=ErrorAction.FAIL,
-                        description=str(exc),
-                    )
-                )
-                return []
-
-    results = await asyncio.gather(*[_fetch_one(c, k) for c, k in fetch_list])
+    results = await asyncio.gather(
+        *[
+            _fetch_one_venue(
+                c,
+                k,
+                sem=sem,
+                instrument_type=instrument_type,
+                api_keys=api_keys,
+                date=date,
+                mode=mode,
+                source=source,
+                batch_venues=batch_venues,
+                failed=failed,
+            )
+            for c, k in fetch_list
+        ]
+    )
     all_records = [record for batch in results for record in batch]
 
     # Log summary of failures with classification
@@ -311,6 +173,180 @@ async def fetch_instruments_for_all_venues(
             )
 
     return VenueFetchResult(records=all_records, failed_venues=failed)
+
+
+async def _fetch_one_venue(
+    canonical: str,
+    adapter_key: str,
+    *,
+    sem: asyncio.Semaphore,
+    instrument_type: str | None,
+    api_keys: dict[str, str] | None,
+    date: str | None,
+    mode: str,
+    source: str | None,
+    batch_venues: set[str],
+    failed: list[VenueErrorClassification],
+) -> list[InstrumentRecord]:
+    """Fetch one venue's instruments via its URDI adapter.
+
+    Applies the module-docstring error-handling policy: retryable errors
+    (timeout / network / rate-limit) and permanent errors (unsupported /
+    adapter / parse) append a ``VenueErrorClassification`` to ``failed`` and
+    return ``[]``; programming errors propagate to fail the shard.
+    """
+    async with sem:
+        try:
+            # Source-aware credential routing: when source="massive", a TradFi
+            # venue that defaults to Databento needs the MASSIVE key, not the
+            # Databento key — resolve the data_source against the effective source.
+            effective_key = "massive" if (source == "massive" and adapter_key == "databento") else adapter_key
+            data_source = ADAPTER_DATA_SOURCES.get(effective_key, "")
+            api_key = (api_keys or {}).get(data_source) if data_source else None
+            adapter = get_adapter_for_canonical_venue(
+                canonical,
+                api_key=api_key,
+                date=date,
+                extra_api_keys=api_keys,
+                mode=mode,
+                source=source,
+            )
+            # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
+            records = await adapter.get_instruments_cached(instrument_type=instrument_type, date=date)
+            logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
+            # Venue-tag filtering: keep only instruments tagged for this venue.
+            # Instruments tagged for sibling venues in the same batch are silently
+            # skipped here — the sibling's _fetch_one call will claim them.
+            # Only log a warning for instruments tagged for venues NOT in the batch
+            # (indicates a real adapter bug).
+            matched: list[InstrumentRecord] = []
+            sibling_routed = 0
+            unknown_venues: set[str] = set()
+            for r in records:
+                tag = getattr(r, "venue", "").upper()
+                if tag == canonical.upper():
+                    matched.append(r)
+                elif tag in batch_venues:
+                    sibling_routed += 1  # will be claimed by sibling fetch
+                else:
+                    unknown_venues.add(tag)
+            if sibling_routed:
+                logger.debug(
+                    "URDI[%s]: %d instruments tagged for sibling venues (will be claimed by their fetch)",
+                    canonical,
+                    sibling_routed,
+                )
+            if unknown_venues:
+                logger.warning(
+                    "URDI[%s]: dropping %d instruments tagged for unknown venues %s",
+                    canonical,
+                    len([r for r in records if getattr(r, "venue", "").upper() in unknown_venues]),
+                    sorted(unknown_venues),
+                )
+            return matched
+        except NotImplementedError:
+            logger.debug("URDI[%s]: instrument_type=%r not supported", canonical, instrument_type)
+            failed.append(
+                VenueErrorClassification(
+                    venue=canonical,
+                    error_code="UNSUPPORTED",
+                    retry_safe=False,
+                    reconnect=False,
+                    action=ErrorAction.SKIP,
+                    description=f"instrument_type={instrument_type!r} not supported",
+                )
+            )
+            return []
+        except TimeoutError as exc:
+            logger.warning("URDI[%s]: TIMEOUT (retryable): %s", canonical, exc)
+            failed.append(
+                VenueErrorClassification(
+                    venue=canonical,
+                    error_code="TIMEOUT",
+                    retry_safe=True,
+                    reconnect=False,
+                    action=ErrorAction.RETRY,
+                    description=str(exc),
+                )
+            )
+            return []
+        except ConnectionError as exc:
+            logger.warning("URDI[%s]: NETWORK error (retryable): %s", canonical, exc)
+            failed.append(
+                VenueErrorClassification(
+                    venue=canonical,
+                    error_code="NETWORK",
+                    retry_safe=True,
+                    reconnect=True,
+                    action=ErrorAction.RECONNECT,
+                    description=str(exc),
+                )
+            )
+            return []
+        except OSError as exc:
+            # OSError covers network-level failures (socket errors, DNS, etc.)
+            logger.warning("URDI[%s]: NETWORK error (retryable): %s", canonical, exc)
+            failed.append(
+                VenueErrorClassification(
+                    venue=canonical,
+                    error_code="NETWORK",
+                    retry_safe=True,
+                    reconnect=True,
+                    action=ErrorAction.RECONNECT,
+                    description=str(exc),
+                )
+            )
+            return []
+        except RuntimeError as exc:
+            # _get_with_retry raises RuntimeError after exhausting retries.
+            # The underlying cause is typically rate limiting or server errors.
+            msg = str(exc).lower()
+            if "429" in msg or "rate" in msg:
+                error_code = "RATE_LIMIT"
+            elif "503" in msg or "502" in msg or "500" in msg:
+                error_code = "SERVER_ERROR"
+            else:
+                error_code = "RETRY_EXHAUSTED"
+            logger.warning("URDI[%s]: %s (retryable): %s", canonical, error_code, exc)
+            failed.append(
+                VenueErrorClassification(
+                    venue=canonical,
+                    error_code=error_code,
+                    retry_safe=True,
+                    reconnect=False,
+                    action=ErrorAction.RETRY,
+                    description=str(exc),
+                )
+            )
+            return []
+        except ValueError as exc:
+            # Pydantic ValidationError is multi-line; compress to single line for log visibility
+            err_oneline = " | ".join(str(exc).splitlines()[:3])
+            logger.error("URDI[%s]: ADAPTER_ERROR (permanent): %s", canonical, err_oneline)
+            failed.append(
+                VenueErrorClassification(
+                    venue=canonical,
+                    error_code="ADAPTER_ERROR",
+                    retry_safe=False,
+                    reconnect=False,
+                    action=ErrorAction.FAIL,
+                    description=err_oneline,
+                )
+            )
+            return []
+        except (AttributeError, KeyError, TypeError) as exc:
+            logger.error("URDI[%s]: PARSE_ERROR (permanent): %s", canonical, exc)
+            failed.append(
+                VenueErrorClassification(
+                    venue=canonical,
+                    error_code="PARSE_ERROR",
+                    retry_safe=False,
+                    reconnect=False,
+                    action=ErrorAction.FAIL,
+                    description=str(exc),
+                )
+            )
+            return []
 
 
 async def fetch_instruments_via_urdi(
