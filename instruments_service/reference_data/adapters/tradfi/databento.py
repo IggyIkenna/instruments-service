@@ -963,17 +963,24 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             # Resolve timezone from exchange hours config (same as Databento-sourced instruments)
             venue_hours = _EXCHANGE_HOURS.get(idx.venue)
             tz = venue_hours["tz"] if venue_hours and venue_hours.get("tz") else "UTC"
+            # Canonical key carries the base-quote suffix (CBOE:INDEX:VIX-USD) — it
+            # MUST match the GCS/symbology key and the data_source_continuity
+            # resolver key, else get_source_for_instrument() silently returns None.
+            quote = "USD"
+            # Genesis = the instrument's empirically-confirmed first Yahoo bar,
+            # carried per-entry on YahooIndexDef (never a shared hardcoded date).
+            genesis = idx.first_available_date
             records.append(
                 InstrumentRecord(
-                    instrument_key=f"{idx.venue}:INDEX:{idx.symbol}",
+                    instrument_key=f"{idx.venue}:INDEX:{idx.base_asset}-{quote}",
                     venue=idx.venue,
                     asset_group=AssetClass(idx.asset_group),
                     instrument_type=InstrumentType.INDEX,
                     raw_symbol=idx.yahoo_ticker,
                     base_asset=idx.base_asset,
-                    quote_asset="USD",
+                    quote_asset=quote,
                     timezone=tz,
-                    available_from_datetime=datetime(2004, 3, 26, tzinfo=UTC),
+                    available_from_datetime=datetime(genesis.year, genesis.month, genesis.day, tzinfo=UTC),
                     # INDEX instruments are non-tradeable pricing references —
                     # tick_size/min_size/contract_size not meaningful but set
                     # for schema completeness.
