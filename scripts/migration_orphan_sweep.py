@@ -476,16 +476,18 @@ class SizingRollup:
 # ---------------------------------------------------------------------------
 
 
-def _footer_row_count(blob: object) -> int | None:
-    """Parquet footer ``num_rows`` for a small blob (whole-object download — only
-    called for <256KB would-be-(E) candidates). ``None`` on any read/parse failure
-    (the caller then keeps the safe non-zero assumption → object stays (E))."""
+def _footer_row_count(client: object, bucket: str, name: str) -> int | None:
+    """Parquet footer ``num_rows`` for a small object (whole-object download via the
+    UCI client — ``list_blobs`` yields ``BlobMetadata`` with NO read surface, so the
+    read goes through ``client.download_bytes``; only called for <256KB would-be-(E)
+    candidates). ``None`` on any read/parse failure (the caller then keeps the safe
+    non-zero assumption → object stays (E))."""
     import io
 
     import pyarrow.parquet as pq
 
     try:
-        data = blob.download_as_bytes()  # type: ignore[attr-defined]
+        data = client.download_bytes(bucket, name)  # type: ignore[attr-defined]
         return int(pq.ParquetFile(io.BytesIO(data)).metadata.num_rows)
     except Exception:
         return None
@@ -548,7 +550,7 @@ def run_sweep(
         # 0-row shells, so the read is bounded to <256KB candidates — large
         # objects are certainly rows>0 and stay (E) without a read.
         if cls is ObjectClass.ORPHAN_REAL and int(getattr(blob, "size", 0) or 0) < 262144:
-            rows = _footer_row_count(blob)
+            rows = _footer_row_count(client, bucket, name)
             if rows == 0:
                 cls, reason = ObjectClass.JUNK, "zero-row object with no manifest row (footer-read)"
         class_counts[cls.value] += 1
