@@ -83,7 +83,10 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         self._chain = chain.upper()
         self._date = date
         self._protocol_slug = protocol_slug or "aave_v3"
-        self._venue_prefix = self._protocol_slug.replace("_", "").upper()
+        # KEEP the underscore — canonical defi venue names are the underscore form (UAC
+        # registry/defi_venues.py; e.g. "aave_v3" → "AAVE_V3-<CHAIN>"). Stripping it made the
+        # URDI venue filter drop every fetched record (R4-IS-freeze finding 2026-06-11).
+        self._venue_prefix = self._protocol_slug.upper()
 
     @property
     def venue(self) -> str:

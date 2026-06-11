@@ -51,17 +51,40 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import logging
 import sys
 import time
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from unified_api_contracts import ShardKey, canonical_path_templates, is_valid_shard_key
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+_PARSER_CACHE: list[object] = []
+
+
+def _backfill_parser() -> Callable[[str, str], tuple[str, str, str, str] | None]:
+    """The pre-hive instrument-key parser, loaded from the sibling backfill script so
+    the path grammar stays single-source (``scripts/`` is not a package — same
+    importlib pattern as ``tests/scripts/``)."""
+    if not _PARSER_CACHE:
+        spec = importlib.util.spec_from_file_location(
+            "backfill_orphan_class_e", Path(__file__).parent / "backfill_orphan_class_e.py"
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("cannot load sibling backfill_orphan_class_e.py")
+        mod = importlib.util.module_from_spec(spec)
+        # dataclass field resolution requires the module registered BEFORE exec
+        sys.modules.setdefault("backfill_orphan_class_e", mod)
+        spec.loader.exec_module(mod)
+        _PARSER_CACHE.append(mod._parse_instrument_key_shape)
+    return _PARSER_CACHE[0]  # type: ignore[return-value]
 
 
 class ObjectClass(StrEnum):
@@ -85,6 +108,23 @@ class ObjectClass(StrEnum):
 # raw-tick orphans (the smoke 2026-06-10 surfaced 7,946 processed-candle objects mis-read
 # as class-E before this label existed). They have their own re-runnable sweep.
 _DATA_PREFIXES: tuple[str, ...] = ("raw_tick_data/", "day=")
+# TOP-LEVEL-ONLY labels (matched via ``startswith`` exclusively — never substring,
+# because tokens like ``dex_pools``/``lending_indices`` also appear as hive VALUES
+# (``data_type=dex_pools``) deeper in real data paths). R1 2026-06-11 additions:
+#   * ``dex_pools/`` + ``lending_indices/`` — the DeFi legacy top-level trees from the
+#     ``solana_defi_legacy_migration_2026_05_27`` plan (own corpora, migrated by the
+#     gated G4 defi walk; understood + never raw-tick-deleted).
+#   * ``_manifests/`` — legacy manifest infra (pre ``_index/`` vocabulary).
+#   * ``configs/`` — service config artifacts co-located in the AG buckets.
+#   * ``databento-batch-registry/`` — the tradfi Databento batch-job registry
+#     (vendor job metadata, not market data).
+_NON_DATA_TOP_LEVEL_LABELS: dict[str, str] = {
+    "_manifests/": "manifest-infra",
+    "configs/": "configs",
+    "dex_pools/": "legacy-data",
+    "lending_indices/": "legacy-data",
+    "databento-batch-registry/": "vendor-registry",
+}
 _NON_DATA_PREFIX_LABELS: dict[str, str] = {
     "_index/": "manifest-infra",
     "snapshots/": "manifest-infra",
@@ -159,9 +199,35 @@ def _source_from_pipeline_mode(pipeline_mode: str) -> str:
     return ""
 
 
+# Legacy instrument_type tokens → canonical (matching + classification). The migrated
+# twin trees + manifest rows carry the canonical singular vocabulary.
+_LEGACY_IT_TOKENS: dict[str, str] = {"equities": "equity"}
+
+
+def canonical_match_instrument_type(asset_group: str, instrument_type: str) -> str:
+    """Canonicalise LEGACY instrument_type vocabulary so coverage matching converges.
+
+    * tradfi pre-hive plural ``equities`` → ``equity`` (R1 2026-06-11: two canonical-twin
+      paths carry the legacy plural in their preserved hive tail — without this remap
+      they can never read as covered by the ``equity``-keyed manifest rows).
+    * prediction legacy underlying-in-the-instrument_type-slot taxonomy
+      (``instrument_type=BTC|ETH|SOL|…``) → ``prediction_market`` — the canonical market
+      grain keys ``instrument_type=prediction_market`` with the asset in ``underlying``
+      (codex/04-architecture/prediction-batch-live.md §4; manifest precedent: every
+      captured prediction cell is ``(POLYMARKET, POLYGON, prediction_market)``). The
+      backfill characterizer derives ``underlying`` from the RAW segment, so no identity
+      is lost by this match-time remap.
+    """
+    it = _LEGACY_IT_TOKENS.get(instrument_type, instrument_type)
+    if asset_group == "prediction" and it and it.lower() != "prediction_market":
+        return "prediction_market"
+    return it
+
+
 def shard_key_from_segments(asset_group: str, segments: dict[str, str]) -> ShardKey:
     """Build a :class:`ShardKey` from parsed hive segments. Handles the DeFi combined
-    ``venue=PROTOCOL-CHAIN`` overload (splits it back into venue + chain)."""
+    ``venue=PROTOCOL-CHAIN`` overload (splits it back into venue + chain) and the legacy
+    instrument_type vocabulary (:func:`canonical_match_instrument_type`)."""
     venue = segments.get("venue", "")
     chain = segments.get("chain", "")
     # DeFi combined venue-chain overload: ``venue=EIGENLAYER-ETHEREUM`` with no chain=.
@@ -171,7 +237,7 @@ def shard_key_from_segments(asset_group: str, segments: dict[str, str]) -> Shard
         asset_group=asset_group,
         venue=venue,
         chain=chain,
-        instrument_type=segments.get("instrument_type", ""),
+        instrument_type=canonical_match_instrument_type(asset_group, segments.get("instrument_type", "")),
         data_type=segments.get("data_type", ""),
     )
 
@@ -190,6 +256,10 @@ def _prefix_label(object_path: str) -> str | None:
     for suffix in _INFRA_SUFFIXES:
         if object_path.endswith(suffix):
             return "manifest-infra"
+    # TOP-LEVEL-ONLY labels first (never substring — see _NON_DATA_TOP_LEVEL_LABELS).
+    for prefix, label in _NON_DATA_TOP_LEVEL_LABELS.items():
+        if object_path.startswith(prefix):
+            return label
     for prefix, label in _NON_DATA_PREFIX_LABELS.items():
         if object_path.startswith(prefix) or f"/{prefix}" in object_path:
             return label
@@ -235,6 +305,25 @@ def classify_object(
     # 3. unparseable / out-of-space hive-key → junk.
     if not key.data_type or not day:
         return ObjectClass.JUNK, key, "missing data_type/day hive segment"
+    # 3.5 pre-hive blank-venue derivation (R1 close-out 2026-06-11): paths like
+    # ``data_type=ohlcv_15m/indices/CBOE/CBOE:INDEX:VIX-USD.parquet`` carry no
+    # ``venue=`` segment, so the hive parse leaves venue blank — and a blank-venue
+    # object can NEVER read as covered (venue is identity, never object-wildcarded),
+    # making E==0 unreachable even after the backfill manifests its canonical twin
+    # cell. Derive (venue, instrument_type) from the non-hive tail with the SAME
+    # parser the backfill characterizer uses (single-source via importlib —
+    # ``scripts/`` is not a package), so post-backfill these flip to class B.
+    if not key.venue:
+        parsed = _backfill_parser()(object_path, key.data_type)
+        if parsed is not None:
+            p_venue, p_it, _class_segment, _underlying = parsed
+            key = ShardKey(
+                asset_group=key.asset_group,
+                venue=p_venue,
+                chain=key.chain,
+                instrument_type=canonical_match_instrument_type(ag, p_it),
+                data_type=key.data_type,
+            )
     if not is_valid_shard_key(ag, key):
         return ObjectClass.JUNK, key, "hive-key outside valid could-exist space"
     # 4. is the object covered by a manifest row? (grain-aware: blank manifest fields
@@ -266,7 +355,17 @@ CoveredIndex = dict[tuple[str, str], set[tuple[str, str, str]]]
 
 
 def _norm_v(value: str) -> str:
-    return value.upper()
+    """Venue/chain token normalisation for COVERAGE MATCHING only.
+
+    Venue spelling drifted across writer generations — the 2026-04 migration +
+    its manifest rows spell ``UNISWAPV3`` / ``AAVEV3`` (and combined
+    ``UNISWAPV2-ETHEREUM``) while the legacy ``category=`` object paths + the UAC
+    canonical registry spell ``UNISWAP_V3`` / ``AAVE_V3`` (R1 finding 2026-06-11:
+    254,812 of the 254,984 defi class-E were this venue-token split, every cell
+    exactly manifested under the no-underscore spelling). Separator characters
+    carry no venue identity in this corpus, so the match collapses them; the
+    canonical SPELLING fix on the manifest rows rides the per-AG G4 rebuild walk."""
+    return value.upper().replace("_", "").replace("-", "")
 
 
 def _norm_it(value: str) -> str:
@@ -281,16 +380,42 @@ def is_covered(index: CoveredIndex, key: ShardKey, day: str) -> bool:
     An object ``(venue, chain, instrument_type)`` is covered iff the ``(day, data_type)``
     bucket contains a captured pattern whose non-blank fields all equal the object's —
     i.e. ANY of the 8 blank-combinations of (venue, chain, instrument_type) is present
-    (a fixed-cost lookup, not an O(patterns) scan)."""
+    (a fixed-cost lookup, not an O(patterns) scan).
+
+    GRAIN ALSO RUNS THE OTHER WAY (R1 refinement 2026-06-11): legacy object paths
+    predate the ``chain=`` / ``instrument_type=`` axes (e.g.
+    ``category=tradfi/venue=NYSE/data_type=ohlcv_1m/ABBV.parquet``) while the
+    manifest row for the SAME corpus is keyed FINER
+    (``(NYSE, '', 'equity')`` — prediction's ``(POLYMARKET, POLYGON,
+    'prediction_market')`` likewise). A blank OBJECT ``chain``/``instrument_type``
+    therefore matches a manifested pattern with ANY value in that slot. ``venue``
+    is IDENTITY and is never object-wildcarded — a blank-venue object stays
+    uncovered (class E) and routes to the backfill characterizer, which derives
+    the venue from the non-hive path segments instead of guessing."""
     bucket = index.get((day, _norm_it(key.data_type)))
     if not bucket:
         return False
     v, c, it = _norm_v(key.venue), _norm_v(key.chain), _norm_it(key.instrument_type)
+    if not v:
+        return False
     for mv in (v, ""):
         for mc in (c, ""):
             for mit in (it, ""):
                 if (mv, mc, mit) in bucket:
                     return True
+    # Slow path: object-blank chain/instrument_type wildcard (manifest finer than the
+    # legacy path). Buckets are small (per (day, data_type) pattern sets), so a linear
+    # scan here is fixed-cost in practice and only runs when the fast path missed.
+    if c and it:
+        return False
+    for mv, mc, mit in bucket:
+        if mv not in (v, ""):
+            continue
+        if c and mc not in (c, ""):
+            continue
+        if it and mit not in (it, ""):
+            continue
+        return True
     return False
 
 
@@ -351,6 +476,21 @@ class SizingRollup:
 # ---------------------------------------------------------------------------
 
 
+def _footer_row_count(blob: object) -> int | None:
+    """Parquet footer ``num_rows`` for a small blob (whole-object download — only
+    called for <256KB would-be-(E) candidates). ``None`` on any read/parse failure
+    (the caller then keeps the safe non-zero assumption → object stays (E))."""
+    import io
+
+    import pyarrow.parquet as pq
+
+    try:
+        data = blob.download_as_bytes()  # type: ignore[attr-defined]
+        return int(pq.ParquetFile(io.BytesIO(data)).metadata.num_rows)
+    except Exception:
+        return None
+
+
 def _resolve_bucket(asset_group: str, cloud: str = "gcp") -> str:
     """Resolve the canonical raw-tick bucket for an asset_group via the bucket-name SSOT.
     Mirrors ``reconcile_phantom_manifest_rows_all._BUCKET_KIND_MAP``."""
@@ -401,6 +541,16 @@ def run_sweep(
         prefix_taxonomy[_taxonomy_label(name)] += 1
         is_parquet = name.endswith(".parquet")
         cls, key, reason = classify_object(name, asset_group, manifested, is_parquet=is_parquet, row_count=None)
+        # The lazy footer read the docstring promises (implemented R1 close-out
+        # 2026-06-11): a would-be-(E) object with no row evidence may be a 0-row
+        # schema shell (e.g. weekend equity days — footer num_rows=0, ~4KB), which
+        # is class (D) junk, not a backfill target. Only small objects can be
+        # 0-row shells, so the read is bounded to <256KB candidates — large
+        # objects are certainly rows>0 and stay (E) without a read.
+        if cls is ObjectClass.ORPHAN_REAL and int(getattr(blob, "size", 0) or 0) < 262144:
+            rows = _footer_row_count(blob)
+            if rows == 0:
+                cls, reason = ObjectClass.JUNK, "zero-row object with no manifest row (footer-read)"
         class_counts[cls.value] += 1
         segs = parse_hive_segments(name)
         pm = segs.get("pipeline_mode", "")

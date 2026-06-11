@@ -772,3 +772,179 @@ async def test_run_sports_fixtures_daily_repoll_record_captured_exception(
         )
     # record_captured failed so count is NOT added to result
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Coverage boost: previously uncovered branches
+# ---------------------------------------------------------------------------
+
+
+def test_league_ids_for_repoll_none_filter_uses_uac_classifications() -> None:
+    """Lines 160-165: _league_ids_for_repoll(None) pulls from UAC classifications."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import _league_ids_for_repoll
+
+    # League with an api_football_id → included
+    mock_with_id = MagicMock()
+    mock_with_id.api_football_id = 39
+    # League without an api_football_id → excluded
+    mock_without_id = MagicMock()
+    mock_without_id.api_football_id = None
+
+    with patch(
+        "unified_api_contracts.sports.get_leagues_by_classification",
+        return_value=[mock_with_id, mock_without_id],
+    ):
+        result = _league_ids_for_repoll(None)
+
+    assert 39 in result
+    # Leagues without api_football_id are not included
+    assert all(v is not None for v in result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_empty_league_set_returns_empty() -> None:
+    """Lines 234-238: empty af_league_ids after resolution → logs warning and returns {}."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import run_sports_fixtures_daily_repoll
+
+    with patch(
+        "instruments_service.triggers.sports_fixtures_daily_repoll._league_ids_for_repoll",
+        return_value=[],
+    ):
+        result = await run_sports_fixtures_daily_repoll(
+            today="2026-05-09",
+            api_key="test-key",
+            bucket="test-bucket",
+        )
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_league_not_found_skipped(
+    mock_adapter: MagicMock,
+    patch_factory: MagicMock,
+) -> None:
+    """Line 310: get_league_by_api_football_id returning None skips the league in empty-fixtures loop."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import run_sports_fixtures_daily_repoll
+
+    # Make adapter return empty fixtures → enters the empty-fixtures manifest loop
+    mock_adapter.get_fixtures_with_raw = AsyncMock(return_value=[])
+
+    manifest_mock = MagicMock()
+
+    with (
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink", return_value=MagicMock()),
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter",
+            return_value=manifest_mock,
+        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
+        # Patch get_league_by_api_football_id to return None → line 310 `if _ld is None: continue`
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.get_league_by_api_football_id",
+            return_value=None,
+        ),
+    ):
+        result = await run_sports_fixtures_daily_repoll(
+            today="2026-05-09",
+            api_key="test-key",
+            bucket="test-bucket",
+            league_filter=["39"],
+            lookahead_days=0,
+        )
+
+    # No record_empty calls since _ld is None and we skip
+    manifest_mock.record_empty.assert_not_called()
+    assert result == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_league_none_attribute_no_timestamp(
+    mock_adapter: MagicMock,
+    patch_factory: MagicMock,
+) -> None:
+    """Lines 348-350 + 361: fixture with league=None → no league_id in row; no timestamp → defensive available_at."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import run_sports_fixtures_daily_repoll
+
+    # Use MagicMock because CanonicalFixture enforces league non-null via Pydantic
+    fx_no_league = MagicMock()
+    fx_no_league.league = None  # getattr(fx, "league", None) returns None → line 348-350 False branch
+
+    mock_adapter.get_fixtures_with_raw = AsyncMock(return_value=[(fx_no_league, {})])
+
+    manifest_mock = MagicMock()
+    # Make record_captured raise so the count isn't added (simpler assertion)
+    manifest_mock.record_captured.side_effect = RuntimeError("skip")
+
+    with (
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink", return_value=MagicMock()),
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter",
+            return_value=manifest_mock,
+        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
+        # Return a row WITHOUT 'timestamp' and WITHOUT 'league_id' to hit both defensive branches
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.flatten_canonical_fixture_for_disk",
+            return_value={"af_league_id": 39, "source_fixture_id": "9999"},
+        ),
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.get_league_by_api_football_id",
+            return_value=MagicMock(league_id="EPL"),
+        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.classify_and_emit_error"),
+    ):
+        await run_sports_fixtures_daily_repoll(
+            today="2026-05-09",
+            api_key="test-key",
+            bucket="test-bucket",
+            league_filter=["39"],
+            lookahead_days=0,
+        )
+
+    # Verify the fixture was processed without crashing
+    assert manifest_mock.flush.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_af_league_id_fallback_empty_skipped(
+    mock_adapter: MagicMock,
+    patch_factory: MagicMock,
+) -> None:
+    """Lines 383-392 + 399: league_id absent + af_league_id NaN → resolved '' → lid skipped."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import run_sports_fixtures_daily_repoll
+
+    # Use MagicMock to avoid CanonicalFixture's league non-null constraint
+    fx = MagicMock()
+    fx.league = None
+
+    mock_adapter.get_fixtures_with_raw = AsyncMock(return_value=[(fx, {})])
+    manifest_mock = MagicMock()
+
+    with (
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink", return_value=MagicMock()),
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter",
+            return_value=manifest_mock,
+        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
+        # Row without 'league_id' AND af_league_id=None (NaN) → _resolved_league_id = "" → skipped
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.flatten_canonical_fixture_for_disk",
+            return_value={"source_fixture_id": "8888", "af_league_id": None},  # no league_id, af_league_id=NaN
+        ),
+    ):
+        result = await run_sports_fixtures_daily_repoll(
+            today="2026-05-09",
+            api_key="test-key",
+            bucket="test-bucket",
+            league_filter=["39"],
+            lookahead_days=0,
+        )
+
+    # All lid_str resolved to "" → skipped → empty counts dict
+    assert result == {}
