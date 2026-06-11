@@ -13,20 +13,23 @@ def test_required_lifecycle_events_importable():
     import ast
     from pathlib import Path
 
-    orch_src = (Path(__file__).parent.parent.parent / "instruments_service" / "engine" / "orchestrator.py").read_text()
-    tree = ast.parse(orch_src)
+    # The orchestrator is a package of cohesion modules (split from the former
+    # monolithic engine/orchestrator.py — codex_violations_ratchet_to_five_2026_06_10).
+    # Submodules call collaborators through the package namespace (`_orch.log_event`),
+    # so accept both bare-name and attribute call forms.
+    pkg_dir = Path(__file__).parent.parent.parent / "instruments_service" / "engine" / "orchestrator"
 
-    # Collect all string literals passed to log_event calls
     events_found: set[str] = set()
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "log_event"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-        ):
-            events_found.add(node.args[0].value)
+    for src_file in sorted(pkg_dir.glob("*.py")):
+        tree = ast.parse(src_file.read_text())
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant)):
+                continue
+            is_log_event = (isinstance(node.func, ast.Name) and node.func.id == "log_event") or (
+                isinstance(node.func, ast.Attribute) and node.func.attr == "log_event"
+            )
+            if is_log_event:
+                events_found.add(node.args[0].value)
 
     required = {"PROCESSING_STARTED", "PROCESSING_COMPLETED", "PROCESSING_FAILED"}
     missing = required - events_found
