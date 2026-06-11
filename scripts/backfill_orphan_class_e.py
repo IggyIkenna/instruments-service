@@ -579,9 +579,15 @@ def record_cells(
             errors.append(f"cell {day}/{venue}/{dt}: no representative frame retained")
             continue
         pm = PipelineMode(pm_value)
+        # Only per-chain shards (defi) carry ``chain`` in the row_key — UTL's
+        # MalformedRowKeyError rejects an explicitly-empty chain (tradfi/
+        # prediction cells are not chain-scoped; hard_schema Phase 4).
+        row_key: dict[str, str] = {"date": day, "venue": venue}
+        if chain:
+            row_key["chain"] = chain
         try:
             writer.record_captured(
-                row_key={"date": day, "venue": venue, "chain": chain},
+                row_key=row_key,
                 df=rep.df,  # type: ignore[arg-type]
                 asset_group=asset_group,
                 instrument_type=it,
