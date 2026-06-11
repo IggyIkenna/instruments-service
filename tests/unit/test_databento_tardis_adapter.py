@@ -761,20 +761,23 @@ def test_derivatives_only_classifies_kraken_futures() -> None:
 
 
 def test_create_yahoo_index_records_no_filter_returns_all() -> None:
-    """venue_filter=None returns one record per YAHOO_INDICES entry (VIX + DXY)."""
+    """venue_filter=None returns one record per YAHOO_INDICES entry (VIX + DXY + treasuries)."""
     adapter = DatabentoReferenceDataAdapter()
     records = adapter._create_yahoo_index_records(venue_filter=None)
     keys = {r.instrument_key for r in records}
     assert "CBOE:INDEX:VIX" in keys
     assert "ICE:INDEX:DXY" in keys
+    for symbol in ("US3M", "US5Y", "US10Y", "US30Y"):
+        assert f"CBOE:INDEX:{symbol}" in keys
 
 
-def test_create_yahoo_index_records_cboe_filter_returns_only_vix() -> None:
-    """venue_filter='CBOE' returns only the VIX record, not DXY."""
+def test_create_yahoo_index_records_cboe_filter_returns_cboe_only() -> None:
+    """venue_filter='CBOE' returns the CBOE records (VIX + treasuries), not DXY (ICE)."""
     adapter = DatabentoReferenceDataAdapter()
     records = adapter._create_yahoo_index_records(venue_filter="CBOE")
     keys = {r.instrument_key for r in records}
     assert "CBOE:INDEX:VIX" in keys
+    assert "CBOE:INDEX:US10Y" in keys
     assert "ICE:INDEX:DXY" not in keys
 
 
