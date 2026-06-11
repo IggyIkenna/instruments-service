@@ -202,23 +202,31 @@ def lookup_status(index: CellIndex, day: str, data_type: str, pattern: CellPatte
     if not bucket:
         return None
     v, c, it = pattern
-    for mv in (v, ""):
-        for mc in (c, ""):
-            for mit in (it, ""):
-                status = bucket.get((mv, mc, mit))
-                if status is not None:
-                    return status
-    if "" in pattern:
-        # No single finest match exists for a coarse query — resolve the covering
-        # rows' statuses by the same priority union as the multi-source collapse
-        # (≥1 captured → captured), keeping the lookup deterministic.
-        covering = [
-            status
-            for (pv, pc, pit), status in bucket.items()
-            if (v in ("", pv) or pv == "") and (c in ("", pc) or pc == "") and (it in ("", pit) or pit == "")
-        ]
-        if covering:
-            return min(covering, key=_status_rank)
+    if "" not in pattern:
+        # FINE query: the fixed 8-way blank-combination lookup (exact match or a
+        # COARSER covering row) — first hit wins, finest first.
+        for mv in (v, ""):
+            for mc in (c, ""):
+                for mit in (it, ""):
+                    status = bucket.get((mv, mc, mit))
+                    if status is not None:
+                        return status
+        return None
+    # COARSE query (blank fields): the cell's effective status is the priority UNION
+    # over ALL covering rows — the same captured-dominance the multi-source collapse
+    # and the 4-state consumers apply (≥1 captured → captured). The previous fast-path
+    # short-circuit returned an exact coarse row (e.g. a re-emitted blank-IT
+    # attempted_failed) BEFORE the finer captured rows of the SAME cell could win,
+    # mis-reading a faithful projection as regressions/removals (tradfi 2026-06-11:
+    # 139 false captured-regressions + ~14.8k false removed cells, all blank-IT
+    # grain collisions between absence re-emits and fine-grain captured rows).
+    covering = [
+        status
+        for (pv, pc, pit), status in bucket.items()
+        if (v in ("", pv) or pv == "") and (c in ("", pc) or pc == "") and (it in ("", pit) or pit == "")
+    ]
+    if covering:
+        return min(covering, key=_status_rank)
     return None
 
 
