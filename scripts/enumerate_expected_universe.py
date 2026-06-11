@@ -301,6 +301,55 @@ def _enumerate_tradfi(start: str, end: str) -> Iterator[ExpectedRow]:
                     reason=reason,
                 )
 
+    # Per-instrument pre-genesis slice for the Yahoo-sourced index universe
+    # (VIX/DXY/US-treasuries). The venue-level holiday loop above can't express
+    # per-instrument genesis (CBOE carries VIX@1990 + treasuries@2000), so a
+    # dedicated instrument-grain pass marks each index's pre-genesis days.
+    yield from _enumerate_tradfi_indices(start, end)
+
+
+def _enumerate_tradfi_indices(start: str, end: str) -> Iterator[ExpectedRow]:
+    """Per-Yahoo-index pre-genesis days → EXPECTED_INSTRUMENT_NOT_LISTED.
+
+    Each ``YahooIndexDef`` carries its empirically-confirmed
+    ``first_available_date`` (VIX 1990-01-02 / DXY 2019-01-02 / treasuries
+    2000-01-03). For days before an index's genesis, yield an instrument-grain
+    row under its canonical ``-USD`` key for each data_type that has a
+    registered source resolver — so the could-exist denominator counts these
+    instruments instead of leaving pre-genesis cells as silent gaps.
+    """
+    from unified_api_contracts.registry import YAHOO_INDICES
+    from unified_api_contracts.registry.data_source_continuity import (
+        data_types_for_instrument,
+    )
+
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    for idx in YAHOO_INDICES:
+        canonical_key = f"{idx.venue}:INDEX:{idx.base_asset}-USD"
+        data_types = data_types_for_instrument(canonical_key)
+        if not data_types:
+            logger.warning("Yahoo index %s has no source resolver — skipping enumeration", canonical_key)
+            continue
+        genesis_ts = pd.Timestamp(idx.first_available_date)
+        if start_ts >= genesis_ts:
+            continue  # whole window is post-genesis — nothing to pre-list
+        last_day = min(end_ts, genesis_ts - pd.Timedelta(days=1))
+        for day in pd.date_range(start, last_day, freq="D"):
+            iso = day.strftime("%Y-%m-%d")
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="tradfi",
+                    venue=idx.venue,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="INDEX",
+                    instrument_id=canonical_key,
+                    league_id="",
+                    date=iso,
+                    reason="EXPECTED_INSTRUMENT_NOT_LISTED",
+                )
+
 
 def _enumerate_defi(start: str, end: str) -> Iterator[ExpectedRow]:
     """Chain pre-genesis + protocol pre-launch days x data_types.

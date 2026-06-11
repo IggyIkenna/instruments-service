@@ -77,6 +77,46 @@ def test_tradfi_yields_no_rows_for_known_trading_day() -> None:
     assert len(saturday_or_holiday) == 0, "Tuesday 2018-01-09 should not yield EXPECTED_WEEKEND rows"
 
 
+def test_tradfi_index_pre_genesis_for_dxy_pre_2019() -> None:
+    """DXY genesis is 2019-01-02; ICE:INDEX:DXY-USD on 2015-06-01 should yield
+    an instrument-grain EXPECTED_INSTRUMENT_NOT_LISTED row."""
+    rows = list(enumerator_module._enumerate_tradfi_indices("2015-06-01", "2015-06-01"))
+    dxy = [r for r in rows if r.instrument_id == "ICE:INDEX:DXY-USD"]
+    assert len(dxy) > 0, "expected DXY pre-genesis row for 2015-06-01 (genesis 2019-01-02)"
+    sample = dxy[0]
+    assert sample.asset_group == "tradfi"
+    assert sample.venue == "ICE"
+    assert sample.instrument_type == "INDEX"
+    assert sample.data_type == "ohlcv_24h"
+    assert sample.reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
+    assert sample.date == "2015-06-01"
+
+
+def test_tradfi_index_pre_genesis_for_treasuries_pre_2000() -> None:
+    """US treasury indices genesis 2000-01-03; on 1999-06-01 every tenor should
+    pre-list under its canonical -USD key."""
+    rows = list(enumerator_module._enumerate_tradfi_indices("1999-06-01", "1999-06-01"))
+    keys = {r.instrument_id for r in rows if r.reason == "EXPECTED_INSTRUMENT_NOT_LISTED"}
+    for tenor in ("US3M", "US5Y", "US10Y", "US30Y"):
+        assert f"CBOE:INDEX:{tenor}-USD" in keys, f"{tenor} pre-genesis row missing"
+
+
+def test_tradfi_index_no_rows_post_all_genesis() -> None:
+    """A date past every Yahoo-index genesis (DXY 2019 is the latest) yields no
+    pre-genesis index rows."""
+    rows = list(enumerator_module._enumerate_tradfi_indices("2020-06-01", "2020-06-01"))
+    assert rows == [], "expected zero index pre-genesis rows for 2020-06-01"
+
+
+def test_tradfi_holiday_excludes_cboe_and_ice_on_new_year() -> None:
+    """P2 regression: 2025-01-01 (New Year) is a holiday for CBOE + ICE — the
+    venue-level tradfi pass must emit EXPECTED_HOLIDAY for both."""
+    rows = list(enumerator_module._enumerate_tradfi("2025-01-01", "2025-01-01"))
+    holiday_venues = {r.venue for r in rows if r.reason == "EXPECTED_HOLIDAY"}
+    assert "CBOE" in holiday_venues, "CBOE should be holiday-excluded on 2025-01-01"
+    assert "ICE" in holiday_venues, "ICE should be holiday-excluded on 2025-01-01"
+
+
 def test_defi_yields_pre_genesis_for_arbitrum_pre_2021() -> None:
     """Arbitrum genesis is 2021-08-31; AAVE_V3-ARBITRUM on 2018-01-01 should
     yield EXPECTED_PRE_GENESIS_CHAIN (chain didn't exist yet)."""
