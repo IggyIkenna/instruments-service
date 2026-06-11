@@ -30,12 +30,12 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           token: ${{ secrets.GH_PAT }}
 
       - name: Checkout unified-trading-pm (active plans)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ env.GH_ORG }}/unified-trading-pm
           path: unified-trading-pm

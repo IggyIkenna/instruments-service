@@ -160,7 +160,7 @@ class TestMassiveAdapterUnit:
         adapter = MassiveReferenceDataAdapter(api_key="k", venue_filter="CBOE", target_date=_TARGET)
         with patch.object(MassiveReferenceDataAdapter, "_get_json", _surface_router()):
             recs = await adapter.get_instruments()
-        assert any(r.instrument_key == "CBOE:INDEX:VIX" for r in recs)
+        assert any(r.instrument_key == "CBOE:INDEX:VIX-USD" for r in recs)
         # SPX index option present + tagged CBOE (OPRA XCBO MIC overridden to CBOE).
         opt = next((r for r in recs if r.instrument_key == "CBOE:OPTION:O:SPX260618C05000000"), None)
         assert opt is not None

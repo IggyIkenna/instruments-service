@@ -258,7 +258,7 @@ async def test_fetch_duplicate_venue_deduped():
 
 @pytest.mark.asyncio
 async def test_fetch_timeout_error_retryable(caplog):
-    """TimeoutError → VenueError with retryable=True."""
+    """TimeoutError → VenueErrorClassification with retry_safe=True."""
     mock_adapter = MagicMock()
     mock_adapter.get_instruments_cached = AsyncMock(side_effect=TimeoutError("timed out"))
 
@@ -273,13 +273,13 @@ async def test_fetch_timeout_error_retryable(caplog):
 
     assert result.records == []
     assert len(result.failed_venues) == 1
-    assert result.failed_venues[0].retryable is True
+    assert result.failed_venues[0].retry_safe is True
     assert result.failed_venues[0].error_code == "TIMEOUT"
 
 
 @pytest.mark.asyncio
 async def test_fetch_os_error_retryable(caplog):
-    """OSError → VenueError with retryable=True."""
+    """OSError → VenueErrorClassification with retry_safe=True."""
     mock_adapter = MagicMock()
     mock_adapter.get_instruments_cached = AsyncMock(side_effect=OSError("socket error"))
 
@@ -294,7 +294,7 @@ async def test_fetch_os_error_retryable(caplog):
 
     assert result.records == []
     assert len(result.failed_venues) == 1
-    assert result.failed_venues[0].retryable is True
+    assert result.failed_venues[0].retry_safe is True
     assert result.failed_venues[0].error_code == "NETWORK"
 
 
@@ -316,7 +316,7 @@ async def test_fetch_runtime_error_429_rate_limit(caplog):
     assert result.records == []
     assert len(result.failed_venues) == 1
     assert result.failed_venues[0].error_code == "RATE_LIMIT"
-    assert result.failed_venues[0].retryable is True
+    assert result.failed_venues[0].retry_safe is True
 
 
 @pytest.mark.asyncio
@@ -367,7 +367,7 @@ async def test_fetch_attribute_error_parse_error():
         result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
 
     assert result.failed_venues[0].error_code == "PARSE_ERROR"
-    assert result.failed_venues[0].retryable is False
+    assert result.failed_venues[0].retry_safe is False
 
 
 @pytest.mark.asyncio
