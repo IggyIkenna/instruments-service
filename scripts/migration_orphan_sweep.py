@@ -176,9 +176,35 @@ def _source_from_pipeline_mode(pipeline_mode: str) -> str:
     return ""
 
 
+# Legacy instrument_type tokens → canonical (matching + classification). The migrated
+# twin trees + manifest rows carry the canonical singular vocabulary.
+_LEGACY_IT_TOKENS: dict[str, str] = {"equities": "equity"}
+
+
+def canonical_match_instrument_type(asset_group: str, instrument_type: str) -> str:
+    """Canonicalise LEGACY instrument_type vocabulary so coverage matching converges.
+
+    * tradfi pre-hive plural ``equities`` → ``equity`` (R1 2026-06-11: two canonical-twin
+      paths carry the legacy plural in their preserved hive tail — without this remap
+      they can never read as covered by the ``equity``-keyed manifest rows).
+    * prediction legacy underlying-in-the-instrument_type-slot taxonomy
+      (``instrument_type=BTC|ETH|SOL|…``) → ``prediction_market`` — the canonical market
+      grain keys ``instrument_type=prediction_market`` with the asset in ``underlying``
+      (codex/04-architecture/prediction-batch-live.md §4; manifest precedent: every
+      captured prediction cell is ``(POLYMARKET, POLYGON, prediction_market)``). The
+      backfill characterizer derives ``underlying`` from the RAW segment, so no identity
+      is lost by this match-time remap.
+    """
+    it = _LEGACY_IT_TOKENS.get(instrument_type, instrument_type)
+    if asset_group == "prediction" and it and it.lower() != "prediction_market":
+        return "prediction_market"
+    return it
+
+
 def shard_key_from_segments(asset_group: str, segments: dict[str, str]) -> ShardKey:
     """Build a :class:`ShardKey` from parsed hive segments. Handles the DeFi combined
-    ``venue=PROTOCOL-CHAIN`` overload (splits it back into venue + chain)."""
+    ``venue=PROTOCOL-CHAIN`` overload (splits it back into venue + chain) and the legacy
+    instrument_type vocabulary (:func:`canonical_match_instrument_type`)."""
     venue = segments.get("venue", "")
     chain = segments.get("chain", "")
     # DeFi combined venue-chain overload: ``venue=EIGENLAYER-ETHEREUM`` with no chain=.
@@ -188,7 +214,7 @@ def shard_key_from_segments(asset_group: str, segments: dict[str, str]) -> Shard
         asset_group=asset_group,
         venue=venue,
         chain=chain,
-        instrument_type=segments.get("instrument_type", ""),
+        instrument_type=canonical_match_instrument_type(asset_group, segments.get("instrument_type", "")),
         data_type=segments.get("data_type", ""),
     )
 
