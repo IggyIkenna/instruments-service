@@ -202,23 +202,31 @@ def lookup_status(index: CellIndex, day: str, data_type: str, pattern: CellPatte
     if not bucket:
         return None
     v, c, it = pattern
-    for mv in (v, ""):
-        for mc in (c, ""):
-            for mit in (it, ""):
-                status = bucket.get((mv, mc, mit))
-                if status is not None:
-                    return status
-    if "" in pattern:
-        # No single finest match exists for a coarse query — resolve the covering
-        # rows' statuses by the same priority union as the multi-source collapse
-        # (≥1 captured → captured), keeping the lookup deterministic.
-        covering = [
-            status
-            for (pv, pc, pit), status in bucket.items()
-            if (v in ("", pv) or pv == "") and (c in ("", pc) or pc == "") and (it in ("", pit) or pit == "")
-        ]
-        if covering:
-            return min(covering, key=_status_rank)
+    if "" not in pattern:
+        # FINE query: the fixed 8-way blank-combination lookup (exact match or a
+        # COARSER covering row) — first hit wins, finest first.
+        for mv in (v, ""):
+            for mc in (c, ""):
+                for mit in (it, ""):
+                    status = bucket.get((mv, mc, mit))
+                    if status is not None:
+                        return status
+        return None
+    # COARSE query (blank fields): the cell's effective status is the priority UNION
+    # over ALL covering rows — the same captured-dominance the multi-source collapse
+    # and the 4-state consumers apply (≥1 captured → captured). The previous fast-path
+    # short-circuit returned an exact coarse row (e.g. a re-emitted blank-IT
+    # attempted_failed) BEFORE the finer captured rows of the SAME cell could win,
+    # mis-reading a faithful projection as regressions/removals (tradfi 2026-06-11:
+    # 139 false captured-regressions + ~14.8k false removed cells, all blank-IT
+    # grain collisions between absence re-emits and fine-grain captured rows).
+    covering = [
+        status
+        for (pv, pc, pit), status in bucket.items()
+        if (v in ("", pv) or pv == "") and (c in ("", pc) or pc == "") and (it in ("", pit) or pit == "")
+    ]
+    if covering:
+        return min(covering, key=_status_rank)
     return None
 
 
@@ -281,12 +289,20 @@ def diff_cell_indexes(projected: CellIndex, current: CellIndex) -> ManifestDiff:
     for (day, dt), patterns in sorted(projected.items()):
         for pattern, new_status in sorted(patterns.items()):
             old_status = lookup_status(current, day, dt, pattern)
+            # Compare EFFECTIVE statuses on BOTH sides: a coarse pattern's raw status
+            # (e.g. a re-emitted blank-IT attempted_failed row) is not the cell's
+            # status when finer captured rows of the SAME projected cell dominate —
+            # comparing raw-projected vs union-resolved-current manufactured 6,600
+            # false captured→failed transitions (2026-06-11). Fine patterns resolve
+            # to their own row via the 8-way fast path, so this only changes coarse
+            # patterns.
+            new_eff = new_status if "" not in pattern else (lookup_status(projected, day, dt, pattern) or new_status)
             cell = CellRef(day, dt, *pattern)
             if old_status is None:
                 diff.added.append(cell)
-            elif old_status != new_status:
-                diff.changed.append((cell, old_status, new_status))
-                diff.transitions[f"{old_status}->{new_status}"] += 1
+            elif old_status != new_eff:
+                diff.changed.append((cell, old_status, new_eff))
+                diff.transitions[f"{old_status}->{new_eff}"] += 1
             else:
                 diff.unchanged += 1
     for (day, dt), patterns in sorted(current.items()):
