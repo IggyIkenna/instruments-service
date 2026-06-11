@@ -33,8 +33,27 @@ Pipeline (per asset_group):
    data_type, underlying) cell with full provenance (``pipeline_mode`` + ``source``),
    through ``ManifestWriter(per_vm_shards=True)`` so the run never races the
    consolidator (run under ``MANIFEST_PER_VM_SHARDS=true VM_NAME=orphan-backfill-<ag>``).
-5. **SAMPLE-VERIFY** — per recorded cell, re-download one converted object and
-   assert rows>0 + ``available_at`` present + columns ⊆ the carried canonical set.
+   **EVERY characterised cell is recorded** (R1 tool fix 2026-06-11): the record df is
+   a footer-exact schema frame built per cell on demand (zero rows; exact on-disk
+   column names + dtypes from the parquet footer; ``available_at``/``source`` stamped) —
+   never a frame retained from the convert pass. ``row_count`` is the footer-exact sum
+   over the cell's objects. The prior design retained the first-converted frame per
+   cell in memory; any cell whose frame didn't survive (multi-pass runs, first-object
+   junk, memory pressure) errored ``no representative frame retained`` and was silently
+   left unmanifested (tradfi 2026-06-11: 14,707 converted objects, only 249 cells
+   recorded → re-sweep still E=28,495).
+5. **SAMPLE-VERIFY** — per recorded cell, verify ONE canonical object at footer grade:
+   rows>0 + (for objects this tool wrote) ``available_at`` present + columns ⊆ the
+   carried canonical set. Record-only cells log column drift as a WARNING (the on-disk
+   object is operator-ratified record-only; the G4 migrator owns object rewrites).
+
+**CeFi (added R1 2026-06-11) is RECORD-ONLY — never converted.** Its class-E corpus is
+the 2020+ Tardis flat-file tick corpus: mostly already-canonical
+``pipeline_mode=batch_tardis/`` paths plus bare-legacy twins of the same cells (no
+``pipeline_mode=`` segment). Recording the cell manifests the canonical objects (→A)
+and re-classes the bare-legacy twins as (B) CF-21 candidates — no new object uploads
+(the cefi SchemaSpec alias-carry is the R2-cefi follow-up; uploading raw-column copies
+would violate the never-manifest-non-canonical bar).
 
 Usage::
 
@@ -138,6 +157,7 @@ class OrphanPlan:
     status: str  # ALREADY_COVERED | CONVERT | RECORD_ONLY | SKIPPED_JUNK | ESCALATED
     target: CanonicalTarget | None
     note: str = ""
+    size_bytes: int = 0  # from the sweep report — lets footer reads skip a metadata GET
 
 
 def _derive_tradfi_pipeline_mode(class_segment: str, data_type: str) -> tuple[PipelineMode, str]:
@@ -279,11 +299,34 @@ def characterize_object(
             # CLOB adapter is the only producer of this corpus.
             pm = PipelineMode.BATCH_POLYMARKET_CLOB
             evidence = "Polymarket CLOB trades column shape; single-producer corpus"
-        if instrument_type and instrument_type != _PREDICTION_CANONICAL_IT:
-            # Legacy rows carried the underlying asset in the instrument_type slot.
-            underlying = underlying or instrument_type
-            instrument_type = _PREDICTION_CANONICAL_IT
+        # Legacy paths carried the UNDERLYING asset in the instrument_type slot
+        # (``instrument_type=BTC|ETH|…``). The sweep's shard key now canonicalises the
+        # MATCH token to ``prediction_market`` (canonical_match_instrument_type), so the
+        # underlying derives from the RAW hive segment — no identity lost.
+        raw_it = segments.get("instrument_type", "")
+        if raw_it and raw_it != _PREDICTION_CANONICAL_IT:
+            underlying = underlying or raw_it
+        instrument_type = instrument_type or _PREDICTION_CANONICAL_IT
         chain = chain or _PREDICTION_CHAIN
+    elif ag == "cefi":
+        # CeFi is RECORD-ONLY (operator-ratified, R1 2026-06-11): the class-E corpus is
+        # the 2020+ Tardis flat-file tick download (raw tardis columns exchange/symbol/
+        # timestamp/local_timestamp; venue-suffix tokens OKX-FUTURES/OKX-SPOT/…; UAC
+        # SOURCE_PRIORITY registers ['tardis'] for every registered cefi data_type).
+        # Canonical-shaped paths keep their parsed pipeline_mode (generic record-only
+        # branch above); bare-legacy twins (no pipeline_mode= segment) attribute to
+        # batch_tardis and are ALSO record-only — manifesting the cell turns the
+        # canonical objects into (A) and the bare twins into (B) CF-21 candidates,
+        # without uploading raw-column copies (the cefi SchemaSpec alias-carry is the
+        # R2-cefi follow-up; G4 owns object canonicalisation).
+        if pm is None:
+            pm = PipelineMode.BATCH_TARDIS
+            evidence = (
+                "tardis flat-file corpus (bare-legacy twin of the batch_tardis tree) — "
+                "record-only; cell manifest re-classes it as a CF-21 legacy twin"
+            )
+        if not venue or not instrument_type:
+            return None, f"cefi orphan missing venue/instrument_type ({venue!r}/{instrument_type!r})"
     else:
         return None, f"asset_group {ag!r} has no backfill characterisation (sports has its own sweep)"
 
@@ -425,26 +468,99 @@ def _available_at_from_metadata(uri: str) -> datetime:
     return datetime.now(UTC)
 
 
+def _read_parquet_footer(bucket: str, blob_path: str, size: int = 0) -> tuple[int, list[str], object]:
+    """Read ONLY the parquet footer via ranged GETs (a multi-GB object costs a few KB).
+
+    Returns ``(num_rows, column_names, arrow_schema)``. ``size`` (from the sweep
+    report) skips the metadata GET when known. The 64 KiB tail heuristic covers
+    virtually every footer in one request; a larger footer triggers exactly one
+    follow-up ranged read."""
+    import pyarrow.parquet as pq
+    from unified_trading_library import get_storage_client
+
+    client = get_storage_client()
+    if size <= 0:
+        meta = client.get_blob_metadata(bucket, blob_path)  # type: ignore[attr-defined]
+        size = int(getattr(meta, "size", 0) or 0)
+    tail_len = min(size, 65536)
+    tail = client.download_bytes_range(bucket, blob_path, size - tail_len, size)  # type: ignore[attr-defined]
+    footer_len = int.from_bytes(tail[-8:-4], "little")
+    if footer_len + 8 > len(tail):
+        tail = client.download_bytes_range(bucket, blob_path, size - footer_len - 8, size)  # type: ignore[attr-defined]
+    md = pq.read_metadata(io.BytesIO(tail[-(footer_len + 8) :]))
+    arrow_schema = md.schema.to_arrow_schema()
+    return md.num_rows, list(md.schema.names), arrow_schema
+
+
+def _empty_frame_from_schema(arrow_schema: object) -> object:
+    """Footer-exact zero-row pandas frame (exact column names + dtypes)."""
+    import pyarrow as pa
+
+    assert isinstance(arrow_schema, pa.Schema)
+    return arrow_schema.empty_table().to_pandas()
+
+
 @dataclass
 class ConvertResult:
     plan: OrphanPlan
     row_count: int
     uploaded: bool
     error: str = ""
-    df: object | None = None  # representative frame (kept for the first object per cell)
+    # Footer-exact zero-row frame of the cell's canonical object (or the head(0) of a
+    # freshly converted frame) — record_cells canonicalises it into the record df.
+    schema_df: object | None = None
+    # The canonical object's footer column names (sample-verify consumes them).
+    footer_cols: list[str] | None = None
 
 
 def convert_object(
-    plan: OrphanPlan, asset_group: str, bucket: str, *, apply: bool, keep_df: bool, overwrite: bool = False
+    plan: OrphanPlan, asset_group: str, bucket: str, *, apply: bool, overwrite: bool = False
 ) -> ConvertResult:
-    """Download + canonicalise + (apply) upload ONE orphan. Never touches the source
-    object. Shard-isolated: every failure is captured on the result, never raised."""
+    """Characterised orphan → ConvertResult, at the cheapest honest grade:
+
+    * ``RECORD_ONLY`` — footer read of the object itself (rows + columns + schema);
+      no row data moves (cefi 74k-object scale).
+    * ``CONVERT`` with an existing canonical twin (prior-run upload) — footer read of
+      the TWIN; no re-download/re-upload unless ``overwrite``.
+    * ``CONVERT`` fresh — full download → canonicalise → (apply) upload. Never touches
+      the source object.
+
+    Shard-isolated: every failure is captured on the result, never raised."""
     from unified_trading_library import get_storage_client
 
     assert plan.target is not None
     client = get_storage_client()
     src_path = plan.uri[len(f"gs://{bucket}/") :]
     try:
+        if plan.status == "RECORD_ONLY":
+            n_rows, cols, schema = _read_parquet_footer(bucket, src_path, plan.size_bytes)
+            if n_rows == 0:
+                return ConvertResult(
+                    plan=replace(plan, status="SKIPPED_JUNK", note="zero rows"), row_count=0, uploaded=False
+                )
+            return ConvertResult(
+                plan=plan,
+                row_count=n_rows,
+                uploaded=False,
+                schema_df=_empty_frame_from_schema(schema),
+                footer_cols=cols,
+            )
+        # CONVERT — reuse the canonical twin when it already exists (idempotent re-run).
+        if not overwrite and client.blob_exists(bucket, plan.target.dest_path):  # type: ignore[attr-defined]
+            n_rows, cols, schema = _read_parquet_footer(bucket, plan.target.dest_path)
+            if n_rows == 0:
+                return ConvertResult(
+                    plan=replace(plan, status="SKIPPED_JUNK", note="zero rows (existing canonical twin)"),
+                    row_count=0,
+                    uploaded=False,
+                )
+            return ConvertResult(
+                plan=replace(plan, note="canonical twin already exists"),
+                row_count=n_rows,
+                uploaded=False,
+                schema_df=_empty_frame_from_schema(schema),
+                footer_cols=cols,
+            )
         raw = client.download_bytes(bucket, src_path)  # type: ignore[attr-defined]
         df = _read_parquet_bytes(raw)
         n_rows = len(df)  # type: ignore[arg-type]
@@ -462,14 +578,19 @@ def convert_object(
             available_at=available_at,
         )
         uploaded = False
-        if plan.status == "CONVERT" and apply:
-            if overwrite or not client.blob_exists(bucket, plan.target.dest_path):  # type: ignore[attr-defined]
-                buf = io.BytesIO()
-                canonical_df.to_parquet(buf, index=False)  # type: ignore[attr-defined]
-                buf.seek(0)
-                client.upload_from_file_obj(bucket, plan.target.dest_path, buf)  # type: ignore[attr-defined]
+        if apply:
+            buf = io.BytesIO()
+            canonical_df.to_parquet(buf, index=False)  # type: ignore[attr-defined]
+            buf.seek(0)
+            client.upload_from_file_obj(bucket, plan.target.dest_path, buf)  # type: ignore[attr-defined]
             uploaded = True
-        return ConvertResult(plan=plan, row_count=n_rows, uploaded=uploaded, df=canonical_df if keep_df else None)
+        return ConvertResult(
+            plan=plan,
+            row_count=n_rows,
+            uploaded=uploaded,
+            schema_df=canonical_df.head(0),  # type: ignore[attr-defined]
+            footer_cols=list(canonical_df.columns),  # type: ignore[attr-defined]
+        )
     except Exception as exc:  # shard isolation: classify, never raise
         return ConvertResult(plan=plan, row_count=0, uploaded=False, error=f"{type(exc).__name__}: {exc}")
 
@@ -506,7 +627,10 @@ def reverify_against_index(
             asset_group=asset_group,
             venue=str(r.get("venue", "")),
             chain=str(r.get("chain", "")),
-            instrument_type=str(r.get("instrument_type", "")),
+            # Reports written before the legacy-token remap carry raw tokens
+            # (equities / prediction BTC|ETH|…) — canonicalise for matching exactly
+            # as the sweep's shard_key_from_segments now does.
+            instrument_type=_sweep.canonical_match_instrument_type(asset_group, str(r.get("instrument_type", ""))),
             data_type=str(r.get("data_type", "")),
         )
         if _sweep.is_covered(index, key, str(r.get("day", ""))):
@@ -523,12 +647,13 @@ def build_plans(asset_group: str, bucket: str, still_orphan: list[dict[str, str]
         uri = str(r["uri"])
         object_path = uri[len(prefix) :] if uri.startswith(prefix) else uri
         day = str(r.get("day", ""))
+        size_bytes = int(r.get("size_bytes", 0) or 0)
         target, reason = characterize_object(asset_group, object_path)
         if target is None:
             plans.append(OrphanPlan(uri=uri, day=day, status="ESCALATED", target=None, note=reason))
             continue
         status = "RECORD_ONLY" if "record-only" in target.evidence else "CONVERT"
-        plans.append(OrphanPlan(uri=uri, day=day, status=status, target=target))
+        plans.append(OrphanPlan(uri=uri, day=day, status=status, target=target, size_bytes=size_bytes))
     return plans
 
 
@@ -574,11 +699,26 @@ def record_cells(
     errors: list[str] = []
     recorded = 0
     for (day, venue, chain, it, dt, underlying, pm_value), cell_results in sorted(by_cell.items()):
-        rep = next((r for r in cell_results if r.df is not None), cell_results[0])
-        if rep.df is None:
-            errors.append(f"cell {day}/{venue}/{dt}: no representative frame retained")
+        # R1 tool fix (2026-06-11): EVERY characterised cell records. The record df is
+        # built per cell from the footer-exact schema frame any ok member carries (no
+        # frame retention across the run; no full-object download). A zero-row frame
+        # passes assert_available_at_present by design (the writer's empty path) and
+        # gives the warn-only validator the TRUE on-disk column set; row_count is the
+        # footer-exact sum. The prior retained-frame design left every cell without a
+        # surviving frame unmanifested ("no representative frame retained").
+        rep = next((r for r in cell_results if r.schema_df is not None), None)
+        if rep is None:  # structurally unreachable: every ok result carries schema_df
+            errors.append(f"cell {day}/{venue}/{dt}: no footer schema on any member")
             continue
         pm = PipelineMode(pm_value)
+        source = source_string_for(pm) or ""
+        rep_df = canonicalise_frame(
+            rep.schema_df,
+            asset_group=asset_group,
+            data_type=dt,
+            source=source,
+            available_at=datetime.now(UTC),  # dtype-only on a zero-row frame
+        )
         # Only per-chain shards (defi) carry ``chain`` in the row_key — UTL's
         # MalformedRowKeyError rejects an explicitly-empty chain (tradfi/
         # prediction cells are not chain-scoped; hard_schema Phase 4).
@@ -588,7 +728,7 @@ def record_cells(
         try:
             writer.record_captured(
                 row_key=row_key,
-                df=rep.df,  # type: ignore[arg-type]
+                df=rep_df,  # type: ignore[arg-type]
                 asset_group=asset_group,
                 instrument_type=it,
                 data_type=dt,
@@ -598,27 +738,38 @@ def record_cells(
                 row_count=sum(r.row_count for r in cell_results),
                 attempted_at=datetime.now(UTC),
                 pipeline_mode=pm,
-                source=source_string_for(pm),
+                source=source,
             )
             recorded += 1
         except Exception as exc:  # per-cell isolation
             errors.append(f"cell {day}/{venue}/{chain}/{it}/{dt}: {type(exc).__name__}: {exc}")
+        if recorded and recorded % 1000 == 0:
+            logger.info("  recorded %d cells", recorded)
     writer.close()
     return recorded, errors
 
 
 def sample_verify(bucket: str, asset_group: str, results: list[ConvertResult]) -> list[str]:
-    """Per recorded cell: re-download ONE converted object; assert rows>0,
-    ``available_at`` present, and columns ⊆ the carried canonical set (when a
-    SchemaSpec exists). Returns failure strings (empty = verified)."""
-    from unified_trading_library import get_storage_client
+    """Per recorded cell: verify ONE canonical object at FOOTER grade (rides the same
+    ranged-read discipline as the convert pass — a multi-GB object costs a few KB).
 
-    client = get_storage_client()
+    * ``CONVERT`` + freshly uploaded → re-read the DEST footer (proves the upload
+      landed): rows>0, ``available_at`` column present (this tool stamped it), columns
+      ⊆ the carried canonical set (when a SchemaSpec exists) — FAILURES.
+    * ``CONVERT`` via an existing twin → same checks on the twin's footer columns
+      (already in hand from the convert pass; no refetch).
+    * ``RECORD_ONLY`` → rows>0 (FAILURE if not); column drift vs the carried set is a
+      WARNING, not a failure — the on-disk object is operator-ratified record-only
+      (cefi pre-G4 tardis corpus); the G4 migrator owns object rewrites and the cefi
+      SchemaSpec alias-carry is the R2-cefi follow-up.
+
+    Returns failure strings (empty = verified)."""
     seen: set[tuple[str, str, str, str, str, str, str]] = set()
     failures: list[str] = []
+    drift_warned = 0
     meta_ok = _sweep_partition_meta_columns()
     for res in results:
-        if res.plan.status != "CONVERT" or res.error or res.row_count == 0:
+        if res.plan.status not in ("CONVERT", "RECORD_ONLY") or res.error or res.row_count == 0:
             continue
         key = _cell_key(res.plan)
         if key in seen:
@@ -627,22 +778,35 @@ def sample_verify(bucket: str, asset_group: str, results: list[ConvertResult]) -
         assert res.plan.target is not None
         dest = res.plan.target.dest_path
         try:
-            raw = client.download_bytes(bucket, dest)  # type: ignore[attr-defined]
-            df = _read_parquet_bytes(raw)
-            if len(df) == 0:  # type: ignore[arg-type]
+            if res.uploaded:
+                n_rows, cols, _schema = _read_parquet_footer(bucket, dest)
+            else:
+                n_rows, cols = res.row_count, list(res.footer_cols or [])
+            if n_rows == 0:
                 failures.append(f"{dest}: zero rows after conversion")
                 continue
-            if "available_at" not in df.columns or df["available_at"].isna().all():  # type: ignore[union-attr]
-                failures.append(f"{dest}: available_at missing/null")
+            is_converted = res.plan.status == "CONVERT"
+            if is_converted and "available_at" not in cols:
+                failures.append(f"{dest}: available_at missing")
                 continue
             spec = find_schema(asset_group, res.plan.target.data_type)
-            if spec is not None:
+            if spec is not None and cols:
                 carried = carried_column_names(spec) | meta_ok
-                extra = {c for c in df.columns if c not in carried}  # type: ignore[union-attr]
-                if extra:
+                extra = {c for c in cols if c not in carried}
+                if extra and is_converted:
                     failures.append(f"{dest}: columns outside carried canonical set: {sorted(extra)}")
+                elif extra:
+                    drift_warned += 1
+                    if drift_warned <= 5:
+                        logger.warning(
+                            "record-only column drift (G4/R2-cefi follow-up, not a failure) %s: %s",
+                            res.plan.uri,
+                            sorted(extra),
+                        )
         except Exception as exc:
             failures.append(f"{dest}: verify error {type(exc).__name__}: {exc}")
+    if drift_warned:
+        logger.warning("record-only cells with column drift vs carried set: %d (warn-only)", drift_warned)
     return failures
 
 
@@ -710,7 +874,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Class-E orphan characterise→canonicalise→record_captured backfill (R1)."
     )
-    parser.add_argument("--asset-group", required=True, choices=["defi", "tradfi", "prediction"])
+    parser.add_argument("--asset-group", required=True, choices=["defi", "tradfi", "prediction", "cefi"])
     parser.add_argument("--cloud", choices=["gcp", "aws"], default="gcp")
     parser.add_argument(
         "--report-uri", default="", help="orphan_sweep report parquet (default: the AG's _index/audit path)"
@@ -778,21 +942,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         to_convert = actionable
 
-    first_of_cell: set[tuple[str, str, str, str, str, str, str]] = set()
-
-    def _keep_df(p: OrphanPlan) -> bool:
-        k = _cell_key(p)
-        if k in first_of_cell:
-            return False
-        first_of_cell.add(k)
-        return True
-
-    keep_flags = [_keep_df(p) for p in to_convert]
     results: list[ConvertResult] = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [
-            pool.submit(convert_object, p, ag, bucket, apply=args.apply, keep_df=keep, overwrite=args.overwrite)
-            for p, keep in zip(to_convert, keep_flags, strict=True)
+            pool.submit(convert_object, p, ag, bucket, apply=args.apply, overwrite=args.overwrite) for p in to_convert
         ]
         for i, fut in enumerate(futures, start=1):
             results.append(fut.result())
@@ -832,6 +985,13 @@ def main(argv: list[str] | None = None) -> int:
         len(failed),
         len(verify_failures),
     )
+    if args.apply and recorded:
+        logger.info(
+            "next: wait for the manifest consolidator (Cloud Scheduler */1; or run "
+            "`python -m unified_trading_library.manifest_consolidator --bucket %s`), "
+            "then re-run migration_orphan_sweep.py — acceptance is E==0.",
+            bucket,
+        )
     if args.apply and (failed or record_errors or verify_failures):
         return 1
     return 0 if not escalated else 1

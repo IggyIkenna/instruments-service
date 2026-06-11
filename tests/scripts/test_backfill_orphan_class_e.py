@@ -283,3 +283,158 @@ class TestInstrumentKeyVenueDirShapes:
         target, reason = _mod.characterize_object("tradfi", obj)
         assert target is None
         assert "unrecognised path shape" in reason
+
+
+class TestCharacterizeCefi:
+    """R1 2026-06-11 cefi support: RECORD-ONLY always (operator-ratified) — canonical
+    batch_tardis paths keep their parsed pipeline_mode; bare-legacy twins attribute to
+    batch_tardis; neither ever converts/uploads."""
+
+    def test_canonical_tardis_path_is_record_only(self) -> None:
+        obj = (
+            "raw_tick_data/by_date/day=2020-01-02/pipeline_mode=batch_tardis/asset_group=cefi/"
+            "venue=OKX-FUTURES/instrument_type=perpetual/data_type=book_snapshot_5/BTC-USD-200103.parquet"
+        )
+        target, reason = _mod.characterize_object("cefi", obj)
+        assert reason == ""
+        assert target is not None
+        assert target.venue == "OKX-FUTURES"
+        assert target.instrument_type == "perpetual"
+        assert target.pipeline_mode == PipelineMode.BATCH_TARDIS
+        assert "record-only" in target.evidence
+
+    def test_bare_legacy_twin_is_record_only_batch_tardis(self) -> None:
+        obj = (
+            "raw_tick_data/by_date/day=2020-08-23/asset_group=cefi/venue=DERIBIT/"
+            "instrument_type=futures_chain/data_type=trades/underlying=BTC/quote=USD/margin=inverse/ticks.parquet"
+        )
+        target, reason = _mod.characterize_object("cefi", obj)
+        assert reason == ""
+        assert target is not None
+        assert target.venue == "DERIBIT"
+        assert target.instrument_type == "futures_chain"
+        assert target.underlying == "BTC"
+        assert target.pipeline_mode == PipelineMode.BATCH_TARDIS
+        assert "record-only" in target.evidence
+
+    def test_missing_venue_escalates(self) -> None:
+        obj = "raw_tick_data/by_date/day=2020-08-23/asset_group=cefi/data_type=trades/x.parquet"
+        target, reason = _mod.characterize_object("cefi", obj)
+        assert target is None
+        assert "venue" in reason
+
+
+class _FakeRangedClient:
+    """In-memory storage client serving ranged reads from real parquet bytes."""
+
+    def __init__(self, blobs: dict[str, bytes]) -> None:
+        self._blobs = blobs
+
+    def get_blob_metadata(self, bucket: str, path: str) -> object:
+        class _Meta:
+            size = len(self._blobs[path])
+
+        return _Meta()
+
+    def download_bytes_range(self, bucket: str, path: str, start: int, end: int) -> bytes:
+        return self._blobs[path][start:end]
+
+
+class TestFooterRead:
+    def test_footer_read_returns_rows_and_columns(self, monkeypatch) -> None:
+        import io as _io
+
+        import unified_trading_library as _utl
+
+        df = pd.DataFrame({"price": [1.0, 2.0, 3.0], "available_at": pd.Timestamp("2026-01-01", tz="UTC")})
+        buf = _io.BytesIO()
+        df.to_parquet(buf, index=False)
+        client = _FakeRangedClient({"a/b.parquet": buf.getvalue()})
+        monkeypatch.setattr(_utl, "get_storage_client", lambda: client)
+        rows, cols, schema = _mod._read_parquet_footer("bkt", "a/b.parquet")
+        assert rows == 3
+        assert "price" in cols and "available_at" in cols
+        empty = _mod._empty_frame_from_schema(schema)
+        assert list(empty.columns) == cols
+        assert len(empty) == 0
+
+    def test_footer_read_with_known_size_skips_metadata(self, monkeypatch) -> None:
+        import io as _io
+
+        import unified_trading_library as _utl
+
+        df = pd.DataFrame({"x": list(range(10))})
+        buf = _io.BytesIO()
+        df.to_parquet(buf, index=False)
+        raw = buf.getvalue()
+
+        class _NoMetaClient(_FakeRangedClient):
+            def get_blob_metadata(self, bucket: str, path: str) -> object:
+                raise AssertionError("metadata GET must be skipped when size is known")
+
+        monkeypatch.setattr(_utl, "get_storage_client", lambda: _NoMetaClient({"p": raw}))
+        rows, cols, _schema = _mod._read_parquet_footer("bkt", "p", size=len(raw))
+        assert rows == 10
+        assert cols == ["x"]
+
+
+class TestRecordCellsRecordsEveryCell:
+    """The R1 record-pass fix: every characterised cell records via the footer-exact
+    schema frame — no retained-frame dependency (tradfi 249-of-many regression)."""
+
+    def _result(self, day: str, venue: str, dt: str, rows: int, status: str = "RECORD_ONLY") -> object:
+        target = _mod.CanonicalTarget(
+            venue=venue,
+            chain="",
+            instrument_type="perpetual",
+            data_type=dt,
+            underlying="",
+            pipeline_mode=PipelineMode.BATCH_TARDIS,
+            dest_path=f"raw/{day}/{venue}/{dt}.parquet",
+            evidence="record-only",
+        )
+        plan = _mod.OrphanPlan(uri=f"gs://b/{day}/{venue}/x.parquet", day=day, status=status, target=target)
+        return _mod.ConvertResult(
+            plan=plan,
+            row_count=rows,
+            uploaded=False,
+            schema_df=pd.DataFrame({"exchange": pd.Series(dtype=str), "price": pd.Series(dtype=float)}),
+            footer_cols=["exchange", "price"],
+        )
+
+    def test_every_cell_recorded_with_footer_exact_row_counts(self, monkeypatch) -> None:
+        import unified_trading_library as _utl
+
+        calls: list[dict[str, object]] = []
+
+        class _FakeWriter:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            def record_captured(self, **kwargs: object) -> None:
+                calls.append(kwargs)
+
+            def close(self) -> None:
+                pass
+
+        monkeypatch.setattr(_utl, "ManifestWriter", _FakeWriter)
+        results = [
+            self._result("2020-01-02", "OKX-FUTURES", "trades", 100),
+            self._result("2020-01-02", "OKX-FUTURES", "trades", 50),  # same cell — summed
+            self._result("2020-01-03", "DERIBIT", "trades", 7),
+        ]
+        recorded, errors = _mod.record_cells("cefi", "bkt", results, apply=True)
+        assert errors == []
+        assert recorded == 2
+        by_day = {str(c["row_key"]["date"]): c for c in calls}  # type: ignore[index]
+        assert by_day["2020-01-02"]["row_count"] == 150
+        assert by_day["2020-01-03"]["row_count"] == 7
+        # the record df is footer-exact + provenance-stamped, zero rows (empty path
+        # passes the available_at gate by design)
+        df = by_day["2020-01-02"]["df"]
+        assert len(df) == 0  # type: ignore[arg-type]
+        assert "available_at" in df.columns  # type: ignore[union-attr]
+        assert "source" in df.columns  # type: ignore[union-attr]
+        # tradfi/prediction/cefi cells are not chain-scoped → chain omitted from row_key
+        assert "chain" not in by_day["2020-01-02"]["row_key"]  # type: ignore[operator]
+        assert by_day["2020-01-02"]["source"] == "tardis"
