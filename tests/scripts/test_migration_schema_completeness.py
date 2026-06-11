@@ -96,3 +96,36 @@ class TestSampling:
     def test_blank_data_type_skipped(self) -> None:
         objs = [("prediction", "", "POLY", "gs://b/x.parquet")]
         assert _mod.sample_targets_from_objects(objs) == []
+
+
+class TestAliasAwareCarry:
+    """CF-18 alias-aware matching (operator ratification 2026-06-11 decision #2):
+    a legacy source column declared as a ``source_aliases`` entry on a canonical
+    UAC column is CARRIED (GREEN), never a silent drop."""
+
+    def test_polymarket_camelcase_aliases_are_carried(self) -> None:
+        canon = _mod.canonical_columns_for("prediction", "trades")
+        assert canon is not None
+        # the rename map: camelCase raw names resolve via UAC source_aliases
+        assert {"conditionId", "outcomeIndex", "transactionHash", "condition_id"} <= canon
+        src = {"conditionId", "outcomeIndex", "transactionHash", "price", "size", "side"}
+        diff = _mod.diff_schema("prediction", "trades", "POLYMARKET", src)
+        assert not diff.is_red
+        assert diff.dropped == frozenset()
+
+    def test_genuinely_unknown_column_still_red(self) -> None:
+        src = {"conditionId", "price", "definitely_not_a_real_column"}
+        diff = _mod.diff_schema("prediction", "trades", "POLYMARKET", src)
+        assert diff.is_red
+        assert diff.dropped == frozenset({"definitely_not_a_real_column"})
+
+    def test_previously_missing_contracts_now_registered(self) -> None:
+        # the 2026-06-11 coverage gaps must stay closed
+        for ag, dt in [
+            ("prediction", "prediction_trades"),
+            ("defi", "rewards"),
+            ("defi", "risk_params"),
+            ("defi", "utilization"),
+            ("tradfi", "trades"),
+        ]:
+            assert _mod.canonical_columns_for(ag, dt) is not None, f"no SchemaSpec for {ag}/{dt}"
