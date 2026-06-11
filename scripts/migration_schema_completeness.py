@@ -31,7 +31,7 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from unified_api_contracts.registry.schema_spec import find_schema
+from unified_api_contracts.registry.schema_spec import carried_column_names, find_schema
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -85,12 +85,19 @@ class SchemaDiff:
 
 
 def canonical_columns_for(asset_group: str, data_type: str) -> frozenset[str] | None:
-    """The v9 canonical column set for (asset_group, data_type), or ``None`` when no
-    ``SchemaSpec`` is registered (a coverage gap — reported separately)."""
+    """The v9 CARRIED column set for (asset_group, data_type), or ``None`` when no
+    ``SchemaSpec`` is registered (a coverage gap — reported separately).
+
+    Carried = canonical names ∪ each column's declared ``source_aliases`` (the UAC
+    rename map, e.g. polymarket ``conditionId`` → canonical ``condition_id``): a
+    renamed-but-carried legacy column is GREEN; a genuinely dropped column stays RED.
+    The matching SSOT is UAC ``schema_spec.carried_column_names`` so the G4 migrator's
+    renames and this audit's verdict cannot drift (operator ratification 2026-06-11
+    decision #2 — CITADEL, no acked drops)."""
     spec = find_schema(asset_group, data_type)
     if spec is None:
         return None
-    return frozenset(c.name for c in spec.columns)
+    return carried_column_names(spec)
 
 
 def diff_schema(
