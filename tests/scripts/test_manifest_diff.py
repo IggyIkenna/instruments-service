@@ -255,3 +255,20 @@ def test_coarse_query_unions_fine_rows_captured_dominance() -> None:
         [{"date": "2020-01-02", "data_type": "ohlcv_1m", "venue": "CME", "instrument_type": "", "capture_status": "attempted_failed"}]
     )
     assert _mod.lookup_status(index2, "2020-01-02", "ohlcv_1m", ("CME", "", "")) == "attempted_failed"
+
+
+def test_diff_compares_effective_statuses_both_sides() -> None:
+    """A projected coarse absence row alongside fine captured rows of the SAME cell is
+    NOT a captured-regression — both sides resolve through captured-dominance."""
+    current = _mod.build_cell_index(
+        [{"date": "2020-01-02", "data_type": "ohlcv_1m", "venue": "CME", "instrument_type": "future", "capture_status": "captured"}]
+    )
+    projected = _mod.build_cell_index(
+        [
+            {"date": "2020-01-02", "data_type": "ohlcv_1m", "venue": "CME", "instrument_type": "", "capture_status": "attempted_failed"},
+            {"date": "2020-01-02", "data_type": "ohlcv_1m", "venue": "CME", "instrument_type": "future", "capture_status": "captured"},
+        ]
+    )
+    diff = _mod.diff_cell_indexes(projected, current)
+    assert diff.captured_regressions == 0
+    assert not diff.removed
