@@ -121,8 +121,13 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         self._chain = chain.upper()
         self._date = date
         self._protocol_slug = protocol_slug or "uniswap_v3"
-        # Convert protocol slug (e.g. "pancakeswap_v3") to UAC venue prefix (e.g. "PANCAKESWAP_V3")
-        self._venue_prefix = self._protocol_slug.replace("_", "").upper()
+        # Convert protocol slug (e.g. "pancakeswap_v3") to UAC venue prefix (e.g. "PANCAKESWAP_V3").
+        # KEEP the underscore — canonical defi venue names are the underscore form (UAC
+        # registry/defi_venues.py). Stripping it ("PANCAKESWAPV3") made every record's venue
+        # tag unknown to the URDI venue filter, silently dropping the whole fetched universe
+        # (R4-IS-freeze finding 2026-06-11; regression from c7d9bb2 which updated this comment
+        # but not the code).
+        self._venue_prefix = self._protocol_slug.upper()
         # Set per get_instruments() call: True if any cascade leg (primary or fallback) genuinely
         # errored (transient/malformed) — drives the all-fallbacks-failed raise (DeFi-plan A8b).
         self._cascade_errored: bool = False
