@@ -152,16 +152,18 @@ FUNCTION_SIZE_EXTRA_EXCLUDES=(
     "!" "-path" "./${SOURCE_DIR}/reference_data/adapters/*"
     # engine/orchestrator package: the 8,192-line orchestrator.py monolith was
     # split into 16 cohesion modules + a thin __init__ (2026-06-11). The split
-    # was PURE CODE MOTION — legacy oversized functions (process_instruments
-    # 1,931L; the sports fetchers 206-882L) kept their existing size by design,
-    # so ONLY the modules that carry them stay excluded. Decomposing those
-    # function bodies is follow-up work under the plan below; all other package
-    # modules (incl. __init__) are now under the 900-line/200-line gates.
+    # was PURE CODE MOTION — legacy oversized functions (the sports fetchers
+    # 206-882L) kept their existing size by design, so ONLY the modules that
+    # carry them stay excluded. 2026-06-11 follow-up (same plan): process.py
+    # (process_instruments 1,931L → staged process_* sibling modules) and
+    # sports_reference.py (_fetch_sports_reference_data 882L →
+    # sports_reference_core/_fixtures sibling modules) were decomposed and
+    # REMOVED from this list — they now pass the 900-line/200-line gates
+    # directly. Decomposing the remaining fetcher bodies is follow-up work
+    # under the plan below.
     # Plan: unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md
     "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/footystats.py"
-    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/process.py"
     "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/sfi.py"
-    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/sports_reference.py"
     "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/transfermarkt.py"
     "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/understat.py"
     "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/weather.py"
@@ -174,9 +176,16 @@ PIP_AUDIT_EXTRA_ARGS="--ignore-vuln CVE-2026-34073"
 
 
 # Temporary rollout tolerance for known codex debt under active remediation.
-# Remaining: bandit /tmp usage (orchestrator fixture cache), backward-compat docstring,
-# pip-audit CVE pending upgrade.
-CODEX_MAX_VIOLATIONS=4
+# Ratcheted 4 → 3 on 2026-06-11: the function/file-size violation class CLEARED
+# — process_instruments (1,931L) + _fetch_sports_reference_data (882L) were
+# decomposed into staged sibling modules and urdi_reference_provider's
+# fetch_instruments_for_all_venues (246L) split, so every non-excluded file now
+# passes the 900/200/50 size gates. Remaining 3 classes: os.getenv/os.environ
+# (DEPLOYMENT_ENV test shims + polymarket cursor overrides), the bare
+# `pip install uv` Dockerfile bootstrap, and broad `except Exception:`
+# shard-isolation handlers.
+# Plan: unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md
+CODEX_MAX_VIOLATIONS=3
 export CODEX_MAX_VIOLATIONS
 
 WORKSPACE_ROOT="$(cd "$(git rev-parse --show-toplevel)/.." && pwd)"
