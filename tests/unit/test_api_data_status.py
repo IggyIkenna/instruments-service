@@ -149,3 +149,58 @@ async def test_get_data_status_read_exception_raises_http_500() -> None:
             await get_data_status(asset_group="defi", bucket=None, data_type=None)
 
     assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_get_data_status_all_null_data_types_returns_empty_rows() -> None:
+    """Index with only null data_type values returns empty rows after dropna."""
+    index_df = pd.DataFrame({"data_type": [None, None], "capture_status": ["captured", "captured"]})
+
+    with (
+        patch("instruments_service.api.data_status.read_availability_index", return_value=index_df),
+        patch("instruments_service.api.data_status.get_write_bucket_name", return_value="test-bucket"),
+    ):
+        from instruments_service.api.data_status import get_data_status
+
+        result = await get_data_status(asset_group="defi", bucket=None, data_type=None)
+
+    assert result["rows"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_data_status_data_type_filter_no_match_returns_empty() -> None:
+    """data_type filter that matches no rows returns empty rows list."""
+    index_df = pd.DataFrame({"data_type": ["trades"], "capture_status": ["captured"]})
+    counts = _make_counts()
+
+    with (
+        patch("instruments_service.api.data_status.read_availability_index", return_value=index_df),
+        patch("instruments_service.api.data_status.get_write_bucket_name", return_value="test-bucket"),
+        patch("instruments_service.api.data_status.compute_coverage_for_bucket", return_value=(counts, 1.0)),
+    ):
+        from instruments_service.api.data_status import get_data_status
+
+        result = await get_data_status(asset_group="defi", bucket=None, data_type="nonexistent_type")
+
+    assert result["rows"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_data_status_coverage_rounded_to_six_decimals() -> None:
+    """Coverage ratio is rounded to 6 decimal places."""
+    index_df = pd.DataFrame({"data_type": ["trades"], "capture_status": ["captured"]})
+    counts = _make_counts()
+    raw_ratio = 1 / 3  # 0.333333...
+
+    with (
+        patch("instruments_service.api.data_status.read_availability_index", return_value=index_df),
+        patch("instruments_service.api.data_status.get_write_bucket_name", return_value="test-bucket"),
+        patch("instruments_service.api.data_status.compute_coverage_for_bucket", return_value=(counts, raw_ratio)),
+    ):
+        from instruments_service.api.data_status import get_data_status
+
+        result = await get_data_status(asset_group="defi", bucket=None, data_type=None)
+
+    rows = result["rows"]
+    assert len(rows) == 1
+    assert rows[0]["coverage"] == round(raw_ratio, 6)
