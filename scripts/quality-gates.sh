@@ -46,7 +46,20 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/reference_data/adapters/sports/adapters/api_football.py"
     "!**/reference_data/adapters/sports/adapters/odds_api.py"
     "!**/reference_data/adapters/sports/adapters/base.py"
-    "!**/engine/orchestrator.py"
+    # engine/orchestrator package: pre-existing lazy in-function imports moved
+    # verbatim in the orchestrator.py split (pure code motion — hoisting them is
+    # behaviour change / cycle risk, e.g. catalogue.refresh_catalogue's import is
+    # cycle-breaking). Scoped to ONLY the carrying modules, not the package.
+    # Plan: unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md
+    "!**/engine/orchestrator/catalogue.py"
+    "!**/engine/orchestrator/footystats.py"
+    "!**/engine/orchestrator/process.py"
+    "!**/engine/orchestrator/sfi.py"
+    "!**/engine/orchestrator/sports_reference.py"
+    "!**/engine/orchestrator/transfermarkt.py"
+    "!**/engine/orchestrator/understat.py"
+    "!**/engine/orchestrator/weather.py"
+    "!**/engine/orchestrator/writers.py"
     "!**/reference_data/adapters/prediction/kalshi.py"
     "!**/triggers/sports_fixtures_daily_repoll.py"
 )
@@ -67,7 +80,17 @@ EMPTY_STR_EXCLUDE_GLOBS=(
     "!**/reference_data/adapters/prediction/*.py"
     "!**/reference_data/intent_resolver.py"
     "!**/reference_data/adapters/sports/adapters/*.py"
-    "!**/engine/orchestrator.py"
+    # engine/orchestrator package: pre-existing adapter-style `.get(key, "")`
+    # parsing guards moved verbatim in the orchestrator.py split (fail-fast
+    # conversion is a behaviour change, out of scope for the pure-motion split).
+    # Scoped to ONLY the carrying modules, not the package.
+    # Plan: unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md
+    "!**/engine/orchestrator/footystats.py"
+    "!**/engine/orchestrator/prediction.py"
+    "!**/engine/orchestrator/sfi.py"
+    "!**/engine/orchestrator/transfermarkt.py"
+    "!**/engine/orchestrator/weather.py"
+    "!**/engine/orchestrator/writers.py"
 )
 
 # Empty dict/list fallbacks: adapter GraphQL/JSON nested access (e.g. .get("data", {}).get("pools", []))
@@ -99,7 +122,15 @@ DEEP_IMPORT_EXCLUDE_GLOBS=(
     "!**/reference_data/intent_resolver.py"
     "!**/reference_data/adapters/sports/adapters/*.py"
     "!**/reference_data/catalogue/*.py"
-    "!**/engine/orchestrator.py"
+    # engine/orchestrator package: module-level deep imports now live in the
+    # package __init__.py (auto-exempt via the check's !**/__init__.py glob).
+    # Only in-function lazy deep imports (capability_declarations._defi,
+    # external.understat) remain — moved verbatim in the orchestrator.py split;
+    # scoped to ONLY the carrying modules.
+    # Plan: unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md
+    "!**/engine/orchestrator/catalogue.py"
+    "!**/engine/orchestrator/understat.py"
+    "!**/engine/orchestrator/writers.py"
     "!**/triggers/sports_fixtures_daily_repoll.py"
 )
 
@@ -119,7 +150,21 @@ CLOUD_SDK_EXCLUDE_GLOBS=(
 # Function/method size: reference data adapters have large parse/fetch methods (JSON→record mapping)
 FUNCTION_SIZE_EXTRA_EXCLUDES=(
     "!" "-path" "./${SOURCE_DIR}/reference_data/adapters/*"
-    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator.py"
+    # engine/orchestrator package: the 8,192-line orchestrator.py monolith was
+    # split into 16 cohesion modules + a thin __init__ (2026-06-11). The split
+    # was PURE CODE MOTION — legacy oversized functions (process_instruments
+    # 1,931L; the sports fetchers 206-882L) kept their existing size by design,
+    # so ONLY the modules that carry them stay excluded. Decomposing those
+    # function bodies is follow-up work under the plan below; all other package
+    # modules (incl. __init__) are now under the 900-line/200-line gates.
+    # Plan: unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md
+    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/footystats.py"
+    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/process.py"
+    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/sfi.py"
+    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/sports_reference.py"
+    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/transfermarkt.py"
+    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/understat.py"
+    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/weather.py"
     "!" "-path" "./${SOURCE_DIR}/triggers/sports_fixtures_daily_repoll.py"
     "!" "-path" "./${SOURCE_DIR}/cli/instruments_handler.py"
 )
