@@ -360,6 +360,27 @@ def test_reference_v2_tree_uncovered_is_class_e() -> None:
     assert cls is OC.ORPHAN_REAL
 
 
+def test_pre_launch_window_is_c3_not_e() -> None:
+    # footystats coverage starts 2019-01-01 (UAC SOURCE_COVERAGE_START) — a 2018 day
+    # is contractually un-manifestable (ManifestWriter pre-launch guard) → C3, not E
+    path = (
+        "sports_reference/by_date/day=2018-06-01/entity=footystats_predictions/"
+        "league=EPL/footystats_predictions.parquet"
+    )
+    cls, _f, reason = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
+    assert cls is OC.PRE_LAUNCH_WINDOW and "pre-launch" in reason
+    # api_football FIXTURE_STATS window starts 2020-06-06 (DATA_TYPE_COVERAGE_START)
+    path = "sports_reference/by_date/day=2020-01-01/entity=fixture_stats/league=EPL/fixture_stats.parquet"
+    assert _mod.classify_reference_object(path, _ref_index(), is_parquet=True)[0] is OC.PRE_LAUNCH_WINDOW
+    # a COVERED pre-launch-window object stays A (covered wins; e.g. the 2018
+    # FIXTURE_STATS cells the manifest already carries as captured)
+    path = "sports_reference/by_date/day=2018-01-02/entity=fixture_stats/league=EPL/fixture_stats.parquet"
+    assert _mod.classify_reference_object(path, _ref_index(), is_parquet=True)[0] is OC.CANONICAL_MANIFESTED
+    # post-window uncovered stays E
+    path = "sports_reference/by_date/day=2026-05-02/entity=fixture_stats/league=EPL/fixture_stats.parquet"
+    assert _mod.classify_reference_object(path, _ref_index(), is_parquet=True)[0] is OC.ORPHAN_REAL
+
+
 def test_v1_archive_is_b2_never_e() -> None:
     path = "sports_reference_v1_archive/by_date/day=2018-01-05/entity=fixtures/fixtures.parquet"
     cls, _f, _ = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
