@@ -753,3 +753,55 @@ def test_derivatives_only_classifies_kraken_futures() -> None:
 
     for exch in ("cryptofacilities", "okex-futures", "okex-swap", "huobi-dm", "bitfinex-derivatives", "bitget-futures"):
         assert exch in _DERIVATIVES_ONLY_EXCHANGES, f"derivatives-only Tardis exchange {exch!r} not classified"
+
+
+# ---------------------------------------------------------------------------
+# Yahoo index venue-filter tests (DXY + VIX)
+# ---------------------------------------------------------------------------
+
+
+def test_create_yahoo_index_records_no_filter_returns_all() -> None:
+    """venue_filter=None returns one record per YAHOO_INDICES entry (VIX + DXY + treasuries)."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_yahoo_index_records(venue_filter=None)
+    keys = {r.instrument_key for r in records}
+    # Canonical keys carry the -USD base-quote suffix (match GCS/symbology + resolver).
+    assert "CBOE:INDEX:VIX-USD" in keys
+    assert "ICE:INDEX:DXY-USD" in keys
+    for symbol in ("US3M", "US5Y", "US10Y", "US30Y"):
+        assert f"CBOE:INDEX:{symbol}-USD" in keys
+
+
+def test_create_yahoo_index_records_cboe_filter_returns_cboe_only() -> None:
+    """venue_filter='CBOE' returns the CBOE records (VIX + treasuries), not DXY (ICE)."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_yahoo_index_records(venue_filter="CBOE")
+    keys = {r.instrument_key for r in records}
+    assert "CBOE:INDEX:VIX-USD" in keys
+    assert "CBOE:INDEX:US10Y-USD" in keys
+    assert "ICE:INDEX:DXY-USD" not in keys
+
+
+def test_create_yahoo_index_records_carry_per_instrument_genesis() -> None:
+    """available_from_datetime is the per-entry genesis, not a shared hardcoded date."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = {r.instrument_key: r for r in adapter._create_yahoo_index_records(venue_filter=None)}
+    assert records["ICE:INDEX:DXY-USD"].available_from_datetime.year == 2019
+    assert records["CBOE:INDEX:US10Y-USD"].available_from_datetime.year == 2000
+    assert records["CBOE:INDEX:VIX-USD"].available_from_datetime.year == 1990
+
+
+def test_create_yahoo_index_records_ice_filter_returns_only_dxy() -> None:
+    """venue_filter='ICE' returns only the DXY record, not VIX."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_yahoo_index_records(venue_filter="ICE")
+    keys = {r.instrument_key for r in records}
+    assert "ICE:INDEX:DXY-USD" in keys
+    assert "CBOE:INDEX:VIX-USD" not in keys
+
+
+def test_create_yahoo_index_records_unknown_venue_returns_empty() -> None:
+    """venue_filter with an unknown venue returns an empty list."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_yahoo_index_records(venue_filter="UNKNOWN_VENUE")
+    assert records == []

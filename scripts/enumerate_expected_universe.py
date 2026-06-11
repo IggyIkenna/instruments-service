@@ -31,12 +31,18 @@ Per-asset-group implementation status (2026-05-07):
   source's ``SOURCE_COVERAGE_START`` / ``DATA_TYPE_COVERAGE_START`` window
   (pre-coverage dates stay owned by the v1 ``_enumerate_sports`` rows).
   v1 still emits the per-source pre-coverage slice.
-* CeFi:   STUB — needs instruments-service catalog with per-instrument
-  lifecycle (``available_from`` / ``available_to`` / ``expiry``).
-  See plan Phase 3.D.4 CeFi sub-task.
-* Prediction: STUB — blocked on UAC ``PREDICTION_GROUPS`` registry which
-  is empty pending the canonical_question_group SSOT
-  (``predictions_master.md``).
+* CeFi:   FULL (v2) — per-instrument lifecycle from the
+  ``build_instrument_catalogue.py`` roll-up (``available_from`` /
+  ``available_to``); the G1-ENUM shape-aware producer (2026-06-07) filters
+  each instrument to its valid ``(instrument_type x data_type)`` cells via the
+  UAC validity matrix + bundle-grain roll-up. The v1 ``_enumerate_cefi`` below
+  retains only the pre-venue-launch slice. (CF-16: the former STUB is closed —
+  the v2 ``_enumerate_v2_cefi`` is the live path.)
+* Prediction: FULL (v2) — per-market lifecycle (``market_created_at`` /
+  ``settlement_time``) with per-row data_type grain-binding (cqg bundle vs
+  per-conditionId trades) from the prediction catalogue. (CF-16: the former
+  ``PREDICTION_GROUPS`` STUB is closed — the v2 ``_enumerate_v2_prediction`` is
+  the live path; the catalogue carries the grain.)
 
 Example::
 
@@ -293,6 +299,55 @@ def _enumerate_tradfi(start: str, end: str) -> Iterator[ExpectedRow]:
                     league_id="",
                     date=iso,
                     reason=reason,
+                )
+
+    # Per-instrument pre-genesis slice for the Yahoo-sourced index universe
+    # (VIX/DXY/US-treasuries). The venue-level holiday loop above can't express
+    # per-instrument genesis (CBOE carries VIX@1990 + treasuries@2000), so a
+    # dedicated instrument-grain pass marks each index's pre-genesis days.
+    yield from _enumerate_tradfi_indices(start, end)
+
+
+def _enumerate_tradfi_indices(start: str, end: str) -> Iterator[ExpectedRow]:
+    """Per-Yahoo-index pre-genesis days → EXPECTED_INSTRUMENT_NOT_LISTED.
+
+    Each ``YahooIndexDef`` carries its empirically-confirmed
+    ``first_available_date`` (VIX 1990-01-02 / DXY 2019-01-02 / treasuries
+    2000-01-03). For days before an index's genesis, yield an instrument-grain
+    row under its canonical ``-USD`` key for each data_type that has a
+    registered source resolver — so the could-exist denominator counts these
+    instruments instead of leaving pre-genesis cells as silent gaps.
+    """
+    from unified_api_contracts.registry import YAHOO_INDICES
+    from unified_api_contracts.registry.data_source_continuity import (
+        data_types_for_instrument,
+    )
+
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    for idx in YAHOO_INDICES:
+        canonical_key = f"{idx.venue}:INDEX:{idx.base_asset}-USD"
+        data_types = data_types_for_instrument(canonical_key)
+        if not data_types:
+            logger.warning("Yahoo index %s has no source resolver — skipping enumeration", canonical_key)
+            continue
+        genesis_ts = pd.Timestamp(idx.first_available_date)
+        if start_ts >= genesis_ts:
+            continue  # whole window is post-genesis — nothing to pre-list
+        last_day = min(end_ts, genesis_ts - pd.Timedelta(days=1))
+        for day in pd.date_range(start, last_day, freq="D"):
+            iso = day.strftime("%Y-%m-%d")
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="tradfi",
+                    venue=idx.venue,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="INDEX",
+                    instrument_id=canonical_key,
+                    league_id="",
+                    date=iso,
+                    reason="EXPECTED_INSTRUMENT_NOT_LISTED",
                 )
 
 

@@ -1,0 +1,884 @@
+"""Coverage tests for sports data-fetcher sub-functions in orchestrator.py.
+
+Targets:
+  - _fetch_understat_xg (lines 6249-6405): skip / empty / happy / exception
+  - _run_understat_shots_date (lines 6474-6622): skip / empty / exception
+  - _fetch_weather_data (lines 7482-7938): no-fixtures / fixtures-read-fail
+  - _fetch_sfi_data (lines 6950-7399): skip / entity-filter / adapter-empty
+  - _fetch_transfermarkt_data (lines 6625-6947): skip / no-leagues / empty
+"""
+
+from __future__ import annotations
+
+import contextlib
+import io
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pandas as pd
+import pytest
+
+from instruments_service.engine.orchestrator import (
+    _fetch_sfi_data,
+    _fetch_transfermarkt_data,
+    _fetch_understat_xg,
+    _fetch_weather_data,
+    _run_understat_shots_date,
+)
+
+_DATE = "2026-01-15"
+_BUCKET = "test-bucket"
+
+
+def _mk_league(lid: str) -> SimpleNamespace:
+    return SimpleNamespace(league_id=lid)
+
+
+def _stack(*patches: object) -> contextlib.ExitStack:
+    s = contextlib.ExitStack()
+    for p in patches:
+        s.enter_context(p)  # type: ignore[arg-type]
+    return s
+
+
+# ---------------------------------------------------------------------------
+# _fetch_understat_xg
+# ---------------------------------------------------------------------------
+
+
+class TestFetchUnderstatXg:
+    """Tests for _fetch_understat_xg (lines 6249-6405)."""
+
+    @staticmethod
+    def _common_patches(skip_all: bool = False, fixtures=None):
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(return_value=fixtures or [])
+        mock_adapter._fetch_error_count = 0  # prevent MagicMock > int TypeError
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        return (
+            _stack(
+                patch(
+                    "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
+                ),
+                patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+                patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+                patch(
+                    "unified_api_contracts.sports.get_expected_leagues_for_source",
+                    return_value=[_mk_league("EPL"), _mk_league("BUNDESLIGA")],
+                ),
+                patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=skip_all),
+                patch("instruments_service.engine.orchestrator._gated_sink_write"),
+                patch(
+                    "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                    side_effect=lambda df, **kw: df,
+                ),
+                patch(
+                    "instruments_service.engine.orchestrator._canonical_league_id",
+                    side_effect=lambda lid: str(lid),
+                ),
+                patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="understat"),
+                patch("unified_api_contracts.sports.build_fixture_id", return_value="EPL:ARSENAL_v_CHELSEA:2026-01-15"),
+                patch("unified_api_contracts.sports.resolve_understat_team", side_effect=lambda t: t.upper()),
+            ),
+            mock_adapter,
+            mock_mw,
+        )
+
+    @pytest.mark.asyncio
+    async def test_all_leagues_captured_skip_returns_empty(self) -> None:
+        stack, _, _ = self._common_patches(skip_all=True)
+        with stack:
+            result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET, force=False)
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_empty_fixtures_writes_empty_per_league(self) -> None:
+        stack, _, mock_mw = self._common_patches(skip_all=False, fixtures=[])
+        with stack:
+            result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET)
+        assert result == {}
+        # record_empty should be called per expected league (EPL + BUNDESLIGA)
+        assert mock_mw.record_empty.call_count == 2
+        mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_happy_path_with_home_away_teams(self) -> None:
+        fixtures = [
+            {
+                "h_title": "Arsenal",
+                "a_title": "Chelsea",
+                "league": "EPL",
+                "date": _DATE,
+                "kickoff_utc": f"{_DATE} 15:00:00",  # needed for available_at column
+                "h": {"goals": 2},
+                "a": {"goals": 1},
+            }
+        ]
+        stack, _, mock_mw = self._common_patches(skip_all=False, fixtures=fixtures)
+        with stack:
+            result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET)
+        assert isinstance(result, dict)
+        mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_exception_records_failed_per_league(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(side_effect=RuntimeError("network error"))
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+            patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="RuntimeError"),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET)
+        assert result == {}
+        mock_mw.record_failed.assert_called()
+        mock_mw.write.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_errors_on_adapter_writes_record_failed(self) -> None:
+        """When adapter has _fetch_error_count > 0 and no fixtures, writes record_failed."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(return_value=[])
+        mock_adapter._fetch_error_count = 3  # simulate partial league fetch errors
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+        ):
+            result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET)
+        assert result == {}
+        # With _fetch_error_count > 0, record_failed is called for each expected league
+        mock_mw.record_failed.assert_called_once()
+        mock_mw.write.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _run_understat_shots_date
+# ---------------------------------------------------------------------------
+
+
+class TestRunUnderstatShotsDate:
+    """Tests for _run_understat_shots_date (lines 6474-6622)."""
+
+    @pytest.mark.asyncio
+    async def test_no_match_ids_returns_empty(self) -> None:
+        """get_match_ids_for_date returns empty list → empty result dict, no writes."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_match_ids_for_date = AsyncMock(return_value=[])
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.understat.UnderstatAdapter",
+                return_value=mock_adapter,
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+        ):
+            result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_skip_all_leagues_captured_returns_empty(self) -> None:
+        mock_adapter = MagicMock()
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.understat.UnderstatAdapter",
+                return_value=mock_adapter,
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=True),
+        ):
+            result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_shots_returned_writes_captured(self) -> None:
+        """match_ids returned + shots for each → gated_sink_write + record_captured per league."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_match_ids_for_date = AsyncMock(return_value=[("match1", "EPL")])
+        # Return one shot dict; _coerce_adapter_output handles dicts
+        mock_adapter.get_match_shots = AsyncMock(return_value=[{"x": 0.5, "y": 0.3, "xG": 0.12}])
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.understat.UnderstatAdapter",
+                return_value=mock_adapter,
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="understat"),
+            patch(
+                "unified_api_contracts.external.understat.normalize.normalize_understat_shot",
+                side_effect=lambda s: s,
+            ),
+        ):
+            result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
+        assert isinstance(result, dict)
+        mock_mw.record_captured.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_exception_shard_isolation_no_raise(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_match_ids_for_date = AsyncMock(side_effect=ConnectionError("timeout"))
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.understat.UnderstatAdapter",
+                return_value=mock_adapter,
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+            patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="ConnectionError"),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
+        # Shard isolation: no raise
+        assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# _fetch_weather_data
+# ---------------------------------------------------------------------------
+
+
+class TestFetchWeatherData:
+    """Tests for _fetch_weather_data (lines 7482-7938)."""
+
+    @pytest.mark.asyncio
+    async def test_no_fixture_blobs_records_empty_manifest(self) -> None:
+        """When no fixture parquets exist, record_empty per expected league and return."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = []  # no blobs
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL"), _mk_league("BUNDESLIGA")],
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+        ):
+            result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET)
+        assert result == {}
+        # record_empty called once per expected league
+        assert mock_mw.record_empty.call_count == 2
+        mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fixture_read_exception_records_failed(self) -> None:
+        """Exception reading fixture blobs → record_failed per league and return."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = RuntimeError("GCS unreachable")
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+            patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="RuntimeError"),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+        ):
+            result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET)
+        assert result == {}
+        mock_mw.record_failed.assert_called()
+        mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_happy_path_with_venue_coordinates(self) -> None:
+        """Fixture with venue_name+league_id + VENUE_COORDINATES match → captured manifest row."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_weather_match_window = AsyncMock(return_value={"temperature": 15.0})
+        mock_adapter_cls = MagicMock(return_value=mock_adapter)
+
+        fixture_df = pd.DataFrame({"venue_name": ["Anfield"], "league_id": ["EPL"]})
+        buf = io.BytesIO()
+        fixture_df.to_parquet(buf)
+        parquet_bytes = buf.getvalue()
+
+        mock_blob = MagicMock()
+        mock_blob.name = f"sports_reference/by_date/day={_DATE}/entity=fixtures/fixtures.parquet"
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = [
+            [mock_blob],  # fixture read
+            [],  # canon weather prefix check (max_results=1)
+            [],  # legacy weather blobs (max_results=10)
+        ]
+        mock_storage.download_bytes.return_value = parquet_bytes
+
+        fake_coords = {"ANFIELD": SimpleNamespace(latitude=53.43, longitude=-2.96)}
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.open_meteo.OpenMeteoAdapter",
+                mock_adapter_cls,
+            ),
+            patch("unified_api_contracts.registry.sports_venue_coordinates.VENUE_COORDINATES", new=fake_coords),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET, api_key="test-key")
+        mock_mw.record_captured_from_counts.assert_called()
+        assert result.get("weather") == 1
+
+    @pytest.mark.asyncio
+    async def test_fixture_parquet_no_venue_name_column(self) -> None:
+        """Fixture parquet without 'venue_name' column → record_empty and return."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        # Simulate a parquet blob without venue_name column
+        df_no_venue = pd.DataFrame({"fixture_id": ["123"], "date": [_DATE]})
+        buf = io.BytesIO()
+        df_no_venue.to_parquet(buf)
+        parquet_bytes = buf.getvalue()
+
+        mock_blob = MagicMock()
+        mock_blob.name = f"sports_reference/by_date/day={_DATE}/entity=fixtures/fixtures.parquet"
+
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = [mock_blob]
+        mock_storage.download_bytes.return_value = parquet_bytes
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+        ):
+            result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET)
+        assert result == {}
+        mock_mw.record_empty.assert_called()
+        mock_mw.write.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _fetch_sfi_data
+# ---------------------------------------------------------------------------
+
+
+class TestFetchSfiData:
+    """Tests for _fetch_sfi_data (lines 6950-7399)."""
+
+    @pytest.mark.asyncio
+    async def test_skip_all_leagues_captured_returns_empty(self) -> None:
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=True),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=[]),
+        ):
+            result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_non_progressive_entity_filter_skips_progressive_block(self) -> None:
+        """entity_filter other than SFI_PROGRESSIVE_STATS skips the block."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        # When _want_sfi_progressive=False, skip check is not reached
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=[]),
+        ):
+            # entity_filter="OTHER_ENTITY" → _want_sfi_progressive=False → skip check skipped
+            result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET, entity_filter="OTHER_ENTITY")
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_progressive_skip_false_adapter_returns_empty_leagues(self) -> None:
+        """Adapter returns no leagues → per-league empty write."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_leagues = AsyncMock(return_value=[])
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL"), _mk_league("LA_LIGA")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+        ):
+            result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_no_match_ids_writes_record_empty(self) -> None:
+        """No match descriptors returned → per-league record_empty (no completed matches)."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_leagues = AsyncMock(return_value=[])
+        mock_adapter.get_match_descriptors_for_date = AsyncMock(return_value=[])
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET)
+        mock_mw.record_empty.assert_called()
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_match_descriptors_exception_writes_record_failed(self) -> None:
+        """Exception in get_match_descriptors_for_date → record_failed per league."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_leagues = AsyncMock(return_value=[])
+        mock_adapter.get_match_descriptors_for_date = AsyncMock(side_effect=RuntimeError("timeout"))
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+            patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="RuntimeError"),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET)
+        mock_mw.record_failed.assert_called()
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_pre_cutoff_date_records_expected_empty(self) -> None:
+        """SFI progressive stats skipped when date is before source coverage start."""
+        from datetime import date as date_type
+
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_leagues = AsyncMock(return_value=[])
+
+        # Return a coverage start AFTER _DATE so _sfi_pp_pre_cutoff=True
+        future_floor = date_type(2027, 1, 1)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET)
+        # record_expected_empty called for the date-level + per-league rows
+        mock_mw.record_expected_empty.assert_called()
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_progressive_stats_match_loop_writes_captured(self) -> None:
+        """Progressive stats match loop: matches found + stats returned → record_captured per league."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        # get_leagues returns empty → sfi_league_ids stays []
+        mock_adapter.get_leagues = AsyncMock(return_value=[])
+        # match descriptors: one match with championship_id matching EPL's hex
+        mock_adapter.get_match_descriptors_for_date = AsyncMock(
+            return_value=[{"championship_id": "abc123", "match_id": "m1"}]
+        )
+        # progressive stats: one row
+        mock_adapter.get_progressive_stats = AsyncMock(
+            return_value=[{"timer_seconds": 1800, "match_id": "m1", "home_score": 1}]
+        )
+
+        sfi_ids = {"EPL": "abc123"}
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
+            patch("instruments_service.engine.orchestrator.SOCCER_FOOTBALL_INFO_IDS", sfi_ids),
+            patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="abc123"),
+            patch("instruments_service.engine.orchestrator._sfi_detect_match_end_time", return_value=None),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="soccer_football_info"),
+            patch("instruments_service.engine.orchestrator._write_sfi_league_mapping"),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator._maybe_emit_drift_anomaly"),
+        ):
+            result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET)
+
+        # record_captured called for EPL league
+        mock_mw.record_captured.assert_called()
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_progressive_stats_all_fetches_empty_writes_record_empty(self) -> None:
+        """Match IDs found but all per-match get_progressive_stats returns [] → record_empty SOURCE_RETURNED_ZERO."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_leagues = AsyncMock(return_value=[])
+        mock_adapter.get_match_descriptors_for_date = AsyncMock(
+            return_value=[{"championship_id": "abc123", "match_id": "m1"}]
+        )
+        # all progressive fetches return empty list
+        mock_adapter.get_progressive_stats = AsyncMock(return_value=[])
+
+        sfi_ids = {"EPL": "abc123"}
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
+            patch("instruments_service.engine.orchestrator.SOCCER_FOOTBALL_INFO_IDS", sfi_ids),
+            patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="abc123"),
+            patch("instruments_service.engine.orchestrator._sfi_detect_match_end_time", return_value=None),
+            patch("instruments_service.engine.orchestrator._write_sfi_league_mapping"),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator._maybe_emit_drift_anomaly"),
+        ):
+            result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET)
+
+        # SOURCE_RETURNED_ZERO path: record_empty called for date-level + per-league
+        mock_mw.record_empty.assert_called()
+        assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# _fetch_transfermarkt_data
+# ---------------------------------------------------------------------------
+
+
+class TestFetchTransfermarktData:
+    """Tests for _fetch_transfermarkt_data (lines 6625-6947)."""
+
+    @pytest.mark.asyncio
+    async def test_no_leagues_from_adapter_returns_empty_manifest(self) -> None:
+        """Adapter returns no leagues → empty manifest writes per expected league."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_leagues = AsyncMock(return_value=[])
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL"), _mk_league("BUNDESLIGA")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+        ):
+            result = await _fetch_transfermarkt_data(
+                date=_DATE,
+                api_key="key",
+                bucket=_BUCKET,
+                season=2025,
+            )
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_skip_all_leagues_captured_returns_empty(self) -> None:
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=True),
+        ):
+            result = await _fetch_transfermarkt_data(
+                date=_DATE,
+                api_key="key",
+                bucket=_BUCKET,
+                season=2025,
+            )
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_entity_filter_player_values_only(self) -> None:
+        """entity_filter='PLAYER_VALUES' sets _want_teams=True."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_leagues = AsyncMock(return_value=[])
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+        ):
+            result = await _fetch_transfermarkt_data(
+                date=_DATE,
+                api_key="key",
+                bucket=_BUCKET,
+                entity_filter="PLAYER_VALUES",
+                season=2025,
+            )
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_teams_returned_writes_record_captured(self) -> None:
+        """Adapter returns teams → record_captured_from_counts called for the mapped league."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_teams = AsyncMock(return_value=[{"name": "Arsenal", "team_id": "1", "squad_size": "20"}])
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator.get_prediction_leagues", return_value=[]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._read_transfermarkt_team_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="531"),
+            patch("instruments_service.engine.orchestrator._maybe_emit_drift_anomaly"),
+            patch("instruments_service.engine.orchestrator.get_expected_team_count_for_league", return_value=20),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch("instruments_service.engine.orchestrator._write_transfermarkt_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_master_append"),
+            patch("instruments_service.engine.orchestrator._write_snapshot_player_values"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_transfermarkt_data(date=_DATE, api_key="key", bucket=_BUCKET, season=2025)
+        mock_mw.record_captured_from_counts.assert_called_once()
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_teams_exception_writes_record_failed(self) -> None:
+        """Per-league exception in get_teams → record_failed + shard isolation (no raise)."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_teams = AsyncMock(side_effect=RuntimeError("API timeout"))
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator.get_prediction_leagues", return_value=[]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._read_transfermarkt_team_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="531"),
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+            patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="API_TIMEOUT"),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_transfermarkt_data(date=_DATE, api_key="key", bucket=_BUCKET, season=2025)
+        mock_mw.record_failed.assert_called_once()
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_no_triggers_emits_captured_from_cache(self) -> None:
+        """Cache hit on non-trigger date: populate _captured_league_counts from cached df."""
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+
+        # Build a fresh cached DataFrame with canonical_league and available_at columns
+        from datetime import UTC, datetime
+
+        import pandas as pd
+
+        _now = datetime.now(UTC)
+        cached_df = pd.DataFrame(
+            {
+                "canonical_league": ["EPL", "EPL", "LA_LIGA"],
+                "team_id": ["1", "2", "3"],
+                "available_at": [_now, _now, _now],
+            }
+        )
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL"), _mk_league("LA_LIGA")],
+            ),
+            patch("instruments_service.engine.orchestrator.get_prediction_leagues", return_value=[]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._read_transfermarkt_team_mapping", return_value=cached_df),
+            patch("instruments_service.engine.orchestrator._cache_is_fresh", return_value=True),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=[]),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_transfermarkt_data(date=_DATE, api_key="key", bucket=_BUCKET, season=2025)
+        # Cache hit path: record_captured_from_counts for each canonical league in cache
+        mock_mw.record_captured_from_counts.assert_called()
+        assert isinstance(result, dict)

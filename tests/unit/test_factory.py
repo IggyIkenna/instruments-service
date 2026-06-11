@@ -143,7 +143,6 @@ class TestCreateReferenceDataAdapterExtended:
         standard_venues = [
             "hyperliquid",
             "ibkr",
-            "polygon",
             "polymarket",
             "betfair",
             "tardis",
