@@ -164,9 +164,12 @@ def _derive_tradfi_pipeline_mode(class_segment: str, data_type: str) -> tuple[Pi
     return PipelineMode.BATCH_DATABENTO, "SOURCE_PRIORITY primary; pre-Massive (2026-05-28) capture"
 
 
-def _parse_instrument_key_shape(object_path: str, data_type: str) -> tuple[str, str, str] | None:
-    """Parse the pre-hive ``data_type=<dt>/<class>[/<VENUE>]/<VENUE>:<ITYPE>:<SYM>.parquet``
-    shape. Returns ``(venue, instrument_type, leaf)`` or ``None`` if not this shape."""
+def _parse_instrument_key_shape(object_path: str, data_type: str) -> tuple[str, str, str, str] | None:
+    """Parse the pre-hive ``data_type=<dt>/<class>[/<VENUE>]/<leaf>`` shape, where
+    ``<leaf>`` is either an instrument key (``<VENUE>:<ITYPE>:<SYM>.parquet``) or a
+    bare chain-root (``CORN.parquet`` under ``futures_chain/CME/``).
+
+    Returns ``(venue, instrument_type, class_segment, underlying)`` or ``None``."""
     marker = f"data_type={data_type}/"
     idx = object_path.find(marker)
     if idx < 0:
@@ -178,14 +181,25 @@ def _parse_instrument_key_shape(object_path: str, data_type: str) -> tuple[str, 
     class_segment = parts[0]
     leaf = parts[-1]
     it = _CLASS_SEGMENT_TO_INSTRUMENT_TYPE.get(class_segment)
-    if it is None or ":" not in leaf:
+    if it is None:
         return None
-    leaf_venue = leaf.split(":", 1)[0]
+    if len(parts) >= 3:
+        leaf_venue = parts[1]  # explicit venue directory level
+    elif ":" in leaf:
+        leaf_venue = leaf.split(":", 1)[0]  # venue from the instrument key
+    else:
+        return None
     # ``spot/`` FX pairs: the leaf venue token is the SOURCE (YAHOO_FINANCE), not a
     # trading venue — the manifested venue for this corpus is ``FX`` (1,967 captured
     # (FX, spot_pair, ohlcv_24h) cells; code reads venue=FX).
     venue = "FX" if class_segment == "spot" else leaf_venue
-    return venue, it, class_segment
+    # Chain classes with a bare-root leaf carry the UNDERLYING as the leaf stem
+    # (``futures_chain/CME/CORN.parquet`` → underlying=CORN), mirroring the hive
+    # twin shape (``.../data_type=ohlcv_1m/underlying=ES/...``).
+    underlying = ""
+    if class_segment in ("futures_chain", "options_chain") and ":" not in leaf:
+        underlying = leaf.rsplit(".", 1)[0]
+    return venue, it, class_segment, underlying
 
 
 def characterize_object(
@@ -225,11 +239,20 @@ def characterize_object(
     # --- per-asset-group characterisation ----------------------------------------
     if ag == "defi":
         if pm is None:
-            # The Solana DeFi capture path stamps BATCH_ONCHAIN_RPC on every manifest
-            # write (mtds ``cli/handlers/solana_defi_handler.py:440``) — that handler
-            # is the code use-case for dex_pools / lending_indices / lst_rates.
-            pm = PipelineMode.BATCH_ONCHAIN_RPC
-            evidence = "mtds solana_defi_handler stamps BATCH_ONCHAIN_RPC for this corpus"
+            # Registry-first: when UAC SOURCE_PRIORITY registers the (defi, data_type)
+            # pair, its primary source is THE write-gate-coherent stamp (the writer's
+            # MissingSourceError / PipelineModeSourceMismatchError gates enforce it —
+            # lending_indices / lst_rates → onchain_subgraph). Unregistered data_types
+            # (dex_pools) fall back to the Solana capture handler's stamp
+            # (mtds ``cli/handlers/solana_defi_handler.py:440`` → BATCH_ONCHAIN_RPC).
+            from unified_api_contracts import read_with_source_priority
+
+            try:
+                _src, pm = read_with_source_priority(ag, data_type)
+                evidence = f"UAC SOURCE_PRIORITY primary source for (defi, {data_type})"
+            except KeyError:
+                pm = PipelineMode.BATCH_ONCHAIN_RPC
+                evidence = "unregistered in SOURCE_PRIORITY; mtds solana_defi_handler stamps BATCH_ONCHAIN_RPC"
         if not venue or not chain or not instrument_type:
             return None, f"defi orphan missing venue/chain/instrument_type ({venue!r}/{chain!r}/{instrument_type!r})"
     elif ag == "tradfi":
@@ -237,7 +260,8 @@ def characterize_object(
             parsed = _parse_instrument_key_shape(object_path, data_type)
             if parsed is None:
                 return None, "blank-venue tradfi object in an unrecognised path shape"
-            venue, instrument_type, class_segment = parsed
+            venue, instrument_type, class_segment, parsed_underlying = parsed
+            underlying = underlying or parsed_underlying
         if pm is None:
             pm, evidence = _derive_tradfi_pipeline_mode(class_segment, data_type)
         if not instrument_type:
@@ -410,7 +434,9 @@ class ConvertResult:
     df: object | None = None  # representative frame (kept for the first object per cell)
 
 
-def convert_object(plan: OrphanPlan, asset_group: str, bucket: str, *, apply: bool, keep_df: bool) -> ConvertResult:
+def convert_object(
+    plan: OrphanPlan, asset_group: str, bucket: str, *, apply: bool, keep_df: bool, overwrite: bool = False
+) -> ConvertResult:
     """Download + canonicalise + (apply) upload ONE orphan. Never touches the source
     object. Shard-isolated: every failure is captured on the result, never raised."""
     from unified_trading_library import get_storage_client
@@ -437,7 +463,7 @@ def convert_object(plan: OrphanPlan, asset_group: str, bucket: str, *, apply: bo
         )
         uploaded = False
         if plan.status == "CONVERT" and apply:
-            if not client.blob_exists(bucket, plan.target.dest_path):  # type: ignore[attr-defined]
+            if overwrite or not client.blob_exists(bucket, plan.target.dest_path):  # type: ignore[attr-defined]
                 buf = io.BytesIO()
                 canonical_df.to_parquet(buf, index=False)  # type: ignore[attr-defined]
                 buf.seek(0)
@@ -530,8 +556,20 @@ def record_cells(
     if not apply:
         logger.info("[dry-run] would record_captured %d cells", len(by_cell))
         return 0, []
+    # strict_validation=False (warn-only) — the sanctioned backfill mode per the
+    # UnifiedCloudConfig.manifest_strict_schema_validation docstring ("set ... false
+    # ... if a backfill needs to push through"). Rationale: the UTL row-contract
+    # registry models the EVM defi variants (ts_event / supply_rate / price_a ...)
+    # while these historical footers are the SOLANA variants that the UAC CF-18
+    # SchemaSpecs (footer-derived, R2 2026-06-11) declare canonical — the mismatch
+    # still logs MANIFEST_WRITE_SCHEMA_MISMATCH (visible), and the manifest row
+    # truthfully reflects the on-disk parquet.
     writer = ManifestWriter(
-        service_name="instruments-service", catalogue_bucket=bucket, per_vm_shards=True, batch_size=200
+        service_name="instruments-service",
+        catalogue_bucket=bucket,
+        per_vm_shards=True,
+        batch_size=200,
+        strict_validation=False,
     )
     errors: list[str] = []
     recorded = 0
@@ -672,6 +710,11 @@ def main(argv: list[str] | None = None) -> int:
         "--report-uri", default="", help="orphan_sweep report parquet (default: the AG's _index/audit path)"
     )
     parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="re-upload destination objects even when they exist (re-run after a SchemaSpec alias extension)",
+    )
     parser.add_argument("--limit", type=int, default=None, help="cap processed orphans (smoke)")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--dry-run", action="store_true")
@@ -679,6 +722,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     ag = args.asset_group
+    # M-COORD-6: the ManifestWriter validation path emits events — init first
+    # (batch mode requires an explicit GcsEventSink; UnifiedCloudConfig owns the
+    # project id — no os.getenv).
+    from unified_trading_library import GcsEventSink, UnifiedCloudConfig, setup_events
+
+    project_id = UnifiedCloudConfig().gcp_project_id
+    setup_events(
+        service_name="instruments-service",
+        mode="batch",
+        sink=GcsEventSink(project_id=project_id, bucket=f"{project_id}-events", service_name="instruments-service"),
+    )
     bucket = _sweep._resolve_bucket(ag, args.cloud)
     report_uri = args.report_uri or f"gs://{bucket}/_index/audit/orphan_sweep_{ag}.parquet"
 
@@ -731,7 +785,7 @@ def main(argv: list[str] | None = None) -> int:
     results: list[ConvertResult] = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [
-            pool.submit(convert_object, p, ag, bucket, apply=args.apply, keep_df=keep)
+            pool.submit(convert_object, p, ag, bucket, apply=args.apply, keep_df=keep, overwrite=args.overwrite)
             for p, keep in zip(to_convert, keep_flags, strict=True)
         ]
         for i, fut in enumerate(futures, start=1):

@@ -33,11 +33,12 @@ enumerator_module = _load_enumerator_module()
 _derive = enumerator_module._derive_pm_source_transport
 
 
-def test_tradfi_trades_seed_carries_databento_batch_rest() -> None:
-    """TradFi trades primary external source = databento → batch_databento / rest."""
+def test_tradfi_trades_seed_carries_massive_batch_rest() -> None:
+    """TradFi trades primary external source = massive → batch_massive / rest
+    (MASSIVE-FIRST per operator ratification 2026-06-11; databento secondary)."""
     pm, source, transport = _derive("tradfi", "trades")
-    assert pm == "batch_databento"
-    assert source == "databento"
+    assert pm == "batch_massive"
+    assert source == "massive"
     assert transport == "rest"
 
 

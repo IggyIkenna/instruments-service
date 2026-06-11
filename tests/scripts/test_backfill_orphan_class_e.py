@@ -36,7 +36,10 @@ _mod = _load_script()
 
 
 class TestCharacterizeDefi:
-    def test_solana_legacy_orphan_maps_to_onchain_rpc(self) -> None:
+    def test_registered_data_type_uses_source_priority_primary(self) -> None:
+        # (defi, lending_indices) is registered in UAC SOURCE_PRIORITY → its primary
+        # source (onchain_subgraph) is the write-gate-coherent stamp (MissingSourceError
+        # rejects anything else — proven on the first defi --apply 2026-06-11).
         obj = (
             "raw_tick_data/by_date/day=2022-11-01/asset_group=defi/venue=KAMINO/chain=SOLANA/"
             "instrument_type=lending/data_type=lending_indices/kamino_lending_SOLANA_20260504.parquet"
@@ -47,15 +50,27 @@ class TestCharacterizeDefi:
         assert target.venue == "KAMINO"
         assert target.chain == "SOLANA"
         assert target.instrument_type == "lending"
-        assert target.pipeline_mode == PipelineMode.BATCH_ONCHAIN_RPC
+        assert target.pipeline_mode == PipelineMode.BATCH_ONCHAIN_SUBGRAPH
         assert target.dest_path == (
-            "raw_tick_data/by_date/day=2022-11-01/pipeline_mode=batch_onchain_rpc/asset_group=defi/"
+            "raw_tick_data/by_date/day=2022-11-01/pipeline_mode=batch_onchain_subgraph/asset_group=defi/"
             "venue=KAMINO/chain=SOLANA/instrument_type=lending/data_type=lending_indices/"
             "kamino_lending_SOLANA_20260504.parquet"
         )
 
+    def test_unregistered_data_type_falls_back_to_onchain_rpc(self) -> None:
+        # (defi, dex_pools) has no SOURCE_PRIORITY entry → the Solana capture handler's
+        # stamp (mtds solana_defi_handler → BATCH_ONCHAIN_RPC) is the evidence.
+        obj = (
+            "raw_tick_data/by_date/day=2022-11-01/asset_group=defi/venue=ORCA/chain=SOLANA/"
+            "instrument_type=pool/data_type=dex_pools/orca_SOLANA_20260504.parquet"
+        )
+        target, reason = _mod.characterize_object("defi", obj)
+        assert reason == ""
+        assert target is not None
+        assert target.pipeline_mode == PipelineMode.BATCH_ONCHAIN_RPC
+
     def test_defi_missing_chain_escalates(self) -> None:
-        obj = "raw_tick_data/by_date/day=2022-11-01/asset_group=defi/venue=ORCA/instrument_type=pool/data_type=dex_pools/x.parquet"
+        obj = "raw_tick_data/by_date/day=2022-11-01/asset_group=defi/venue=SOMEPOOL/instrument_type=pool/data_type=dex_pools/x.parquet"
         target, reason = _mod.characterize_object("defi", obj)
         assert target is None
         assert "chain" in reason
@@ -243,3 +258,28 @@ class TestPlanGrouping:
             "ES",
             "batch_databento",
         )
+
+
+class TestInstrumentKeyVenueDirShapes:
+    def test_chain_root_leaf_with_venue_dir(self) -> None:
+        # futures_chain/CME/CORN.parquet — venue from the directory, underlying from
+        # the bare chain-root leaf
+        obj = "raw_tick_data/by_date/day=2025-01-06/data_type=ohlcv_1m/futures_chain/CME/CORN.parquet"
+        target, reason = _mod.characterize_object("tradfi", obj)
+        assert reason == ""
+        assert target is not None
+        assert target.venue == "CME"
+        assert target.instrument_type == "futures_chain"
+        assert target.underlying == "CORN"
+        assert target.pipeline_mode == PipelineMode.BATCH_DATABENTO
+        assert target.dest_path == (
+            "raw_tick_data/by_date/day=2025-01-06/pipeline_mode=batch_databento/asset_group=tradfi/"
+            "venue=CME/instrument_type=futures_chain/data_type=ohlcv_1m/underlying=CORN/CORN.parquet"
+        )
+
+    def test_bare_root_leaf_without_venue_dir_escalates(self) -> None:
+        # no venue directory + no instrument key → identity unknown → escalate
+        obj = "raw_tick_data/by_date/day=2025-01-06/data_type=ohlcv_1m/futures_chain/CORN.parquet"
+        target, reason = _mod.characterize_object("tradfi", obj)
+        assert target is None
+        assert "unrecognised path shape" in reason
