@@ -311,3 +311,66 @@ class TestR1MatcherRefinements:
             "instrument_type=pool/data_type=dex_pools/orca.parquet"
         )
         assert _mod._taxonomy_label(obj) == "service-data"
+
+
+class TestLegacyInstrumentTypeCanonicalisation:
+    """R1 2026-06-11: legacy instrument_type vocabulary canonicalised for coverage
+    matching (tradfi plural ``equities``; prediction underlying-in-the-IT-slot)."""
+
+    def test_equities_plural_maps_to_equity(self) -> None:
+        assert _mod.canonical_match_instrument_type("tradfi", "equities") == "equity"
+
+    def test_prediction_legacy_underlying_token_maps_to_market_grain(self) -> None:
+        for token in ("BTC", "ETH", "SOL", "XRP", "DOGE", "OTHER"):
+            assert _mod.canonical_match_instrument_type("prediction", token) == "prediction_market"
+
+    def test_canonical_tokens_pass_through(self) -> None:
+        assert _mod.canonical_match_instrument_type("cefi", "perpetual") == "perpetual"
+        assert _mod.canonical_match_instrument_type("prediction", "prediction_market") == "prediction_market"
+        assert _mod.canonical_match_instrument_type("prediction", "") == ""
+
+    def test_prediction_legacy_object_covered_by_canonical_cell(self) -> None:
+        # the residual prediction E=34 class: a legacy ``category=`` object carrying
+        # instrument_type=BTC must read as covered once the canonical
+        # (POLYMARKET, POLYGON, prediction_market) cell is recorded
+        rows = [
+            {
+                "asset_group": "prediction",
+                "venue": "POLYMARKET",
+                "chain": "POLYGON",
+                "instrument_type": "prediction_market",
+                "data_type": "prediction_trades",
+                "date": "2025-03-27",
+                "capture_status": "captured",
+            }
+        ]
+        index = _mod.build_covered_index(rows)
+        obj = (
+            "raw_tick_data/by_date/day=2025-03-27/category=prediction/venue=POLYMARKET/"
+            "instrument_type=BTC/data_type=prediction_trades/ticks.parquet"
+        )
+        cls, _key, _reason = _mod.classify_object(obj, "prediction", index, is_parquet=True, row_count=500)
+        assert cls == OC.LEGACY_DUPLICATE
+
+    def test_tradfi_equities_canonical_twin_covered_by_equity_cell(self) -> None:
+        # canonical-shaped twin whose preserved hive tail carries the legacy plural —
+        # must read as covered (class A) by the ``equity``-keyed manifest row
+        rows = [
+            {
+                "asset_group": "tradfi",
+                "venue": "NYSE",
+                "chain": "",
+                "instrument_type": "equity",
+                "data_type": "ohlcv_1m",
+                "date": "2024-01-02",
+                "capture_status": "captured",
+            }
+        ]
+        index = _mod.build_covered_index(rows)
+        obj = (
+            "raw_tick_data/by_date/day=2024-01-02/pipeline_mode=batch_databento/asset_group=tradfi/"
+            "venue=NYSE/instrument_type=equity/data_type=ohlcv_1m/instrument_type=equities/venue=NYSE/"
+            "NYSE:EQUITY:ABBV-USD_migrated.parquet"
+        )
+        cls, _key, _reason = _mod.classify_object(obj, "tradfi", index, is_parquet=True, row_count=10)
+        assert cls == OC.CANONICAL_MANIFESTED
