@@ -85,6 +85,23 @@ class ObjectClass(StrEnum):
 # raw-tick orphans (the smoke 2026-06-10 surfaced 7,946 processed-candle objects mis-read
 # as class-E before this label existed). They have their own re-runnable sweep.
 _DATA_PREFIXES: tuple[str, ...] = ("raw_tick_data/", "day=")
+# TOP-LEVEL-ONLY labels (matched via ``startswith`` exclusively — never substring,
+# because tokens like ``dex_pools``/``lending_indices`` also appear as hive VALUES
+# (``data_type=dex_pools``) deeper in real data paths). R1 2026-06-11 additions:
+#   * ``dex_pools/`` + ``lending_indices/`` — the DeFi legacy top-level trees from the
+#     ``solana_defi_legacy_migration_2026_05_27`` plan (own corpora, migrated by the
+#     gated G4 defi walk; understood + never raw-tick-deleted).
+#   * ``_manifests/`` — legacy manifest infra (pre ``_index/`` vocabulary).
+#   * ``configs/`` — service config artifacts co-located in the AG buckets.
+#   * ``databento-batch-registry/`` — the tradfi Databento batch-job registry
+#     (vendor job metadata, not market data).
+_NON_DATA_TOP_LEVEL_LABELS: dict[str, str] = {
+    "_manifests/": "manifest-infra",
+    "configs/": "configs",
+    "dex_pools/": "legacy-data",
+    "lending_indices/": "legacy-data",
+    "databento-batch-registry/": "vendor-registry",
+}
 _NON_DATA_PREFIX_LABELS: dict[str, str] = {
     "_index/": "manifest-infra",
     "snapshots/": "manifest-infra",
@@ -190,6 +207,10 @@ def _prefix_label(object_path: str) -> str | None:
     for suffix in _INFRA_SUFFIXES:
         if object_path.endswith(suffix):
             return "manifest-infra"
+    # TOP-LEVEL-ONLY labels first (never substring — see _NON_DATA_TOP_LEVEL_LABELS).
+    for prefix, label in _NON_DATA_TOP_LEVEL_LABELS.items():
+        if object_path.startswith(prefix):
+            return label
     for prefix, label in _NON_DATA_PREFIX_LABELS.items():
         if object_path.startswith(prefix) or f"/{prefix}" in object_path:
             return label
@@ -266,7 +287,17 @@ CoveredIndex = dict[tuple[str, str], set[tuple[str, str, str]]]
 
 
 def _norm_v(value: str) -> str:
-    return value.upper()
+    """Venue/chain token normalisation for COVERAGE MATCHING only.
+
+    Venue spelling drifted across writer generations — the 2026-04 migration +
+    its manifest rows spell ``UNISWAPV3`` / ``AAVEV3`` (and combined
+    ``UNISWAPV2-ETHEREUM``) while the legacy ``category=`` object paths + the UAC
+    canonical registry spell ``UNISWAP_V3`` / ``AAVE_V3`` (R1 finding 2026-06-11:
+    254,812 of the 254,984 defi class-E were this venue-token split, every cell
+    exactly manifested under the no-underscore spelling). Separator characters
+    carry no venue identity in this corpus, so the match collapses them; the
+    canonical SPELLING fix on the manifest rows rides the per-AG G4 rebuild walk."""
+    return value.upper().replace("_", "").replace("-", "")
 
 
 def _norm_it(value: str) -> str:
@@ -281,16 +312,42 @@ def is_covered(index: CoveredIndex, key: ShardKey, day: str) -> bool:
     An object ``(venue, chain, instrument_type)`` is covered iff the ``(day, data_type)``
     bucket contains a captured pattern whose non-blank fields all equal the object's —
     i.e. ANY of the 8 blank-combinations of (venue, chain, instrument_type) is present
-    (a fixed-cost lookup, not an O(patterns) scan)."""
+    (a fixed-cost lookup, not an O(patterns) scan).
+
+    GRAIN ALSO RUNS THE OTHER WAY (R1 refinement 2026-06-11): legacy object paths
+    predate the ``chain=`` / ``instrument_type=`` axes (e.g.
+    ``category=tradfi/venue=NYSE/data_type=ohlcv_1m/ABBV.parquet``) while the
+    manifest row for the SAME corpus is keyed FINER
+    (``(NYSE, '', 'equity')`` — prediction's ``(POLYMARKET, POLYGON,
+    'prediction_market')`` likewise). A blank OBJECT ``chain``/``instrument_type``
+    therefore matches a manifested pattern with ANY value in that slot. ``venue``
+    is IDENTITY and is never object-wildcarded — a blank-venue object stays
+    uncovered (class E) and routes to the backfill characterizer, which derives
+    the venue from the non-hive path segments instead of guessing."""
     bucket = index.get((day, _norm_it(key.data_type)))
     if not bucket:
         return False
     v, c, it = _norm_v(key.venue), _norm_v(key.chain), _norm_it(key.instrument_type)
+    if not v:
+        return False
     for mv in (v, ""):
         for mc in (c, ""):
             for mit in (it, ""):
                 if (mv, mc, mit) in bucket:
                     return True
+    # Slow path: object-blank chain/instrument_type wildcard (manifest finer than the
+    # legacy path). Buckets are small (per (day, data_type) pattern sets), so a linear
+    # scan here is fixed-cost in practice and only runs when the fast path missed.
+    if c and it:
+        return False
+    for mv, mc, mit in bucket:
+        if mv not in (v, ""):
+            continue
+        if c and mc not in (c, ""):
+            continue
+        if it and mit not in (it, ""):
+            continue
+        return True
     return False
 
 
