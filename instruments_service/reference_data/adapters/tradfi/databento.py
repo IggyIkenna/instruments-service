@@ -570,9 +570,12 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         if vf in (None, "FX"):
             results.extend(self._create_fx_spot_records())
 
-        # 3b. Static Yahoo Finance indices — only for CBOE venue (VIX etc.)
-        if vf in (None, "CBOE"):
-            results.extend(self._create_yahoo_index_records())
+        # 3b. Static Yahoo Finance indices — venue-driven (CBOE=VIX, ICE=DXY, …)
+        from unified_api_contracts.registry import YAHOO_INDICES as _YAHOO_INDICES
+
+        _yahoo_venues = {idx.venue for idx in _YAHOO_INDICES}
+        if vf is None or vf in _yahoo_venues:
+            results.extend(self._create_yahoo_index_records(venue_filter=vf))
 
         # 4. Enrich with session metadata (trading hours, holidays, early closes)
         self._enrich_session_metadata(results)
@@ -946,12 +949,17 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             )
         return records
 
-    def _create_yahoo_index_records(self) -> list[InstrumentRecord]:
-        """Create static InstrumentRecords for Yahoo Finance indices (VIX, etc.)."""
+    def _create_yahoo_index_records(self, venue_filter: str | None = None) -> list[InstrumentRecord]:
+        """Create static InstrumentRecords for Yahoo Finance indices (VIX, DXY, etc.).
+
+        venue_filter=None returns all indices; otherwise only those for the given venue.
+        """
         from unified_api_contracts.registry import YAHOO_INDICES
 
         records: list[InstrumentRecord] = []
         for idx in YAHOO_INDICES:
+            if venue_filter is not None and idx.venue != venue_filter:
+                continue
             # Resolve timezone from exchange hours config (same as Databento-sourced instruments)
             venue_hours = _EXCHANGE_HOURS.get(idx.venue)
             tz = venue_hours["tz"] if venue_hours and venue_hours.get("tz") else "UTC"
