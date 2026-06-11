@@ -26,6 +26,25 @@ from instruments_service.engine.orchestrator import (
 )
 
 
+def _orchestrator_package_source() -> str:
+    """Concatenated source of the orchestrator package + all cohesion submodules.
+
+    The former monolithic ``engine/orchestrator.py`` was split into the
+    ``engine/orchestrator/`` package (codex_violations_ratchet_to_five_2026_06_10);
+    source-scan regression tests must see the WHOLE package, not just
+    ``__init__.py``, to keep their protective power.
+    """
+    import inspect
+    import pkgutil
+
+    from instruments_service.engine import orchestrator
+
+    sources = [inspect.getsource(orchestrator)]
+    for mod_info in pkgutil.iter_modules(orchestrator.__path__):
+        sources.append(inspect.getsource(getattr(orchestrator, mod_info.name)))
+    return "\n".join(sources)
+
+
 def _make_record(
     instrument_key: str = "TEST",
     venue: str = "TEST-VENUE",
@@ -442,11 +461,7 @@ class TestGetLeaguesNeedingRefreshImportScope:
         any helper would silently shadow the module-level name and trigger
         UnboundLocalError on alternative code paths.
         """
-        import inspect
-
-        from instruments_service.engine import orchestrator
-
-        src = inspect.getsource(orchestrator)
+        src = _orchestrator_package_source()
         # Strip the single authoritative module-level import block before scanning.
         # The module-level import lives in a ``from unified_api_contracts.sports import (`` block.
         lines = src.splitlines()
@@ -499,11 +514,7 @@ class TestRecoveryFixtureIdsBypassBug:
         with ``--entity FIXTURE_STATS --recovery-fixture-ids <parquet>`` on a date
         where GCS has no completed fixtures will exit in ~22s with zero data written.
         """
-        import inspect
-
-        from instruments_service.engine import orchestrator
-
-        src = inspect.getsource(orchestrator)
+        src = _orchestrator_package_source()
         assert "not gcs_fixture_ids and not recovery_fixture_ids" in src, (
             "The _skip_urdi early-exit must guard against recovery_fixture_ids. "
             "Pattern 'not gcs_fixture_ids and not recovery_fixture_ids' missing - "
@@ -518,11 +529,7 @@ class TestRecoveryFixtureIdsBypassBug:
         If this guard is missing, zero-fixture dates with --recovery-fixture-ids
         silently skip all per-fixture entity fetches.
         """
-        import inspect
-
-        from instruments_service.engine import orchestrator
-
-        src = inspect.getsource(orchestrator)
+        src = _orchestrator_package_source()
         assert "list(recovery_fixture_ids) if recovery_fixture_ids else []" in src, (
             "Zero-fixture path must use recovery_fixture_ids as fixture_ids_override. "
             "Pattern 'list(recovery_fixture_ids) if recovery_fixture_ids else []' missing - "
