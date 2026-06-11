@@ -753,3 +753,42 @@ def test_derivatives_only_classifies_kraken_futures() -> None:
 
     for exch in ("cryptofacilities", "okex-futures", "okex-swap", "huobi-dm", "bitfinex-derivatives", "bitget-futures"):
         assert exch in _DERIVATIVES_ONLY_EXCHANGES, f"derivatives-only Tardis exchange {exch!r} not classified"
+
+
+# ---------------------------------------------------------------------------
+# Yahoo index venue-filter tests (DXY + VIX)
+# ---------------------------------------------------------------------------
+
+
+def test_create_yahoo_index_records_no_filter_returns_all() -> None:
+    """venue_filter=None returns one record per YAHOO_INDICES entry (VIX + DXY)."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_yahoo_index_records(venue_filter=None)
+    keys = {r.instrument_key for r in records}
+    assert "CBOE:INDEX:VIX" in keys
+    assert "ICE:INDEX:DXY" in keys
+
+
+def test_create_yahoo_index_records_cboe_filter_returns_only_vix() -> None:
+    """venue_filter='CBOE' returns only the VIX record, not DXY."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_yahoo_index_records(venue_filter="CBOE")
+    keys = {r.instrument_key for r in records}
+    assert "CBOE:INDEX:VIX" in keys
+    assert "ICE:INDEX:DXY" not in keys
+
+
+def test_create_yahoo_index_records_ice_filter_returns_only_dxy() -> None:
+    """venue_filter='ICE' returns only the DXY record, not VIX."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_yahoo_index_records(venue_filter="ICE")
+    keys = {r.instrument_key for r in records}
+    assert "ICE:INDEX:DXY" in keys
+    assert "CBOE:INDEX:VIX" not in keys
+
+
+def test_create_yahoo_index_records_unknown_venue_returns_empty() -> None:
+    """venue_filter with an unknown venue returns an empty list."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_yahoo_index_records(venue_filter="UNKNOWN_VENUE")
+    assert records == []
