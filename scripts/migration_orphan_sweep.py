@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 _PARSER_CACHE: list[object] = []
 
 
-def _backfill_parser() -> "Callable[[str, str], tuple[str, str, str, str] | None]":
+def _backfill_parser() -> Callable[[str, str], tuple[str, str, str, str] | None]:
     """The pre-hive instrument-key parser, loaded from the sibling backfill script so
     the path grammar stays single-source (``scripts/`` is not a package — same
     importlib pattern as ``tests/scripts/``)."""
@@ -476,6 +476,21 @@ class SizingRollup:
 # ---------------------------------------------------------------------------
 
 
+def _footer_row_count(blob: object) -> int | None:
+    """Parquet footer ``num_rows`` for a small blob (whole-object download — only
+    called for <256KB would-be-(E) candidates). ``None`` on any read/parse failure
+    (the caller then keeps the safe non-zero assumption → object stays (E))."""
+    import io
+
+    import pyarrow.parquet as pq
+
+    try:
+        data = blob.download_as_bytes()  # type: ignore[attr-defined]
+        return int(pq.ParquetFile(io.BytesIO(data)).metadata.num_rows)
+    except Exception:
+        return None
+
+
 def _resolve_bucket(asset_group: str, cloud: str = "gcp") -> str:
     """Resolve the canonical raw-tick bucket for an asset_group via the bucket-name SSOT.
     Mirrors ``reconcile_phantom_manifest_rows_all._BUCKET_KIND_MAP``."""
@@ -526,6 +541,16 @@ def run_sweep(
         prefix_taxonomy[_taxonomy_label(name)] += 1
         is_parquet = name.endswith(".parquet")
         cls, key, reason = classify_object(name, asset_group, manifested, is_parquet=is_parquet, row_count=None)
+        # The lazy footer read the docstring promises (implemented R1 close-out
+        # 2026-06-11): a would-be-(E) object with no row evidence may be a 0-row
+        # schema shell (e.g. weekend equity days — footer num_rows=0, ~4KB), which
+        # is class (D) junk, not a backfill target. Only small objects can be
+        # 0-row shells, so the read is bounded to <256KB candidates — large
+        # objects are certainly rows>0 and stay (E) without a read.
+        if cls is ObjectClass.ORPHAN_REAL and int(getattr(blob, "size", 0) or 0) < 262144:
+            rows = _footer_row_count(blob)
+            if rows == 0:
+                cls, reason = ObjectClass.JUNK, "zero-row object with no manifest row (footer-read)"
         class_counts[cls.value] += 1
         segs = parse_hive_segments(name)
         pm = segs.get("pipeline_mode", "")
