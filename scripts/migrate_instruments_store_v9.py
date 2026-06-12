@@ -482,7 +482,16 @@ def _utc_stamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def migrate(asset_group: str, *, start_date: str, end_date: str, workers: int, apply: bool, skip_objects: bool) -> int:
+def migrate(
+    asset_group: str,
+    *,
+    start_date: str,
+    end_date: str,
+    workers: int,
+    apply: bool,
+    skip_objects: bool,
+    projection_out: str = "",
+) -> int:
     from unified_trading_library.cloud_interface import get_storage_client  # noqa: qg-deep-import
 
     dry_run = not apply
@@ -505,6 +514,14 @@ def migrate(asset_group: str, *, start_date: str, end_date: str, workers: int, a
         _snapshot_and_write_index(storage, bucket, raw_old, new_df, _utc_stamp())
     else:
         logger.info("DRY-RUN — _index NOT written (use --apply on a VM, GATED).")
+        if projection_out:
+            # CF-20/V5: materialize the projected v9 _index for the beta data-status
+            # render + manifest_diff. SAFETY: never the live index object.
+            pb, _, pblob = projection_out.removeprefix("gs://").partition("/")
+            if pblob == INDEX_REL and "-prd-" in pb:
+                raise SystemExit("--projection-out refuses the LIVE prd index object")
+            storage.upload_from_file_obj(pb, pblob, _write_parquet_obj(new_df), content_type="application/octet-stream")
+            logger.info("projected v9 _index written: gs://%s/%s (%d rows)", pb, pblob, len(new_df))
 
     # Phase B — object-path v9 rewrite (CF-2/CF-3 path keys; additive server-side copy).
     if not skip_objects:
@@ -526,6 +543,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", type=int, default=64)
     ap.add_argument("--apply", action="store_true", help="GATED (G4): write the _index + copy objects on a VM")
     ap.add_argument("--skip-objects", action="store_true", help="index-only run (skip the object-path walk)")
+    ap.add_argument(
+        "--projection-out",
+        default="",
+        help=(
+            "CF-20/V5: with dry-run, write the projected v9 _index parquet to this gs:// URI "
+            "(e.g. gs://instruments-store-<ag>-prd-.../_index/audit/projected_index_<ag>.parquet)"
+        ),
+    )
     args = ap.parse_args(argv)
     return migrate(
         args.asset_group,
@@ -534,6 +559,7 @@ def main(argv: list[str] | None = None) -> int:
         workers=args.workers,
         apply=args.apply,
         skip_objects=args.skip_objects,
+        projection_out=args.projection_out,
     )
 
 
