@@ -1124,4 +1124,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Cloud Run / Cloud Logging splits the default multi-line stderr traceback
+    # into per-line entries and drops the tail — every failed lifecycle-catalogue-regen
+    # run truncated at the ``run_rollup(`` call frame, hiding the real exception
+    # (R6, plan proper_instrument_catalogue_lifecycle_rollup §R6). Re-log any uncaught
+    # error via ``logger.exception`` so it lands as ONE structured record (full
+    # traceback in a single field) + flush, surfacing the actual cause.
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        logger.exception("build_instrument_catalogue FAILED — full traceback follows")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        raise
