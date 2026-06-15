@@ -143,6 +143,12 @@ extraPaths = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# -p no:network-block: disable UAC entry-point auto-registration; conftest.py loads
+# the plugin explicitly via pytest_plugins so there is no double-registration.
+# (Consolidated from the deleted pytest.ini, 2026-06-15 — toml is the single home.)
+addopts = "-p no:network-block"
 asyncio_mode = "auto"
 markers = [
     "unit: mark test as unit test",
@@ -150,6 +156,7 @@ markers = [
     "e2e: end-to-end test writing real data — requires IS_TEST_RUN=true and real GCP project",
     "live: requires live external API access or real GCP credentials — skipped in CI",
     "smoke: mark test as smoke test",
+    "asyncio: Async tests (pytest-asyncio)",
 ]
 
 [tool.coverage.run]
