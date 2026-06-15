@@ -17,6 +17,7 @@ from unified_api_contracts.registry.capability_declarations._defi import (
 from .adapters.cefi.aster import AsterReferenceDataAdapter
 from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
 from .adapters.cefi.deribit_combo_adapter import DeribitComboReferenceDataAdapter
+from .adapters.cefi.deribit_options_adapter import DeribitOptionsReferenceDataAdapter
 from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
@@ -103,6 +104,9 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     # DERIBIT-COMBO: live multi-leg options strategy fetch via Deribit public REST API.
     # Batch (historical) combo instruments come via the Tardis adapter (DERIBIT → tardis).
     "DERIBIT-COMBO": "deribit_combo",
+    # DERIBIT-OPTIONS: live option-chain enumeration + mark IV via Deribit public REST.
+    # Historical option data comes via the Tardis adapter (DERIBIT → tardis).
+    "DERIBIT-OPTIONS": "deribit_options",
     "COINBASE-SPOT": "tardis",
     "UPBIT": "tardis",
     # Tier-3 CeFi (added 2026-05-01) — Tardis archives spot + perp/dated futures.
@@ -273,6 +277,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "api_football": ApiFootballReferenceDataAdapter,
     "aster": AsterReferenceDataAdapter,
     "deribit_combo": DeribitComboReferenceDataAdapter,
+    "deribit_options": DeribitOptionsReferenceDataAdapter,
     "balancer": BalancerReferenceDataAdapter,
     "beefy": BeefyReferenceDataAdapter,
     "benqi": BenqiReferenceDataAdapter,
@@ -367,6 +372,8 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "betfair": "betfair",
     # Deribit combo: public REST endpoint, no API key needed
     "deribit_combo": "",
+    # Deribit options: public REST endpoint (get_instruments + ticker), no API key needed
+    "deribit_options": "",
     # EigenLayer / EtherFi governance — on-chain, no API key needed
     "eigenlayer": "",
     "ethfi_governance": "",
