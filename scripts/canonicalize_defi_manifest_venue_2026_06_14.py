@@ -77,7 +77,7 @@ def _canonical_venue(vm: VenueMapping, canon: frozenset[str], venue: str, chain:
             return direct
     try:
         return str(vm.normalize_defi_venue(venue, chain if chain.strip() else None))
-    except Exception:  # noqa: BLE001 — unknown venue surfaced unchanged, never raised
+    except Exception:
         return venue
 
 
@@ -105,7 +105,7 @@ def _process_bucket(bucket: str, *, apply: bool, projection_out: bool) -> None:
     logger.info("── gs://%s/%s ──", bucket, LIVE_BLOB)
     try:
         raw = client.download_bytes(bucket, LIVE_BLOB)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("  skip — no live _index (%s)", exc)
         return
     df = pd.read_parquet(io.BytesIO(raw))
