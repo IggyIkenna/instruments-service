@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 
@@ -114,7 +114,7 @@ def _print_report(report: list[dict[str, object]]) -> None:
     for r in report:
         print(
             f"{r['data_type']:<22} {r['provider']:<18} "
-            f"{str(r['start']):>12} {str(r['end']):>12} {r['failed_dates']:>14,}"
+            f"{r['start']!s:>12} {r['end']!s:>12} {r['failed_dates']:>14,}"
         )
     print()
     total = sum(int(str(r["failed_dates"])) for r in report)
@@ -133,8 +133,8 @@ def _print_launch_commands(
     print("=" * 82)
     print("LAUNCH COMMANDS — run from workspace root:")
     print("=" * 82)
-    print(f"# Ensure tarball is up-to-date first:")
-    print(f"# bash deployment-service/scripts/vm/create-code-tarballs.sh --include instruments-service")
+    print("# Ensure tarball is up-to-date first:")
+    print("# bash deployment-service/scripts/vm/create-code-tarballs.sh --include instruments-service")
     print()
 
     for r in report:
