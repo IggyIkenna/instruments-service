@@ -92,9 +92,14 @@ _TYPE_MAP: dict[str, InstrumentType] = {
 # SSOT, classify the newly-included derivatives-only Tardis exchange ids (unambiguous
 # -futures / -swap / -derivatives / -dm / cryptofacilities-=-Kraken-Futures suffixes)
 # so their unknown-type instruments are skipped, not mis-defaulted to SPOT_PAIR.
+# NOTE 2026-06-16 (operator correction): Deribit DOES list spot instruments
+# (BTC_USDC / ETH_USDC / … spot launched ~2023) — it is REMOVED from this set so
+# its SPOT_PAIR instruments enumerate and pass the normal CEFI_BASE_ASSET_UNIVERSE
+# base-asset filter like any other venue. The Tardis `deribit` exchange id covers
+# both the derivatives (perp/future/option, carrying explicit `type`) and the spot
+# pairs, so unknown-type defaulting is not a concern here.
 _DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset(
     {
-        "deribit",
         "binance-futures",
         "okex-futures",
         "okex-swap",
@@ -718,9 +723,11 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         tardis_type = item.type
         if tardis_type is None:
             if exchange in _DERIVATIVES_ONLY_EXCHANGES:
-                # deribit has no spot instruments; skip instruments with unknown
-                # type rather than defaulting to SPOT_PAIR (which causes HTTP 400
-                # from MTDS when it requests spot symbols from a derivatives-only venue).
+                # Derivatives-only venue: skip instruments with unknown type rather
+                # than defaulting to SPOT_PAIR (which causes HTTP 400 from MTDS when
+                # it requests spot symbols from a venue carrying only derivatives).
+                # NOTE: Deribit is NOT in this set — it lists spot (BTC_USDC/…) since
+                # ~2023, so its spot pairs enumerate normally.
                 return None
             tardis_type = "spot"
         instrument_type: InstrumentType = _TYPE_MAP.get(tardis_type, InstrumentType.SPOT_PAIR)
