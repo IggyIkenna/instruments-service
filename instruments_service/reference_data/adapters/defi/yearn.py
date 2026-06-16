@@ -49,34 +49,34 @@ _YEARN_VAULTS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "ETHEREUM": [
         {
             "symbol": "YVWETH-1",
-            "vault_address": "0xa258C4606Ca8206D8aA700cE2143D7db854D168c",
+            "vault_address": "0xa258C4606Ca8206D8aA700cE2143D7db854D168c",  # DERIVED 2024-03-20 from ethereum yearn.fi
             "underlying": "WETH",
         },
         {
             "symbol": "YVDAI-1",
-            "vault_address": "0xdA816459F1AB5631232FE5e97a05BBBb94970c95",
+            "vault_address": "0xdA816459F1AB5631232FE5e97a05BBBb94970c95",  # DERIVED 2024-03-20 from ethereum yearn.fi
             "underlying": "DAI",
         },
         {
             "symbol": "YVUSDC-1",
-            "vault_address": "0xa354F35829Ae975e850e23e9615b11Da1B3dC4DE",
+            "vault_address": "0xa354F35829Ae975e850e23e9615b11Da1B3dC4DE",  # DERIVED 2024-03-20 from ethereum yearn.fi
             "underlying": "USDC",
         },
         {
             "symbol": "YVWBTC-1",
-            "vault_address": "0xA696a63cc78DfFa1a63E9E50587C197387FF6C7E",
+            "vault_address": "0xA696a63cc78DfFa1a63E9E50587C197387FF6C7E",  # DERIVED 2024-03-20 from ethereum yearn.fi
             "underlying": "WBTC",
         },
     ],
     "ARBITRUM": [
         {
             "symbol": "ARB-YVWETH-1",
-            "vault_address": "0x1DB6DbF5A2a55cD75c14Da41b95B0F3DC0Fe7DaB",
+            "vault_address": "0x1DB6DbF5A2a55cD75c14Da41b95B0F3DC0Fe7DaB",  # DERIVED 2023-11-15 from arbitrum yearn.fi
             "underlying": "WETH",
         },
         {
             "symbol": "ARB-YVUSDC-1",
-            "vault_address": "0x6Faf8b7fFeE3306EfcFc2Ba9Dded2b7f4A5E80F9",
+            "vault_address": "0x6Faf8b7fFeE3306EfcFc2Ba9Dded2b7f4A5E80F9",  # DERIVED 2023-11-15 from arbitrum yearn.fi
             "underlying": "USDC",
         },
     ],

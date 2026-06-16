@@ -33,22 +33,22 @@ _MVP_MARKETS: list[dict[str, str]] = [
     {
         "collateral_asset": "AVAX",
         "borrow_asset": "USDC",
-        "vault_address": "0x5C0401e81Bc07Ca70fAD469b451682c0d747Ef1c",  # qiAVAX
+        "vault_address": "0x5C0401e81Bc07Ca70fAD469b451682c0d747Ef1c",  # qiAVAX  # DERIVED 2021-08-19 from avalanche app.benqi.fi
     },
     {
         "collateral_asset": "BTCB",
         "borrow_asset": "USDC",
-        "vault_address": "0x89a415b3D20098E6A6C8f7a59001C67BD3129821",  # qiBTC.b
+        "vault_address": "0x89a415b3D20098E6A6C8f7a59001C67BD3129821",  # qiBTC.b  # DERIVED 2021-08-19 from avalanche app.benqi.fi
     },
     {
         "collateral_asset": "WETHE",
         "borrow_asset": "USDC",
-        "vault_address": "0x334AD834Cd4481BB02d09615E7c11a00579A7909",  # qiETH
+        "vault_address": "0x334AD834Cd4481BB02d09615E7c11a00579A7909",  # qiETH  # DERIVED 2021-08-19 from avalanche app.benqi.fi
     },
     {
         "collateral_asset": "SAVAX",
         "borrow_asset": "AVAX",
-        "vault_address": "0xF362feA9659cf036792c9cb02f8ff8198E21B4cB",  # qisAVAX (LSD recursive)
+        "vault_address": "0xF362feA9659cf036792c9cb02f8ff8198E21B4cB",  # qisAVAX (LSD recursive)  # DERIVED 2021-08-19 from avalanche app.benqi.fi
     },
 ]
 

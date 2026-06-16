@@ -48,17 +48,17 @@ _IDLE_VAULTS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "ETHEREUM": [
         {
             "symbol": "IDLEDAI-BEST",
-            "vault_address": "0x3fE7940616e5Bc47b0775a0dccf6237893353bB4",
+            "vault_address": "0x3fE7940616e5Bc47b0775a0dccf6237893353bB4",  # DERIVED 2019-08-13 from ethereum idle.finance
             "underlying": "DAI",
         },
         {
             "symbol": "IDLEUSDC-BEST",
-            "vault_address": "0x5274891bEC421B39D23760c04A6755eCB444797C",
+            "vault_address": "0x5274891bEC421B39D23760c04A6755eCB444797C",  # DERIVED 2019-08-13 from ethereum idle.finance
             "underlying": "USDC",
         },
         {
             "symbol": "IDLEUSDT-BEST",
-            "vault_address": "0xF34842d05A1c888Ca02769A633DF37177415C2f8",
+            "vault_address": "0xF34842d05A1c888Ca02769A633DF37177415C2f8",  # DERIVED 2019-08-13 from ethereum idle.finance
             "underlying": "USDT",
         },
     ],

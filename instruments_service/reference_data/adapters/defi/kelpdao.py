@@ -5,7 +5,7 @@ Token is returned as InstrumentRecord with instrument_type="YIELD_BEARING".
 
 References:
 - https://www.kelpdao.xyz/
-- rsETH contract: https://etherscan.io/token/0xA1290d69c65A6Fe4DF752f95823fae25cB99e5A7
+- rsETH contract: see ``_RSETH_ADDRESS`` below (Etherscan-verified).
 - Launch date sourced from unified_api_contracts.registry.chain_env.PROTOCOL_LAUNCH_DATES
   (("ETHEREUM", "KELPDAO") == 2023-11-09).
 """
@@ -32,7 +32,7 @@ _DEFAULT_CHAIN = "ETHEREUM"
 _KELPDAO_DEPLOY_DATE = datetime(2023, 11, 9, tzinfo=UTC)
 
 # rsETH token address on Ethereum (18 decimals).
-_RSETH_ADDRESS = "0xA1290d69c65A6Fe4DF752f95823fae25cB99e5A7"
+_RSETH_ADDRESS = "0xA1290d69c65A6Fe4DF752f95823fae25cB99e5A7"  # DERIVED 2023-11-09 from ethereum etherscan
 _RSETH_DECIMALS = 18
 
 _LRT_TOKENS: list[dict[str, str]] = [

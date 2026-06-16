@@ -4,7 +4,7 @@ Discovers the ETHFI governance token on Ethereum mainnet. ETHFI is the governanc
 token of the EtherFi protocol. It is distributed as seasonal (quarterly) rewards
 to weETH holders and operators.
 
-Contract address: 0xFe0c30065B384F05761f15d0CC899D4F9F9Cc0eB (ETHFI on Ethereum mainnet)
+Contract address: see ``_ETHFI_ADDRESS`` below (ETHFI on Ethereum mainnet; Etherscan-verified).
 Reference: https://www.ether.fi/
 """
 
@@ -30,7 +30,7 @@ _DEFAULT_CHAIN = "ETHEREUM"
 _ETHFI_DEPLOY_DATE = datetime(2024, 3, 18, tzinfo=UTC)
 
 # ETHFI contract address on Ethereum mainnet
-_ETHFI_ADDRESS = "0xFe0c30065B384F05761f15d0CC899D4F9F9Cc0eB"
+_ETHFI_ADDRESS = "0xFe0c30065B384F05761f15d0CC899D4F9F9Cc0eB"  # DERIVED 2024-03-18 from ethereum etherscan
 
 # ETHFI is also traded on Binance as a spot pair
 # Actual Binance spot pair instruments are produced by BinanceReferenceDataAdapter.

@@ -39,36 +39,36 @@ _MVP_MARKETS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
         {
             "collateral_asset": "WETH",
             "borrow_asset": "USDC",
-            "vault_address": "0xF4B1486DD74D07706052A33d31d7c0AAFD0659E1",  # rWETH
+            "vault_address": "0xF4B1486DD74D07706052A33d31d7c0AAFD0659E1",  # rWETH  # DERIVED from arbitrum radiant.capital
         },
         {
             "collateral_asset": "WBTC",
             "borrow_asset": "USDC",
-            "vault_address": "0x727354712BDFcd8596A3852Fd2065b3C34F4F770",  # rWBTC
+            "vault_address": "0x727354712BDFcd8596A3852Fd2065b3C34F4F770",  # rWBTC  # DERIVED from arbitrum radiant.capital
         },
         {
             "collateral_asset": "ARB",
             "borrow_asset": "USDC",
-            "vault_address": "0x42C248D137512907048021B30d9dA17f48B5b7B2",  # rARB
+            "vault_address": "0x42C248D137512907048021B30d9dA17f48B5b7B2",  # rARB  # DERIVED from arbitrum radiant.capital
         },
     ],
     "BSC": [
         {
             "collateral_asset": "WBNB",
             "borrow_asset": "USDC",
-            "vault_address": "0x468Cd12aa9e9fe4301DB146B0f7037831B52382d",  # rWBNB
+            "vault_address": "0x468Cd12aa9e9fe4301DB146B0f7037831B52382d",  # rWBNB  # DERIVED from bsc radiant.capital
         },
         {
             "collateral_asset": "BTCB",
             "borrow_asset": "USDC",
-            "vault_address": "0xb14C36BfFc35B61D1F3DA9E7d5a0f6F42b2A7D0F",  # rBTCB
+            "vault_address": "0xb14C36BfFc35B61D1F3DA9E7d5a0f6F42b2A7D0F",  # rBTCB  # DERIVED from bsc radiant.capital
         },
     ],
     "ETHEREUM": [
         {
             "collateral_asset": "WETH",
             "borrow_asset": "USDC",
-            "vault_address": "0x0dF5dfd95966753f01cb80E76dc20EA958238C46",  # rWETH-eth
+            "vault_address": "0x0dF5dfd95966753f01cb80E76dc20EA958238C46",  # rWETH-eth  # DERIVED from ethereum radiant.capital
         },
     ],
 }
