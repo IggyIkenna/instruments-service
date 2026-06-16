@@ -138,17 +138,27 @@ def test_defi_yields_no_rows_for_post_protocol_launch() -> None:
     assert len(rows) == 0, "expected zero pre-launch rows for 2026-01-01 (all chains + protocols launched)"
 
 
-def test_sports_yields_pre_source_coverage_for_pre_2018() -> None:
-    """api_football coverage starts 2018-01-01; 2017-12-31 should yield
-    EXPECTED_PRE_SOURCE_COVERAGE_START rows for all sports data_types."""
-    rows = list(enumerator_module._enumerate_sports("2017-12-31", "2017-12-31"))
+def test_sports_yields_pre_source_coverage_before_source_start() -> None:
+    """The day BEFORE a source's SOURCE_COVERAGE_START yields
+    EXPECTED_PRE_SOURCE_COVERAGE_START rows for that source.
+
+    Derives the date from the UAC SSOT (``SOURCE_COVERAGE_START``) rather than a
+    hardcoded year so it never goes stale: api_football's start moved 2018-01-01 →
+    2015-01-01, which silently broke the prior literal-"2017-12-31" assertion (2017
+    is now AFTER coverage start, so it correctly yields no pre-source rows)."""
+    import pandas as pd
+    from unified_api_contracts.sports import SOURCE_COVERAGE_START
+
+    af_start = pd.Timestamp(SOURCE_COVERAGE_START["api_football"])
+    pre_day = (af_start - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    rows = list(enumerator_module._enumerate_sports(pre_day, pre_day))
     af_rows = [r for r in rows if r.venue == "api_football"]
-    assert len(af_rows) > 0, "expected api_football rows for 2017-12-31"
+    assert len(af_rows) > 0, f"expected api_football rows for {pre_day} (day before coverage start)"
     pre_coverage = [r for r in af_rows if r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"]
-    assert len(pre_coverage) > 0, "expected EXPECTED_PRE_SOURCE_COVERAGE_START for api_football 2017-12-31"
+    assert len(pre_coverage) > 0, f"expected EXPECTED_PRE_SOURCE_COVERAGE_START for api_football {pre_day}"
     sample = pre_coverage[0]
     assert sample.asset_group == "sports"
-    assert sample.date == "2017-12-31"
+    assert sample.date == pre_day
 
 
 def test_cefi_yields_pre_venue_launch_for_lighter_pre_2024_09() -> None:
