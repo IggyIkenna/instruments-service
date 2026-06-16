@@ -445,10 +445,12 @@ class TestExtractPredictionCanonicalGroup:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_polymarket_unknown_slug_returns_other(self) -> None:
+    def test_polymarket_unknown_slug_returns_misc_novelty(self) -> None:
+        # Genuinely-uncategorised Polymarket slug → MISC_NOVELTY (UAC decision 338);
+        # Kalshi unknown tickers still → OTHER (see test_kalshi_unknown_ticker_returns_other).
         row = self._make_row("POLYMARKET", raw_symbol="totally-unknown-market-xyz-99999")
         result = _extract_prediction_canonical_group(row)
-        assert result == CanonicalQuestionGroup.OTHER.value
+        assert result == CanonicalQuestionGroup.MISC_NOVELTY.value
 
     def test_kalshi_known_ticker(self) -> None:
         row = self._make_row("kalshi", instrument_key="KXBTCX-25MAR14-T85000")
