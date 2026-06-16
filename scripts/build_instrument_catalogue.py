@@ -409,7 +409,14 @@ def build_prediction_catalogue_dataframe(
         all_days.add(day)
         venue_str = venue.strip()
         cqg_str = cqg.strip()
-        if frame.empty or not cqg_str:
+        # 249-a: the conditionId grain (instrument_key) accumulates from EVERY
+        # non-empty frame — it does NOT require a canonical_question_group. The
+        # cqg grain (gated below on cqg_str) is materialised only when the writer
+        # emits a cqg, which it does not in the current venue=/market= layout
+        # (that's 249-b, gated on operator decision 338). Skipping a frame on
+        # `not cqg_str` (the pre-fix behaviour) dropped BOTH grains → 0-row
+        # catalogue. Skip only genuinely-empty frames.
+        if frame.empty:
             continue
         records: list[dict[str, object]] = frame.to_dict("records")  # pyright: ignore[reportAssignmentType]
         # cqg-grain lifecycle: the cqg is present on this day if ANY member is.
@@ -431,7 +438,9 @@ def build_prediction_catalogue_dataframe(
             if settled and (cqg_settled is None or settled > cqg_settled):
                 cqg_settled = settled
             _merge_lifecycle(cid_acc, (venue_str, cid), day, venue_str, itype, created, settled)
-        if saw_member:
+        # cqg grain only when the writer emits a cqg (249-b, gated on decision
+        # 338). Currently always empty → no cqg rows, conditionId grain only.
+        if saw_member and cqg_str:
             _merge_lifecycle(cqg_acc, (venue_str, cqg_str), day, venue_str, cqg_itype, cqg_created, cqg_settled)
 
     if not all_days:
@@ -802,11 +811,19 @@ def _iter_prediction_by_date_snapshots(
 ) -> Iterator[tuple[date, str, str, pd.DataFrame]]:
     """Yield ``(day, venue, cqg, frame)`` for every prediction ``by_date`` blob.
 
-    The prediction writer partitions by ``canonical_question_group=`` in the
-    path (the ``_canonical_group`` column is dropped at write), so the cqg is
-    parsed from the blob name. Blobs with no ``canonical_question_group=``
-    segment (e.g. a non-prediction venue mixed into the bucket) are skipped with
-    a warning rather than silently mis-rolled at the wrong grain.
+    **249-a (2026-06-16): conditionId/market grain reads the ACTUAL writer
+    layout.** The prediction writer partitions ``by_date/day=/venue=<V>/[market=<M>/]
+    instruments.parquet`` — it does NOT emit a ``canonical_question_group=`` path
+    segment (the prior code required one and so skipped EVERY blob → 0-row
+    catalogue). The conditionId (``instrument_key``) is read from the FRAME, so
+    the cqg is no longer needed for the conditionId grain; ``cqg`` is yielded as
+    ``""`` (the cqg grain is 249-b, gated on operator decision 338, and the
+    rollup only materialises it when cqg is non-empty). Both the venue-level
+    ``instruments.parquet`` (full conditionId universe) and the per-market
+    ``market=<M>/instruments.parquet`` blobs are read; the rollup dedups by
+    ``(venue, conditionId)`` via ``_merge_lifecycle``. The metadata sibling
+    ``prediction_market_metadata.parquet`` is excluded (it is not an instruments
+    frame). Blobs with no ``day=``/``venue=`` partition are skipped with a warning.
 
     Downloads run concurrently (``max_workers`` threads), mirroring
     :func:`_iter_by_date_snapshots` — the prediction ``by_date`` history is also
@@ -818,16 +835,17 @@ def _iter_prediction_by_date_snapshots(
     targets: list[tuple[date, str, str, str]] = []
     for blob in storage.list_blobs(bucket, prefix=walk_prefix):
         name = blob.name
-        if not name.endswith(".parquet"):
+        # Only the instruments frames — never the prediction_market_metadata.parquet sibling.
+        if not name.endswith("instruments.parquet"):
             continue
         day_m = _DAY_RE.search(name)
-        cqg_m = _CQG_RE.search(name)
-        if day_m is None or cqg_m is None:
-            logger.warning("Skipping prediction blob missing day=/canonical_question_group=: %s", name)
-            continue
         venue_m = _VENUE_RE.search(name)
-        venue = venue_m.group(1) if venue_m else ""
-        targets.append((date.fromisoformat(day_m.group(1)), venue, cqg_m.group(1), name))
+        if day_m is None or venue_m is None:
+            logger.warning("Skipping prediction blob missing day=/venue=: %s", name)
+            continue
+        cqg_m = _CQG_RE.search(name)
+        cqg = cqg_m.group(1) if cqg_m else ""
+        targets.append((date.fromisoformat(day_m.group(1)), venue_m.group(1), cqg, name))
 
     targets.sort(key=lambda item: item[3])
     if max_blobs is not None:
