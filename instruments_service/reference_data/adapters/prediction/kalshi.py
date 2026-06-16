@@ -161,9 +161,20 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         Returns (records, next_cursor). next_cursor is None when no more pages.
         """
         url = f"{_KALSHI_BASE_URL}/markets"
+        # Kalshi's ``status`` query param is a LIFECYCLE filter whose valid
+        # values are ``unopened`` / ``open`` / ``closed`` / ``settled`` —
+        # ``status=active`` is rejected with HTTP 400
+        # ``{"error":{"code":"bad_request","details":"invalid status filter"}}``
+        # (verified live 2026-06-16 against the public endpoint). The per-MARKET
+        # ``status`` field returned for currently-tradeable markets IS
+        # ``"active"`` (hence ``_parse_market``'s ``is_active = status ==
+        # "active"`` check below is correct) — but the REQUEST filter for those
+        # open/tradeable markets is ``status=open``. Using ``open`` returns the
+        # same currently-tradeable markets (each carrying market-level
+        # ``status=active``) with HTTP 200.
         params: dict[str, str] = {
             "limit": str(_PAGE_LIMIT),
-            "status": "active",
+            "status": "open",
         }
         if cursor is not None:
             params["cursor"] = cursor

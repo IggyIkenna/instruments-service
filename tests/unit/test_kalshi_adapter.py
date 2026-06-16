@@ -56,6 +56,40 @@ class TestKalshiAdapter:
         assert results[0].venue == "kalshi"
 
     @pytest.mark.asyncio
+    async def test_get_instruments_uses_open_status_filter_not_active(self) -> None:
+        """R5-fix-4 regression: the markets request MUST filter ``status=open``,
+        never ``status=active``.
+
+        Kalshi's ``status`` query param is a lifecycle filter whose valid values
+        are ``unopened``/``open``/``closed``/``settled`` — ``status=active`` is
+        rejected with HTTP 400 ``"invalid status filter"`` (verified live
+        2026-06-16). The per-market ``status`` field for tradeable markets is
+        ``"active"``, so ``open`` is the correct REQUEST filter that returns
+        those active markets.
+        """
+        adapter = KalshiReferenceDataAdapter()
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(return_value={"markets": [], "cursor": ""})
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            await adapter.get_instruments()
+
+        mock_session_obj.get.assert_called_once()
+        _args, kwargs = mock_session_obj.get.call_args
+        params = kwargs.get("params", {})
+        assert params.get("status") == "open"
+        assert params.get("status") != "active"
+
+    @pytest.mark.asyncio
     async def test_get_instruments_401_raises_not_swallowed(self) -> None:
         """CF-11 regression: a 401 on the first page must RAISE (→ attempted_failed),
         never return [] (which urdi_reference_provider would record as a silent
