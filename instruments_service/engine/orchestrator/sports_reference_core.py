@@ -137,7 +137,9 @@ async def _fetch_teams_and_standings(
                         operation="sports_reference_teams_fetch",
                         shard=str(league_def.league_id),
                     )
-                    hooks.record_failed("TEAMS", exc, league_id=league_def.league_id)
+                    hooks.record_failed(
+                        "TEAMS", exc, league_id=league_def.league_id
+                    )  # QG-allow: pipeline-mode-not-applicable (hooks.* wrapper injects pipeline_mode=BATCH_API_FOOTBALL)
             if all_teams:
                 teams_df = _orch.pd.DataFrame(all_teams)
                 _orch._set_cached_teams(teams_df, prediction_league_ids)
@@ -148,7 +150,9 @@ async def _fetch_teams_and_standings(
                 service_name="instruments-service",
                 operation="sports_reference_teams_batch",
             )
-            hooks.record_failed("TEAMS", exc)
+            hooks.record_failed(
+                "TEAMS", exc
+            )  # QG-allow: pipeline-mode-not-applicable (hooks.* wrapper injects pipeline_mode=BATCH_API_FOOTBALL)
     else:
         prediction_league_ids = _orch._cached_prediction_league_ids
         _orch.logger.info("Sports reference: %d teams from cache (0 API calls)", len(teams_df))
@@ -201,7 +205,9 @@ async def _fetch_teams_and_standings(
                     operation="sports_reference_standings_fetch",
                     shard=str(lid),
                 )
-                hooks.record_failed("STANDINGS", exc, league_id=str(lid))
+                hooks.record_failed(
+                    "STANDINGS", exc, league_id=str(lid)
+                )  # QG-allow: pipeline-mode-not-applicable (hooks.* wrapper injects pipeline_mode=BATCH_API_FOOTBALL)
         if all_standings:
             standings_df = _orch.pd.DataFrame(all_standings)
             _orch._set_cached_standings(standings_df)
@@ -363,4 +369,6 @@ async def _fetch_injuries(
             operation="sports_reference_injuries_fetch",
             shard=date,
         )
-        hooks.record_failed("INJURIES", exc)
+        hooks.record_failed(
+            "INJURIES", exc
+        )  # QG-allow: pipeline-mode-not-applicable (hooks.* wrapper injects pipeline_mode=BATCH_API_FOOTBALL)
