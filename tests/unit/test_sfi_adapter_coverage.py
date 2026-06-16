@@ -142,75 +142,18 @@ class TestSFIGetLeagues:
 
 class TestSFIGetStandings:
     @pytest.mark.asyncio
-    async def test_get_standings_success(self) -> None:
-        raw = {
-            "standings": [
-                {
-                    "position": 1,
-                    "team_id": "T1",
-                    "team_name": "Arsenal",
-                    "points": 72,
-                    "goal_difference": 35,
-                    "played": 30,
-                    "wins": 22,
-                    "draws": 6,
-                    "losses": 2,
-                    "goals_for": 65,
-                    "goals_against": 30,
-                    "group": "A",
-                    "form": "WWWDW",
-                },
-            ]
-        }
+    async def test_get_standings_returns_empty(self) -> None:
+        # SFI has no standings endpoint — retired 2026-04-24 after 100% failure
+        # (42/42 phantom rows on 2026-04-29). No HTTP call is made.
         adapter = SoccerFootballInfoAdapter(api_key="test-key")
-        mock_session = _make_aiohttp_mock(raw)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            standings = await adapter.get_standings("league-1", season="2025")
-        assert len(standings) == 1
-        s = standings[0]
-        assert s.rank == 1
-        assert s.team_name == "Arsenal"
-        assert s.points == 72
-        assert s.goals_diff == 35
+        standings = await adapter.get_standings("league-1", season="2025")
+        assert standings == []
 
     @pytest.mark.asyncio
-    async def test_get_standings_no_season(self) -> None:
-        raw = {"standings": [{"position": 1, "team_id": "T1", "team_name": "Team", "points": 10}]}
+    async def test_get_standings_returns_empty_no_season(self) -> None:
         adapter = SoccerFootballInfoAdapter(api_key="test-key")
-        mock_session = _make_aiohttp_mock(raw)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            standings = await adapter.get_standings("league-1")
-        assert len(standings) == 1
-
-    @pytest.mark.asyncio
-    async def test_get_standings_with_alternate_field_names(self) -> None:
-        raw = {
-            "data": [
-                {
-                    "rank": 2,
-                    "id": "T2",
-                    "name": "Chelsea",
-                    "points": 65,
-                    "goals_diff": 20,
-                    "matches_played": 30,
-                    "won": 20,
-                    "drawn": 5,
-                    "lost": 5,
-                    "goals_scored": 55,
-                    "goals_conceded": 35,
-                }
-            ]
-        }
-        adapter = SoccerFootballInfoAdapter(api_key="test-key")
-        mock_session = _make_aiohttp_mock(raw)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            standings = await adapter.get_standings("league-1")
-        assert len(standings) == 1
-        s = standings[0]
-        assert s.rank == 2
-        assert s.team_name == "Chelsea"
-        assert s.played == 30
-        assert s.wins == 20
+        standings = await adapter.get_standings("league-1")
+        assert standings == []
 
 
 # ---------------------------------------------------------------------------
@@ -233,35 +176,12 @@ class TestSFIGetFixtures:
 
 class TestSFIGetTeams:
     @pytest.mark.asyncio
-    async def test_get_teams_from_standings(self) -> None:
-        raw = {
-            "standings": [
-                {"position": 1, "team_id": "T1", "team_name": "Arsenal", "points": 72},
-                {"position": 2, "team_id": "T2", "team_name": "Chelsea", "points": 65},
-            ]
-        }
+    async def test_get_teams_returns_empty(self) -> None:
+        # SFI team data was derived from standings, which SFI doesn't support.
+        # No HTTP call is made; returns empty immediately.
         adapter = SoccerFootballInfoAdapter(api_key="test-key")
-        mock_session = _make_aiohttp_mock(raw)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            teams = await adapter.get_teams("league-1")
-        assert len(teams) == 2
-        assert teams[0].name == "Arsenal"
-        assert teams[1].name == "Chelsea"
-
-    @pytest.mark.asyncio
-    async def test_get_teams_skips_empty_name(self) -> None:
-        raw = {
-            "standings": [
-                {"position": 1, "team_id": "T1", "team_name": "", "points": 72},
-                {"position": 2, "team_id": "T2", "team_name": "Chelsea", "points": 65},
-            ]
-        }
-        adapter = SoccerFootballInfoAdapter(api_key="test-key")
-        mock_session = _make_aiohttp_mock(raw)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            teams = await adapter.get_teams("league-1")
-        assert len(teams) == 1
-        assert teams[0].name == "Chelsea"
+        teams = await adapter.get_teams("league-1")
+        assert teams == []
 
 
 # ---------------------------------------------------------------------------
