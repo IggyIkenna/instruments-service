@@ -99,6 +99,7 @@ from instruments_service.reference_data.adapters.tradfi.databento.symbology impo
     _EXCHANGE_CODE_asset_group,
     _extract_underlying_from_symbol,
     _parse_cme_calendar_spread_legs,
+    _resolve_product_root,
 )
 
 __all__ = [
@@ -145,6 +146,7 @@ __all__ = [
     "_is_trading_holiday",
     "_non_trading_result",
     "_parse_cme_calendar_spread_legs",
+    "_resolve_product_root",
     "_resolve_trading_status",
     "adapter",
     "classify_venue_error",
