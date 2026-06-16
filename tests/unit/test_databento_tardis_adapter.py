@@ -417,6 +417,59 @@ class TestTardisAdapterMocked:
         assert results[0].venue is not None
 
     @pytest.mark.asyncio
+    async def test_deribit_spot_not_dropped(self) -> None:
+        """Deribit lists spot pairs (BTC_USDC/…) since ~2023 — it is NOT a
+        derivatives-only venue, so a Deribit SPOT instrument must enumerate as a
+        SPOT_PAIR InstrumentRecord (not silently dropped), while a Deribit perp
+        still parses as PERPETUAL (no regression). Regression guard for the
+        operator correction 2026-06-16: the Tardis adapter used to drop ALL
+        Deribit spot via _DERIVATIVES_ONLY_EXCHANGES."""
+        adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(
+            return_value={
+                "id": "deribit",
+                "name": "Deribit",
+                "availableSymbols": [
+                    {
+                        "id": "BTC_USDC",
+                        "type": "spot",
+                        "baseCurrency": "BTC",
+                        "quoteCurrency": "USDC",
+                        "availableSince": "2023-01-01T00:00:00Z",
+                        "availableTo": None,
+                    },
+                    {
+                        "id": "BTC-PERPETUAL",
+                        "type": "perpetual",
+                        "availableSince": "2020-01-01T00:00:00Z",
+                        "availableTo": None,
+                    },
+                ],
+            }
+        )
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+        by_type = {str(r.instrument_type): r for r in results}
+        # The Deribit spot pair is enumerated (not dropped) as a SPOT_PAIR.
+        assert "SPOT_PAIR" in by_type, f"Deribit spot dropped — got types {sorted(by_type)}"
+        spot = by_type["SPOT_PAIR"]
+        assert spot.base_asset == "BTC"
+        assert spot.quote_asset == "USDC"
+        # The Deribit perp still parses (no regression).
+        assert "PERPETUAL" in by_type, f"Deribit perp lost — got types {sorted(by_type)}"
+
+    @pytest.mark.asyncio
     async def test_get_instruments_with_type_filter(self) -> None:
         adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
         mock_resp = AsyncMock()
