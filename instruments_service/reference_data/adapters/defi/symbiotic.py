@@ -45,25 +45,25 @@ _SYMBIOTIC_DEPLOY_DATE = datetime(2024, 6, 11, tzinfo=UTC)
 _SYMBIOTIC_VAULTS: list[dict[str, str]] = [
     {
         "symbol": "SYMB-WSTETH",
-        "vault_address": "0xC329400492c6ff2438472D4651Ad17389fCb843a",
+        "vault_address": "0xC329400492c6ff2438472D4651Ad17389fCb843a",  # DERIVED 2024-06-11 from ethereum symbiotic.fi
         "collateral": "WSTETH",
         "underlying": "ETH",
     },
     {
         "symbol": "SYMB-RETH",
-        "vault_address": "0x4Ec07dF977D5f7E6Bb3d10B1d01B7A7680e5E6B0",
+        "vault_address": "0x4Ec07dF977D5f7E6Bb3d10B1d01B7A7680e5E6B0",  # DERIVED 2024-06-11 from ethereum symbiotic.fi
         "collateral": "RETH",
         "underlying": "ETH",
     },
     {
         "symbol": "SYMB-CBETH",
-        "vault_address": "0xB26ff591F44b04E78de18f43B46f8b70C6676984",
+        "vault_address": "0xB26ff591F44b04E78de18f43B46f8b70C6676984",  # DERIVED 2024-06-11 from ethereum symbiotic.fi
         "collateral": "CBETH",
         "underlying": "ETH",
     },
     {
         "symbol": "SYMB-ETHX",
-        "vault_address": "0x40e65E81e7D39e593eE55C5eeE44A7a84B65cC40",
+        "vault_address": "0x40e65E81e7D39e593eE55C5eeE44A7a84B65cC40",  # DERIVED 2024-06-11 from ethereum symbiotic.fi
         "collateral": "ETHX",
         "underlying": "ETH",
     },

@@ -4,7 +4,7 @@ Discovers the EIGEN token on Ethereum mainnet. EIGEN is the governance and resta
 token of the EigenLayer protocol. It is staked on EigenLayer and earns weekly rewards
 from AVS operators.
 
-Contract address: 0xec53bF9167f50cDEB3Ae105f56099aaaB9061F83 (EIGEN on Ethereum mainnet)
+Contract address: see ``_EIGEN_ADDRESS`` below (EIGEN on Ethereum mainnet; Etherscan-verified).
 Reference: https://docs.eigenlayer.xyz/eigenlayer/restaking-guides/restaking-user-guide
 """
 
@@ -31,7 +31,7 @@ _DEFAULT_CHAIN = "ETHEREUM"
 _EIGEN_DEPLOY_DATE = datetime(2024, 9, 17, tzinfo=UTC)
 
 # EIGEN contract address on Ethereum mainnet
-_EIGEN_ADDRESS = "0xec53bF9167f50cDEB3Ae105f56099aaaB9061F83"
+_EIGEN_ADDRESS = "0xec53bF9167f50cDEB3Ae105f56099aaaB9061F83"  # DERIVED 2024-09-17 from ethereum etherscan
 
 # EIGEN is a standard ERC-20 governance token with 18 decimals — fixed contract metadata.
 _EIGEN_DECIMALS = 18

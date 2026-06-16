@@ -78,51 +78,51 @@ _PENDLE_MARKETS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
         {
             "symbol": "wstETH-25JUN2026",
             "underlying": "wstETH",
-            "pt_address": "0x9ce6478ef45bb1baac69efd8a3ea0ed110a43042",
-            "yt_address": "0x12cc7b6ee36b1a33ebc33dc41c39d383b3b33896",
-            "sy_address": "0xcbc72d92b2dc8187414f6734718563898740c0bc",
-            "market_address": "0xcfd848b9f6fef552204014ac67901223ad6bf679",
-            "underlying_token_address": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+            "pt_address": "0x9ce6478ef45bb1baac69efd8a3ea0ed110a43042",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "yt_address": "0x12cc7b6ee36b1a33ebc33dc41c39d383b3b33896",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "sy_address": "0xcbc72d92b2dc8187414f6734718563898740c0bc",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "market_address": "0xcfd848b9f6fef552204014ac67901223ad6bf679",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-06-25T00:00:00Z",
         },
         {
             "symbol": "weETH-25JUN2026",
             "underlying": "weETH",
-            "pt_address": "0x8e8b8d3b2dca78cb04b9914b7ec1ad72f671f96d",
-            "yt_address": "0xf25586be8b7bbcdbf1585ffe02d50c6d1f2bc51b",
-            "sy_address": "0xac0047886a985071476a1186be89222659970d65",
-            "market_address": "0x95a9504f246cd65bf91c2c550a53f7f415227ed1",
-            "underlying_token_address": "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee",
+            "pt_address": "0x8e8b8d3b2dca78cb04b9914b7ec1ad72f671f96d",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "yt_address": "0xf25586be8b7bbcdbf1585ffe02d50c6d1f2bc51b",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "sy_address": "0xac0047886a985071476a1186be89222659970d65",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "market_address": "0x95a9504f246cd65bf91c2c550a53f7f415227ed1",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-06-25T00:00:00Z",
         },
         {
             "symbol": "weETHs-25JUN2026",
             "underlying": "weETHs",
-            "pt_address": "0x6cc3237ae1bbeba960c35b47b0424d34b6404037",
-            "yt_address": "0xe25310adc40bd9ed6ea0eefe22bdff208d8e207d",
-            "sy_address": "0x012badcc6e824c2ea32bd5367ebda3be3402c9c5",
-            "market_address": "0xc7d566f5cd575fdad0e982bd238d9abcf29807ea",
-            "underlying_token_address": "0x917cee801a67f933f2e6b33fc0cd1ed2d5909d88",
+            "pt_address": "0x6cc3237ae1bbeba960c35b47b0424d34b6404037",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "yt_address": "0xe25310adc40bd9ed6ea0eefe22bdff208d8e207d",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "sy_address": "0x012badcc6e824c2ea32bd5367ebda3be3402c9c5",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "market_address": "0xc7d566f5cd575fdad0e982bd238d9abcf29807ea",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0x917cee801a67f933f2e6b33fc0cd1ed2d5909d88",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-06-25T00:00:00Z",
         },
         {
             "symbol": "sUSDe-13AUG2026",
             "underlying": "sUSDe",
-            "pt_address": "0x5a19fa369f2895dcd8d2cee62e4ceae58ef92bbb",
-            "yt_address": "0x45a699a11a4a17fe0931ef3cea4bfc3235e659f2",
-            "sy_address": "0xbf98480425a29197e5d99d003017f63a1e595d02",
-            "market_address": "0x177768caf9d0e036725a51d3f60d7e20f2d4d194",
-            "underlying_token_address": "0x9d39a5de30e57443bff2a8307a4256c8797a3497",
+            "pt_address": "0x5a19fa369f2895dcd8d2cee62e4ceae58ef92bbb",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "yt_address": "0x45a699a11a4a17fe0931ef3cea4bfc3235e659f2",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "sy_address": "0xbf98480425a29197e5d99d003017f63a1e595d02",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "market_address": "0x177768caf9d0e036725a51d3f60d7e20f2d4d194",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0x9d39a5de30e57443bff2a8307a4256c8797a3497",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-08-13T00:00:00Z",
         },
         {
             "symbol": "USDe-13AUG2026",
             "underlying": "USDe",
-            "pt_address": "0x3ec43f4158d51df0928979c09eaf33cad287065c",
-            "yt_address": "0x8becb3beca07029ffddd2135082468cb8af19ca9",
-            "sy_address": "0xf0bacd9c3d94fc924dbcaaf644208c4e3f4d3bb4",
-            "market_address": "0x43c97094da0e894d3af2fda6f507d59a29888251",
-            "underlying_token_address": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+            "pt_address": "0x3ec43f4158d51df0928979c09eaf33cad287065c",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "yt_address": "0x8becb3beca07029ffddd2135082468cb8af19ca9",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "sy_address": "0xf0bacd9c3d94fc924dbcaaf644208c4e3f4d3bb4",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "market_address": "0x43c97094da0e894d3af2fda6f507d59a29888251",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",  # DERIVED 2026-05-12 from ethereum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-08-13T00:00:00Z",
         },
     ],
@@ -130,51 +130,51 @@ _PENDLE_MARKETS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
         {
             "symbol": "wstETH-25JUN2026",
             "underlying": "wstETH",
-            "pt_address": "0x71fbf40651e9d4278a74586afc99f307f369ce9a",
-            "yt_address": "0x25bda1edd6af17c61399aa0eb84b93daa3069764",
-            "sy_address": "0x80c12d5b6cc494632bf11b03f09436c8b61cc5df",
-            "market_address": "0xf78452e0f5c0b95fc5dc8353b8cd1e06e53fa25b",
-            "underlying_token_address": "0x5979d7b546e38e414f7e9822514be443a4800529",
+            "pt_address": "0x71fbf40651e9d4278a74586afc99f307f369ce9a",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "yt_address": "0x25bda1edd6af17c61399aa0eb84b93daa3069764",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "sy_address": "0x80c12d5b6cc494632bf11b03f09436c8b61cc5df",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "market_address": "0xf78452e0f5c0b95fc5dc8353b8cd1e06e53fa25b",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0x5979d7b546e38e414f7e9822514be443a4800529",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-06-25T00:00:00Z",
         },
         {
             "symbol": "weETH-25JUN2026",
             "underlying": "weETH",
-            "pt_address": "0xab7f3837e6e721abbc826927b655180af6a04388",
-            "yt_address": "0xff9826c358a822d00187b487c349bc5e7f30788a",
-            "sy_address": "0xa6c895eb332e91c5b3d00b7baeeaae478cc502da",
-            "market_address": "0x46d62a8dede1bf2d0de04f2ed863245cbba5e538",
-            "underlying_token_address": "0x35751007a407ca6feffe80b3cb397736d2cf4dbe",
+            "pt_address": "0xab7f3837e6e721abbc826927b655180af6a04388",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "yt_address": "0xff9826c358a822d00187b487c349bc5e7f30788a",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "sy_address": "0xa6c895eb332e91c5b3d00b7baeeaae478cc502da",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "market_address": "0x46d62a8dede1bf2d0de04f2ed863245cbba5e538",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0x35751007a407ca6feffe80b3cb397736d2cf4dbe",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-06-25T00:00:00Z",
         },
         {
             "symbol": "rETH-25JUN2026",
             "underlying": "rETH",
-            "pt_address": "0x3362c1265a0522f321253708c9fb176f2274fa8d",
-            "yt_address": "0xe03c236ca6f07755ad631a42dd5d60e293b1bf71",
-            "sy_address": "0xc0cf4b266be5b3229c49590b59e67a09c15b22f4",
-            "market_address": "0xd7eac6c9109d8c3977ebce4e7dbf0a5a9532e240",
-            "underlying_token_address": "0xec70dcb4a1efa46b8f2d97c310c9c4790ba5ffa8",
+            "pt_address": "0x3362c1265a0522f321253708c9fb176f2274fa8d",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "yt_address": "0xe03c236ca6f07755ad631a42dd5d60e293b1bf71",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "sy_address": "0xc0cf4b266be5b3229c49590b59e67a09c15b22f4",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "market_address": "0xd7eac6c9109d8c3977ebce4e7dbf0a5a9532e240",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0xec70dcb4a1efa46b8f2d97c310c9c4790ba5ffa8",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-06-25T00:00:00Z",
         },
         {
             "symbol": "uniETH-25JUN2026",
             "underlying": "uniETH",
-            "pt_address": "0xd8d5fbbaad1e80aa0352b2029a594caeff6cf1ec",
-            "yt_address": "0x0fb95ec4086b3007c894ad78703bc634150a1d50",
-            "sy_address": "0x5b56f4bf94807b547eb5e7eba5cd8c033af83aed",
-            "market_address": "0x7b8aec3d1986b4becbf1c651ff6a953cc0117b05",
-            "underlying_token_address": "0x3d15fd46ce9e551498328b1c83071d9509e2c3a0",
+            "pt_address": "0xd8d5fbbaad1e80aa0352b2029a594caeff6cf1ec",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "yt_address": "0x0fb95ec4086b3007c894ad78703bc634150a1d50",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "sy_address": "0x5b56f4bf94807b547eb5e7eba5cd8c033af83aed",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "market_address": "0x7b8aec3d1986b4becbf1c651ff6a953cc0117b05",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0x3d15fd46ce9e551498328b1c83071d9509e2c3a0",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-06-25T00:00:00Z",
         },
         {
             "symbol": "USDai-15OCT2026",
             "underlying": "USDai",
-            "pt_address": "0xc9d24ad0bb25f34098e226a8c5192dea7bacccae",
-            "yt_address": "0xaf67341456151ab8c270e0962966092181c2eb80",
-            "sy_address": "0x5edcbc20cac67adc2e724d4348ff85132b085b82",
-            "market_address": "0xa8a0dea40174cfc30fea9e3a77f182ab33f46e25",
-            "underlying_token_address": "0x0a1a1a107e45b7ced86833863f482bc5f4ed82ef",
+            "pt_address": "0xc9d24ad0bb25f34098e226a8c5192dea7bacccae",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "yt_address": "0xaf67341456151ab8c270e0962966092181c2eb80",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "sy_address": "0x5edcbc20cac67adc2e724d4348ff85132b085b82",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "market_address": "0xa8a0dea40174cfc30fea9e3a77f182ab33f46e25",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
+            "underlying_token_address": "0x0a1a1a107e45b7ced86833863f482bc5f4ed82ef",  # DERIVED 2026-05-12 from arbitrum api-v2.pendle.finance markets/active
             "maturity_iso": "2026-10-15T00:00:00Z",
         },
     ],

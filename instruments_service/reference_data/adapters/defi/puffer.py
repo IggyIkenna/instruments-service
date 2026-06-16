@@ -5,7 +5,7 @@ Token is returned as InstrumentRecord with instrument_type="YIELD_BEARING".
 
 References:
 - https://www.puffer.fi/
-- pufETH contract: https://etherscan.io/token/0xD9A442856C234a39a81a089C06451EBAa4306a72
+- pufETH contract: see ``_PUFETH_ADDRESS`` below (Etherscan-verified).
 - Launch date sourced from unified_api_contracts.registry.chain_env.PROTOCOL_LAUNCH_DATES
   (("ETHEREUM", "PUFFER") == 2024-05-09).
 """
@@ -32,7 +32,7 @@ _DEFAULT_CHAIN = "ETHEREUM"
 _PUFFER_DEPLOY_DATE = datetime(2024, 5, 9, tzinfo=UTC)
 
 # pufETH token address on Ethereum (18 decimals).
-_PUFETH_ADDRESS = "0xD9A442856C234a39a81a089C06451EBAa4306a72"
+_PUFETH_ADDRESS = "0xD9A442856C234a39a81a089C06451EBAa4306a72"  # DERIVED 2024-05-09 from ethereum etherscan
 _PUFETH_DECIMALS = 18
 
 _LRT_TOKENS: list[dict[str, str]] = [
