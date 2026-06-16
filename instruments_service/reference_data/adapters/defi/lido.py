@@ -28,8 +28,8 @@ _DEFAULT_CHAIN = "ETHEREUM"
 _LIDO_DEPLOY_DATE = datetime(2020, 12, 18, tzinfo=UTC)
 
 # Lido token addresses on Ethereum
-_STETH_ADDRESS = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"
-_WSTETH_ADDRESS = "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"
+_STETH_ADDRESS = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"  # DERIVED 2020-12-18 from ethereum lido.fi
+_WSTETH_ADDRESS = "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"  # DERIVED 2020-12-18 from ethereum lido.fi
 
 # MTDS handlers derive the APY/rate fetch URL from this field; hardcoding is banned.
 _LIDO_APY_URL_TEMPLATE = "https://api.lido.fi/v1/protocol/steth/apr/last"
