@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from unified_api_contracts import TRADFI_DATABENTO_INSTRUMENTS, VenueMapping
 from unified_api_contracts.internal import AssetClass, InstrumentLeg, InstrumentType
+from unified_api_contracts.registry import EXCHANGE_CODE_TO_NAME
 
 if TYPE_CHECKING:
     from instruments_service.reference_data.adapters.tradfi import databento as _db
@@ -31,6 +32,7 @@ __all__ = [
     "_CLASS_TO_TYPE",
     "_DATASET_TO_VENUE",
     "_DEFAULT_TRADFI_FLOOR",
+    "_EXCHANGE_CODE_TO_PRODUCT_ROOT",
     "_FUTURES_DATASETS",
     "_SORTED_EXCHANGE_CODES",
     "_VENUE_FLOOR_DATES",
@@ -40,6 +42,7 @@ __all__ = [
     "_classify_bento_error",
     "_extract_underlying_from_symbol",
     "_parse_cme_calendar_spread_legs",
+    "_resolve_product_root",
 ]
 
 # Databento instrument_class → canonical InstrumentType
@@ -119,15 +122,46 @@ _SORTED_EXCHANGE_CODES: list[str] = sorted(_EXCHANGE_CODE_asset_group.keys(), ke
 
 
 def _extract_underlying_from_symbol(raw_symbol: str) -> str:
-    """Derive underlying (parent/root symbol) from a futures raw symbol.
+    """Derive underlying (parent/root exchange code) from a futures/option raw symbol.
 
     Matches the longest registered exchange_code that is a prefix of raw_symbol.
-    E.g. "ESH6" → "ES", "6MJ6" → "6M", "CLZ26" → "CL".
+    E.g. "ESH6" → "ES", "6MJ6" → "6M", "CLZ26" → "CL". Spaced option contract
+    codes resolve on the leading futures-style token, e.g. "E5AH0 C2510" → "E5A".
     """
     for code in _SORTED_EXCHANGE_CODES:
         if raw_symbol.startswith(code) and len(raw_symbol) > len(code):
             return code
     return ""
+
+
+# Exchange code → human-canonical product root (e.g. "ES" → "SP500", "E5A" →
+# "SP500"). Built from the UAC ``EXCHANGE_CODE_TO_NAME`` registry plus every
+# curated ``DatabentoInstrumentDef.exchange_code`` → ``.base_asset`` (which
+# covers the daily/weekly option roots E1A..E5A / EW1.. that the display map
+# omits). No Databento API call — purely the existing static registry.
+_EXCHANGE_CODE_TO_PRODUCT_ROOT: dict[str, str] = dict(EXCHANGE_CODE_TO_NAME)
+for _inst in TRADFI_DATABENTO_INSTRUMENTS:
+    if _inst.exchange_code:
+        _EXCHANGE_CODE_TO_PRODUCT_ROOT.setdefault(_inst.exchange_code, _inst.base_asset)
+
+
+def _resolve_product_root(raw_symbol: str) -> str | None:
+    """Resolve the human-canonical product root from a raw exchange contract code.
+
+    Extracts the registered exchange-code prefix (incl. spaced options like
+    "E5AH0 C2510" → "E5A") then maps it to the human product root via the UAC
+    registry (e.g. "ES" → "SP500"). Returns ``None`` when no mapping resolves.
+    """
+    if not raw_symbol:
+        return None
+    # Direct hit (raw_symbol IS an exchange code, e.g. parent-stype "ES").
+    root = _EXCHANGE_CODE_TO_PRODUCT_ROOT.get(raw_symbol)
+    if root:
+        return root
+    code = _extract_underlying_from_symbol(raw_symbol)
+    if code:
+        return _EXCHANGE_CODE_TO_PRODUCT_ROOT.get(code)
+    return None
 
 
 def _parse_cme_calendar_spread_legs(raw_symbol: str, venue: str) -> list[InstrumentLeg] | None:
