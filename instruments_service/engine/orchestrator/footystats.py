@@ -659,6 +659,16 @@ async def _fetch_footystats_odds(
                         pipeline_mode=_orch.PipelineMode.BATCH_ODDS_API,
                         source=_orch._sports_ref_source("footystats_odds"),
                         service_emission_state=None,
+                        # Phase 1A cluster gate: per-fixture ≥1 row floor (bridge until
+                        # EXPECTED_BOOKMAKER_MARKET_SETS ships as item 1 of this plan
+                        # and the min-count can be set to len(expected_set[tier])).
+                        expected_root_clusters={
+                            str(fid): 1
+                            for fid in _stamped_odds_clean["canonical_fixture_id"].dropna().unique()
+                            if fid
+                        },
+                        cluster_extractor=lambda sym: sym,
+                        cluster_symbol_column="canonical_fixture_id",
                     )
 
                 if not _without_league.empty:
@@ -686,6 +696,15 @@ async def _fetch_footystats_odds(
                         pipeline_mode=_orch.PipelineMode.BATCH_ODDS_API,
                         source=_orch._sports_ref_source("footystats_odds"),
                         service_emission_state=None,
+                        # Unmapped-league rows still carry canonical_fixture_id; assert
+                        # ≥1 row per fixture to catch silent drops.
+                        expected_root_clusters={
+                            str(fid): 1
+                            for fid in _stamped_odds_unmapped["canonical_fixture_id"].dropna().unique()
+                            if fid
+                        },
+                        cluster_extractor=lambda sym: sym,
+                        cluster_symbol_column="canonical_fixture_id",
                     )
             else:
                 _stamped_odds_df = _orch.stamp_available_at_explicit(df, when=_orch.datetime.now(_orch.UTC))
@@ -709,6 +728,10 @@ async def _fetch_footystats_odds(
                     pipeline_mode=_orch.PipelineMode.BATCH_ODDS_API,
                     source=_orch._sports_ref_source("footystats_odds"),
                     service_emission_state=None,
+                    # No canonical_fixture_id column (home_team/away_team absent in source
+                    # response) — NO-OP cluster gate per SP-10 contract.
+                    expected_root_clusters={},
+                    cluster_extractor=lambda sym: sym,
                 )
             odds_manifest.write()
             _orch.logger.info("FootyStats odds: %d rows written for date=%s", len(df), date)
