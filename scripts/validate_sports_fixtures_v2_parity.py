@@ -39,7 +39,7 @@ from pathlib import Path
 
 import pandas as pd
 from google.api_core.exceptions import NotFound
-from google.cloud import storage
+from unified_trading_library import StorageClient, get_storage_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -74,9 +74,9 @@ def _load_legacy_days() -> list[str]:
     return sorted(d for d, schema in data["days"].items() if schema == "LEGACY")
 
 
-def _read_parquet(client: storage.Client, path: str) -> pd.DataFrame | None:
+def _read_parquet(client: StorageClient, path: str) -> pd.DataFrame | None:
     try:
-        raw = client.bucket(BUCKET).blob(path).download_as_bytes()
+        raw = client.download_bytes(bucket=BUCKET, blob_path=path)
     except (NotFound, FileNotFoundError):
         return None
     try:
@@ -95,7 +95,7 @@ def _af_id_from_legacy_struct(cell: object) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _validate_one_day(client: storage.Client, day: str) -> DayParity:
+def _validate_one_day(client: StorageClient, day: str) -> DayParity:
     legacy_path = f"{SRC_PREFIX}day={day}/entity=fixtures/fixtures.parquet"
     fixtures_v2_path = f"{DST_PREFIX}day={day}/entity=fixtures/fixtures.parquet"
     stats_v2_path = f"{DST_PREFIX}day={day}/entity=fixture_stats/fixture_stats.parquet"
@@ -167,7 +167,7 @@ def main() -> int:
     legacy_days = _load_legacy_days()
     logger.info("validating parity on %d days", len(legacy_days))
 
-    client = storage.Client()
+    client = get_storage_client()
     results: dict[str, DayParity] = {}
     t0 = time.monotonic()
     with ThreadPoolExecutor(max_workers=16) as pool:
