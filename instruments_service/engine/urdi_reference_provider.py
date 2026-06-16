@@ -15,6 +15,9 @@ ERROR HANDLING POLICY
 - NotImplementedError: adapter unsupported instrument_type — DEBUG + return []
 - ValueError: no URDI adapter for this venue — ERROR + skip
 - Programming errors (TypeError etc.): reraise to fail the shard
+- Empty-after-venue-filter (fetched rows but 0 matched the venue tag, with none
+  routed to a sibling): ADAPTER_ERROR (permanent) — a venue-tagging bug, NOT a
+  silent honest-empty. See the empty-after-filter guard in `_fetch_one_venue`.
 
 Failed venues are tracked in `VenueFetchResult.failed_venues` with their error
 classification (retryable/permanent) so the orchestrator can make retry decisions.
@@ -175,6 +178,78 @@ async def fetch_instruments_for_all_venues(
     return VenueFetchResult(records=all_records, failed_venues=failed)
 
 
+def _filter_records_to_venue(
+    records: list[InstrumentRecord],
+    *,
+    canonical: str,
+    batch_venues: set[str],
+    failed: list[VenueErrorClassification],
+) -> list[InstrumentRecord]:
+    """Filter fetched records down to those tagged for ``canonical``.
+
+    Instruments tagged for sibling venues in the same batch are skipped here
+    (the sibling's fetch will claim them); instruments tagged for venues NOT in
+    the batch are dropped with a warning (a real adapter venue-tagging bug).
+
+    Honest-absence guard: a fetch that returned rows but yields ZERO records for
+    this venue after the venue-tag filter — with NONE of them legitimately
+    routed to a sibling in this batch — is a silent exclusion, NOT an honest
+    empty (every fetched row was tagged for a venue not in the batch). Record it
+    as ``attempted_failed`` (ADAPTER_ERROR, permanent — a tagging bug, not
+    transient) so the orchestrator flags the venue honestly rather than as a
+    fetched-OK-empty. A genuine empty source response (``records == []``) stays
+    an honest empty; a partially-claimed batch (``sibling_routed > 0``) is the
+    legitimate sibling-routing path.
+    """
+    matched: list[InstrumentRecord] = []
+    sibling_routed = 0
+    unknown_venues: set[str] = set()
+    for r in records:
+        tag = getattr(r, "venue", "").upper()
+        if tag == canonical.upper():
+            matched.append(r)
+        elif tag in batch_venues:
+            sibling_routed += 1  # will be claimed by sibling fetch
+        else:
+            unknown_venues.add(tag)
+    if sibling_routed:
+        logger.debug(
+            "URDI[%s]: %d instruments tagged for sibling venues (will be claimed by their fetch)",
+            canonical,
+            sibling_routed,
+        )
+    if unknown_venues:
+        logger.warning(
+            "URDI[%s]: dropping %d instruments tagged for unknown venues %s",
+            canonical,
+            len([r for r in records if getattr(r, "venue", "").upper() in unknown_venues]),
+            sorted(unknown_venues),
+        )
+    if records and not matched and sibling_routed == 0:
+        logger.error(
+            "URDI[%s]: ADAPTER_ERROR (permanent) — fetched %d row(s) but 0 survived "
+            "the venue-tag filter (all tagged for venue(s) not in batch: %s); "
+            "recording attempted_failed, not a silent honest-empty",
+            canonical,
+            len(records),
+            sorted(unknown_venues),
+        )
+        failed.append(
+            VenueErrorClassification(
+                venue=canonical,
+                error_code="ADAPTER_ERROR",
+                retry_safe=False,
+                reconnect=False,
+                action=ErrorAction.FAIL,
+                description=(
+                    f"fetched {len(records)} row(s) but 0 matched venue tag "
+                    f"{canonical!r} (all tagged for {sorted(unknown_venues)})"
+                ),
+            )
+        )
+    return matched
+
+
 async def _fetch_one_venue(
     canonical: str,
     adapter_key: str,
@@ -214,36 +289,12 @@ async def _fetch_one_venue(
             # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
             records = await adapter.get_instruments_cached(instrument_type=instrument_type, date=date)
             logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
-            # Venue-tag filtering: keep only instruments tagged for this venue.
-            # Instruments tagged for sibling venues in the same batch are silently
-            # skipped here — the sibling's _fetch_one call will claim them.
-            # Only log a warning for instruments tagged for venues NOT in the batch
-            # (indicates a real adapter bug).
-            matched: list[InstrumentRecord] = []
-            sibling_routed = 0
-            unknown_venues: set[str] = set()
-            for r in records:
-                tag = getattr(r, "venue", "").upper()
-                if tag == canonical.upper():
-                    matched.append(r)
-                elif tag in batch_venues:
-                    sibling_routed += 1  # will be claimed by sibling fetch
-                else:
-                    unknown_venues.add(tag)
-            if sibling_routed:
-                logger.debug(
-                    "URDI[%s]: %d instruments tagged for sibling venues (will be claimed by their fetch)",
-                    canonical,
-                    sibling_routed,
-                )
-            if unknown_venues:
-                logger.warning(
-                    "URDI[%s]: dropping %d instruments tagged for unknown venues %s",
-                    canonical,
-                    len([r for r in records if getattr(r, "venue", "").upper() in unknown_venues]),
-                    sorted(unknown_venues),
-                )
-            return matched
+            return _filter_records_to_venue(
+                records,
+                canonical=canonical,
+                batch_venues=batch_venues,
+                failed=failed,
+            )
         except NotImplementedError:
             logger.debug("URDI[%s]: instrument_type=%r not supported", canonical, instrument_type)
             failed.append(
