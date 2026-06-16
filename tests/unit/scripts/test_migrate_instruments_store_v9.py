@@ -278,6 +278,52 @@ def test_sports_structural_only_preserves_semantics() -> None:
     assert out.iloc[1]["error_reason"] == "EXPECTED_PRE_SEASON"
 
 
+def test_sports_blank_status_phantom_skeletons_dropped() -> None:
+    """384: sports rows with a blank capture_status AND blank data_type are PHANTOM
+    skeletons (no valid v9 cell — the prod sports IS-store has 6,869, API_FOOTBALL*
+    venues) → dropped (blank capture_status is invalid v9; not re-stampable without a
+    data_type). A real cell is kept untouched."""
+    df = pd.DataFrame(
+        [
+            # phantom skeleton: blank capture_status + blank data_type → DROP
+            {"date": "2024-09-11", "venue": "API_FOOTBALL", "instrument_count": 0,
+             "capture_status": "", "data_type": "", "league_id": "", "pipeline_mode": "",
+             "written_at": "2026-05-01T00:00:00+00:00", "error_reason": "", "schema_version": 8},
+            # phantom skeleton with count>0 (370 of the 6,869) → still DROP (no data_type ⇒ no cell)
+            {"date": "2024-09-11", "venue": "API_FOOTBALL_FIXTURES", "instrument_count": 5,
+             "capture_status": "", "data_type": "", "league_id": "", "pipeline_mode": "",
+             "written_at": "2026-05-01T00:00:00+00:00", "error_reason": "", "schema_version": 8},
+            # a real captured cell → KEEP
+            {"date": "2024-09-11", "venue": "API_FOOTBALL", "instrument_count": 0,
+             "capture_status": "captured", "data_type": "STANDINGS", "league_id": "39",
+             "pipeline_mode": "", "written_at": "2026-05-01T00:00:00+00:00",
+             "error_reason": "", "schema_version": 8},
+        ]
+    )
+    out, stats = MOD.transform_index_v9(df, "sports")
+    assert stats["sports_blank_status_phantoms_dropped"] == 2
+    assert len(out) == 1
+    assert out.iloc[0]["data_type"] == "STANDINGS"
+    # zero blank capture_status survives (valid v9)
+    assert (out["capture_status"].astype(str).str.len() > 0).all()
+
+
+def test_sports_blank_status_with_real_data_type_loud_fails() -> None:
+    """384 guard: a blank capture_status WITH a real data_type is NOT a phantom — it is
+    a real cell needing an honest re-stamp (sports oracle), so the migrator loud-fails
+    rather than silently dropping a real cell or emitting invalid v9."""
+    df = pd.DataFrame(
+        [
+            {"date": "2024-09-11", "venue": "API_FOOTBALL", "instrument_count": 3,
+             "capture_status": "", "data_type": "FIXTURE_LINEUPS", "league_id": "39",
+             "pipeline_mode": "", "written_at": "2026-05-01T00:00:00+00:00",
+             "error_reason": "", "schema_version": 8},
+        ]
+    )
+    with pytest.raises(ValueError, match="blank capture_status WITH a non-blank"):
+        MOD.transform_index_v9(df, "sports")
+
+
 # ── object-path transform ─────────────────────────────────────────────────────────────────────────────────────
 
 
