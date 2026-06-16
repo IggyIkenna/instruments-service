@@ -700,6 +700,20 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
         legs = pre_parsed_legs if is_combo else None
 
+        # Canonical product identity (additive — raw_symbol stays the raw code).
+        # Resolve the human product root from the existing UAC exchange-code
+        # registry (no Databento API call). COMBO/spread instruments span >1
+        # product, so they carry no single canonical root.
+        product_root = None if is_combo else _db._resolve_product_root(raw_symbol)
+        canonical_instrument_id = self._build_canonical_instrument_id(
+            canonical_venue=canonical_venue,
+            instrument_type=instrument_type,
+            product_root=product_root,
+            expiry=expiry,
+            strike=strike if not is_combo else None,
+            option_type=option_type if not is_combo else None,
+        )
+
         return InstrumentRecord(
             instrument_key=f"{canonical_venue}:{instrument_type.upper()}:{raw_symbol}",
             venue=canonical_venue,
@@ -708,6 +722,8 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_type=instrument_type,
             base_asset=underlying or raw_symbol,
             quote_asset=currency,
+            product_root=product_root,
+            canonical_instrument_id=canonical_instrument_id,
             tick_size=tick_size if not is_combo else None,
             min_size=lot_size if not is_combo else None,
             contract_size=Decimal("1") if not is_combo else None,
@@ -784,3 +800,31 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # 3. Fallback to dataset-level mapping
         return _db._DATASET_TO_asset_group.get(dataset, AssetClass.EQUITY)
+
+    @staticmethod
+    def _build_canonical_instrument_id(
+        canonical_venue: str,
+        instrument_type: InstrumentType,
+        product_root: str | None,
+        expiry: datetime | None,
+        strike: Decimal | None,
+        option_type: str | None,
+    ) -> str | None:
+        """Build a human-canonical instrument id from the resolved product root.
+
+        Shape: ``{venue}:{instrument_type}:{product_root}:{expiry_or_tenor}[:{strike}{C|P}]``
+        e.g. ``CME:FUTURE:SP500:2030-06`` / ``CME:OPTION:SP500:2025-10:5000C``.
+
+        Returns ``None`` when no product root resolves — the id is additive and
+        must not fabricate identity for instruments the registry can't canonicalise.
+        """
+        if not product_root:
+            return None
+        parts = [canonical_venue, instrument_type.upper(), product_root]
+        if expiry is not None:
+            parts.append(expiry.strftime("%Y-%m"))
+        if strike is not None and instrument_type == InstrumentType.OPTION:
+            strike_str = format(strike.normalize(), "f")
+            suffix = {"C": "C", "P": "P"}.get((option_type or "").upper(), "")
+            parts.append(f"{strike_str}{suffix}")
+        return ":".join(parts)
