@@ -187,7 +187,7 @@ def _honest_capture_status(df: pd.DataFrame, counts: pd.Series) -> dict[str, int
     placeholder. Returns stats.
     """
     cs = df["capture_status"]
-    blank = cs.str.len() == 0
+    blank = cs.str.len() == 0  # _ensure_v9_columns already coerced NaN→"" (see _as_text)
     cap_from_blank = blank & (counts > 0)
     empty_from_blank = blank & (counts <= 0)
     df.loc[cap_from_blank, "capture_status"] = "captured"
@@ -301,6 +301,30 @@ def transform_index_v9(df: pd.DataFrame, asset_group: str) -> tuple[pd.DataFrame
         stats.update(_honest_capture_status(out, counts))
         # CF-5 typed empty reasons
         stats.update(_typed_empty_reasons(out))
+    else:
+        # CF-10s (sports): capture_status is set authoritatively by the sports
+        # enumerator + coverage oracle (instrument_count is NOT the sports
+        # captured-signal — 194k sports captured cells legitimately carry count==0),
+        # so the count-based honest derivation above is deliberately skipped. A row
+        # that STILL has a blank capture_status after that is invalid v9 (the closed
+        # 4-state set excludes blank). In the prod sports IS-store these are 6,869
+        # uniformly-PHANTOM skeleton rows (blank data_type + blank league_id, no valid
+        # v9 cell — API_FOOTBALL* venues, never stamped by the enumerator). They are
+        # not re-stampable (no data_type ⇒ no cell), so they are DROPPED as phantoms.
+        blank_status = out["capture_status"].str.len() == 0
+        phantom = blank_status & (out["data_type"].str.len() == 0)
+        # Loud-fail guard: a blank-status row WITH a real data_type is a DIFFERENT bug
+        # (it needs an honest re-stamp from the sports oracle, not a phantom drop) —
+        # surface it rather than silently dropping a real cell or keeping invalid v9.
+        unexpected = int((blank_status & (~phantom)).sum())
+        if unexpected > 0:
+            raise ValueError(
+                f"{unexpected} sports rows carry a blank capture_status WITH a non-blank "
+                "data_type — these are real cells needing an honest re-stamp (sports "
+                "coverage oracle), not a phantom drop. Investigate before applying."
+            )
+        stats["sports_blank_status_phantoms_dropped"] = int(phantom.sum())
+        out = out.loc[~phantom].reset_index(drop=True)
 
     # CF-3/CF-4/CF-TRANSPORT provenance
     if is_sports:
@@ -312,7 +336,7 @@ def transform_index_v9(df: pd.DataFrame, asset_group: str) -> tuple[pd.DataFrame
         blank_aa = out["available_at"].str.len() == 0
         out.loc[blank_aa, "available_at"] = _as_text(out.loc[blank_aa, "written_at"])
     stats["available_at_filled"] = int((out["available_at"].str.len() > 0).sum())
-    stats["v9_after"] = n
+    stats["v9_after"] = len(out)  # may be < n when sports phantom skeleton rows were dropped
     return out, stats
 
 
