@@ -28,7 +28,7 @@ _DEFAULT_CHAIN = "ETHEREUM"
 _ETHERFI_DEPLOY_DATE = datetime(2023, 11, 1, tzinfo=UTC)
 
 # EtherFi token address on Ethereum
-_WEETH_ADDRESS = "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee"
+_WEETH_ADDRESS = "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee"  # DERIVED 2023-11-01 from ethereum ether.fi
 
 # MTDS handlers derive the APY/rate fetch URL from this field; hardcoding is banned.
 _ETHERFI_APY_URL_TEMPLATE = "https://api.etherfi.id/weeth/apr"
