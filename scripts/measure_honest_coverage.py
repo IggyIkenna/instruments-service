@@ -81,7 +81,13 @@ def _read_manifest(asset_group: str) -> pd.DataFrame | None:
     for bucket_name in _MANIFEST_BUCKET_CANDIDATES[asset_group]:
         uri = f"gs://{bucket_name}/_index/availability_index.parquet"
         try:
-            df = pd.read_parquet(uri)
+            # Read ONLY the 3 columns the coverage compute uses (capture_status for
+            # _count_statuses; venue + data_type for the groupby levels). The cefi
+            # availability_index is ~35.8M rows × many columns — loading the full frame
+            # OOM-killed even a 32 GiB VM (rc=137); 3 string columns fit in a few GiB and
+            # stay bounded as the index grows. SSOT for the used columns: _count_statuses +
+            # _compute_coverage below.
+            df = pd.read_parquet(uri, columns=["capture_status", "venue", "data_type"])
         except Exception as exc:
             logger.info("  %s candidate not accessible (%s): %s", asset_group, uri, exc)
             continue

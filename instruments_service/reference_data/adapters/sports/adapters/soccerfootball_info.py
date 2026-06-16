@@ -102,49 +102,18 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         return leagues
 
     async def get_standings(self, league_id: str, season: str | None = None) -> list[CanonicalStanding]:
-        """Fetch standings/table for a specific league.
+        """SoccerFootball.info does not provide a standings endpoint.
 
-        Args:
-            league_id: SoccerFootball.info league ID (UUID string).
-            season: Optional season identifier.
-
-        Returns:
-            List of validated CanonicalStanding models.
+        The `/championships/standings/` endpoint was probed and yielded 100%
+        failures across all 42 tracked shards (2026-04-29 audit). The data type
+        ``SFI_STANDINGS`` was retired on 2026-04-24.  Use ApiFootballAdapter for
+        league standings. This returns an empty list.
         """
-        # SFI uses /championships/{id}/standings/ not /leagues/{id}/standings
-        # (confirmed from archived new-sports-batting-services client)
-        url = f"{_BASE_URL}/championships/standings/"
-        params: dict[str, str] = {"i": league_id, "l": "en_US"}
-        if season:
-            params["s"] = season
-
-        try:
-            async with self._make_session() as session:
-                raw_response = await self._get_with_retry(
-                    session,
-                    url,
-                    params=params if params else None,
-                    headers=self._headers(),
-                )
-        except Exception as exc:
-            error_code = self._classify_error(exc)
-            self._emit_fetch_failed(error_code, exc)
-            raise
-
-        raw_rows = _extract_data(raw_response)
-        results: list[CanonicalStanding] = []
-        for item in raw_rows:
-            try:
-                results.append(_normalize_sfi_standing(item, league_id, season))
-            except Exception as exc:
-                logger.warning("Failed to normalize SFI standing: %s", exc)
-                continue
         logger.info(
-            "Fetched %d standings entries for league=%s",
-            len(results),
-            league_id,
+            "get_standings not supported on SoccerFootball.info adapter — SFI has no standings endpoint "
+            "(SFI_STANDINGS retired 2026-04-24). Use ApiFootballAdapter."
         )
-        return results
+        return []
 
     async def get_fixtures(
         self,
@@ -159,38 +128,17 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         return []
 
     async def get_teams(self, league_id: int | str, season: int | None = None) -> list[CanonicalTeam]:
-        """Fetch teams from standings for a league.
+        """SoccerFootball.info does not provide team data.
 
-        Args:
-            league_id: SoccerFootball.info league ID (as int, converted to str).
-            season: Optional season year.
-
-        Returns:
-            List of canonical teams extracted from standings data.
+        Teams were previously derived from standings, but SFI has no standings
+        endpoint (retired 2026-04-24). Use ApiFootballAdapter for team data.
+        This returns an empty list.
         """
-        standings = await self.get_standings(str(league_id))
-        teams: list[CanonicalTeam] = []
-        for entry in standings:
-            try:
-                if not entry.team_name:
-                    continue
-                teams.append(
-                    CanonicalTeam(
-                        team_id=entry.team_id,
-                        name=entry.team_name,
-                        short_name=None,
-                        country=None,
-                        founded=None,
-                        logo_url=None,
-                        venue=None,
-                    )
-                )
-            except Exception as exc:
-                logger.warning("Failed to parse SoccerFootball.info team: %s", exc)
-                continue
-
-        logger.info("Fetched %d teams for league=%s", len(teams), league_id)
-        return teams
+        logger.info(
+            "get_teams not supported on SoccerFootball.info adapter — depends on standings which SFI lacks. "
+            "Use ApiFootballAdapter."
+        )
+        return []
 
     async def get_match_ids_for_date(
         self,
