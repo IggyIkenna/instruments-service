@@ -35,24 +35,24 @@ _MVP_MARKETS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
         {
             "collateral_asset": "BNB",
             "borrow_asset": "USDC",
-            "vault_address": "0xA07c5b74C9B40447a954e1466938b865b6BBea36",  # vBNB
+            "vault_address": "0xA07c5b74C9B40447a954e1466938b865b6BBea36",  # vBNB  # DERIVED 2020-09 from bsc app.venus.io
         },
         {
             "collateral_asset": "BTCB",
             "borrow_asset": "USDC",
-            "vault_address": "0x882C173bC7Ff3b7786CA16dfeD3DFFfb9Ee7847B",  # vBTCB
+            "vault_address": "0x882C173bC7Ff3b7786CA16dfeD3DFFfb9Ee7847B",  # vBTCB  # DERIVED 2020-09 from bsc app.venus.io
         },
         {
             "collateral_asset": "USDT",
             "borrow_asset": "USDC",
-            "vault_address": "0xfD5840Cd36d94D7229439859C0112a4185BC0255",  # vUSDT
+            "vault_address": "0xfD5840Cd36d94D7229439859C0112a4185BC0255",  # vUSDT  # DERIVED 2020-09 from bsc app.venus.io
         },
     ],
     "ETHEREUM": [
         {
             "collateral_asset": "WETH",
             "borrow_asset": "USDC",
-            "vault_address": "0x7c8ff7d2A1372433726f879BD945fFb250B94c65",  # vWETH-Core
+            "vault_address": "0x7c8ff7d2A1372433726f879BD945fFb250B94c65",  # vWETH-Core  # DERIVED 2024-04-15 from ethereum app.venus.io
         },
     ],
 }

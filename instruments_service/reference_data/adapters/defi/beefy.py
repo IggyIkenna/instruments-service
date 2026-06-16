@@ -75,17 +75,17 @@ _BEEFY_VAULTS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "ETHEREUM": [
         {
             "symbol": "BEEFY-ETH-MORPHO-USDC-FRONTIER",
-            "vault_address": "0x35E7Bf11193C40B943df1fb33e20f947a6EB04E4",
+            "vault_address": "0x35E7Bf11193C40B943df1fb33e20f947a6EB04E4",  # DERIVED 2026-05-12 from ethereum api.beefy.finance/vaults/ethereum
             "underlying": "USDC",
         },
         {
             "symbol": "BEEFY-ETH-MORPHO-V2-USDC-STEAKHOUSE",
-            "vault_address": "0x4fB81F52e8606F5Eaf5E840DCAbF8611286Cc46b",
+            "vault_address": "0x4fB81F52e8606F5Eaf5E840DCAbF8611286Cc46b",  # DERIVED 2026-05-12 from ethereum api.beefy.finance/vaults/ethereum
             "underlying": "USDC",
         },
         {
             "symbol": "BEEFY-ETH-MORPHO-V2-AUSD-STEAKHOUSE",
-            "vault_address": "0x3988C372513F854Bb5fb980fF135567909012Bda",
+            "vault_address": "0x3988C372513F854Bb5fb980fF135567909012Bda",  # DERIVED 2026-05-12 from ethereum api.beefy.finance/vaults/ethereum
             "underlying": "AUSD",
         },
     ],
@@ -94,22 +94,22 @@ _BEEFY_VAULTS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "ARBITRUM": [
         {
             "symbol": "BEEFY-ARB-MORPHO-USDC-STEAKHOUSE",
-            "vault_address": "0x13EaA79178f2b6C0A43cA265B66d70b9d60F827a",
+            "vault_address": "0x13EaA79178f2b6C0A43cA265B66d70b9d60F827a",  # DERIVED 2026-05-12 from arbitrum api.beefy.finance/vaults/arbitrum
             "underlying": "USDC",
         },
         {
             "symbol": "BEEFY-ARB-CURVE-CRVUSD-USDC",
-            "vault_address": "0x174897AD878c614D7Bc563Eaf23A4a0D75D58d2C",
+            "vault_address": "0x174897AD878c614D7Bc563Eaf23A4a0D75D58d2C",  # DERIVED 2026-05-12 from arbitrum api.beefy.finance/vaults/arbitrum
             "underlying": "USDC",
         },
         {
             "symbol": "BEEFY-ARB-UNI-USDC-USDT",
-            "vault_address": "0x195DE404648C4E9f8778816d1E31566272FBff6b",
+            "vault_address": "0x195DE404648C4E9f8778816d1E31566272FBff6b",  # DERIVED 2026-05-12 from arbitrum api.beefy.finance/vaults/arbitrum
             "underlying": "USDC",
         },
         {
             "symbol": "BEEFY-ARB-UNI-DAI-WETH",
-            "vault_address": "0x155aEbAe69B3Fa2D135146Df6fECa0F8D6FabDD6",
+            "vault_address": "0x155aEbAe69B3Fa2D135146Df6fECa0F8D6FabDD6",  # DERIVED 2026-05-12 from arbitrum api.beefy.finance/vaults/arbitrum
             "underlying": "WETH",
         },
     ],
@@ -118,17 +118,17 @@ _BEEFY_VAULTS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "BASE": [
         {
             "symbol": "BEEFY-BASE-AERO-WETH-USDC",
-            "vault_address": "0x09139A80454609B69700836a9eE12Db4b5DBB15f",
+            "vault_address": "0x09139A80454609B69700836a9eE12Db4b5DBB15f",  # DERIVED 2026-05-12 from base api.beefy.finance/vaults/base
             "underlying": "WETH",
         },
         {
             "symbol": "BEEFY-BASE-AERO-DAI-USDC",
-            "vault_address": "0x315043e79Cc1c2a71199769087CeF61f8a4297a0",
+            "vault_address": "0x315043e79Cc1c2a71199769087CeF61f8a4297a0",  # DERIVED 2026-05-12 from base api.beefy.finance/vaults/base
             "underlying": "USDC",
         },
         {
             "symbol": "BEEFY-BASE-AERO-USDC-MAI",
-            "vault_address": "0x22F8ff24861a7F7e2ec9b19C5668b43bB69202E3",
+            "vault_address": "0x22F8ff24861a7F7e2ec9b19C5668b43bB69202E3",  # DERIVED 2026-05-12 from base api.beefy.finance/vaults/base
             "underlying": "USDC",
         },
     ],
@@ -137,17 +137,17 @@ _BEEFY_VAULTS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "BSC": [
         {
             "symbol": "BEEFY-BSC-PANCAKE-ETH-WBNB",
-            "vault_address": "0x015E2d1b7aC621370A24B7dd426EF1ef4DA99B86",
+            "vault_address": "0x015E2d1b7aC621370A24B7dd426EF1ef4DA99B86",  # DERIVED 2026-05-12 from bsc api.beefy.finance/vaults/bsc
             "underlying": "WBNB",
         },
         {
             "symbol": "BEEFY-BSC-PANCAKE-ETH-BTCB",
-            "vault_address": "0x0A751Fec061327d7338a972d3D05b5d1A105bfDa",
+            "vault_address": "0x0A751Fec061327d7338a972d3D05b5d1A105bfDa",  # DERIVED 2026-05-12 from bsc api.beefy.finance/vaults/bsc
             "underlying": "BTCB",
         },
         {
             "symbol": "BEEFY-BSC-PANCAKE-PEPE-WBNB",
-            "vault_address": "0x13aD48480aC03233b4A1f73fABF7B7aa08cAfdbE",
+            "vault_address": "0x13aD48480aC03233b4A1f73fABF7B7aa08cAfdbE",  # DERIVED 2026-05-12 from bsc api.beefy.finance/vaults/bsc
             "underlying": "WBNB",
         },
     ],
@@ -156,17 +156,17 @@ _BEEFY_VAULTS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "AVALANCHE": [
         {
             "symbol": "BEEFY-AVAX-JOE",
-            "vault_address": "0x282B11E65f0B49363D4505F91c7A44fBEe6bCc0b",
+            "vault_address": "0x282B11E65f0B49363D4505F91c7A44fBEe6bCc0b",  # DERIVED 2026-05-12 from avalanche api.beefy.finance/vaults/avax
             "underlying": "JOE",
         },
         {
             "symbol": "BEEFY-AVAX-BLACK-BTCB-WAVAX",
-            "vault_address": "0x0483130D4EFBC2e082653F88Bd52adF987545455",
+            "vault_address": "0x0483130D4EFBC2e082653F88Bd52adF987545455",  # DERIVED 2026-05-12 from avalanche api.beefy.finance/vaults/avax
             "underlying": "WAVAX",
         },
         {
             "symbol": "BEEFY-AVAX-BLACK-WETH-WAVAX",
-            "vault_address": "0x424E9a7D393adFCfc1EEA03731f56F26e42eB27C",
+            "vault_address": "0x424E9a7D393adFCfc1EEA03731f56F26e42eB27C",  # DERIVED 2026-05-12 from avalanche api.beefy.finance/vaults/avax
             "underlying": "WAVAX",
         },
     ],
