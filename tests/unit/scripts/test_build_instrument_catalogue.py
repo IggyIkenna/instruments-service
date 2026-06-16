@@ -237,13 +237,21 @@ def test_prediction_rollup_cqg_lifecycle_spans_member_window(rollup: ModuleType)
     assert cqg["H"]["available_to"] is None  # present on the latest day → active
 
 
-def test_prediction_rollup_skips_blank_cqg(rollup: ModuleType) -> None:
-    """A blank cqg path segment yields no bundle row (honest skip, no empty-string bundle)."""
+def test_prediction_rollup_blank_cqg_emits_conditionid_grain_no_bundle(rollup: ModuleType) -> None:
+    """249-a: a blank cqg (the real venue=/market= writer layout, which emits NO
+    canonical_question_group) yields NO cqg-bundle row but DOES emit the
+    conditionId grain (trades + market_lifecycle). Pre-fix this skipped the whole
+    frame → 0-row catalogue; the bundle/cqg grain stays absent (gated on 338)."""
     d1 = date(2025, 3, 14)
     df = rollup.build_prediction_catalogue_dataframe(
         [(d1, "POLYMARKET", "", _pred_snap([{"instrument_key": "c1", "venue": "POLYMARKET"}]))]
     )
-    assert not [r for r in df.to_dict("records") if r["data_type"] == "prediction_canonical_question_group"]
+    recs = df.to_dict("records")
+    # No cqg bundle row (no empty-string bundle; the cqg grain is 249-b, gated on 338).
+    assert not [r for r in recs if r["data_type"] == "prediction_canonical_question_group"]
+    # ...but the conditionId grain IS materialised (the 249-a fix — was 0 rows before).
+    assert {r["instrument_id"] for r in recs if r["data_type"] == "trades"} == {"c1"}
+    assert {r["instrument_id"] for r in recs if r["data_type"] == "market_lifecycle"} == {"c1"}
 
 
 def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleType) -> None:
