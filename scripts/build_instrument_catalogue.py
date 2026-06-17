@@ -144,6 +144,15 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # options/futures). Propagated from the instruments-store ``underlying``
     # column so enumerate's roll-up keys options_chain candidates per underlying.
     "underlying",
+    # Exchange-native symbol + base asset (CeFi/defi lifecycle cross-ref keys).
+    # The UTL ``instruments_catalog_reader`` matches a manifest row's bare symbol
+    # via ``venue+raw_symbol`` (proven UNIQUE per instrument — 0 collisions across
+    # the full 2019→2026 history) and falls back to ``venue+base_asset`` (lossy —
+    # base_asset alone maps to many instruments, so it is the last resort). Carried
+    # from the instruments-store by_date source so the reader's existing strategies
+    # match. Blank for prediction/sports (no exchange-native symbol there).
+    "raw_symbol",
+    "base_asset",
     # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean
     # computed via the UAC ``is_mvp(...)`` predicate over the rolled-up catalogue.
     # Read by deployment-api's ``scope=mvp`` coverage denominator + the data-status
@@ -304,6 +313,8 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 # the full DATA_TYPES_BY_ASSET_GROUP list (legacy behaviour).
                 "data_type": None,
                 "underlying": agg.meta.get("underlying") or "",
+                "raw_symbol": agg.meta.get("raw_symbol") or "",
+                "base_asset": agg.meta.get("base_asset") or "",
             }
         )
 
@@ -320,6 +331,8 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         "market_created_at": _opt_field(row, "market_created_at"),
         "settlement_time": _opt_field(row, "settlement_time"),
         "underlying": _str_field(row, "underlying"),
+        "raw_symbol": _str_field(row, "raw_symbol"),
+        "base_asset": _str_field(row, "base_asset"),
     }
 
 

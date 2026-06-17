@@ -132,6 +132,45 @@ def test_rollup_metadata_follows_most_recent_snapshot(rollup: ModuleType) -> Non
     assert row["chain"] == "ARBITRUM"
 
 
+def test_rollup_carries_raw_symbol_and_base_asset(rollup: ModuleType) -> None:
+    """raw_symbol + base_asset are carried from the by_date source so the UTL
+    catalogue reader's ``venue+raw_symbol`` (unique) / ``venue+base_asset``
+    (fallback) lifecycle cross-ref matches CeFi manifest bare symbols (E5)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-FUTURES:PERPETUAL:ADA-USDT",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "raw_symbol": "ADA-PERP",
+                            "base_asset": "ADA",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    assert "raw_symbol" in df.columns
+    assert "base_asset" in df.columns
+    row = df.to_dict("records")[0]
+    assert row["raw_symbol"] == "ADA-PERP"
+    assert row["base_asset"] == "ADA"
+
+
+def test_rollup_raw_symbol_blank_when_source_absent(rollup: ModuleType) -> None:
+    """A source row without raw_symbol/base_asset yields "" (never NaN/fabricated)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot([{"instrument_key": "X", "venue": "V"}]))])
+    row = df.to_dict("records")[0]
+    assert row["raw_symbol"] == ""
+    assert row["base_asset"] == ""
+
+
 def test_rollup_supports_instrument_id_column(rollup: ModuleType) -> None:
     """The id column falls back to instrument_id when instrument_key is absent."""
     d1 = date(2024, 1, 1)
