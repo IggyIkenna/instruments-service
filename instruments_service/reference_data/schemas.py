@@ -17,7 +17,16 @@ from unified_api_contracts.internal import InstrumentRecord
 
 @dataclass
 class CanonicalOptionsChain:
-    """Options chain snapshot — available strikes and expiries for an underlying."""
+    """Options chain snapshot — available strikes and expiries for an underlying.
+
+    ``mark_iv_by_instrument`` carries the venue-published mark implied volatility
+    (annualised, fractional — e.g. ``Decimal("0.62")`` = 62% IV) keyed by
+    ``InstrumentRecord.instrument_key`` for each leg present in ``calls``/``puts``.
+    Venues that do not publish a mark IV (or did not return it for a leg) simply
+    omit the key — never a synthetic placeholder. ``underlying_mark`` is the
+    venue's index/mark price for the underlying at snapshot time, or ``None`` if
+    not available.
+    """
 
     venue: str
     underlying: str
@@ -25,6 +34,8 @@ class CanonicalOptionsChain:
     strikes: list[Decimal] = field(default_factory=list)
     calls: list[InstrumentRecord] = field(default_factory=list)
     puts: list[InstrumentRecord] = field(default_factory=list)
+    mark_iv_by_instrument: dict[str, Decimal] = field(default_factory=dict)
+    underlying_mark: Decimal | None = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

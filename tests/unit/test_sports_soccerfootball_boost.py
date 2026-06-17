@@ -2,7 +2,7 @@
 
 Targets:
 - get_leagues: lines 74-77 (exception in HTTP), 83 (non-dict continue), 97-99 (parse error)
-- get_standings: lines 129-132 (exception), 139-141 (parse error continue)
+- get_standings: retired 2026-04-24 — returns [] immediately (no HTTP calls)
 - get_match_descriptors_for_date: lines 244-247 (exception)
 - get_progressive_stats: lines 297-300 (exception), 307-313 (parse error continue)
 """
@@ -121,59 +121,21 @@ class TestGetLeagues:
 
 
 class TestGetStandings:
-    """Lines 129-132, 139-141."""
+    """get_standings returns [] immediately — SFI has no standings endpoint (retired 2026-04-24)."""
 
     @pytest.mark.asyncio
-    async def test_http_exception_propagates(self) -> None:
-        """Lines 129-132: exception in _get_with_retry → classify + emit + re-raise."""
+    async def test_returns_empty_list(self) -> None:
+        """get_standings is retired and returns [] without making any HTTP calls."""
         adapter = _make_adapter()
-
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=MagicMock())
-        cm.__aexit__ = AsyncMock(return_value=None)
-
-        with (
-            patch.object(adapter, "_make_session", return_value=cm),
-            patch.object(
-                adapter,
-                "_get_with_retry",
-                new_callable=AsyncMock,
-                side_effect=RuntimeError("timeout"),
-            ),
-            patch.object(adapter, "_classify_error", return_value="TIMEOUT"),
-            patch.object(adapter, "_emit_fetch_failed"),
-            pytest.raises(RuntimeError),
-        ):
-            await adapter.get_standings("league-123")  # type: ignore[attr-defined]
+        results = await adapter.get_standings("league-123")  # type: ignore[attr-defined]
+        assert results == []
 
     @pytest.mark.asyncio
-    async def test_standing_parse_error_continues(self) -> None:
-        """Lines 139-141: _normalize_sfi_standing raises → warning + continue."""
+    async def test_returns_empty_list_with_season(self) -> None:
+        """get_standings with season arg still returns [] without HTTP calls."""
         adapter = _make_adapter()
-
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=MagicMock())
-        cm.__aexit__ = AsyncMock(return_value=None)
-
-        raw_response = {"data": [{"team": "Arsenal", "rank": 1}, {"team": "Chelsea", "rank": 2}]}
-
-        with (
-            patch.object(adapter, "_make_session", return_value=cm),
-            patch.object(
-                adapter,
-                "_get_with_retry",
-                new_callable=AsyncMock,
-                return_value=raw_response,
-            ),
-            patch(
-                "instruments_service.reference_data.adapters.sports.adapters.soccerfootball_info._normalize_sfi_standing",
-                side_effect=[MagicMock(), Exception("bad standing")],
-            ),
-        ):
-            results = await adapter.get_standings("league-123")  # type: ignore[attr-defined]
-
-        # First row succeeded, second failed
-        assert len(results) == 1
+        results = await adapter.get_standings("league-123", season="2025")  # type: ignore[attr-defined]
+        assert results == []
 
 
 # ---------------------------------------------------------------------------

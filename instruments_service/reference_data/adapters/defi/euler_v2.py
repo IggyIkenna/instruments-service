@@ -36,17 +36,17 @@ _MVP_MARKETS: list[dict[str, str]] = [
     {
         "collateral_asset": "WETH",
         "borrow_asset": "USDC",
-        "vault_address": "0xD8b27CF359b7D15710a5BE299AF6e7Bf904984C2",
+        "vault_address": "0xD8b27CF359b7D15710a5BE299AF6e7Bf904984C2",  # DERIVED 2024-08-29 from ethereum app.euler.finance
     },
     {
         "collateral_asset": "WSTETH",
         "borrow_asset": "WETH",
-        "vault_address": "0xbC4B4AC47582c3E38Ce5940B80Da65401F4628f1",
+        "vault_address": "0xbC4B4AC47582c3E38Ce5940B80Da65401F4628f1",  # DERIVED 2024-08-29 from ethereum app.euler.finance
     },
     {
         "collateral_asset": "USDC",
         "borrow_asset": "USDT",
-        "vault_address": "0x797DD80692c3b2dAdabCe8e30C07fDE5307D48a9",
+        "vault_address": "0x797DD80692c3b2dAdabCe8e30C07fDE5307D48a9",  # DERIVED 2024-08-29 from ethereum app.euler.finance
     },
 ]
 

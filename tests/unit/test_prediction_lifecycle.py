@@ -106,17 +106,20 @@ class TestPolymarketLifecycle:
         assert expected_lag == timedelta(hours=2)
         assert lifecycle.current_status == "active"
 
-    def test_unclassifiable_market_falls_through_to_other(self) -> None:
+    def test_unclassifiable_market_falls_through_to_misc_novelty(self) -> None:
         adapter = PolymarketReferenceDataAdapter()
         market = _polymarket_unclassifiable_market()
 
         lifecycle = adapter.classify_lifecycle(market)
 
         assert lifecycle is not None
-        assert lifecycle.canonical_group == CanonicalQuestionGroup.OTHER
-        # OTHER's settlement_lag = 24h per UAC CANONICAL_GROUP_METADATA.
-        other_lag = CANONICAL_GROUP_METADATA[CanonicalQuestionGroup.OTHER].settlement_lag
-        assert lifecycle.settlement_time == lifecycle.resolution_time + other_lag
+        # Genuinely-uncategorised Polymarket markets (taxonomy MISC/UNKNOWN) now
+        # route to MISC_NOVELTY, the explicit novelty residual, per UAC
+        # decision 338 (categorised-but-ungrouped still → OTHER).
+        assert lifecycle.canonical_group == CanonicalQuestionGroup.MISC_NOVELTY
+        # MISC_NOVELTY's settlement_lag = 24h per UAC CANONICAL_GROUP_METADATA.
+        misc_lag = CANONICAL_GROUP_METADATA[CanonicalQuestionGroup.MISC_NOVELTY].settlement_lag
+        assert lifecycle.settlement_time == lifecycle.resolution_time + misc_lag
 
     def test_missing_condition_id_returns_none(self) -> None:
         adapter = PolymarketReferenceDataAdapter()
@@ -185,7 +188,8 @@ class TestPolymarketLifecycle:
         groups = {lc.canonical_group for lc in lifecycles}
         assert groups == {
             CanonicalQuestionGroup.BTC_UP_DOWN_HOURLY,
-            CanonicalQuestionGroup.OTHER,
+            # Uncategorised Polymarket market → MISC_NOVELTY (UAC decision 338).
+            CanonicalQuestionGroup.MISC_NOVELTY,
         }
 
     def test_get_market_lifecycles_skips_unclassifiable_lifecycle_rows(self) -> None:

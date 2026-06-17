@@ -11,8 +11,7 @@ with no network access. Tests are credential-free and offline.
 
 References:
 - https://www.convexfinance.com/
-- CVX contract: https://etherscan.io/token/0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B
-- cvxCRV contract: https://etherscan.io/token/0x62B9c7356A2Dc64a1969e19C23e4f579F9810Aa7
+- CVX / cvxCRV contracts: see ``_YIELD_TOKENS`` below (Etherscan-verified; per-address DERIVED citation).
 - Launch date sourced from unified_api_contracts.registry.chain_env.PROTOCOL_LAUNCH_DATES
   (("ETHEREUM", "CONVEX") == 2021-05-17).
 """
@@ -42,12 +41,12 @@ _CONVEX_DEPLOY_DATE = datetime(2021, 5, 17, tzinfo=UTC)
 _YIELD_TOKENS: list[dict[str, str]] = [
     {
         "symbol": "CVX",
-        "contract_address": "0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B",
+        "contract_address": "0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B",  # DERIVED 2021-05-17 from ethereum etherscan
         "underlying": "ETH",
     },
     {
         "symbol": "CVXCRV",
-        "contract_address": "0x62B9c7356A2Dc64a1969e19C23e4f579F9810Aa7",
+        "contract_address": "0x62B9c7356A2Dc64a1969e19C23e4f579F9810Aa7",  # DERIVED 2021-05-17 from ethereum etherscan
         "underlying": "CRV",
     },
 ]

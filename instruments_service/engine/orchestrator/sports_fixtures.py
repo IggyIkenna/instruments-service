@@ -52,12 +52,34 @@ def _sports_ref_pm(entity_name: str) -> str:
     return _orch.pipeline_mode_for_sports_entity(entity_name).value
 
 
-def _sports_ref_source(entity_name: str) -> str:
-    """Return the lower-case source key for a sports_reference entity name.
+# Sports entities whose canonical manifest SOURCE legitimately differs from the
+# pipeline_mode PATH key (``batch_<pathkey>``). The path key partitions GCS objects;
+# the source must match the UAC ``SOURCE_PRIORITY``/``SPORTS_DATA_TYPE_TO_SOURCE`` SSOT
+# accepted by ``record_captured`` (a mismatch raises ``MissingSourceError`` fail_fast).
+#
+# ``footystats_odds``: the odds snapshot is FETCHED by the FootyStats adapter
+# (``_fetch_footystats_odds``), so the upstream vendor/source is ``footystats``
+# (UAC ``SPORTS_DATA_TYPE_TO_SOURCE[ODDS] == "footystats"``), even though its GCS
+# pipeline_mode path key is ``batch_odds_api``. Stamping the path-key-derived
+# ``odds_api`` here previously made the ``record_captured`` for data_type ``ODDS``
+# fail (``source='odds_api' … not a registered source … Allowed: ['footystats']``).
+_SPORTS_REF_SOURCE_OVERRIDE: dict[str, str] = {
+    "footystats_odds": "footystats",
+}
 
-    Strips the ``batch_`` prefix from the pipeline_mode value so the source
-    string matches what the manifest rebuild's ``_source_from_row`` derives.
+
+def _sports_ref_source(entity_name: str) -> str:
+    """Return the lower-case manifest source key for a sports_reference entity name.
+
+    Defaults to the ``batch_``-stripped pipeline_mode value (which matches what the
+    manifest rebuild's ``_source_from_row`` derives for entities whose path key equals
+    their source). For the closed set of entities in ``_SPORTS_REF_SOURCE_OVERRIDE``
+    whose canonical UAC source legitimately differs from their GCS path key, returns
+    the overridden source so ``record_captured`` accepts it.
     """
+    override = _SPORTS_REF_SOURCE_OVERRIDE.get(entity_name.lower())
+    if override is not None:
+        return override
     pm_val = _orch._sports_ref_pm(entity_name)
     if pm_val.startswith("batch_"):
         return pm_val[len("batch_") :]
