@@ -54,7 +54,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 import pandas as pd
-from unified_api_contracts import MVP_SCOPE, is_mvp
+from unified_api_contracts import is_mvp
 from unified_trading_library import (
     StorageClient,
     get_config,
@@ -1026,28 +1026,6 @@ def promote_catalogue(
 # ---------------------------------------------------------------------------
 
 
-def _representative_mvp_data_type(asset_group: str) -> str:
-    """Return one MVP data_type for ``asset_group`` to gate an unbound catalogue row.
-
-    The ``is_mvp`` predicate hard-requires ``data_type in rule.data_types`` (Axis 3),
-    but a single-grain instrument catalogue carries ``data_type=None`` (the instrument
-    exists across ALL the AG's data_types — data_type is not an axis of the catalogue
-    grain). Evaluating with ``data_type=""`` therefore tags EVERY single-grain row
-    ``mvp=False`` (the all-zero MVP column bug, mvp_instrument_universe_gap_audit
-    2026-06-17). The instrument-grain MVP question is "is this instrument's
-    (venue, instrument_type, base) in scope for ANY MVP data_type" — so probe with one
-    representative MVP data_type drawn from the AG's rule. Returns ``""`` when the AG
-    has no rule / no declared data_types (predicate then returns False as before).
-    """
-    rule = MVP_SCOPE.get(asset_group)
-    data_types = getattr(rule, "data_types", None)
-    if not data_types:
-        return ""
-    # Deterministic pick (sorted) — any member works since the catalogue grain is
-    # data_type-agnostic; sorting keeps the tag reproducible across runs.
-    return sorted(data_types)[0]
-
-
 def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
     """Tag each catalogue row with ``mvp: bool`` via the UAC ``is_mvp`` predicate.
 
@@ -1057,18 +1035,18 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
 
     The catalogue carries ``data_type=None`` for single-grain asset groups (the
     instrument exists across ALL the AG's data_types — data_type is not a catalogue
-    axis). ``is_mvp`` requires a data_type match, so an unbound row is probed with a
-    representative MVP data_type for the AG (:func:`_representative_mvp_data_type`);
-    a row that DOES carry a data_type (prediction multi-grain) uses its own. The base
-    asset comes from ``base_asset`` (spot/perp legs) with ``underlying`` as the
-    derivative/option fallback — the axis the cefi/tradfi MVP rules gate on.
+    axis). ``is_mvp`` now honours the **unbound-data_type convention** (a blank
+    ``data_type`` == "any MVP data_type", mvp_instrument_universe_gap_audit P2 #2),
+    so a single-grain row simply passes its (absent) data_type through — no local
+    "representative data_type" workaround needed. A row that DOES carry a data_type
+    (prediction multi-grain) uses its own. The base asset comes from ``base_asset``
+    (spot/perp legs) with ``underlying`` as the derivative/option fallback — the axis
+    the cefi/tradfi MVP rules gate on.
     """
     if df.empty:
         out = df.copy()
         out["mvp"] = pd.Series([], dtype="bool")
         return out
-
-    fallback_dt = _representative_mvp_data_type(asset_group)
 
     def _cell(row: "pd.Series[object]", col: str) -> str:
         """Return a row's string cell, treating NaN/None/empty as "".
@@ -1090,10 +1068,11 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
 
     def _row_is_mvp(row: "pd.Series[object]") -> bool:
         league = _cell(row, "league_id") or None
-        # Unbound (single-grain) catalogue rows carry no data_type → probe with the
-        # AG's representative MVP data_type so the venue/instrument_type/base axes,
-        # not a missing data_type, decide membership.
-        data_type = _cell(row, "data_type") or fallback_dt
+        # Unbound (single-grain) catalogue rows carry no data_type → pass "" straight
+        # through; ``is_mvp`` treats a blank data_type as "any MVP data_type" so the
+        # venue/instrument_type/base axes (not a missing data_type) decide membership.
+        # A multi-grain row (prediction) carries its own data_type and is gated on it.
+        data_type = _cell(row, "data_type") or None
         # Base asset: ``base_asset`` is populated for spot/perp legs (the cefi MVP
         # base_ccy axis); ``underlying`` carries it for derivatives/options. "" → None
         # so a non-derivative row is not over-constrained.
