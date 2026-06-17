@@ -34,6 +34,30 @@ __all__ = [
 ]
 
 
+def _derive_instrument_type(df: _orch.pd.DataFrame) -> str:
+    """Return the single ``instrument_type`` for a venue's instrument-definition df.
+
+    The manifest row is at (venue, date) grain. The instrument-definition parquet
+    (``InstrumentRecord.model_dump()``) carries an ``instrument_type`` column. When
+    every instrument in this venue x date shard is the SAME type (the common case —
+    a venue df is typically one type, e.g. all PERPETUAL or all SPOT_PAIR), stamp
+    that real type so the v9 manifest carries per-instrument_type counts (Audit §K).
+
+    Returns "" (honest blank — never fabricated) when the column is absent, empty,
+    or holds MIXED types (a single-type tag would misrepresent the shard).
+    """
+    if "instrument_type" not in df.columns or df.empty:
+        return ""
+    # Coerce to plain str (NaN/None → ""), drop blanks, then require a SINGLE
+    # distinct non-blank type. Uses pandas string-dtype ops (no .tolist()/Any).
+    col: _orch.pd.Series = df["instrument_type"].astype("string").fillna("").astype(str)
+    nonblank: _orch.pd.Series = col[col.str.len() > 0]
+    distinct: list[str] = [str(v) for v in nonblank.drop_duplicates()]
+    if len(distinct) != 1:
+        return ""
+    return distinct[0]
+
+
 def _write_venue(
     venue_str: str,
     df: _orch.pd.DataFrame,
@@ -166,11 +190,14 @@ def _write_venue(
                     # source auto-resolves (blank/instruments_service). Which vendor
                     # served the snapshot is the adapter's routing concern, not a
                     # per-row manifest tag for producer rows.
+                    # v9 instrument_type column (Audit §K): stamp the REAL type when
+                    # the venue x date shard is single-type, "" when mixed/absent. This
+                    # enables per-instrument_type counts off the manifest.
                     manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key=_rk,
                         df=_stamped_venue_df,
                         asset_group=_cat,
-                        instrument_type="",
+                        instrument_type=_derive_instrument_type(_stamped_venue_df),
                         data_type="",
                         venue=manifest_venue,
                         chain=manifest_chain,

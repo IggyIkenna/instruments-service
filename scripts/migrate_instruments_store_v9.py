@@ -137,7 +137,49 @@ _V9_TEXT_COLUMNS = (
     "error_reason",
     "capture_status",
     "available_at",
+    # Audit §K: instrument_type becomes a populated v9 column so the manifest supports
+    # per-instrument_type counts. Backfilled from the venue suffix where derivable
+    # (see _backfill_instrument_type); blank-default for rows where it is not.
+    "instrument_type",
 )
+
+# Venue-name suffix → instrument_type (Audit §K backfill). Mirrors UTL
+# ``manifest_discovery._infer_instrument_type_from_venue`` — the recorded-column-only
+# (no GCS probe) derivation. The non-sports instruments-store _index rows are at
+# (venue, date) grain and carry a ``venue`` column but no per-instrument symbol, so
+# ``VENUE:TYPE:SYMBOL`` cannot be split here; the venue suffix is the only honest
+# recorded-column source of the type. Venues without a known suffix stay "" (honest).
+_VENUE_SUFFIX_TO_INSTRUMENT_TYPE: dict[str, str] = {
+    "-SPOT": "spot",
+    "-FUTURES": "perpetual",
+}
+
+
+def _instrument_type_from_venue(venue: str) -> str:
+    """Infer instrument_type from a venue-name suffix (Audit §K). "" when unknown."""
+    venue_upper = venue.upper()
+    for suffix, inst_type in _VENUE_SUFFIX_TO_INSTRUMENT_TYPE.items():
+        if venue_upper.endswith(suffix):
+            return inst_type
+    return ""
+
+
+def _backfill_instrument_type(df: pd.DataFrame) -> int:
+    """CF — backfill a blank ``instrument_type`` from the venue suffix (in place).
+
+    Only fills rows that are currently blank AND whose ``venue`` carries a known
+    suffix — a row that already carries an instrument_type (writer-stamped) or whose
+    venue has no derivable type is left untouched/blank (honest, never fabricated).
+    Returns the number of rows filled.
+    """
+    if "venue" not in df.columns:
+        return 0
+    blank = df["instrument_type"].str.len() == 0
+    derived = df.loc[blank, "venue"].map(lambda v: _instrument_type_from_venue(str(v)))
+    fillable = blank & (derived.str.len() > 0)
+    df.loc[fillable, "instrument_type"] = derived[fillable]
+    return int(fillable.sum())
+
 
 _VALID_PIPELINE_MODES = frozenset(m.value for m in PipelineMode)
 
@@ -301,6 +343,8 @@ def transform_index_v9(df: pd.DataFrame, asset_group: str) -> tuple[pd.DataFrame
         stats.update(_honest_capture_status(out, counts))
         # CF-5 typed empty reasons
         stats.update(_typed_empty_reasons(out))
+        # Audit §K: backfill a populated instrument_type from the venue suffix where derivable.
+        stats["instrument_type_backfilled"] = _backfill_instrument_type(out)
     else:
         # CF-10s (sports): capture_status is set authoritatively by the sports
         # enumerator + coverage oracle (instrument_count is NOT the sports
