@@ -5,7 +5,7 @@ Token is returned as InstrumentRecord with instrument_type="YIELD_BEARING".
 
 References:
 - https://rocketpool.net/
-- rETH contract: https://etherscan.io/token/0xae78736Cd615f374D3085123A210448E74Fc6393
+- rETH contract: see ``_RETH_ADDRESS`` below (Etherscan-verified).
 - Launch date sourced from unified_api_contracts.registry.chain_env.PROTOCOL_LAUNCH_DATES
   (("ETHEREUM", "ROCKETPOOL") == 2021-11-08 — Rocket Pool mainnet GA).
 """
@@ -32,7 +32,7 @@ _DEFAULT_CHAIN = "ETHEREUM"
 _ROCKET_POOL_DEPLOY_DATE = datetime(2021, 11, 8, tzinfo=UTC)
 
 # rETH token address on Ethereum (18 decimals).
-_RETH_ADDRESS = "0xae78736Cd615f374D3085123A210448E74Fc6393"
+_RETH_ADDRESS = "0xae78736Cd615f374D3085123A210448E74Fc6393"  # DERIVED 2021-11-08 from ethereum etherscan
 _RETH_DECIMALS = 18
 
 _LST_TOKENS: list[dict[str, str]] = [

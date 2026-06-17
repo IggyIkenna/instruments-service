@@ -132,6 +132,45 @@ def test_rollup_metadata_follows_most_recent_snapshot(rollup: ModuleType) -> Non
     assert row["chain"] == "ARBITRUM"
 
 
+def test_rollup_carries_raw_symbol_and_base_asset(rollup: ModuleType) -> None:
+    """raw_symbol + base_asset are carried from the by_date source so the UTL
+    catalogue reader's ``venue+raw_symbol`` (unique) / ``venue+base_asset``
+    (fallback) lifecycle cross-ref matches CeFi manifest bare symbols (E5)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-FUTURES:PERPETUAL:ADA-USDT",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "raw_symbol": "ADA-PERP",
+                            "base_asset": "ADA",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    assert "raw_symbol" in df.columns
+    assert "base_asset" in df.columns
+    row = df.to_dict("records")[0]
+    assert row["raw_symbol"] == "ADA-PERP"
+    assert row["base_asset"] == "ADA"
+
+
+def test_rollup_raw_symbol_blank_when_source_absent(rollup: ModuleType) -> None:
+    """A source row without raw_symbol/base_asset yields "" (never NaN/fabricated)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot([{"instrument_key": "X", "venue": "V"}]))])
+    row = df.to_dict("records")[0]
+    assert row["raw_symbol"] == ""
+    assert row["base_asset"] == ""
+
+
 def test_rollup_supports_instrument_id_column(rollup: ModuleType) -> None:
     """The id column falls back to instrument_id when instrument_key is absent."""
     d1 = date(2024, 1, 1)
@@ -237,13 +276,21 @@ def test_prediction_rollup_cqg_lifecycle_spans_member_window(rollup: ModuleType)
     assert cqg["H"]["available_to"] is None  # present on the latest day → active
 
 
-def test_prediction_rollup_skips_blank_cqg(rollup: ModuleType) -> None:
-    """A blank cqg path segment yields no bundle row (honest skip, no empty-string bundle)."""
+def test_prediction_rollup_blank_cqg_emits_conditionid_grain_no_bundle(rollup: ModuleType) -> None:
+    """249-a: a blank cqg (the real venue=/market= writer layout, which emits NO
+    canonical_question_group) yields NO cqg-bundle row but DOES emit the
+    conditionId grain (trades + market_lifecycle). Pre-fix this skipped the whole
+    frame → 0-row catalogue; the bundle/cqg grain stays absent (gated on 338)."""
     d1 = date(2025, 3, 14)
     df = rollup.build_prediction_catalogue_dataframe(
         [(d1, "POLYMARKET", "", _pred_snap([{"instrument_key": "c1", "venue": "POLYMARKET"}]))]
     )
-    assert not [r for r in df.to_dict("records") if r["data_type"] == "prediction_canonical_question_group"]
+    recs = df.to_dict("records")
+    # No cqg bundle row (no empty-string bundle; the cqg grain is 249-b, gated on 338).
+    assert not [r for r in recs if r["data_type"] == "prediction_canonical_question_group"]
+    # ...but the conditionId grain IS materialised (the 249-a fix — was 0 rows before).
+    assert {r["instrument_id"] for r in recs if r["data_type"] == "trades"} == {"c1"}
+    assert {r["instrument_id"] for r in recs if r["data_type"] == "market_lifecycle"} == {"c1"}
 
 
 def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleType) -> None:
@@ -743,3 +790,66 @@ def test_instruments_store_bucket_for_prediction_uses_flat_kind(
 def test_instruments_store_bucket_for_unknown_raises(rollup: ModuleType) -> None:
     with pytest.raises(ValueError, match="Unknown asset_group"):
         rollup._instruments_store_bucket_for("bogus")
+
+
+# ---------------------------------------------------------------------------
+# MVP-tagged catalogue view (mvp_scope_catalogue_tagging_2026_06_08)
+# ---------------------------------------------------------------------------
+
+
+def test_add_mvp_column_tags_mvp_and_non_mvp_cells(rollup: ModuleType) -> None:
+    """_add_mvp_column tags an MVP cell True and a non-MVP cell False via UAC is_mvp.
+
+    Uses real UAC MVP_SCOPE rules (no mock): a cefi cell on an MVP venue +
+    instrument_type + data_type + base_ccy is in scope; a bogus-venue cell is not.
+    Regression guard for the IS MVP-tagged catalogue view.
+    """
+    df = pd.DataFrame(
+        [
+            # MVP: BINANCE-FUTURES / PERPETUAL / funding_rate / BTC are all in cefi MVP_SCOPE.
+            {
+                "instrument_id": "MVP-1",
+                "instrument_type": "PERPETUAL",
+                "venue": "BINANCE-FUTURES",
+                "chain": "",
+                "league_id": "",
+                "available_from": "2024-01-01",
+                "available_to": None,
+                "market_created_at": None,
+                "settlement_time": None,
+                "data_type": "funding_rate",
+                "underlying": "BTC",
+            },
+            # NON-MVP: venue not in the MVP venue set → excluded.
+            {
+                "instrument_id": "OUT-1",
+                "instrument_type": "PERPETUAL",
+                "venue": "NOT-A-VENUE",
+                "chain": "",
+                "league_id": "",
+                "available_from": "2024-01-01",
+                "available_to": None,
+                "market_created_at": None,
+                "settlement_time": None,
+                "data_type": "funding_rate",
+                "underlying": "BTC",
+            },
+        ],
+        columns=[c for c in rollup.CATALOG_COLUMNS if c != "mvp"],
+    )
+
+    out = rollup._add_mvp_column(df, "cefi")
+    assert "mvp" in out.columns
+    assert out["mvp"].dtype == bool
+    by_id = {row["instrument_id"]: row for row in out.to_dict("records")}
+    assert bool(by_id["MVP-1"]["mvp"]) is True
+    assert bool(by_id["OUT-1"]["mvp"]) is False
+
+
+def test_add_mvp_column_empty_frame_keeps_bool_column(rollup: ModuleType) -> None:
+    """An empty catalogue keeps the typed bool ``mvp`` column (stable schema)."""
+    empty = rollup.build_catalogue_dataframe([])
+    out = rollup._add_mvp_column(empty, "cefi")
+    assert "mvp" in out.columns
+    assert out["mvp"].dtype == bool
+    assert out.empty

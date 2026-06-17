@@ -54,6 +54,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 import pandas as pd
+from unified_api_contracts import is_mvp
 from unified_trading_library import (
     StorageClient,
     get_config,
@@ -143,6 +144,20 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # options/futures). Propagated from the instruments-store ``underlying``
     # column so enumerate's roll-up keys options_chain candidates per underlying.
     "underlying",
+    # Exchange-native symbol + base asset (CeFi/defi lifecycle cross-ref keys).
+    # The UTL ``instruments_catalog_reader`` matches a manifest row's bare symbol
+    # via ``venue+raw_symbol`` (proven UNIQUE per instrument — 0 collisions across
+    # the full 2019→2026 history) and falls back to ``venue+base_asset`` (lossy —
+    # base_asset alone maps to many instruments, so it is the last resort). Carried
+    # from the instruments-store by_date source so the reader's existing strategies
+    # match. Blank for prediction/sports (no exchange-native symbol there).
+    "raw_symbol",
+    "base_asset",
+    # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean
+    # computed via the UAC ``is_mvp(...)`` predicate over the rolled-up catalogue.
+    # Read by deployment-api's ``scope=mvp`` coverage denominator + the data-status
+    # MVP toggle. On-the-fly at roll-up time — never a baked rule (UAC owns the rule).
+    "mvp",
 )
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
@@ -298,6 +313,8 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 # the full DATA_TYPES_BY_ASSET_GROUP list (legacy behaviour).
                 "data_type": None,
                 "underlying": agg.meta.get("underlying") or "",
+                "raw_symbol": agg.meta.get("raw_symbol") or "",
+                "base_asset": agg.meta.get("base_asset") or "",
             }
         )
 
@@ -314,6 +331,8 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         "market_created_at": _opt_field(row, "market_created_at"),
         "settlement_time": _opt_field(row, "settlement_time"),
         "underlying": _str_field(row, "underlying"),
+        "raw_symbol": _str_field(row, "raw_symbol"),
+        "base_asset": _str_field(row, "base_asset"),
     }
 
 
@@ -409,7 +428,14 @@ def build_prediction_catalogue_dataframe(
         all_days.add(day)
         venue_str = venue.strip()
         cqg_str = cqg.strip()
-        if frame.empty or not cqg_str:
+        # 249-a: the conditionId grain (instrument_key) accumulates from EVERY
+        # non-empty frame — it does NOT require a canonical_question_group. The
+        # cqg grain (gated below on cqg_str) is materialised only when the writer
+        # emits a cqg, which it does not in the current venue=/market= layout
+        # (that's 249-b, gated on operator decision 338). Skipping a frame on
+        # `not cqg_str` (the pre-fix behaviour) dropped BOTH grains → 0-row
+        # catalogue. Skip only genuinely-empty frames.
+        if frame.empty:
             continue
         records: list[dict[str, object]] = frame.to_dict("records")  # pyright: ignore[reportAssignmentType]
         # cqg-grain lifecycle: the cqg is present on this day if ANY member is.
@@ -431,7 +457,9 @@ def build_prediction_catalogue_dataframe(
             if settled and (cqg_settled is None or settled > cqg_settled):
                 cqg_settled = settled
             _merge_lifecycle(cid_acc, (venue_str, cid), day, venue_str, itype, created, settled)
-        if saw_member:
+        # cqg grain only when the writer emits a cqg (249-b, gated on decision
+        # 338). Currently always empty → no cqg rows, conditionId grain only.
+        if saw_member and cqg_str:
             _merge_lifecycle(cqg_acc, (venue_str, cqg_str), day, venue_str, cqg_itype, cqg_created, cqg_settled)
 
     if not all_days:
@@ -802,11 +830,19 @@ def _iter_prediction_by_date_snapshots(
 ) -> Iterator[tuple[date, str, str, pd.DataFrame]]:
     """Yield ``(day, venue, cqg, frame)`` for every prediction ``by_date`` blob.
 
-    The prediction writer partitions by ``canonical_question_group=`` in the
-    path (the ``_canonical_group`` column is dropped at write), so the cqg is
-    parsed from the blob name. Blobs with no ``canonical_question_group=``
-    segment (e.g. a non-prediction venue mixed into the bucket) are skipped with
-    a warning rather than silently mis-rolled at the wrong grain.
+    **249-a (2026-06-16): conditionId/market grain reads the ACTUAL writer
+    layout.** The prediction writer partitions ``by_date/day=/venue=<V>/[market=<M>/]
+    instruments.parquet`` — it does NOT emit a ``canonical_question_group=`` path
+    segment (the prior code required one and so skipped EVERY blob → 0-row
+    catalogue). The conditionId (``instrument_key``) is read from the FRAME, so
+    the cqg is no longer needed for the conditionId grain; ``cqg`` is yielded as
+    ``""`` (the cqg grain is 249-b, gated on operator decision 338, and the
+    rollup only materialises it when cqg is non-empty). Both the venue-level
+    ``instruments.parquet`` (full conditionId universe) and the per-market
+    ``market=<M>/instruments.parquet`` blobs are read; the rollup dedups by
+    ``(venue, conditionId)`` via ``_merge_lifecycle``. The metadata sibling
+    ``prediction_market_metadata.parquet`` is excluded (it is not an instruments
+    frame). Blobs with no ``day=``/``venue=`` partition are skipped with a warning.
 
     Downloads run concurrently (``max_workers`` threads), mirroring
     :func:`_iter_by_date_snapshots` — the prediction ``by_date`` history is also
@@ -818,16 +854,17 @@ def _iter_prediction_by_date_snapshots(
     targets: list[tuple[date, str, str, str]] = []
     for blob in storage.list_blobs(bucket, prefix=walk_prefix):
         name = blob.name
-        if not name.endswith(".parquet"):
+        # Only the instruments frames — never the prediction_market_metadata.parquet sibling.
+        if not name.endswith("instruments.parquet"):
             continue
         day_m = _DAY_RE.search(name)
-        cqg_m = _CQG_RE.search(name)
-        if day_m is None or cqg_m is None:
-            logger.warning("Skipping prediction blob missing day=/canonical_question_group=: %s", name)
-            continue
         venue_m = _VENUE_RE.search(name)
-        venue = venue_m.group(1) if venue_m else ""
-        targets.append((date.fromisoformat(day_m.group(1)), venue, cqg_m.group(1), name))
+        if day_m is None or venue_m is None:
+            logger.warning("Skipping prediction blob missing day=/venue=: %s", name)
+            continue
+        cqg_m = _CQG_RE.search(name)
+        cqg = cqg_m.group(1) if cqg_m else ""
+        targets.append((date.fromisoformat(day_m.group(1)), venue_m.group(1), cqg, name))
 
     targets.sort(key=lambda item: item[3])
     if max_blobs is not None:
@@ -989,6 +1026,43 @@ def promote_catalogue(
 # ---------------------------------------------------------------------------
 
 
+def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
+    """Tag each catalogue row with ``mvp: bool`` via the UAC ``is_mvp`` predicate.
+
+    The predicate is the UAC SSOT for "what is MVP scope"; it is applied on-the-fly
+    over the rolled-up catalogue (real expiries) — never baked into a rule here.
+    Empty-catalogue frames keep the typed ``mvp`` column so the schema is stable.
+
+    The catalogue carries ``data_type=None`` for single-grain asset groups; in that
+    case the predicate is evaluated with ``data_type=""`` (the all-data_type cell —
+    venue/instrument_type/league are what gate MVP membership for those AGs).
+    """
+    if df.empty:
+        out = df.copy()
+        out["mvp"] = pd.Series([], dtype="bool")
+        return out
+
+    def _row_is_mvp(row: "pd.Series[object]") -> bool:
+        league = str(row.get("league_id") or "") or None
+        data_type = str(row.get("data_type") or "")
+        # ``underlying`` is the catalogue's base-asset/underlier column (cefi/defi/
+        # tradfi derivatives) — the axis the MVP cefi/tradfi rules gate on (base_ccy
+        # / underliers). "" → None so a non-derivative row is not over-constrained.
+        base = str(row.get("underlying") or "") or None
+        return is_mvp(
+            asset_group,
+            venue=str(row.get("venue") or ""),
+            instrument_type=str(row.get("instrument_type") or ""),
+            data_type=data_type,
+            base_ccy=base,
+            league=league,
+        )
+
+    out = df.copy()
+    out["mvp"] = out.apply(_row_is_mvp, axis=1).astype("bool")
+    return out
+
+
 def run_rollup(
     asset_group: str,
     *,
@@ -1046,6 +1120,12 @@ def run_rollup(
     else:
         df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
     logger.info("Rolled up %d catalogue rows", len(df))
+
+    # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean via
+    # the UAC is_mvp predicate, so deployment-api / data-status can scope coverage.
+    df = _add_mvp_column(df, asset_group)
+    _mvp_count = int(df["mvp"].sum()) if not df.empty else 0
+    logger.info("MVP-tagged catalogue: %d / %d rows in MVP scope", _mvp_count, len(df))
 
     code = promote_catalogue(
         storage,

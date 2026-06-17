@@ -610,3 +610,34 @@ class TestFetchFootystatsOdds:
             result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
         assert result == {}
         mock_mw.record_failed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_record_captured_passes_cluster_validation_kwargs(self) -> None:
+        """SP-10-ODDS regression: record_captured for ODDS with canonical_fixture_id must
+        supply expected_root_clusters, cluster_extractor, and cluster_symbol_column so the
+        per-fixture cluster gate is active (not silently skipped)."""
+        odds_rows = [
+            {
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
+                "kickoff_utc": "2026-01-15T15:00:00Z",
+                "home_odds": 1.8,
+                "away_odds": 4.2,
+            }
+        ]
+        stack, _, mock_mw = _ft_odds_stack(skip=False, odds_rows=odds_rows)
+        with stack:
+            await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+
+        mock_mw.record_captured.assert_called()
+        call_kwargs = mock_mw.record_captured.call_args.kwargs
+        # cluster_symbol_column must point to the fixture-id column
+        assert call_kwargs.get("cluster_symbol_column") == "canonical_fixture_id"
+        # cluster_extractor must be callable
+        assert callable(call_kwargs.get("cluster_extractor"))
+        # expected_root_clusters must be a non-None dict (non-empty for mapped fixtures)
+        erc = call_kwargs.get("expected_root_clusters")
+        assert erc is not None
+        assert isinstance(erc, dict)
+        assert len(erc) > 0, "non-empty expected_root_clusters required for mapped fixtures"
