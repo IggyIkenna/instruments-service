@@ -41,22 +41,15 @@ logger = logging.getLogger(__name__)
 # umi_tick_provider.py:545 + UAC SCHEMA_VERSIONS.md wss://fstream.asterdex.com).
 # Issue: plans/active/issues/emerging_perp_venue_adapters_broken_2026_05_13.md
 _BASE = "https://fapi.asterdex.com"
-# SSOT: UAC VenueMapping.get_instrument_discovery_start("ASTER"). Pre-2026-05-05
-# this was hardcoded as datetime(2024, 9, 1) and silently diverged from UAC's
-# venue_start_dates["ASTER"] = "2024-10-01" by one month. Investigation 2026-05-05:
-# (a) Aster's official api-docs GitHub repo (asterdex/api-docs) was created
-# 2025-03-27 — neither candidate date has authoritative provenance, both were
-# guesses from the original PR author. (b) Aster's exchangeInfo onboardDate
-# field is Binance-Futures-API-compatible and inherits Binance's listing dates
-# (BTCUSDT shows 2021-07-30) — not usable for venue-launch verification.
-# (c) GCS probe shows ZERO ASTER captures across both buckets
-# (market-data-tick-cefi + instruments-store-cefi) for any date in 2024-2025.
-# Resolution: pick the LATER (more conservative) of the two divergent values
-# — UAC's 2024-10-01 — and have the adapter consume it. Zero historical data
-# at risk; one-month conservatism cuts a small attempted_failed window. No
-# venue_instrument_discovery_overrides entry needed: UAC's value IS the
-# discovery start (no second timeline like HYPERLIQUID's market-data vs
-# discovery split).
+# SSOT: UAC VenueMapping.get_instrument_discovery_start("ASTER") = 2023-07-22
+# (operator-confirmed 2026-06-17 = the Astherus pre-rebrand genesis; matches the
+# venue_launch_dates ASTER floor + the perp_funding_handler funding genesis).
+# IMPORTANT — pre-2024 Aster funding is BINANCE-PROXIED (Astherus pre-rebrand
+# mirrored Binance funding); it is imported, NOT Aster-native — label source
+# honestly downstream. SSOT:
+# perp_funding_data_semantics_and_cadence_2026_06_16.md §GAP 2. The adapter
+# consumes UAC's value directly (no venue_instrument_discovery_overrides entry —
+# no second timeline like HYPERLIQUID's market-data vs discovery split).
 _ASTER_LAUNCH_DATE = datetime.fromisoformat(cast(str, VenueMapping().get_instrument_discovery_start("ASTER"))).replace(
     tzinfo=UTC
 )
