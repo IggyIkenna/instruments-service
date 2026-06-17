@@ -107,6 +107,12 @@ _CEFI_VENUES: list[str] = [
     "ASTER",
     # Tier-3 CeFi (Tardis archive — factory entries exist, added to orchestrator 2026-05-12)
     "KRAKEN-FUTURES",
+    # KRAKEN-SPOT: Tardis ``kraken`` exchange (BASE/QUOTE spot pairs). Added 2026-06-17
+    # (mvp_instrument_universe_gap_audit): the factory adapter mapping + UAC venue_mapping
+    # (genesis 2020-01-01) + 76k captured market-data rows all existed, but the venue was
+    # never in this enumeration list → reference-data invisible while market data captured.
+    # Pairs with the Kraken ``/``-separator + ``XBT``→``BTC`` parse fix in tardis/parsing.py.
+    "KRAKEN-SPOT",
     "BITFINEX-FUTURES",
     # Tier-3 CeFi (Tardis archive — added 2026-05-22: factory entries existed, missing from batch)
     "BITGET-SPOT",
