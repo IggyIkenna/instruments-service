@@ -46,6 +46,7 @@ __all__ = [
     "_passes_asset_filter",
     "_resolve_base_quote",
     "_resolve_option_fields",
+    "_split_kraken_symbol",
     "_split_symbol",
 ]
 
@@ -248,6 +249,17 @@ def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str
         return base, quote
 
     upper_id = raw_id.upper()
+    # Kraken spot (Tardis ``kraken``) uses ``<BASE>/<QUOTE>`` — AAVE/USD, AAVE/ETH,
+    # 1INCH/USD, XBT/USD. Kraken Futures (Tardis ``cryptofacilities``) uses a typed
+    # prefix + concatenated ``<BASE><QUOTE>`` — PF_AAVEUSD (linear perp), PI_XBTUSD
+    # (inverse perp), FI_XBTUSD_240329 (inverse future). The generic ``/``-naive +
+    # quote-suffix splitting mis-parses BOTH (``AAVE/`` keeps the slash; ``PF_AAVE``
+    # keeps the prefix; ``XBTUSD`` greedily matches the TUSD quote → ``XB``), so they
+    # are handled here. Kraken denominates BTC as ``XBT`` → map back to canonical BTC.
+    if exchange in ("kraken", "cryptofacilities"):
+        kraken_base, kraken_quote = _split_kraken_symbol(upper_id)
+        if kraken_base:
+            return kraken_base, kraken_quote
     # Bitfinex derivatives use ``<BASE>F0:<QUOTE>F0`` — ``F0`` is Bitfinex's
     # "perpetual" marker, not a currency suffix. Examples:
     #   BTCF0:USTF0  → base=BTC,  quote=USDT (USDT-margined linear perp)
@@ -378,6 +390,53 @@ def _resolve_option_fields(
                 opt_type = _tardis._normalize_option_type(parts[-1])
 
     return strike, opt_type
+
+
+#: Kraken Futures (Tardis ``cryptofacilities``) instrument-type prefixes.
+#: PF_ = linear (multi-collateral) perpetual; PI_ = inverse perpetual;
+#: FI_ = inverse fixed-expiry future; FF_ = linear fixed-expiry future.
+_KRAKEN_FUTURES_PREFIXES: tuple[str, ...] = ("PF_", "PI_", "FF_", "FI_")
+
+#: Kraken denominates Bitcoin as ``XBT`` (ISO 4217-style); map back to the
+#: canonical ``BTC`` ticker used by ``CEFI_BASE_ASSET_UNIVERSE``.
+_KRAKEN_BASE_ALIASES: dict[str, str] = {"XBT": "BTC"}
+
+#: Quote suffixes a Kraken Futures concatenated ``<BASE><QUOTE>`` body may carry,
+#: longest-first so ``USD`` is not greedily matched before a stable variant.
+_KRAKEN_FUTURES_QUOTES: tuple[str, ...] = ("USDT", "USDC", "USD")
+
+
+def _split_kraken_symbol(upper_id: str) -> tuple[str, str]:
+    """Split a Kraken spot (``AAVE/USD``) or Kraken-Futures (``PF_AAVEUSD``) id.
+
+    Kraken spot ids are ``<BASE>/<QUOTE>`` (slash-separated). Kraken Futures ids
+    (Tardis ``cryptofacilities``) carry a typed prefix (PF_/PI_/FF_/FI_) + a
+    concatenated ``<BASE><QUOTE>`` body, optionally with a trailing ``_YYMMDD``
+    expiry segment for fixed-expiry futures (``FI_XBTUSD_240329``). Returns
+    ``(base, quote)`` with the Kraken ``XBT``→``BTC`` alias applied, or
+    ``("", "")`` when the id matches neither shape (caller falls back).
+    """
+    # Spot: BASE/QUOTE
+    if "/" in upper_id:
+        base, _, quote = upper_id.partition("/")
+        base = _KRAKEN_BASE_ALIASES.get(base, base)
+        return base, quote
+    # Futures: <PREFIX><BASE><QUOTE>[_<YYMMDD>]
+    body = upper_id
+    for prefix in _KRAKEN_FUTURES_PREFIXES:
+        if body.startswith(prefix):
+            body = body[len(prefix) :]
+            break
+    else:
+        return "", ""
+    # Drop a trailing expiry segment (fixed-expiry futures: AAVEUSD_240329).
+    body = body.split("_", 1)[0]
+    for quote in _KRAKEN_FUTURES_QUOTES:
+        if body.endswith(quote) and len(body) > len(quote):
+            base = body[: -len(quote)]
+            base = _KRAKEN_BASE_ALIASES.get(base, base)
+            return base, quote
+    return "", ""
 
 
 def _split_symbol(symbol: str) -> tuple[str, str]:
