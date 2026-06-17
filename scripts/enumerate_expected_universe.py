@@ -84,7 +84,7 @@ from unified_api_contracts import (
     grain_for_instrument_type,
     has_source_priority,
     pipeline_mode_for_source,
-    valid_data_types_for_instrument_type,
+    valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry.chain_env import (
     CHAIN_GENESIS_DATES,
@@ -622,7 +622,13 @@ def _row_data_types(
     Resolution order:
     1. If ``instr.data_type`` is set (prediction per-row grain binding) → emit
        ONLY that one data_type (already validated at catalogue-build time).
-    2. Otherwise call the UAC validity matrix for ``(asset_group, instrument_type)``.
+    2. Otherwise call the UAC validity matrix for ``(asset_group, venue, instrument_type)``.
+       For DeFi this narrows validity to the SPECIFIC protocol named by
+       ``instr.venue`` (e.g. ``UNISWAP_V3-ETHEREUM`` → only the Uniswap-V3
+       data_types), so a hybrid protocol's data_type (e.g. GMX's
+       ``perp_funding``) no longer leaks to every pool of that instrument_type.
+       For every NON-DeFi asset_group, or an unmapped DeFi protocol, the helper
+       delegates to the instrument_type-grain matrix (unchanged behaviour).
        - ``None`` returned (unmapped instrument type) → log a warning and fall
          back to ALL ``data_types`` (legacy behaviour; the row is never silently
          dropped for unknown types — only known-invalid cross-products are filtered).
@@ -636,7 +642,7 @@ def _row_data_types(
     if instr.data_type is not None:
         return [instr.data_type]
 
-    valid = valid_data_types_for_instrument_type(asset_group, instr.instrument_type)
+    valid = valid_data_types_for_venue_instrument_type(asset_group, instr.venue, instr.instrument_type)
     if valid is None:
         logger.warning(
             "G1-ENUM: unmapped instrument_type=%r for asset_group=%r (instrument=%r) "
