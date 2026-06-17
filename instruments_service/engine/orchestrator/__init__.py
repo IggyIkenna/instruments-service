@@ -633,6 +633,9 @@ from instruments_service.engine.orchestrator.writers import (
     _build_market_lifecycle_df as _build_market_lifecycle_df,
 )
 from instruments_service.engine.orchestrator.writers import (
+    _derive_instrument_type as _derive_instrument_type,
+)
+from instruments_service.engine.orchestrator.writers import (
     _write_futures_contracts as _write_futures_contracts,
 )
 from instruments_service.engine.orchestrator.writers import (
@@ -719,6 +722,7 @@ __all__ = [
     "_count_per_venue",
     "_defi_universe_cache",
     "_defi_universe_retryable",
+    "_derive_instrument_type",
     "_empty_lifecycle_columns",
     "_enforce_defi_monotonicity",
     "_extract_fixture_venue_ids",
