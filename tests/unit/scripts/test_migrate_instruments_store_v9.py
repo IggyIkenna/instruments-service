@@ -123,6 +123,45 @@ def test_v9_column_stamping_and_provenance() -> None:
     assert MOD.REFERENCE_PIPELINE_MODE == "batch_instruments_service"
 
 
+def test_instrument_type_backfilled_from_venue_suffix() -> None:
+    """Audit §K: instrument_type is a populated v9 column, backfilled from venue suffix.
+
+    OKX-SPOT → spot, BINANCE-FUTURES → perpetual; DERIBIT (no known suffix) stays ""
+    (honest blank, never fabricated). Regression guard for the migrator backfill path.
+    """
+    out, stats = MOD.transform_index_v9(_cefi_like_frame(), "cefi")
+    assert "instrument_type" in out.columns
+    by_date = {r["date"]: r for r in out.to_dict(orient="records")}
+    assert by_date["2020-01-02"]["instrument_type"] == "spot"  # OKX-SPOT
+    assert by_date["2020-01-03"]["instrument_type"] == "perpetual"  # BINANCE-FUTURES
+    assert by_date["2020-01-01"]["instrument_type"] == ""  # DERIBIT — no derivable type
+    assert by_date["2020-01-04"]["instrument_type"] == ""  # DERIBIT
+    # 2 rows (OKX-SPOT, BINANCE-FUTURES) were backfilled.
+    assert stats["instrument_type_backfilled"] == 2
+
+
+def test_instrument_type_existing_value_preserved() -> None:
+    """A row that already carries an instrument_type is never overwritten by the backfill."""
+    df = pd.DataFrame(
+        [
+            {
+                "date": "2020-01-01",
+                "venue": "BINANCE-FUTURES",
+                "instrument_count": 5,
+                "capture_status": "captured",
+                "data_type": "",
+                "pipeline_mode": "",
+                "instrument_type": "option",  # writer-stamped real type — must survive
+                "written_at": "2026-05-04T13:10:10+00:00",
+                "error_reason": "",
+                "schema_version": 8,
+            }
+        ]
+    )
+    out, _ = MOD.transform_index_v9(df, "cefi")
+    assert out.iloc[0]["instrument_type"] == "option"  # not overwritten to perpetual
+
+
 def test_honest_capture_status_relabel() -> None:
     out, stats = MOD.transform_index_v9(_cefi_like_frame(), "cefi")
     by_date = {r["date"]: r for r in out.to_dict(orient="records")}
@@ -286,18 +325,44 @@ def test_sports_blank_status_phantom_skeletons_dropped() -> None:
     df = pd.DataFrame(
         [
             # phantom skeleton: blank capture_status + blank data_type → DROP
-            {"date": "2024-09-11", "venue": "API_FOOTBALL", "instrument_count": 0,
-             "capture_status": "", "data_type": "", "league_id": "", "pipeline_mode": "",
-             "written_at": "2026-05-01T00:00:00+00:00", "error_reason": "", "schema_version": 8},
+            {
+                "date": "2024-09-11",
+                "venue": "API_FOOTBALL",
+                "instrument_count": 0,
+                "capture_status": "",
+                "data_type": "",
+                "league_id": "",
+                "pipeline_mode": "",
+                "written_at": "2026-05-01T00:00:00+00:00",
+                "error_reason": "",
+                "schema_version": 8,
+            },
             # phantom skeleton with count>0 (370 of the 6,869) → still DROP (no data_type ⇒ no cell)
-            {"date": "2024-09-11", "venue": "API_FOOTBALL_FIXTURES", "instrument_count": 5,
-             "capture_status": "", "data_type": "", "league_id": "", "pipeline_mode": "",
-             "written_at": "2026-05-01T00:00:00+00:00", "error_reason": "", "schema_version": 8},
+            {
+                "date": "2024-09-11",
+                "venue": "API_FOOTBALL_FIXTURES",
+                "instrument_count": 5,
+                "capture_status": "",
+                "data_type": "",
+                "league_id": "",
+                "pipeline_mode": "",
+                "written_at": "2026-05-01T00:00:00+00:00",
+                "error_reason": "",
+                "schema_version": 8,
+            },
             # a real captured cell → KEEP
-            {"date": "2024-09-11", "venue": "API_FOOTBALL", "instrument_count": 0,
-             "capture_status": "captured", "data_type": "STANDINGS", "league_id": "39",
-             "pipeline_mode": "", "written_at": "2026-05-01T00:00:00+00:00",
-             "error_reason": "", "schema_version": 8},
+            {
+                "date": "2024-09-11",
+                "venue": "API_FOOTBALL",
+                "instrument_count": 0,
+                "capture_status": "captured",
+                "data_type": "STANDINGS",
+                "league_id": "39",
+                "pipeline_mode": "",
+                "written_at": "2026-05-01T00:00:00+00:00",
+                "error_reason": "",
+                "schema_version": 8,
+            },
         ]
     )
     out, stats = MOD.transform_index_v9(df, "sports")
@@ -314,10 +379,18 @@ def test_sports_blank_status_with_real_data_type_loud_fails() -> None:
     rather than silently dropping a real cell or emitting invalid v9."""
     df = pd.DataFrame(
         [
-            {"date": "2024-09-11", "venue": "API_FOOTBALL", "instrument_count": 3,
-             "capture_status": "", "data_type": "FIXTURE_LINEUPS", "league_id": "39",
-             "pipeline_mode": "", "written_at": "2026-05-01T00:00:00+00:00",
-             "error_reason": "", "schema_version": 8},
+            {
+                "date": "2024-09-11",
+                "venue": "API_FOOTBALL",
+                "instrument_count": 3,
+                "capture_status": "",
+                "data_type": "FIXTURE_LINEUPS",
+                "league_id": "39",
+                "pipeline_mode": "",
+                "written_at": "2026-05-01T00:00:00+00:00",
+                "error_reason": "",
+                "schema_version": 8,
+            },
         ]
     )
     with pytest.raises(ValueError, match="blank capture_status WITH a non-blank"):

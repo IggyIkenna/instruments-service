@@ -751,3 +751,66 @@ def test_instruments_store_bucket_for_prediction_uses_flat_kind(
 def test_instruments_store_bucket_for_unknown_raises(rollup: ModuleType) -> None:
     with pytest.raises(ValueError, match="Unknown asset_group"):
         rollup._instruments_store_bucket_for("bogus")
+
+
+# ---------------------------------------------------------------------------
+# MVP-tagged catalogue view (mvp_scope_catalogue_tagging_2026_06_08)
+# ---------------------------------------------------------------------------
+
+
+def test_add_mvp_column_tags_mvp_and_non_mvp_cells(rollup: ModuleType) -> None:
+    """_add_mvp_column tags an MVP cell True and a non-MVP cell False via UAC is_mvp.
+
+    Uses real UAC MVP_SCOPE rules (no mock): a cefi cell on an MVP venue +
+    instrument_type + data_type + base_ccy is in scope; a bogus-venue cell is not.
+    Regression guard for the IS MVP-tagged catalogue view.
+    """
+    df = pd.DataFrame(
+        [
+            # MVP: BINANCE-FUTURES / PERPETUAL / funding_rate / BTC are all in cefi MVP_SCOPE.
+            {
+                "instrument_id": "MVP-1",
+                "instrument_type": "PERPETUAL",
+                "venue": "BINANCE-FUTURES",
+                "chain": "",
+                "league_id": "",
+                "available_from": "2024-01-01",
+                "available_to": None,
+                "market_created_at": None,
+                "settlement_time": None,
+                "data_type": "funding_rate",
+                "underlying": "BTC",
+            },
+            # NON-MVP: venue not in the MVP venue set → excluded.
+            {
+                "instrument_id": "OUT-1",
+                "instrument_type": "PERPETUAL",
+                "venue": "NOT-A-VENUE",
+                "chain": "",
+                "league_id": "",
+                "available_from": "2024-01-01",
+                "available_to": None,
+                "market_created_at": None,
+                "settlement_time": None,
+                "data_type": "funding_rate",
+                "underlying": "BTC",
+            },
+        ],
+        columns=[c for c in rollup.CATALOG_COLUMNS if c != "mvp"],
+    )
+
+    out = rollup._add_mvp_column(df, "cefi")
+    assert "mvp" in out.columns
+    assert out["mvp"].dtype == bool
+    by_id = {row["instrument_id"]: row for row in out.to_dict("records")}
+    assert bool(by_id["MVP-1"]["mvp"]) is True
+    assert bool(by_id["OUT-1"]["mvp"]) is False
+
+
+def test_add_mvp_column_empty_frame_keeps_bool_column(rollup: ModuleType) -> None:
+    """An empty catalogue keeps the typed bool ``mvp`` column (stable schema)."""
+    empty = rollup.build_catalogue_dataframe([])
+    out = rollup._add_mvp_column(empty, "cefi")
+    assert "mvp" in out.columns
+    assert out["mvp"].dtype == bool
+    assert out.empty

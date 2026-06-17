@@ -54,6 +54,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 import pandas as pd
+from unified_api_contracts import is_mvp
 from unified_trading_library import (
     StorageClient,
     get_config,
@@ -143,6 +144,11 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # options/futures). Propagated from the instruments-store ``underlying``
     # column so enumerate's roll-up keys options_chain candidates per underlying.
     "underlying",
+    # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean
+    # computed via the UAC ``is_mvp(...)`` predicate over the rolled-up catalogue.
+    # Read by deployment-api's ``scope=mvp`` coverage denominator + the data-status
+    # MVP toggle. On-the-fly at roll-up time — never a baked rule (UAC owns the rule).
+    "mvp",
 )
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
@@ -1007,6 +1013,43 @@ def promote_catalogue(
 # ---------------------------------------------------------------------------
 
 
+def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
+    """Tag each catalogue row with ``mvp: bool`` via the UAC ``is_mvp`` predicate.
+
+    The predicate is the UAC SSOT for "what is MVP scope"; it is applied on-the-fly
+    over the rolled-up catalogue (real expiries) — never baked into a rule here.
+    Empty-catalogue frames keep the typed ``mvp`` column so the schema is stable.
+
+    The catalogue carries ``data_type=None`` for single-grain asset groups; in that
+    case the predicate is evaluated with ``data_type=""`` (the all-data_type cell —
+    venue/instrument_type/league are what gate MVP membership for those AGs).
+    """
+    if df.empty:
+        out = df.copy()
+        out["mvp"] = pd.Series([], dtype="bool")
+        return out
+
+    def _row_is_mvp(row: "pd.Series[object]") -> bool:
+        league = str(row.get("league_id") or "") or None
+        data_type = str(row.get("data_type") or "")
+        # ``underlying`` is the catalogue's base-asset/underlier column (cefi/defi/
+        # tradfi derivatives) — the axis the MVP cefi/tradfi rules gate on (base_ccy
+        # / underliers). "" → None so a non-derivative row is not over-constrained.
+        base = str(row.get("underlying") or "") or None
+        return is_mvp(
+            asset_group,
+            venue=str(row.get("venue") or ""),
+            instrument_type=str(row.get("instrument_type") or ""),
+            data_type=data_type,
+            base_ccy=base,
+            league=league,
+        )
+
+    out = df.copy()
+    out["mvp"] = out.apply(_row_is_mvp, axis=1).astype("bool")
+    return out
+
+
 def run_rollup(
     asset_group: str,
     *,
@@ -1064,6 +1107,12 @@ def run_rollup(
     else:
         df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
     logger.info("Rolled up %d catalogue rows", len(df))
+
+    # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean via
+    # the UAC is_mvp predicate, so deployment-api / data-status can scope coverage.
+    df = _add_mvp_column(df, asset_group)
+    _mvp_count = int(df["mvp"].sum()) if not df.empty else 0
+    logger.info("MVP-tagged catalogue: %d / %d rows in MVP scope", _mvp_count, len(df))
 
     code = promote_catalogue(
         storage,
