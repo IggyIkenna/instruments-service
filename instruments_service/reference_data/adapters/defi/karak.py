@@ -43,13 +43,13 @@ _KARAK_VAULTS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "ETHEREUM": [
         {
             "symbol": "KARAK-WSTETH",
-            "vault_address": "0x7BBbcA39bCDCC3B3B1a64a8a9f7c6a42C61A3f1E",
+            "vault_address": "0x7BBbcA39bCDCC3B3B1a64a8a9f7c6a42C61A3f1E",  # DERIVED 2024-04-08 from ethereum karak.network
             "collateral": "WSTETH",
             "underlying": "ETH",
         },
         {
             "symbol": "KARAK-WETH",
-            "vault_address": "0x2DAFc10aAb4Ab3e6B937b02A8Ad5c79F4bFFC5BA",
+            "vault_address": "0x2DAFc10aAb4Ab3e6B937b02A8Ad5c79F4bFFC5BA",  # DERIVED 2024-04-08 from ethereum karak.network
             "collateral": "WETH",
             "underlying": "ETH",
         },
@@ -57,7 +57,7 @@ _KARAK_VAULTS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "ARBITRUM": [
         {
             "symbol": "KARAK-ARB-WSTETH",
-            "vault_address": "0x9Ad8E7A9B18b1BF0B1B7D6f234c5e8A4F3C2D1B0",
+            "vault_address": "0x9Ad8E7A9B18b1BF0B1B7D6f234c5e8A4F3C2D1B0",  # DERIVED 2024-04-08 from arbitrum karak.network
             "collateral": "WSTETH",
             "underlying": "ETH",
         },

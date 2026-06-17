@@ -814,33 +814,43 @@ class TestTardisAdapter:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_parse_tardis_instrument_deribit_none_type_returns_none(self) -> None:
-        """Deribit is derivatives-only; instruments with type=None must be skipped, not defaulted to SPOT_PAIR."""
+    async def test_parse_tardis_instrument_deribit_none_type_defaults_spot(self) -> None:
+        """Deribit is NOT derivatives-only (it lists spot since ~2023), so an
+        unknown/None type defaults to SPOT_PAIR like any other venue (operator
+        correction 2026-06-16). Deribit's API carries an explicit type for its
+        derivatives, so this default only affects genuinely typeless rows."""
         from unified_api_contracts import TardisInstrumentDetail
 
         adapter = TardisReferenceDataAdapter()
         item = TardisInstrumentDetail(
-            id="BTC",
+            id="BTC_USDC",
             type=None,
             baseCurrency="BTC",
+            quoteCurrency="USDC",
         )
         result = adapter._parse_tardis_instrument(item, "deribit")
-        assert result is None, "type=None on deribit must return None, not a SPOT_PAIR record"
+        assert result is not None, "type=None on deribit must default to SPOT_PAIR, not be skipped"
+        assert result.instrument_type == InstrumentType.SPOT_PAIR
 
     @pytest.mark.asyncio
-    async def test_parse_tardis_instrument_deribit_spot_type_returns_none(self) -> None:
-        """An explicit type='spot' on deribit must also be rejected (deribit has no spot trading)."""
+    async def test_parse_tardis_instrument_deribit_spot_type_enumerated(self) -> None:
+        """An explicit type='spot' on deribit must enumerate as a SPOT_PAIR record —
+        Deribit DOES have spot trading (BTC_USDC/…) since ~2023 (operator correction
+        2026-06-16). Regression guard against the stale 'deribit has no spot' drop."""
         from unified_api_contracts import TardisInstrumentDetail
 
         adapter = TardisReferenceDataAdapter()
         item = TardisInstrumentDetail(
-            id="BTC-USD",
+            id="BTC_USDC",
             type="spot",
             baseCurrency="BTC",
-            quoteCurrency="USD",
+            quoteCurrency="USDC",
         )
         result = adapter._parse_tardis_instrument(item, "deribit")
-        assert result is None, "type='spot' on deribit must return None"
+        assert result is not None, "type='spot' on deribit must enumerate, not return None"
+        assert result.instrument_type == InstrumentType.SPOT_PAIR
+        assert result.base_asset == "BTC"
+        assert result.quote_asset == "USDC"
 
     @pytest.mark.asyncio
     async def test_parse_tardis_instrument_non_derivatives_only_spot_allowed(self) -> None:

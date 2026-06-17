@@ -68,14 +68,16 @@ class TestExtractPredictionCanonicalGroup:
 
         assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.ETH_UP_DOWN_HOURLY.value
 
-    def test_polymarket_unrecognised_slug_falls_to_other(self) -> None:
+    def test_polymarket_unrecognised_slug_falls_to_misc_novelty(self) -> None:
+        # Genuinely-uncategorised Polymarket slug (taxonomy MISC/UNKNOWN) →
+        # MISC_NOVELTY per UAC decision 338 (Kalshi unknown still → OTHER).
         row = _row(
             venue="POLYMARKET",
             instrument_key="0xother",
             raw_symbol="will-something-strange-happen-this-week",
         )
 
-        assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.OTHER.value
+        assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.MISC_NOVELTY.value
 
     def test_kalshi_without_override_falls_to_other(self) -> None:
         """Kalshi rule classifier is override-only currently; an
@@ -102,21 +104,25 @@ class TestExtractPredictionCanonicalGroup:
 
         assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.OTHER.value
 
-    def test_missing_instrument_key_routes_to_other(self) -> None:
-        """No condition_id → no override hit; slug also unrecognised."""
+    def test_missing_instrument_key_routes_to_misc_novelty(self) -> None:
+        """No condition_id → no override hit; slug also unrecognised → the
+        genuinely-uncategorised Polymarket residual MISC_NOVELTY (decision 338).
+        """
         row = _row(
             venue="POLYMARKET",
             instrument_key="",
             raw_symbol="totally-unrecognised-slug",
         )
 
-        assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.OTHER.value
+        assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.MISC_NOVELTY.value
 
 
 class TestComputePredictionShards:
     def test_aggregates_per_venue_canonical_group(self) -> None:
-        """24 BTC hourly markets + 1 SPX daily + 5 OTHER → three buckets
+        """24 BTC hourly markets + 1 SPX daily + 5 MISC_NOVELTY → three buckets
         keyed on ``venue/group``, mirroring the manifest emit shape.
+
+        Uncategorised Polymarket slugs route to MISC_NOVELTY per UAC decision 338.
         """
         rows: list[dict[str, object]] = []
         # 24 BTC hourly market_ids — one shard atom (cluster bundle).
@@ -138,7 +144,7 @@ class TestComputePredictionShards:
                 "base_asset": "SPX:UP_DOWN:2026-03-26",
             }
         )
-        # 5 unclassifiable markets → OTHER.
+        # 5 unclassifiable markets → MISC_NOVELTY (UAC decision 338).
         for i in range(5):
             rows.append(
                 {
@@ -154,7 +160,7 @@ class TestComputePredictionShards:
 
         assert shard_counts["POLYMARKET/BTC_UP_DOWN_HOURLY"] == 24
         assert shard_counts["POLYMARKET/SPX_UP_DOWN_DAILY"] == 1
-        assert shard_counts["POLYMARKET/OTHER"] == 5
+        assert shard_counts["POLYMARKET/MISC_NOVELTY"] == 5
         # Total preserved.
         assert sum(shard_counts.values()) == len(df)
 
@@ -398,8 +404,9 @@ class TestPredictionWriterManifestContract:
             )
 
     def test_mixed_prediction_venues_produce_separate_shards(self) -> None:
-        """POLYMARKET and KALSHI rows go to distinct shard buckets; both use
-        ``CanonicalQuestionGroup.OTHER.value`` as underlying for unrecognised slugs/tickers.
+        """POLYMARKET and KALSHI rows go to distinct shard buckets. Per UAC
+        decision 338, a genuinely-uncategorised Polymarket slug routes to
+        ``MISC_NOVELTY`` while an unrecognised Kalshi ticker stays ``OTHER``.
         """
         df = pd.DataFrame(
             [
@@ -419,8 +426,9 @@ class TestPredictionWriterManifestContract:
         )
         shards = _compute_prediction_shards(df)
 
+        misc_val = CanonicalQuestionGroup.MISC_NOVELTY.value
         other_val = CanonicalQuestionGroup.OTHER.value
-        assert shards.get(f"POLYMARKET/{other_val}") == 1
+        assert shards.get(f"POLYMARKET/{misc_val}") == 1
         assert shards.get(f"KALSHI/{other_val}") == 1
 
 

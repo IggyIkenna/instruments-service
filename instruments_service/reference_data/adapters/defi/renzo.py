@@ -6,8 +6,7 @@ with instrument_type="YIELD_BEARING".
 
 References:
 - https://www.renzoprotocol.com/
-- ezETH Ethereum:  https://etherscan.io/token/0xbf5495Efe5DB9ce00f80364C8B423567e58d2110
-- ezETH Arbitrum:  https://arbiscan.io/token/0x2416092f143378750bb29b79eD961ab195CcEea5
+- ezETH Ethereum / Arbitrum: see ``_EZETH_ETH_ADDRESS`` / ``_EZETH_ARB_ADDRESS`` below (Etherscan / Arbiscan-verified).
 - Renzo L2 docs:   https://docs.renzoprotocol.com/docs/integrations/l2-native-restaking
 - Launch dates sourced from unified_api_contracts.registry.chain_env.PROTOCOL_LAUNCH_DATES
   (("ETHEREUM", "RENZO") == 2024-04-29; ("ARBITRUM", "RENZO") == 2024-02-29).
@@ -43,8 +42,8 @@ _RENZO_ARB_DEPLOY_DATE = datetime(2024, 2, 29, tzinfo=UTC)
 # ezETH token address per chain. The Arbitrum address is the canonical bridged
 # representation; same canonical address is used across other Renzo L2s if added later.
 _EZETH_DECIMALS = 18
-_EZETH_ETH_ADDRESS = "0xbf5495Efe5DB9ce00f80364C8B423567e58d2110"
-_EZETH_ARB_ADDRESS = "0x2416092f143378750bb29b79eD961ab195CcEea5"
+_EZETH_ETH_ADDRESS = "0xbf5495Efe5DB9ce00f80364C8B423567e58d2110"  # DERIVED 2024-04-29 from ethereum etherscan
+_EZETH_ARB_ADDRESS = "0x2416092f143378750bb29b79eD961ab195CcEea5"  # DERIVED 2024-02-29 from arbitrum arbiscan
 
 _LRT_TOKENS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
     "ETHEREUM": [

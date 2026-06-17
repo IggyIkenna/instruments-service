@@ -449,3 +449,68 @@ async def test_fetch_unknown_venue_tag_logs_warning(caplog):
 
     assert len(result.records) == 1
     assert any("unknown" in r.message.lower() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_fetch_defi_all_rows_filtered_records_attempted_failed(caplog):
+    """R4 P2 regression: a DeFi fetch that returns rows but yields 0 records
+    after the venue-tag filter — with NONE routed to a sibling — must be recorded
+    as ``attempted_failed`` (ADAPTER_ERROR), NOT a silent honest-empty.
+
+    Scenario: the MORPHO-ETHEREUM adapter returns DeFi instruments but every one
+    is tagged for a venue NOT in the batch (a venue-tagging bug). Without the
+    empty-after-filter guard the provider returns ``[]`` with no failure → the
+    shard is silently dropped from the expected denominator instead of flagged.
+    """
+    from unified_api_contracts.internal import InstrumentRecord
+
+    r_mistagged = InstrumentRecord(
+        instrument_key="SOME_OTHER_DEFI_VENUE:A_TOKEN:WETH",
+        venue="SOME_OTHER_DEFI_VENUE",
+        instrument_type="A_TOKEN",
+        base_asset="WETH",
+        quote_asset="USDC",
+        base_asset_contract_address="0x" + "d" * 40,
+        base_asset_decimals=18,
+    )
+
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[r_mistagged])
+
+    with (
+        patch(
+            "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+            return_value=mock_adapter,
+        ),
+        caplog.at_level("ERROR"),
+    ):
+        # MORPHO-ETHEREUM is the only venue in the batch; the returned row is
+        # tagged for SOME_OTHER_DEFI_VENUE (not in batch) → no sibling claim.
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
+
+    # 0 records survive the filter
+    assert result.records == []
+    # ...but the venue is recorded as attempted_failed, not silently dropped
+    assert len(result.failed_venues) == 1
+    assert result.failed_venues[0].venue == "MORPHO-ETHEREUM"
+    assert result.failed_venues[0].error_code == "ADAPTER_ERROR"
+    assert result.failed_venues[0].retry_safe is False
+    assert any("attempted_failed" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_fetch_empty_source_response_stays_honest_empty():
+    """Guard boundary: a genuinely-empty source response (records == []) is an
+    honest empty — NOT recorded as attempted_failed by the empty-after-filter
+    guard (which only fires when rows were fetched but all filtered out)."""
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[])
+
+    with patch(
+        "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+        return_value=mock_adapter,
+    ):
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
+
+    assert result.records == []
+    assert result.failed_venues == []

@@ -237,6 +237,95 @@ class TestDatabentoEventContractClassification:
 
 
 # ---------------------------------------------------------------------------
+# Canonical product identity via _parse_row_to_record
+# (additive canonical_instrument_id + product_root from the UAC exchange-code
+#  registry; raw_symbol stays the raw exchange code).
+# ---------------------------------------------------------------------------
+
+
+class TestDatabentoCanonicalIdentity:
+    """ESM0 future + E5AH0 C2510 spaced option → product_root=SP500 + canonical id;
+    raw_symbol unchanged. A CeFi instrument is unaffected."""
+
+    def _make_row(
+        self,
+        raw_symbol: str,
+        instrument_class: str,
+        expiry: str,
+        strike_price: float | None = None,
+        underlying: str = "",
+        currency: str = "USD",
+    ) -> object:
+        row = MagicMock()
+        row.raw_symbol = raw_symbol
+        row.symbol = raw_symbol
+        row.instrument_class = instrument_class
+        row.currency = currency
+        row.underlying = underlying
+        row.expiration = expiry
+        row.activation = None
+        row.strike_price = strike_price
+        row.min_price_increment = 0.25
+        row.min_lot_size_round_lot = 1
+        # Empty option_type so the adapter falls back to instrument_class (C/P).
+        row.option_type = ""
+        return row
+
+    def _make_adapter(self) -> DatabentoReferenceDataAdapter:
+        from datetime import date
+
+        adapter = DatabentoReferenceDataAdapter(api_key="test-key")
+        adapter._target_date = date(2026, 5, 20)
+        return adapter
+
+    def test_es_future_gets_sp500_product_root_and_canonical_id(self) -> None:
+        adapter = self._make_adapter()
+        row = self._make_row("ESM0", instrument_class="F", expiry="2026-06-19T13:30:00+00:00")
+        record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
+        assert record is not None
+        assert record.instrument_type == "FUTURE"
+        # raw_symbol unchanged — canonicals are additive.
+        assert record.raw_symbol == "ESM0"
+        assert record.product_root == "SP500"
+        assert record.canonical_instrument_id is not None
+        assert record.canonical_instrument_id.startswith("CME:FUTURE:SP500:")
+
+    def test_spaced_option_gets_sp500_product_root_and_canonical_id(self) -> None:
+        adapter = self._make_adapter()
+        # E5A = Friday-daily ES option root; spaced contract code + strike token.
+        row = self._make_row(
+            "E5AH0 C2510",
+            instrument_class="C",
+            expiry="2026-09-18T14:00:00+00:00",
+            strike_price=2510.0,
+        )
+        record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
+        assert record is not None
+        assert record.instrument_type == "OPTION"
+        # raw_symbol stays the raw spaced exchange code.
+        assert record.raw_symbol == "E5AH0 C2510"
+        assert record.product_root == "SP500"
+        assert record.canonical_instrument_id is not None
+        assert record.canonical_instrument_id.startswith("CME:OPTION:SP500:")
+        # strike + C/P suffix encoded in the canonical id.
+        assert record.canonical_instrument_id.endswith("C")
+
+    def test_cefi_instrument_unaffected(self) -> None:
+        # A CeFi spot/perp record (built directly, not via the TradFi adapter)
+        # carries no canonical product identity — the fields stay None.
+        record = _make_record(
+            key="BINANCE:PERPETUAL:BTCUSDT",
+            venue="binance",
+            instrument_type="PERPETUAL",
+            raw_symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+        )
+        assert record.product_root is None
+        assert record.canonical_instrument_id is None
+
+
+# ---------------------------------------------------------------------------
 # CF-11 silent-shrink fix: fetch-failure must thread STATE (not just emit event)
 # ---------------------------------------------------------------------------
 
@@ -415,6 +504,59 @@ class TestTardisAdapterMocked:
         assert results[0].instrument_type == "PERPETUAL"
         # Tardis adapter uses the exchange name as venue (e.g. DERIBIT)
         assert results[0].venue is not None
+
+    @pytest.mark.asyncio
+    async def test_deribit_spot_not_dropped(self) -> None:
+        """Deribit lists spot pairs (BTC_USDC/…) since ~2023 — it is NOT a
+        derivatives-only venue, so a Deribit SPOT instrument must enumerate as a
+        SPOT_PAIR InstrumentRecord (not silently dropped), while a Deribit perp
+        still parses as PERPETUAL (no regression). Regression guard for the
+        operator correction 2026-06-16: the Tardis adapter used to drop ALL
+        Deribit spot via _DERIVATIVES_ONLY_EXCHANGES."""
+        adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(
+            return_value={
+                "id": "deribit",
+                "name": "Deribit",
+                "availableSymbols": [
+                    {
+                        "id": "BTC_USDC",
+                        "type": "spot",
+                        "baseCurrency": "BTC",
+                        "quoteCurrency": "USDC",
+                        "availableSince": "2023-01-01T00:00:00Z",
+                        "availableTo": None,
+                    },
+                    {
+                        "id": "BTC-PERPETUAL",
+                        "type": "perpetual",
+                        "availableSince": "2020-01-01T00:00:00Z",
+                        "availableTo": None,
+                    },
+                ],
+            }
+        )
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+        by_type = {str(r.instrument_type): r for r in results}
+        # The Deribit spot pair is enumerated (not dropped) as a SPOT_PAIR.
+        assert "SPOT_PAIR" in by_type, f"Deribit spot dropped — got types {sorted(by_type)}"
+        spot = by_type["SPOT_PAIR"]
+        assert spot.base_asset == "BTC"
+        assert spot.quote_asset == "USDC"
+        # The Deribit perp still parses (no regression).
+        assert "PERPETUAL" in by_type, f"Deribit perp lost — got types {sorted(by_type)}"
 
     @pytest.mark.asyncio
     async def test_get_instruments_with_type_filter(self) -> None:

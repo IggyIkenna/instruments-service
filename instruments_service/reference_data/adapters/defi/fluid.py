@@ -36,32 +36,32 @@ _MVP_MARKETS: list[dict[str, str]] = [
     {
         "collateral_asset": "ETH",
         "borrow_asset": "USDC",
-        "vault_address": "0xeAbBfca72F8a8bf14C4ac59e69ECB2eB69F0811C",
+        "vault_address": "0xeAbBfca72F8a8bf14C4ac59e69ECB2eB69F0811C",  # DERIVED 2024-10 from ethereum fluid.instadapp.io
     },
     {
         "collateral_asset": "ETH",
         "borrow_asset": "USDT",
-        "vault_address": "0xbEC491FeF7B4f666b270F9D5E5C3f443cBf20991",
+        "vault_address": "0xbEC491FeF7B4f666b270F9D5E5C3f443cBf20991",  # DERIVED 2024-10 from ethereum fluid.instadapp.io
     },
     {
         "collateral_asset": "WSTETH",
         "borrow_asset": "ETH",
-        "vault_address": "0xA0F83Fc5885cEBc0420ce7C7b139Adc80c4F4D91",
+        "vault_address": "0xA0F83Fc5885cEBc0420ce7C7b139Adc80c4F4D91",  # DERIVED 2024-10 from ethereum fluid.instadapp.io
     },
     {
         "collateral_asset": "WSTETH",
         "borrow_asset": "USDC",
-        "vault_address": "0x51197586F6A9e2571868b6ffaef308f3bdfEd3aE",
+        "vault_address": "0x51197586F6A9e2571868b6ffaef308f3bdfEd3aE",  # DERIVED 2024-10 from ethereum fluid.instadapp.io
     },
     {
         "collateral_asset": "WSTETH",
         "borrow_asset": "USDT",
-        "vault_address": "0x1c2bB46f36561bc4F05A94BD50916496aa501078",
+        "vault_address": "0x1c2bB46f36561bc4F05A94BD50916496aa501078",  # DERIVED 2024-10 from ethereum fluid.instadapp.io
     },
     {
         "collateral_asset": "WEETH",
         "borrow_asset": "WSTETH",
-        "vault_address": "0x40D9b8417E6E1DcD358f04E3328bCEd061018A82",
+        "vault_address": "0x40D9b8417E6E1DcD358f04E3328bCEd061018A82",  # DERIVED 2024-10 from ethereum fluid.instadapp.io
     },
 ]
 
