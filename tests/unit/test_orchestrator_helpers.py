@@ -873,3 +873,38 @@ class TestExtractFixtureVenueIds:
         ):
             result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
         assert result == ["V1"]
+
+
+def test_derive_instrument_type_single_type_stamps_real_type() -> None:
+    """Audit §K: a single-type venue df → the real instrument_type is stamped."""
+    from instruments_service.engine.orchestrator import _derive_instrument_type
+
+    df = pd.DataFrame(
+        [
+            {"instrument_key": "BTC-PERP", "instrument_type": "PERPETUAL"},
+            {"instrument_key": "ETH-PERP", "instrument_type": "PERPETUAL"},
+        ]
+    )
+    assert _derive_instrument_type(df) == "PERPETUAL"
+
+
+def test_derive_instrument_type_mixed_types_blank() -> None:
+    """A mixed-type venue df → "" (a single tag would misrepresent the shard)."""
+    from instruments_service.engine.orchestrator import _derive_instrument_type
+
+    df = pd.DataFrame(
+        [
+            {"instrument_key": "BTC-PERP", "instrument_type": "PERPETUAL"},
+            {"instrument_key": "BTC-USDT", "instrument_type": "SPOT_PAIR"},
+        ]
+    )
+    assert _derive_instrument_type(df) == ""
+
+
+def test_derive_instrument_type_absent_or_empty_blank() -> None:
+    """No instrument_type column, an empty df, or all-blank values → "" (honest blank)."""
+    from instruments_service.engine.orchestrator import _derive_instrument_type
+
+    assert _derive_instrument_type(pd.DataFrame([{"instrument_key": "X"}])) == ""
+    assert _derive_instrument_type(pd.DataFrame(columns=["instrument_type"])) == ""
+    assert _derive_instrument_type(pd.DataFrame([{"instrument_type": ""}, {"instrument_type": None}])) == ""

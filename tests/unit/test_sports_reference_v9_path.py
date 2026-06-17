@@ -83,7 +83,10 @@ class TestSportsRefSource:
             ("fixtures", "api_football"),
             ("injuries", "api_football"),
             ("footystats_predictions", "footystats"),
-            ("footystats_odds", "odds_api"),
+            # footystats_odds path key is batch_odds_api, but its manifest SOURCE
+            # is footystats (R5-fix-3): the odds snapshot is fetched by the
+            # FootyStats adapter and UAC SPORTS_DATA_TYPE_TO_SOURCE[ODDS]=="footystats".
+            ("footystats_odds", "footystats"),
             ("understat_xg", "understat"),
             ("player_values", "transfermarkt"),
             ("progressive_stats", "soccer_football_info"),
@@ -302,8 +305,17 @@ class TestSourceDerivation:
         assert _sports_ref_source("footystats_matches") == "footystats"
 
     def test_footystats_odds_source(self) -> None:
-        """footystats_odds produce source='odds_api' (BATCH_ODDS_API)."""
-        assert _sports_ref_source("footystats_odds") == "odds_api"
+        """footystats_odds produces manifest source='footystats' (R5-fix-3).
+
+        The GCS pipeline_mode PATH key is ``batch_odds_api``, but the manifest
+        SOURCE must be ``footystats`` — the odds snapshot is fetched by the
+        FootyStats adapter and UAC ``SPORTS_DATA_TYPE_TO_SOURCE[ODDS] == 'footystats'``
+        / ``SOURCE_PRIORITY[(sports, ODDS)] == ['footystats']``. Stamping
+        ``odds_api`` made ``record_captured`` for data_type ODDS fail with
+        ``MissingSourceError`` ('source=odds_api not registered … Allowed: footystats').
+        Regression guard for R5-fix-3.
+        """
+        assert _sports_ref_source("footystats_odds") == "footystats"
 
     def test_understat_source(self) -> None:
         """understat entities produce source='understat'."""
