@@ -38,87 +38,6 @@ _BASE = "https://www.deribit.com/api/v2"
 # Deribit underlyings that are actively traded.
 _DERIBIT_COMBO_UNDERLYINGS: list[str] = ["BTC", "ETH", "SOL", "BNB", "XRP"]
 
-# Map Deribit combo_type → human-readable classification (also used for instrument_key suffix).
-# Deribit returns names like "BTC-STRD-25APR26-90000" — the structure code is embedded.
-_DERIBIT_STRUCTURE_CODES: frozenset[str] = frozenset(
-    {
-        # Future spreads
-        "FS",
-        # Vanilla option spreads
-        "CS",
-        "PS",
-        "STRD",
-        "STRG",
-        "RR",
-        "RRITM",
-        "GUTS",
-        "REV",
-        # 3-leg (butterflies, ladders)
-        "CBUT",
-        "PBUT",
-        "CBUT111",
-        "PBUT111",
-        "CLAD",
-        "PLAD",
-        # 4-leg (condors, iron butterflies, boxes)
-        "IBUT",
-        "ICOND",
-        "CCOND",
-        "PCOND",
-        "BOX",
-        # Calendar / diagonal (2 expiries)
-        "CCAL",
-        "PCAL",
-        "CDIAG",
-        "PDIAG",
-        "STDC",
-        "DSTDC",
-        # Ratio spreads
-        "CSR12",
-        "CSR13",
-        "CSR23",
-        "PSR12",
-        "PSR13",
-        "PSR23",
-        # Jelly roll
-        "JR",
-    }
-)
-
-
-def _extract_structure_code(instrument_name: str) -> str:
-    """Extract the Deribit structure code from a combo instrument name.
-
-    Deribit combo names: BASE-CODE-EXPIRY-STRIKES (e.g. BTC-STRD-25APR26-90000).
-    Returns the structure code, or "UNKNOWN" if it cannot be parsed.
-    """
-    parts = instrument_name.split("-")
-    for part in parts:
-        if part in _DERIBIT_STRUCTURE_CODES:
-            return part
-    return "UNKNOWN"
-
-
-def _parse_combo_legs(instrument_name: str) -> list[InstrumentLeg]:
-    """Build a minimal legs list from the combo instrument name.
-
-    Each combo instrument is defined by its component legs encoded in its
-    name. The full leg parsing (strike/expiry resolution) matches the
-    logic in the Tardis adapter's ``_parse_deribit_combo_legs``.  Here
-    we emit symbolic leg instrument_keys so that downstream consumers can
-    resolve them against the full instrument catalogue.
-
-    Returns an empty list if the name cannot be parsed.
-    """
-    parts = instrument_name.split("-")
-    if len(parts) < 3:
-        return []
-    # No legs pre-populated here; combo instruments are identified by their name
-    # and structure code. Downstream leg resolution uses the Tardis instrument catalogue.
-    # This keeps the live adapter lightweight — full leg expansion is a feature for
-    # tools that need it (e.g. execution-service combo quoting).
-    return []
-
 
 def _classify_deribit_error(exc: Exception, status: int | None = None) -> str:
     """Map a Deribit HTTP/network error to a UAC error code for classification."""
@@ -147,8 +66,18 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
-        """Return the venue identifier."""
-        return "DERIBIT"
+        """Return the venue identifier.
+
+        MUST be the registered venue id ``DERIBIT-COMBO`` (factory.py
+        ``VENUE_TO_ADAPTER["DERIBIT-COMBO"]="deribit_combo"``), NOT the bare
+        exchange ``DERIBIT`` — the URDI venue-tag filter
+        (``_filter_records_to_venue``) keeps only records whose ``venue`` equals
+        the BATCH canonical venue, so tagging combos ``DERIBIT`` dropped every
+        fetched row as an "unknown venue" (the venue had 0 captured days since it
+        was added 2026-05-23). The per-instrument ``instrument_key`` stays
+        ``DERIBIT:COMBO:<name>`` (a separate identity field).
+        """
+        return "DERIBIT-COMBO"
 
     async def get_instruments(
         self,
@@ -251,13 +180,22 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
 
         Returns a list of InstrumentRecord objects (possibly empty if no active
         combos exist for this currency at the time of the call).
+
+        Uses the ``public/get_combos`` endpoint (NOT ``get_instruments?kind=combo``):
+        Deribit retired the unified ``kind=combo`` value on ``get_instruments``
+        (now HTTP 400 ``invalid value`` for ``param=kind``; it split into
+        ``future_combo``/``option_combo``, neither of which carries the LEG
+        structure). ``get_combos`` returns each combo with its STRUCTURED
+        ``legs:[{amount, instrument_name}]`` — the canonical source for the
+        ``InstrumentLeg`` list the validation registry requires for a COMBO (a
+        leg-less COMBO is rejected "legs required for COMBO"). Verified live
+        2026-06-18. Leg ``amount``: sign → BUY/SELL, ``abs`` → ratio;
+        ``instrument_name`` → leg ``instrument_key``. A failure raises so the
+        caller's shard-isolation routes it to attempted_failed (CF-11). SSOT:
+        https://docs.deribit.com/#public-get_combos.
         """
-        url = f"{_BASE}/public/get_instruments"
-        params = {
-            "currency": currency,
-            "kind": "combo",
-            "expired": "false",
-        }
+        url = f"{_BASE}/public/get_combos"
+        params = {"currency": currency}
 
         try:
             async with self._make_session() as session, session.get(url, params=params) as resp:
@@ -269,8 +207,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
             action = classification.action.value if classification else "fail"
             retry_safe = classification.retry_safe if classification else False
             logger.error(
-                "Deribit get_instruments (combo, currency=%s) HTTP error: %s "
-                "(classified: %s, action: %s, retry_safe: %s)",
+                "Deribit get_combos (currency=%s) HTTP error: %s (classified: %s, action: %s, retry_safe: %s)",
                 currency,
                 exc,
                 error_code,
@@ -282,7 +219,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
                 details={
                     "venue": "deribit",
                     "adapter": "DeribitComboReferenceDataAdapter",
-                    "endpoint": "get_instruments",
+                    "endpoint": "get_combos",
                     "currency": currency,
                     "error": str(exc),
                     "error_code": error_code,
@@ -301,15 +238,15 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # Deribit wraps responses in {"result": [...], "id": ...}
         if not isinstance(payload, dict):
-            logger.warning("Deribit combo response is not a dict for currency=%s", currency)
+            logger.warning("Deribit get_combos response is not a dict for currency=%s", currency)
             return []
 
         result_raw: object = payload.get("result", [])
-        instruments_raw: list[object] = result_raw if isinstance(result_raw, list) else []
+        combos_raw: list[object] = result_raw if isinstance(result_raw, list) else []
 
         records: list[InstrumentRecord] = []
-        for item in instruments_raw:
-            record = self._parse_combo_instrument(item, now)
+        for item in combos_raw:
+            record = self._parse_combo_instrument(item, currency, now)
             if record is not None:
                 records.append(record)
 
@@ -320,28 +257,63 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         )
         return records
 
+    @staticmethod
+    def _build_legs(raw_legs: object) -> list[InstrumentLeg]:
+        """Map Deribit get_combos structured ``legs`` → list[InstrumentLeg].
+
+        Each Deribit leg is ``{"amount": <signed int>, "instrument_name": <str>}``.
+        ``amount`` sign → side (>0 BUY / <0 SELL); ``abs(amount)`` → ratio;
+        ``instrument_name`` → the leg's ``instrument_key`` (DERIBIT:<name>).
+        """
+        legs: list[InstrumentLeg] = []
+        if not isinstance(raw_legs, list):
+            return legs
+        for raw in raw_legs:
+            if not isinstance(raw, dict):
+                continue
+            leg_name = str(raw.get("instrument_name", ""))
+            if not leg_name:
+                continue
+            try:
+                amount = int(raw.get("amount", 0))
+            except (TypeError, ValueError):
+                amount = 0
+            if amount == 0:
+                continue
+            legs.append(
+                InstrumentLeg(
+                    instrument_key=f"DERIBIT:{leg_name}",
+                    side="BUY" if amount > 0 else "SELL",
+                    ratio=abs(amount),
+                )
+            )
+        return legs
+
     def _parse_combo_instrument(
         self,
         item: object,
+        currency: str,
         now: datetime,
     ) -> InstrumentRecord | None:
-        """Parse a single Deribit combo instrument dict into an InstrumentRecord.
+        """Parse a single Deribit get_combos result dict into an InstrumentRecord.
 
-        Returns None if the item is malformed or missing required fields.
+        The get_combos item shape is ``{"id": <combo-name>, "legs": [...],
+        "creation_timestamp": <ms>, "state": <str>, "instrument_id": <int>}``.
+        Returns None if the item is malformed or missing required fields (incl. a
+        combo with no parseable legs — the validation registry rejects leg-less
+        COMBOs, so we drop it here rather than emit an invalid record).
         """
         if not isinstance(item, dict):
             return None
 
-        instrument_name: str = str(item.get("instrument_name", ""))
-        if not instrument_name:
+        combo_id: str = str(item.get("id", ""))
+        if not combo_id:
             return None
 
-        # Extract the underlying currency from the instrument name (first segment).
-        # e.g. "BTC-STRD-25APR26-90000" → "BTC"
-        name_parts = instrument_name.split("-")
-        underlying: str = name_parts[0] if name_parts else ""
-        if not underlying:
-            return None
+        # Underlying currency from the combo id first segment (e.g. "BTC-CCAL-…" → "BTC"),
+        # falling back to the queried currency.
+        name_parts = combo_id.split("-")
+        underlying: str = name_parts[0] if name_parts and name_parts[0] else currency
 
         # Creation timestamp from Deribit (milliseconds UTC).
         creation_ts_ms: object = item.get("creation_timestamp", 0)
@@ -350,20 +322,20 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         except (ValueError, OSError, OverflowError):
             available_from = now
 
-        # Settlement currency (e.g. BTC for inverse, USDC for linear combos).
-        settlement_currency: str = str(item.get("settlement_currency", underlying))
-
-        # Legs: populated from symbol name encoding.
-        legs: list[InstrumentLeg] = _parse_combo_legs(instrument_name)
+        # Legs: from the get_combos STRUCTURED legs (canonical source). A combo
+        # without parseable legs is invalid → drop (validation requires legs).
+        legs: list[InstrumentLeg] = self._build_legs(item.get("legs"))
+        if not legs:
+            return None
 
         return InstrumentRecord(
-            instrument_key=f"DERIBIT:COMBO:{instrument_name}",
+            instrument_key=f"DERIBIT:COMBO:{combo_id}",
             venue=self.venue,
-            raw_symbol=instrument_name,
+            raw_symbol=combo_id,
             instrument_type=InstrumentType.COMBO,
             base_asset=underlying,
             quote_asset="USD",
-            settle_asset=settlement_currency if settlement_currency else underlying,
+            settle_asset=underlying,
             underlying=underlying,
             status=InstrumentStatus.ACTIVE,
             # Combo instruments have no single tick/lot size — they depend on leg composition.
@@ -371,7 +343,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
             min_size=None,
             contract_size=Decimal("1"),
             available_from_datetime=available_from,
-            legs=legs if legs else None,
+            legs=legs,
             timezone="UTC",
         )
 
