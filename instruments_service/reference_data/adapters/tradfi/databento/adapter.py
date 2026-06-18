@@ -105,6 +105,19 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             key = (inst_def.dataset, inst_def.stype_in)
             groups.setdefault(key, []).append(inst_def.symbol)
 
+        # DATASET-level shard isolation (operator 2026-06-18 subscription cutover):
+        # a single venue (e.g. NASDAQ) groups instruments across SEVERAL datasets —
+        # an off-allowlist one (XNAS.ITCH for IBIT/ETHA, IFEU/IFUS for ICE) raises a
+        # DatabentoSubscriptionError from _fetch_symbols. That is a PERMANENT condition
+        # (we will never be entitled to it) and MUST isolate to its own dataset so the
+        # sibling allowed datasets (DBEQ.BASIC / GLBX.MDP3 / CFE) still return — the
+        # per-dataset fetch IS the shard. The breach already emitted ADAPTER_FETCH_FAILED
+        # inside _fetch_symbols; here we log + continue. A TRANSIENT failure (BentoError /
+        # parse — re-raised as a plain RuntimeError by _fetch_symbols) is NOT caught here:
+        # it propagates to fail the whole venue → _fetch_one_venue's failed[] → manifest
+        # attempted_failed + retry (CF-11). SSOT: codex/04-architecture/shard-level-failure-isolation.md.
+        from unified_api_contracts.registry import DatabentoSubscriptionError  # noqa: qg-inside-import
+
         for (dataset, stype_in), symbols in groups.items():
             _db.logger.info(
                 "Databento [%s]: fetching %d symbols from %s (stype=%s)...",
@@ -113,7 +126,16 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                 dataset,
                 stype_in,
             )
-            batch = self._fetch_symbols(api_key, dataset, symbols, stype_in)
+            try:
+                batch = self._fetch_symbols(api_key, dataset, symbols, stype_in)
+            except DatabentoSubscriptionError as _ds_exc:
+                _db.logger.error(
+                    "Databento [%s]: dataset %s off-allowlist (isolated — siblings continue): %s",
+                    vf or "ALL",
+                    dataset,
+                    _ds_exc,
+                )
+                continue
             _db.logger.info("Databento [%s]: %s returned %d instruments", vf or "ALL", dataset, len(batch))
             results.extend(batch)
 
@@ -126,7 +148,15 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     vf or "ALL",
                     len(equity_symbols),
                 )
-                batch = self._fetch_symbols(api_key, "DBEQ.BASIC", equity_symbols, "raw_symbol")
+                try:
+                    batch = self._fetch_symbols(api_key, "DBEQ.BASIC", equity_symbols, "raw_symbol")
+                except DatabentoSubscriptionError as _eq_exc:
+                    _db.logger.error(
+                        "Databento [%s]: DBEQ.BASIC equity fetch off-allowlist (isolated): %s",
+                        vf or "ALL",
+                        _eq_exc,
+                    )
+                    batch = []
                 _db.logger.info("Databento [%s]: DBEQ.BASIC returned %d instruments", vf or "ALL", len(batch))
                 results.extend(batch)
 
@@ -356,6 +386,48 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         lookback = timedelta(days=5) if is_equity_dataset else timedelta(days=0)
         start = datetime(effective_date.year, effective_date.month, effective_date.day, tzinfo=UTC) - lookback
         end = datetime(effective_date.year, effective_date.month, effective_date.day, tzinfo=UTC) + timedelta(days=1)
+
+        # Subscription-entitlement gate (operator 2026-06-18): the request's
+        # (dataset, schema='definition' → L0, start) tuple MUST fall inside the paid
+        # 3-dataset subscription + the schema's free included-history window, else the
+        # query would be billed pay-as-you-go. Fail CLOSED — a disallowed request never
+        # reaches the vendor. This is a 403/ENTITLEMENT breach (NOT 402/PAYG); classify
+        # + emit ADAPTER_FETCH_FAILED + re-raise the DatabentoSubscriptionError as-is so
+        # get_instruments's per-dataset loop can ISOLATE it (a PERMANENT off-allowlist
+        # condition — never retried; sibling datasets still return) — distinct from the
+        # transient BentoError/parse RuntimeError below which fails the whole venue → the
+        # _fetch_one_venue failed[] retry path (attempted_failed). DatabentoSubscriptionError
+        # IS a RuntimeError subclass, so the loop catches it FIRST (before plain RuntimeError).
+        # SSOT: UAC registry/databento_subscription_allowlist.py + shard-level-failure-isolation.md.
+        from unified_api_contracts.registry import (  # noqa: qg-inside-import
+            DatabentoSubscriptionError,
+            assert_databento_request_allowed,
+        )
+
+        try:
+            assert_databento_request_allowed(dataset, "definition", start.isoformat())
+        except DatabentoSubscriptionError as _ent_exc:
+            classification = _db.classify_venue_error("DATABENTO", "DATABENTO_ENTITLEMENT")
+            _db.logger.error(
+                "Databento entitlement breach dataset=%s schema=definition start=%s: %s",
+                dataset,
+                start.date(),
+                _ent_exc,
+            )
+            _db.log_event(
+                "ADAPTER_FETCH_FAILED",
+                details={
+                    "venue": "DATABENTO",
+                    "dataset": dataset,
+                    "schema": "definition",
+                    "symbol_count": len(symbols),
+                    "error": str(_ent_exc),
+                    "error_code": "DATABENTO_ENTITLEMENT",
+                    "action": classification.action.value if classification else "fail",
+                    "retry_safe": False,
+                },
+            )
+            raise
 
         try:
             data = client.timeseries.get_range(
