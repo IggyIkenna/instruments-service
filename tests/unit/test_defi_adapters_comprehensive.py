@@ -1819,7 +1819,7 @@ class TestMorphoAdapter:
                 "markets": {
                     "items": [
                         {
-                            "uniqueKey": "0xmarketkey123456789",
+                            "marketId": "0xmarketkey123456789",
                             "loanAsset": {"address": "0xusdc", "symbol": "USDC", "name": "USDC", "decimals": 6},
                             "collateralAsset": {"address": "0xweth", "symbol": "WETH", "name": "WETH", "decimals": 18},
                             "lltv": "860000000000000000",
@@ -1892,7 +1892,7 @@ class TestMorphoAdapter:
 
         record = MorphoReferenceDataAdapter._market_to_record(
             {
-                "uniqueKey": "0xkey123456",
+                "marketId": "0xkey123456",
                 "loanAsset": {"symbol": "USDC", "decimals": 6},
                 "collateralAsset": {"symbol": "WETH", "decimals": 18},
             },
@@ -1905,7 +1905,7 @@ class TestMorphoAdapter:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
         record = MorphoReferenceDataAdapter._market_to_record(
-            {"uniqueKey": "0xkey", "loanAsset": "not_dict", "collateralAsset": {"symbol": "WETH"}},
+            {"marketId": "0xkey", "loanAsset": "not_dict", "collateralAsset": {"symbol": "WETH"}},
             "MORPHO-ETHEREUM",
         )
         assert record is None
@@ -1914,7 +1914,7 @@ class TestMorphoAdapter:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
         record = MorphoReferenceDataAdapter._market_to_record(
-            {"uniqueKey": "0xkey", "loanAsset": {"symbol": "USDC"}, "collateralAsset": {"symbol": ""}},
+            {"marketId": "0xkey", "loanAsset": {"symbol": "USDC"}, "collateralAsset": {"symbol": ""}},
             "MORPHO-ETHEREUM",
         )
         assert record is None
@@ -1923,7 +1923,7 @@ class TestMorphoAdapter:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
         record = MorphoReferenceDataAdapter._market_to_record(
-            {"uniqueKey": "", "loanAsset": {"symbol": "USDC"}, "collateralAsset": {"symbol": "WETH"}},
+            {"marketId": "", "loanAsset": {"symbol": "USDC"}, "collateralAsset": {"symbol": "WETH"}},
             "MORPHO-ETHEREUM",
         )
         assert record is None
