@@ -191,7 +191,7 @@ class TestMorphoMetadataRoundTrip:
                 "markets": {
                     "items": [
                         {
-                            "uniqueKey": "0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc",
+                            "marketId": "0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc",
                             "loanAsset": {
                                 "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                                 "symbol": "USDC",
