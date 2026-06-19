@@ -27,6 +27,18 @@ logger = logging.getLogger(__name__)
 _RETRY_ATTEMPTS: int = 10
 _RETRY_BASE_DELAY: float = 3.0
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+# Bounded per-request HTTP timeouts. WITHOUT these, aiohttp falls back to its
+# default ClientTimeout(total=300) with NO sock_connect / sock_read bound — a
+# half-open connection or a provider that accepts the socket then never sends
+# bytes hangs the single backfill worker INDEFINITELY (the event loop blocks on
+# the open response). Root cause of the 2026-06-19 SFI backfill stall: the VM
+# processed exactly one date then froze 3h+ on the second date's
+# /matches/day/basic/ fetch with no error and no progress (heartbeat sidecar
+# kept the VM "alive", masking the dead worker). Bounding sock_connect + sock_read
+# converts a hung socket into a retryable aiohttp error the loop already handles.
+_HTTP_SOCK_CONNECT_TIMEOUT: float = 15.0  # TCP+TLS establish
+_HTTP_SOCK_READ_TIMEOUT: float = 60.0  # max idle gap between received chunks
+_HTTP_TOTAL_TIMEOUT: float = 120.0  # absolute ceiling for one request
 # Default throttle: 0.1s = 10 req/sec. Suitable for high-quota plans like
 # api_football Ultra (~900/min). Subclasses override `_min_request_interval`
 # class attribute when their plan is tighter (e.g. SFI = 4 req/sec).
@@ -54,9 +66,23 @@ class BaseSportsReferenceAdapter(ABC):
 
     @staticmethod
     def _make_session() -> aiohttp.ClientSession:
-        """Create an aiohttp session with ThreadedResolver (OS DNS)."""
+        """Create an aiohttp session with ThreadedResolver (OS DNS) + bounded timeouts.
+
+        A bounded ``ClientTimeout`` is MANDATORY: without it aiohttp uses
+        ``ClientTimeout(total=300)`` and leaves ``sock_connect``/``sock_read``
+        unbounded, so a half-open or stalled provider connection hangs the
+        single backfill worker forever (see ``_HTTP_*_TIMEOUT`` rationale above).
+        With the bound, a stalled socket raises ``asyncio.TimeoutError`` (an
+        ``aiohttp.ClientError`` subclass) that ``_get_with_retry`` already
+        retries/escalates — progress is never silently frozen.
+        """
         connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
-        return aiohttp.ClientSession(connector=connector)
+        timeout = aiohttp.ClientTimeout(
+            total=_HTTP_TOTAL_TIMEOUT,
+            sock_connect=_HTTP_SOCK_CONNECT_TIMEOUT,
+            sock_read=_HTTP_SOCK_READ_TIMEOUT,
+        )
+        return aiohttp.ClientSession(connector=connector, timeout=timeout)
 
     @property
     @abstractmethod
