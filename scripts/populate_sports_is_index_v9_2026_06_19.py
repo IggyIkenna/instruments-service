@@ -2,8 +2,8 @@
 # Epic: sports_master
 # Lifecycle: oneoff
 # Delete-when: sports instruments-store _index v9-column population (schema_version=9 +
-#   asset_group + source) applied to live + verified; fleet-wide IS v9 populate tracked
-#   under data_source_provenance_all_asset_groups_2026_06_01.md.
+#   asset_group + source + pipeline_mode=batch_instruments_service) applied to live + verified;
+#   fleet-wide IS v9 populate tracked under data_source_provenance_all_asset_groups_2026_06_01.md.
 """Populate v9 columns on the SPORTS instruments-store ``_index``.
 
 AUDIT (2026-06-19): the live ``instruments-store-sports-prd`` ``_index`` had the
@@ -15,7 +15,7 @@ instruments-store gap (cefi/tradfi/defi `_index` are in the same state — the p
 not the v9 columns). This tool closes it for SPORTS; the other AGs + the live-writer
 auto-stamp are tracked under ``data_source_provenance_all_asset_groups_2026_06_01.md``.
 
-ROW-PRESERVING (never adds/drops a row — only fills 3 columns), so captured is provably
+ROW-PRESERVING (never adds/drops a row — only fills 4 columns), so captured is provably
 preserved:
   * ``schema_version`` → 9 (canonical).
   * ``asset_group`` → ``"sports"`` (constant — one AG per bucket).
@@ -25,8 +25,15 @@ preserved:
     SFI_STANDINGS/TRANSFERMARKT_LEAGUES), the existing manifest ``venue`` is used as the
     source IF it is already a known lowercase vendor token (api_football/footystats/odds_api/
     …); otherwise left blank (honest — the SSOT defines what is source-attributable; never a
-    fabricated source). ``pipeline_mode`` is left untouched (instruments-store is reference
-    data — no batch/live mode; no pipeline_mode twin model, per the plan).
+    fabricated source).
+  * ``pipeline_mode`` → keep an existing concrete value; fill blank/None with
+    ``batch_instruments_service`` (the IS PRODUCER mode — instrument-definition rows are
+    always IS-produced, batch=live, single producer mode). ALIGNS sports with the
+    cefi/defi/tradfi/prediction IS ``_index`` (which ``populate_is_index_v9_2026_06_19.py``
+    stamps the same way) + the IS-writer C-#6 producer contract documented in
+    ``codex/02-data/availability-manifest-and-data-status.md`` § "IS instruments-store _index
+    v9 column-population". AUDIT 2026-06-19: sports IS ``pipeline_mode`` was 100% blank
+    (the prior version of this script deliberately skipped it; that deviation is now closed).
 
 DRY-RUN by default (writes a projection to ``_index/audit/`` + before/after). ``--apply``
 snapshots the live ``_index`` then writes it back.
@@ -48,6 +55,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("populate_sports_is_v9")
 
 _MANIFEST_BLOB = "_index/availability_index.parquet"
+# IS PRODUCER mode (PipelineMode.BATCH_INSTRUMENTS_SERVICE.value) — instrument-definition
+# rows are always IS-produced (batch=live, single producer); aligns sports with the other 4
+# IS _index objects + the C-#6 producer contract.
+_PRODUCER_MODE = "batch_instruments_service"
 _KNOWN_VENDORS = frozenset(
     {
         "api_football",
@@ -80,19 +91,28 @@ def populate(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     if "source" not in out.columns:
         out["source"] = ""
 
+    if "pipeline_mode" not in out.columns:
+        out["pipeline_mode"] = ""
+
     dt = out["data_type"].astype("string").fillna("")
     venue = out["venue"].astype("string").fillna("")
     out["source"] = [_resolve_source(d, v) for d, v in zip(dt.tolist(), venue.tolist(), strict=True)]
     out["asset_group"] = "sports"
     out["schema_version"] = 9
 
+    # pipeline_mode: keep an existing concrete value; fill blank/None with the IS producer mode.
+    pm = out["pipeline_mode"].astype("string").fillna("").str.strip()
+    out["pipeline_mode"] = pm.where(pm.str.len() > 0, _PRODUCER_MODE)
+
     src = out["source"].astype("string")
+    pmc = out["pipeline_mode"].astype("string")
     stats = {
         "rows": n,
         "schema_v9": int((out["schema_version"] == 9).sum()),
         "asset_group_sports": int((out["asset_group"].astype("string") == "sports").sum()),
         "source_populated": int((src.notna() & (src.str.len() > 0)).sum()),
         "source_blank_unmapped": int((src.isna() | (src.str.len() == 0)).sum()),
+        "pipeline_mode_populated": int((pmc.notna() & (pmc.str.len() > 0)).sum()),
     }
     return out, stats
 
@@ -113,8 +133,12 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Before schema_version: %s", before_sv)
     for k, v in stats.items():
         logger.info("  %s = %d", k, v)
-    # source distribution preview
+    # source + pipeline_mode distribution preview
     logger.info("source distribution: %s", out["source"].astype("string").value_counts(dropna=False).head(12).to_dict())
+    logger.info(
+        "pipeline_mode distribution: %s",
+        out["pipeline_mode"].astype("string").value_counts(dropna=False).head(6).to_dict(),
+    )
 
     buf = io.BytesIO()
     out.to_parquet(buf, index=False)
