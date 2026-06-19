@@ -77,7 +77,7 @@ All data sources use a consistent venue adapter pattern:
 - **TardisAdapter** (`venues/tardis/`) - Crypto exchanges (Binance, Bybit, OKX, Deribit)
 - **DatabentoAdapter** (`venues/databento/`) - TradFi exchanges (CME, NASDAQ, NYSE)
 - **DeFi Adapters** (`venues/defi/`) - DeFi protocols:
-  - Uniswap V2/V3/V4 (The Graph, Envio)
+  - Uniswap V2/V3/V4 (The Graph)
   - Curve (The Graph, RPC)
   - Balancer (The Graph)
   - AAVE V3 (The Graph, Protocol SDKs)
@@ -120,8 +120,7 @@ Handles batch processing:
 ├─────────────────────────────────────────────────────────────┤
 │  Tardis API → TardisAdapter                                 │
 │  Databento API → DatabentoAdapter                            │
-│  The Graph → UniswapV3Adapter, CurveAdapter                 │
-│  Envio → UniswapV4Adapter                                   │
+│  The Graph → UniswapV3Adapter, UniswapV4Adapter, CurveAdapter│
 │  Protocol SDKs → AaveV3Adapter, EtherFiAdapter, LidoAdapter │
 └─────────────────────────────────────────────────────────────┘
                           ↓
@@ -240,7 +239,6 @@ All API keys retrieved from Secret Manager (no env vars for keys):
 - Databento API key: `databento-api-key`
 - The Graph API key: `thegraph-api-key`
 - Alchemy API key: `alchemy-api-key`
-- Envio API key: `envio-api-key`
 
 Environment variables only specify secret names, not actual keys.
 
@@ -306,8 +304,7 @@ Abstract data source integrations:
 
 - **TardisAdapter**: Crypto exchanges (Binance, Bybit, OKX, Deribit)
 - **DatabentoAdapter**: TradFi exchanges (CME, NASDAQ, NYSE)
-- **The Graph Adapters**: DeFi DEX pools (Uniswap V3, Curve, Balancer)
-- **Envio Adapter**: Uniswap V4 pools
+- **The Graph Adapters**: DeFi DEX pools (Uniswap V3, Uniswap V4, Curve, Balancer)
 - **Protocol SDK Adapters**: DeFi protocols (AAVE V3, EtherFi, Lido)
 
 ### CCXT (Optional)
