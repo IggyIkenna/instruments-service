@@ -49,19 +49,16 @@ This guide covers DeFi protocol integration, data sources, and instrument discov
 
 - ✅ **V3**: Implemented (`UniswapV3Adapter`)
 - ✅ **V2**: Implemented (`UniswapV2Adapter`)
-- ✅ **V4**: Implemented (`UniswapV4Adapter`) - Uses Envio fallback
+- ✅ **V4**: Implemented (`UniswapV4Adapter`) - Uses The Graph subgraph
 
 **Data Sources**:
 
-- **The Graph**: Primary source for V2/V3 (subgraph queries)
-- **Envio**: Fallback for V4 (HyperSync API)
+- **The Graph**: Primary source for V2/V3/V4 (subgraph queries)
 - **RPC**: Future option (requires event tracking)
 
-**Uniswap V4 Fallback Order**:
+**Uniswap V4 Source**:
 
-1. The Graph Network gateway (if subgraph ID available)
-2. Envio indexer (primary fallback)
-3. RPC queries (skipped for MVP)
+- The Graph Network gateway subgraph (`gateway.thegraph.com`)
 
 **Instrument Format**:
 
@@ -315,52 +312,6 @@ query GetPools($first: Int!, $skip: Int!) {
 
 **Usage**: Token metadata, contract address resolution, wallet position discovery
 
-### Envio
-
-**What**: Alternative blockchain indexer (HyperIndex/HyperSync)
-**API**: GraphQL
-**Authentication**: API token required
-**Documentation**: https://docs.envio.dev/
-
-**Key Concepts**:
-
-- **HyperIndex**: The indexing framework (similar to The Graph subgraphs)
-- **HyperSync**: The API service for accessing deployed indexers
-
-**API Tokens**:
-
-- Required from November 3, 2025
-- Get Token: https://envio.dev/app/api-tokens
-- Store: In GCP Secret Manager as `envio-api-key`
-
-**Usage**: Uniswap V4 pool enumeration (fallback when The Graph unavailable)
-
-**Local Development**:
-
-- Clone: `https://github.com/enviodev/uniswap-v4-indexer.git`
-- Run: `pnpm envio dev`
-- GraphQL endpoint: `http://localhost:8080/v1/graphql`
-
-**GraphQL Query Format** (Envio):
-
-```graphql
-query TopPools {
-  Pool(
-    order_by: { totalValueLockedUSD: desc }
-    limit: 10
-    where: { chainId: { _eq: "1" } }
-  ) {
-    id
-    name
-    token0
-    token1
-    totalValueLockedUSD
-    volumeUSD
-    feesUSD
-  }
-}
-```
-
 ### Protocol SDKs
 
 #### AAVE SDK
@@ -508,9 +459,6 @@ gcloud secrets create thegraph-api-key --data-file=-
 # Alchemy API key
 gcloud secrets create alchemy-api-key --data-file=-
 
-# Envio API key
-gcloud secrets create envio-api-key --data-file=-
-
 # AaveScan API key (optional, for AAVE V3 adapter fallback)
 gcloud secrets create aavescan-api-key --data-file=-
 ```
@@ -523,7 +471,6 @@ Configure secret names in `.env`:
 # Secret Manager secret names (keys stored in GCP Secret Manager)
 THEGRAPH_SECRET_NAME=thegraph-api-key
 ALCHEMY_SECRET_NAME=alchemy-api-key
-ENVIO_SECRET_NAME=envio-api-key
 AAVESCAN_SECRET_NAME=aavescan-api-key
 ```
 
@@ -535,7 +482,6 @@ AAVESCAN_SECRET_NAME=aavescan-api-key
 | ------------- | ----------------------- | ---------------------------------- | ------------------ |
 | **Alchemy**   | ✅ Available            | Token metadata, contract addresses | `alchemy-api-key`  |
 | **The Graph** | ✅ Available            | DEX pool enumeration               | `thegraph-api-key` |
-| **Envio**     | ✅ Available            | Uniswap V4 fallback                | `envio-api-key`    |
 | **AaveScan**  | ✅ Available (optional) | AAVE fallback                      | `aavescan-api-key` |
 
 **Note**: AAVE, EtherFi, and Lido use The Graph and Alchemy - no separate API keys needed.
@@ -724,7 +670,6 @@ If you see "Failed to retrieve API key from Secret Manager":
 
 - **The Graph**: Free tier has rate limits (100,000 queries/month), consider upgrading
 - **Alchemy**: Free tier (300M compute units/month), then paid
-- **Envio**: Development plan is FREE (30-day limit), then paid
 
 ### Import Errors
 

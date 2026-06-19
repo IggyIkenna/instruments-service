@@ -39,7 +39,6 @@ venues/
 └── defi/
     ├── __init__.py
     ├── the_graph_client.py      # GraphQL client for The Graph
-    ├── envio_client.py           # Envio HyperSync client
     ├── uniswapv2_adapter.py     # Uniswap V2 pools
     ├── uniswapv3_adapter.py     # Uniswap V3 pools
     ├── uniswapv4_adapter.py     # Uniswap V4 pools
@@ -227,15 +226,12 @@ is_holiday, holiday_name = adapter.is_us_market_holiday(date(2025, 1, 1))
 
 **Data Sources**:
 
-- **The Graph**: Primary source for V2/V3 (subgraph queries)
-- **Envio**: Fallback for V4 (HyperSync API)
+- **The Graph**: Primary source for V2/V3/V4 (subgraph queries)
 - **RPC**: Future option (requires event tracking)
 
-**Uniswap V4 Fallback Order**:
+**Uniswap V4 Source**:
 
-1. The Graph Network gateway (if subgraph ID available)
-2. Envio indexer (primary fallback)
-3. RPC queries (skipped for MVP)
+- The Graph Network gateway subgraph (`gateway.thegraph.com`)
 
 **Usage**:
 
@@ -438,9 +434,6 @@ gcloud secrets create thegraph-api-key --data-file=-
 # Alchemy API key
 gcloud secrets create alchemy-api-key --data-file=-
 
-# Envio API key
-gcloud secrets create envio-api-key --data-file=-
-
 # AaveScan API key (optional, for AAVE V3 adapter)
 gcloud secrets create aavescan-api-key --data-file=-
 ```
@@ -455,7 +448,6 @@ TARDIS_SECRET_NAME=tardis-api-key
 DATABENTO_SECRET_NAME=databento-api-key
 THEGRAPH_SECRET_NAME=thegraph-api-key
 ALCHEMY_SECRET_NAME=alchemy-api-key
-ENVIO_SECRET_NAME=envio-api-key
 AAVESCAN_SECRET_NAME=aavescan-api-key
 ```
 
@@ -564,7 +556,7 @@ If adapters fail to import:
 - **DatabentoAdapter**: TradFi exchanges (CME, NASDAQ, NYSE)
 - **UniswapV2Adapter**: Uniswap V2 pools (The Graph)
 - **UniswapV3Adapter**: Uniswap V3 pools (The Graph)
-- **UniswapV4Adapter**: Uniswap V4 pools (Envio fallback)
+- **UniswapV4Adapter**: Uniswap V4 pools (The Graph subgraph)
 - **CurveAdapter**: Curve pools (RPC fallback)
 - **BalancerAdapter**: Balancer pools (Balancer API v3)
 - **AaveV3Adapter**: AAVE V3 markets (The Graph + AaveScan)
