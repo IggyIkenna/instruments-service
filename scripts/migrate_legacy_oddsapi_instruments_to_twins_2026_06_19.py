@@ -66,7 +66,7 @@ from unified_api_contracts.canonical.domain.sports.league_data import (
 from unified_api_contracts.canonical.domain.sports.provider_league_ids import (
     ODDS_API_DISPLAY_TO_CANONICAL,
 )
-from unified_trading_library.cloud_interface import (
+from unified_trading_library import (
     gcs_copy_object,
     gcs_describe_object,
     get_storage_client,

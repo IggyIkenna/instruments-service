@@ -1013,6 +1013,43 @@ class TestAaveV3Adapter:
         with patch("instruments_service.reference_data.adapters.defi.aave_v3.log_event"):
             adapter._log_fetch_error(aiohttp.ClientError("timeout"))
 
+    @pytest.mark.asyncio
+    async def test_get_instruments_optimism_static_fallback_no_subgraph(self) -> None:
+        """OPTIMISM chain must return static reserves without touching subgraph."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="OPTIMISM")
+        # _resolve_api_url must NOT be called for OPTIMISM (abandoned subgraph)
+        with patch.object(adapter, "_resolve_api_url") as mock_url:
+            results = await adapter.get_instruments()
+        mock_url.assert_not_called()
+        # 7 reserves: 5 borrowing-enabled (aToken + debtToken = 2 each) +
+        # 2 non-borrowing (WSTETH/RETH, aToken only = 1 each) → 12 instruments
+        assert len(results) == 12
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_optimism_no_api_key_still_works(self) -> None:
+        """OPTIMISM returns instruments even when no API key is set."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="OPTIMISM", api_key=None)
+        results = await adapter.get_instruments()
+        assert len(results) == 12
+
+    def test_get_optimism_reserves_static_returns_lending_instruments(self) -> None:
+        from unified_api_contracts.internal import InstrumentType
+
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="OPTIMISM")
+        results = adapter._get_optimism_reserves_static()
+        assert all(r.instrument_type == InstrumentType.LENDING for r in results)
+        # base_asset (not raw_symbol which is the contract address) carries the token symbol
+        assets = {r.base_asset for r in results}
+        assert "USDC" in assets
+        assert "WETH" in assets
+        assert "RETH" in assets
+
 
 # ── UniswapV4ReferenceDataAdapter ─────────────────────────────────────────────
 
@@ -1425,6 +1462,41 @@ class TestOrcaAdapter:
 # ── DriftReferenceDataAdapter ─────────────────────────────────────────────────
 
 
+_PERP_TS_SNIPPET = """\
+export const MainnetPerpMarkets: PerpMarketConfig[] = [
+  {
+    symbol: 'SOL-PERP',
+    baseAssetSymbol: 'SOL',
+    marketIndex: 0,
+  },
+  {
+    symbol: 'BTC-PERP',
+    baseAssetSymbol: 'BTC',
+    marketIndex: 1,
+    marketStatus: MarketStatus.DELISTED,
+  },
+  {
+    symbol: 'ETH-PERP',
+    baseAssetSymbol: 'ETH',
+    marketIndex: 2,
+  },
+];
+"""
+
+_SPOT_TS_SNIPPET = """\
+export const MainnetSpotMarkets: SpotMarketConfig[] = [
+  {
+    symbol: 'USDC',
+    marketIndex: 0,
+  },
+  {
+    symbol: 'SOL',
+    marketIndex: 1,
+  },
+];
+"""
+
+
 class TestDriftAdapter:
     def test_venue_property(self) -> None:
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
@@ -1434,70 +1506,94 @@ class TestDriftAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_success(self) -> None:
+        from unittest.mock import AsyncMock
+
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 
         adapter = DriftReferenceDataAdapter()
-        markets_data = {
-            "markets": [
-                {"symbol": "SOL-PERP", "marketType": "perp", "status": "active"},
-                {"symbol": "SOL", "marketType": "spot", "status": "active", "baseAsset": "SOL"},
-                {"symbol": "BTC-PERP", "marketType": "perp", "status": "inactive"},
-            ]
-        }
-        with patch.object(adapter, "_get_with_retry", return_value=markets_data):
+        active_markets = [
+            {"symbol": "SOL-PERP", "baseAsset": "SOL", "marketType": "perp", "status": "active"},
+            {"symbol": "SOL", "baseAsset": "SOL", "marketType": "spot", "status": "active"},
+            {"symbol": "BTC-PERP", "baseAsset": "BTC", "marketType": "perp", "status": "delisted"},
+        ]
+        with patch.object(adapter, "_fetch_all_markets", new=AsyncMock(return_value=active_markets)):
             results = await adapter.get_instruments()
         assert len(results) == 2  # Only active markets
 
     @pytest.mark.asyncio
     async def test_get_instruments_filter_perp_only(self) -> None:
+        from unittest.mock import AsyncMock
+
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 
         adapter = DriftReferenceDataAdapter()
-        markets_data = {
-            "markets": [
-                {"symbol": "SOL-PERP", "marketType": "perp", "status": "active"},
-                {"symbol": "SOL", "marketType": "spot", "status": "active", "baseAsset": "SOL"},
-            ]
-        }
-        with patch.object(adapter, "_get_with_retry", return_value=markets_data):
+        active_markets = [
+            {"symbol": "SOL-PERP", "baseAsset": "SOL", "marketType": "perp", "status": "active"},
+            {"symbol": "SOL", "baseAsset": "SOL", "marketType": "spot", "status": "active"},
+        ]
+        with patch.object(adapter, "_fetch_all_markets", new=AsyncMock(return_value=active_markets)):
             results = await adapter.get_instruments(instrument_type=InstrumentType.PERPETUAL)
         assert len(results) == 1
         assert results[0].instrument_type == InstrumentType.PERPETUAL
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
+        from unittest.mock import AsyncMock
+
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 
+        # _fetch_ts_content converts aiohttp.ClientError → ConnectionError; mock
+        # _fetch_all_markets (the aggregate caller) to surface that as ConnectionError.
         adapter = DriftReferenceDataAdapter()
         with (
-            patch.object(adapter, "_get_with_retry", side_effect=aiohttp.ClientError("fail")),
+            patch.object(adapter, "_fetch_all_markets", new=AsyncMock(side_effect=ConnectionError("fail"))),
             patch("instruments_service.reference_data.adapters.defi.drift.log_event"),
             pytest.raises(ConnectionError),
         ):
             await adapter.get_instruments()
 
-    @pytest.mark.asyncio
-    async def test_fetch_all_markets_not_dict(self) -> None:
+    def test_parse_ts_perp_markets_active(self) -> None:
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 
-        adapter = DriftReferenceDataAdapter()
-        with patch.object(adapter, "_get_with_retry", return_value=[]):
-            markets = await adapter._fetch_all_markets()
+        markets = DriftReferenceDataAdapter._parse_ts_markets(_PERP_TS_SNIPPET, "perp")
+        active = [m for m in markets if m["status"] == "active"]
+        delisted = [m for m in markets if m["status"] == "delisted"]
+        assert len(active) == 2
+        assert len(delisted) == 1
+        sol = next(m for m in active if m["symbol"] == "SOL-PERP")
+        assert sol["baseAsset"] == "SOL"
+        assert sol["marketType"] == "perp"
+
+    def test_parse_ts_spot_markets(self) -> None:
+        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
+
+        markets = DriftReferenceDataAdapter._parse_ts_markets(_SPOT_TS_SNIPPET, "spot")
+        assert len(markets) == 2
+        usdc = next(m for m in markets if m["symbol"] == "USDC")
+        assert usdc["baseAsset"] == "USDC"
+        assert usdc["marketType"] == "spot"
+
+    def test_parse_ts_missing_section_returns_empty(self) -> None:
+        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
+
+        markets = DriftReferenceDataAdapter._parse_ts_markets("// empty file", "perp")
         assert markets == []
 
     @pytest.mark.asyncio
-    async def test_fetch_all_markets_no_markets_key_raises(self) -> None:
+    async def test_fetch_all_markets_uses_sdk_urls(self) -> None:
+        """_fetch_all_markets fetches perp + spot TS and combines the results."""
+        from unittest.mock import AsyncMock
+
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 
-        # A 200 response whose body is a dict missing the expected ``markets`` key is a malformed /
-        # error envelope — a TRANSIENT fetch failure, not an empty universe. It must RAISE so the
-        # discovery caller records ``attempted_failed`` instead of silently returning [] (DeFi-plan A8b).
         adapter = DriftReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_get_with_retry", return_value={"other": "data"}),
-            pytest.raises(ConnectionError),
+        with patch.object(
+            adapter, "_fetch_ts_content", new=AsyncMock(side_effect=[_PERP_TS_SNIPPET, _SPOT_TS_SNIPPET])
         ):
-            await adapter._fetch_all_markets()
+            markets = await adapter._fetch_all_markets()
+        assert len(markets) == 5  # 3 perp + 2 spot
+        types = {m["marketType"] for m in markets}
+        assert types == {"perp", "spot"}
 
     def test_build_perp_record_empty_symbol(self) -> None:
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
@@ -1509,7 +1605,7 @@ class TestDriftAdapter:
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 
         adapter = DriftReferenceDataAdapter()
-        record = adapter._build_perp_record({"symbol": "SOL-PERP"})
+        record = adapter._build_perp_record({"symbol": "SOL-PERP", "baseAsset": "SOL"})
         assert record is not None
         assert record.base_asset == "SOL"
         assert record.quote_asset == "USDC"
@@ -2731,11 +2827,17 @@ class TestRuntimeErrorPaths:
 
     @pytest.mark.asyncio
     async def test_drift_runtime_error(self) -> None:
+        from unittest.mock import AsyncMock
+
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 
         adapter = DriftReferenceDataAdapter()
         with (
-            patch.object(adapter, "_get_with_retry", side_effect=RuntimeError("all retries failed")),
+            patch.object(
+                adapter,
+                "_fetch_all_markets",
+                new=AsyncMock(side_effect=RuntimeError("all retries failed")),
+            ),
             pytest.raises(RuntimeError, match="all retries failed"),
         ):
             await adapter.get_instruments()
