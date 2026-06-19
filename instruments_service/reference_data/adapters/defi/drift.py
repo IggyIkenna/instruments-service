@@ -1,13 +1,15 @@
-"""Drift reference data adapter -- instrument discovery via DLOB API.
+"""Drift reference data adapter -- instrument discovery via SDK TypeScript constants.
 
 Discovers Drift perpetual and spot markets on Solana.
 Markets are returned as InstrumentRecord with instrument_type=PERPETUAL or SPOT_PAIR.
 
-Data source: Drift DLOB API (https://dlob.drift.trade) — public, no auth required.
+Data source: Drift SDK TypeScript constants on GitHub (MainnetPerpMarkets / MainnetSpotMarkets).
+The old Data API (https://data.api.drift.trade) is dead (404/CloudFront 403 as of 2026-06).
 Reference: https://docs.drift.trade/
 """
 
 import logging
+import re
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -24,12 +26,16 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
-from ...utils.defi_utils import extract_rest_list_or_raise
 from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
-_DATA_API_URL = get_solana_protocol_url("drift", "api_url") or "https://data.api.drift.trade"
+_SDK_PERP_MARKETS_URL = get_solana_protocol_url("drift", "sdk_perp_markets_url") or (
+    "https://raw.githubusercontent.com/drift-labs/protocol-v2/master/sdk/src/constants/perpMarkets.ts"
+)
+_SDK_SPOT_MARKETS_URL = get_solana_protocol_url("drift", "sdk_spot_markets_url") or (
+    "https://raw.githubusercontent.com/drift-labs/protocol-v2/master/sdk/src/constants/spotMarkets.ts"
+)
 _DEFAULT_CHAIN = "SOLANA"
 _DRIFT_DEPLOY_DATE = get_protocol_floor_date("drift")
 
@@ -150,20 +156,83 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
         logger.info("Drift: fetched %d instruments on %s", len(results), self._chain)
         return results
 
-    async def _fetch_all_markets(self) -> list[dict[str, object]]:
-        """Fetch all markets from Drift Data API /stats/markets (public, no auth)."""
-        url = f"{_DATA_API_URL}/stats/markets"
+    async def _fetch_ts_content(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        label: str,
+    ) -> str:
+        """Fetch raw TypeScript file content as text from a GitHub raw URL."""
         try:
-            async with self._make_session() as session:
-                data = await self._get_with_retry(session, url)
-        except (aiohttp.ClientError, RuntimeError) as exc:
-            if isinstance(exc, aiohttp.ClientError):
-                self._log_fetch_error(exc, "stats/markets")
-                raise ConnectionError(str(exc)) from exc
-            logger.error("Drift stats/markets request failed after retries: %s", exc)
-            raise
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                resp.raise_for_status()
+                return await resp.text()
+        except aiohttp.ClientError as exc:
+            self._log_fetch_error(exc, label)
+            raise ConnectionError(str(exc)) from exc
 
-        return extract_rest_list_or_raise(data, venue=self.venue, keys=("markets",))
+    @staticmethod
+    def _parse_ts_markets(content: str, market_type: str) -> list[dict[str, object]]:
+        """Parse Drift SDK TypeScript market constants into normalised dicts.
+
+        Returns dicts with keys: symbol, baseAsset, marketType, status.
+        Filters DELISTED markets (status != 'active').
+        """
+        section_name = "MainnetPerpMarkets" if market_type == "perp" else "MainnetSpotMarkets"
+        section_pat = re.compile(
+            rf"{re.escape(section_name)}\s*(?::\s*\w[\w<>\[\], ]*?)?\s*=\s*\[",
+        )
+        m = section_pat.search(content)
+        if not m:
+            logger.warning("Drift SDK: could not locate %s in TS content", section_name)
+            return []
+        # Bracket-depth walk to extract the array section
+        start = m.end()
+        depth = 1
+        pos = start
+        while pos < len(content) and depth > 0:
+            ch = content[pos]
+            if ch in ("[", "{"):
+                depth += 1
+            elif ch in ("]", "}"):
+                depth -= 1
+            pos += 1
+        section = content[start : pos - 1]
+        results: list[dict[str, object]] = []
+        obj_pat = re.compile(r"\{([^{}]*)\}", re.DOTALL)
+        sym_pat = re.compile(r"""symbol\s*:\s*['"]([^'"]+)['"]""")
+        base_pat = re.compile(r"""baseAssetSymbol\s*:\s*['"]([^'"]+)['"]""")
+        delisted_pat = re.compile(r"DELISTED", re.IGNORECASE)
+        for obj_m in obj_pat.finditer(section):
+            obj_text = obj_m.group(1)
+            sym_m = sym_pat.search(obj_text)
+            if not sym_m:
+                continue
+            symbol = sym_m.group(1)
+            if market_type == "perp":
+                base_m = base_pat.search(obj_text)
+                base_asset = base_m.group(1) if base_m else symbol.split("-")[0]
+            else:
+                base_asset = symbol.upper()
+            status = "delisted" if delisted_pat.search(obj_text) else "active"
+            results.append(
+                {
+                    "symbol": symbol,
+                    "baseAsset": base_asset,
+                    "marketType": market_type,
+                    "status": status,
+                }
+            )
+        return results
+
+    async def _fetch_all_markets(self) -> list[dict[str, object]]:
+        """Fetch all markets from Drift SDK TypeScript constants on GitHub."""
+        async with self._make_session() as session:
+            perp_content = await self._fetch_ts_content(session, _SDK_PERP_MARKETS_URL, "sdk/perpMarkets.ts")
+            spot_content = await self._fetch_ts_content(session, _SDK_SPOT_MARKETS_URL, "sdk/spotMarkets.ts")
+        perp_markets = self._parse_ts_markets(perp_content, "perp")
+        spot_markets = self._parse_ts_markets(spot_content, "spot")
+        return [*perp_markets, *spot_markets]
 
     def _build_perp_record(
         self,
@@ -174,7 +243,11 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
         if not symbol:
             return None
 
-        base_asset = symbol.split("-")[0].upper() if "-" in symbol else symbol.upper()
+        # Prefer SDK-provided baseAsset; fall back to splitting the symbol string
+        raw_base = market.get("baseAsset") or market.get("baseAssetSymbol", "")
+        base_asset = (
+            str(raw_base).upper() if raw_base else (symbol.split("-")[0].upper() if "-" in symbol else symbol.upper())
+        )
 
         venue_tag = self.venue
         instrument_key = f"{venue_tag}:PERP:{symbol.upper()}"
