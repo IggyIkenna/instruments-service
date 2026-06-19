@@ -46,7 +46,7 @@ COPY pip.conf /etc/pip.conf
 COPY . .
 
 # Install service dependencies (base image already has UTL + UAC pre-installed)
-RUN uv pip install --system --no-deps -e .
+RUN uv pip install --system --no-sources -e .
 
 # Create data directories
 RUN mkdir -p /app/instruments-service/data/samples /app/instruments-service/logs
