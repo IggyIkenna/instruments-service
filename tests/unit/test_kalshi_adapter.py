@@ -197,3 +197,50 @@ class TestKalshiAdapter:
         adapter = KalshiReferenceDataAdapter()
         with pytest.raises(NotImplementedError):
             await adapter.get_ohlcv("BTC")
+
+    # -- date-aware live↔historical routing + RSA-PSS auth (2026-06-20) --
+
+    def test_parse_kalshi_creds_rsa_blob(self) -> None:
+        """RSA credential JSON blob → (api_key_id, private_key_pem); enables signing."""
+        import json as _json
+
+        blob = _json.dumps({"api_key_id": "kid-123", "private_key": "-----BEGIN RSA-----x"})
+        adapter = KalshiReferenceDataAdapter(api_key=blob)
+        assert adapter._kalshi_key_id == "kid-123"
+        assert adapter._kalshi_private_key_pem == "-----BEGIN RSA-----x"
+        assert adapter._can_sign is True
+
+    def test_parse_kalshi_creds_none_and_legacy(self) -> None:
+        """Missing / non-JSON credential → no signing (live unauthenticated is OK)."""
+        assert KalshiReferenceDataAdapter()._can_sign is False
+        assert KalshiReferenceDataAdapter(api_key="legacy-single-key")._can_sign is False
+
+    def test_signed_headers_present_only_when_creds(self) -> None:
+        """`_signed_headers` adds KALSHI-ACCESS-* only when RSA creds are present."""
+        plain = KalshiReferenceDataAdapter()._signed_headers("GET", "/trade-api/v2/markets")
+        assert "KALSHI-ACCESS-SIGNATURE" not in plain
+        assert plain["Accept"] == "application/json"
+
+    @pytest.mark.asyncio
+    async def test_deep_date_is_honest_absence(self) -> None:
+        """A date far before the cutoff returns [] (deep history = bulk seed) — it
+        must NOT futile-paginate ``/historical/markets`` (only the cutoff lookup)."""
+        adapter = KalshiReferenceDataAdapter()
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(return_value={"market_settled_ts": "2026-04-21T00:00:00Z"})
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            result = await adapter.get_instruments(date="2022-06-01")
+        assert result == []
+        # exactly one call — the /historical/cutoff lookup; no market pagination
+        mock_session_obj.get.assert_called_once()
+        assert "historical/cutoff" in mock_session_obj.get.call_args.args[0]
