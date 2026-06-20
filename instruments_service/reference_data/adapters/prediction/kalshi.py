@@ -8,10 +8,17 @@ Base URL: https://api.elections.kalshi.com/trade-api/v2
 Auth: API key passed as header (RSA key signing for production).
 """
 
+import base64
+import json
 import logging
+import time
 from datetime import UTC, datetime
+from datetime import date as date_cls
 from decimal import Decimal
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 import aiohttp
 from unified_api_contracts import (
@@ -38,8 +45,18 @@ from ...schemas import (
 logger = logging.getLogger(__name__)
 
 _KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+_KALSHI_API_PREFIX = "/trade-api/v2"  # path prefix included in the RSA-PSS signed message
 _PAGE_LIMIT = 200
-_MAX_PAGES = 10  # cap at 2000 markets per fetch
+_MAX_PAGES = 10  # cap at 2000 markets per fetch (live snapshot)
+# Historical (pre-cutoff) enumeration paginates `/historical/markets` newest-first
+# from the cutoff backward; cap pages so a deep target date (whose markets are far
+# down the cursor) degrades to honest-absence rather than an unbounded walk — deep
+# history is seeded from the bulk corpus, NOT this per-date API path. SSOT:
+# plans/active/prediction_venue_perps_and_live_clob_depth_2026_06_20.md (PM-2 entry).
+_MAX_HISTORICAL_PAGES = 40
+# Only attempt live↔historical gap-edge pagination within this many days of the
+# cutoff; deeper dates are honest-absence (served by the bulk corpus seed).
+_HISTORICAL_GAP_EDGE_DAYS = 3
 
 
 _STATUS_MAP: dict[int, str] = {429: "429", 401: "401", 403: "403", 400: "400"}
@@ -50,6 +67,26 @@ _MSG_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("400", "bad request"), "400"),
     (("500", "internal", "server"), "500"),
 )
+
+
+def _parse_iso_date(value: str | None) -> date_cls | None:
+    """Parse a ``YYYY-MM-DD`` backfill date string to a ``date`` (None if blank/bad)."""
+    if not value:
+        return None
+    try:
+        return date_cls.fromisoformat(value[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _market_date(value: object) -> date_cls | None:
+    """Parse a Kalshi market ISO timestamp (e.g. ``2026-04-20T23:00:00Z``) to a date."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except (ValueError, TypeError):
+        return None
 
 
 def _classify_kalshi_error(exc: Exception, status: int | None = None) -> str:
@@ -94,42 +131,163 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         # MARKET_LIFECYCLE rows alongside the InstrumentRecord shard
         # without re-fetching from the Kalshi API.
         self._last_markets: list[KalshiMarket] = []
+        # RSA-PSS credentials parsed from the `kalshi-api-credentials` JSON blob
+        # ({"api_key_id"|"key_id", "private_key"}). Kalshi authenticates with
+        # RSA-PSS request signing — a plain `Authorization: Bearer` is rejected.
+        # The LIVE `/markets?status=open` snapshot is reachable UNAUTHENTICATED;
+        # the `/historical/*` tier (pre-cutoff markets/trades) REQUIRES signing.
+        self._kalshi_key_id, self._kalshi_private_key_pem = self._parse_kalshi_creds(api_key)
+        self._loaded_private_key: RSAPrivateKey | None = None  # lazily loaded crypto key
+        self._historical_cutoff: date_cls | None = None  # lazily resolved
 
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
         return "kalshi"
 
-    def _get_headers(self) -> dict[str, str]:
-        """Build request headers with optional API key auth."""
+    @staticmethod
+    def _parse_kalshi_creds(api_key: str | None) -> tuple[str | None, str | None]:
+        """Extract (api_key_id, private_key_pem) from the injected credential blob.
+
+        The service injects the `kalshi-api-credentials` Secret Manager JSON via the
+        ``api_key`` constructor param. Returns (None, None) for a missing/legacy
+        non-JSON credential — the adapter then runs unauthenticated (live-only).
+        """
+        if not api_key:
+            return None, None
+        try:
+            blob = cast(dict[str, object], json.loads(api_key))
+        except (json.JSONDecodeError, TypeError):
+            return None, None
+        key_id = blob.get("api_key_id") or blob.get("key_id")
+        priv = blob.get("private_key")
+        return (
+            str(key_id) if isinstance(key_id, str) else None,
+            str(priv) if isinstance(priv, str) else None,
+        )
+
+    @property
+    def _can_sign(self) -> bool:
+        return bool(self._kalshi_key_id and self._kalshi_private_key_pem)
+
+    def _signed_headers(self, method: str, path: str) -> dict[str, str]:
+        """Build request headers, RSA-PSS-signing when credentials are present.
+
+        ``path`` is the API path the signature covers, e.g.
+        ``/trade-api/v2/historical/markets`` (no query string). Falls back to plain
+        headers (unauthenticated) when no RSA credentials were injected — sufficient
+        for the live ``/markets?status=open`` snapshot.
+        """
         headers: dict[str, str] = {
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-        if self._api_key is not None:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+        if not self._can_sign:
+            return headers
+        # Lazy import: cryptography is heavy + only needed for the signed
+        # `/historical/*` tier (live `status=open` runs without it).
+        if self._loaded_private_key is None:
+            from cryptography.hazmat.primitives import serialization
+
+            self._loaded_private_key = cast(
+                "RSAPrivateKey",
+                serialization.load_pem_private_key(cast(str, self._kalshi_private_key_pem).encode(), password=None),
+            )
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+
+        ts = str(int(time.time() * 1000))
+        signature: bytes = self._loaded_private_key.sign(
+            (ts + method + path).encode(),
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+            hashes.SHA256(),
+        )
+        headers["KALSHI-ACCESS-KEY"] = cast(str, self._kalshi_key_id)
+        headers["KALSHI-ACCESS-SIGNATURE"] = base64.b64encode(signature).decode()
+        headers["KALSHI-ACCESS-TIMESTAMP"] = ts
         return headers
+
+    async def _resolve_cutoff(self, session: aiohttp.ClientSession) -> date_cls:
+        """Resolve the live↔historical boundary via ``/historical/cutoff`` (cached).
+
+        Markets settled on/after the cutoff live on ``/markets`` (the rolling live
+        snapshot); older markets are served by ``/historical/*``. On any failure we
+        return ``date.min`` so EVERY date routes LIVE (safe default — live works
+        unauthenticated; historical is opt-in only when the cutoff is known).
+        """
+        if self._historical_cutoff is not None:
+            return self._historical_cutoff
+        sign_path = f"{_KALSHI_API_PREFIX}/historical/cutoff"
+        try:
+            async with session.get(
+                f"{_KALSHI_BASE_URL}/historical/cutoff", headers=self._signed_headers("GET", sign_path)
+            ) as resp:
+                resp.raise_for_status()
+                body = cast(dict[str, object], await resp.json())
+            raw = body.get("market_settled_ts")
+            self._historical_cutoff = (
+                datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date() if raw else date_cls.min
+            )
+        except (aiohttp.ClientError, ValueError, TypeError):
+            self._historical_cutoff = date_cls.min
+        return self._historical_cutoff
 
     async def get_instruments(
         self,
         instrument_type: str | None = None,
+        date: str | None = None,
     ) -> list[InstrumentRecord]:
-        """Fetch active Kalshi markets as InstrumentRecord list.
+        """Fetch Kalshi markets as InstrumentRecord list.
+
+        ``date`` (``YYYY-MM-DD``) selects the enumeration mode — this is what makes
+        batch (historical) and live pipeline modes share one canonical path:
+          * ``None`` / on-or-after the live cutoff → LIVE snapshot
+            (``/markets?status=open``, unauthenticated-OK) = currently-tradeable
+            markets. Used by the daily/live cron + forward batch.
+          * before the live cutoff → HISTORICAL tier (``/historical/markets``,
+            RSA-PSS signed), cursor-paginated newest-first from the cutoff and
+            filtered to markets whose lifecycle spans ``date``. Bounded by
+            ``_MAX_HISTORICAL_PAGES``; deep dates beyond the cap return empty
+            (honest-absence) — deep history is seeded from the bulk corpus.
 
         instrument_type filter: pass "PREDICTION_MARKET" or None (all). Other values
         return an empty list since Kalshi only exposes prediction markets.
         """
         if instrument_type is not None and instrument_type != "PREDICTION_MARKET":
             return []
-        results: list[InstrumentRecord] = []
         self._last_markets = []
-        now = datetime.now(UTC)
-        cursor: str | None = None
-        fetch_failed = False
+        target = _parse_iso_date(date)
         async with self._make_session() as session:
-            for _page in range(_MAX_PAGES):
+            # LIVE (date None) needs no cutoff lookup — it is always the current
+            # snapshot. Only a dated request resolves the cutoff to decide routing.
+            historical = False
+            if target is not None:
+                cutoff = await self._resolve_cutoff(session)
+                historical = target < cutoff
+                if historical and (cutoff - target).days > _HISTORICAL_GAP_EDGE_DAYS:
+                    # Deep pre-cutoff date: flat `/historical/markets` pagination
+                    # cannot reach it (Kalshi settles ~12k markets/day; the page
+                    # budget covers ~1 day from the cutoff). Honest-absence — this
+                    # date's universe comes from the BULK corpus seed (+ the
+                    # series-scoped enumerator), not this API path.
+                    logger.info(
+                        "KalshiAdapter: %s is >%dd before cutoff %s — honest-absence "
+                        "(deep history served by bulk seed, not the live/historical API path)",
+                        target,
+                        _HISTORICAL_GAP_EDGE_DAYS,
+                        cutoff,
+                    )
+                    return []
+            max_pages = _MAX_HISTORICAL_PAGES if historical else _MAX_PAGES
+            now = datetime.now(UTC)
+            results: list[InstrumentRecord] = []
+            cursor: str | None = None
+            fetch_failed = False
+            for _page in range(max_pages):
                 try:
-                    batch, cursor = await self._fetch_markets_page(session, cursor, now)
+                    batch, cursor = await self._fetch_markets_page(
+                        session, cursor, now, target=(target if historical else None)
+                    )
                 except RuntimeError:
                     # Page fetch failed — ADAPTER_FETCH_FAILED already emitted in
                     # _fetch_markets_page. Per shard-isolation, keep pages already
@@ -138,7 +296,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
                     fetch_failed = True
                     break
                 results.extend(batch)
-                if cursor is None or len(batch) < _PAGE_LIMIT:
+                if cursor is None or (not historical and len(batch) < _PAGE_LIMIT):
                     break
         if fetch_failed and not results:
             # All pages failed with zero records → raise so
@@ -155,30 +313,35 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         session: aiohttp.ClientSession,
         cursor: str | None,
         now: datetime,
+        *,
+        target: date_cls | None = None,
     ) -> tuple[list[InstrumentRecord], str | None]:
         """Fetch one page of markets from Kalshi API.
 
+        ``target`` None → LIVE ``/markets?status=open`` snapshot. ``target`` set →
+        HISTORICAL ``/historical/markets`` (signed), filtered to markets whose
+        lifecycle spans ``target``; ``next_cursor`` is forced to None once a page
+        holds no market still open on/after ``target`` (newest-first → we've walked
+        past the target going backward).
+
         Returns (records, next_cursor). next_cursor is None when no more pages.
         """
-        url = f"{_KALSHI_BASE_URL}/markets"
+        base_path = "/historical/markets" if target is not None else "/markets"
+        url = f"{_KALSHI_BASE_URL}{base_path}"
+        sign_path = f"{_KALSHI_API_PREFIX}{base_path}"
         # Kalshi's ``status`` query param is a LIFECYCLE filter whose valid
         # values are ``unopened`` / ``open`` / ``closed`` / ``settled`` —
-        # ``status=active`` is rejected with HTTP 400
-        # ``{"error":{"code":"bad_request","details":"invalid status filter"}}``
-        # (verified live 2026-06-16 against the public endpoint). The per-MARKET
-        # ``status`` field returned for currently-tradeable markets IS
-        # ``"active"`` (hence ``_parse_market``'s ``is_active = status ==
-        # "active"`` check below is correct) — but the REQUEST filter for those
-        # open/tradeable markets is ``status=open``. Using ``open`` returns the
-        # same currently-tradeable markets (each carrying market-level
-        # ``status=active``) with HTTP 200.
-        params: dict[str, str] = {
-            "limit": str(_PAGE_LIMIT),
-            "status": "open",
-        }
+        # ``status=active`` is rejected with HTTP 400. For the live snapshot the
+        # request filter for currently-tradeable markets is ``status=open`` (each
+        # carries market-level ``status=active``, which ``_parse_market`` checks).
+        # The ``/historical/markets`` tier is unfiltered (returns settled markets
+        # newest-first from the cutoff); we date-filter client-side below.
+        params: dict[str, str] = {"limit": str(_PAGE_LIMIT)}
+        if target is None:
+            params["status"] = "open"
         if cursor is not None:
             params["cursor"] = cursor
-        headers = self._get_headers()
+        headers = self._signed_headers("GET", sign_path)
         try:
             async with session.get(url, params=params, headers=headers) as resp:
                 if resp.status == 401:
@@ -236,16 +399,31 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             return [], None
 
         records: list[InstrumentRecord] = []
+        page_has_market_active_through_target = False
         for raw_item in markets_raw:
-            record = self._parse_market(cast(dict[str, object], raw_item), now)
+            market = cast(dict[str, object], raw_item)
+            if target is not None:
+                open_d = _market_date(market.get("open_time"))
+                close_d = _market_date(market.get("close_time"))
+                if close_d is not None and close_d >= target:
+                    page_has_market_active_through_target = True
+                # Keep only markets whose lifecycle [open, close] spans the target
+                # date — i.e. the markets actually tradeable on that historical day.
+                if not (open_d is not None and close_d is not None and open_d <= target <= close_d):
+                    continue
+            record = self._parse_market(market, now)
             if record is not None:
                 records.append(record)
+        if target is not None and not page_has_market_active_through_target:
+            # Newest-first historical pagination has walked entirely PAST the target
+            # (every market on this page already closed before it) → stop.
+            next_cursor = None
         return records, next_cursor
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch single market by ticker."""
         url = f"{_KALSHI_BASE_URL}/markets/{symbol}"
-        headers = self._get_headers()
+        headers = self._signed_headers("GET", f"{_KALSHI_API_PREFIX}/markets/{symbol}")
         now = datetime.now(UTC)
         async with self._make_session() as session:
             try:
