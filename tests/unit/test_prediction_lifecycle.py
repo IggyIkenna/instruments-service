@@ -240,13 +240,13 @@ class TestKalshiLifecycle:
         assert lifecycle is not None
         assert lifecycle.market_id == "KXBTC-26MAR-90000"
         assert lifecycle.venue == "kalshi"
-        # Kalshi rule classifier is override-only currently → unrecognised
-        # tickers go to OTHER per UAC SSOT.
-        assert lifecycle.canonical_group == CanonicalQuestionGroup.OTHER
+        # Kalshi prefix classifier (2026-06-20): KXBTC-* → BTC_PRICE_RANGE_DAILY
+        # via the ``KXBTC`` prefix entry in KALSHI_TICKER_PREFIX_TO_GROUP.
+        assert lifecycle.canonical_group == CanonicalQuestionGroup.BTC_PRICE_RANGE_DAILY
         assert lifecycle.market_created_at == datetime(2026, 3, 25, 0, 0, tzinfo=UTC)
         assert lifecycle.resolution_time == datetime(2026, 3, 26, 0, 0, tzinfo=UTC)
-        other_lag = CANONICAL_GROUP_METADATA[CanonicalQuestionGroup.OTHER].settlement_lag
-        assert lifecycle.settlement_time == lifecycle.resolution_time + other_lag
+        btc_range_lag = CANONICAL_GROUP_METADATA[CanonicalQuestionGroup.BTC_PRICE_RANGE_DAILY].settlement_lag
+        assert lifecycle.settlement_time == lifecycle.resolution_time + btc_range_lag
         assert lifecycle.current_status == "active"
 
     def test_open_time_fallback_when_missing(self) -> None:
