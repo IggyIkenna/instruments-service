@@ -38,6 +38,22 @@ __all__ = [
     "_run_per_fixture_enrichment",
 ]
 
+# Per-fixture entity short-name → canonical manifest data_type. SSOT for the
+# entity-axis key used by both the observed-coverage skip (in
+# ``_gather_per_fixture_rows``) and the per-league manifest writes (in
+# ``_write_per_fixture_entities``) so the two never drift.
+_ENTITY_DT_BY_SHORT: dict[str, str] = {
+    "fixture_stats": "FIXTURE_STATS",
+    "fixture_events": "FIXTURE_EVENTS",
+    "fixture_lineups": "FIXTURE_LINEUPS",
+    "player_stats": "PLAYER_STATS",
+}
+
+
+def _entity_dt_for_short(entity_name: str) -> str:
+    """Canonical manifest data_type for a per-fixture entity short-name (``""`` if unknown)."""
+    return _ENTITY_DT_BY_SHORT.get(entity_name, "")
+
 
 async def _resolve_fixture_ids(
     *,
@@ -389,20 +405,45 @@ async def _gather_per_fixture_rows(
                 captured_per_entity_league[(entity_name, canonical_league)] = captured_set
 
     # Build all tasks: N entities x M fixtures (only missing entities)
+    #
+    # Out-of-coverage skip (observed (league x entity) map): API-Football only
+    # provides PLAYER_STATS / FIXTURE_LINEUPS / FIXTURE_EVENTS / FIXTURE_STATS
+    # for SOME leagues (measured ~57% of /fixtures/players calls return 0 —
+    # 729 of 790 leagues never yield PLAYER_STATS). For a (league, entity) that
+    # the captured corpus shows is observed-out-of-coverage we DON'T call the
+    # API at all (kills the wasted fan-out); the zero-row cell is recorded as
+    # ``EXPECTED_NO_PROVIDER_COVERAGE`` by the emit_empty path below rather than
+    # forced to ``attempted_failed`` by the live-instrument guard. SSOT:
+    # ``unified_api_contracts.registry.sports_league_entity_coverage``.
     tasks: list[_orch.asyncio.Task[None]] = []
     skipped_already_captured = 0
+    skipped_no_provider_coverage = 0
     for entity_name, fetch_fn in per_fixture_entities:
+        _af_entity_dt = _entity_dt_for_short(entity_name)
         for fid in fixture_ids:
-            if not redo_all and captured_per_entity_league:
-                canonical_league = af_fid_to_league.get(str(fid))
-                if canonical_league:
-                    canonical_league = _orch._canonical_league_id(canonical_league)
-                    captured_set = captured_per_entity_league.get((entity_name, canonical_league), frozenset())
-                    if int(fid) in captured_set:
-                        skipped_already_captured += 1
-                        continue
+            canonical_league = af_fid_to_league.get(str(fid))
+            canonical_league = _orch._canonical_league_id(canonical_league) if canonical_league else ""
+            if (
+                canonical_league
+                and _af_entity_dt
+                and not _orch.is_league_entity_covered(canonical_league, _af_entity_dt)
+            ):
+                # League never yields this entity in API-Football — skip the call.
+                skipped_no_provider_coverage += 1
+                continue
+            if not redo_all and captured_per_entity_league and canonical_league:
+                captured_set = captured_per_entity_league.get((entity_name, canonical_league), frozenset())
+                if int(fid) in captured_set:
+                    skipped_already_captured += 1
+                    continue
             tasks.append(_orch.asyncio.ensure_future(_fetch_one(entity_name, fetch_fn, fid)))
 
+    if skipped_no_provider_coverage:
+        _orch.logger.info(
+            "Per-fixture observed-coverage skip: %d (entity, fixture_id) pairs whose (league, entity) is "
+            "observed-out-of-coverage in API-Football — skipping api calls (honest EXPECTED_NO_PROVIDER_COVERAGE)",
+            skipped_no_provider_coverage,
+        )
     if skipped_already_captured:
         _orch.logger.info(
             "Per-fixture pre-fetch skip: %d (entity, fixture_id) pairs already in existing per-league "
@@ -437,15 +478,9 @@ def _write_per_fixture_entities(
 ) -> None:
     """Write per-league partitioned per-fixture entity files + manifest rows."""
     manifest = hooks.manifest
-    _entity_dt_by_short = {
-        "fixture_stats": "FIXTURE_STATS",
-        "fixture_events": "FIXTURE_EVENTS",
-        "fixture_lineups": "FIXTURE_LINEUPS",
-        "player_stats": "PLAYER_STATS",
-    }
 
     for entity_name in entity_names:
-        _af_entity_dt = _entity_dt_by_short[entity_name]
+        _af_entity_dt = _entity_dt_for_short(entity_name)
         all_rows = entity_rows[entity_name]
         if all_rows:
             df = _orch.pd.DataFrame(all_rows)
