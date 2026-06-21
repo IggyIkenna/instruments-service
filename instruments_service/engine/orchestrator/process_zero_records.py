@@ -52,8 +52,14 @@ async def _handle_zero_records(
     redo_all: bool,
     sports_entity_filter: str | None,
     season_override: int | None,
+    fixtures_fetch_failed: bool = False,
 ) -> dict[str, int]:
     """Stage 4 — handle zero records after the date filter.
+
+    ``fixtures_fetch_failed`` is True when the sports fixtures venue's adapter
+    actually ERRORED (raised → ``failed_venues``), as opposed to running clean
+    and returning zero fixtures. A failed fetch must record ``attempted_failed``
+    (not ``empty_confirmed``) so the gap stays visible.
 
     Raises:
         RuntimeError: when zero records is NOT an expected absence
@@ -73,6 +79,7 @@ async def _handle_zero_records(
             redo_all=redo_all,
             sports_entity_filter=sports_entity_filter,
             season_override=season_override,
+            fixtures_fetch_failed=fixtures_fetch_failed,
         )
     return _zero_records_non_sports(
         date=date,
@@ -95,12 +102,22 @@ async def _zero_records_sports(
     redo_all: bool,
     sports_entity_filter: str | None,
     season_override: int | None,
+    fixtures_fetch_failed: bool = False,
 ) -> dict[str, int]:
-    """SPORTS zero-fixture day: honest empty markers + reference fetches."""
+    """SPORTS zero-fixture day: honest empty markers + reference fetches.
+
+    ``fixtures_fetch_failed`` → the fixtures venue errored, so write
+    ``attempted_failed`` markers instead of ``empty_confirmed``.
+    """
     primary_asset_group = asset_groups[0] if asset_groups else None
     bucket = _orch._get_instruments_bucket(primary_asset_group)
 
-    _zero_sports_empty_fixture_markers(date=date, bucket=bucket, league_filter=league_filter)
+    _zero_sports_empty_fixture_markers(
+        date=date,
+        bucket=bucket,
+        league_filter=league_filter,
+        fixtures_fetch_failed=fixtures_fetch_failed,
+    )
 
     # Still fetch sports reference data (leagues/teams/standings/injuries)
     # even when no fixtures exist. These are date-independent slow-moving
@@ -138,8 +155,15 @@ def _zero_sports_empty_fixture_markers(
     date: str,
     bucket: str,
     league_filter: list[str] | None,
+    fixtures_fetch_failed: bool = False,
 ) -> None:
-    """Write one empty marker per prediction league for a zero-fixture day.
+    """Write one marker per prediction league for a zero-fixture day.
+
+    When ``fixtures_fetch_failed`` is True the fixtures venue's adapter ERRORED
+    (e.g. API-Football plan/quota/auth error → ``response: []``); the day's
+    "zero fixtures" is NOT honest absence, so write ``attempted_failed`` via
+    ``record_failed`` so the gap stays visible + is backfilled. Only a clean
+    fetch that genuinely returned zero fixtures writes ``empty_confirmed``.
 
     Honest-coverage (CLAUDE.md "4 pillars" #1): we use ``record_empty`` here,
     NOT ``add(row_count=0)``. Marking zero-fixture days as ``captured`` with
@@ -161,22 +185,39 @@ def _zero_sports_empty_fixture_markers(
         catalogue_bucket=bucket,
     )
     for _league_id in _empty_league_ids:
-        _empty_manifest.record_empty(
-            row_key={
-                "date": date,
-                "data_type": "FIXTURES",
-                "league_id": _orch._canonical_league_id(_league_id),
-            },
-            attempted_at=_empty_attempt_ts,
-            reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
-            pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-        )
+        _row_key = {
+            "date": date,
+            "data_type": "FIXTURES",
+            "league_id": _orch._canonical_league_id(_league_id),
+        }
+        if fixtures_fetch_failed:
+            # Fetch ERRORED (plan/quota/auth/etc.) — NOT honest absence.
+            _empty_manifest.record_failed(
+                row_key=_row_key,
+                error="FIXTURES_FETCH_FAILED",
+                attempted_at=_empty_attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+            )
+        else:
+            _empty_manifest.record_empty(
+                row_key=_row_key,
+                attempted_at=_empty_attempt_ts,
+                reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+            )
     _empty_manifest.write()
-    _orch.logger.info(
-        "SPORTS: No fixtures for date=%s — wrote empty_confirmed markers for %d leagues",
-        date,
-        len(_empty_league_ids),
-    )
+    if fixtures_fetch_failed:
+        _orch.logger.warning(
+            "SPORTS: fixtures FETCH FAILED for date=%s — wrote attempted_failed markers for %d leagues",
+            date,
+            len(_empty_league_ids),
+        )
+    else:
+        _orch.logger.info(
+            "SPORTS: No fixtures for date=%s — wrote empty_confirmed markers for %d leagues",
+            date,
+            len(_empty_league_ids),
+        )
 
 
 async def _zero_sports_reference_fetch(
