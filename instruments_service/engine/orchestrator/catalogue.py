@@ -153,6 +153,7 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
             manifest_venue = ""
         # DeFi: split AAVE_V3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM
         elif "-" in venue_str:
+            manifest_data_type = "instrument-catalog"  # UTL preflight filters on this
             try:
                 from unified_api_contracts.registry.capability_declarations._defi import (
                     KNOWN_CHAINS,
