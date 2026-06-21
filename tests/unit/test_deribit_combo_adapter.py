@@ -33,7 +33,9 @@ def _combo_record(key: str = "DERIBIT:COMBO:BTC-FS-25APR26_PERP") -> InstrumentR
 
 class TestDeribitComboCF11:
     def test_venue_name(self) -> None:
-        assert DeribitComboReferenceDataAdapter().venue == "DERIBIT"
+        # Venue MUST be the registered venue id DERIBIT-COMBO (not the bare exchange
+        # DERIBIT) so records survive the URDI venue-tag filter for the DERIBIT-COMBO batch.
+        assert DeribitComboReferenceDataAdapter().venue == "DERIBIT-COMBO"
 
     @pytest.mark.asyncio
     async def test_get_instruments_raises_when_all_currencies_fail(self) -> None:

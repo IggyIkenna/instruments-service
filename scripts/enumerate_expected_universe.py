@@ -65,7 +65,7 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -197,6 +197,18 @@ def _default_bucket_for(asset_group: str) -> str:
 
 MANIFEST_BLOB = "_index/availability_index.parquet"
 DEFAULT_START_DATE = "2018-01-01"
+
+#: Prediction bundle data_type whose captured manifest atom is per-canonical_question_group
+#: grain (mirrors build_instrument_catalogue._PREDICTION_CQG_DATA_TYPE). The v2 prediction
+#: enumerator seeds expected_unattempted at THIS grain ONLY (decision 338) — never the
+#: per-conditionId trades/market_lifecycle grain (the >50M-row false-EU blow-up).
+_PREDICTION_CQG_DATA_TYPE = "prediction_canonical_question_group"
+
+#: Full-history range-encoded expected_unattempted companion artifact. Keeps the main
+#: _index at per-day grain (recent bounded window) while a range-encoded companion carries
+#: the FULL 2018→today could-exist universe as one row per contiguous (shard-key, reason)
+#: date-span — ~100x smaller than the naive per-day full-history (~190M rows fleet-wide).
+EXPECTED_UNIVERSE_RANGES_BLOB = "_index/expected_universe_ranges.parquet"
 
 
 @dataclass(frozen=True)
@@ -1093,10 +1105,32 @@ def _enumerate_v2_prediction(
     * date > settlement_time   → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
     * alive AND no manifest row (present_set provided) → expected_unattempted
     * alive AND present_set not provided → skip (legacy mode)
+
+    **cqg-bundle grain ONLY (decision 338, 2026-06-19).** The prediction catalogue
+    carries TWO grains: the cqg bundle (``data_type=prediction_canonical_question_group``,
+    ``instrument_id=<cqg>``, ~45 rows) AND per-conditionId (``data_type=trades`` /
+    ``market_lifecycle``, ~870K rows). Seeding ``expected_unattempted`` at per-conditionId
+    grain emits >50M FALSE rows (435K conditionIds x ~574 days x 2 data_types) that NEVER
+    match the per-conditionId-``trades`` captured present-set -> catastrophic denominator
+    inflation. So when the catalogue contains ANY cqg-bundle rows, this enumerator FILTERS
+    to those rows ONLY (the manifest's actual reconciliation grain for the bundle). The
+    per-conditionId trades/market_lifecycle universe is a feature-layer concern, NOT an EU
+    seed. If the catalogue has NO cqg-bundle rows (legacy / test), fall through to all rows
+    unchanged (never silently drop a whole AG).
     """
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
+    # decision 338: keep ONLY the cqg-bundle grain when present (else >50M conditionId blow-up).
+    _cqg_rows = [c for c in catalog if c.data_type == _PREDICTION_CQG_DATA_TYPE]
+    if _cqg_rows:
+        logger.info(
+            "prediction v2: cqg-bundle-grain filter active — %d cqg rows kept of %d catalogue rows "
+            "(per-conditionId trades/market_lifecycle EXCLUDED; decision 338)",
+            len(_cqg_rows),
+            len(catalog),
+        )
+        catalog = _cqg_rows
     for instr in catalog:
         # Prefer market lifecycle fields; fall back to generic available_from/to
         created_str = instr.market_created_at or instr.available_from
@@ -1479,6 +1513,211 @@ def _build_present_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ...
     return {tuple(row) for row in df_subset.itertuples(index=False, name=None)}
 
 
+# ---------------------------------------------------------------------------
+# Full-history range-encoding (Part 2 — scalable representation)
+# ---------------------------------------------------------------------------
+
+#: The non-date shard-key + state columns that define one range. Two ExpectedRows
+#: collapse into the same range iff every one of these is equal and their dates are
+#: contiguous (no gap > 1 day).
+_RANGE_KEY_FIELDS: tuple[str, ...] = (
+    "asset_group",
+    "venue",
+    "chain",
+    "data_type",
+    "instrument_type",
+    "instrument_id",
+    "league_id",
+    "reason",
+    "capture_status",
+)
+
+
+@dataclass(frozen=True)
+class RangeRow:
+    """One range-encoded expected_unattempted span - ``[date_start, date_end]`` inclusive.
+
+    Replaces ``(date_end - date_start + 1)`` per-day ``ExpectedRow``s with a SINGLE row.
+    ``n_days`` is the materialised day count so a coverage consumer recovers the exact
+    per-day denominator contribution WITHOUT expanding the range
+    (``sum of n_days`` over ranges == the per-day EU count the naive full-history would have).
+    """
+
+    asset_group: str
+    venue: str
+    chain: str
+    data_type: str
+    instrument_type: str
+    instrument_id: str
+    league_id: str
+    reason: str
+    capture_status: str
+    date_start: str
+    date_end: str
+    n_days: int
+
+
+def range_encode(rows: Iterable[ExpectedRow]) -> list[RangeRow]:
+    """Collapse per-day ``ExpectedRow``s into contiguous ``RangeRow`` spans.
+
+    Groups by :data:`_RANGE_KEY_FIELDS`; within a group, sorts the ISO dates and
+    emits one :class:`RangeRow` per maximal run of consecutive calendar days (a gap
+    of > 1 day starts a new span). This is the ~100x compaction that makes the full
+    2018-to-today per-instrument universe (~190M day-rows fleet-wide) fit as ~1-3M range
+    rows while keeping the coverage denominator EXACT (sum of ``n_days``).
+
+    Pure + deterministic (sorted group keys + sorted dates) so re-runs are byte-stable
+    - required for the gitignore'd-artifact / idempotent-shard contract.
+    """
+    by_key: dict[tuple[str, ...], list[str]] = {}
+    for r in rows:
+        key = tuple(getattr(r, f) for f in _RANGE_KEY_FIELDS)
+        by_key.setdefault(key, []).append(r.date)
+
+    out: list[RangeRow] = []
+    one_day = pd.Timedelta(days=1)
+    for key in sorted(by_key):
+        dates = sorted(set(by_key[key]))
+        if not dates:
+            continue
+        span_start = dates[0]
+        prev = dates[0]
+        prev_ts = pd.Timestamp(prev)
+        run_days = 1
+        kw = dict(zip(_RANGE_KEY_FIELDS, key, strict=True))
+        for d in dates[1:]:
+            d_ts = pd.Timestamp(d)
+            if d_ts - prev_ts == one_day:
+                run_days += 1
+            else:
+                out.append(RangeRow(date_start=span_start, date_end=prev, n_days=run_days, **kw))  # pyright: ignore[reportArgumentType]
+                span_start = d
+                run_days = 1
+            prev = d
+            prev_ts = d_ts
+        out.append(RangeRow(date_start=span_start, date_end=prev, n_days=run_days, **kw))  # pyright: ignore[reportArgumentType]
+    return out
+
+
+def full_timeframe_coverage(
+    index_df: pd.DataFrame,
+    ranges_df: pd.DataFrame | None,
+) -> dict[str, float | int]:
+    """Compute the HONEST full-timeframe coverage denominator from the per-day ``_index``
+    + the range-encoded EU companion (read-side reconciliation, Part 2).
+
+    The main ``_index`` carries per-day cells (recent bounded window + any captured
+    history). The companion carries the FULL 2018-to-today expected_unattempted universe as
+    range spans. The full-timeframe denominator ADDS the companion's EU-days that are NOT
+    already represented per-day in the ``_index`` window:
+
+        captured  = sum of index cells where capture_status == captured
+        empty     = sum of index cells where capture_status == empty_confirmed
+        failed    = sum of index cells where capture_status == attempted_failed
+        eu_index  = sum of index cells where capture_status == expected_unattempted (window)
+        eu_full   = sum of ranges.n_days where capture_status == expected_unattempted
+        # The companion is the COMPLETE EU universe; the window EU is a subset of it, so
+        # use max(eu_index, eu_full) to avoid double-counting the overlap.
+        denom     = captured + empty + failed + max(eu_index, eu_full)
+        coverage% = 100 * captured / denom
+
+    Returns a dict with the components + ``coverage_pct``. Pure (no IO) so it is the
+    canonical reader a coverage consumer (deployment-api / data-status) calls.
+    """
+    cs = index_df["capture_status"] if "capture_status" in index_df.columns else pd.Series([], dtype=str)
+    captured = int((cs == "captured").sum())
+    empty = int((cs == "empty_confirmed").sum())
+    failed = int((cs == "attempted_failed").sum())
+    eu_index = int((cs == "expected_unattempted").sum())
+    eu_full = 0
+    if ranges_df is not None and not ranges_df.empty and "n_days" in ranges_df.columns:
+        _eu = ranges_df
+        if "capture_status" in ranges_df.columns:
+            _eu = ranges_df[ranges_df["capture_status"] == "expected_unattempted"]
+        eu_full = int(_eu["n_days"].fillna(0).astype(int).sum())
+    eu = max(eu_index, eu_full)
+    denom = captured + empty + failed + eu
+    coverage_pct = round(100.0 * captured / denom, 2) if denom else 0.0
+    return {
+        "captured": captured,
+        "empty_confirmed": empty,
+        "attempted_failed": failed,
+        "expected_unattempted_window": eu_index,
+        "expected_unattempted_full_history": eu_full,
+        "expected_unattempted_effective": eu,
+        "denominator": denom,
+        "coverage_pct": coverage_pct,
+    }
+
+
+def _write_range_artifact(
+    *,
+    ranges: list[RangeRow],
+    asset_group: str,
+    bucket_name: str,
+    run_id: str,
+) -> int:
+    """Write the range-encoded full-history EU companion to
+    ``gs://{bucket}/_index/expected_universe_ranges.parquet``.
+
+    This is a SEPARATE artifact from the main ``_index/availability_index.parquet`` -
+    the coverage consumer reads it ADDITIVELY for the full-timeframe denominator,
+    keeping the hot-path per-day ``_index`` lean (recent window only). One stable blob
+    per AG bucket (last-writer-wins; idempotent re-runs). Returns 0 on success.
+    """
+    attempted_at_iso = datetime.now(UTC).isoformat()
+    records: list[dict[str, object]] = []
+    for r in ranges:
+        pipeline_mode, source, transport = _derive_pm_source_transport(asset_group, r.data_type)
+        records.append(
+            {
+                "asset_group": r.asset_group,
+                "venue": r.venue,
+                "chain": r.chain,
+                "data_type": r.data_type,
+                "instrument_type": r.instrument_type,
+                "instrument_id": r.instrument_id,
+                "league_id": r.league_id,
+                "capture_status": r.capture_status,
+                "error_reason": r.reason if r.capture_status == "empty_confirmed" else "",
+                "date_start": r.date_start,
+                "date_end": r.date_end,
+                "n_days": r.n_days,
+                "written_at": attempted_at_iso,
+                "schema_version": MANIFEST_SCHEMA_VERSION,
+                "service_name": "instruments-service",
+                "enumerator_run_id": run_id,
+                "pipeline_mode": pipeline_mode,
+                "source": source,
+                "transport": transport,
+            }
+        )
+    new_df = pd.DataFrame(records)
+    with tempfile.NamedTemporaryFile(
+        prefix=f"enum-univ-ranges-{asset_group}-",
+        suffix=".parquet",
+        delete=False,
+    ) as tf:
+        out_path = tf.name
+    try:
+        new_df.to_parquet(out_path, index=False)
+        client = storage.Client(project=PROJECT_ID)
+        bucket = client.bucket(bucket_name)
+        out_blob = bucket.blob(EXPECTED_UNIVERSE_RANGES_BLOB)
+        out_blob.upload_from_filename(out_path, timeout=600)
+        logger.info(
+            "Wrote %d range rows (%d total EU-days) to gs://%s/%s",
+            len(records),
+            sum(r.n_days for r in ranges),
+            bucket_name,
+            EXPECTED_UNIVERSE_RANGES_BLOB,
+        )
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(out_path)
+    return 0
+
+
 def _row_key(row: ExpectedRow, available_cols: list[str]) -> tuple[str, ...]:
     """Build the manifest-aligned row key from an ExpectedRow."""
     field_map = {
@@ -1576,6 +1815,30 @@ def _parse_args() -> argparse.Namespace:
             "Path to instruments-service catalog parquet for v2 enumeration. "
             "Accepts local filesystem path or gs:// URI. Required when "
             "--enumerator-version=v2."
+        ),
+    )
+    p.add_argument(
+        "--data-types",
+        default=None,
+        help=(
+            "Comma-separated data_type override (v2 only). Restricts the enumerated "
+            "data_type axis to this explicit set — e.g. "
+            "'--data-types prediction_canonical_question_group' to seed prediction "
+            "expected_unattempted at the cqg-bundle grain ONLY (decision 338). "
+            "Default: the per-asset_group canonical data_types."
+        ),
+    )
+    p.add_argument(
+        "--full-history",
+        action="store_true",
+        help=(
+            "Full-history mode (Part 2). Enumerate the FULL --start-date..--end-date "
+            "window and write a RANGE-ENCODED companion artifact "
+            "(_index/expected_universe_ranges.parquet) instead of per-day rows into the "
+            "per-VM _index shard. Collapses the ~190M-row naive full-history per-day "
+            "universe into ~1-3M contiguous (shard-key, reason) spans (~100x), keeping "
+            "the hot-path _index lean while the coverage denominator stays honest over "
+            "2018->today. Requires --enumerator-version=v2 + --apply-write to write."
         ),
     )
     return p.parse_args()
@@ -1843,6 +2106,10 @@ def main() -> int:
     end_date: str = str(args.end_date)
     gcs_report_bucket_arg: str | None = args.gcs_report_bucket
     catalog_path: str | None = args.catalog_path
+    data_types_override: list[str] | None = (
+        [dt.strip() for dt in str(args.data_types).split(",") if dt.strip()] if args.data_types else None
+    )
+    full_history: bool = bool(args.full_history)
 
     _emit_event(
         "ENUMERATOR_STARTED",
@@ -1854,8 +2121,15 @@ def main() -> int:
         end_date=end_date,
         apply_write=apply_write,
         max_writes_per_run=max_writes_per_run,
+        data_types_override=data_types_override,
+        full_history=full_history,
         run_id=run_id,
     )
+
+    if full_history and enumerator_version != "v2":
+        logger.error("--full-history requires --enumerator-version=v2 (range-encoding is v2-only)")
+        _emit_event("ENUMERATOR_FAILED", reason="full_history_requires_v2", run_id=run_id)
+        return 4
 
     # v2 path: load catalog + manifest, build date axis, delegate to enumerate_v2()
     if enumerator_version == "v2":
@@ -1900,10 +2174,21 @@ def main() -> int:
             # Sports denominator iterates the captured provider data_types
             # (SPORTS_DATA_TYPE_TO_SOURCE), NOT the MTDS odds types in
             # DATA_TYPES_BY_ASSET_GROUP["sports"] — see _sports_data_types().
-            if asset_group == "sports":
+            if data_types_override is not None:
+                # Explicit override (e.g. prediction cqg-bundle grain only, decision 338).
+                data_types_list = data_types_override
+                logger.info("v2: data_type override active → %s", data_types_list)
+            elif asset_group == "sports":
                 data_types_list = _sports_data_types()
             else:
                 data_types_list = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
+            # FULL-HISTORY (Part 2): enumerate the FULL --start..--end window. The
+            # present_set is STILL passed (alive-and-present cells — the recent ~120d
+            # _index window — correctly SKIP, never double-counted; alive-and-absent →
+            # expected_unattempted; lifecycle-boundary days → empty_confirmed). The result
+            # is range-encoded into the companion artifact rather than written per-day, so
+            # the ~190M-day full-history collapses to ~1-3M spans. The bounded-window path
+            # is identical but over the short window + writes per-day rows to the _index shard.
             # Wrap enumerate_v2 in an adapter that matches the absent_rows list
             # the existing write-path expects (list[ExpectedRow])
             v2_absent: list[ExpectedRow] = []
@@ -1946,6 +2231,47 @@ def main() -> int:
                     run_id=run_id,
                 )
                 return 0
+            # FULL-HISTORY: range-encode the per-day candidates into contiguous spans +
+            # write the companion artifact (not the per-day _index shard). ~100x compaction.
+            if full_history:
+                ranges = range_encode(v2_absent)
+                total_days = sum(r.n_days for r in ranges)
+                logger.info(
+                    "v2 full-history: %d per-day candidates → %d range rows (%d EU-days; %.0fx compaction)",
+                    len(v2_absent),
+                    len(ranges),
+                    total_days,
+                    (len(v2_absent) / len(ranges)) if ranges else 1.0,
+                )
+                if not apply_write:
+                    logger.info("Scan-only full-history; pass --apply-write to commit the range companion.")
+                    _emit_event(
+                        "ENUMERATOR_COMPLETED",
+                        enumerator_version="v2",
+                        asset_group=asset_group,
+                        candidates=len(v2_absent),
+                        range_rows=len(ranges),
+                        eu_days=total_days,
+                        written=0,
+                        full_history=True,
+                        run_id=run_id,
+                    )
+                    return 0
+                code = _write_range_artifact(
+                    ranges=ranges, asset_group=asset_group, bucket_name=bucket_name, run_id=run_id
+                )
+                _emit_event(
+                    "ENUMERATOR_COMPLETED",
+                    enumerator_version="v2",
+                    asset_group=asset_group,
+                    candidates=len(v2_absent),
+                    range_rows=len(ranges),
+                    eu_days=total_days,
+                    written=len(ranges),
+                    full_history=True,
+                    run_id=run_id,
+                )
+                return code
             # Route through shared write path (v1 passes manifest_df for column
             # alignment; v2 passes None — uses minimal schema).
             return _write_absent_rows(

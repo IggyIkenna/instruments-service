@@ -773,19 +773,43 @@ class TestClassifyKalshiError:
 
 
 class TestKalshiGetHeaders:
-    """Tests for _get_headers method."""
+    """Tests for _signed_headers (RSA-PSS auth; replaced the wrong Bearer scheme)."""
 
-    def test_headers_without_api_key(self) -> None:
-        adapter = KalshiReferenceDataAdapter()
-        headers = adapter._get_headers()
-        assert "Accept" in headers
-        assert "Content-Type" in headers
+    def test_headers_without_creds(self) -> None:
+        """No creds → plain headers (live `status=open` is unauthenticated-OK); a
+        legacy non-JSON api_key is NOT a usable RSA credential → still unsigned."""
+        for adapter in (
+            KalshiReferenceDataAdapter(),
+            KalshiReferenceDataAdapter(api_key="my-key-123"),
+        ):
+            headers = adapter._signed_headers("GET", "/trade-api/v2/markets")
+            assert "Accept" in headers
+            assert "Content-Type" in headers
+            assert "Authorization" not in headers  # Bearer scheme is RETIRED
+            assert "KALSHI-ACCESS-SIGNATURE" not in headers
+
+    def test_headers_with_rsa_creds_are_signed(self) -> None:
+        """An RSA credential blob → RSA-PSS-signed KALSHI-ACCESS-* headers."""
+        import base64
+        import json
+
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+            NoEncryption,
+            PrivateFormat,
+        )
+
+        priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = priv.private_bytes(Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption()).decode()
+        blob = json.dumps({"api_key_id": "kid-xyz", "private_key": pem})
+        adapter = KalshiReferenceDataAdapter(api_key=blob)
+        headers = adapter._signed_headers("GET", "/trade-api/v2/historical/markets")
+        assert headers["KALSHI-ACCESS-KEY"] == "kid-xyz"
+        assert headers["KALSHI-ACCESS-TIMESTAMP"].isdigit()
+        # signature is valid base64 of a 2048-bit RSA signature (256 bytes)
+        assert len(base64.b64decode(headers["KALSHI-ACCESS-SIGNATURE"])) == 256
         assert "Authorization" not in headers
-
-    def test_headers_with_api_key(self) -> None:
-        adapter = KalshiReferenceDataAdapter(api_key="my-key-123")
-        headers = adapter._get_headers()
-        assert headers["Authorization"] == "Bearer my-key-123"
 
 
 class TestKalshiParseMarket:

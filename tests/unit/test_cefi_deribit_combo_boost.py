@@ -30,25 +30,54 @@ def _make_adapter() -> object:
 
 
 # ---------------------------------------------------------------------------
-# _parse_combo_legs
+# _build_legs (structured legs from Deribit get_combos)
 # ---------------------------------------------------------------------------
 
 
-class TestParseComboLegs:
-    """Line 115: < 3 parts → return []."""
+class TestBuildLegs:
+    """DeribitComboReferenceDataAdapter._build_legs maps get_combos legs → InstrumentLeg."""
 
-    def test_short_name_returns_empty(self) -> None:
-        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import _parse_combo_legs
+    def test_non_list_returns_empty(self) -> None:
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
 
-        assert _parse_combo_legs("BTC") == []
-        assert _parse_combo_legs("BTC-STRD") == []
+        assert DeribitComboReferenceDataAdapter._build_legs(None) == []
+        assert DeribitComboReferenceDataAdapter._build_legs("not_a_list") == []
 
-    def test_valid_name_returns_empty_too(self) -> None:
-        """Current implementation always returns [] (legs resolved downstream)."""
-        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import _parse_combo_legs
+    def test_signed_amount_maps_to_side_and_ratio(self) -> None:
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
 
-        result = _parse_combo_legs("BTC-STRD-25APR26-90000")
-        assert result == []
+        legs = DeribitComboReferenceDataAdapter._build_legs(
+            [
+                {"amount": -1, "instrument_name": "BTC-19JUN26-69000-C"},
+                {"amount": 2, "instrument_name": "BTC-26JUN26-69000-C"},
+            ]
+        )
+        assert len(legs) == 2
+        assert legs[0].instrument_key == "DERIBIT:BTC-19JUN26-69000-C"
+        assert legs[0].side == "SELL"
+        assert legs[0].ratio == 1
+        assert legs[1].side == "BUY"
+        assert legs[1].ratio == 2
+
+    def test_zero_amount_and_missing_name_skipped(self) -> None:
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        legs = DeribitComboReferenceDataAdapter._build_legs(
+            [
+                {"amount": 0, "instrument_name": "BTC-X"},  # zero amount → skip
+                {"amount": 1, "instrument_name": ""},  # empty name → skip
+                "not_a_dict",  # non-dict → skip
+                {"amount": 1, "instrument_name": "BTC-26JUN26-69000-C"},  # kept
+            ]
+        )
+        assert len(legs) == 1
+        assert legs[0].instrument_key == "DERIBIT:BTC-26JUN26-69000-C"
 
 
 # ---------------------------------------------------------------------------
@@ -181,37 +210,53 @@ class TestGetInstrumentsExceptions:
 
 
 class TestParseComboInstrument:
-    """Line 344: instrument_name split gives empty first part → None."""
+    """_parse_combo_instrument(item, currency, now) parses a get_combos result item."""
 
-    def test_instrument_name_with_empty_underlying_returns_none(self) -> None:
-        """instrument_name = '-STRD-25APR26' → name_parts[0] = '' → return None."""
+    def test_combo_with_legs_returns_record(self) -> None:
+        """A get_combos item with id + structured legs → a COMBO InstrumentRecord."""
         from datetime import UTC, datetime
 
         adapter = _make_adapter()
-
-        # Instrument name that starts with '-' so name_parts[0] == ""
         item = {
-            "instrument_name": "-STRD-25APR26-90000",
+            "id": "BTC-CCAL-26JUN26_19JUN26-69000",
             "creation_timestamp": 1700000000000,
-            "settlement_currency": "USD",
+            "state": "active",
+            "legs": [
+                {"amount": -1, "instrument_name": "BTC-19JUN26-69000-C"},
+                {"amount": 1, "instrument_name": "BTC-26JUN26-69000-C"},
+            ],
         }
-        result = adapter._parse_combo_instrument(item, datetime.now(UTC))  # type: ignore[attr-defined]
+        result = adapter._parse_combo_instrument(item, "BTC", datetime.now(UTC))  # type: ignore[attr-defined]
+        assert result is not None
+        assert result.venue == "DERIBIT-COMBO"
+        assert result.instrument_key == "DERIBIT:COMBO:BTC-CCAL-26JUN26_19JUN26-69000"
+        assert result.base_asset == "BTC"
+        assert result.legs is not None
+        assert len(result.legs) == 2
+
+    def test_combo_without_legs_returns_none(self) -> None:
+        """A combo with no parseable legs is invalid (validation requires legs) → None."""
+        from datetime import UTC, datetime
+
+        adapter = _make_adapter()
+        item = {"id": "BTC-FS-19JUN26_PERP", "legs": []}
+        result = adapter._parse_combo_instrument(item, "BTC", datetime.now(UTC))  # type: ignore[attr-defined]
         assert result is None
 
     def test_non_dict_item_returns_none(self) -> None:
-        """Line 332-333: item is not a dict → None."""
+        """item is not a dict → None."""
         from datetime import UTC, datetime
 
         adapter = _make_adapter()
-        result = adapter._parse_combo_instrument("not_a_dict", datetime.now(UTC))  # type: ignore[attr-defined]
+        result = adapter._parse_combo_instrument("not_a_dict", "BTC", datetime.now(UTC))  # type: ignore[attr-defined]
         assert result is None
 
-    def test_empty_instrument_name_returns_none(self) -> None:
-        """Line 336-337: instrument_name is empty string → None."""
+    def test_empty_id_returns_none(self) -> None:
+        """combo id is empty string → None."""
         from datetime import UTC, datetime
 
         adapter = _make_adapter()
-        result = adapter._parse_combo_instrument({"instrument_name": ""}, datetime.now(UTC))  # type: ignore[attr-defined]
+        result = adapter._parse_combo_instrument({"id": ""}, "BTC", datetime.now(UTC))  # type: ignore[attr-defined]
         assert result is None
 
 
