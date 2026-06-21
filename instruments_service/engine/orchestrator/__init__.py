@@ -61,7 +61,7 @@ from unified_api_contracts.predictions import (
     classify_kalshi_to_canonical_group,
     classify_polymarket_to_canonical_group,
 )
-from unified_api_contracts.registry import get_supported_chains_for_protocol
+from unified_api_contracts.registry import get_supported_chains_for_protocol, is_league_entity_covered
 from unified_api_contracts.registry.source_data_latency import SFI_DATA_LAG_P95_SECONDS
 from unified_api_contracts.sports import (
     FOOTYSTATS_HISTORICAL_SEASON_IDS,
@@ -832,6 +832,7 @@ __all__ = [
     "io",
     "is_any_league_refresh_date",
     "is_in_known_gap",
+    "is_league_entity_covered",
     "is_non_trading_day",
     "is_venue_available",
     "json",
