@@ -19,6 +19,8 @@ from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
 from .adapters.cefi.deribit_combo_adapter import DeribitComboReferenceDataAdapter
 from .adapters.cefi.deribit_options_adapter import DeribitOptionsReferenceDataAdapter
 from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
+from .adapters.cefi.kalshi_perp import KalshiPerpReferenceDataAdapter
+from .adapters.cefi.polymarket_perp import PolymarketPerpReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
@@ -129,6 +131,11 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     # Prediction markets
     "POLYMARKET": "polymarket",
     "KALSHI": "kalshi",
+    # Prediction-platform crypto-perp CLOBs (CFTC-regulated perpetual futures,
+    # NOT prediction YES/NO markets). Treated as cefi asset_group.
+    # KALSHI-PERP: beta launch 2026-05-29. POLYMARKET-PERP: beta launch 2026-04-21.
+    "KALSHI-PERP": "kalshi_perp",
+    "POLYMARKET-PERP": "polymarket_perp",
     # DeFi — LST/Yield protocols (Ethereum-only, no subgraph multi-chain)
     "LIDO-ETHEREUM": "lido",
     "ETHERFI-ETHEREUM": "etherfi",
@@ -307,6 +314,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "massive": MassiveReferenceDataAdapter,
     "ibkr": IBKRReferenceDataAdapter,
     "kalshi": KalshiReferenceDataAdapter,
+    "kalshi_perp": KalshiPerpReferenceDataAdapter,
     "lighter": LighterReferenceDataAdapter,
     "lido": LidoReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
@@ -314,6 +322,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "pacifica": PacificaReferenceDataAdapter,
     "pendle": PendleReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
+    "polymarket_perp": PolymarketPerpReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
     "puffer": PufferReferenceDataAdapter,
     "raydium": RaydiumReferenceDataAdapter,
@@ -346,6 +355,10 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "ibkr": "ibkr",
     "polymarket": "polymarket",
     "kalshi": "kalshi",
+    # Crypto-perp CLOBs — public REST endpoints for contract enumeration, no API key needed.
+    # Trading/funding/depth requires auth (separate MTDS data pipeline).
+    "kalshi_perp": "",
+    "polymarket_perp": "",
     "uniswap_v2": "thegraph",
     "uniswap_v3": "thegraph",
     "uniswap_v4": "thegraph",
