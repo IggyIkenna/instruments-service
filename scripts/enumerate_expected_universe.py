@@ -392,7 +392,7 @@ def _enumerate_defi(start: str, end: str) -> Iterator[ExpectedRow]:
         # Yield rows for [start, min(end, effective_start - 1day)].
         last_day = min(end_ts, eff_ts - pd.Timedelta(days=1))
         days = pd.date_range(start, last_day, freq="D")
-        venue_label = f"{protocol.upper()}-{chain_upper}"  # canonical venue shape
+        venue_label = protocol.upper()  # canonical: bare protocol, chain= is set separately
         for day in days:
             iso = day.strftime("%Y-%m-%d")
             reason = "EXPECTED_PRE_GENESIS_CHAIN" if iso < chain_genesis else "EXPECTED_INSTRUMENT_NOT_LISTED"
