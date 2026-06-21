@@ -41,6 +41,19 @@ _RETRY_ATTEMPTS: int = 3
 _RETRY_BASE_DELAY: float = 1.0  # seconds; doubles on each retry
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
+# Bounded HTTP timeout — MANDATORY on every session. Without it aiohttp defaults to
+# ClientTimeout(total=300) with NO sock_connect / sock_read bound, so a half-open /
+# stalled provider socket blocks a single backfill worker FOREVER while the heartbeat
+# sidecar keeps the VM "alive" (the silent-stall incident 2026-06-19 that froze the
+# SFI sports adapter — fixed there in 729fbdb; this is the same fix for the GENERIC
+# reference-data base, covering every defi/prediction adapter that calls _make_session).
+# A bound raises aiohttp.ServerTimeoutError (a ClientError subclass) which the retry
+# path handles + escalates instead of hanging. SSOT:
+# plans/active/issues/backfill_vm_silent_worker_stall_watchdog_2026_06_19.md P3.
+_HTTP_SOCK_CONNECT_TIMEOUT: float = 15.0  # TCP+TLS establish
+_HTTP_SOCK_READ_TIMEOUT: float = 60.0  # max idle gap between received chunks
+_HTTP_TOTAL_TIMEOUT: float = 120.0  # absolute ceiling for one request
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -86,9 +99,18 @@ class BaseReferenceDataAdapter(ABC):
         c-ares has known issues with container DNS, CNAME chains, and certain
         host configurations.  ThreadedResolver is reliable everywhere with
         negligible overhead at our connection scale.
+
+        A bounded ``ClientTimeout`` is MANDATORY (see the ``_HTTP_*_TIMEOUT``
+        rationale above): without it a stalled provider socket blocks a single
+        backfill worker forever (silent-stall incident 2026-06-19).
         """
         connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
-        return aiohttp.ClientSession(connector=connector)
+        timeout = aiohttp.ClientTimeout(
+            sock_connect=_HTTP_SOCK_CONNECT_TIMEOUT,
+            sock_read=_HTTP_SOCK_READ_TIMEOUT,
+            total=_HTTP_TOTAL_TIMEOUT,
+        )
+        return aiohttp.ClientSession(connector=connector, timeout=timeout)
 
     def _optional_api_key(self) -> str | None:
         """Return the injected API key, or None if not provided.
