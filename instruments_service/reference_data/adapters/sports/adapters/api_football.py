@@ -605,8 +605,43 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         return results
 
 
+class ApiFootballResponseError(RuntimeError):
+    """API-Football returned a 200-OK body carrying a non-empty ``errors`` field.
+
+    API-Football signals plan/quota/auth/param errors INSIDE the JSON envelope
+    (HTTP 200 + ``{"errors": {"plan": "..."}, "response": []}``), NOT via an HTTP
+    status. Treating that empty ``response`` as a genuine zero-result silently
+    masks a fetch failure as honest absence (``empty_confirmed``), inflating
+    honest-coverage. Raising here routes the venue to ``failed_venues`` (caught
+    by ``_fetch_one_venue``'s ``RuntimeError`` branch) → ``attempted_failed``.
+    """
+
+
+def _raise_on_api_errors(raw: object) -> None:
+    """Raise ``ApiFootballResponseError`` if the envelope carries API errors.
+
+    API-Football uses ``errors: []`` (empty list) on success and a non-empty
+    ``errors`` dict (e.g. ``{"plan": "..."}`` / ``{"requests": "..."}`` /
+    ``{"token": "..."}``) or non-empty list on failure. Empty list / empty dict
+    / absent ⇒ success (no raise).
+    """
+    if not isinstance(raw, dict):
+        return
+    errors = raw.get("errors")
+    if isinstance(errors, dict) and errors:
+        raise ApiFootballResponseError(f"API-Football returned errors: {errors!r}")
+    if isinstance(errors, list) and errors:
+        raise ApiFootballResponseError(f"API-Football returned errors: {errors!r}")
+
+
 def _extract_response(raw: object) -> list[dict[str, object]]:
-    """Extract the response list from an API Football response envelope."""
+    """Extract the response list from an API Football response envelope.
+
+    Raises ``ApiFootballResponseError`` when the envelope carries a non-empty
+    ``errors`` field — a plan/quota/auth error must surface as a fetch FAILURE
+    (``attempted_failed``), never a silent empty (``empty_confirmed``).
+    """
+    _raise_on_api_errors(raw)
     if isinstance(raw, dict):
         response = raw.get("response")
         if isinstance(response, list):

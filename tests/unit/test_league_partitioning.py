@@ -352,6 +352,71 @@ class TestOrchestratorSportsLeaguePartitioning:
         ]
         assert len(epl_empty_calls) >= 1
 
+    def test_zero_sports_markers_failed_fetch_records_failed(self) -> None:
+        """fixtures_fetch_failed=True → record_failed (attempted_failed), NOT record_empty.
+
+        Regression guard for the silent-empty bug: a fixtures venue error (e.g.
+        API-Football plan/quota) must surface as attempted_failed, never the
+        empty_confirmed honest-absence marker (which masks the gap).
+        """
+        from instruments_service.engine.orchestrator.process_zero_records import (
+            _zero_sports_empty_fixture_markers,
+        )
+
+        mock_manifest = MagicMock()
+        mock_cls = MagicMock(return_value=mock_manifest)
+        with (
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_cls),
+            patch(
+                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
+                return_value=["EPL", "BUNDESLIGA"],
+            ),
+        ):
+            _zero_sports_empty_fixture_markers(
+                date="2024-01-13",
+                bucket="test-bucket",
+                league_filter=None,
+                fixtures_fetch_failed=True,
+            )
+
+        assert mock_manifest.record_empty.call_count == 0
+        failed_calls = mock_manifest.record_failed.call_args_list
+        assert len(failed_calls) == 2
+        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES" for c in failed_calls)
+        mock_manifest.write.assert_called_once()
+
+    def test_zero_sports_markers_clean_empty_records_empty(self) -> None:
+        """fixtures_fetch_failed=False → record_empty (empty_confirmed) unchanged.
+
+        A clean fetch that genuinely returned zero fixtures is honest absence —
+        the existing record_empty EXPECTED_NO_FIXTURE path must be preserved.
+        """
+        from instruments_service.engine.orchestrator.process_zero_records import (
+            _zero_sports_empty_fixture_markers,
+        )
+
+        mock_manifest = MagicMock()
+        mock_cls = MagicMock(return_value=mock_manifest)
+        with (
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_cls),
+            patch(
+                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
+                return_value=["EPL", "BUNDESLIGA"],
+            ),
+        ):
+            _zero_sports_empty_fixture_markers(
+                date="2024-01-13",
+                bucket="test-bucket",
+                league_filter=None,
+                fixtures_fetch_failed=False,
+            )
+
+        assert mock_manifest.record_failed.call_count == 0
+        empty_calls = mock_manifest.record_empty.call_args_list
+        assert len(empty_calls) == 2
+        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES" for c in empty_calls)
+        mock_manifest.write.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_sports_fixtures_partitioned_by_league(self) -> None:
         """Sports fixtures are grouped by league and written per-league partition."""
