@@ -47,6 +47,10 @@ _CUSTOMER_BASE_URL: str = "https://customer-api.open-meteo.com/v1"
 _CUSTOMER_ARCHIVE_URL: str = "https://customer-archive-api.open-meteo.com/v1/archive"
 _CUSTOMER_PREV_RUNS_URL: str = "https://customer-previous-runs-api.open-meteo.com/v1/forecast"
 _HOURLY_VARS: str = "temperature_2m,precipitation,wind_speed_10m,relative_humidity_2m,cloud_cover,weather_code"
+# Previous Runs API data only available from 2024-01-01 (GFS from Apr 2021, but the
+# `*_previous_day1` suffix variables are only served from this date). Requesting them
+# for earlier dates causes systematic 400 Bad Request errors fleet-wide.
+_PREV_RUNS_START: str = "2024-01-01"
 
 
 class OpenMeteoAdapter(BaseSportsReferenceAdapter):
@@ -163,49 +167,51 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
         # Short column names for output
         col_names = ["temp", "precip_mm", "wind_kmh", "humidity_pct", "cloud_pct", "weather_code"]
 
-        prev_day1_vars = ",".join(f"{v}_previous_day1" for v in _HOURLY_VARS.split(","))
-
         try:
             async with self._make_session() as session:
-                # 1. Previous Runs API: T-24h forecast + T-0 forecast for full match window
-                prev_params: dict[str, str] = {
-                    "latitude": str(venue_lat),
-                    "longitude": str(venue_lon),
-                    "hourly": f"{_HOURLY_VARS},{prev_day1_vars}",
-                    "start_date": date,
-                    "end_date": date,
-                    "timezone": "UTC",
-                }
-                if self._api_key:
-                    prev_params["apikey"] = self._api_key
-                prev_runs_url = _CUSTOMER_PREV_RUNS_URL if self._api_key else _PREV_RUNS_URL
-                try:
-                    # 2 retries max — if Previous Runs API is down, skip forecasts
-                    # and still get actuals. Don't block 3+ min per venue on 500s.
-                    prev_response = await self._get_with_retry(
-                        session,
-                        prev_runs_url,
-                        params=prev_params,
-                        max_retries=2,
-                    )
-                    if isinstance(prev_response, dict) and "hourly" in prev_response:
-                        hourly = prev_response["hourly"]
-                        times = hourly.get("time", [])
-                        for lead, prefix_suffix in [("forecast_t24h", "_previous_day1"), ("forecast_t0", "")]:
-                            for hour, hlabel in zip(match_hours, hour_labels, strict=True):
-                                idx = _find_hour_index(times, hour)
-                                for wkey, cname in zip(weather_keys, col_names, strict=True):
-                                    data = hourly.get(f"{wkey}{prefix_suffix}")
-                                    val = data[idx] if data and idx < len(data) and data[idx] is not None else None
-                                    results[f"{lead}_{hlabel}_{cname}"] = val
-                except Exception as exc:
-                    logger.warning(
-                        "Previous Runs API failed for (%.2f, %.2f) on %s: %s",
-                        venue_lat,
-                        venue_lon,
-                        date,
-                        exc,
-                    )
+                # 1. Previous Runs API: T-24h forecast + T-0 forecast for full match window.
+                # `*_previous_day1` variables are only served from _PREV_RUNS_START onward;
+                # requesting them for earlier dates causes systematic 400 Bad Request errors.
+                if date >= _PREV_RUNS_START:
+                    prev_day1_vars = ",".join(f"{v}_previous_day1" for v in _HOURLY_VARS.split(","))
+                    prev_params: dict[str, str] = {
+                        "latitude": str(venue_lat),
+                        "longitude": str(venue_lon),
+                        "hourly": f"{_HOURLY_VARS},{prev_day1_vars}",
+                        "start_date": date,
+                        "end_date": date,
+                        "timezone": "UTC",
+                    }
+                    if self._api_key:
+                        prev_params["apikey"] = self._api_key
+                    prev_runs_url = _CUSTOMER_PREV_RUNS_URL if self._api_key else _PREV_RUNS_URL
+                    try:
+                        # 2 retries max — if Previous Runs API is down, skip forecasts
+                        # and still get actuals. Don't block 3+ min per venue on 500s.
+                        prev_response = await self._get_with_retry(
+                            session,
+                            prev_runs_url,
+                            params=prev_params,
+                            max_retries=2,
+                        )
+                        if isinstance(prev_response, dict) and "hourly" in prev_response:
+                            hourly = prev_response["hourly"]
+                            times = hourly.get("time", [])
+                            for lead, prefix_suffix in [("forecast_t24h", "_previous_day1"), ("forecast_t0", "")]:
+                                for hour, hlabel in zip(match_hours, hour_labels, strict=True):
+                                    idx = _find_hour_index(times, hour)
+                                    for wkey, cname in zip(weather_keys, col_names, strict=True):
+                                        data = hourly.get(f"{wkey}{prefix_suffix}")
+                                        val = data[idx] if data and idx < len(data) and data[idx] is not None else None
+                                        results[f"{lead}_{hlabel}_{cname}"] = val
+                    except Exception as exc:
+                        logger.warning(
+                            "Previous Runs API failed for (%.2f, %.2f) on %s: %s",
+                            venue_lat,
+                            venue_lon,
+                            date,
+                            exc,
+                        )
 
                 # 2. Actual weather across match window (archive for >90d, forecast for recent)
                 cutoff = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
@@ -225,29 +231,55 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                 }
                 if self._api_key:
                     actual_params["apikey"] = self._api_key
+                actual_resp: object | None = None
                 try:
-                    actual_response = await self._get_with_retry(
+                    actual_resp = await self._get_with_retry(
                         session,
                         actual_url,
                         params=actual_params,
                     )
-                    if isinstance(actual_response, dict) and "hourly" in actual_response:
-                        hourly = actual_response["hourly"]
-                        times = hourly.get("time", [])
-                        for hour, hlabel in zip(match_hours, hour_labels, strict=True):
-                            idx = _find_hour_index(times, hour)
-                            for wkey, cname in zip(weather_keys, col_names, strict=True):
-                                data = hourly.get(wkey)
-                                val = data[idx] if data and idx < len(data) and data[idx] is not None else None
-                                results[f"actual_{hlabel}_{cname}"] = val
                 except Exception as exc:
-                    logger.warning(
-                        "Actual weather fetch failed for (%.2f, %.2f) on %s: %s",
-                        venue_lat,
-                        venue_lon,
-                        date,
-                        exc,
-                    )
+                    if getattr(exc, "status", None) == 400 and actual_url == _CUSTOMER_ARCHIVE_URL:
+                        # Customer archive returns 400 for some date ranges despite ERA5 covering
+                        # 1940+. Fall back to the free-tier archive which is more permissive.
+                        logger.info(
+                            "Customer archive 400 for (%.2f, %.2f) on %s — retrying with free-tier archive",
+                            venue_lat,
+                            venue_lon,
+                            date,
+                        )
+                        free_params = {k: v for k, v in actual_params.items() if k != "apikey"}
+                        try:
+                            actual_resp = await self._get_with_retry(
+                                session,
+                                "https://archive-api.open-meteo.com/v1/archive",
+                                params=free_params,
+                            )
+                        except Exception as fallback_exc:
+                            logger.warning(
+                                "Actual weather fetch failed for (%.2f, %.2f) on %s (free-tier fallback): %s",
+                                venue_lat,
+                                venue_lon,
+                                date,
+                                fallback_exc,
+                            )
+                    else:
+                        logger.warning(
+                            "Actual weather fetch failed for (%.2f, %.2f) on %s: %s",
+                            venue_lat,
+                            venue_lon,
+                            date,
+                            exc,
+                        )
+                if isinstance(actual_resp, dict) and "hourly" in actual_resp:
+                    hourly = actual_resp["hourly"]
+                    times = hourly.get("time", [])
+                    for hour, hlabel in zip(match_hours, hour_labels, strict=True):
+                        idx = _find_hour_index(times, hour)
+                        for wkey, cname in zip(weather_keys, col_names, strict=True):
+                            data = hourly.get(wkey)
+                            val = data[idx] if data and idx < len(data) and data[idx] is not None else None
+                            results[f"actual_{hlabel}_{cname}"] = val
 
         except Exception as exc:
             error_code = self._classify_error(exc)
