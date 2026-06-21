@@ -31,7 +31,15 @@ _NON_EVM_CHAINS = frozenset({"SOLANA", "BITCOIN"})
 def _make_session(
     timeout: aiohttp.ClientTimeout | None = None,
 ) -> aiohttp.ClientSession:
-    """Create an aiohttp session with ThreadedResolver (OS DNS)."""
+    """Create an aiohttp session with ThreadedResolver (OS DNS).
+
+    A bounded ``ClientTimeout`` is MANDATORY: when no ``timeout`` is passed, default
+    to a bounded one rather than aiohttp's unbounded sock_connect/sock_read — a
+    stalled provider socket otherwise blocks a backfill worker forever (silent-stall
+    incident 2026-06-19; backfill_vm_silent_worker_stall_watchdog_2026_06_19 P3).
+    """
+    if timeout is None:
+        timeout = aiohttp.ClientTimeout(sock_connect=15.0, sock_read=60.0, total=120.0)
     connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
     return aiohttp.ClientSession(connector=connector, timeout=timeout)
 

@@ -28,9 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 def _make_session() -> aiohttp.ClientSession:
-    """Create an aiohttp session with ThreadedResolver (OS DNS)."""
+    """Create an aiohttp session with ThreadedResolver (OS DNS).
+
+    Bounded ``ClientTimeout`` is MANDATORY — without it a stalled provider socket
+    blocks a backfill worker forever (silent-stall incident 2026-06-19;
+    backfill_vm_silent_worker_stall_watchdog_2026_06_19 P3).
+    """
     connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
-    return aiohttp.ClientSession(connector=connector)
+    timeout = aiohttp.ClientTimeout(sock_connect=15.0, sock_read=60.0, total=120.0)
+    return aiohttp.ClientSession(connector=connector, timeout=timeout)
 
 
 # ── Cache files ──────────────────────────────────────────────────────
