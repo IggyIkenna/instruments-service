@@ -39,10 +39,12 @@ _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 _HTTP_SOCK_CONNECT_TIMEOUT: float = 15.0  # TCP+TLS establish
 _HTTP_SOCK_READ_TIMEOUT: float = 60.0  # max idle gap between received chunks
 _HTTP_TOTAL_TIMEOUT: float = 120.0  # absolute ceiling for one request
-# Default throttle: 0.1s = 10 req/sec. Suitable for high-quota plans like
-# api_football Ultra (~900/min). Subclasses override `_min_request_interval`
-# class attribute when their plan is tighter (e.g. SFI = 4 req/sec).
-_MIN_REQUEST_INTERVAL: float = 0.1
+# Default throttle: 0.12s ≈ 8.3 req/sec ≈ 500 req/min PER VM. Two parallel
+# backfill VMs ⇒ ~1000 req/min, a deliberate ~83% margin under the api_football
+# Custom plan's 1200 req/min cap so the SELF-ENFORCED rate never trips a 429
+# (avoiding the wasteful "sleep to next UTC minute" backoff). Subclasses override
+# `_min_request_interval` when their plan is tighter (e.g. SFI = 4 req/sec).
+_MIN_REQUEST_INTERVAL: float = 0.12
 
 
 class BaseSportsReferenceAdapter(ABC):
@@ -57,9 +59,23 @@ class BaseSportsReferenceAdapter(ABC):
     """
 
     _last_request_time: float = 0.0
-    # Per-class throttle override. Defaults to module-level _MIN_REQUEST_INTERVAL (0.1s).
+    # Per-class throttle override. Defaults to module-level _MIN_REQUEST_INTERVAL.
     # Subclasses set this to their RapidAPI plan's per-second floor.
     _min_request_interval: float = _MIN_REQUEST_INTERVAL
+    # Concurrency-safe self-enforced rate limiter (per-subclass via cls-attr write).
+    # ``_next_slot`` is the monotonic time the NEXT request may fire; the lock
+    # serialises slot assignment so N concurrent per-fixture calls are spaced by
+    # ``_min_request_interval`` instead of all firing at once (the burst that
+    # instantly saturated the per-minute cap → 429 → minute-boundary sleep).
+    _next_slot: float = 0.0
+    _rate_lock: asyncio.Lock | None = None
+
+    @classmethod
+    def _get_rate_lock(cls) -> asyncio.Lock:
+        """Lazily create a per-subclass asyncio.Lock (must run inside the loop)."""
+        if cls.__dict__.get("_rate_lock") is None:
+            cls._rate_lock = asyncio.Lock()
+        return cls._rate_lock
 
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key
@@ -258,21 +274,29 @@ class BaseSportsReferenceAdapter(ABC):
         )
 
     async def _throttle(self) -> None:
-        """Enforce minimum interval between API requests.
+        """Self-enforced, concurrency-safe minimum interval between API requests.
 
         Uses per-class `_min_request_interval` so each adapter (SFI, api_football,
-        transfermarkt, etc.) paces against its own RapidAPI plan instead of
-        sharing a single 10 req/sec floor that overshoots tight plans.
+        transfermarkt, etc.) paces against its own RapidAPI plan. CRITICAL: slot
+        assignment is serialised under a lock so that N concurrent per-fixture
+        requests are spaced by ``interval`` rather than all passing the check at
+        once. The old lock-free ``_last_request_time`` compare let concurrent
+        async tasks read the same timestamp and burst together — instantly
+        saturating the per-minute cap → 429 → 52s minute-boundary sleep →
+        throughput collapsed to ~46/min vs the 1200/min cap.
         """
         import time
 
         cls = type(self)
         interval = cls._min_request_interval
-        now = time.monotonic()
-        elapsed = now - cls._last_request_time
-        if elapsed < interval:
-            await asyncio.sleep(interval - elapsed)
-        cls._last_request_time = time.monotonic()
+        async with cls._get_rate_lock():
+            now = time.monotonic()
+            slot = cls._next_slot if cls._next_slot > now else now
+            cls._next_slot = slot + interval
+            cls._last_request_time = slot
+        wait = slot - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
 
     async def _get_with_retry(
         self,
