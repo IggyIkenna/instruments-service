@@ -95,11 +95,33 @@ class _AfManifestHooks:
         )
 
     def emit_empty_gaps_for_entity(self, data_type: str, captured_league_ids: set[str]) -> None:
-        """Emit empty_confirmed per expected league with no captured rows (same contract as FIXTURES)."""
+        """Emit empty_confirmed per expected league with no captured rows (same contract as FIXTURES).
+
+        For per-fixture / enrichment entities the absence is classified per the
+        OBSERVED (league x entity) coverage map: a league that has NEVER yielded
+        this entity in API-Football is honest ``EXPECTED_NO_PROVIDER_COVERAGE``
+        (out-of-coverage — provider has no data for this (league, entity)), NOT
+        ``EXPECTED_NO_FIXTURE`` (which means a fixture genuinely wasn't scheduled
+        and would falsely imply the gap is restorable by a re-fetch). An
+        out-of-coverage league is emitted even with a fixture on the calendar
+        (the fixture exists but the entity is uncollectable there). SSOT:
+        ``unified_api_contracts.registry.sports_league_entity_coverage``.
+        """
         if self.manifest is None:
             return
         _expected = {lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")}
         for _exp_lid in sorted(_expected - captured_league_ids):
+            _canon_lid = _orch._canonical_league_id(_exp_lid)
+            if not _orch.is_league_entity_covered(_canon_lid, data_type):
+                # Provider has no coverage for this (league, entity) — honest,
+                # uncollectable absence (excluded from the gap denominator).
+                self.manifest.record_empty(
+                    row_key={"date": self.date, "data_type": data_type, "league_id": _exp_lid},
+                    attempted_at=self.attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_NO_PROVIDER_COVERAGE,
+                    pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                )
+                continue
             if not _orch.get_league_fixture_calendar(_exp_lid, self.date, self.date):
                 continue
             self.manifest.record_empty(
