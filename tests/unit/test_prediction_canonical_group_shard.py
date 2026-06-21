@@ -79,9 +79,14 @@ class TestExtractPredictionCanonicalGroup:
 
         assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.MISC_NOVELTY.value
 
-    def test_kalshi_without_override_falls_to_other(self) -> None:
-        """Kalshi rule classifier is override-only currently; an
-        unrecognised ticker routes to OTHER per UAC SSOT.
+    def test_kalshi_prefix_rule_routes_kxbtc_to_price_range(self) -> None:
+        """Kalshi prefix classifier maps KXBTC-* to BTC_PRICE_RANGE_DAILY.
+
+        The three-tier classifier (override → prefix rules → OTHER) now
+        classifies KXBTC-* tickers via the ``KXBTC`` prefix entry in
+        ``KALSHI_TICKER_PREFIX_TO_GROUP`` — the generic BTC range-bracket
+        family on Kalshi maps to ``BTC_PRICE_RANGE_DAILY`` per the
+        cross-venue arb canonical group alignment (2026-06-20).
         """
         row = _row(
             venue="kalshi",
@@ -89,7 +94,7 @@ class TestExtractPredictionCanonicalGroup:
             raw_symbol="KXBTC",
         )
 
-        assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.OTHER.value
+        assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.BTC_PRICE_RANGE_DAILY.value
 
     def test_unknown_venue_routes_to_other(self) -> None:
         """Defensive — should never trigger in practice, but the
@@ -175,6 +180,11 @@ class TestComputePredictionShards:
         """Kalshi rows aggregate under ``KALSHI/<group>`` (manifest
         venue-slot is uppercased) regardless of whether the source
         ``venue`` field arrived in lowercase or uppercase form.
+
+        With the prefix-rule classifier (2026-06-20):
+        - ``KXBTC-*`` → BTC_PRICE_RANGE_DAILY (prefix ``KXBTC``).
+        - ``KXSPX-*`` → OTHER (no ``KXSPX`` prefix; Kalshi uses ``KXINX``
+          for S&P 500, not ``KXSPX``).
         """
         df = pd.DataFrame(
             [
@@ -195,8 +205,9 @@ class TestComputePredictionShards:
 
         shard_counts = _compute_prediction_shards(df)
 
-        # Both route to OTHER (no override seeded yet) under KALSHI/OTHER.
-        assert shard_counts.get("KALSHI/OTHER") == 2
+        # KXBTC-* → BTC_PRICE_RANGE_DAILY; KXSPX-* has no prefix entry → OTHER.
+        assert shard_counts.get("KALSHI/BTC_PRICE_RANGE_DAILY") == 1
+        assert shard_counts.get("KALSHI/OTHER") == 1
 
 
 def _lifecycle_df(

@@ -2601,11 +2601,15 @@ class TestDeribitComboAdapter:
         )
 
         adapter = DeribitComboReferenceDataAdapter()
+        # get_combos result shape: id + structured legs (the canonical leg source).
         combo_instrument = {
-            "instrument_name": "BTC-STRD-25APR26-90000",
+            "id": "BTC-CCAL-26JUN26_19JUN26-90000",
             "creation_timestamp": 1700000000000,
-            "settlement_currency": "BTC",
-            "kind": "combo",
+            "state": "active",
+            "legs": [
+                {"amount": -1, "instrument_name": "BTC-19JUN26-90000-C"},
+                {"amount": 1, "instrument_name": "BTC-26JUN26-90000-C"},
+            ],
         }
         mock_session = _make_aiohttp_session_mock(resp_json={"result": [combo_instrument]})
         with patch("aiohttp.ClientSession", return_value=mock_session):
@@ -2614,10 +2618,11 @@ class TestDeribitComboAdapter:
         assert len(results) == len(_DERIBIT_COMBO_UNDERLYINGS)
         rec = results[0]
         assert rec.instrument_type == InstrumentType.COMBO
-        assert rec.venue == "DERIBIT"
-        assert rec.raw_symbol == "BTC-STRD-25APR26-90000"
+        assert rec.venue == "DERIBIT-COMBO"
+        assert rec.raw_symbol == "BTC-CCAL-26JUN26_19JUN26-90000"
         assert rec.base_asset == "BTC"
-        assert rec.instrument_key == "DERIBIT:COMBO:BTC-STRD-25APR26-90000"
+        assert rec.instrument_key == "DERIBIT:COMBO:BTC-CCAL-26JUN26_19JUN26-90000"
+        assert rec.legs is not None and len(rec.legs) == 2
 
     @pytest.mark.asyncio
     async def test_get_instruments_none_type_fetches_combo(self) -> None:
@@ -2798,43 +2803,32 @@ class TestDeribitComboAdapter:
             await adapter.get_ohlcv("BTC-STRD-25APR26-90000")
 
     def test_venue_property(self) -> None:
-        """venue property returns DERIBIT."""
+        """venue property returns the registered venue id DERIBIT-COMBO."""
         from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
             DeribitComboReferenceDataAdapter,
         )
 
         adapter = DeribitComboReferenceDataAdapter()
-        assert adapter.venue == "DERIBIT"
-
-    def test_extract_structure_code(self) -> None:
-        """_extract_structure_code correctly identifies structure codes."""
-        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
-            _extract_structure_code,
-        )
-
-        assert _extract_structure_code("BTC-STRD-25APR26-90000") == "STRD"
-        assert _extract_structure_code("BTC-CS-25APR26-80000_90000") == "CS"
-        assert _extract_structure_code("BTC-ICOND-25APR26-70000_80000_90000_100000") == "ICOND"
-        assert _extract_structure_code("BTC-FS-25APR26_PERP") == "FS"
-        assert _extract_structure_code("ETH-CBUT-25APR26-3000_3500_4000") == "CBUT"
-        assert _extract_structure_code("UNKNOWN-FORMAT") == "UNKNOWN"
+        assert adapter.venue == "DERIBIT-COMBO"
 
     @pytest.mark.asyncio
     async def test_parse_combo_instrument_bad_item_returns_none(self) -> None:
-        """_parse_combo_instrument returns None for non-dict input."""
+        """_parse_combo_instrument returns None for non-dict / empty-id / leg-less input."""
         from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
             DeribitComboReferenceDataAdapter,
         )
 
         adapter = DeribitComboReferenceDataAdapter()
         now = datetime.now(UTC)
-        assert adapter._parse_combo_instrument("not_a_dict", now) is None
-        assert adapter._parse_combo_instrument(None, now) is None
-        assert adapter._parse_combo_instrument({"instrument_name": ""}, now) is None
+        assert adapter._parse_combo_instrument("not_a_dict", "BTC", now) is None
+        assert adapter._parse_combo_instrument(None, "BTC", now) is None
+        assert adapter._parse_combo_instrument({"id": ""}, "BTC", now) is None
+        # leg-less combo is invalid (validation requires legs) → None
+        assert adapter._parse_combo_instrument({"id": "BTC-FS-19JUN26_PERP", "legs": []}, "BTC", now) is None
 
     @pytest.mark.asyncio
     async def test_parse_combo_instrument_invalid_timestamp(self) -> None:
-        """Invalid creation_timestamp falls back to now."""
+        """Invalid creation_timestamp falls back to now (combo with legs still parses)."""
         from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
             DeribitComboReferenceDataAdapter,
         )
@@ -2842,11 +2836,14 @@ class TestDeribitComboAdapter:
         adapter = DeribitComboReferenceDataAdapter()
         now = datetime.now(UTC)
         item = {
-            "instrument_name": "BTC-STRD-25APR26-90000",
+            "id": "BTC-CCAL-26JUN26_19JUN26-90000",
             "creation_timestamp": "NOT_A_NUMBER",
-            "settlement_currency": "BTC",
+            "legs": [
+                {"amount": -1, "instrument_name": "BTC-19JUN26-90000-C"},
+                {"amount": 1, "instrument_name": "BTC-26JUN26-90000-C"},
+            ],
         }
-        result = adapter._parse_combo_instrument(item, now)
+        result = adapter._parse_combo_instrument(item, "BTC", now)
         assert result is not None
         assert result.instrument_type == InstrumentType.COMBO
 

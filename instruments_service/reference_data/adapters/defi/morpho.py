@@ -49,7 +49,7 @@ _MARKETS_QUERY_TEMPLATE = """
 query {{
     markets(first: 1000, orderBy: SupplyAssets, orderDirection: Desc, where: {{ chainId_in: [{chain_id}] }}) {{
         items {{
-            uniqueKey
+            marketId
             loanAsset {{ address symbol name decimals }}
             collateralAsset {{ address symbol name decimals }}
             lltv
@@ -179,7 +179,10 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         loan_symbol = str(loan_asset.get("symbol", ""))
         collateral_symbol = str(collateral_asset.get("symbol", ""))
-        market_key = str(market.get("uniqueKey", ""))
+        # Morpho renamed the canonical bytes32 market id field uniqueKey → marketId
+        # (verified live 2026-06-18: the old query 400'd with "Cannot query field
+        # uniqueKey on type Market"; the venue had been attempted_failed since ~2026-05).
+        market_key = str(market.get("marketId", ""))
 
         if not collateral_symbol or not market_key:
             return None

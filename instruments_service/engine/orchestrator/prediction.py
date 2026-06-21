@@ -57,9 +57,15 @@ def _extract_prediction_canonical_group(row: _orch.pd.Series) -> str:
     todo).
 
     Kalshi: classifies via ``classify_kalshi_to_canonical_group(ticker=...)``
-    using the override-only path
-    (:data:`unified_api_contracts.predictions.KALSHI_TICKER_TO_GROUP`).
-    Unrecognised tickers route to ``OTHER``.
+    using a three-tier lookup — (1) exact override dict
+    (:data:`unified_api_contracts.predictions.KALSHI_TICKER_TO_GROUP`),
+    (2) rule-based prefix table
+    (:data:`unified_api_contracts.predictions.KALSHI_TICKER_PREFIX_TO_GROUP`)
+    mapping ``KXBTCD-*`` / ``KXINX-*`` / ``KXFED-*`` / ``KXCPI-*`` etc.
+    to their canonical groups (the same
+    :class:`~unified_api_contracts.predictions.CanonicalQuestionGroup`
+    values as the equivalent Polymarket market, enabling cross-venue arb),
+    (3) ``OTHER`` catch-all.  Unrecognised tickers route to ``OTHER``.
 
     Other venues route to ``OTHER`` defensively — should never trigger
     in practice because the writer only invokes this on rows with
