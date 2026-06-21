@@ -39,9 +39,11 @@ __all__ = [
     "_FreshnessOutcome",
     "_apply_sports_provider_filter",
     "_enrichment_only_fast_path",
+    "_fixture_leagues_for_date",
     "_freshness_preflight",
     "_promote_redo_all_for_recovery",
     "_sports_provider_short_circuit",
+    "clear_fixture_leagues_cache",
 ]
 
 # Sports entity lists — used by the freshness check AND later fast-path logic,
@@ -86,6 +88,66 @@ _ENRICHMENT_ENTITY_VENUES: tuple[tuple[str, str], ...] = (
     ("SFI_PROGRESSIVE_STATS", "SOCCER_FOOTBALL_INFO"),
     ("WEATHER", "OPEN_METEO"),
 )
+
+# Per-run cache: ``bucket -> {date -> {league_id, ...}}`` for the leagues that
+# have a FIXTURES manifest row on each date.
+#
+# WHY THIS EXISTS (incident 2026-06-21 — sports-enrich VMs hung): the per-date
+# freshness pre-flight extracts "which leagues have FIXTURES on THIS date" so it
+# can drop enrichment entities whose covered leagues have no fixtures that day.
+# It did this by calling ``read_availability_index(bucket)`` ON EVERY DATE. That
+# reader's in-process cache is invalidated after every ``manifest.write()``
+# (which happens at the end of each date in the BatchIO loop), so the next date
+# always MISSED the cache and re-read + re-merged + re-sorted + de-duplicated the
+# entire multi-GB / multi-million-row consolidated availability index in pandas
+# (``_merge_shard_frames`` → ``sort_values`` + ``drop_duplicates``). As the sports
+# manifest grew over years of backfill, that per-date pandas work went from ~27s
+# to MINUTES, pinning the worker at ~92% CPU / ~8 GB RSS with zero stdout — a
+# CPU-bound hang that looked like a network stall (py-spy: MainThread spinning in
+# ``factorize_array``/``sort_values`` inside ``read_availability_index``).
+#
+# A VM's OWN enrichment run writes FIXTURE_STATS / FIXTURE_EVENTS /
+# FIXTURE_LINEUPS / PLAYER_STATS rows — NEVER FIXTURES rows — so the
+# date→FIXTURES-leagues map is STABLE for the duration of one run. We therefore
+# read the index ONCE, pre-group it into ``date -> {leagues}`` for the whole
+# corpus, cache it per bucket, and serve every subsequent date from the cache.
+# One heavy read per run instead of one per date.
+_FIXTURE_LEAGUES_BY_DATE_CACHE: dict[str, dict[str, frozenset[str]]] = {}
+
+
+def clear_fixture_leagues_cache() -> None:
+    """Drop the per-run FIXTURES-leagues-by-date cache.
+
+    Called at the START of each batch run (handler pre-flight), mirroring
+    ``clear_defi_universe_cache``. The map is stable WITHIN a run but a fresh
+    run must re-read the (now-updated) index. Also keeps tests isolated — the
+    module-level cache must not leak FIXTURES content between test cases.
+    """
+    _FIXTURE_LEAGUES_BY_DATE_CACHE.clear()
+
+
+def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
+    """Return the set of league_ids that have a FIXTURES manifest row on ``date``.
+
+    Reads + groups the availability index ONCE per bucket (see
+    ``_FIXTURE_LEAGUES_BY_DATE_CACHE`` rationale), then serves every date from the
+    cached ``date -> {leagues}`` map. This converts the per-date full-index
+    read/merge/sort (the 2026-06-21 sports-enrich hang) into a single read per run.
+    """
+    by_date = _FIXTURE_LEAGUES_BY_DATE_CACHE.get(bucket)
+    if by_date is None:
+        by_date = {}
+        _index_df = _orch.read_availability_index(bucket)
+        if not _index_df.empty and "league_id" in _index_df.columns:
+            _fix_only = _index_df.loc[_index_df["data_type"] == "FIXTURES", ["date", "league_id"]].dropna(
+                subset=["league_id"]
+            )
+            for _date_val, _grp in _fix_only.groupby("date"):
+                _leagues = {str(lid).upper() for lid in _grp["league_id"].unique() if str(lid).strip()}
+                by_date[str(_date_val)] = frozenset(_leagues)
+        _FIXTURE_LEAGUES_BY_DATE_CACHE[bucket] = by_date
+    return set(by_date.get(date, frozenset()))
+
 
 # Sports per-league entities (FIXTURES + PREDICTIONS + MATCHES + ODDS +
 # 5 per-fixture downstreams + ...) write one manifest row per
@@ -342,18 +404,23 @@ def _build_expected_entities(
         expected.extend(per_fixture_entities)
 
         # League-aware enrichment: only expect an enrichment entity if
-        # the leagues it covers have fixtures on this date.  Read the
-        # manifest index once to get leagues with FIXTURES on this date.
+        # the leagues it covers have fixtures on this date. Resolve the
+        # FIXTURES-leagues-for-this-date from the per-run cache.
         #
-        # Performance: the in-process index cache is invalidated after every
-        # ``manifest.write()`` call (manifest_writer.py:_invalidate_index_cache).
-        # In the per-date BatchIO loop the orchestrator writes manifest at
-        # the END of each date's work, so the next date's read_availability_index
-        # call here misses the cache → re-reads the full 25MB / 2.6M-row
-        # canonical → ~27s GCS pull. That dominates wall-clock for ALL
-        # multi-date sports backfills.
+        # Performance / hang root cause (incident 2026-06-21 — sports-enrich
+        # VMs froze at ~92% CPU / ~8 GB RSS): the manifest reader's in-process
+        # cache is invalidated after every ``manifest.write()`` call
+        # (manifest_writer.py:_invalidate_index_cache). In the per-date BatchIO
+        # loop the orchestrator writes manifest at the END of each date's work,
+        # so calling ``read_availability_index`` HERE on every date always
+        # missed the cache → re-read + re-merged + re-SORTED + de-duplicated the
+        # entire multi-GB / multi-million-row consolidated index in pandas. As
+        # the sports manifest grew that went from ~27s to MINUTES per date →
+        # CPU-bound hang. ``_fixture_leagues_for_date`` reads + groups the index
+        # ONCE per run instead (the date→FIXTURES-leagues map is stable across an
+        # enrichment run — enrichment never writes FIXTURES rows).
         #
-        # Skip this read entirely when scope is already explicit:
+        # Skip even that single read when scope is already explicit:
         #   * ``sports_entity_filter`` set → entity-scoped run, ``expected``
         #     gets restricted to that one entity later anyway
         #   * ``recovery_fixture_ids`` set → targeted recovery, the allowlist
@@ -363,11 +430,7 @@ def _build_expected_entities(
         _date_fixture_leagues: set[str] = set()
         _scope_is_explicit = bool(sports_entity_filter) or recovery_fixture_ids is not None
         if not _scope_is_explicit:
-            _index_df = _orch.read_availability_index(bucket)
-            if not _index_df.empty and "league_id" in _index_df.columns:
-                _fix_mask = (_index_df["date"] == date) & (_index_df["data_type"] == "FIXTURES")
-                _lid_series = _index_df.loc[_fix_mask, "league_id"].dropna()
-                _date_fixture_leagues = {str(lid).upper() for lid in _lid_series.unique() if str(lid).strip()}
+            _date_fixture_leagues = _fixture_leagues_for_date(bucket, date)
         else:
             _orch.logger.debug(
                 "date=%s: skipping per-date read_availability_index — scope is explicit "
