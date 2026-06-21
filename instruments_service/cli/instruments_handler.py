@@ -35,6 +35,9 @@ from instruments_service.engine.orchestrator import (
     get_venues_for_asset_groups,
     resolve_instruments_store_kind,
 )
+from instruments_service.engine.orchestrator.process_preflight import (
+    clear_fixture_leagues_cache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +115,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
         is_all = any(c.upper() == "ALL" for c in asset_groups)
         if is_all or any(c.upper() == "DEFI" for c in asset_groups):
             clear_defi_universe_cache()
+
+        # Reset the per-run FIXTURES-leagues-by-date cache so this run reads the
+        # (possibly newer) availability index once, then serves every date from
+        # cache — avoids the per-date full-index re-read/merge/sort that hung the
+        # sports-enrich VMs (incident 2026-06-21). Cheap no-op for non-sports runs.
+        clear_fixture_leagues_cache()
 
         self._wire_cli_filters_from_args()
 

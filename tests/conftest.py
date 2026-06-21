@@ -135,6 +135,21 @@ def _skip_integration_without_creds(request: pytest.FixtureRequest, gcp_auth_inf
             pytest.skip("No GCP credentials — skipping integration test")
 
 
+@pytest.fixture(autouse=True)
+def _clear_preflight_run_caches() -> None:
+    """Reset the per-run FIXTURES-leagues-by-date cache before each test.
+
+    The cache is module-level + bucket-keyed (shared "test-bucket" across the
+    suite), so without this reset a test that populates it would leak FIXTURES
+    content into the next. Production clears it in the handler pre-flight.
+    """
+    from instruments_service.engine.orchestrator.process_preflight import (
+        clear_fixture_leagues_cache,
+    )
+
+    clear_fixture_leagues_cache()
+
+
 @pytest.fixture(scope="session")
 def gcp_credentials(gcp_auth_info: tuple) -> str | None:
     """GCP credentials file path (None when using ADC)."""
