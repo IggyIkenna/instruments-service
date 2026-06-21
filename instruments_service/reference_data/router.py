@@ -72,6 +72,8 @@ from unified_api_contracts.registry import (
 from .adapters.cefi.aster import AsterReferenceDataAdapter
 from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
 from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
+from .adapters.cefi.kalshi_perp import KalshiPerpReferenceDataAdapter
+from .adapters.cefi.polymarket_perp import PolymarketPerpReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
@@ -247,12 +249,17 @@ def create_reference_data_adapter_for_source(
         "betfair": BetfairReferenceDataAdapter,
         "polymarket": PolymarketReferenceDataAdapter,
         "kalshi": KalshiReferenceDataAdapter,
+        # Crypto-perp CLOBs — public REST, no auth needed for enumeration.
+        "kalshi_perp": KalshiPerpReferenceDataAdapter,
+        "polymarket_perp": PolymarketPerpReferenceDataAdapter,
     }
     adapter_class = simple_source_map.get(source)
     if adapter_class is not None:
         return adapter_class(project_id=project_id, api_key=api_key)
 
-    supported = "direct, databento, tardis, ccxt, api_football, ibkr, betfair, polymarket, kalshi"
+    supported = (
+        "direct, databento, tardis, ccxt, api_football, ibkr, betfair, polymarket, kalshi, kalshi_perp, polymarket_perp"
+    )
     msg = f"Unsupported data_source {source!r} for venue {venue!r}. Supported: {supported}."
     raise ValueError(msg)
 
@@ -333,9 +340,11 @@ def _route_direct(
         "hyperliquid": HyperliquidReferenceDataAdapter,
         "ibkr": IBKRReferenceDataAdapter,
         "kalshi": KalshiReferenceDataAdapter,
+        "kalshi-perp": KalshiPerpReferenceDataAdapter,
         "lido": LidoReferenceDataAdapter,
         "morpho": MorphoReferenceDataAdapter,
         "polymarket": PolymarketReferenceDataAdapter,
+        "polymarket-perp": PolymarketPerpReferenceDataAdapter,
         "radiant": RadiantReferenceDataAdapter,
         "uniswap_v2": UniswapV2ReferenceDataAdapter,
         "uniswap_v3": UniswapV3ReferenceDataAdapter,
