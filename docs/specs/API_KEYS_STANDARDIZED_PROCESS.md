@@ -142,4 +142,3 @@ When adding a new data source, verify we have a secret for it:
 | The Graph   | graph_secret_name     | ✅                                    |
 | Alchemy     | alchemy_secret_name   | ✅                                    |
 | AaveScan    | aavescan_secret_name  | ✅                                    |
-| Envio       | envio_secret_name     | ✅ Used (UniswapV4, features-onchain) |

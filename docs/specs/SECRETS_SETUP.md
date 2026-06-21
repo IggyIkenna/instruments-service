@@ -142,11 +142,6 @@ echo "YOUR_ALCHEMY_API_KEY" | gcloud secrets create alchemy-api-key \
   --project={project_id} \
   --data-file=-
 
-# Envio API key (Uniswap V4 fallback)
-echo "YOUR_ENVIO_API_KEY" | gcloud secrets create envio-api-key \
-  --project={project_id} \
-  --data-file=-
-
 # AaveScan API key (AAVE fallback - optional)
 echo "YOUR_AAVESCAN_API_KEY" | gcloud secrets create aavescan-api-key \
   --project={project_id} \
@@ -198,7 +193,6 @@ TARDIS_SECRET_NAME=tardis-api-key
 DATABENTO_SECRET_NAME=databento-api-key
 THEGRAPH_SECRET_NAME=graph-api-key
 ALCHEMY_SECRET_NAME=alchemy-api-key
-ENVIO_SECRET_NAME=envio-api-key
 AAVESCAN_SECRET_NAME=aavescan-api-key
 
 # Environment
@@ -217,7 +211,6 @@ ENVIRONMENT=development
 | `databento-api-key` | Databento | https://databento.com            | TradFi data      | Pay-per-use             |
 | `graph-api-key`     | The Graph | https://thegraph.com/studio      | DeFi subgraphs   | **$2 per 100k queries** |
 | `alchemy-api-key`   | Alchemy   | https://dashboard.alchemy.com    | DeFi RPC         | Pay-as-you-go           |
-| `envio-api-key`     | Envio     | https://envio.dev/app/api-tokens | Uniswap V4       | Free tier available     |
 | `aavescan-api-key`  | AaveScan  | https://aavescan.com             | AAVE fallback    | Free                    |
 
 ### The Graph Billing Notes
@@ -272,7 +265,6 @@ echo "YOUR_API_KEY" | gcloud secrets create SECRET_NAME \
 
 ### Optional Secrets
 
-- ⚠️ `envio-api-key` - Optional (Uniswap V4 fallback)
 - ⚠️ `aavescan-api-key` - Optional (AAVE fallback)
 
 ---

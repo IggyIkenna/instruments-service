@@ -84,6 +84,41 @@ class TestDatabentoAdapterMocked:
         assert all(r.instrument_type == "FUTURE" for r in results)
 
     @pytest.mark.asyncio
+    async def test_get_instruments_isolates_banned_dataset(self) -> None:
+        """A subscription-entitlement breach on ONE dataset (e.g. IFEU/XNAS.ITCH off the
+        2026-06-18 allowlist) must NOT hard-fail get_instruments — sibling datasets still return.
+
+        Regression for the dataset-level shard-isolation fix: _fetch_symbols raises
+        DatabentoSubscriptionError (PERMANENT off-allowlist) for the banned dataset;
+        get_instruments catches it per-dataset and continues. Without the fix the first banned
+        dataset propagated and lost every surviving sibling for that venue.
+        """
+        from unified_api_contracts.registry import DatabentoDatasetNotAllowedError
+
+        adapter = DatabentoReferenceDataAdapter(api_key="test-key")
+        survivor = _make_record(raw_symbol="ESZ4")
+
+        def _fetch_side_effect(api_key: str, dataset: str, symbols: list[str], stype_in: str):
+            if dataset == "GLBX.MDP3":
+                return [survivor]
+            # Any off-allowlist dataset (IFEU.IMPACT / XNAS.ITCH / DBEQ.BASIC equities) raises.
+            raise DatabentoDatasetNotAllowedError(f"dataset {dataset!r} is NOT in the paid subscription")
+
+        with (
+            patch.object(adapter, "_venue_filter", None),
+            patch.object(adapter, "_fetch_symbols", side_effect=_fetch_side_effect),
+            patch.object(adapter, "_get_equity_symbols", return_value=["AAPL"]),
+            patch.object(adapter, "_create_fx_spot_records", return_value=[]),
+            patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_enrich_session_metadata"),
+        ):
+            # Must NOT raise — the banned dataset isolates, GLBX survivor returns.
+            results = await adapter.get_instruments()
+        assert any(r.raw_symbol == "ESZ4" for r in results), (
+            "GLBX survivor must be returned despite a sibling dataset's entitlement breach"
+        )
+
+    @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
         adapter = DatabentoReferenceDataAdapter(api_key="test-key")
         record = _make_record(raw_symbol="ESZ4")

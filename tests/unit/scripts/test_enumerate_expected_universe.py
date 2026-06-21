@@ -174,10 +174,12 @@ def test_cefi_yields_pre_venue_launch_for_lighter_pre_2024_09() -> None:
 
 
 def test_cefi_yields_no_rows_for_post_all_venue_launches() -> None:
-    """A date past every CeFi venue launch (e.g. 2026-01-01) should yield
-    zero pre-venue-launch rows."""
-    rows = list(enumerator_module._enumerate_cefi("2026-01-01", "2026-01-01"))
-    assert len(rows) == 0, "expected zero pre-venue-launch rows for 2026-01-01 (every cefi venue launched)"
+    """A date past every CeFi venue launch (use 2026-07-01, after the latest —
+    KALSHI-PERP launched 2026-05-29, POLYMARKET-PERP 2026-04-21) should yield
+    zero pre-venue-launch rows. NOTE: bump this date whenever a later-launching
+    CeFi venue is added, else newly-added post-date venues yield pre-launch rows."""
+    rows = list(enumerator_module._enumerate_cefi("2026-07-01", "2026-07-01"))
+    assert len(rows) == 0, "expected zero pre-venue-launch rows for 2026-07-01 (every cefi venue launched)"
 
 
 def test_prediction_yields_pre_venue_launch_for_pre_2020_polymarket() -> None:

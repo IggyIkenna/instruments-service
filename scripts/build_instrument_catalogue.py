@@ -1033,26 +1033,54 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
     over the rolled-up catalogue (real expiries) — never baked into a rule here.
     Empty-catalogue frames keep the typed ``mvp`` column so the schema is stable.
 
-    The catalogue carries ``data_type=None`` for single-grain asset groups; in that
-    case the predicate is evaluated with ``data_type=""`` (the all-data_type cell —
-    venue/instrument_type/league are what gate MVP membership for those AGs).
+    The catalogue carries ``data_type=None`` for single-grain asset groups (the
+    instrument exists across ALL the AG's data_types — data_type is not a catalogue
+    axis). ``is_mvp`` now honours the **unbound-data_type convention** (a blank
+    ``data_type`` == "any MVP data_type", mvp_instrument_universe_gap_audit P2 #2),
+    so a single-grain row simply passes its (absent) data_type through — no local
+    "representative data_type" workaround needed. A row that DOES carry a data_type
+    (prediction multi-grain) uses its own. The base asset comes from ``base_asset``
+    (spot/perp legs) with ``underlying`` as the derivative/option fallback — the axis
+    the cefi/tradfi MVP rules gate on.
     """
     if df.empty:
         out = df.copy()
         out["mvp"] = pd.Series([], dtype="bool")
         return out
 
+    def _cell(row: "pd.Series[object]", col: str) -> str:
+        """Return a row's string cell, treating NaN/None/empty as "".
+
+        ``str(np.nan)`` is ``"nan"`` and ``np.nan or x`` keeps the NaN (NaN is
+        truthy) — so a naive ``str(row.get(col) or "")`` turns a missing
+        ``base_asset`` into the literal ``"nan"`` (the all-False MVP tag bug,
+        mvp_instrument_universe_gap_audit 2026-06-17). Guard with ``pd.isna``.
+        """
+        raw = row.get(col)
+        if raw is None:
+            return ""
+        try:
+            if pd.isna(raw):  # pyright: ignore[reportArgumentType]
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(raw)
+
     def _row_is_mvp(row: "pd.Series[object]") -> bool:
-        league = str(row.get("league_id") or "") or None
-        data_type = str(row.get("data_type") or "")
-        # ``underlying`` is the catalogue's base-asset/underlier column (cefi/defi/
-        # tradfi derivatives) — the axis the MVP cefi/tradfi rules gate on (base_ccy
-        # / underliers). "" → None so a non-derivative row is not over-constrained.
-        base = str(row.get("underlying") or "") or None
+        league = _cell(row, "league_id") or None
+        # Unbound (single-grain) catalogue rows carry no data_type → pass "" straight
+        # through; ``is_mvp`` treats a blank data_type as "any MVP data_type" so the
+        # venue/instrument_type/base axes (not a missing data_type) decide membership.
+        # A multi-grain row (prediction) carries its own data_type and is gated on it.
+        data_type = _cell(row, "data_type") or None
+        # Base asset: ``base_asset`` is populated for spot/perp legs (the cefi MVP
+        # base_ccy axis); ``underlying`` carries it for derivatives/options. "" → None
+        # so a non-derivative row is not over-constrained.
+        base = _cell(row, "base_asset") or _cell(row, "underlying") or None
         return is_mvp(
             asset_group,
-            venue=str(row.get("venue") or ""),
-            instrument_type=str(row.get("instrument_type") or ""),
+            venue=_cell(row, "venue"),
+            instrument_type=_cell(row, "instrument_type"),
             data_type=data_type,
             base_ccy=base,
             league=league,

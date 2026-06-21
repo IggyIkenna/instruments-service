@@ -1498,3 +1498,149 @@ def test_enumerate_v2_future_leaf_stays_per_contract_at_bybit() -> None:
     assert all(r.instrument_id == "BTC-27JUN25" for r in rows)
     assert not any(r.instrument_type == "futures_chain" for r in rows)
     assert rows, "BYBIT FUTURE leaf must still fan per-contract candidates"
+
+
+# ---------------------------------------------------------------------------
+# Prediction cqg-bundle-grain filter (decision 338, 2026-06-19)
+# ---------------------------------------------------------------------------
+
+
+def _make_prediction_cqg_entry(
+    cqg: str = "BTC_UP_DOWN_DAILY",
+    available_from: str | None = "2025-01-01",
+    available_to: str | None = None,
+) -> InstrumentCatalogEntry:
+    return InstrumentCatalogEntry(
+        instrument_id=cqg,
+        instrument_type="prediction_market",
+        venue="POLYMARKET",
+        chain="",
+        league_id="",
+        available_from=available_from,
+        available_to=available_to,
+        market_created_at=available_from,
+        settlement_time=available_to,
+        data_type=enumerator_module._PREDICTION_CQG_DATA_TYPE,
+    )
+
+
+def _make_prediction_cid_entry(
+    condition_id: str = "0xabc",
+    data_type: str = "trades",
+) -> InstrumentCatalogEntry:
+    return InstrumentCatalogEntry(
+        instrument_id=condition_id,
+        instrument_type="prediction_market",
+        venue="POLYMARKET",
+        chain="",
+        league_id="",
+        available_from="2025-01-01",
+        available_to=None,
+        market_created_at="2025-01-01",
+        settlement_time=None,
+        data_type=data_type,
+    )
+
+
+def test_prediction_v2_cqg_filter_excludes_per_condition_id() -> None:
+    """Decision 338: when the catalogue carries BOTH grains, the prediction enumerator
+    seeds ONLY the cqg-bundle grain (per-conditionId trades/market_lifecycle EXCLUDED —
+    else the >50M-row false-EU blow-up)."""
+    catalog = [
+        _make_prediction_cqg_entry("BTC_UP_DOWN_DAILY"),
+        _make_prediction_cid_entry("0xabc", "trades"),
+        _make_prediction_cid_entry("0xabc", "market_lifecycle"),
+        _make_prediction_cid_entry("0xdef", "trades"),
+    ]
+    dates = _date_axis("2025-01-01", "2025-01-02", "2025-01-03")
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="prediction",
+            catalog=catalog,
+            date_axis=dates,
+            data_types=["prediction_canonical_question_group", "trades", "market_lifecycle"],
+            present_set=set(),
+            present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+        )
+    )
+    assert rows, "cqg-bundle rows must seed expected_unattempted"
+    assert {r.data_type for r in rows} == {"prediction_canonical_question_group"}
+    assert {r.instrument_id for r in rows} == {"BTC_UP_DOWN_DAILY"}, "no per-conditionId leak"
+
+
+def test_prediction_v2_no_cqg_falls_through() -> None:
+    """A catalogue with NO cqg-bundle rows (legacy/test) must NOT silently drop the AG —
+    fall through to all rows unchanged."""
+    catalog = [_make_prediction_cid_entry("0xabc", "trades")]
+    dates = _date_axis("2025-01-01", "2025-01-02")
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="prediction",
+            catalog=catalog,
+            date_axis=dates,
+            data_types=["trades"],
+            present_set=set(),
+            present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+        )
+    )
+    assert rows, "legacy no-cqg catalogue must still enumerate"
+    assert {r.data_type for r in rows} == {"trades"}
+
+
+# ---------------------------------------------------------------------------
+# Full-history range-encoding (Part 2 — scalable representation)
+# ---------------------------------------------------------------------------
+
+
+def _eu_row(date_str: str, instrument_id: str = "BTCUSDT", reason: str = "") -> object:
+    return ExpectedRow(
+        asset_group="cefi",
+        venue="BINANCE",
+        chain="",
+        data_type="trades",
+        instrument_type="spot",
+        instrument_id=instrument_id,
+        league_id="",
+        date=date_str,
+        reason=reason,
+        capture_status="expected_unattempted",
+    )
+
+
+def test_range_encode_collapses_contiguous_run() -> None:
+    """A contiguous run of days collapses into ONE RangeRow with exact n_days."""
+    rows = [_eu_row(d) for d in ("2025-01-01", "2025-01-02", "2025-01-03")]
+    ranges = enumerator_module.range_encode(rows)
+    assert len(ranges) == 1
+    assert ranges[0].date_start == "2025-01-01"
+    assert ranges[0].date_end == "2025-01-03"
+    assert ranges[0].n_days == 3
+
+
+def test_range_encode_splits_on_gap() -> None:
+    """A gap > 1 day starts a new span; Σ n_days equals the per-day count (exact denominator)."""
+    rows = [_eu_row(d) for d in ("2025-01-01", "2025-01-02", "2025-01-05", "2025-01-06")]
+    ranges = enumerator_module.range_encode(rows)
+    assert len(ranges) == 2
+    assert [(r.date_start, r.date_end, r.n_days) for r in ranges] == [
+        ("2025-01-01", "2025-01-02", 2),
+        ("2025-01-05", "2025-01-06", 2),
+    ]
+    assert sum(r.n_days for r in ranges) == 4
+
+
+def test_range_encode_separate_keys_do_not_merge() -> None:
+    """Different shard-keys never merge even on the same dates."""
+    rows = [_eu_row("2025-01-01", "BTCUSDT"), _eu_row("2025-01-01", "ETHUSDT")]
+    ranges = enumerator_module.range_encode(rows)
+    assert len(ranges) == 2
+    assert {r.instrument_id for r in ranges} == {"BTCUSDT", "ETHUSDT"}
+
+
+def test_range_encode_deterministic() -> None:
+    """Re-encoding the same rows (any input order) yields byte-identical output (sorted keys+dates)."""
+    rows = [_eu_row(d) for d in ("2025-01-03", "2025-01-01", "2025-01-02")]
+    a = enumerator_module.range_encode(rows)
+    b = enumerator_module.range_encode(list(reversed(rows)))
+    assert a == b
+    assert a[0].n_days == 3

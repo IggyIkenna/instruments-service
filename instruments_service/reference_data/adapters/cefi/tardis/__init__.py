@@ -99,6 +99,7 @@ from instruments_service.reference_data.adapters.cefi.tardis.parsing import (
     _passes_asset_filter,
     _resolve_base_quote,
     _resolve_option_fields,
+    _split_kraken_symbol,
     _split_symbol,
 )
 
@@ -148,6 +149,7 @@ __all__ = [
     "_passes_asset_filter",
     "_resolve_base_quote",
     "_resolve_option_fields",
+    "_split_kraken_symbol",
     "_split_symbol",
     "adapter",
     "aiohttp",
