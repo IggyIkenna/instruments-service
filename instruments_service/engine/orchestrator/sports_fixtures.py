@@ -536,15 +536,32 @@ def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]
         return {}
 
 
+# Process-level write-once guard for the STATIC team-mapping table. The table is
+# built entirely from UAC constants (EPL/Bundesliga aliases) — byte-identical on
+# every call — but was being re-written to the SAME GCS blob on EVERY backfill
+# date (~1.1k writes/run to one object) → GCS hot-object 429s dropped ~16% of the
+# writes (no retry). One write per process is correct: the content cannot change
+# mid-run. (Per-season roster changes are handled by the per-date FIXTURES/TEAMS
+# entities, not this static lookup.)
+_TEAM_MAPPING_WRITTEN_THIS_PROCESS: bool = False
+
+
 def _write_team_mapping(bucket: str) -> None:
-    """Build and write TeamMapping table to GCS.
+    """Build and write TeamMapping table to GCS — once per process.
 
     Combines UAC team_mappings.py (API-Football names) and team_names.py
     (Odds API / Understat names) into a single lookup table keyed by
     canonical team_id. Used by FSS to resolve provider-specific IDs.
 
+    The table is STATIC (UAC constants) so it is written ONCE per process; later
+    per-date calls short-circuit to avoid hammering the single GCS object.
+
     Path: sports_reference/mappings/team_mapping.parquet
     """
+    global _TEAM_MAPPING_WRITTEN_THIS_PROCESS
+    if _TEAM_MAPPING_WRITTEN_THIS_PROCESS:
+        return
+
     rows: list[dict[str, str]] = []
 
     # EPL teams
@@ -584,7 +601,8 @@ def _write_team_mapping(bucket: str) -> None:
         df = _orch.pd.DataFrame(rows)
         mapping_sink = _orch.get_data_sink(bucket=bucket, prefix="sports_reference/mappings")
         mapping_sink.write(data=df, partition={}, format="parquet", filename="team_mapping.parquet")
-        _orch.logger.info("Team mapping: %d entries written", len(df))
+        _TEAM_MAPPING_WRITTEN_THIS_PROCESS = True
+        _orch.logger.info("Team mapping: %d entries written (once per process)", len(df))
     except Exception as exc:
         _orch.classify_and_emit_error(
             exc,

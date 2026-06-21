@@ -58,6 +58,26 @@ __all__ = [
 ]
 
 
+def _fixtures_fetch_failed(
+    *,
+    active_venues: list[str],
+    non_error_venues: set[str],
+    skip_urdi: bool,
+) -> bool:
+    """True when the URDI fetch ERRORED (→ attempted_failed), not clean-empty.
+
+    A venue absent from ``non_error_venues`` raised/failed during the fetch.
+    Guard on ``not skip_urdi``: when the URDI fetch was skipped (enrichment-only
+    / per-fixture entities) no fixtures fetch was attempted, so an empty
+    ``non_error_venues`` is NOT a failure (→ keep the honest-absence path).
+    """
+    return (
+        not skip_urdi
+        and bool(active_venues)
+        and not all(v in non_error_venues for v in active_venues)
+    )
+
+
 async def process_instruments(
     date: str | _orch.datetime,
     asset_groups: list[str],
@@ -207,6 +227,11 @@ async def process_instruments(
 
     # 4. Handle zero records (honest absence per asset group, or fail the shard).
     if not records:
+        fixtures_fetch_failed = _fixtures_fetch_failed(
+            active_venues=active_venues,
+            non_error_venues=fetch_outcome.non_error_venues,
+            skip_urdi=_skip_urdi,
+        )
         return await _handle_zero_records(
             date=date,
             asset_groups=asset_groups,
@@ -220,6 +245,7 @@ async def process_instruments(
             redo_all=redo_all,
             sports_entity_filter=sports_entity_filter,
             season_override=season_override,
+            fixtures_fetch_failed=fixtures_fetch_failed,
         )
 
     # 5. Schema validation — per-record failure isolation (hard_schema_enforcement Phase 2).
