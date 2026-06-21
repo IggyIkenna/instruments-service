@@ -14,12 +14,14 @@ import pytest
 
 from instruments_service.reference_data.adapters.sports.adapters.api_football import (
     ApiFootballAdapter,
+    ApiFootballResponseError,
     _extract_response,
     _flatten_standings_groups,
     _parse_fixture_list,
     _parse_fixture_response,
     _parse_team_item,
     _parse_teams,
+    _raise_on_api_errors,
 )
 from instruments_service.reference_data.adapters.sports.adapters.base import (
     BaseSportsReferenceAdapter,
@@ -100,6 +102,33 @@ class TestApiFootballHelpers:
         assert _extract_response("string") == []
         assert _extract_response(42) == []
         assert _extract_response(None) == []
+
+    def test_extract_response_raises_on_plan_error(self) -> None:
+        # API-Football signals plan/quota errors INSIDE a 200 body with an empty
+        # response — must surface as a FETCH FAILURE, not a silent empty.
+        raw = {
+            "errors": {"plan": "Free plans do not have access to this date, try from 2026-06-20."},
+            "results": 0,
+            "response": [],
+        }
+        with pytest.raises(ApiFootballResponseError):
+            _extract_response(raw)
+
+    def test_extract_response_raises_on_nonempty_errors_list(self) -> None:
+        with pytest.raises(ApiFootballResponseError):
+            _extract_response({"errors": ["rate limit exceeded"], "response": []})
+
+    def test_extract_response_no_raise_on_empty_errors(self) -> None:
+        # errors: [] (success envelope) → parse normally, no raise.
+        assert _extract_response({"errors": [], "response": [{"id": 1}]}) == [{"id": 1}]
+        assert _extract_response({"errors": {}, "response": []}) == []
+
+    def test_raise_on_api_errors_ignores_absent_or_non_dict(self) -> None:
+        # absent errors key, or non-dict envelope → no raise.
+        _raise_on_api_errors({"response": []})
+        _raise_on_api_errors([{"id": 1}])
+        _raise_on_api_errors("string")
+        _raise_on_api_errors(None)
 
     def test_flatten_standings_groups_nested(self) -> None:
         groups = [
