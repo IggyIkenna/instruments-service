@@ -156,11 +156,11 @@ class _ModelDumpable(Protocol):
 # UAC@52d289c): footystats-served catalog rows previously tagged with
 # ``BATCH_API_FOOTBALL`` as a documented workaround. With the canonical
 # ``BATCH_FOOTYSTATS`` member now present in UAC ``PipelineMode``,
-# footystats-served data_types (``PREDICTIONS`` / ``MATCHES``) are stamped
-# with their canonical source. ``ODDS`` still tags ``BATCH_ODDS_API``
-# because the footystats odds adapter wraps the ``odds_api`` source per
-# UAC SOURCE_PRIORITY for ``ODDS_SNAPSHOT`` / ``ODDS_MOVEMENT`` /
-# ``ARBITRAGE``.
+# all footystats-served data_types (``PREDICTIONS`` / ``MATCHES`` / ``ODDS``)
+# are stamped with ``BATCH_FOOTYSTATS``. Fix 2026-06-22: ODDS was previously
+# mislabelled ``BATCH_ODDS_API``, causing UAC record_captured fail_fast
+# rejects because source='footystats' disagreed with pipeline_mode
+# batch_odds_api (which expects source='odds_api').
 _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # api_football catalog (FIXTURES + per-fixture entities + reference data)
     "FIXTURES": PipelineMode.BATCH_API_FOOTBALL,
@@ -179,9 +179,9 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # workaround stamp on 2026-05-12).
     "PREDICTIONS": PipelineMode.BATCH_FOOTYSTATS,
     "MATCHES": PipelineMode.BATCH_FOOTYSTATS,
-    # ODDS slice — UAC SOURCE_PRIORITY top entry for the odds-snapshot slice
-    # is ``odds_api``; footystats odds adapter tagged with BATCH_ODDS_API.
-    "ODDS": PipelineMode.BATCH_ODDS_API,
+    # ODDS slice — footystats is the writer; stamp BATCH_FOOTYSTATS to match
+    # source='footystats' (UAC SOURCE_PRIORITY@40751840 aligned to BATCH_FOOTYSTATS).
+    "ODDS": PipelineMode.BATCH_FOOTYSTATS,
     # understat catalog
     "XG": PipelineMode.BATCH_UNDERSTAT,
     # transfermarkt catalog
