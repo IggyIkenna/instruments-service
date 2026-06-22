@@ -677,7 +677,7 @@ async def _fetch_footystats_odds(
                         instrument_type="",
                         data_type="ODDS",
                         league_id=_orch._canonical_league_id(_odds_lid_str),
-                        pipeline_mode=_orch.PipelineMode.BATCH_ODDS_API,
+                        pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                         source=_orch._sports_ref_source("footystats_odds"),
                         service_emission_state=None,
                         # Phase 1A cluster gate: per-fixture ≥1 row floor (bridge until
@@ -714,7 +714,7 @@ async def _fetch_footystats_odds(
                         asset_group="sports",
                         instrument_type="",
                         data_type="ODDS",
-                        pipeline_mode=_orch.PipelineMode.BATCH_ODDS_API,
+                        pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                         source=_orch._sports_ref_source("footystats_odds"),
                         service_emission_state=None,
                         # Unmapped-league rows still carry canonical_fixture_id; assert
@@ -746,7 +746,7 @@ async def _fetch_footystats_odds(
                     asset_group="sports",
                     instrument_type="",
                     data_type="ODDS",
-                    pipeline_mode=_orch.PipelineMode.BATCH_ODDS_API,
+                    pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                     source=_orch._sports_ref_source("footystats_odds"),
                     service_emission_state=None,
                     # No canonical_fixture_id column (home_team/away_team absent in source
