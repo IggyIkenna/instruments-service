@@ -2,7 +2,7 @@
 
 Credential-free + GCS-free: exercises the PURE surfaces — pipeline_mode convention
 (the operator-ratified ``backfill_sports_per_entity_manifest`` mapping incl. the
-ODDS→BATCH_ODDS_API special case), report-row re-verification against a synthetic
+ODDS→BATCH_FOOTYSTATS stamp), report-row re-verification against a synthetic
 covered index, and cell grouping (entity cells vs the instrument-definitions split).
 
 Plan refs: ``migration_verification_orphan_safety_2026_06_10.md`` § V2 (R8) +
