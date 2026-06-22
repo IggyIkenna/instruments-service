@@ -118,7 +118,7 @@ PROJECT_ID = "central-element-323112"
 # match the league-grain manifest → every cell would inflate the denominator.
 _SPORTS_PRESENT_COLS: list[str] = ["data_type", "league_id", "date"]
 
-# Full per-instrument present-set columns for cefi / defi / tradfi / prediction.
+# Full per-instrument present-set columns for cefi / defi / prediction.
 _DEFAULT_PRESENT_COLS: list[str] = [
     "venue",
     "chain",
@@ -129,16 +129,47 @@ _DEFAULT_PRESENT_COLS: list[str] = [
     "date",
 ]
 
+# TradFi present-set columns = the default per-instrument grain PLUS ``underlying``
+# (axis-3, 2026-06-22). The MTDS writer records per-underlying BUNDLE captures
+# (futures_chain / combo / options_chain) at ``instrument_id=""`` + ``underlying=<U>``
+# (venue_fetch.py:318-320 → manifest_finalize.py base_row_key), so the present-set
+# match + the seeded ``expected_unattempted`` atom MUST key on ``underlying`` — keying
+# on the (blank) instrument_id alone would collapse every underlying of a
+# (venue, bundle_type) into ONE tuple and the seed would never reconcile against the
+# real capture. Leaf rows carry ``underlying=""`` on BOTH sides, so the extra column is
+# a no-op for non-bundle tradfi cells. ``_present_cols_for`` intersects this with the
+# manifest's actual columns, so a manifest WITHOUT an ``underlying`` column drops it
+# (backward-safe). Scoped to tradfi to leave the cefi / defi / prediction grain — and
+# their per-AG enumerators, which do not yet collapse bundle ``instrument_id`` —
+# untouched.
+_TRADFI_PRESENT_COLS: list[str] = [
+    "venue",
+    "chain",
+    "data_type",
+    "instrument_type",
+    "instrument_id",
+    "underlying",
+    "league_id",
+    "date",
+]
+
 
 def _present_cols_for(asset_group: str, available_in_df: list[str]) -> list[str]:
     """Return the manifest present-set column grain for ``asset_group``.
 
-    Sports is LEAGUE-grain (``_SPORTS_PRESENT_COLS``); every other group is the
-    full per-instrument grain (``_DEFAULT_PRESENT_COLS``). Intersected with the
+    Sports is LEAGUE-grain (``_SPORTS_PRESENT_COLS``); tradfi is the per-instrument
+    grain PLUS ``underlying`` (``_TRADFI_PRESENT_COLS`` — so per-underlying bundle
+    captures with a blank instrument_id reconcile on the underlying); every other group
+    is the full per-instrument grain (``_DEFAULT_PRESENT_COLS``). Intersected with the
     columns actually present in the manifest so the present-set tuples and the
     enumerator row-keys line up.
     """
-    base = _SPORTS_PRESENT_COLS if asset_group == "sports" else _DEFAULT_PRESENT_COLS
+    if asset_group == "sports":
+        base = _SPORTS_PRESENT_COLS
+    elif asset_group == "tradfi":
+        base = _TRADFI_PRESENT_COLS
+    else:
+        base = _DEFAULT_PRESENT_COLS
     return [c for c in base if c in available_in_df]
 
 
@@ -227,6 +258,15 @@ class ExpectedRow:
     date: str
     reason: str  # one of EMPTY_CONFIRMED_REASONS (empty string when capture_status=expected_unattempted)
     capture_status: str = "empty_confirmed"  # "empty_confirmed" | "expected_unattempted"
+    # Underlying asset for per-underlying BUNDLE cells (futures_chain / combo /
+    # options_chain). The MTDS writer records bundle captures at
+    # ``instrument_id=""`` + ``underlying=<U>`` (venue_fetch.py:318-320 →
+    # manifest_finalize.py base_row_key); a leaf cell carries ``instrument_id=<id>``
+    # + ``underlying=""``. So a bundle seed MUST mirror that shape (blank
+    # instrument_id, populated underlying) or the seed's shard-atom never matches
+    # the capture and the cell stays permanently ``expected_unattempted``. "" for
+    # leaf / non-derivative rows.
+    underlying: str = ""
 
 
 def _emit_event(event: str, /, **details: object) -> None:
@@ -883,17 +923,22 @@ def _canonical_writer_instrument_type(asset_group: str, instr: InstrumentCatalog
     uses to collapse OPTION/COMBO leaves to one per-underlying ``options_chain``
     entry); so:
 
-    * a bundle leaf (``option`` / ``combo`` at any tradfi venue, or a venue-overlaid
-      ``future``) → its bundle instrument_type (``options_chain`` / ``futures_chain``);
-    * a passthrough leaf (``future`` / ``equity`` / ``etf`` / ``spot_pair`` /
-      ``index``) → the canonical-lowercase leaf type (``.strip().lower()``); for
-      tradfi the lowercase form already equals the UAC canonical alias for every
+    * a bundle leaf (``option`` at any tradfi venue → ``options_chain``; ``combo`` at
+      a tradfi venue → ``combo``; a CME/ICE-venue-overlaid ``future`` → ``futures_chain``)
+      → its bundle instrument_type. NOTE (2026-06-22): TradFi ``combo`` rolls up to its
+      OWN ``instrument_type=combo`` (the writer keeps a distinct ``combo`` partition),
+      and TradFi ``future`` at CME/ICE bundles to ``futures_chain`` via the
+      ``FUTURE_BUNDLE_VENUES["tradfi"]`` overlay — both matching the writer grain;
+    * a passthrough leaf (``future`` at a NON-bundling venue / ``equity`` / ``etf`` /
+      ``spot_pair`` / ``index``) → the canonical-lowercase leaf type (``.strip().lower()``);
+      for tradfi the lowercase form already equals the UAC canonical alias for every
       type (``FUTURE``→``future`` etc — no per-type aliasing needed);
-    * an already-canonical bundle entry (``options_chain`` / ``futures_chain`` —
-      e.g. the synthetic rows ``_rollup_bundle_grain`` already produced, or a
-      bundle entry direct from the catalogue) → returned unchanged
-      (``bundle_instrument_type_for_leaf`` returns ``None`` for a bundle type, so
-      the ``.lower()`` fall-through keeps it intact).
+    * an already-canonical bundle entry (``options_chain`` / ``futures_chain`` — e.g.
+      the synthetic rows ``_rollup_bundle_grain`` already produced, or a bundle entry
+      direct from the catalogue) → returned unchanged (``bundle_instrument_type_for_leaf``
+      returns ``None`` for the ``options_chain`` / ``futures_chain`` bundle types, so the
+      ``.lower()`` fall-through keeps it intact; a synthetic ``combo`` bundle entry instead
+      resolves to ``combo`` via the leaf map, which is likewise its correct canonical type).
 
     De-dup note: leaf types keep a per-contract ``instrument_id``, so two leaves
     never collapse to one cell here; the OPTION/COMBO→underlying collapse (which
@@ -955,6 +1000,24 @@ def _enumerate_v2_tradfi(
         # never be converted by the real capture. (_row_data_types above is
         # case-insensitive, so it is unaffected by reading instr.instrument_type.)
         canon_it = _canonical_writer_instrument_type("tradfi", instr)
+        # Shard-grain SSOT (axis-3, 2026-06-22): for the per-underlying BUNDLE
+        # instrument_types (futures_chain / combo / options_chain — the synthetic
+        # entries _rollup_bundle_grain produces at instrument_id=<underlying>), the
+        # MTDS writer records the captured cell with instrument_id="" + underlying=<U>
+        # (market-tick-data-service venue_fetch.py:318-320 → manifest_finalize.py
+        # base_row_key, the _UNDERLYING_PARTITIONED_TYPES set). So the seed MUST mirror
+        # that: blank instrument_id, the underlying carried in the ``underlying``
+        # column. A LEAF type (future at a non-bundling venue / equity / etf / index)
+        # keeps its real instrument_id and a blank underlying — unchanged. The
+        # discriminator is the UAC GRAIN axis (the same SSOT _rollup_bundle_grain uses),
+        # NOT a hardcoded type set, so it tracks the writer automatically.
+        is_bundle = grain_for_instrument_type("tradfi", canon_it) == GRAIN_BUNDLE_BY_UNDERLYING
+        if is_bundle:
+            seed_instrument_id = ""
+            seed_underlying = instr.underlying or instr.instrument_id
+        else:
+            seed_instrument_id = instr.instrument_id
+            seed_underlying = ""
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -972,7 +1035,8 @@ def _enumerate_v2_tradfi(
                             "chain": "",
                             "data_type": dt,
                             "instrument_type": canon_it,
-                            "instrument_id": instr.instrument_id,
+                            "instrument_id": seed_instrument_id,
+                            "underlying": seed_underlying,
                             "league_id": "",
                             "date": iso,
                         }.get(c, "")
@@ -985,11 +1049,12 @@ def _enumerate_v2_tradfi(
                             chain="",
                             data_type=dt,
                             instrument_type=canon_it,
-                            instrument_id=instr.instrument_id,
+                            instrument_id=seed_instrument_id,
                             league_id="",
                             date=iso,
                             reason="",
                             capture_status="expected_unattempted",
+                            underlying=seed_underlying,
                         )
                 continue
             for dt in row_dts:
@@ -999,10 +1064,11 @@ def _enumerate_v2_tradfi(
                     chain="",
                     data_type=dt,
                     instrument_type=canon_it,
-                    instrument_id=instr.instrument_id,
+                    instrument_id=seed_instrument_id,
                     league_id="",
                     date=iso,
                     reason=reason,
+                    underlying=seed_underlying,
                 )
 
 
@@ -1286,10 +1352,11 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
     bundle entry (G1-ENUM, ERA-B).
 
     For instrument_types the UAC GRAIN axis marks ``bundle_by_underlying`` AND
-    that map to a bundle INSTRUMENT_TYPE (``option``/``combo`` → ``options_chain``),
-    every leaf contract of an ``(venue, chain, underlying)`` collapses into ONE
+    that map to a bundle INSTRUMENT_TYPE (``option`` → ``options_chain``; tradfi
+    ``combo`` → ``combo``; a CME/ICE ``future`` → ``futures_chain``), every leaf
+    contract of an ``(venue, chain, underlying)`` collapses into ONE
     synthetic catalogue entry — ``instrument_type`` = the bundle instrument_type
-    (``options_chain`` / ``futures_chain``), ``instrument_id`` = the underlying,
+    (``options_chain`` / ``futures_chain`` / ``combo``), ``instrument_id`` = the underlying,
     ``data_type`` = None so the enumerator resolves the bundle's data_type from the
     UAC validity matrix (``options_chain``/``futures_chain`` → ``trades``, Era-B) —
     emitting ONE candidate with data_type=trades, NOT data_type=options_chain.
@@ -1584,6 +1651,7 @@ _RANGE_KEY_FIELDS: tuple[str, ...] = (
     "data_type",
     "instrument_type",
     "instrument_id",
+    "underlying",
     "league_id",
     "reason",
     "capture_status",
@@ -1606,6 +1674,7 @@ class RangeRow:
     data_type: str
     instrument_type: str
     instrument_id: str
+    underlying: str
     league_id: str
     reason: str
     capture_status: str
@@ -1734,6 +1803,7 @@ def _write_range_artifact(
                 "data_type": r.data_type,
                 "instrument_type": r.instrument_type,
                 "instrument_id": r.instrument_id,
+                "underlying": r.underlying,
                 "league_id": r.league_id,
                 "capture_status": r.capture_status,
                 "error_reason": r.reason if r.capture_status == "empty_confirmed" else "",
@@ -1783,6 +1853,7 @@ def _row_key(row: ExpectedRow, available_cols: list[str]) -> tuple[str, ...]:
         "data_type": row.data_type,
         "instrument_type": row.instrument_type,
         "instrument_id": row.instrument_id,
+        "underlying": row.underlying,
         "league_id": row.league_id,
         "date": row.date,
     }
@@ -2050,6 +2121,7 @@ def _write_absent_rows(
             "data_type": r.data_type,
             "instrument_type": r.instrument_type,
             "instrument_id": r.instrument_id,
+            "underlying": r.underlying,
             "league_id": r.league_id,
             "date": r.date,
             "capture_status": r.capture_status,
