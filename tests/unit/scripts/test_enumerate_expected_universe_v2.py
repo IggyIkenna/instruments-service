@@ -438,6 +438,117 @@ def test_tradfi_v2_empty_catalog() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shard-grain SSOT: seeded instrument_type == the CANONICAL WRITER grain
+# (lowercase ``future``/``equity``/``etf``), NOT the raw UPPERCASE catalogue leaf.
+# Without this, the seeded ``expected_unattempted`` / ``empty_confirmed`` cell can
+# never be converted by the real capture (which writes lowercase) → the cell sits
+# permanently expected_unattempted and deflates honest-coverage. Same shard-grain
+# mismatch class as the defi PROTOCOL-CHAIN bug (instruments-service@38cec01).
+# ---------------------------------------------------------------------------
+
+
+def test_tradfi_v2_future_seeds_canonical_lowercase_instrument_type() -> None:
+    """A pre-bundled ``futures_chain`` entry must seed ``instrument_type == 'futures_chain'``.
+
+    Pre-listing (empty_confirmed) path: the seed grain MUST be the canonical
+    writer grain that MTDS captures at. For tradfi CME futures, enumerate_v2()
+    calls _rollup_bundle_grain first, so _enumerate_v2_tradfi receives pre-bundled
+    entries with instrument_type='futures_chain' and instrument_id=underlying ('ES').
+    The canonical MTDS writer grain for CME tradfi futures is 'futures_chain'
+    (see FUTURE_BUNDLE_VENUES["tradfi"] = frozenset({"CME", "ICE"}) in UAC).
+    """
+    catalog = [
+        _make_tradfi_entry(
+            instrument_id="ES", instrument_type="futures_chain", venue="CME", available_from="2025-01-01"
+        )
+    ]
+    # Window spans the listing date so the lifecycle-overlap filter keeps the
+    # instrument: 2024-06-01 → NOT_LISTED, 2025-06-01 → alive (no row in legacy mode).
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
+    assert len(rows) == 1
+    assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
+    assert rows[0].instrument_type == "futures_chain", (
+        "seed must use the canonical writer grain (futures_chain for CME tradfi)"
+    )
+    assert rows[0].instrument_id == "ES"
+
+
+def test_tradfi_v2_future_expected_unattempted_uses_writer_grain() -> None:
+    """Alive ``futures_chain`` with no manifest row → expected_unattempted at ``futures_chain``.
+
+    The expected_unattempted seed (present_set provided) must carry the canonical
+    writer grain so a later MTDS capture (also at 'futures_chain') can convert it.
+    _enumerate_v2_tradfi receives pre-bundled entries from enumerate_v2() (after
+    _rollup_bundle_grain collapses per-contract FUTURE@CME leaves to per-underlying
+    futures_chain bundles). The canonical grain for tradfi CME futures is 'futures_chain'.
+    """
+    catalog = [
+        _make_tradfi_entry(
+            instrument_id="ES", instrument_type="futures_chain", venue="CME", available_from="2020-01-01"
+        )
+    ]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            catalog,
+            _date_axis("2024-06-03"),  # alive
+            ["ohlcv_1m"],
+            present_set=set(),  # nothing captured yet → seed expected_unattempted
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].instrument_type == "futures_chain"
+    assert rows[0].instrument_id == "ES"
+
+
+def test_tradfi_v2_capture_at_writer_grain_suppresses_seed() -> None:
+    """A captured cell at the canonical writer grain must SUPPRESS the seed.
+
+    Proves the row_key match is at the writer grain: a present-set tuple stamped
+    ``instrument_type='futures_chain'`` (what the MTDS writer records for CME
+    tradfi futures bundles) makes the alive-and-captured cell skip seeding —
+    confirming seed grain == capture grain. Were the enumerator keyed on raw
+    ``FUTURE``, the 'futures_chain' present-set tuple would NOT match and the
+    cell would be (wrongly) re-seeded.
+
+    _enumerate_v2_tradfi receives pre-bundled entries (instrument_type='futures_chain',
+    instrument_id=underlying) from enumerate_v2() after _rollup_bundle_grain runs.
+    """
+    cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+    present = {("CME", "", "ohlcv_1m", "futures_chain", "ES", "", "2024-06-03")}
+    catalog = [
+        _make_tradfi_entry(
+            instrument_id="ES", instrument_type="futures_chain", venue="CME", available_from="2020-01-01"
+        )
+    ]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            catalog,
+            _date_axis("2024-06-03"),
+            ["ohlcv_1m"],
+            present_set=present,
+            present_cols=cols,
+        )
+    )
+    assert rows == [], "captured futures_chain-grain cell must suppress the seed (grain match)"
+
+
+def test_tradfi_v2_equity_and_etf_seed_canonical_lowercase() -> None:
+    """``EQUITY`` / ``ETF`` leaves also seed the lowercase writer grain."""
+    catalog = [
+        _make_tradfi_entry(instrument_id="AAPL", instrument_type="EQUITY", venue="NASDAQ", available_from="2025-01-01"),
+        _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NASDAQ", available_from="2025-01-01"),
+    ]
+    # 2024-06-01 → NOT_LISTED; 2025-06-01 alive keeps the lifecycle-overlap filter happy.
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
+    seeded = {(r.instrument_id, r.instrument_type) for r in rows}
+    assert ("AAPL", "equity") in seeded
+    assert ("SPY", "etf") in seeded
+    # never the raw uppercase leaf
+    assert not any(r.instrument_type in {"EQUITY", "ETF"} for r in rows)
+
+
+# ---------------------------------------------------------------------------
 # Sports v2 enumerator tests
 # ---------------------------------------------------------------------------
 
@@ -871,12 +982,15 @@ def test_tradfi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -
 def test_tradfi_v2_alive_date_in_present_set_skipped() -> None:
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]
     date_axis = _date_axis("2024-06-01")
+    # present_set carries the CANONICAL WRITER grain (lowercase ``etf``) — the
+    # instrument_type the MTDS writer actually stamps for a captured cell. The seed
+    # now also normalises to ``etf``, so the captured cell suppresses the seed.
     key = _row_key_from_dict(
         {
             "venue": "NASDAQ",
             "chain": "",
             "data_type": "ohlcv_1m",
-            "instrument_type": "ETF",
+            "instrument_type": "etf",
             "instrument_id": "SPY",
             "league_id": "",
             "date": "2024-06-01",
@@ -906,13 +1020,16 @@ def test_tradfi_v2_denominator_is_could_exist_universe_not_just_manifest() -> No
     captured = _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NASDAQ")
     uncaptured = _make_tradfi_entry(instrument_id="QQQ", instrument_type="ETF", venue="NASDAQ")
     date_axis = _date_axis("2024-06-01")
+    # present_set keyed at the canonical lowercase writer grain (``etf``) — what the
+    # writer records; the seed now normalises to the same grain so the captured cell
+    # is suppressed (the raw uppercase ``ETF`` would never match a real capture).
     present_set = {
         _row_key_from_dict(
             {
                 "venue": "NASDAQ",
                 "chain": "",
                 "data_type": "ohlcv_1m",
-                "instrument_type": "ETF",
+                "instrument_type": "etf",
                 "instrument_id": "SPY",
                 "league_id": "",
                 "date": "2024-06-01",

@@ -329,105 +329,140 @@ class TestGetOrFetchDefiUniverseRetry:
 
 
 class TestShouldSkipDateForPerLeague:
-    def _make_manifest(self, lookup_results: dict[str, object]) -> MagicMock:
+    """Memory-safe single-read variant (2026-06-22 OOM fix): the helper reads
+    the consolidated availability index ONCE via ``read_availability_index``
+    and resolves all expected leagues in-memory (it no longer calls
+    ``manifest.lookup`` per league -- that re-read the ~6.5 GB index 93x/date,
+    OOM. These tests patch ``read_availability_index`` with a small DataFrame
+    standing in for the per-(date, data_type, league_id) shard rows.
+    """
+
+    _DATE = "2026-01-01"
+    _DATA_TYPE = "MATCHES"
+    _SERVICE = "instruments-service"
+
+    def _make_manifest(self) -> MagicMock:
         mock_mw = MagicMock()
-        mock_mw.lookup.side_effect = lambda row_key: lookup_results.get(row_key.get("league_id"))
+        mock_mw.catalogue_bucket = "instruments-store-sports-test"
+        mock_mw.service_name = self._SERVICE
         return mock_mw
 
-    def test_all_captured_returns_true(self) -> None:
-        captured_row = _make_manifest_row(CaptureStatus.CAPTURED.value)
-        manifest = self._make_manifest({"EPL": captured_row, "BUNDESLIGA": captured_row})
-        result = _should_skip_date_for_per_league(
-            manifest,
-            date="2026-01-01",
-            data_type="MATCHES",
-            expected_canonical_leagues=["EPL", "BUNDESLIGA"],
-            force=False,
+    def _index_df(self, rows: dict[str, tuple[str, str]]) -> pd.DataFrame:
+        """Build a stand-in availability index. ``rows`` maps league_id ->
+        ``(capture_status, error_reason)``; a league absent from the map = no
+        row (the "missing" case).
+        """
+        records = [
+            {
+                "service_name": self._SERVICE,
+                "date": self._DATE,
+                "data_type": self._DATA_TYPE,
+                "league_id": lid,
+                "capture_status": status,
+                "error_reason": reason,
+            }
+            for lid, (status, reason) in rows.items()
+        ]
+        return pd.DataFrame(
+            records,
+            columns=["service_name", "date", "data_type", "league_id", "capture_status", "error_reason"],
         )
-        assert result is True
+
+    def _run(self, manifest: MagicMock, index_df: pd.DataFrame, expected: list[str]) -> bool:
+        with patch(
+            "instruments_service.engine.orchestrator.read_availability_index",
+            return_value=index_df,
+        ):
+            return _should_skip_date_for_per_league(
+                manifest,
+                date=self._DATE,
+                data_type=self._DATA_TYPE,
+                expected_canonical_leagues=expected,
+                force=False,
+            )
+
+    def test_all_captured_returns_true(self) -> None:
+        manifest = self._make_manifest()
+        df = self._index_df(
+            {"EPL": (CaptureStatus.CAPTURED.value, ""), "BUNDESLIGA": (CaptureStatus.CAPTURED.value, "")}
+        )
+        assert self._run(manifest, df, ["EPL", "BUNDESLIGA"]) is True
 
     def test_all_empty_confirmed_returns_true(self) -> None:
-        ec_row = _make_manifest_row(CaptureStatus.EMPTY_CONFIRMED.value)
-        manifest = self._make_manifest({"EPL": ec_row})
-        result = _should_skip_date_for_per_league(
-            manifest,
-            date="2026-01-01",
-            data_type="MATCHES",
-            expected_canonical_leagues=["EPL"],
-            force=False,
-        )
-        assert result is True
+        manifest = self._make_manifest()
+        df = self._index_df({"EPL": (CaptureStatus.EMPTY_CONFIRMED.value, "")})
+        assert self._run(manifest, df, ["EPL"]) is True
 
     def test_one_missing_returns_false(self) -> None:
-        captured_row = _make_manifest_row(CaptureStatus.CAPTURED.value)
-        manifest = self._make_manifest({"EPL": captured_row, "LA_LIGA": None})
-        result = _should_skip_date_for_per_league(
-            manifest,
-            date="2026-01-01",
-            data_type="MATCHES",
-            expected_canonical_leagues=["EPL", "LA_LIGA"],
-            force=False,
-        )
-        assert result is False
+        manifest = self._make_manifest()
+        df = self._index_df({"EPL": (CaptureStatus.CAPTURED.value, "")})  # LA_LIGA absent
+        assert self._run(manifest, df, ["EPL", "LA_LIGA"]) is False
 
     def test_force_returns_false_immediately(self) -> None:
         manifest = MagicMock()
-        result = _should_skip_date_for_per_league(
-            manifest,
-            date="2026-01-01",
-            data_type="MATCHES",
-            expected_canonical_leagues=["EPL"],
-            force=True,
-        )
+        with patch("instruments_service.engine.orchestrator.read_availability_index") as mock_read:
+            result = _should_skip_date_for_per_league(
+                manifest,
+                date=self._DATE,
+                data_type=self._DATA_TYPE,
+                expected_canonical_leagues=["EPL"],
+                force=True,
+            )
         assert result is False
-        manifest.lookup.assert_not_called()
+        mock_read.assert_not_called()
 
     def test_empty_leagues_returns_false(self) -> None:
         manifest = MagicMock()
-        result = _should_skip_date_for_per_league(
-            manifest,
-            date="2026-01-01",
-            data_type="MATCHES",
-            expected_canonical_leagues=[],
-            force=False,
-        )
+        with patch("instruments_service.engine.orchestrator.read_availability_index") as mock_read:
+            result = _should_skip_date_for_per_league(
+                manifest,
+                date=self._DATE,
+                data_type=self._DATA_TYPE,
+                expected_canonical_leagues=[],
+                force=False,
+            )
         assert result is False
+        mock_read.assert_not_called()
+
+    def test_empty_index_returns_false(self) -> None:
+        manifest = self._make_manifest()
+        df = self._index_df({})  # no rows at all
+        assert self._run(manifest, df, ["EPL"]) is False
 
     def test_expected_unattempted_with_expected_reason_counts_as_covered(self) -> None:
-        eu_row = _make_manifest_row(CaptureStatus.EXPECTED_UNATTEMPTED.value, error_reason="EXPECTED_WEEKEND")
-        manifest = self._make_manifest({"EPL": eu_row})
-        result = _should_skip_date_for_per_league(
-            manifest,
-            date="2026-01-01",
-            data_type="MATCHES",
-            expected_canonical_leagues=["EPL"],
-            force=False,
-        )
-        assert result is True
+        manifest = self._make_manifest()
+        df = self._index_df({"EPL": (CaptureStatus.EXPECTED_UNATTEMPTED.value, "EXPECTED_WEEKEND")})
+        assert self._run(manifest, df, ["EPL"]) is True
 
     def test_expected_unattempted_without_expected_reason_not_covered(self) -> None:
-        eu_row = _make_manifest_row(CaptureStatus.EXPECTED_UNATTEMPTED.value, error_reason="SOME_OTHER")
-        manifest = self._make_manifest({"EPL": eu_row})
-        result = _should_skip_date_for_per_league(
-            manifest,
-            date="2026-01-01",
-            data_type="MATCHES",
-            expected_canonical_leagues=["EPL"],
-            force=False,
-        )
-        assert result is False
+        manifest = self._make_manifest()
+        df = self._index_df({"EPL": (CaptureStatus.EXPECTED_UNATTEMPTED.value, "SOME_OTHER")})
+        assert self._run(manifest, df, ["EPL"]) is False
 
     def test_attempted_failed_league_returns_false(self) -> None:
-        failed_row = _make_manifest_row(CaptureStatus.ATTEMPTED_FAILED.value)
-        manifest = self._make_manifest({"EPL": failed_row})
-        result = _should_skip_date_for_per_league(
-            manifest,
-            date="2026-01-01",
-            data_type="MATCHES",
-            expected_canonical_leagues=["EPL"],
-            force=False,
-        )
-        assert result is False
+        manifest = self._make_manifest()
+        df = self._index_df({"EPL": (CaptureStatus.ATTEMPTED_FAILED.value, "")})
+        assert self._run(manifest, df, ["EPL"]) is False
+
+    def test_index_read_happens_once_not_per_league(self) -> None:
+        """Regression guard for the 2026-06-22 OOM: the index is read EXACTLY
+        once regardless of league count (the bug was N reads of a 6.5 GB frame).
+        """
+        manifest = self._make_manifest()
+        df = self._index_df({f"L{i}": (CaptureStatus.CAPTURED.value, "") for i in range(50)})
+        with patch(
+            "instruments_service.engine.orchestrator.read_availability_index",
+            return_value=df,
+        ) as mock_read:
+            result = _should_skip_date_for_per_league(
+                manifest,
+                date=self._DATE,
+                data_type=self._DATA_TYPE,
+                expected_canonical_leagues=[f"L{i}" for i in range(50)],
+                force=False,
+            )
+        assert result is True
+        assert mock_read.call_count == 1
 
 
 # ---------------------------------------------------------------------------
