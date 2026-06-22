@@ -12,7 +12,7 @@ from instruments_service.reference_data.adapters.prediction.kalshi import Kalshi
 class TestKalshiAdapter:
     def test_venue_name(self) -> None:
         adapter = KalshiReferenceDataAdapter()
-        assert adapter.venue == "kalshi"
+        assert adapter.venue == "KALSHI"
 
     @pytest.mark.asyncio
     async def test_get_instruments_mocked(self) -> None:
@@ -53,7 +53,7 @@ class TestKalshiAdapter:
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
             results = await adapter.get_instruments()
         assert len(results) >= 1
-        assert results[0].venue == "kalshi"
+        assert results[0].venue == "KALSHI"
 
     @pytest.mark.asyncio
     async def test_get_instruments_uses_open_status_filter_not_active(self) -> None:
