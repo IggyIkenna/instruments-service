@@ -96,6 +96,7 @@ from unified_api_contracts.registry.venue_launch_dates import (
     CEFI_VENUE_LAUNCH_DATES,
     PREDICTION_VENUE_LAUNCH_DATES,
 )
+from unified_api_contracts.registry.venue_mapping import VenueMapping
 from unified_api_contracts.registry.venue_trading_calendar import (
     is_non_trading_day,
     non_trading_day_reason,
@@ -939,11 +940,26 @@ def _enumerate_v2_defi(
             continue  # fully delisted before window started
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
             continue  # not yet listed when window ended
-        chain_upper = instr.chain.upper() if instr.chain else ""
+        # Canonical venue/chain derivation — gotcha #3 (defi-canonical-naming-ssot.md).
+        # The instruments-service catalog stores legacy combined venue='AAVEV3-ARBITRUM'
+        # with blank chain=''; MTDS captures use canonical venue='AAVE_V3' + chain='ARBITRUM'.
+        # Fix: (1) canonicalise protocol spelling (AAVEV3→AAVE_V3) via VenueMapping,
+        # (2) if chain is blank and the result is PROTOCOL-CHAIN form, split to derive both.
+        canonical_venue_str = VenueMapping._canonicalise_defi_protocol_spelling(instr.venue)
+        if not instr.chain and "-" in canonical_venue_str:
+            # Split on the last '-' to separate PROTOCOL from CHAIN.
+            _proto, _chain = canonical_venue_str.rsplit("-", 1)
+            canonical_venue = _proto
+            chain_upper = _chain.upper()
+        else:
+            canonical_venue = canonical_venue_str
+            chain_upper = instr.chain.upper() if instr.chain else ""
         chain_genesis_str = CHAIN_GENESIS_DATES.get(chain_upper)
         chain_genesis_ts = pd.Timestamp(chain_genesis_str) if chain_genesis_str else None
         # G1-ENUM: filter data_types to those valid for this instrument's shape.
-        row_dts = _row_data_types("defi", instr, data_types)
+        # Pass a proxy entry with canonical venue so the validity matrix lookup works.
+        _instr_canonical = instr._replace(venue=canonical_venue, chain=chain_upper)
+        row_dts = _row_data_types("defi", _instr_canonical, data_types)
         if not row_dts:
             continue  # instrument type not in PROTOCOL_CAPABILITIES → skip entirely
         for d in date_axis:
@@ -962,7 +978,7 @@ def _enumerate_v2_defi(
                 for dt in row_dts:
                     row_key = tuple(
                         {
-                            "venue": instr.venue,
+                            "venue": canonical_venue,
                             "chain": chain_upper,
                             "data_type": dt,
                             "instrument_type": instr.instrument_type,
@@ -975,7 +991,7 @@ def _enumerate_v2_defi(
                     if row_key not in present_set:
                         yield ExpectedRow(
                             asset_group="defi",
-                            venue=instr.venue,
+                            venue=canonical_venue,
                             chain=chain_upper,
                             data_type=dt,
                             instrument_type=instr.instrument_type,
@@ -989,7 +1005,7 @@ def _enumerate_v2_defi(
             for dt in row_dts:
                 yield ExpectedRow(
                     asset_group="defi",
-                    venue=instr.venue,
+                    venue=canonical_venue,
                     chain=chain_upper,
                     data_type=dt,
                     instrument_type=instr.instrument_type,
