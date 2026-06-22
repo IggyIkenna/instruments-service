@@ -51,7 +51,7 @@ class TestSportsRefPm:
             ("player_stats", "batch_api_football"),
             ("footystats_predictions", "batch_footystats"),
             ("footystats_matches", "batch_footystats"),
-            ("footystats_odds", "batch_odds_api"),
+            ("footystats_odds", "batch_footystats"),
             ("understat_xg", "batch_understat"),
             ("understat_xg_shots", "batch_understat"),
             ("player_values", "batch_transfermarkt"),
@@ -83,7 +83,7 @@ class TestSportsRefSource:
             ("fixtures", "api_football"),
             ("injuries", "api_football"),
             ("footystats_predictions", "footystats"),
-            # footystats_odds path key is batch_odds_api, but its manifest SOURCE
+            # footystats_odds path key is batch_footystats, but its manifest SOURCE
             # is footystats (R5-fix-3): the odds snapshot is fetched by the
             # FootyStats adapter and UAC SPORTS_DATA_TYPE_TO_SOURCE[ODDS]=="footystats".
             ("footystats_odds", "footystats"),
