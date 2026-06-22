@@ -27,6 +27,7 @@ from unified_trading_library import (
     publish_coordination_event,  # pyright: ignore[reportPrivateImportUsage]
     resolve_bucket_name,
 )
+from unified_trading_library.events import emit_pipeline_heartbeat  # noqa: qg-deep-import
 
 from instruments_service.engine import orchestrator as engine_orchestrator
 from instruments_service.engine.orchestrator import (
@@ -92,6 +93,13 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # is fetched via a MASSIVE pseudo-venue added to the key reloader. None ⇒
         # default (Databento for TradFi).
         self._source: str | None = None
+        # Phase 2 stall detection: a long multi-day instruments backfill MUST stream a
+        # PIPELINE_HEARTBEAT after each date completes so a hung/idle IS VM trips
+        # DP_VM_STALL rather than sitting RUNNING with no progress. rows_captured_cum
+        # going flat across heartbeats while alive is the DP_VM_GONE_NO_CAPTURE
+        # cross-check. VM_NAME is the per-VM shard tag.
+        self._vm_name: str = getattr(runtime, "vm_name", "") or "instruments-backfill"
+        self._rows_captured_cum: int = 0
         # Live-mode trigger name (Phase A.7 of instruments_master).
         # When set under --mode live, names which entity-type subset to refresh +
         # which source adapter to invoke. Closed-set per-asset-group taxonomy lives
@@ -277,7 +285,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
         asset_groups: list[str] = list(payload.asset_groups) if payload.asset_groups else ["ALL"]
         api_keys = self._key_reloader.current_keys if self._key_reloader else {}
-        return await engine_orchestrator.process_instruments(
+        result = await engine_orchestrator.process_instruments(
             date=date,
             asset_groups=asset_groups,
             redo_all=redo_all,
@@ -291,6 +299,37 @@ class InstrumentsHandler(UnifiedServiceHandler):
             recovery_fixture_ids=self._recovery_fixture_ids,
             source=self._source,
         )
+        self._emit_date_heartbeat(date, asset_groups, result)
+        return result
+
+    def _emit_date_heartbeat(
+        self,
+        date: str,
+        asset_groups: list[str],
+        result: dict[str, int],
+    ) -> None:
+        """Emit a PIPELINE_HEARTBEAT after each completed date (Phase 2 stall detection).
+
+        The per-date completion is the natural progress point for the instruments
+        backfill loop (``process_instruments`` runs once per date). A hung date (e.g.
+        an unbounded API-Football / Transfermarkt scrape) → no heartbeat → DP_VM_STALL,
+        instead of the IS VM sitting RUNNING with no progress. ``rows_captured_cum``
+        going flat while the VM is alive is the DP_VM_GONE_NO_CAPTURE cross-check the
+        fleet monitor reads. Best-effort — a heartbeat failure must never abort the run.
+        """
+        try:
+            self._rows_captured_cum += sum(result.values())
+            primary_ag = next((c for c in asset_groups if c.upper() != "ALL"), "") or "all"
+            emit_pipeline_heartbeat(
+                vm_name=self._vm_name,
+                asset_group=primary_ag.lower(),
+                data_type="instruments",
+                rows_captured_cum=self._rows_captured_cum,
+                source=self._source or "",
+                extra={"service": "instruments", "date": date, "venues_ok": len(result)},
+            )
+        except Exception as exc:  # defensive — heartbeat must never abort the backfill
+            logger.warning("InstrumentsHandler: heartbeat emit failed for date=%s: %s", date, exc)
 
     async def cleanup(self) -> None:
         """Flush any buffered manifest writes to GCS at end of batch."""
