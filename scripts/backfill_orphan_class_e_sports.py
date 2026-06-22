@@ -8,7 +8,7 @@ instrument_type): a sports cell is ``(date, data_type, league_id)``, paths are
 already at ``candidate_parquet_paths`` SSOT shapes (NO object conversion / move
 needed — never-manifest-non-canonical is satisfied by construction), and the
 manifest surface conventions come from ``backfill_sports_per_entity_manifest.py``
-(venue='' + ``_SOURCE_TO_PIPELINE_MODE`` + the ODDS→BATCH_ODDS_API special case).
+(venue='' + ``_SOURCE_TO_PIPELINE_MODE`` — source='footystats' → BATCH_FOOTYSTATS for ODDS).
 
 Drives every report-E object to a manifested state — **PRESERVE + backfill, never
 delete** (operator ratification R1/R8: backfill ``--apply`` is sanctioned; the only
@@ -81,7 +81,7 @@ def _load_sibling(stem: str) -> ModuleType:
 
 
 # Source → batch PipelineMode (mirrors backfill_sports_per_entity_manifest.py —
-# the operator-ratified conventions, incl. the ODDS→BATCH_ODDS_API special case).
+# operator-ratified conventions; source='footystats' → BATCH_FOOTYSTATS for ODDS).
 _SOURCE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     "api_football": PipelineMode.BATCH_API_FOOTBALL,
     "footystats": PipelineMode.BATCH_FOOTYSTATS,
@@ -101,8 +101,8 @@ def resolve_source_and_mode(data_type: str, fallback_source: str) -> tuple[str, 
     SOURCE_PRIORITY allows only api_football → 858 cell errors), and for batch rows
     the writer requires ``source == source_string_for(pipeline_mode)``
     (``PipelineModeSourceMismatchError`` — so the per-entity precedent's
-    ODDS→BATCH_ODDS_API special case is WRONG for the footystats ODDS entity; the
-    mode follows the resolved source). Resolution: keep the entity-map source when
+    ODDS→BATCH_ODDS_API was wrong for footystats ODDS (fixed 2026-06-22 in
+    __init__.py); the mode follows the resolved source. Resolution: keep the entity-map source when
     SOURCE_PRIORITY allows it, else take the SOURCE_PRIORITY primary; data_types
     with no SOURCE_PRIORITY entry (e.g. PLAYER_STATS) keep the entity-map source.
     """
