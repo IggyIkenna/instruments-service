@@ -53,16 +53,17 @@ def _sports_ref_pm(entity_name: str) -> str:
 
 
 # Sports entities whose canonical manifest SOURCE legitimately differs from the
-# pipeline_mode PATH key (``batch_<pathkey>``). The path key partitions GCS objects;
-# the source must match the UAC ``SOURCE_PRIORITY``/``SPORTS_DATA_TYPE_TO_SOURCE`` SSOT
-# accepted by ``record_captured`` (a mismatch raises ``MissingSourceError`` fail_fast).
+# default path-key-derived value (``batch_<pathkey>`` stripped). The source must
+# match the UAC ``SOURCE_PRIORITY``/``SPORTS_DATA_TYPE_TO_SOURCE`` SSOT accepted by
+# ``record_captured`` (a mismatch raises ``MissingSourceError`` fail_fast).
 #
 # ``footystats_odds``: the odds snapshot is FETCHED by the FootyStats adapter
 # (``_fetch_footystats_odds``), so the upstream vendor/source is ``footystats``
-# (UAC ``SPORTS_DATA_TYPE_TO_SOURCE[ODDS] == "footystats"``), even though its GCS
-# pipeline_mode path key is ``batch_odds_api``. Stamping the path-key-derived
-# ``odds_api`` here previously made the ``record_captured`` for data_type ``ODDS``
-# fail (``source='odds_api' … not a registered source … Allowed: ['footystats']``).
+# (UAC ``SPORTS_DATA_TYPE_TO_SOURCE[ODDS] == "footystats"``). Since 2026-06-22
+# the GCS pipeline_mode path key is also ``batch_footystats`` (fixed from the prior
+# ``batch_odds_api`` mislabel — that stamp caused ``record_captured`` fail_fast
+# rejects: ``source='footystats'`` disagreed with ``pipeline_mode=batch_odds_api``).
+# This override keeps source='footystats' explicit as a guard.
 _SPORTS_REF_SOURCE_OVERRIDE: dict[str, str] = {
     "footystats_odds": "footystats",
 }
