@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "instruments-service"
-version = "0.25.0"
+version = "0.28.0"
 description = "Service for generating canonical instrument definitions from exchange APIs"
 readme = "README.md"
 authors = [
@@ -162,6 +162,12 @@ markers = [
 [tool.coverage.run]
 source = ["instruments_service"]
 branch = true
+# pytest-cov + xdist: workers are separate processes; without parallel-combine the terminal
+# fail-under reads PARTIAL (controller-only) data and spuriously fails (2026-06-22: mtds saw
+# terminal 46.4% while coverage.xml correctly combined to 83.95%). parallel-combine fixes the gate.
+parallel = true
+concurrency = ["thread", "multiprocessing"]
+sigterm = true
 
 [tool.coverage.report]
 fail_under = 88
