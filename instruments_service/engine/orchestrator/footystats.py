@@ -677,16 +677,14 @@ async def _fetch_footystats_odds(
                         instrument_type="",
                         data_type="ODDS",
                         league_id=_orch._canonical_league_id(_odds_lid_str),
-                        pipeline_mode=_orch.PipelineMode.BATCH_ODDS_API,
+                        pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                         source=_orch._sports_ref_source("footystats_odds"),
                         service_emission_state=None,
                         # Phase 1A cluster gate: per-fixture ≥1 row floor (bridge until
                         # EXPECTED_BOOKMAKER_MARKET_SETS ships as item 1 of this plan
                         # and the min-count can be set to len(expected_set[tier])).
                         expected_root_clusters={
-                            str(fid): 1
-                            for fid in _stamped_odds_clean["canonical_fixture_id"].dropna().unique()
-                            if fid
+                            str(fid): 1 for fid in _stamped_odds_clean["canonical_fixture_id"].dropna().unique() if fid
                         },
                         cluster_extractor=lambda sym: sym,
                         cluster_symbol_column="canonical_fixture_id",
@@ -714,7 +712,7 @@ async def _fetch_footystats_odds(
                         asset_group="sports",
                         instrument_type="",
                         data_type="ODDS",
-                        pipeline_mode=_orch.PipelineMode.BATCH_ODDS_API,
+                        pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                         source=_orch._sports_ref_source("footystats_odds"),
                         service_emission_state=None,
                         # Unmapped-league rows still carry canonical_fixture_id; assert
@@ -746,7 +744,7 @@ async def _fetch_footystats_odds(
                     asset_group="sports",
                     instrument_type="",
                     data_type="ODDS",
-                    pipeline_mode=_orch.PipelineMode.BATCH_ODDS_API,
+                    pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                     source=_orch._sports_ref_source("footystats_odds"),
                     service_emission_state=None,
                     # No canonical_fixture_id column (home_team/away_team absent in source
@@ -759,8 +757,8 @@ async def _fetch_footystats_odds(
         else:
             _orch.logger.info("FootyStats odds: no odds data for date=%s", date)
             # Honest-coverage: legitimate empty (no odds for this date).
-            # ODDS slice tagged BATCH_ODDS_API per UAC SOURCE_PRIORITY
-            # (footystats odds adapter; see footystats_pipeline_mode_gap_2026_05_12.md).
+            # ODDS slice tagged BATCH_FOOTYSTATS (source='footystats'); fixed
+            # from BATCH_ODDS_API 2026-06-22 — prior stamp caused fail_fast rejects.
             odds_manifest.record_empty(
                 row_key=_row_key,
                 attempted_at=attempt_ts,
