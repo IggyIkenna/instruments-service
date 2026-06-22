@@ -609,6 +609,57 @@ def _write_triage_jsonl_gcs(
     )
 
 
+# Chain-/source-level DeFi data_types -> canonical chain-level venue. Fetched
+# once per chain (or relay) at a synthetic infra venue, NEVER per protocol. The
+# IS enumerator used to emit FALSE empty_confirmed cells keyed venue=<PROTOCOL>
+# for these (gas/transfers/MEV exist from chain genesis; real key is the venue
+# below). oracle_prices is DELIBERATELY ABSENT — it IS genuinely per-protocol.
+_DEFI_CHAIN_LEVEL_VENUE: dict[str, str] = {
+    "gas_fees": "ALCHEMY",
+    "token_transfers": "ALCHEMY",
+    "mev_events": "FLASHBOTS",
+}
+
+
+def _report_chain_level_defi_phantoms(df: pd.DataFrame) -> None:
+    """DRY-RUN report (no mutation): chain-level DeFi data_types wrongly keyed
+    ``venue=<PROTOCOL>``. Single-walk — reads only the already-loaded ``_index``
+    ``df``. Per chain-level data_type, reports the ``empty_confirmed`` rows on a
+    non-chain-level venue (the phantom set) split by ``error_reason`` + whether
+    the canonical venue has captured rows (decides flip-vs-delete)."""
+    status = df["capture_status"].fillna("").astype(str)
+    venue = df["venue"].fillna("").astype(str)
+    dt_col = df["data_type"].fillna("").astype(str)
+    reason = df["error_reason"].fillna("").astype(str) if "error_reason" in df.columns else None
+    logger.info("=== DRY-RUN: chain-level DeFi empty_confirmed phantom report ===")
+    for data_type, cv in _DEFI_CHAIN_LEVEL_VENUE.items():
+        is_dt = dt_col == data_type
+        if not int(is_dt.sum()):
+            logger.info("[%s] 0 manifest rows — skip", data_type)
+            continue
+        cap_cv = int((is_dt & (status == "captured") & (venue == cv)).sum())
+        phantom = is_dt & (status == "empty_confirmed") & (venue != cv)
+        n = int(phantom.sum())
+        why = "captured dupes" if cap_cv else f"no capture yet; canonical key is venue={cv}+chain"
+        logger.info(
+            f"[{data_type}] rows={int(is_dt.sum())} | captured@{cv}={cap_cv} | "
+            f"empty_confirmed@venue!={cv} (PHANTOM)={n} | DECISION: DELETE ({why} — "
+            "flipping to attempted_failed would be wrong)"
+        )
+        if reason is not None and n:
+            logger.info(f"    [{data_type}] phantom by reason: {reason[phantom].value_counts().to_dict()}")
+            logger.info(
+                f"    [{data_type}] DELETE PREDICATE: (data_type=='{data_type}') & "
+                f"(capture_status=='empty_confirmed') & (venue != '{cv}') -> {n} rows "
+                "(both NOT_LISTED + PRE_GENESIS_CHAIN are wrong-key; genuine pre-genesis "
+                f"re-seeds at venue={cv})"
+            )
+    logger.info(
+        "NOTE oracle_prices EXCLUDED — genuinely per-protocol (LIDO/ETHENA/AAVE_V3/… "
+        "capture it at venue=<PROTOCOL>; those empties are CORRECT). Dry-run only — no writes."
+    )
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--asset-group", required=True, choices=list(ASSET_GROUP_CONFIG.keys()))
@@ -692,6 +743,16 @@ def main() -> int:
         default="gcp",
         help="Cloud provider for storage backend (default: gcp).",
     )
+    p.add_argument(
+        "--report-chain-level-defi-phantoms",
+        action="store_true",
+        help=(
+            "DRY-RUN ONLY (no mutation, single _index read): report empty_confirmed "
+            "gas_fees/token_transfers/mev_events rows wrongly keyed venue=<PROTOCOL> "
+            "vs canonical chain-level venue (ALCHEMY/FLASHBOTS). Prints delete "
+            "predicate + counts. oracle_prices excluded (genuinely per-protocol)."
+        ),
+    )
     args = p.parse_args()
 
     os.environ.setdefault("CLOUD_PROVIDER", args.cloud)
@@ -732,6 +793,15 @@ def main() -> int:
     raw_bytes = storage_client.download_bytes(bucket_name, cfg["index"])
     df = pd.read_parquet(io.BytesIO(raw_bytes))
     logger.info("Manifest rows: %d", len(df))
+
+    # Chain-level DeFi phantom report — DRY-RUN ONLY, single-walk (reuses the
+    # index read above). Returns before any disk-audit / mutation path.
+    if args.report_chain_level_defi_phantoms:
+        if args.asset_group != "defi":
+            logger.error("--report-chain-level-defi-phantoms requires --asset-group defi")
+            return 2
+        _report_chain_level_defi_phantoms(df)
+        return 0
 
     captured_mask = df["capture_status"].fillna("") == "captured"
     if args.venues:
