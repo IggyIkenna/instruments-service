@@ -88,6 +88,8 @@ from unified_api_contracts import (
 )
 from unified_api_contracts.registry.chain_env import (
     CHAIN_GENESIS_DATES,
+    GAS_FEE_CHAIN_START_DATES,
+    MAINNET_CHAIN_IDS,
     PROTOCOL_LAUNCH_DATES,
 )
 from unified_api_contracts.registry.venue_launch_dates import (
@@ -403,6 +405,89 @@ def _enumerate_tradfi_indices(start: str, end: str) -> Iterator[ExpectedRow]:
                 )
 
 
+# Chain-/source-level DeFi data_types — fetched ONCE PER CHAIN (or per
+# relay) at a synthetic infrastructure venue, NEVER per real protocol.
+# Declared in UAC ``PROTOCOL_CAPABILITIES`` only by synthetic INFRASTRUCTURE
+# pseudo-protocols (``ALCHEMY-ONCHAIN`` / ``FLASHBOTS``), not by the DEX /
+# lending / LST protocols in ``PROTOCOL_LAUNCH_DATES``. Iterating these for
+# every ``(chain, protocol)`` in ``PROTOCOL_LAUNCH_DATES`` produces FALSE
+# ``empty_confirmed[EXPECTED_INSTRUMENT_NOT_LISTED]`` cells keyed to a
+# protocol venue (e.g. ``venue=AAVE_V3, data_type=gas_fees``) for pre-protocol-
+# launch dates — but gas/transfers/MEV exist from CHAIN genesis regardless of
+# when any DEX launched, and the real capture is keyed ``venue=ALCHEMY`` /
+# ``venue=FLASHBOTS`` + ``chain=X``. So these must NOT ride the per-protocol
+# loop. ``gas_fees`` chain-level pre-genesis cells are seeded by
+# ``_enumerate_defi_gas_fees`` below; ``token_transfers`` / ``mev_events``
+# post-genesis absence is the handler/backfill's concern, not the enumerator's.
+#
+# NOTE — ``oracle_prices`` is DELIBERATELY NOT here: it IS genuinely
+# per-protocol. ~15 LST/yield/staking/perp protocols (LIDO, ETHERFI, ETHENA,
+# EIGENLAYER, HYPERLIQUID, DRIFT, MARINADE, JITO, YEARN_V3, PENDLE, SYMBIOTIC,
+# KARAK, RENZO, KELPDAO, PUFFER, …) emit ``oracle_prices`` as their protocol
+# exchange rate at ``venue=<PROTOCOL>`` (verified captured at AAVE_V3/ETHENA/
+# LIDO/ETHERFI venues in the live ``market-data-tick-defi-prd`` manifest); the
+# CHAINLINK/PYTH chain-level feed is a SEPARATE source. A pre-protocol-launch
+# ``oracle_prices`` empty at ``venue=<PROTOCOL>`` is therefore CORRECT, not a
+# phantom — leave it on the per-protocol loop.
+_DEFI_CHAIN_LEVEL_DATA_TYPES: frozenset[str] = frozenset({"gas_fees", "token_transfers", "mev_events"})
+
+# Synthetic chain-level gas venue (mirrors the MTDS gas_fee_handler's
+# ``_GAS_FEE_VENUE``). Gas is collected once per chain at this venue, never
+# per protocol.
+_GAS_FEE_VENUE = "ALCHEMY"
+
+
+def _gas_fee_chain_names() -> dict[str, str]:
+    """Chain NAME -> genesis-date for chains the gas pipeline covers.
+
+    Derived purely from UAC (no MTDS import): a chain has gas coverage when its
+    ``MAINNET_CHAIN_IDS`` id is in ``GAS_FEE_CHAIN_START_DATES`` (the Alchemy
+    archival-coverage set) — plus SOLANA. The pre-genesis clip uses the chain's
+    mainnet ``CHAIN_GENESIS_DATES``, not the (later) gas-coverage start.
+    """
+    names: dict[str, str] = {}
+    for name, chain_id in MAINNET_CHAIN_IDS.items():
+        if chain_id in GAS_FEE_CHAIN_START_DATES:
+            genesis = CHAIN_GENESIS_DATES.get(name.upper())
+            if genesis is not None:
+                names[name.upper()] = genesis
+    sol_genesis = CHAIN_GENESIS_DATES.get("SOLANA")
+    if sol_genesis is not None:
+        names["SOLANA"] = sol_genesis
+    return names
+
+
+def _enumerate_defi_gas_fees(start: str, end: str) -> Iterator[ExpectedRow]:
+    """Chain-level ``gas_fees`` pre-CHAIN-genesis days at ``venue=ALCHEMY``.
+
+    Gas exists since CHAIN genesis (independent of any DEX/protocol launch), so
+    the only honest enumerator concern is the pre-genesis window: one series per
+    gas-covered chain, ``venue=ALCHEMY`` + ``chain=X``, for days before that
+    chain's mainnet genesis -> ``EXPECTED_PRE_GENESIS_CHAIN``. Post-genesis gas
+    absence is the gas_fee_handler / backfill's concern (it captures at the same
+    ``venue=ALCHEMY`` shard key), NOT the enumerator's.
+    """
+    end_ts = pd.Timestamp(end)
+    start_ts = pd.Timestamp(start)
+    for chain_upper, chain_genesis in _gas_fee_chain_names().items():
+        genesis_ts = pd.Timestamp(chain_genesis)
+        if start_ts >= genesis_ts:
+            continue  # whole window is post-genesis — nothing pre-genesis to seed
+        last_day = min(end_ts, genesis_ts - pd.Timedelta(days=1))
+        for day in pd.date_range(start, last_day, freq="D"):
+            yield ExpectedRow(
+                asset_group="defi",
+                venue=_GAS_FEE_VENUE,
+                chain=chain_upper,
+                data_type="gas_fees",
+                instrument_type="",
+                instrument_id="",
+                league_id="",
+                date=day.strftime("%Y-%m-%d"),
+                reason="EXPECTED_PRE_GENESIS_CHAIN",
+            )
+
+
 def _enumerate_defi(start: str, end: str) -> Iterator[ExpectedRow]:
     """Chain pre-genesis + protocol pre-launch days x data_types.
 
@@ -411,8 +496,19 @@ def _enumerate_defi(start: str, end: str) -> Iterator[ExpectedRow]:
       * for each day in [start, effective_start - 1]:
           - day < chain_genesis  -> EXPECTED_PRE_GENESIS_CHAIN
           - day < protocol_launch -> EXPECTED_INSTRUMENT_NOT_LISTED
+
+    Chain-/source-level data_types (``_DEFI_CHAIN_LEVEL_DATA_TYPES``:
+    gas_fees / token_transfers / mev_events) are EXCLUDED from the per-protocol
+    loop — they're fetched once per chain at a synthetic venue, not per
+    protocol; enumerating them per (chain, protocol) produced ~142k false
+    ``venue=<PROTOCOL>`` empties (phantom wrong-key duplicates). Chain-level
+    ``gas_fees`` pre-genesis cells come from ``_enumerate_defi_gas_fees``.
     """
-    data_types = DATA_TYPES_BY_ASSET_GROUP.get("defi", [])
+    data_types = [dt for dt in DATA_TYPES_BY_ASSET_GROUP.get("defi", []) if dt not in _DEFI_CHAIN_LEVEL_DATA_TYPES]
+    # Chain-level gas_fees pre-genesis cells (venue=ALCHEMY), independent of
+    # the per-protocol loop below.
+    yield from _enumerate_defi_gas_fees(start, end)
+
     if not data_types:
         logger.warning("DeFi data_types empty — nothing to enumerate")
         return
