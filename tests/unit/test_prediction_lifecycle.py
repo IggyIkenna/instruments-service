@@ -239,7 +239,7 @@ class TestKalshiLifecycle:
 
         assert lifecycle is not None
         assert lifecycle.market_id == "KXBTC-26MAR-90000"
-        assert lifecycle.venue == "kalshi"
+        assert lifecycle.venue == "KALSHI"
         # Kalshi prefix classifier (2026-06-20): KXBTC-* → BTC_PRICE_RANGE_DAILY
         # via the ``KXBTC`` prefix entry in KALSHI_TICKER_PREFIX_TO_GROUP.
         assert lifecycle.canonical_group == CanonicalQuestionGroup.BTC_PRICE_RANGE_DAILY
