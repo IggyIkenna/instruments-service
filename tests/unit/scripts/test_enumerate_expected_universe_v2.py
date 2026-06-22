@@ -448,34 +448,43 @@ def test_tradfi_v2_empty_catalog() -> None:
 
 
 def test_tradfi_v2_future_seeds_canonical_lowercase_instrument_type() -> None:
-    """A raw UPPERCASE ``FUTURE`` leaf must seed ``instrument_type == 'future'``.
+    """A pre-bundled ``futures_chain`` entry must seed ``instrument_type == 'futures_chain'``.
 
-    Pre-listing (empty_confirmed) path: the seed grain MUST be the lowercase
-    writer grain that MTDS captures at, never the raw ``FUTURE``.
-    """
-    catalog = [
-        _make_tradfi_entry(instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2025-01-01")
-    ]
-    # Window spans the listing date so the lifecycle-overlap filter keeps the
-    # instrument: 2024-06-01 → NOT_LISTED, 2025-06-01 → alive (no row in legacy mode).
-    rows = list(
-        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"])
-    )
-    assert len(rows) == 1
-    assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
-    assert rows[0].instrument_type == "future", "seed must use the lowercase writer grain, not raw 'FUTURE'"
-    assert rows[0].instrument_type != "FUTURE"
-
-
-def test_tradfi_v2_future_expected_unattempted_uses_writer_grain() -> None:
-    """Alive ``FUTURE`` with no manifest row → expected_unattempted at ``future``.
-
-    The expected_unattempted seed (present_set provided) must carry the lowercase
-    writer grain so a later capture (also lowercase) converts it.
+    Pre-listing (empty_confirmed) path: the seed grain MUST be the canonical
+    writer grain that MTDS captures at. For tradfi CME futures, enumerate_v2()
+    calls _rollup_bundle_grain first, so _enumerate_v2_tradfi receives pre-bundled
+    entries with instrument_type='futures_chain' and instrument_id=underlying ('ES').
+    The canonical MTDS writer grain for CME tradfi futures is 'futures_chain'
+    (see FUTURE_BUNDLE_VENUES["tradfi"] = frozenset({"CME", "ICE"}) in UAC).
     """
     catalog = [
         _make_tradfi_entry(
-            instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01"
+            instrument_id="ES", instrument_type="futures_chain", venue="CME", available_from="2025-01-01"
+        )
+    ]
+    # Window spans the listing date so the lifecycle-overlap filter keeps the
+    # instrument: 2024-06-01 → NOT_LISTED, 2025-06-01 → alive (no row in legacy mode).
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
+    assert len(rows) == 1
+    assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
+    assert rows[0].instrument_type == "futures_chain", (
+        "seed must use the canonical writer grain (futures_chain for CME tradfi)"
+    )
+    assert rows[0].instrument_id == "ES"
+
+
+def test_tradfi_v2_future_expected_unattempted_uses_writer_grain() -> None:
+    """Alive ``futures_chain`` with no manifest row → expected_unattempted at ``futures_chain``.
+
+    The expected_unattempted seed (present_set provided) must carry the canonical
+    writer grain so a later MTDS capture (also at 'futures_chain') can convert it.
+    _enumerate_v2_tradfi receives pre-bundled entries from enumerate_v2() (after
+    _rollup_bundle_grain collapses per-contract FUTURE@CME leaves to per-underlying
+    futures_chain bundles). The canonical grain for tradfi CME futures is 'futures_chain'.
+    """
+    catalog = [
+        _make_tradfi_entry(
+            instrument_id="ES", instrument_type="futures_chain", venue="CME", available_from="2020-01-01"
         )
     ]
     rows = list(
@@ -488,23 +497,28 @@ def test_tradfi_v2_future_expected_unattempted_uses_writer_grain() -> None:
     )
     assert len(rows) == 1
     assert rows[0].capture_status == "expected_unattempted"
-    assert rows[0].instrument_type == "future"
+    assert rows[0].instrument_type == "futures_chain"
+    assert rows[0].instrument_id == "ES"
 
 
 def test_tradfi_v2_capture_at_writer_grain_suppresses_seed() -> None:
-    """A captured cell at the canonical lowercase grain must SUPPRESS the seed.
+    """A captured cell at the canonical writer grain must SUPPRESS the seed.
 
     Proves the row_key match is at the writer grain: a present-set tuple stamped
-    ``instrument_type='future'`` (what the writer records) makes the alive-and-
-    captured cell skip seeding — confirming seed grain == capture grain. Were the
-    enumerator still keyed on raw ``FUTURE``, the lowercase present-set tuple would
-    NOT match and the cell would be (wrongly) re-seeded.
+    ``instrument_type='futures_chain'`` (what the MTDS writer records for CME
+    tradfi futures bundles) makes the alive-and-captured cell skip seeding —
+    confirming seed grain == capture grain. Were the enumerator keyed on raw
+    ``FUTURE``, the 'futures_chain' present-set tuple would NOT match and the
+    cell would be (wrongly) re-seeded.
+
+    _enumerate_v2_tradfi receives pre-bundled entries (instrument_type='futures_chain',
+    instrument_id=underlying) from enumerate_v2() after _rollup_bundle_grain runs.
     """
     cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
-    present = {("CME", "", "ohlcv_1m", "future", "ES-2025H", "", "2024-06-03")}
+    present = {("CME", "", "ohlcv_1m", "futures_chain", "ES", "", "2024-06-03")}
     catalog = [
         _make_tradfi_entry(
-            instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01"
+            instrument_id="ES", instrument_type="futures_chain", venue="CME", available_from="2020-01-01"
         )
     ]
     rows = list(
@@ -516,7 +530,7 @@ def test_tradfi_v2_capture_at_writer_grain_suppresses_seed() -> None:
             present_cols=cols,
         )
     )
-    assert rows == [], "captured lowercase-grain cell must suppress the seed (grain match)"
+    assert rows == [], "captured futures_chain-grain cell must suppress the seed (grain match)"
 
 
 def test_tradfi_v2_equity_and_etf_seed_canonical_lowercase() -> None:
@@ -526,9 +540,7 @@ def test_tradfi_v2_equity_and_etf_seed_canonical_lowercase() -> None:
         _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NASDAQ", available_from="2025-01-01"),
     ]
     # 2024-06-01 → NOT_LISTED; 2025-06-01 alive keeps the lifecycle-overlap filter happy.
-    rows = list(
-        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"])
-    )
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
     seeded = {(r.instrument_id, r.instrument_type) for r in rows}
     assert ("AAPL", "equity") in seeded
     assert ("SPY", "etf") in seeded
