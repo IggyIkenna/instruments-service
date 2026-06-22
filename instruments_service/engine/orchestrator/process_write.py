@@ -23,6 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from unified_api_contracts import source_string_for
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -257,10 +259,20 @@ def _write_prediction_venue(
             venue=venue_str,
             entity="instruments",
         )
+        # The cqg manifest data_type (prediction_canonical_question_group) is MULTI-source
+        # in UAC SOURCE_PRIORITY (polymarket_clob + kalshi) → record_captured REQUIRES an
+        # explicit venue-derived source=. Resolve a cqg-specific pipeline_mode whose source
+        # is in that closed set (POLYMARKET→polymarket_clob, KALSHI→kalshi). The lifecycle
+        # write below keeps _pred_pm (prediction_market_lifecycle is single/unregistered).
         _pred_pm = (
             _orch.PipelineMode.BATCH_POLYMARKET_GAMMA_API
             if _manifest_venue == "POLYMARKET"
             else _orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE
+        )
+        _cqg_pm = (
+            _orch.PipelineMode.BATCH_POLYMARKET_CLOB
+            if _manifest_venue == "POLYMARKET"
+            else _orch.PipelineMode.BATCH_KALSHI
         )
         manifest.record_captured(  # QG-allow: emission-policy-not-applicable
             row_key={
@@ -290,7 +302,8 @@ def _write_prediction_venue(
             # Left {} for now; tracked as a P2 follow-up (see predictions_master.md).
             expected_root_clusters={},
             cluster_extractor=lambda s: s,
-            pipeline_mode=_pred_pm,
+            pipeline_mode=_cqg_pm,
+            source=source_string_for(_cqg_pm),
             service_emission_state=None,
         )
         counts[f"{_manifest_venue}/{_group_str}"] = len(_group_df_clean)
