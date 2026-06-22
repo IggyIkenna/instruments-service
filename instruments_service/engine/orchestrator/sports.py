@@ -310,19 +310,70 @@ def _should_skip_date_for_per_league(
     necessarily). Same pattern, same fix.
 
     ``force`` bypasses the skip entirely.
+
+    MEMORY (2026-06-22 OOM fix): this reads the consolidated availability
+    index **ONCE** and resolves every expected league in-memory, instead of
+    calling ``manifest.lookup()`` once per league. ``lookup()`` re-reads the
+    whole index per call (``read_availability_index``), and the in-process
+    cache has a 60s TTL that expires mid-date under the throttled per-league
+    fan-out — so the per-league loop re-decompressed the 80 MB sports index
+    into a ~6.5 GB pandas frame (4.1M rows x 41 cols) up to 93x per date,
+    with multiple multi-GB frames live at once -> OOM (exit 137) within ~2
+    dates even on 32 GB. The single-read membership check resolves all
+    leagues from one frame load. SSOT:
+    ``plans/active/sports_reference_backfill_oom_2026_06_22.md``.
     """
     if force or not expected_canonical_leagues:
         return False
+
+    bucket = manifest.catalogue_bucket
+    if not bucket:
+        # No bucket = no index = nothing captured yet; never skip.
+        return False
+
+    # ONE index read (TTL-cached) — NOT one per league.
+    index = _orch.read_availability_index(bucket)
+    if index.empty:
+        return False
+
+    # Scope to this service + this (date, data_type) shard, exactly as
+    # ``ManifestWriter.lookup`` would (service_name filter + exact-match on
+    # the specified row-key dims). Build a per-league status map; last row
+    # wins (matches ``lookup``'s ``iloc[-1]`` last-write-wins semantics).
+    _df = index
+    if "service_name" in _df.columns:
+        _df = _df[_df["service_name"] == manifest.service_name]
+    for _col, _want in (("date", date), ("data_type", data_type)):
+        if _col not in _df.columns:
+            # Legacy parquet missing a dim we filter on → cannot prove
+            # coverage; do not skip.
+            return False
+        _df = _df[_df[_col].fillna("").astype(str) == _want]
+    if _df.empty or "league_id" not in _df.columns:
+        return False
+
+    _captured = _orch.CaptureStatus.CAPTURED.value
+    _empty = _orch.CaptureStatus.EMPTY_CONFIRMED.value
+    _expected_unattempted = _orch.CaptureStatus.EXPECTED_UNATTEMPTED.value
+    _status_by_league: dict[str, tuple[str, str]] = {}
+    for _lid_val, _status_val, _reason_val in zip(
+        _df["league_id"].fillna("").astype(str),
+        _df["capture_status"].fillna("").astype(str) if "capture_status" in _df.columns else [""] * len(_df),
+        _df["error_reason"].fillna("").astype(str) if "error_reason" in _df.columns else [""] * len(_df),
+        strict=False,
+    ):
+        # last write wins (dict assignment overwrites earlier rows)
+        _status_by_league[_lid_val] = (_status_val, _reason_val)
+
     for lid in expected_canonical_leagues:
-        prev = manifest.lookup({"date": date, "data_type": data_type, "league_id": lid})
+        prev = _status_by_league.get(lid)
         if prev is None:
             return False
-        if prev.capture_status in (_orch.CaptureStatus.CAPTURED.value, _orch.CaptureStatus.EMPTY_CONFIRMED.value):
+        _status, _reason = prev
+        if _status in (_captured, _empty):
             continue
         # expected_unattempted + EXPECTED_* reason = known-empty → treat as covered
-        if prev.capture_status == _orch.CaptureStatus.EXPECTED_UNATTEMPTED.value and (
-            prev.error_reason or ""
-        ).startswith("EXPECTED_"):
+        if _status == _expected_unattempted and _reason.startswith("EXPECTED_"):
             continue
         return False
     # All expected canonical leagues are already captured/empty_confirmed for this date — the
