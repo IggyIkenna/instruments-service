@@ -758,6 +758,119 @@ def _apply_delete_chain_level_defi_phantoms(
     return n_delete
 
 
+def _legacy_combined_venue_phantom_mask(df: pd.DataFrame) -> pd.Series:
+    """Boolean mask for the LEGACY-combined-venue DeFi phantom set (SSOT predicate).
+
+    A row is a phantom IFF it is ``capture_status=='empty_confirmed'`` keyed on a
+    LEGACY combined ``venue=PROTOCOL-CHAIN`` (the venue string contains ``-``)
+    with a BLANK ``chain`` column. The fixed v2 enumerator
+    (``enumerate_expected_universe.py`` @42dd37c) emits CANONICAL ``venue=PROTOCOL``
+    + separate ``chain=X``; an earlier stale enumerator build (Cloud Run image /
+    pre-fix tarball) seeded per-instrument ``empty_confirmed`` cells in the legacy
+    combined form. Those legacy rows can NEVER be converted by a canonical capture
+    (different shard key) and only poison the honest-cov DENOMINATOR. Same class as
+    the 2.31M legacy-format ``expected_unattempted`` removed earlier (the prior
+    driver re-seeded only ``expected_unattempted``; this stale build emitted the
+    legacy form as ``empty_confirmed``).
+
+    NEVER matches a ``captured``/``attempted_failed`` row (status gate), and NEVER
+    matches a canonical row (canonical rows carry a bare ``venue`` without ``-`` AND
+    a populated ``chain``). The genuine could-exist cells re-seed at the canonical
+    ``venue=PROTOCOL``/``chain=X`` via the FIXED v2 enumerator.
+    """
+    status = df["capture_status"].fillna("").astype(str)
+    venue = df["venue"].fillna("").astype(str)
+    chain = df["chain"].fillna("").astype(str)
+    return (status == "empty_confirmed") & venue.str.contains("-", regex=False) & (chain == "")
+
+
+def _report_legacy_combined_venue_defi_phantoms(df: pd.DataFrame) -> None:
+    """DRY-RUN report (no mutation) of the legacy-combined-venue DeFi phantom set.
+    Single-walk — reads only the already-loaded ``_index`` ``df``."""
+    mask = _legacy_combined_venue_phantom_mask(df)
+    n = int(mask.sum())
+    logger.info("=== DRY-RUN: legacy-combined-venue DeFi empty_confirmed phantom report ===")
+    logger.info(
+        "PHANTOM rows (empty_confirmed AND venue contains '-' AND chain==''): %d / %d total",
+        n,
+        len(df),
+    )
+    if n:
+        ph = df[mask]
+        reason = ph["error_reason"].fillna("").astype(str) if "error_reason" in ph.columns else None
+        logger.info("    by error_reason: %s", reason.value_counts().to_dict() if reason is not None else "n/a")
+        logger.info("    top venues: %s", ph["venue"].value_counts().head(10).to_dict())
+        if "enumerator_run_id" in ph.columns:
+            logger.info("    enumerator_run_id(s): %s", ph["enumerator_run_id"].dropna().unique().tolist()[:8])
+    logger.info(
+        "DECISION: DELETE (legacy combined venue=PROTOCOL-CHAIN + blank chain can never "
+        "convert vs canonical venue=PROTOCOL+chain=X captures — denominator poison). "
+        "Genuine could-exist cells re-seed canonically via the FIXED v2 enumerator. "
+        "Dry-run only — no writes."
+    )
+
+
+def _apply_delete_legacy_combined_venue_defi_phantoms(
+    storage_client: StorageClient,
+    bucket_name: str,
+    index_blob: str,
+    df: pd.DataFrame,
+) -> int:
+    """APPLY mode: DELETE the legacy-combined-venue DeFi phantom rows from the
+    ``_index`` and write the trimmed index back. Single-walk (one index read +
+    one write, no whole-corpus GCS walk). Predicate =
+    ``_legacy_combined_venue_phantom_mask`` (SSOT). Asserts captured/
+    attempted_failed totals are preserved before writing back. Returns rows deleted."""
+    status_before = df["capture_status"].fillna("").astype(str)
+    captured_before = int((status_before == "captured").sum())
+    attempted_failed_before = int((status_before == "attempted_failed").sum())
+
+    phantom_mask = _legacy_combined_venue_phantom_mask(df)
+    n_delete = int(phantom_mask.sum())
+    logger.info("APPLY legacy-combined-venue DeFi phantom DELETE: %d rows match the predicate", n_delete)
+    if n_delete == 0:
+        logger.info("Nothing to delete — legacy-combined-venue phantom set is empty. No write.")
+        return 0
+
+    deleting = df[phantom_mask]
+    deleting_status = deleting["capture_status"].fillna("").astype(str)
+    bad = int((deleting_status != "empty_confirmed").sum())
+    if bad:
+        raise RuntimeError(
+            f"REFUSING DELETE — predicate selected {bad} non-empty_confirmed rows "
+            "(would destroy captured/attempted_failed data)"
+        )
+
+    kept = df[~phantom_mask].copy()
+    status_after = kept["capture_status"].fillna("").astype(str)
+    captured_after = int((status_after == "captured").sum())
+    attempted_failed_after = int((status_after == "attempted_failed").sum())
+    if captured_after != captured_before:
+        raise RuntimeError(
+            f"REFUSING WRITE — captured count changed {captured_before} -> {captured_after} (delete bug)"
+        )
+    if attempted_failed_after != attempted_failed_before:
+        raise RuntimeError(
+            f"REFUSING WRITE — attempted_failed count changed "
+            f"{attempted_failed_before} -> {attempted_failed_after} (delete bug)"
+        )
+
+    out = io.BytesIO()
+    kept.to_parquet(out, index=False)
+    out.seek(0)
+    logger.info(
+        "Writing trimmed index: %d -> %d rows (%d deleted; captured=%d unchanged; attempted_failed=%d unchanged)",
+        len(df),
+        len(kept),
+        n_delete,
+        captured_after,
+        attempted_failed_after,
+    )
+    storage_client.upload_from_file_obj(bucket_name, index_blob, out)
+    logger.info("Done — legacy-combined-venue DeFi phantom DELETE applied.")
+    return n_delete
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--asset-group", required=True, choices=list(ASSET_GROUP_CONFIG.keys()))
@@ -858,9 +971,22 @@ def main() -> int:
         "--apply",
         action="store_true",
         help=(
-            "Mutation switch for --report-chain-level-defi-phantoms: DELETE the "
-            "wrong-key chain-level phantom rows and write the trimmed _index back. "
-            "Without it the chain-level pass is dry-run."
+            "Mutation switch for --report-chain-level-defi-phantoms / "
+            "--report-legacy-venue-defi-phantoms: DELETE the matching phantom rows "
+            "and write the trimmed _index back. Without it the pass is dry-run."
+        ),
+    )
+    p.add_argument(
+        "--report-legacy-venue-defi-phantoms",
+        action="store_true",
+        help=(
+            "Legacy-combined-venue DeFi phantom pass (single _index read). WITHOUT "
+            "--apply: DRY-RUN report of empty_confirmed rows keyed legacy "
+            "venue=PROTOCOL-CHAIN (venue contains '-') + blank chain — the stale "
+            "v2-enumerator-build regression (denominator poison; can't convert vs "
+            "canonical venue=PROTOCOL+chain=X captures). WITH --apply: DELETE that "
+            "set + write the trimmed _index back (preserves captured/attempted_failed; "
+            "genuine cells re-seed canonically via the FIXED v2 enumerator)."
         ),
     )
     args = p.parse_args()
@@ -914,6 +1040,19 @@ def main() -> int:
         _report_chain_level_defi_phantoms(df)
         if args.apply:
             _apply_delete_chain_level_defi_phantoms(storage_client, bucket_name, str(cfg["index"]), df)
+        else:
+            logger.info("DRY-RUN — pass --apply to DELETE the phantom set. No writes.")
+        return 0
+
+    # Legacy-combined-venue DeFi phantom pass — single-walk (reuses the index
+    # read above). Returns before any disk-audit / mutation path.
+    if args.report_legacy_venue_defi_phantoms:
+        if args.asset_group != "defi":
+            logger.error("--report-legacy-venue-defi-phantoms requires --asset-group defi")
+            return 2
+        _report_legacy_combined_venue_defi_phantoms(df)
+        if args.apply:
+            _apply_delete_legacy_combined_venue_defi_phantoms(storage_client, bucket_name, str(cfg["index"]), df)
         else:
             logger.info("DRY-RUN — pass --apply to DELETE the phantom set. No writes.")
         return 0
