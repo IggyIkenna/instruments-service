@@ -179,9 +179,9 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # workaround stamp on 2026-05-12).
     "PREDICTIONS": PipelineMode.BATCH_FOOTYSTATS,
     "MATCHES": PipelineMode.BATCH_FOOTYSTATS,
-    # ODDS slice — UAC SOURCE_PRIORITY top entry for the odds-snapshot slice
-    # is ``odds_api``; footystats odds adapter tagged with BATCH_ODDS_API.
-    "ODDS": PipelineMode.BATCH_ODDS_API,
+    # ODDS slice — footystats is the writer; stamp BATCH_FOOTYSTATS to match
+    # source='footystats' (UAC SOURCE_PRIORITY@40751840 aligned to BATCH_FOOTYSTATS).
+    "ODDS": PipelineMode.BATCH_FOOTYSTATS,
     # understat catalog
     "XG": PipelineMode.BATCH_UNDERSTAT,
     # transfermarkt catalog
