@@ -621,6 +621,32 @@ _DEFI_CHAIN_LEVEL_VENUE: dict[str, str] = {
 }
 
 
+def _chain_level_phantom_mask(df: pd.DataFrame) -> pd.Series:
+    """Boolean mask for the chain-level DeFi wrong-key phantom set (SSOT predicate).
+
+    A row is a phantom IFF it is a chain-level data_type
+    (``gas_fees``/``token_transfers``/``mev_events``) with
+    ``capture_status=='empty_confirmed'`` keyed on a venue that is NOT that
+    data_type's canonical chain-level venue (ALCHEMY/FLASHBOTS) — i.e. the IS
+    enumerator wrongly emitted a per-PROTOCOL ``empty_confirmed`` cell for a
+    metric that is captured/expected at a single chain-level synthetic venue.
+
+    This covers BOTH the ``EXPECTED_INSTRUMENT_NOT_LISTED`` and the
+    ``EXPECTED_PRE_GENESIS_CHAIN`` wrong-key rows; the genuine pre-genesis cells
+    re-seed at the canonical ``venue=ALCHEMY``/``FLASHBOTS`` via the fixed v2
+    enumerator. ``oracle_prices`` is DELIBERATELY EXCLUDED (genuinely
+    per-protocol). NEVER matches a ``captured``/``attempted_failed`` row, and
+    NEVER matches a row already at the canonical venue.
+    """
+    status = df["capture_status"].fillna("").astype(str)
+    venue = df["venue"].fillna("").astype(str)
+    dt_col = df["data_type"].fillna("").astype(str)
+    mask = pd.Series(False, index=df.index)
+    for data_type, cv in _DEFI_CHAIN_LEVEL_VENUE.items():
+        mask = mask | ((dt_col == data_type) & (status == "empty_confirmed") & (venue != cv))
+    return mask
+
+
 def _report_chain_level_defi_phantoms(df: pd.DataFrame) -> None:
     """DRY-RUN report (no mutation): chain-level DeFi data_types wrongly keyed
     ``venue=<PROTOCOL>``. Single-walk — reads only the already-loaded ``_index``
@@ -658,6 +684,78 @@ def _report_chain_level_defi_phantoms(df: pd.DataFrame) -> None:
         "NOTE oracle_prices EXCLUDED — genuinely per-protocol (LIDO/ETHENA/AAVE_V3/… "
         "capture it at venue=<PROTOCOL>; those empties are CORRECT). Dry-run only — no writes."
     )
+
+
+def _apply_delete_chain_level_defi_phantoms(
+    storage_client: StorageClient,
+    bucket_name: str,
+    index_blob: str,
+    df: pd.DataFrame,
+) -> int:
+    """APPLY mode: DELETE the chain-level DeFi wrong-key phantom rows from the
+    ``_index`` and write the trimmed index back. Single-walk (reuses the
+    already-loaded ``df``; one index read + one write, no whole-corpus GCS walk).
+
+    The delete predicate is ``_chain_level_phantom_mask`` (SSOT) — it removes the
+    BOTH wrong-key reason classes (NOT_LISTED + PRE_GENESIS_CHAIN) keyed
+    ``venue=<PROTOCOL>`` for the chain-level data_types, and NEVER touches:
+    ``oracle_prices`` (genuinely per-protocol), any ``captured`` /
+    ``attempted_failed`` row, or any row already at the canonical
+    ``venue=ALCHEMY``/``FLASHBOTS``. The genuine pre-genesis cells re-seed at the
+    canonical venue via the FIXED v2 enumerator (``enumerate_expected_universe.py``).
+
+    Asserts captured/attempted_failed totals are preserved before writing back.
+    Returns the number of rows deleted.
+    """
+    status_before = df["capture_status"].fillna("").astype(str)
+    captured_before = int((status_before == "captured").sum())
+    attempted_failed_before = int((status_before == "attempted_failed").sum())
+
+    phantom_mask = _chain_level_phantom_mask(df)
+    n_delete = int(phantom_mask.sum())
+    logger.info("APPLY chain-level DeFi phantom DELETE: %d rows match the predicate", n_delete)
+    if n_delete == 0:
+        logger.info("Nothing to delete — chain-level phantom set is empty. No write.")
+        return 0
+
+    # Defensive guard: the predicate must never select a captured/failed row.
+    deleting = df[phantom_mask]
+    deleting_status = deleting["capture_status"].fillna("").astype(str)
+    bad = int((deleting_status != "empty_confirmed").sum())
+    if bad:
+        raise RuntimeError(
+            f"REFUSING DELETE — predicate selected {bad} non-empty_confirmed rows "
+            "(would destroy captured/attempted_failed data)"
+        )
+
+    kept = df[~phantom_mask].copy()
+    status_after = kept["capture_status"].fillna("").astype(str)
+    captured_after = int((status_after == "captured").sum())
+    attempted_failed_after = int((status_after == "attempted_failed").sum())
+    if captured_after != captured_before:
+        raise RuntimeError(
+            f"REFUSING WRITE — captured count changed {captured_before} -> {captured_after} (delete bug)"
+        )
+    if attempted_failed_after != attempted_failed_before:
+        raise RuntimeError(
+            f"REFUSING WRITE — attempted_failed count changed "
+            f"{attempted_failed_before} -> {attempted_failed_after} (delete bug)"
+        )
+
+    out = io.BytesIO()
+    kept.to_parquet(out, index=False)
+    out.seek(0)
+    logger.info(
+        "Writing trimmed index: %d -> %d rows (%d deleted; captured=%d unchanged; attempted_failed=%d unchanged)",
+        len(df),
+        len(kept),
+        n_delete,
+        captured_after,
+        attempted_failed_after,
+    )
+    storage_client.upload_from_file_obj(bucket_name, index_blob, out)
+    logger.info("Done — chain-level DeFi phantom DELETE applied.")
+    return n_delete
 
 
 def main() -> int:
@@ -747,10 +845,22 @@ def main() -> int:
         "--report-chain-level-defi-phantoms",
         action="store_true",
         help=(
-            "DRY-RUN ONLY (no mutation, single _index read): report empty_confirmed "
+            "Chain-level DeFi phantom pass (single _index read). WITHOUT --apply: "
+            "DRY-RUN report (no mutation) of empty_confirmed "
             "gas_fees/token_transfers/mev_events rows wrongly keyed venue=<PROTOCOL> "
-            "vs canonical chain-level venue (ALCHEMY/FLASHBOTS). Prints delete "
-            "predicate + counts. oracle_prices excluded (genuinely per-protocol)."
+            "vs canonical chain-level venue (ALCHEMY/FLASHBOTS) + the delete "
+            "predicate + counts. WITH --apply: DELETE that phantom set and write the "
+            "trimmed _index back (preserves captured/attempted_failed; oracle_prices "
+            "excluded — genuinely per-protocol)."
+        ),
+    )
+    p.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Mutation switch for --report-chain-level-defi-phantoms: DELETE the "
+            "wrong-key chain-level phantom rows and write the trimmed _index back. "
+            "Without it the chain-level pass is dry-run."
         ),
     )
     args = p.parse_args()
@@ -800,7 +910,12 @@ def main() -> int:
         if args.asset_group != "defi":
             logger.error("--report-chain-level-defi-phantoms requires --asset-group defi")
             return 2
+        # Always print the report first (the apply path then deletes the same set).
         _report_chain_level_defi_phantoms(df)
+        if args.apply:
+            _apply_delete_chain_level_defi_phantoms(storage_client, bucket_name, str(cfg["index"]), df)
+        else:
+            logger.info("DRY-RUN — pass --apply to DELETE the phantom set. No writes.")
         return 0
 
     captured_mask = df["capture_status"].fillna("") == "captured"
