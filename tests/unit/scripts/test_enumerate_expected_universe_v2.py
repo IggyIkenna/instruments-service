@@ -463,9 +463,7 @@ def test_tradfi_v2_future_seeds_canonical_lowercase_instrument_type() -> None:
     ]
     # Window spans the listing date so the lifecycle-overlap filter keeps the
     # instrument: 2024-06-01 → NOT_LISTED, 2025-06-01 → alive (no row in legacy mode).
-    rows = list(
-        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"])
-    )
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
     assert rows[0].instrument_type == "futures_chain", "CME future seed must use the writer's futures_chain grain"
@@ -479,9 +477,7 @@ def test_tradfi_v2_future_expected_unattempted_uses_writer_grain() -> None:
     grain (futures_chain for CME/ICE) so a later capture converts it.
     """
     catalog = [
-        _make_tradfi_entry(
-            instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01"
-        )
+        _make_tradfi_entry(instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01")
     ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
@@ -512,9 +508,7 @@ def test_tradfi_v2_capture_at_writer_grain_suppresses_seed() -> None:
     # Writer shape for a futures_chain bundle: instrument_id="", underlying=<U>.
     present = {("CME", "", "ohlcv_1m", "futures_chain", "", "ES-2025H", "", "2024-06-03")}
     catalog = [
-        _make_tradfi_entry(
-            instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01"
-        )
+        _make_tradfi_entry(instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01")
     ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
@@ -536,9 +530,7 @@ def test_tradfi_v2_bundle_seed_has_blank_instrument_id_and_underlying() -> None:
     its shard atom equals the writer's captured-cell atom (axis-3, 2026-06-22).
     """
     catalog = [
-        _make_tradfi_entry(
-            instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01"
-        )
+        _make_tradfi_entry(instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01")
     ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
@@ -563,9 +555,7 @@ def test_tradfi_v2_leaf_seed_keeps_instrument_id_blank_underlying() -> None:
     underlying="" (no regression).
     """
     catalog = [
-        _make_tradfi_entry(
-            instrument_id="AAPL", instrument_type="EQUITY", venue="NASDAQ", available_from="2020-01-01"
-        )
+        _make_tradfi_entry(instrument_id="AAPL", instrument_type="EQUITY", venue="NASDAQ", available_from="2020-01-01")
     ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
@@ -597,7 +587,11 @@ def test_tradfi_v2_bundle_capture_suppresses_via_full_enumerate_v2() -> None:
         ),
         # options_chain: CME option leaf → rolls up to options_chain on underlying CL.
         _make_tradfi_entry(
-            instrument_id="CL-C-70", instrument_type="OPTION", venue="CME-OPTIONS", underlying="CL", available_from="2020-01-01"
+            instrument_id="CL-C-70",
+            instrument_type="OPTION",
+            venue="CME-OPTIONS",
+            underlying="CL",
+            available_from="2020-01-01",
         ),
     ]
     axis = _date_axis("2024-06-03")
@@ -645,9 +639,7 @@ def test_tradfi_v2_equity_and_etf_seed_canonical_lowercase() -> None:
         _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NASDAQ", available_from="2025-01-01"),
     ]
     # 2024-06-01 → NOT_LISTED; 2025-06-01 alive keeps the lifecycle-overlap filter happy.
-    rows = list(
-        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"])
-    )
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
     seeded = {(r.instrument_id, r.instrument_type) for r in rows}
     assert ("AAPL", "equity") in seeded
     assert ("SPY", "etf") in seeded
@@ -1931,3 +1923,127 @@ def test_make_tradfi_entry_underlying_kw_supported() -> None:
     """Guard: the helper accepts an underlying kwarg used by the roll-up tests above."""
     entry = _make_tradfi_entry(instrument_id="ESM6", instrument_type="FUTURE", venue="CME", underlying="ES")
     assert entry.underlying == "ES"
+
+
+# ---------------------------------------------------------------------------
+# DeFi canonical venue/chain split — gotcha #3 (defi-canonical-naming-ssot.md)
+#
+# The instruments-service catalog stores legacy combined venue='AAVEV3-ARBITRUM'
+# with blank chain=''. MTDS captures use canonical venue='AAVE_V3' + chain='ARBITRUM'.
+# Fix: _enumerate_v2_defi must split the combined form and canonicalise the protocol
+# token before emitting ExpectedRows or building the present_set row_key.
+# ---------------------------------------------------------------------------
+
+
+def _make_defi_legacy_entry(
+    instrument_id: str = "ETH-USDC",
+    instrument_type: str = "LENDING",
+    legacy_venue: str = "AAVEV3-ARBITRUM",
+    available_from: str | None = "2022-01-01",
+    available_to: str | None = None,
+) -> InstrumentCatalogEntry:
+    """Catalog entry with legacy combined venue and blank chain — mirrors the real catalog shape."""
+    return InstrumentCatalogEntry(
+        instrument_id=instrument_id,
+        instrument_type=instrument_type,
+        venue=legacy_venue,
+        chain="",  # blank: the catalog legacy form
+        league_id="",
+        available_from=available_from,
+        available_to=available_to,
+        market_created_at=None,
+        settlement_time=None,
+    )
+
+
+def test_defi_v2_legacy_combined_venue_yields_canonical_venue_and_chain() -> None:
+    """Core regression test: legacy venue='AAVEV3-ARBITRUM' + chain='' in the catalog
+    must produce ExpectedRow.venue='AAVE_V3' + ExpectedRow.chain='ARBITRUM'.
+
+    This is durable gotcha #3 from defi-canonical-naming-ssot.md: seeded
+    expected_unattempted cells carried the combined PROTOCOL-CHAIN venue and blank
+    chain, so they could never be converted to 'captured' by the MTDS writer.
+    """
+    catalog = [_make_defi_legacy_entry(legacy_venue="AAVEV3-ARBITRUM")]
+    dates = _date_axis("2024-06-01")
+    rows = list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"], present_set=set()))
+    assert len(rows) >= 1, "expected ≥1 expected_unattempted row for alive AAVE_V3/ARBITRUM"
+    r = rows[0]
+    assert r.venue == "AAVE_V3", (
+        f"expected canonical venue='AAVE_V3', got '{r.venue}' — PROTOCOL-CHAIN combined form leaked through"
+    )
+    assert r.chain == "ARBITRUM", (
+        f"expected chain='ARBITRUM', got '{r.chain}' — blank chain from catalog leaked through"
+    )
+    assert r.capture_status == "expected_unattempted"
+
+
+def test_defi_v2_legacy_uniswapv3_ethereum_splits_canonical() -> None:
+    """UNISWAPV3-ETHEREUM → venue='UNISWAP_V3' + chain='ETHEREUM'."""
+    catalog = [
+        InstrumentCatalogEntry(
+            instrument_id="WETH-USDC-500",
+            instrument_type="POOL",
+            venue="UNISWAPV3-ETHEREUM",
+            chain="",
+            league_id="",
+            available_from="2021-01-01",
+            available_to=None,
+            market_created_at=None,
+            settlement_time=None,
+        )
+    ]
+    dates = _date_axis("2024-06-01")
+    rows = list(
+        enumerator_module._enumerate_v2_defi(catalog, dates, ["dex_pool_state", "dex_pool_swaps"], present_set=set())
+    )
+    assert rows, "expected ≥1 row for alive UNISWAP_V3/ETHEREUM"
+    assert all(r.venue == "UNISWAP_V3" for r in rows), f"expected 'UNISWAP_V3', got {[r.venue for r in rows]}"
+    assert all(r.chain == "ETHEREUM" for r in rows), f"expected 'ETHEREUM', got {[r.chain for r in rows]}"
+
+
+def test_defi_v2_canonical_venue_present_set_suppresses_seed() -> None:
+    """When the manifest present_set carries a canonical-form key (venue='AAVE_V3', chain='ARBITRUM'),
+    the enumerator with legacy combined-venue catalog entry must match and suppress the seed.
+
+    Before the fix: row_key used legacy 'AAVEV3-ARBITRUM' / '' so the key never matched the
+    canonical captured row and the seed was always emitted (false EU).
+    """
+    catalog = [_make_defi_legacy_entry(legacy_venue="AAVEV3-ARBITRUM")]
+    date_axis = _date_axis("2024-06-01")
+    # The manifest has a captured row with canonical venue/chain (as MTDS writer produces).
+    key = _row_key_from_dict(
+        {
+            "venue": "AAVE_V3",
+            "chain": "ARBITRUM",
+            "data_type": "lending_indices",
+            "instrument_type": "LENDING",
+            "instrument_id": "ETH-USDC",
+            "league_id": "",
+            "date": "2024-06-01",
+        }
+    )
+    rows = list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set={key}))
+    assert rows == [], (
+        "canonical present_set key must suppress the legacy-catalog entry — row_key mismatch after the fix"
+    )
+
+
+def test_defi_v2_legacy_venue_pre_genesis_uses_split_chain() -> None:
+    """Empty_confirmed (pre-genesis) branch: AAVEV3-ARBITRUM + date before ARBITRUM genesis
+    must use the split chain='ARBITRUM' for the CHAIN_GENESIS_DATES lookup.
+
+    Before the fix: chain_upper was '' (blank), so chain_genesis_ts was None and the
+    pre-genesis branch never fired — pre-genesis dates were misclassified as alive.
+    """
+    # ARBITRUM genesis = 2021-08-31; use a clearly pre-genesis date.
+    catalog = [_make_defi_legacy_entry(legacy_venue="AAVEV3-ARBITRUM", available_from="2022-01-01")]
+    # Window includes an alive date (2022-06-01) so the overlap filter passes.
+    dates = _date_axis("2020-01-01", "2022-06-01")
+    rows = list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"]))
+    assert len(rows) == 1, "expected exactly 1 pre-genesis row"
+    assert rows[0].reason == "EXPECTED_PRE_GENESIS_CHAIN", (
+        f"pre-genesis branch did not fire; got reason='{rows[0].reason}' — "
+        "chain was likely still blank (split chain not forwarded to CHAIN_GENESIS_DATES)"
+    )
+    assert rows[0].chain == "ARBITRUM"
