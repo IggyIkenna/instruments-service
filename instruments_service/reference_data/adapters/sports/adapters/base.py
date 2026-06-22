@@ -21,6 +21,7 @@ from unified_api_contracts.sports import (
     CanonicalTeam,
 )
 from unified_trading_library import log_event
+from unified_trading_library.events import DP_SOURCE_RATE_LIMITED  # noqa: qg-deep-import
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,9 @@ class BaseSportsReferenceAdapter(ABC):
     """
 
     _last_request_time: float = 0.0
+    # DP-RATE-003: cumulative 429 count per adapter subclass — surfaced in the
+    # DP_SOURCE_RATE_LIMITED event so a throttled backfill is visible, not silent.
+    _rate_limit_429_count: int = 0
     # Per-class throttle override. Defaults to module-level _MIN_REQUEST_INTERVAL.
     # Subclasses set this to their RapidAPI plan's per-second floor.
     _min_request_interval: float = _MIN_REQUEST_INTERVAL
@@ -334,6 +338,22 @@ class BaseSportsReferenceAdapter(ABC):
                                 delay,
                                 attempt + 1,
                                 _RETRY_ATTEMPTS,
+                            )
+                            # DP-RATE-003: emit DP_SOURCE_RATE_LIMITED so a slow /
+                            # throttled sports backfill surfaces in
+                            # #data-pipeline-alerts instead of silently stalling on
+                            # minute-boundary sleeps. Best-effort observability emit —
+                            # never let it interrupt the retry loop (shard isolation).
+                            type(self)._rate_limit_429_count += 1
+                            log_event(
+                                DP_SOURCE_RATE_LIMITED,
+                                details={
+                                    "source": self.venue,
+                                    "venue": self.venue,
+                                    "http_429_count": type(self)._rate_limit_429_count,
+                                    "url": url,
+                                    "sleep_seconds": delay,
+                                },
                             )
                         else:
                             delay = _RETRY_BASE_DELAY * (1 << min(attempt, 4))

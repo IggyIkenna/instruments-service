@@ -829,7 +829,7 @@ class TestKalshiParseMarket:
         result = adapter._parse_market(raw, now)
         assert result is not None
         assert result.instrument_key == "KXBTC-26MAR-90000"
-        assert result.venue == "kalshi"
+        assert result.venue == "KALSHI"
         assert result.quote_asset == "USD"
         assert str(result.status) == "active"
 
