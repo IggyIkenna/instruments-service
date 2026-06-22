@@ -1,32 +1,25 @@
 """Extended reference data adapter — instrument discovery via /info/markets.
 
-Extended is a StarkNet perp DEX (Extended.exchange). Public REST at
-api.starknet.extended.exchange — no auth required for market discovery.
-Returns all active perpetual markets as InstrumentRecord objects.
+Extended is a StarkNet perp DEX (Extended.exchange, formerly X10). Public REST
+at api.starknet.extended.exchange — **no auth / API key required** for market
+discovery, candles, or funding (verified live 2026-06-22 against the public
+docs at api.docs.extended.exchange). Trading keys are needed ONLY for order
+placement, never for read-only market data. Returns all active perpetual
+markets as InstrumentRecord objects.
 
-Diagnosis 2026-05-14 (slot-3-ikenna):
-Manifest shows 15 attempted_failed rows on 2026-04-30 only (0% capture).
-Three possible root causes:
-1. API transient failure on that specific date — the adapter code itself is
-   correct (uses api.starknet.extended.exchange/api/v1/info/markets which
-   is the verified endpoint). The fallback list handles network outages.
-2. Extended was in testnet/pre-launch on 2026-04-30 — the _EXTENDED_DEPLOY_DATE
-   is 2024-07-26 but Extended.exchange may have relaunched/migrated to StarkNet
-   mainnet later (MTDS notes "funding only from 2025-08-01 Starknet migration").
-   Instruments discovery date may need to be updated to 2025-08-01 when StarkNet
-   mainnet funded — or pre-migration data simply returns empty.
-3. Only one VM run attempted on 2026-04-30 — 15 rows is suspiciously small;
-   the adapter likely ran but the API returned no ACTIVE markets that day.
-
-Recommended next steps:
-- Re-run instruments discovery for 2026-05-14 to verify API is live
-- If returns ACTIVE markets, the 0% capture is a transient VM/date issue
-- If returns 404/error, investigate StarkNet migration date as true launch
-- Issue: plans/active/issues/emerging_perp_venue_adapters_broken_2026_05_13.md
+Per-instrument genesis (2026-06-22 audit, slot-3-ikenna):
+`/info/markets` `createdAt` is the StarkNet-mainnet record-creation timestamp
+(50 of 103 markets share the 2025-07-18 bulk-migration stamp), but historical
+OHLCV pre-dates it — e.g. BTC-USD / ETH-USD candles begin 2024-07-26 (testnet
+/ x10 era). The honest `available_from` is therefore the **earliest actual
+daily candle per market** (resolved via a one-shot P1D `/info/candles` probe),
+NOT a single venue-wide constant and NOT `createdAt`. Audited genesis spans
+2024-07-26 → 2026-05-22 across all 103 active markets.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -47,16 +40,14 @@ from ...schemas import (
 
 logger = logging.getLogger(__name__)
 
-# DIAGNOSIS 2026-05-14 (slot-3): 0 blobs captured from 15 attempted manifest rows
-# (all 2026-04-30, all attempted_failed). Likely stale domain — Extended.exchange
-# may have rebranded or moved its REST API (mirrors ASTER pattern: ASTER used
-# www.aster.exchange instead of fapi.asterdex.com). Action needed: probe this
-# URL live and check Extended Finance docs for the current REST base. Until
-# corrected, every adapter call will fail into attempted_failed.
-# Reference: plans/active/issues/emerging_perp_venue_adapters_broken_2026_05_13.md
 _EXTENDED_API_BASE = "https://api.starknet.extended.exchange/api/v1"
-# Extended StarkNet mainnet launch (historical OHLCV available from 2024-07-26).
+# Earliest possible Extended data (StarkNet/x10 testnet launch). Used only as a
+# fallback floor for available_from when the per-market genesis probe fails.
 _EXTENDED_DEPLOY_DATE = datetime(2024, 7, 26, tzinfo=UTC)
+# Lower bound for the per-market genesis probe (before any Extended history).
+_EXTENDED_GENESIS_PROBE_START_MS = int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)
+# Bounded concurrency for the per-market genesis probe.
+_EXTENDED_GENESIS_PROBE_CONCURRENCY = 12
 
 # Fallback market list used when /info/markets is unreachable.
 # Mirrors MTDS _EXTENDED_FALLBACK_SYMBOLS (umi_tick_provider.py:1086-1092).
@@ -101,10 +92,11 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
             return []
 
         symbols: list[str] = []
+        genesis_map: dict[str, datetime] = {}
         async with self._make_session() as session:
             try:
                 raw = await self._get_with_retry(session, f"{_EXTENDED_API_BASE}/info/markets")
-                payload: dict[str, object] = raw if isinstance(raw, dict) else {}
+                payload: dict[str, object] = cast("dict[str, object]", raw) if isinstance(raw, dict) else {}
                 mkt_list = cast("list[dict[str, object]]", payload.get("data") or [])
                 symbols = [str(m["name"]) for m in mkt_list if m.get("active") and str(m.get("status", "")) == "ACTIVE"]
                 if not symbols:
@@ -133,6 +125,12 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
                     logger.warning("Extended /info/markets failed after retries: %s — using fallback", exc)
                 symbols = list(_EXTENDED_FALLBACK_MARKETS)
 
+            # Resolve the honest per-market available_from = earliest daily candle.
+            # createdAt reflects the StarkNet-mainnet record migration, not first
+            # tradability (OHLCV pre-dates it for ~half the universe), so the
+            # candle history is the SSOT for genesis. Probe concurrently.
+            genesis_map = await self._probe_genesis_map(session, symbols)
+
         results: list[InstrumentRecord] = []
         for sym in symbols:
             base_asset = sym.split("-")[0].upper() if "-" in sym else sym.upper()
@@ -153,13 +151,57 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
                     strike=None,
                     option_type=None,
                     status=InstrumentStatus.ACTIVE,
-                    available_from_datetime=_EXTENDED_DEPLOY_DATE,
+                    available_from_datetime=genesis_map.get(sym, _EXTENDED_DEPLOY_DATE),
                     timezone="UTC",
                 )
             )
 
         logger.info("Extended: fetched %d perp instruments", len(results))
         return results
+
+    async def _probe_genesis_map(
+        self,
+        session: aiohttp.ClientSession,
+        symbols: list[str],
+    ) -> dict[str, datetime]:
+        """Resolve earliest-tradable date per market via a one-shot P1D candle probe.
+
+        Returns ``{symbol: available_from_datetime}``; markets whose probe fails
+        are omitted and fall back to ``_EXTENDED_DEPLOY_DATE`` at the call site.
+        """
+        semaphore = asyncio.Semaphore(_EXTENDED_GENESIS_PROBE_CONCURRENCY)
+        end_ms = int(datetime.now(UTC).timestamp() * 1000)
+
+        async def _one(sym: str) -> tuple[str, datetime | None]:
+            async with semaphore:
+                return sym, await self._probe_market_genesis(session, sym, end_ms)
+
+        pairs = await asyncio.gather(*(_one(s) for s in symbols))
+        return {sym: dt for sym, dt in pairs if dt is not None}
+
+    async def _probe_market_genesis(
+        self,
+        session: aiohttp.ClientSession,
+        symbol: str,
+        end_ms: int,
+    ) -> datetime | None:
+        """Earliest daily candle timestamp for ``symbol`` (the honest genesis)."""
+        url = (
+            f"{_EXTENDED_API_BASE}/info/candles/{symbol}/trades"
+            f"?interval=P1D&startTime={_EXTENDED_GENESIS_PROBE_START_MS}"
+            f"&endTime={end_ms}&limit=1000"
+        )
+        try:
+            raw = await self._get_with_retry(session, url)
+        except (aiohttp.ClientError, RuntimeError) as exc:
+            logger.warning("Extended genesis probe failed for %s: %s — using deploy-date floor", symbol, exc)
+            return None
+        payload: dict[str, object] = cast("dict[str, object]", raw) if isinstance(raw, dict) else {}
+        candles = cast("list[dict[str, object]]", payload.get("data") or [])
+        stamps = [int(cast("int", c["T"])) for c in candles if c.get("T") is not None]
+        if not stamps:
+            return None
+        return datetime.fromtimestamp(min(stamps) / 1000, UTC)
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single instrument by identifier."""
