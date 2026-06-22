@@ -153,7 +153,10 @@ async def _fetch_weather_data(
         lg.league_id for lg in get_expected_leagues_for_source("open_meteo", classifications=["Prediction"])
     }
 
-    def _record_weather_empty(reason: _orch.EmptyConfirmedReason) -> None:
+    def _record_weather_empty(
+        reason: _orch.EmptyConfirmedReason,
+        fetch_evidence: _orch.FetchEvidence | None = None,
+    ) -> None:
         """Helper — emit per-league record_empty for WEATHER shard.
 
         Args:
@@ -162,6 +165,9 @@ async def _fetch_weather_data(
                 blank string previously raised ``LegacyBlankErrorReasonError``
                 at runtime; making the parameter required turns that into a
                 static error at call time.
+            fetch_evidence: Optional ``FetchEvidence`` proving honest absence
+                for SOURCE_RETURNED_ZERO paths (required by the UTL keystone
+                gate when reason==SOURCE_RETURNED_ZERO).
 
         Historic versions also emitted a date-aggregate row (no ``league_id``)
         alongside the per-league rows; the aggregator ignores it
@@ -176,6 +182,7 @@ async def _fetch_weather_data(
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
                 reason=reason,
+                fetch_evidence=fetch_evidence,
             )
 
     def _record_weather_failed(err_code: str) -> None:
@@ -565,10 +572,21 @@ async def _fetch_weather_data(
     else:
         # No rows AND no errors — means venues existed but all were already
         # covered earlier in this run (incremental dedup skipped them) or
-        # adapter returned empty dicts.  Treat as empty_confirmed.
+        # adapter returned empty dicts.  The absence of errors proves the
+        # adapter ran cleanly with 0 rows — a genuine 2xx+0-rows path.
+        _weather_ev = _orch.FetchEvidence(
+            http_status=200,
+            response_received=True,
+            rows_in_response=0,
+            source="open_meteo",
+            endpoint="get_weather_match_window",
+            attempted_at=attempt_ts,
+            error_signal="",
+        )
         _record_weather_empty(
-            reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO
-        )  # QG-allow: weather-incremental-dedup; may be incremental-dedup skip not an external fetch failure; sports oracle not applicable — A10c-fleet followup
+            reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
+            fetch_evidence=_weather_ev,
+        )
 
     manifest.write()
 

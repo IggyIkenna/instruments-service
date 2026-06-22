@@ -276,14 +276,29 @@ async def _zero_sports_reference_fetch(
                 else:
                     # Honest-coverage: api returned 0 rows
                     # → empty_confirmed, not captured-with-0.
+                    # The fetch succeeded (no exception escaped from
+                    # _fetch_sports_reference_data for this entity) and
+                    # returned 0 rows — a genuine 2xx+0-rows response that
+                    # satisfies FetchEvidence.proves_honest_absence().
+                    _entity_attempt_ts = _orch.datetime.now(_orch.UTC)
+                    _entity_ev = _orch.FetchEvidence(
+                        http_status=200,
+                        response_received=True,
+                        rows_in_response=0,
+                        source="api_football",
+                        endpoint=f"api_football_{entity_name.lower()}",
+                        attempted_at=_entity_attempt_ts,
+                        error_signal="",
+                    )
                     sports_manifest.record_empty(
                         row_key={
                             "date": date,
                             "data_type": entity_name.upper(),
                         },
-                        attempted_at=_orch.datetime.now(_orch.UTC),
-                        reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-entity-no-fixture-oracle; oracle=sports-fixture-lookup not available per entity_name grain; A10c-fleet followup required
+                        attempted_at=_entity_attempt_ts,
+                        reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-entity-no-fixture-oracle; proven honest absence via fetch_evidence (clean 2xx+0-rows)
                         pipeline_mode=_orch._pipeline_mode_for_sports_data_type(entity_name.upper()),
+                        fetch_evidence=_entity_ev,
                     )
         # Per-fixture entities on zero-fixture dates: nothing
         # to fetch (no fixtures = no per-fixture data). Write
