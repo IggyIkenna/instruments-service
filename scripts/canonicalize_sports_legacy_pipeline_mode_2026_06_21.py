@@ -251,11 +251,11 @@ def _process_blob(
     try:
         with fs.open(path, "rb") as fh:
             df = pd.read_parquet(fh)
-    except (FileNotFoundError, OSError) as exc:
+    except Exception as exc:  # noqa: BLE001 — per-VM shard; mirrors consolidator skip-unreadable (ArrowInvalid, OSError, etc.)
         if required:
             raise
-        # A per-VM shard listed by ls() but unreadable (stale cache / 0-byte / deleted) —
-        # the consolidator skips unreadable shards (``_download_valid_parquets``); so do we.
+        # A per-VM shard listed by ls() but unreadable (stale cache / 0-byte / corrupted /
+        # ArrowInvalid) — the consolidator skips unreadable shards; so do we.
         logger.warning("  [%s] SKIP — unreadable shard: %s", blob, exc)
         return {"skipped_unreadable_shards": 1}
 
@@ -275,6 +275,21 @@ def _process_blob(
     if stats["legacy_rows_found"] == 0 and stats["fixtures_blank_reason_filled"] == 0:
         logger.info("  [%s] nothing to canonicalise (idempotent no-op).", blob)
         return stats
+    # Legacy rows exist but ALL three change counters are zero → data already canonicalised
+    # (e.g. NULL→"" normalisation applied by a prior populate run). Skip write to avoid
+    # rewriting 4M+ rows with no actual change.
+    _no_changes = (
+        stats.get("pipeline_mode_restamped", 0) == 0
+        and stats.get("legacy_null_optdim_normalised_cells", 0) == 0
+        and stats.get("fixtures_blank_reason_filled", 0) == 0
+    )
+    if _no_changes:
+        logger.info(
+            "  [%s] legacy rows present (%d) but all change counters are 0 — already canonicalised, skipping write.",
+            blob,
+            stats["legacy_rows_found"],
+        )
+        return stats
 
     rows, distinct = _projected_distinct(out)
     # FIXTURES captured-distinct sanity: after collapse, captured FIXTURES rows ~= distinct.
@@ -282,9 +297,7 @@ def _process_blob(
     fx_captured = fx[fx["capture_status"].astype("string") == "captured"]
     fx_dist_cols = [c for c in _dedup_cols(list(out.columns)) if c in fx_captured.columns]
     fx_cap_distinct = (
-        len(fx_captured[fx_dist_cols].astype("string").fillna("__NULL__").drop_duplicates())
-        if len(fx_captured)
-        else 0
+        len(fx_captured[fx_dist_cols].astype("string").fillna("__NULL__").drop_duplicates()) if len(fx_captured) else 0
     )
 
     for k, v in stats.items():
