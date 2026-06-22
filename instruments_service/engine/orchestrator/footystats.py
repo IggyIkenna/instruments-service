@@ -32,6 +32,18 @@ __all__ = [
     "_validate_predictions_null_rates",
 ]
 
+# Hard per-date ceiling for a single FootyStats entity fetch. The base session
+# bounds each individual HTTP request (total=120s) + retries, but a
+# connector/DNS/executor-level stall inside aiohttp can leave the awaited
+# coroutine blocked WITHOUT ever surfacing the ClientTimeout (the 2026-06-22 FS
+# backfill froze with python alive, no traceback, no progress). ``asyncio
+# .wait_for`` cancels the coroutine from the event loop regardless of where it
+# is stuck and raises ``asyncio.TimeoutError`` (caught by the per-date handler
+# → record_failed → the date loop continues), so one wedged fetch can never
+# hang the whole backfill VM. Each FootyStats entity is a single /todays-matches
+# call, so 300s is far above any legitimate completion (a few retries).
+_FS_PER_DATE_TIMEOUT_SECS: float = 300.0
+
 
 async def _fetch_footystats_predictions(
     date: str,
@@ -87,7 +99,10 @@ async def _fetch_footystats_predictions(
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
 
-        predictions = await _orch.cast(_orch.FootystatsAdapter, adapter).get_fixture_predictions(date)
+        predictions = await _orch.asyncio.wait_for(
+            _orch.cast(_orch.FootystatsAdapter, adapter).get_fixture_predictions(date),
+            timeout=_FS_PER_DATE_TIMEOUT_SECS,
+        )
         if predictions:
             df = _orch.pd.DataFrame([_orch._coerce_adapter_output(p) for p in predictions])
             # PIT safety: FootyStats predictions publish alongside odds ~3 days before kickoff
@@ -369,7 +384,10 @@ async def _fetch_footystats_matches(
         # FootyStats league IDs are seasonal — use HISTORICAL map which covers
         # all seasons 2019-2026 (not just current, so old backfill dates match).
         league_ids = list(_orch.FOOTYSTATS_HISTORICAL_SEASON_IDS.keys())
-        fixtures = await adapter.get_fixtures(date, league_ids=league_ids)
+        fixtures = await _orch.asyncio.wait_for(
+            adapter.get_fixtures(date, league_ids=league_ids),
+            timeout=_FS_PER_DATE_TIMEOUT_SECS,
+        )
         if fixtures:
             rows = [_orch._coerce_adapter_output(fx) for fx in fixtures]
             # Flatten nested models for parquet compatibility
@@ -587,7 +605,10 @@ async def _fetch_footystats_odds(
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
 
-        odds_rows = await _orch.cast(_orch.FootystatsAdapter, adapter).get_fixture_odds_snapshot(date)
+        odds_rows = await _orch.asyncio.wait_for(
+            _orch.cast(_orch.FootystatsAdapter, adapter).get_fixture_odds_snapshot(date),
+            timeout=_FS_PER_DATE_TIMEOUT_SECS,
+        )
         if odds_rows:
             df = _orch.pd.DataFrame(odds_rows)
             # PIT safety: FootyStats publishes odds ~3 days before kickoff (empirically verified
