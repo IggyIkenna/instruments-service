@@ -142,8 +142,19 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
-        """Return the venue identifier."""
-        return "kalshi"
+        """Return the canonical venue token (UPPERCASE).
+
+        Must be ``KALSHI`` (uppercase) — the canonical prediction venue per UAC
+        ``partition_paths`` ("POLYMARKET / KALSHI"), mirroring the Polymarket
+        adapter's ``"POLYMARKET"``. This governs the instrument-parquet partition
+        ``venue=KALSHI`` AND must match what the MTDS live runner looks up
+        (``venue={venue}.upper()/instruments.parquet``). Returning the lowercase
+        SOURCE name ``"kalshi"`` (fixed 2026-06-22) wrote the universe to
+        ``venue=kalshi`` while the live reader searched ``venue=KALSHI`` → the
+        Kalshi universe was silently never found (venue ≠ source: venue=KALSHI,
+        source=kalshi are distinct axes).
+        """
+        return "KALSHI"
 
     @staticmethod
     def _parse_kalshi_creds(api_key: str | None) -> tuple[str | None, str | None]:
@@ -527,6 +538,19 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         # lifecycle row (with canonical_question_group + current_status)
         # rides the MARKET_LIFECYCLE data_type alongside.
         lifecycle = self.classify_lifecycle(market)
+        # Universe-membership floor (fixes silent-empty KALSHI universe, 2026-06-22):
+        # Kalshi's live `/markets?status=open` snapshot stamps `open_time` as an
+        # intraday timestamp on the CURRENT day (e.g. 2026-06-22T13:21Z). The IS
+        # date filter (`filter_instruments_by_date`) compares against the
+        # enumeration day's MIDNIGHT (`date_dt = fromisoformat("2026-06-22")` →
+        # 00:00Z), so a market opening at 13:21 today fails `available_from <= date_dt`
+        # and EVERY open Kalshi market is dropped on every day → zero universe written.
+        # A market opening any time on day D belongs to day D's universe, so floor
+        # `available_from_datetime` to the open DATE (midnight). The PRECISE
+        # market_created_at is still carried on the MarketLifecycle for MTDS
+        # tick-gating; this floor only governs day-grain universe membership.
+        _created = lifecycle.market_created_at if lifecycle else None
+        _afd = _created.replace(hour=0, minute=0, second=0, microsecond=0) if _created else None
         return InstrumentRecord(
             instrument_key=ticker,
             venue=self.venue,
@@ -545,7 +569,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             is_active=is_active,
             updated_at=now,
-            available_from_datetime=lifecycle.market_created_at if lifecycle else None,
+            available_from_datetime=_afd,
             available_to_datetime=lifecycle.settlement_time if lifecycle else None,
         )
 
