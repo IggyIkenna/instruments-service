@@ -47,6 +47,8 @@ from unified_api_contracts import (
     DEX_VENUE_KEYWORDS,
     EPL_TEAM_ALIASES,
     EmptyConfirmedReason,
+    FetchErrorSignal,
+    FetchEvidence,
     PipelineMode,
     RecordFailedReason,
     VenueMapping,
