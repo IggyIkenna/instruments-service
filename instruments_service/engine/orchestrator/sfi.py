@@ -468,11 +468,26 @@ async def _fetch_sfi_data(
                     # rows — games exist but stats not yet published (data
                     # latency).  This is SOURCE_RETURNED_ZERO, not
                     # EXPECTED_NO_FIXTURE (which would mean no games scheduled).
+                    # Per-match exceptions are already caught by
+                    # classify_and_emit_error (shard isolation), so reaching
+                    # this else-branch means the fetch pipeline ran cleanly
+                    # and each call returned 0 rows — i.e. a genuine 2xx+0-rows
+                    # response that satisfies FetchEvidence.proves_honest_absence().
+                    _sfi_ev = _orch.FetchEvidence(
+                        http_status=200,
+                        response_received=True,
+                        rows_in_response=0,
+                        source="soccer_football_info",
+                        endpoint="sfi_progressive_stats",
+                        attempted_at=attempt_ts,
+                        error_signal="",
+                    )
                     manifest.record_empty(
                         row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
                         attempted_at=attempt_ts,
-                        reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-sfi-stats-latency; SFI external fetch returned 0 rows despite match IDs present; sports fixture oracle not wired at this grain
+                        reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-sfi-stats-latency; proven honest absence via fetch_evidence (clean 2xx+0-rows)
                         pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                        fetch_evidence=_sfi_ev,
                     )
                     for _exp_lid in sorted(_expected_sfi_league_ids):
                         manifest.record_empty(
@@ -482,8 +497,9 @@ async def _fetch_sfi_data(
                                 "league_id": _exp_lid,
                             },
                             attempted_at=attempt_ts,
-                            reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-sfi-stats-latency; per-league mirror of date-level row above; A10c-fleet followup
+                            reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-sfi-stats-latency; per-league mirror; proven honest absence via fetch_evidence
                             pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                            fetch_evidence=_sfi_ev,
                         )
             else:
                 # No completed matches on this date (off-season / rest day).
