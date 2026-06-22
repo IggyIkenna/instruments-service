@@ -864,6 +864,48 @@ def _enumerate_v2_defi(
                 )
 
 
+def _canonical_writer_instrument_type(asset_group: str, instr: InstrumentCatalogEntry) -> str:
+    """Return the CANONICAL bundled instrument_type the MTDS WRITER records at.
+
+    Shard-grain SSOT (mirrors the defi PROTOCOL-vs-PROTOCOL-CHAIN fix at
+    instruments-service@38cec01): the seeded ``expected_unattempted`` cell MUST
+    carry the SAME ``instrument_type`` the writer stamps for a captured cell, or
+    the shard atoms differ and a capture can never convert the seed (the seed
+    stays permanently ``expected_unattempted`` and deflates honest-coverage).
+
+    The IS catalogue carries the RAW leaf type UPPERCASE (``FUTURE`` / ``EQUITY``
+    / ``ETF`` / ``SPOT_PAIR`` / ``INDEX``), but MTDS writes captured cells at the
+    CANONICAL BUNDLED grain LOWERCASE (``future`` / ``equity`` / ``etf`` /
+    ``combo`` / ``futures_chain`` / ``options_chain``) — the writer reads the
+    ``instrument_type=`` hive path segment which the capture emits in canonical
+    form. The UAC ``bundle_instrument_type_for_leaf`` / ``grain_for_instrument_type``
+    helpers are the SSOT for that mapping (the same pair ``_rollup_bundle_grain``
+    uses to collapse OPTION/COMBO leaves to one per-underlying ``options_chain``
+    entry); so:
+
+    * a bundle leaf (``option`` / ``combo`` at any tradfi venue, or a venue-overlaid
+      ``future``) → its bundle instrument_type (``options_chain`` / ``futures_chain``);
+    * a passthrough leaf (``future`` / ``equity`` / ``etf`` / ``spot_pair`` /
+      ``index``) → the canonical-lowercase leaf type (``.strip().lower()``); for
+      tradfi the lowercase form already equals the UAC canonical alias for every
+      type (``FUTURE``→``future`` etc — no per-type aliasing needed);
+    * an already-canonical bundle entry (``options_chain`` / ``futures_chain`` —
+      e.g. the synthetic rows ``_rollup_bundle_grain`` already produced, or a
+      bundle entry direct from the catalogue) → returned unchanged
+      (``bundle_instrument_type_for_leaf`` returns ``None`` for a bundle type, so
+      the ``.lower()`` fall-through keeps it intact).
+
+    De-dup note: leaf types keep a per-contract ``instrument_id``, so two leaves
+    never collapse to one cell here; the OPTION/COMBO→underlying collapse (which
+    DOES merge leaves into one cell per ``(venue, underlying)``) is handled
+    upstream by ``_rollup_bundle_grain``, so this normaliser never double-counts.
+    """
+    bundle_it = bundle_instrument_type_for_leaf(asset_group, instr.instrument_type, instr.venue)
+    if bundle_it is not None:
+        return bundle_it
+    return (instr.instrument_type or "").strip().lower()
+
+
 def _enumerate_v2_tradfi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -878,6 +920,16 @@ def _enumerate_v2_tradfi(
     Weekend and holiday dates fall through to the pipeline (v1 handles them
     at venue-grain; v2 only adds per-instrument rows for the non-trading-day
     windows outside the instrument lifecycle).
+
+    The seeded ``instrument_type`` is the CANONICAL WRITER grain (lowercase
+    ``future``/``equity``/``etf``/``combo``/``futures_chain``), NOT the raw
+    UPPERCASE catalogue leaf (``FUTURE``/``EQUITY``/…) — see
+    :func:`_canonical_writer_instrument_type`. Without this, the seeded shard
+    atom (``FUTURE`` + uppercase) can NEVER be converted by the real capture
+    (``future`` lowercase) → ~253k tradfi cells sit permanently
+    ``expected_unattempted`` and deflate honest-coverage even though the data IS
+    captured (same shard-grain-mismatch class as the defi PROTOCOL-CHAIN bug,
+    instruments-service@38cec01).
 
     * date < available_from    → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
     * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
@@ -898,6 +950,11 @@ def _enumerate_v2_tradfi(
         row_dts = _row_data_types("tradfi", instr, data_types)
         if not row_dts:
             continue  # e.g. unknown TradFi instrument type → skip entirely
+        # Shard-grain SSOT: seed at the CANONICAL WRITER instrument_type (lowercase
+        # bundled grain), not the raw UPPERCASE catalogue leaf — else the seed can
+        # never be converted by the real capture. (_row_data_types above is
+        # case-insensitive, so it is unaffected by reading instr.instrument_type.)
+        canon_it = _canonical_writer_instrument_type("tradfi", instr)
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -914,7 +971,7 @@ def _enumerate_v2_tradfi(
                             "venue": instr.venue,
                             "chain": "",
                             "data_type": dt,
-                            "instrument_type": instr.instrument_type,
+                            "instrument_type": canon_it,
                             "instrument_id": instr.instrument_id,
                             "league_id": "",
                             "date": iso,
@@ -927,7 +984,7 @@ def _enumerate_v2_tradfi(
                             venue=instr.venue,
                             chain="",
                             data_type=dt,
-                            instrument_type=instr.instrument_type,
+                            instrument_type=canon_it,
                             instrument_id=instr.instrument_id,
                             league_id="",
                             date=iso,
@@ -941,7 +998,7 @@ def _enumerate_v2_tradfi(
                     venue=instr.venue,
                     chain="",
                     data_type=dt,
-                    instrument_type=instr.instrument_type,
+                    instrument_type=canon_it,
                     instrument_id=instr.instrument_id,
                     league_id="",
                     date=iso,
