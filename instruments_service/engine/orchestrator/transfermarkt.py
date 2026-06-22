@@ -38,6 +38,21 @@ __all__ = [
     "_write_transfermarkt_team_mapping",
 ]
 
+# Hard per-league ceiling for a single ``adapter.get_teams`` call. The base
+# session already bounds each individual HTTP request (total=120s), but a
+# single ``get_teams`` fans out into standings + per-club profile fetches
+# (RapidAPI) or a start+poll Apify run, so the *call* has no single ceiling.
+# Worse, a connector/DNS/executor-level stall inside aiohttp can leave the
+# awaited coroutine blocked WITHOUT ever raising the ClientTimeout (the
+# 2026-06-22 TM backfill froze 6.5h on date=2019-02-13 with python alive, no
+# traceback, no progress — exactly this class). ``asyncio.wait_for`` cancels
+# the coroutine from the event loop regardless of where it is stuck and raises
+# ``asyncio.TimeoutError`` (caught by the per-league handler → record_failed →
+# loop continues), so one wedged league can never hang the whole backfill VM.
+# 600s is far above any legitimate per-league completion (standings + ~20 club
+# profiles at the throttle).
+_TM_PER_LEAGUE_TIMEOUT_SECS: float = 600.0
+
 
 def _transfermarkt_mapping_blob_path(season: int) -> str:
     return f"sports_reference/mappings/transfermarkt_league_teams/season={season}/teams.parquet"
@@ -460,7 +475,13 @@ async def _fetch_transfermarkt_data(
                     _unmapped_leagues.add(league_def.league_id)
                     continue
                 try:
-                    teams = await adapter.get_teams(tm_code, season=season)
+                    # Hard ceiling so a wedged HTTP call (stalled socket / DNS /
+                    # connector that never surfaces the per-request ClientTimeout)
+                    # becomes a retryable TimeoutError instead of freezing the VM.
+                    teams = await _orch.asyncio.wait_for(
+                        adapter.get_teams(tm_code, season=season),
+                        timeout=_TM_PER_LEAGUE_TIMEOUT_SECS,
+                    )
                     if not teams:
                         _empty_leagues.add(league_def.league_id)
                         continue
