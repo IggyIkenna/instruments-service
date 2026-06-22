@@ -102,6 +102,7 @@ def _make_tradfi_entry(
     venue: str = "NASDAQ",
     available_from: str | None = "2020-01-01",
     available_to: str | None = None,
+    underlying: str = "",
 ) -> InstrumentCatalogEntry:
     return InstrumentCatalogEntry(
         instrument_id=instrument_id,
@@ -113,6 +114,7 @@ def _make_tradfi_entry(
         available_to=available_to,
         market_created_at=None,
         settlement_time=None,
+        underlying=underlying,
     )
 
 
@@ -448,43 +450,37 @@ def test_tradfi_v2_empty_catalog() -> None:
 
 
 def test_tradfi_v2_future_seeds_canonical_lowercase_instrument_type() -> None:
-    """A pre-bundled ``futures_chain`` entry must seed ``instrument_type == 'futures_chain'``.
+    """A raw UPPERCASE ``FUTURE`` leaf at CME must seed ``instrument_type == 'futures_chain'``.
 
-    Pre-listing (empty_confirmed) path: the seed grain MUST be the canonical
-    writer grain that MTDS captures at. For tradfi CME futures, enumerate_v2()
-    calls _rollup_bundle_grain first, so _enumerate_v2_tradfi receives pre-bundled
-    entries with instrument_type='futures_chain' and instrument_id=underlying ('ES').
-    The canonical MTDS writer grain for CME tradfi futures is 'futures_chain'
-    (see FUTURE_BUNDLE_VENUES["tradfi"] = frozenset({"CME", "ICE"}) in UAC).
+    Pre-listing (empty_confirmed) path: the seed grain MUST be the writer grain
+    that MTDS captures at. CME/ICE outright futures are written at the per-underlying
+    ``futures_chain`` bundle grain (``symbol_rules._VENUE_INSTRUMENT_TYPE["CME"]``),
+    NOT the raw ``FUTURE`` nor the passthrough ``future`` (writer-grain alignment
+    2026-06-22 — FUTURE_BUNDLE_VENUES["tradfi"]).
     """
     catalog = [
-        _make_tradfi_entry(
-            instrument_id="ES", instrument_type="futures_chain", venue="CME", available_from="2025-01-01"
-        )
+        _make_tradfi_entry(instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2025-01-01")
     ]
     # Window spans the listing date so the lifecycle-overlap filter keeps the
     # instrument: 2024-06-01 → NOT_LISTED, 2025-06-01 → alive (no row in legacy mode).
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"])
+    )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
-    assert rows[0].instrument_type == "futures_chain", (
-        "seed must use the canonical writer grain (futures_chain for CME tradfi)"
-    )
-    assert rows[0].instrument_id == "ES"
+    assert rows[0].instrument_type == "futures_chain", "CME future seed must use the writer's futures_chain grain"
+    assert rows[0].instrument_type != "FUTURE"
 
 
 def test_tradfi_v2_future_expected_unattempted_uses_writer_grain() -> None:
-    """Alive ``futures_chain`` with no manifest row → expected_unattempted at ``futures_chain``.
+    """Alive CME ``FUTURE`` with no manifest row → expected_unattempted at ``futures_chain``.
 
-    The expected_unattempted seed (present_set provided) must carry the canonical
-    writer grain so a later MTDS capture (also at 'futures_chain') can convert it.
-    _enumerate_v2_tradfi receives pre-bundled entries from enumerate_v2() (after
-    _rollup_bundle_grain collapses per-contract FUTURE@CME leaves to per-underlying
-    futures_chain bundles). The canonical grain for tradfi CME futures is 'futures_chain'.
+    The expected_unattempted seed (present_set provided) must carry the writer
+    grain (futures_chain for CME/ICE) so a later capture converts it.
     """
     catalog = [
         _make_tradfi_entry(
-            instrument_id="ES", instrument_type="futures_chain", venue="CME", available_from="2020-01-01"
+            instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01"
         )
     ]
     rows = list(
@@ -498,27 +494,26 @@ def test_tradfi_v2_future_expected_unattempted_uses_writer_grain() -> None:
     assert len(rows) == 1
     assert rows[0].capture_status == "expected_unattempted"
     assert rows[0].instrument_type == "futures_chain"
-    assert rows[0].instrument_id == "ES"
 
 
 def test_tradfi_v2_capture_at_writer_grain_suppresses_seed() -> None:
-    """A captured cell at the canonical writer grain must SUPPRESS the seed.
+    """A captured BUNDLE cell at the canonical writer grain must SUPPRESS the seed.
 
-    Proves the row_key match is at the writer grain: a present-set tuple stamped
-    ``instrument_type='futures_chain'`` (what the MTDS writer records for CME
-    tradfi futures bundles) makes the alive-and-captured cell skip seeding —
-    confirming seed grain == capture grain. Were the enumerator keyed on raw
-    ``FUTURE``, the 'futures_chain' present-set tuple would NOT match and the
+    Proves the row_key match is at the writer grain: the MTDS writer records a CME
+    futures_chain capture with ``instrument_id=""`` + ``underlying=<U>``
+    (venue_fetch.py:318-320 → manifest_finalize.py base_row_key). The present-set
+    tuple therefore carries a BLANK instrument_id and the underlying in the
+    ``underlying`` column; the seed mirrors that shape (axis-3, 2026-06-22), so the
+    alive-and-captured cell skips seeding. Were the enumerator still keyed on the
+    leaf instrument_id (``ES-2025H``) the present-set tuple would NOT match and the
     cell would be (wrongly) re-seeded.
-
-    _enumerate_v2_tradfi receives pre-bundled entries (instrument_type='futures_chain',
-    instrument_id=underlying) from enumerate_v2() after _rollup_bundle_grain runs.
     """
-    cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
-    present = {("CME", "", "ohlcv_1m", "futures_chain", "ES", "", "2024-06-03")}
+    cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "underlying", "league_id", "date"]
+    # Writer shape for a futures_chain bundle: instrument_id="", underlying=<U>.
+    present = {("CME", "", "ohlcv_1m", "futures_chain", "", "ES-2025H", "", "2024-06-03")}
     catalog = [
         _make_tradfi_entry(
-            instrument_id="ES", instrument_type="futures_chain", venue="CME", available_from="2020-01-01"
+            instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01"
         )
     ]
     rows = list(
@@ -530,7 +525,117 @@ def test_tradfi_v2_capture_at_writer_grain_suppresses_seed() -> None:
             present_cols=cols,
         )
     )
-    assert rows == [], "captured futures_chain-grain cell must suppress the seed (grain match)"
+    assert rows == [], "captured writer-grain bundle cell must suppress the seed (grain match)"
+
+
+def test_tradfi_v2_bundle_seed_has_blank_instrument_id_and_underlying() -> None:
+    """A bundle (futures_chain) seed mirrors the writer: instrument_id="" + underlying set.
+
+    The un-captured CME future is seeded as a per-underlying futures_chain bundle
+    cell; the seed MUST carry a BLANK instrument_id and the underlying populated so
+    its shard atom equals the writer's captured-cell atom (axis-3, 2026-06-22).
+    """
+    catalog = [
+        _make_tradfi_entry(
+            instrument_id="ES-2025H", instrument_type="FUTURE", venue="CME", available_from="2020-01-01"
+        )
+    ]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            catalog,
+            _date_axis("2024-06-03"),
+            ["ohlcv_1m"],
+            present_set=set(),  # nothing captured → seed
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].instrument_type == "futures_chain"
+    assert rows[0].instrument_id == "", "bundle seed must carry a BLANK instrument_id (writer grain)"
+    assert rows[0].underlying == "ES-2025H", "bundle seed must carry the underlying"
+
+
+def test_tradfi_v2_leaf_seed_keeps_instrument_id_blank_underlying() -> None:
+    """A LEAF (equity) seed keeps its real instrument_id and a blank underlying.
+
+    Confirms the bundle collapse is scoped to per-underlying bundle types and never
+    touches leaf/per-instrument types — they still carry instrument_id=<id>,
+    underlying="" (no regression).
+    """
+    catalog = [
+        _make_tradfi_entry(
+            instrument_id="AAPL", instrument_type="EQUITY", venue="NASDAQ", available_from="2020-01-01"
+        )
+    ]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            catalog,
+            _date_axis("2024-06-03"),
+            ["ohlcv_1m"],
+            present_set=set(),
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0].instrument_type == "equity"
+    assert rows[0].instrument_id == "AAPL", "leaf seed must keep its real instrument_id"
+    assert rows[0].underlying == "", "leaf seed must carry a blank underlying"
+
+
+def test_tradfi_v2_bundle_capture_suppresses_via_full_enumerate_v2() -> None:
+    """End-to-end (enumerate_v2 → rollup → tradfi): captured futures_chain/combo/options_chain
+    cells with ``instrument_id=""`` + ``underlying=<U>`` SUPPRESS their seeds; the
+    un-captured ones seed with a blank instrument_id. Covers all three bundle types.
+    """
+    catalog = [
+        # futures_chain: CME outright future leaf → rolls up to futures_chain on underlying ES.
+        _make_tradfi_entry(
+            instrument_id="ESH5", instrument_type="FUTURE", venue="CME", underlying="ES", available_from="2020-01-01"
+        ),
+        # combo: CME calendar/inter-commodity combo leaf → rolls up to combo on underlying ES.
+        _make_tradfi_entry(
+            instrument_id="ES-CAL-1", instrument_type="COMBO", venue="CME", underlying="ES", available_from="2020-01-01"
+        ),
+        # options_chain: CME option leaf → rolls up to options_chain on underlying CL.
+        _make_tradfi_entry(
+            instrument_id="CL-C-70", instrument_type="OPTION", venue="CME-OPTIONS", underlying="CL", available_from="2020-01-01"
+        ),
+    ]
+    axis = _date_axis("2024-06-03")
+    # Writer-shape captures (instrument_id="", underlying=<U>) for ES futures_chain
+    # and ES combo only — CL options_chain stays UN-captured so it must seed.
+    cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "underlying", "league_id", "date"]
+    present = {
+        ("CME", "", "trades", "futures_chain", "", "ES", "", "2024-06-03"),
+        ("CME", "", "trades", "combo", "", "ES", "", "2024-06-03"),
+    }
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="tradfi",
+            catalog=catalog,
+            date_axis=axis,
+            data_types=["trades"],
+            present_set=present,
+            present_cols=cols,
+        )
+    )
+    seeded = {(r.instrument_type, r.instrument_id, r.underlying) for r in rows}
+    # ES futures_chain + ES combo captured → suppressed.
+    assert ("futures_chain", "", "ES") not in seeded, "captured futures_chain must be suppressed"
+    assert ("combo", "", "ES") not in seeded, "captured combo must be suppressed"
+    # CL options_chain un-captured → seeded with blank instrument_id + underlying=CL.
+    assert ("options_chain", "", "CL") in seeded, "un-captured options_chain must seed at writer grain"
+    # No bundle seed ever carries a non-blank instrument_id.
+    bundle_types = {"futures_chain", "combo", "options_chain"}
+    assert all(r.instrument_id == "" for r in rows if r.instrument_type in bundle_types), (
+        "every bundle seed must carry a blank instrument_id"
+    )
+    # De-dup: each (venue, bundle_type, underlying, data_type, date) appears at most once.
+    bundle_keys = [
+        (r.venue, r.instrument_type, r.underlying, r.data_type, r.date)
+        for r in rows
+        if r.instrument_type in bundle_types
+    ]
+    assert len(bundle_keys) == len(set(bundle_keys)), "bundle seeds must be emitted once per underlying (no dupes)"
 
 
 def test_tradfi_v2_equity_and_etf_seed_canonical_lowercase() -> None:
@@ -540,7 +645,9 @@ def test_tradfi_v2_equity_and_etf_seed_canonical_lowercase() -> None:
         _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NASDAQ", available_from="2025-01-01"),
     ]
     # 2024-06-01 → NOT_LISTED; 2025-06-01 alive keeps the lifecycle-overlap filter happy.
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"])
+    )
     seeded = {(r.instrument_id, r.instrument_type) for r in rows}
     assert ("AAPL", "equity") in seeded
     assert ("SPY", "etf") in seeded
@@ -1558,9 +1665,11 @@ def test_enumerate_v2_tradfi_option_leaves_roll_up() -> None:
     rows = list(enumerator_module.enumerate_v2(asset_group="tradfi", catalog=catalog, date_axis=dates))
     # Era-B: instrument_type=options_chain bundle; tradfi admits trades + ohlcv_1m
     # (the captured chain market-data data_types — UAC validity matrix T-OLD-2b).
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {
-        ("ES", "options_chain", "trades"),
-        ("ES", "options_chain", "ohlcv_1m"),
+    # axis-3 (2026-06-22): a tradfi BUNDLE cell carries instrument_id="" + underlying=<U>
+    # (the MTDS writer grain), NOT instrument_id=<underlying>.
+    assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
+        ("", "ES", "options_chain", "trades"),
+        ("", "ES", "options_chain", "ohlcv_1m"),
     }
 
 
@@ -1761,3 +1870,64 @@ def test_range_encode_deterministic() -> None:
     b = enumerator_module.range_encode(list(reversed(rows)))
     assert a == b
     assert a[0].n_days == 3
+
+
+# ---------------------------------------------------------------------------
+# TradFi writer-grain alignment (2026-06-22): the expected-universe SEED must
+# roll FUTURE/COMBO leaves up to the SAME instrument_type the MTDS writer
+# captures (futures_chain / combo), NOT the passthrough leaf (future) or the
+# wrong bundle (options_chain). See UAC FUTURE_BUNDLE_VENUES["tradfi"] +
+# BUNDLE_INSTRUMENT_TYPE_BY_AG_AND_LEAF[("tradfi","combo")].
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_writer_instrument_type_tradfi_future_cme_is_futures_chain() -> None:
+    """A CME outright FUTURE leaf seeds instrument_type=futures_chain (writer grain)."""
+    entry = _make_tradfi_entry(instrument_id="ESM6", instrument_type="FUTURE", venue="CME")
+    assert enumerator_module._canonical_writer_instrument_type("tradfi", entry) == "futures_chain"
+
+
+def test_canonical_writer_instrument_type_tradfi_combo_is_combo() -> None:
+    """A CME COMBO (spread) leaf seeds instrument_type=combo (writer keeps its own partition)."""
+    entry = _make_tradfi_entry(instrument_id="ESM6-ESU6", instrument_type="COMBO", venue="CME")
+    assert enumerator_module._canonical_writer_instrument_type("tradfi", entry) == "combo"
+
+
+def test_canonical_writer_instrument_type_tradfi_equity_passthrough() -> None:
+    """Regression: a NASDAQ EQUITY leaf still seeds the lowercase passthrough type."""
+    entry = _make_tradfi_entry(instrument_id="AAPL", instrument_type="EQUITY", venue="NASDAQ")
+    assert enumerator_module._canonical_writer_instrument_type("tradfi", entry) == "equity"
+
+
+def test_rollup_bundle_grain_tradfi_future_collapses_to_futures_chain() -> None:
+    """Two CME ES futures leaves collapse to ONE per-underlying futures_chain entry."""
+    catalog = [
+        _make_tradfi_entry(instrument_id="ESM6", instrument_type="FUTURE", venue="CME", underlying="ES"),
+        _make_tradfi_entry(instrument_id="ESU6", instrument_type="FUTURE", venue="CME", underlying="ES"),
+    ]
+    rolled = enumerator_module._rollup_bundle_grain(catalog, "tradfi")
+    synth = [e for e in rolled if e.instrument_type == "futures_chain"]
+    assert len(synth) == 1
+    assert synth[0].instrument_id == "ES"
+    assert synth[0].data_type is None  # data_type resolved later from the validity matrix
+
+
+def test_rollup_bundle_grain_tradfi_combo_collapses_to_combo() -> None:
+    """CME combo leaves collapse to ONE per-underlying combo entry (NOT options_chain)."""
+    catalog = [
+        _make_tradfi_entry(instrument_id="ESM6-ESU6", instrument_type="COMBO", venue="CME", underlying="ES"),
+        _make_tradfi_entry(instrument_id="ESU6-ESZ6", instrument_type="COMBO", venue="CME", underlying="ES"),
+    ]
+    rolled = enumerator_module._rollup_bundle_grain(catalog, "tradfi")
+    types = {e.instrument_type for e in rolled}
+    assert "combo" in types
+    assert "options_chain" not in types  # the pre-2026-06-22 mis-grain is gone
+    synth = [e for e in rolled if e.instrument_type == "combo"]
+    assert len(synth) == 1
+    assert synth[0].instrument_id == "ES"
+
+
+def test_make_tradfi_entry_underlying_kw_supported() -> None:
+    """Guard: the helper accepts an underlying kwarg used by the roll-up tests above."""
+    entry = _make_tradfi_entry(instrument_id="ESM6", instrument_type="FUTURE", venue="CME", underlying="ES")
+    assert entry.underlying == "ES"
