@@ -684,9 +684,7 @@ async def _fetch_footystats_odds(
                         # EXPECTED_BOOKMAKER_MARKET_SETS ships as item 1 of this plan
                         # and the min-count can be set to len(expected_set[tier])).
                         expected_root_clusters={
-                            str(fid): 1
-                            for fid in _stamped_odds_clean["canonical_fixture_id"].dropna().unique()
-                            if fid
+                            str(fid): 1 for fid in _stamped_odds_clean["canonical_fixture_id"].dropna().unique() if fid
                         },
                         cluster_extractor=lambda sym: sym,
                         cluster_symbol_column="canonical_fixture_id",
@@ -759,8 +757,8 @@ async def _fetch_footystats_odds(
         else:
             _orch.logger.info("FootyStats odds: no odds data for date=%s", date)
             # Honest-coverage: legitimate empty (no odds for this date).
-            # ODDS slice tagged BATCH_ODDS_API per UAC SOURCE_PRIORITY
-            # (footystats odds adapter; see footystats_pipeline_mode_gap_2026_05_12.md).
+            # ODDS slice tagged BATCH_FOOTYSTATS (source='footystats'); fixed
+            # from BATCH_ODDS_API 2026-06-22 — prior stamp caused fail_fast rejects.
             odds_manifest.record_empty(
                 row_key=_row_key,
                 attempted_at=attempt_ts,
