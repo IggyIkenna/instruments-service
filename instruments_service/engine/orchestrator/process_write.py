@@ -109,12 +109,26 @@ def _validate_records(
 
 def _records_to_dataframe(records: list[_orch.InstrumentRecord]) -> _orch.pd.DataFrame:
     """Serialize InstrumentRecord list to a flat DataFrame for parquet writes."""
+    from instruments_service.reference_data.adapters.prediction.polymarket import (  # noqa: qg-inside-import
+        _clob_token_ids_for_condition_id,
+    )
+
     rows: list[dict[str, object]] = []
     for r in records:
         d = r.model_dump()
         # Serialize legs list[InstrumentLeg] → JSON string for parquet storage
         if d.get("legs") is not None:
             d["legs"] = _orch.json.dumps(d["legs"])
+        # Polymarket: InstrumentRecord (UAC) has no clob_token_ids field. Join the
+        # per-outcome decimal CLOB token-ids from the package side-table (keyed by
+        # condition_id == instrument_key, registered in parsing._parse_market) so the
+        # availability parquet carries the column the Polymarket CLOB WS subscribes by
+        # (live + batch). No-op for non-Polymarket rows (lookup returns None).
+        _ik = d.get("instrument_key")
+        if isinstance(_ik, str):
+            _tids = _clob_token_ids_for_condition_id(_ik)
+            if _tids:
+                d["clob_token_ids"] = _tids
         rows.append(d)
     return _orch.pd.DataFrame(rows)
 
