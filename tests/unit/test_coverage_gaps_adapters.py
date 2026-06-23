@@ -440,7 +440,7 @@ class TestTardisCoverageGaps:
 
     @pytest.mark.asyncio
     async def test_fetch_exchange_instruments_404_returns_empty(self) -> None:
-        """Lines 419-421: 404 status returns empty list with warning."""
+        """404 status on the free /v1/exchanges metadata endpoint returns []."""
         adapter = TardisReferenceDataAdapter(exchanges=["nonexistent-exchange"])
         mock_resp = AsyncMock()
         mock_resp.status = 404
@@ -450,12 +450,15 @@ class TestTardisCoverageGaps:
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=mock_cm)
 
-        results = await adapter._fetch_exchange_instruments(mock_session, None, "nonexistent-exchange")
+        # New no-auth signature: (session, exchange) — no api_key parameter.
+        results = await adapter._fetch_exchange_instruments(mock_session, "nonexistent-exchange")
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_fetch_exchange_instruments_with_api_key_adds_auth_header(self) -> None:
-        """Line 416: API key is added to headers when present."""
+    async def test_fetch_exchange_instruments_no_auth_header_free_endpoint(self) -> None:
+        """Enumeration uses the FREE /v1/exchanges metadata endpoint with NO
+        Authorization header and NEVER the authenticated /v1/instruments path
+        (operator 2026-06-23: IS must not consume the Tardis key)."""
 
         from unified_api_contracts import TardisExchangeDetail
 
@@ -475,14 +478,14 @@ class TestTardisCoverageGaps:
             "instruments_service.reference_data.adapters.cefi.tardis.TardisExchangeDetail.model_validate",
             return_value=empty_detail,
         ):
-            results = await adapter._fetch_exchange_instruments(mock_session, "my-api-key", "binance-futures")
+            results = await adapter._fetch_exchange_instruments(mock_session, "binance-futures")
 
-        # Verify get was called with auth header (adapter makes 2 calls: instruments + exchanges)
-        assert mock_session.get.call_count >= 1
-        call_args = mock_session.get.call_args
-        assert (
-            "Authorization" in call_args[1]["headers"]
-            or (len(call_args[0]) > 1 and "Authorization" in call_args[0][1])
-            or any("Authorization" in str(a) for a in call_args)
-        )
+        # Exactly one call, to the FREE endpoint, with no auth header.
+        assert mock_session.get.call_count == 1
+        call = mock_session.get.call_args
+        url = call.args[0] if call.args else call.kwargs.get("url", "")
+        assert "/v1/exchanges/" in url
+        assert "/v1/instruments/" not in url
+        headers = call.kwargs.get("headers")
+        assert not (headers and "Authorization" in headers)
         assert results == []
