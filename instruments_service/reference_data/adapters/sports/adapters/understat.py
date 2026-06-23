@@ -38,6 +38,13 @@ _BASE_URL: str = "https://understat.com"
 # Understat league identifiers
 _UNDERSTAT_LEAGUES: list[str] = ["EPL", "La_Liga", "Bundesliga", "Serie_A", "Ligue_1", "RFPL"]
 
+# Process-lifetime cache: (league, season) → extracted match list (dates array only).
+# Eliminates redundant /getLeagueData fetches across dates within the same backfill run.
+# A full backfill spans up to ~11 seasons x 6 leagues = 66 distinct keys; bounded.
+# We cache only the `dates` list (extracted by _extract_dates_from_json), not the raw
+# JSON that also contains large `teams` and `players` sections — keeps memory small.
+_LEAGUE_SEASON_CACHE: dict[tuple[str, int], list[dict[str, object]]] = {}
+
 
 class UnderstatAdapter(BaseSportsReferenceAdapter):
     """Understat sports reference data adapter.
@@ -121,7 +128,15 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         Uses ``GET /getLeagueData/{league}/{season}`` which returns JSON
         with ``{dates: [...], teams: {...}, players: [...]}`` where each
         entry in ``dates`` is a match with xG, goals, and team info.
+
+        Results are cached per (league, season) for the lifetime of the process
+        so a multi-date backfill fetches each season exactly once per league.
         """
+        cache_key = (league, season)
+        if cache_key in _LEAGUE_SEASON_CACHE:
+            logger.debug("Cache hit: (league=%s, season=%d) — skipping HTTP fetch", league, season)
+            return _filter_and_normalize_matches(_LEAGUE_SEASON_CACHE[cache_key], target_date, league, season)
+
         url = f"{_BASE_URL}/getLeagueData/{league}/{season}"
         headers = {**self._headers(), "Referer": f"{_BASE_URL}/league/{league}/{season}"}
 
@@ -134,7 +149,9 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
             self._fetch_error_count += 1
             return []
 
+        # Extract only the dates list (discards large teams/players sections).
         matches = _extract_dates_from_json(raw_response)
+        _LEAGUE_SEASON_CACHE[cache_key] = matches
         return _filter_and_normalize_matches(matches, target_date, league, season)
 
     async def get_leagues(self) -> list[CanonicalLeague]:
@@ -209,11 +226,17 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         result: list[tuple[str, str]] = []
         async with self._make_session() as session:
             for league in _UNDERSTAT_LEAGUES:
-                url = f"{_BASE_URL}/getLeagueData/{league}/{season}"
-                headers = {**self._headers(), "Referer": f"{_BASE_URL}/league/{league}/{season}"}
+                cache_key = (league, season)
                 try:
-                    raw = await self._get_with_retry(session, url, headers=headers)
-                    matches = _extract_dates_from_json(raw)
+                    if cache_key in _LEAGUE_SEASON_CACHE:
+                        logger.debug("Cache hit: (league=%s, season=%d) — skipping HTTP fetch", league, season)
+                        matches = _LEAGUE_SEASON_CACHE[cache_key]
+                    else:
+                        url = f"{_BASE_URL}/getLeagueData/{league}/{season}"
+                        headers = {**self._headers(), "Referer": f"{_BASE_URL}/league/{league}/{season}"}
+                        raw = await self._get_with_retry(session, url, headers=headers)
+                        matches = _extract_dates_from_json(raw)
+                        _LEAGUE_SEASON_CACHE[cache_key] = matches
                     for m in matches:
                         if not isinstance(m, dict):
                             continue

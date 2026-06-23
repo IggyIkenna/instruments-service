@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
+import instruments_service.reference_data.adapters.sports.adapters.understat as _understat_mod
 from instruments_service.reference_data.adapters.sports.adapters.understat import (
     UnderstatAdapter,
     _extract_dates_from_json,
@@ -22,6 +23,12 @@ from instruments_service.reference_data.adapters.sports.adapters.understat impor
     _safe_float,
     _safe_int,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_league_season_cache() -> None:
+    """Clear the module-level season cache before every test so tests are independent."""
+    _understat_mod._LEAGUE_SEASON_CACHE.clear()
 
 
 def _make_aiohttp_mock(
