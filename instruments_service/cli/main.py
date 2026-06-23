@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import UTC, datetime
 
 import pandas as pd  # pyright: ignore[reportMissingImports]
 from unified_trading_library import ServiceBootstrap, get_write_bucket_name
@@ -196,6 +197,47 @@ def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pra
     )
 
 
+def _arg_present(argv: list[str], name: str) -> bool:
+    """True if ``--name`` (or ``--name=...``) appears in argv."""
+    return any(a == name or a.startswith(name + "=") for a in argv)
+
+
+def _arg_value(argv: list[str], name: str) -> str | None:
+    """Return the value of ``--name value`` or ``--name=value`` in argv, else None."""
+    for i, a in enumerate(argv):
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+        if a == name and i + 1 < len(argv):
+            return argv[i + 1]
+    return None
+
+
+def _default_recon_dates_to_today() -> None:
+    """Self-default ``--start-date``/``--end-date`` to TODAY for the daily recon run.
+
+    The recurring cefi IS fetch is the Cloud Run job
+    ``uts-prod-instruments-service-cefi-t1-recon`` (scheduler 06:00 UTC). The
+    UTL date-loop framework REQUIRES explicit ``--start-date``/``--end-date``
+    and raises ``ValueError: Invalid date format ''`` when the scheduler's empty
+    ``httpTarget.body`` injects none — so the recon job had to carry a HARDCODED
+    date, which goes stale the next day (re-fetches yesterday's snapshot forever).
+
+    Fix (instruments-service-scoped, no scheduler edit needed): when the run is a
+    recon run (``--run-tag=t1-recon``) and BOTH dates are unset, inject TODAY
+    (UTC) for both. Instrument reference data is a CURRENT-listing snapshot (the
+    Tardis no-auth enumeration / native venue APIs return today's universe), so
+    TODAY is the correct anchor — not a T+1 lag. Idempotent: a no-op when either
+    date is already supplied (manual backfills keep full control).
+    """
+    argv = sys.argv[1:]
+    if _arg_value(argv, "--run-tag") != "t1-recon":
+        return
+    if _arg_present(argv, "--start-date") or _arg_present(argv, "--end-date"):
+        return
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    sys.argv.extend(["--start-date", today, "--end-date", today])
+
+
 def main_service_cli() -> None:  # pragma: no cover
     """ServiceBootstrap entry point for instruments-service."""
     # --operation=status is a read-only diagnostic; bypass the date-loop framework.
@@ -203,6 +245,9 @@ def main_service_cli() -> None:  # pragma: no cover
     if "--operation=status" in _argv or ("--operation" in _argv and _argv[_argv.index("--operation") + 1] == "status"):
         _run_coverage_status(_argv)
         return
+    # Daily recon run self-defaults its date window to TODAY so the scheduled
+    # 06:00 UTC job never re-fetches a stale hardcoded date (incident 2026-06-23).
+    _default_recon_dates_to_today()
     ServiceBootstrap(
         service_name=_SERVICE_NAME,
         operations={"instruments": InstrumentsHandler},
