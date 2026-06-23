@@ -55,9 +55,16 @@ def test_split_kraken_symbol_non_kraken_shape_returns_empty() -> None:
     assert _split_kraken_symbol("BTCUSDT") == ("", "")
 
 
-def test_kraken_base_is_in_universe_for_aave() -> None:
-    """AAVE (an mvp_instrument_universe_gap base) must survive parsing → asset filter."""
-    from unified_api_contracts import CEFI_BASE_ASSET_UNIVERSE
+def test_kraken_base_survives_asset_filter_for_aave() -> None:
+    """AAVE must survive Kraken parsing → the (full-universe) asset filter.
 
-    base, _quote = _resolve_base_quote(_item("AAVE/USD"), "AAVE/USD", "kraken")
-    assert base in CEFI_BASE_ASSET_UNIVERSE
+    Post-2026-06-23 full-universe model: the gate is no longer membership in the
+    CEFI_BASE_ASSET_UNIVERSE majors whitelist (that whitelist no longer gates
+    spot/perp) — it is parse-correctness + an accepted USD-family quote. AAVE/USD
+    must parse to base=AAVE and pass _passes_asset_filter.
+    """
+    from instruments_service.reference_data.adapters.cefi.tardis.parsing import _passes_asset_filter
+
+    base, quote = _resolve_base_quote(_item("AAVE/USD"), "AAVE/USD", "kraken")
+    assert base == "AAVE"
+    assert _passes_asset_filter(base, quote, "SPOT_PAIR") is True
