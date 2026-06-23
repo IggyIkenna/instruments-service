@@ -494,6 +494,79 @@ class TestKalshiAdapter:
 
         assert series_called == [], f"/series must NOT be called for a dated historical request; got: {series_called}"
 
+    @pytest.mark.asyncio
+    async def test_series_scoped_runs_for_current_day_batch_after_cutoff(self) -> None:
+        """A dated batch enum on/after the cutoff is still the LIVE path → series-scoped
+        MUST run (regression: the `target is None` gate skipped a `--mode batch
+        --start-date <today>` re-enum, leaving the catalogue all-OTHER)."""
+        adapter = KalshiReferenceDataAdapter()
+
+        cutoff_resp = AsyncMock()
+        cutoff_resp.status = 200
+        cutoff_resp.raise_for_status = MagicMock()
+        cutoff_resp.json = AsyncMock(return_value={"market_settled_ts": "2026-06-20T00:00:00Z"})
+
+        snapshot_resp = AsyncMock()
+        snapshot_resp.status = 200
+        snapshot_resp.raise_for_status = MagicMock()
+        snapshot_resp.json = AsyncMock(return_value={"markets": [], "cursor": ""})
+
+        series_crypto_resp = AsyncMock()
+        series_crypto_resp.status = 200
+        series_crypto_resp.raise_for_status = MagicMock()
+        series_crypto_resp.json = AsyncMock(return_value={"series": [{"ticker": "KXBTCD"}]})
+
+        series_empty_resp = AsyncMock()
+        series_empty_resp.status = 200
+        series_empty_resp.raise_for_status = MagicMock()
+        series_empty_resp.json = AsyncMock(return_value={"series": []})
+
+        btc_resp = AsyncMock()
+        btc_resp.status = 200
+        btc_resp.raise_for_status = MagicMock()
+        btc_resp.json = AsyncMock(
+            return_value={
+                "markets": [
+                    {
+                        "ticker": "KXBTCD-26JUN23-T90000",
+                        "event_ticker": "KXBTCD-26JUN23",
+                        "series_ticker": "KXBTCD",
+                        "title": "BTC daily above $90k?",
+                        "category": "Crypto",
+                        "status": "active",
+                        "yes_bid": 60,
+                        "yes_ask": 65,
+                        "open_time": "2026-06-23T00:00:00Z",
+                        "close_time": "2026-06-23T23:59:59Z",
+                        "expiration_time": "2026-06-23T23:59:59Z",
+                    }
+                ],
+                "cursor": "",
+            }
+        )
+
+        def get_side_effect(url: str, **kwargs: object) -> object:
+            params = kwargs.get("params", {})
+            if "historical/cutoff" in url:
+                return _make_cm(cutoff_resp)
+            if isinstance(params, dict) and params.get("series_ticker") == "KXBTCD":
+                return _make_cm(btc_resp)
+            if "/series" in url:
+                cat = params.get("category") if isinstance(params, dict) else None
+                return _make_cm(series_crypto_resp if cat == "Crypto" else series_empty_resp)
+            return _make_cm(snapshot_resp)
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(side_effect=get_side_effect)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm), patch("asyncio.sleep", AsyncMock()):
+            results = await adapter.get_instruments(date="2026-06-23")  # on/after cutoff = live
+
+        tickers = {r.instrument_key for r in results}
+        assert "KXBTCD-26JUN23-T90000" in tickers, f"current-day batch must run series-scoped; got: {tickers}"
+
     def test_parse_kalshi_creds_rsa_blob(self) -> None:
         """RSA credential JSON blob → (api_key_id, private_key_pem); enables signing."""
         import json as _json
