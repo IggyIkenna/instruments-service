@@ -263,14 +263,14 @@ def _write_fixtures_per_league(
             _ldf.drop(columns=["_canonical_league_id"], errors="ignore"), when=_orch.datetime.now(_orch.UTC)
         )
         # Write-skip guard (opt-in, e.g. the daily re-poll): if the on-disk per-league
-        # parquet already holds identical fixture data (ignoring the re-stamped
-        # available_at), skip the re-write. Avoids churning a fresh object version each
-        # run and preserves the earliest available_at. Bias is to write on any doubt.
+        # fixtures_schedule parquet already holds identical schedule data (ignoring the
+        # re-stamped available_at), skip both entity writes for this league. Bias is to
+        # write on any doubt.
         if (
             skip_if_unchanged
             and bucket
             and _orch._per_league_fixtures_data_unchanged(
-                bucket, date, "fixtures", _orch._canonical_league_id(_lid_str), _ldf_clean
+                bucket, date, "fixtures_schedule", _orch._canonical_league_id(_lid_str), _ldf_clean
             )
         ):
             _orch.logger.debug(
@@ -280,18 +280,47 @@ def _write_fixtures_per_league(
                 source_label,
             )
             continue
-        # v9 canonical write: use entity-specific sink so pipeline_mode= lands
-        # in the prefix (DataSink sorts partition keys alphabetically — p > l > e,
-        # so pipeline_mode cannot go in the partition dict without breaking order).
-        _fix_canonical_sink = _orch._sports_ref_sink_for(bucket, date, "fixtures") if bucket else sink
+
+        _canonical_lid = _orch._canonical_league_id(_lid_str)
+
+        # --- Entity-split (fixture-schedule-split Phase 4) ---
+        # FIXTURES_SCHEDULE: schedule + Q5 phase timestamps. Excludes Q6 outcome
+        # columns and match_end_time (known only at match end, not at kickoff).
+        # Written for ALL fixtures (upcoming + in-play + completed).
+        _schedule_excl = set(_orch._Q6_OUTCOME_COLUMNS) | {"match_end_time"}
+        _schedule_cols = [c for c in _ldf_clean.columns if c not in _schedule_excl]
+        _ldf_schedule = _ldf_clean[_schedule_cols]
+        _fix_schedule_sink = _orch._sports_ref_sink_for(bucket, date, "fixtures_schedule") if bucket else sink
         _orch._gated_sink_write(
-            _fix_canonical_sink,
-            data=_ldf_clean,
-            partition={"entity": "fixtures", "league": _orch._canonical_league_id(_lid_str)},
-            filename="fixtures.parquet",
+            _fix_schedule_sink,
+            data=_ldf_schedule,
+            partition={"entity": "fixtures_schedule", "league": _canonical_lid},
+            filename="fixtures_schedule.parquet",
             venue="api_football",
-            entity="fixtures",
+            entity=_orch.FIXTURES_SCHEDULE,
         )
+
+        # FIXTURES_OUTCOMES: score-distinction columns (Q6) + match_end_time +
+        # fixture key. Written ONLY for completed fixtures (home_score_regulation
+        # populated — regulation always finishes even in ET/PEN games).
+        _outcomes_key_cols = ["af_fixture_id", "day", "available_at", "match_end_time"]
+        _outcomes_cols = [c for c in _outcomes_key_cols + list(_orch._Q6_OUTCOME_COLUMNS) if c in _ldf_clean.columns]
+        _ldf_completed = (
+            _ldf_clean[_ldf_clean["home_score_regulation"].notna()]
+            if "home_score_regulation" in _ldf_clean.columns
+            else _ldf_clean.iloc[:0]
+        )
+        if not _ldf_completed.empty:
+            _ldf_outcomes = _ldf_completed[_outcomes_cols]
+            _fix_outcomes_sink = _orch._sports_ref_sink_for(bucket, date, "fixtures_outcomes") if bucket else sink
+            _orch._gated_sink_write(
+                _fix_outcomes_sink,
+                data=_ldf_outcomes,
+                partition={"entity": "fixtures_outcomes", "league": _canonical_lid},
+                filename="fixtures_outcomes.parquet",
+                venue="api_football",
+                entity=_orch.FIXTURES_OUTCOMES,
+            )
 
     if not _without_league.empty:
         _orch.logger.warning(
