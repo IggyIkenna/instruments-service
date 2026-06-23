@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """reconcile_correct_legacy_blank_misflips_defi_2026_05_13.py — Wave 3 DeFi corrector.
 
 Mirror of the CeFi corrector (``reconcile_correct_legacy_blank_misflips_cefi_2026_05_13.py``)

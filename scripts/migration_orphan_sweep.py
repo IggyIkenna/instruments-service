@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """migration_orphan_sweep.py — GCS→manifest orphan sweep + bucket taxonomy + sizing.
 
 The INVERSE of ``reconcile_phantom_manifest_rows_all.py``:

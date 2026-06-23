@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after rebuild confirmed + GCS orphan-sweep = 0
 """Rebuild the SPORTS availability manifest from canonical GCS layouts.
 
 Mirrors the cefi/defi/prediction rebuilders but adds:

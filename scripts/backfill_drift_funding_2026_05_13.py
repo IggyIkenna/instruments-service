@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 """Backfill DRIFT-SOLANA perp_funding data from Drift historical S3 archive.
 
 Reads DRIFT V2 historical funding rates from:

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after purge confirmed in live consolidated _index (zero rows of target type)
 """Purge IS prediction manifest rows where canonical_question_group=OTHER.
 
 Context (predictions_master.md Phase 5.reclassify):

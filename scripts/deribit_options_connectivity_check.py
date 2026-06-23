@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Deribit options-chain connectivity proof — hits Deribit PUBLIC REST live.
 
 NOT a backfill. Pulls a single BTC (default) option chain via the

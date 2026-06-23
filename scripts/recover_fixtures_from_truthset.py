@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reclassification/relabelling confirmed + parent plan archived
 """Phase 2 — Targeted FIXTURES recovery using the Phase 1 truth-set.
 
 Plan: ``unified-trading-pm/plans/active/sports_fixtures_truthset_recovery_2026_05_06.md``.

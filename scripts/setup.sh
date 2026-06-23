@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 # CANONICAL SETUP — unified-trading-system
 #
 # Single source of truth for repo-local development environment setup.

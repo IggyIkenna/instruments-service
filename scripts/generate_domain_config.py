@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Generate and upload instruments domain config to cloud storage.
 
 This is the TEMPLATE config generation script for the unified trading system.
