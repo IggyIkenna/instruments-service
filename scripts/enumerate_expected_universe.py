@@ -1225,6 +1225,11 @@ def _enumerate_v2_sports(
     ``main``. A data_type with no source mapping (e.g. a test stub) gets no
     coverage filter.
     """
+    from unified_api_contracts.registry import (
+        BOOKMAKER_LEAGUE_COVERAGE,
+        LEAGUE_ENTITY_COVERAGE_ENTITIES,
+        is_league_entity_covered,
+    )
     from unified_api_contracts.sports import (
         SPORTS_DATA_TYPE_TO_SOURCE,
         get_entity_league_coverage,
@@ -1234,6 +1239,9 @@ def _enumerate_v2_sports(
     _pcols = present_cols or list(_SPORTS_PRESENT_COLS)
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
+
+    # Union of all leagues covered by at least one bookmaker — used to gate ODDS cells.
+    _leagues_with_any_bookmaker_coverage: frozenset[str] = frozenset().union(*BOOKMAKER_LEAGUE_COVERAGE.values())
 
     # Pre-resolve each data_type's source coverage start once (None = unmapped).
     coverage_starts: dict[str, pd.Timestamp | None] = {}
@@ -1245,7 +1253,11 @@ def _enumerate_v2_sports(
     entity_coverage: dict[str, frozenset[str] | None] = {}
     for dt in data_types:
         source = SPORTS_DATA_TYPE_TO_SOURCE.get(dt)
-        cov = get_source_coverage_start(source, dt) if source is not None else None
+        if source is None:
+            # Retired or unmapped data_type — not part of the expected universe.
+            # Skip pre-resolution; the dt loop below will skip it too.
+            continue
+        cov = get_source_coverage_start(source, dt)
         coverage_starts[dt] = pd.Timestamp(cov) if cov is not None else None
         _ec = get_entity_league_coverage(dt)
         entity_coverage[dt] = frozenset(x.upper() for x in _ec) if _ec is not None else None
@@ -1258,17 +1270,33 @@ def _enumerate_v2_sports(
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
             continue  # league not yet listed when window ended
         league_id = instr.league_id or instr.instrument_id
+        league_id_upper = league_id.upper()
         # G1-ENUM: filter data_types to those valid for this league instrument's shape.
         row_dts = _row_data_types("sports", instr, data_types)
         if not row_dts:
             continue  # unmapped sports instrument type → skip entirely
         for dt in row_dts:
+            # Retired / unmapped data_type — no source mapping → not in expected universe.
+            if SPORTS_DATA_TYPE_TO_SOURCE.get(dt) is None:
+                continue
+
             # Per-league entity coverage: skip a data_type whose source does NOT
             # cover this league (e.g. XG for a non-Understat league) — seeding it
             # would be a false expected_unattempted, not an honest owed cell.
             _cov_leagues = entity_coverage.get(dt)
-            if _cov_leagues is not None and league_id.upper() not in _cov_leagues:
+            if _cov_leagues is not None and league_id_upper not in _cov_leagues:
                 continue
+
+            # Structural out-of-scope flags (yield EXPECTED_NO_PROVIDER_COVERAGE, not skip):
+            # (a) api_football per-entity observed coverage: data_types like INJURIES /
+            #     PLAYER_STATS / STANDINGS etc. are only expected for leagues where
+            #     API-Football has EVER returned data for that entity.
+            # (b) ODDS: only expected for leagues where at least one bookmaker has
+            #     historically priced odds (union of BOOKMAKER_LEAGUE_COVERAGE values).
+            _is_oos = (dt in LEAGUE_ENTITY_COVERAGE_ENTITIES and not is_league_entity_covered(league_id, dt)) or (
+                dt == "ODDS" and league_id_upper not in _leagues_with_any_bookmaker_coverage
+            )
+
             cov_ts = coverage_starts.get(dt)
             for d in date_axis:
                 d_ts = pd.Timestamp(d)
@@ -1305,8 +1333,8 @@ def _enumerate_v2_sports(
                             instrument_id="",
                             league_id=league_id,
                             date=iso,
-                            reason="",
-                            capture_status="expected_unattempted",
+                            reason="EXPECTED_NO_PROVIDER_COVERAGE" if _is_oos else "",
+                            capture_status="empty_confirmed" if _is_oos else "expected_unattempted",
                         )
                     continue
                 yield ExpectedRow(
