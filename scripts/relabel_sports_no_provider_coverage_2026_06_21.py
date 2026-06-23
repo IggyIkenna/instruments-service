@@ -28,18 +28,36 @@ and ``expected_unattempted`` cells are never touched.
 
 IDEMPOTENT: a second run is a no-op (already-``EXPECTED_NO_PROVIDER_COVERAGE``
 cells aren't re-matched). SINGLE-WALK: one read of the ``_index``, one
-classification pass, one write-back. The Part-2 write-path fix (coverage-aware
+classification pass, one shard write. The Part-2 write-path fix (coverage-aware
 skip + emit) makes NEW writes produce the same empty_confirmed, so live writes
 reinforce — but ship Part-2 BEFORE --apply here.
 
+CONSOLIDATOR-SAFE WRITE (2026-06-23 — supersedes the full-``_index`` overwrite).
+Live sports MTDS + backfill VMs write per-VM shards that the manifest
+consolidator (Cloud Run cron) merges into the canonical
+``_index/availability_index.parquet`` every minute. A full-index overwrite would
+RACE that merge and drop live rows written since this script's read (the
+pre-migration-drain HARD RULE). Instead ``--apply`` writes ONLY the relabeled
+rows as a **per-VM shard** at ``_index/per_vm/{VM_NAME}.parquet`` (the canonical
+fleet write path). The consolidator's DuckDB last-write-wins merge
+(``PARTITION BY (date, venue, data_type, service_name, <dims…>) ORDER BY
+attempted_at DESC NULLS LAST, written_at DESC NULLS LAST``) collapses each
+(canonical row, shard relabeled row) pair into one group and picks the shard row
+because its ``attempted_at`` is fresher → the relabel WINS for its keys without
+touching the canonical blob. The shard carries the SAME dedup-key dims as the
+canonical rows it replaces. Untouched cells (captured / in-coverage failures /
+expected_unattempted) have different keys / are never in the shard → never lost.
+SSOT: ``codex/05-infrastructure/manifest-consolidator-ssot.md`` § "Merge engine".
+
 DRY-RUN by default: prints count to re-label + projected attempted_failed% per
 entity (before/after) + projected wasted-fetch reduction, writes the projection
-to ``_index/audit/``. ``--apply`` snapshots the live ``_index`` to
-``_index/snapshots/`` first, then writes back.
+to ``_index/audit/``. ``--apply`` requires ``MANIFEST_PER_VM_SHARDS=true`` +
+``VM_NAME=<unique>`` and writes the relabeled rows as that VM's per-VM shard.
 
 Usage:
-  GCP_PROJECT_ID=central-element-323112 PROJECT_ID=central-element-323112 DEPLOYMENT_ENV_SHORT=prd \
-    .venv-workspace/bin/python scripts/relabel_sports_no_provider_coverage_2026_06_21.py [--apply]
+  GCP_PROJECT_ID=central-element-323112 PROJECT_ID=central-element-323112 DEPLOYMENT_ENV_SHORT=prd CLOUD_PROVIDER=gcp \
+    MANIFEST_PER_VM_SHARDS=true VM_NAME=relabel-sports-nocov-$(date +%s) \
+    .venv/bin/python scripts/relabel_sports_no_provider_coverage_2026_06_21.py [--apply]
 """
 
 from __future__ import annotations
@@ -47,6 +65,7 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import os
 from datetime import UTC, datetime
 
 import gcsfs
@@ -58,6 +77,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("relabel_sports_no_provider_coverage")
 
 _MANIFEST_BLOB = "_index/availability_index.parquet"
+# Per-VM shard path template — matches the canonical fleet write path
+# ``unified_trading_library.manifest_writer._state._PER_VM_PATH_TEMPLATE`` so the
+# consolidator lists + merges this shard exactly like a writer-VM's shard.
+_PER_VM_PATH_TEMPLATE = "_index/per_vm/{instance}.parquet"
 _NO_COVERAGE_REASON = "EXPECTED_NO_PROVIDER_COVERAGE"
 # Per-fixture-entity empty_confirmed reasons that are NON-canonical for an
 # out-of-coverage (league, entity) cell — these are the wrong-empty reasons we
@@ -96,7 +119,7 @@ def _build_relabel_mask(df: pd.DataFrame) -> pd.Series:
     return mask
 
 
-def relabel(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]:
+def relabel(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object], pd.Series]:
     mask = _build_relabel_mask(df)
     n = int(mask.sum())
     out = df.copy()
@@ -133,7 +156,7 @@ def relabel(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]:
         relbl = int((mask & (dt == e)).sum())
         per_entity[e] = {"attempted_failed": f"{af_b}->{af_a}", "relabeled": relbl}
     stats["per_entity"] = per_entity
-    return out, stats
+    return out, stats, mask
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -141,7 +164,25 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--apply", action="store_true", help="Write the relabeled index back (snapshots first).")
     args = p.parse_args(argv)
 
+    # Fail loud if the env-short isn't set — otherwise resolve_bucket_name falls
+    # back to the env-LESS name (stale bucket frozen 2026-06-08).
+    env_short = os.environ.get("DEPLOYMENT_ENV_SHORT")
+    if not env_short:
+        logger.error("DEPLOYMENT_ENV_SHORT must be set (e.g. prd). Refusing — would resolve the stale env-less bucket.")
+        return 1
+
+    instance = os.environ.get("VM_NAME", "")
+    if args.apply and (os.environ.get("MANIFEST_PER_VM_SHARDS") != "true" or not instance):
+        logger.error(
+            "--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. The relabel is written as a "
+            "per-VM shard the consolidator merges (never a full-index overwrite). Refusing."
+        )
+        return 1
+
     bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+    if not bucket.startswith(f"instruments-store-sports-{env_short}"):
+        logger.error("Resolved bucket %s is not the expected env-short shape. Refusing.", bucket)
+        return 1
     fs = gcsfs.GCSFileSystem()
     logger.info("Reading live _index gs://%s/%s", bucket, _MANIFEST_BLOB)
     with fs.open(f"{bucket}/{_MANIFEST_BLOB}", "rb") as fh:
@@ -149,11 +190,12 @@ def main(argv: list[str] | None = None) -> int:
     if "error_reason" not in df.columns:
         df["error_reason"] = pd.array([None] * len(df), dtype="string")
 
-    out, stats = relabel(df)
+    out, stats, mask = relabel(df)
     logger.info("Relabel stats:")
     for k, v in stats.items():
         logger.info("  %s = %s", k, v)
 
+    # Audit projection (a separate, non-canonical blob — safe to write any time).
     buf = io.BytesIO()
     out.to_parquet(buf, index=False)
     buf.seek(0)
@@ -163,20 +205,36 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Wrote projection -> gs://%s", proj)
 
     if not args.apply:
-        logger.info("DRY RUN — live _index untouched.")
+        logger.info("DRY RUN — live _index untouched. Re-run with --apply to write the per-VM shard.")
         return 0
 
-    stamp = datetime.now(UTC).strftime("%Y%m%d")
-    snap = f"{bucket}/_index/snapshots/pre_sports_no_provider_coverage_{stamp}.parquet"
+    n = int(mask.sum())
+    if n == 0:
+        logger.info("Nothing to relabel — manifest already honest for out-of-coverage entity cells.")
+        return 0
+
+    # CONSOLIDATOR-SAFE APPLY: write ONLY the relabeled rows (carrying every
+    # canonical dedup-key dim verbatim, with fresh attempted_at/written_at so the
+    # consolidator's last-write-wins picks them) as this VM's per-VM shard. The
+    # canonical blob is NEVER overwritten → no race with live writers.
+    now_iso = datetime.now(UTC).isoformat()
+    shard_df = out.loc[mask].copy()
+    shard_df["attempted_at"] = now_iso
+    if "written_at" in shard_df.columns:
+        shard_df["written_at"] = now_iso
+
+    shard_path = _PER_VM_PATH_TEMPLATE.format(instance=instance)
     sbuf = io.BytesIO()
-    df.to_parquet(sbuf, index=False)
+    shard_df.to_parquet(sbuf, index=False, coerce_timestamps="us", allow_truncated_timestamps=True)
     sbuf.seek(0)
-    with fs.open(snap, "wb") as fh:
+    with fs.open(f"{bucket}/{shard_path}", "wb") as fh:
         fh.write(sbuf.getvalue())
-    logger.info("Snapshot -> gs://%s", snap)
-    with fs.open(f"{bucket}/{_MANIFEST_BLOB}", "wb") as fh:
-        fh.write(buf.getvalue())
-    logger.info("APPLIED. Relabeled %s rows.", stats["relabeled"])
+    logger.info(
+        "APPLIED. Wrote %d relabeled rows as per-VM shard gs://%s/%s (consolidator merges next cycle).",
+        n,
+        bucket,
+        shard_path,
+    )
     return 0
 
 
