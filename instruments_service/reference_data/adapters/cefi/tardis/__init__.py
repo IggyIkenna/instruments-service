@@ -1,11 +1,12 @@
 """Tardis reference data adapter — historical tick data provider.
 
 Tardis provides historical trades/orderbook data for crypto derivatives.
-This adapter retrieves instrument metadata via the public exchanges REST endpoint.
-API key optional for public instrument listing; required for higher rate limits.
+This adapter retrieves the instrument universe via the FREE, NO-AUTH public
+metadata endpoint ``GET /v1/exchanges/{exchange}`` — NO API key is sent or
+consumed for enumeration (operator 2026-06-23: IS must not burn the Tardis
+academic-unlimited key's limits on reference data). The authenticated
+``datasets.tardis.dev`` / ``/data-feeds`` tick-data path is MTDS's job, not IS.
 
-API key: store in Secret Manager as TARDIS_API_KEY.
-Auth: Authorization: Bearer {api_key} (header).
 Base URL: https://api.tardis.dev/v1
 
 Supported exchanges (configurable):
