@@ -45,10 +45,10 @@ class _FakeSink:
 
 
 class TestModuleLevelGate:
-    def test_gate_starts_in_warn_mode(self) -> None:
-        """Plan 6 rollout: warn-mode is the default until strict is flipped."""
+    def test_gate_is_in_strict_mode(self) -> None:
+        """Writegate flipped to strict after entity-split landed (fixture-schedule-split Phase 4)."""
         assert isinstance(_WRITE_GATE, InstrumentsWriteGate)
-        assert _WRITE_GATE.mode == "warn"
+        assert _WRITE_GATE.mode == "strict"
 
 
 class TestGatedSinkWrite:
@@ -77,12 +77,9 @@ class TestGatedSinkWrite:
             "entity": "player_values",
         }
 
-    def test_tm_incident_shape_warn_mode_writes_but_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_tm_incident_shape_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Replay 2026-04-22 Transfermarkt VM incident: wall-clock valuation_date
-        on historical day=2023-03-16. Warn mode emits + proceeds.
-
-        A strict-mode flip would raise TimestampAlignmentError from the per-shard
-        try/except in ``_fetch_transfermarkt_data`` — see plan Phase 3.
+        on historical day=2023-03-16. Strict mode emits the event then raises.
         """
         events: list[tuple[str, str, dict[str, object]]] = []
 
@@ -109,21 +106,22 @@ class TestGatedSinkWrite:
                 "available_at": [_ts, _ts],
             }
         )
-        _gated_sink_write(
-            sink,
-            data=df,
-            partition={"day": "2023-03-16", "entity": "player_values"},
-            filename="player_values.parquet",
-            venue="transfermarkt",
-            entity="player_values",
-        )
-        # warn mode → write still happens
-        assert len(sink.writes) == 1
-        # event emitted
+        with pytest.raises(TimestampAlignmentError):
+            _gated_sink_write(
+                sink,
+                data=df,
+                partition={"day": "2023-03-16", "entity": "player_values"},
+                filename="player_values.parquet",
+                venue="transfermarkt",
+                entity="player_values",
+            )
+        # strict mode → write skipped
+        assert sink.writes == []
+        # event still emitted before raise (CRITICAL in strict mode)
         alignment_events = [e for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION"]
         assert len(alignment_events) == 1
         _, severity, details = alignment_events[0]
-        assert severity == "WARNING"
+        assert severity == "CRITICAL"
         assert details["venue"] == "transfermarkt"
         assert details["entity"] == "player_values"
 
@@ -174,12 +172,12 @@ class TestGatedSinkWrite:
 
 
 class TestVenueParityCases:
-    """Phase 3a — each wired venue's warn-mode incident shape passes through
-    the same ``_gated_sink_write`` helper and emits on wall-clock-on-historical.
+    """Phase 3a (strict mode) — each wired venue's incident shape raises via
+    ``_gated_sink_write`` + emits ``DATA_ALIGNMENT_VIOLATION`` before raising.
 
     The gate is venue-agnostic; these cases exist so any future adapter-side
     wall-clock bug (like 2026-04-22 Transfermarkt) is caught at the FIRST
-    sink.write call regardless of provider. Failure to emit here = the gate
+    sink.write call regardless of provider. Failure to raise here = the gate
     wasn't threaded into the caller's sink.write."""
 
     _BATCH_DATE = "2023-03-16"  # historical backfill partition
@@ -219,17 +217,18 @@ class TestVenueParityCases:
                 "available_at": [_write_ts, _write_ts],
             }
         )
-        _gated_sink_write(
-            sink,
-            data=df,
-            partition=partition,
-            filename=filename,
-            venue=venue,
-            entity=entity,
-        )
+        with pytest.raises(TimestampAlignmentError):
+            _gated_sink_write(
+                sink,
+                data=df,
+                partition=partition,
+                filename=filename,
+                venue=venue,
+                entity=entity,
+            )
         return sink, events
 
-    def test_api_football_fixtures_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_api_football_fixtures_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "fixtures"},
@@ -238,15 +237,15 @@ class TestVenueParityCases:
             entity="fixtures",
             column="kickoff_utc",
         )
-        assert len(sink.writes) == 1  # warn mode writes
+        assert sink.writes == []  # strict mode → write skipped
         alignment = [e for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION"]
         assert len(alignment) == 1
         _, severity, details = alignment[0]
-        assert severity == "WARNING"
+        assert severity == "CRITICAL"
         assert details["venue"] == "api_football"
         assert details["entity"] == "fixtures"
 
-    def test_api_football_injuries_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_api_football_injuries_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "injuries", "league": "epl"},
@@ -255,10 +254,10 @@ class TestVenueParityCases:
             entity="injuries",
             column="kickoff_utc",
         )
-        assert len(sink.writes) == 1
+        assert sink.writes == []
         assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
 
-    def test_footystats_matches_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_footystats_matches_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "footystats_matches"},
@@ -267,11 +266,11 @@ class TestVenueParityCases:
             entity="footystats_matches",
             column="kickoff_utc",
         )
-        assert len(sink.writes) == 1
+        assert sink.writes == []
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
         assert details["venue"] == "footystats"
 
-    def test_footystats_odds_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_footystats_odds_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={
@@ -284,10 +283,10 @@ class TestVenueParityCases:
             entity="footystats_odds",
             column="kickoff_utc",
         )
-        assert len(sink.writes) == 1
+        assert sink.writes == []
         assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
 
-    def test_understat_xg_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_understat_xg_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "understat_xg"},
@@ -296,11 +295,11 @@ class TestVenueParityCases:
             entity="understat_xg",
             column="event_time",
         )
-        assert len(sink.writes) == 1
+        assert sink.writes == []
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
         assert details["venue"] == "understat"
 
-    def test_transfermarkt_leagues_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_transfermarkt_leagues_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "transfermarkt_leagues"},
@@ -308,10 +307,10 @@ class TestVenueParityCases:
             venue="transfermarkt",
             entity="transfermarkt_leagues",
         )
-        assert len(sink.writes) == 1
+        assert sink.writes == []
         assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
 
-    def test_weather_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_weather_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "weather"},
@@ -320,11 +319,11 @@ class TestVenueParityCases:
             entity="weather",
             column="kickoff_utc",
         )
-        assert len(sink.writes) == 1
+        assert sink.writes == []
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
         assert details["venue"] == "open_meteo"
 
-    def test_instrument_universe_universe_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_instrument_universe_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """L1723/L2340 instrument-universe writes (DeFi/CeFi/TradFi/Prediction).
         Production DataFrames don't carry DEFAULT_AS_OF_COLUMNS so the gate
         no-ops; this test injects one to prove the gate fires if a future
@@ -337,7 +336,7 @@ class TestVenueParityCases:
             entity="instruments",
             column="computed_at",
         )
-        assert len(sink.writes) == 1
+        assert sink.writes == []
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
         assert details["venue"] == "HYPERLIQUID"
         assert details["entity"] == "instruments"

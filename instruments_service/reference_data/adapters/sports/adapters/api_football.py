@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as date_
 from itertools import chain
@@ -44,6 +46,42 @@ from .base import BaseSportsReferenceAdapter
 logger = logging.getLogger(__name__)
 
 _BASE_URL: str = BASE_URLS["api_football"]
+
+# How long a live ``/status`` read is cached before re-querying the provider.
+# The plan limit + daily usage change slowly (usage climbs as the fleet spends;
+# the limit only changes on a plan upgrade), so a short cache avoids burning a
+# fixtures-quota request on every allocation decision while staying fresh.
+_LIVE_QUOTA_CACHE_TTL_S: float = 60.0
+
+
+@dataclass(frozen=True)
+class LiveQuota:
+    """The api-football plan's REAL limits + usage, read live from ``/status``.
+
+    Replaces the hardcoded ``SOURCE_RATE_LIMITS_RPM`` / ``SOURCE_DAILY_QUOTA``
+    registry constants as the AUTHORITATIVE source for the allocator + monitor —
+    the registry entries become only the fallback default when the live read
+    fails (so allocation is resilient, not hard-dependent on the call).
+
+    Fields (operator 2026-06-23 — "query, don't hardcode"):
+        per_minute_limit: The plan's per-minute request ceiling, read from the
+            ``X-RateLimit-Limit`` response header (the same header the per-VM
+            backoff in ``_get_with_retry`` reads ``X-RateLimit-Remaining`` from).
+            Falls back to the registry per-minute constant when the header is
+            absent.
+        daily_limit: ``requests.limit_day`` from the ``/status`` body — the plan's
+            real per-UTC-day quota (today's plan self-reports e.g. ``Custom300`` =
+            300,000/day, NOT the stale registry 450,000).
+        daily_remaining: ``daily_limit - requests.current`` (today's used) — the
+            requests still spendable before the 00:00 UTC reset.
+        live: ``True`` when the figures came from a successful ``/status`` read;
+            ``False`` when this is the registry fallback (the call failed).
+    """
+
+    per_minute_limit: int
+    daily_limit: int
+    daily_remaining: int
+    live: bool
 
 
 def _effective_season_for_league(
@@ -163,10 +201,125 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
     # this class attribute when running on a tighter plan.
     _min_request_interval: float = 0.05
 
+    # Class-level cache for the live ``/status`` read (per-VM singleton adapter).
+    # ``_live_quota_cache`` holds the last successful LiveQuota; ``_live_quota_ts``
+    # the monotonic time it was read. A read within ``_LIVE_QUOTA_CACHE_TTL_S``
+    # returns the cache (no extra provider request).
+    _live_quota_cache: LiveQuota | None = None
+    _live_quota_ts: float = 0.0
+
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
         return "api_football"
+
+    async def get_live_quota(
+        self,
+        *,
+        fallback_per_minute: int,
+        fallback_daily: int,
+        force_refresh: bool = False,
+    ) -> LiveQuota:
+        """Read the plan's REAL per-minute + per-day limits live from ``/status``.
+
+        Queries ``GET /status`` (api-football's own plan + usage endpoint) and
+        returns the LIVE ceilings the allocator / monitor should distribute and
+        throttle against — superseding the static registry constants, which drift
+        (the registry said 450,000/day while the API self-reports ``Custom300`` =
+        300,000/day). The ``/status`` body carries ``requests.limit_day`` (the
+        plan's per-day quota) + ``requests.current`` (today's used), so
+        ``daily_remaining = limit_day - current``; the per-minute ceiling is the
+        ``X-RateLimit-Limit`` response header (the per-VM backoff already reads its
+        ``X-RateLimit-Remaining`` sibling).
+
+        Resilient, NOT hard-dependent: on ANY failure (no key, network error,
+        unexpected body) it logs a warning and returns the supplied registry
+        FALLBACK with ``live=False`` so allocation never blocks on the call. A
+        successful read is cached for ``_LIVE_QUOTA_CACHE_TTL_S`` (class-level —
+        the adapter is a per-VM singleton).
+
+        Args:
+            fallback_per_minute: Registry per-minute ceiling to use if the live
+                read fails OR the header is absent
+                (``SOURCE_RATE_LIMITS_RPM['api_football']``).
+            fallback_daily: Registry per-day quota to use if the live read fails
+                (``SOURCE_DAILY_QUOTA['api_football']``).
+            force_refresh: Bypass the cache and re-query ``/status`` now.
+
+        Returns:
+            A :class:`LiveQuota`. ``live=True`` when read from the provider;
+            ``live=False`` when it is the registry fallback.
+        """
+        cls = type(self)
+        if (
+            not force_refresh
+            and cls._live_quota_cache is not None
+            and (time.monotonic() - cls._live_quota_ts) < _LIVE_QUOTA_CACHE_TTL_S
+        ):
+            return cls._live_quota_cache
+
+        fallback = LiveQuota(
+            per_minute_limit=fallback_per_minute,
+            daily_limit=fallback_daily,
+            daily_remaining=fallback_daily,
+            live=False,
+        )
+        if not self._api_key:
+            logger.warning(
+                "api_football /status: no API key available — using registry fallback "
+                "(per_minute=%d daily=%d)",
+                fallback_per_minute,
+                fallback_daily,
+            )
+            return fallback
+
+        url = f"{_BASE_URL}/status"
+        try:
+            async with self._make_session() as session, session.get(url, headers=self._headers()) as resp:
+                resp.raise_for_status()
+                body = await resp.json(content_type=None)
+                per_minute = self._parse_per_minute_limit(resp.headers, fallback_per_minute)
+                quota = _parse_status_body(
+                    body,
+                    per_minute_limit=per_minute,
+                    fallback_daily=fallback_daily,
+                )
+        except Exception as exc:  # resilient: any failure falls back to registry
+            logger.warning(
+                "api_football /status read failed (%s) — using registry fallback (per_minute=%d daily=%d)",
+                exc,
+                fallback_per_minute,
+                fallback_daily,
+            )
+            return fallback
+
+        cls._live_quota_cache = quota
+        cls._live_quota_ts = time.monotonic()
+        logger.info(
+            "api_football live quota: per_minute=%d daily_limit=%d daily_remaining=%d (live=/status)",
+            quota.per_minute_limit,
+            quota.daily_limit,
+            quota.daily_remaining,
+        )
+        return quota
+
+    @staticmethod
+    def _parse_per_minute_limit(headers: object, fallback_per_minute: int) -> int:
+        """Read the per-minute ceiling from the ``X-RateLimit-Limit`` header.
+
+        Falls back to ``fallback_per_minute`` when the header is absent or
+        unparseable (the registry constant).
+        """
+        if not hasattr(headers, "get"):
+            return fallback_per_minute
+        raw = headers.get("X-RateLimit-Limit")  # type: ignore[attr-defined]
+        if raw is None:
+            return fallback_per_minute
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return fallback_per_minute
+        return value if value > 0 else fallback_per_minute
 
     def _headers(self) -> dict[str, str]:
         """Build request headers with API key authentication."""
@@ -727,6 +880,48 @@ def _raise_on_api_errors(raw: object) -> None:
         )
     if isinstance(errors, list) and errors:
         raise ApiFootballResponseError(f"API-Football returned errors: {errors!r}")
+
+
+def _parse_status_body(
+    body: object,
+    *,
+    per_minute_limit: int,
+    fallback_daily: int,
+) -> LiveQuota:
+    """Build a :class:`LiveQuota` from a ``/status`` response body.
+
+    api-football ``/status`` returns
+    ``{"response": {"account": {...}, "subscription": {...},
+    "requests": {"current": <today_used>, "limit_day": <plan_per_day>}}}``.
+    ``daily_remaining = limit_day - current`` (floored at 0). When the body is
+    malformed / missing ``requests`` the daily figures fall back to
+    ``fallback_daily`` (the registry constant) but the read is still treated as
+    LIVE (the per-minute header succeeded).
+
+    Args:
+        body: The decoded JSON envelope from ``GET /status``.
+        per_minute_limit: The per-minute ceiling already read from the
+            ``X-RateLimit-Limit`` header.
+        fallback_daily: Registry per-day quota used when the body lacks
+            ``requests.limit_day``.
+    """
+    daily_limit = fallback_daily
+    daily_remaining = fallback_daily
+    response = body.get("response") if isinstance(body, dict) else None
+    requests_obj = response.get("requests") if isinstance(response, dict) else None
+    if isinstance(requests_obj, dict):
+        raw_limit = requests_obj.get("limit_day")
+        raw_current = requests_obj.get("current")
+        if isinstance(raw_limit, int) and raw_limit > 0:
+            daily_limit = raw_limit
+            current = raw_current if isinstance(raw_current, int) and raw_current >= 0 else 0
+            daily_remaining = max(0, daily_limit - current)
+    return LiveQuota(
+        per_minute_limit=per_minute_limit,
+        daily_limit=daily_limit,
+        daily_remaining=daily_remaining,
+        live=True,
+    )
 
 
 def _extract_response(raw: object) -> list[dict[str, object]]:
