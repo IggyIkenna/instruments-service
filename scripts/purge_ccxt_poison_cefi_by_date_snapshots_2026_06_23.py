@@ -63,16 +63,17 @@ def main() -> int:
     args = parser.parse_args()
 
     bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="cefi")
-    logger.info("Bucket: gs://%s", bucket)
+    logger.info("Bucket: %s", bucket)
 
     deleted = 0
     for blob in _POISON_BLOBS:
-        exists = gcs_describe_object(bucket=bucket, object_name=blob) is not None
+        uri = f"gs://{bucket}/{blob}"  # noqa: gs-uri  (one-off purge; bucket via resolve_bucket_name SSOT)
+        exists = gcs_describe_object(uri) is not None
         if not exists:
             logger.info("SKIP (absent): %s", blob)
             continue
         if args.apply:
-            gcs_delete_object(bucket=bucket, object_name=blob)
+            gcs_delete_object(uri)
             logger.info("DELETED: %s", blob)
             deleted += 1
         else:
