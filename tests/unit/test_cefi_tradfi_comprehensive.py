@@ -937,8 +937,10 @@ class TestTardisAdapter:
         assert result.option_type == OptionType.CALL
 
     @pytest.mark.asyncio
-    async def test_fetch_exchange_instruments_401_falls_back(self) -> None:
-        """401 on /v1/instruments falls back to /v1/exchanges."""
+    async def test_fetch_exchange_instruments_no_auth_single_call(self) -> None:
+        """Enumeration makes a SINGLE no-auth call to the free /v1/exchanges
+        metadata endpoint — never the authenticated /v1/instruments path, and
+        never an Authorization header (operator 2026-06-23)."""
 
         adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
 
@@ -947,13 +949,13 @@ class TestTardisAdapter:
         def mock_get(url: str, headers: object = None) -> MagicMock:
             nonlocal call_count
             call_count += 1
+            assert "/v1/exchanges/" in url
+            assert "/v1/instruments/" not in url
+            assert headers is None  # no Bearer token on the free endpoint
             mock_resp = AsyncMock()
-            if "/v1/instruments/" in url:
-                mock_resp.status = 401
-            else:
-                mock_resp.status = 200
-                mock_resp.raise_for_status = MagicMock()
-                mock_resp.json = AsyncMock(return_value={"id": "deribit", "name": "Deribit", "instruments": []})
+            mock_resp.status = 200
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json = AsyncMock(return_value={"id": "deribit", "name": "Deribit", "instruments": []})
             mock_cm = MagicMock()
             mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
             mock_cm.__aexit__ = AsyncMock(return_value=None)
@@ -962,9 +964,10 @@ class TestTardisAdapter:
         mock_session = MagicMock()
         mock_session.get = mock_get
 
-        results = await adapter._fetch_exchange_instruments(mock_session, "api-key", "deribit")
+        # New no-auth 2-arg signature: (session, exchange).
+        results = await adapter._fetch_exchange_instruments(mock_session, "deribit")
         assert results == []
-        assert call_count >= 2  # instruments API + exchanges API
+        assert call_count == 1  # ONE free /v1/exchanges call, no fallback
 
 
 # =============================================================================
