@@ -765,3 +765,122 @@ class TestFootystatsParseMatchException:
 
         result = _parse_match({"other_key": "value"})
         assert result is None
+
+
+class TestApiFootballLiveQuota:
+    """Coverage for the live ``/status`` quota read (query, don't hardcode 2026-06-23).
+
+    Covers ``LiveQuota`` / ``_parse_status_body`` / ``_parse_per_minute_limit`` /
+    ``ApiFootballAdapter.get_live_quota`` — all credential-free + network-free
+    (the HTTP layer is mocked).
+    """
+
+    def _adapter(self, api_key: str | None = "test-key"):
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key=api_key)
+        # Reset the class-level live-quota cache so tests don't leak into each other
+        # (the adapter is a per-VM singleton; the cache is a class attribute).
+        type(adapter)._live_quota_cache = None
+        type(adapter)._live_quota_ts = 0.0
+        return adapter
+
+    def test_parse_status_body_reads_limit_day_and_current(self) -> None:
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            _parse_status_body,
+        )
+
+        body = {"response": {"requests": {"current": 12345, "limit_day": 300000}}}
+        q = _parse_status_body(body, per_minute_limit=1200, fallback_daily=999)
+        assert q.live is True
+        assert q.per_minute_limit == 1200
+        assert q.daily_limit == 300000
+        assert q.daily_remaining == 300000 - 12345
+
+    def test_parse_status_body_malformed_falls_back_to_daily_but_stays_live(self) -> None:
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            _parse_status_body,
+        )
+
+        # No ``requests`` block → daily figures fall back, but read is still LIVE
+        # (the per-minute header succeeded).
+        q = _parse_status_body({"response": {}}, per_minute_limit=900, fallback_daily=300000)
+        assert q.live is True
+        assert q.daily_limit == 300000
+        assert q.daily_remaining == 300000
+
+    def test_parse_per_minute_limit_reads_header(self) -> None:
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        assert ApiFootballAdapter._parse_per_minute_limit({"X-RateLimit-Limit": "1200"}, 50) == 1200
+        # Absent / unparseable header → fallback.
+        assert ApiFootballAdapter._parse_per_minute_limit({}, 50) == 50
+        assert ApiFootballAdapter._parse_per_minute_limit({"X-RateLimit-Limit": "x"}, 50) == 50
+        # Non-positive → fallback.
+        assert ApiFootballAdapter._parse_per_minute_limit({"X-RateLimit-Limit": "0"}, 50) == 50
+
+    @pytest.mark.asyncio
+    async def test_get_live_quota_no_key_returns_registry_fallback(self) -> None:
+        adapter = self._adapter(api_key=None)
+        q = await adapter.get_live_quota(fallback_per_minute=1200, fallback_daily=300000)
+        assert q.live is False
+        assert q.per_minute_limit == 1200
+        assert q.daily_limit == 300000
+        assert q.daily_remaining == 300000
+
+    @pytest.mark.asyncio
+    async def test_get_live_quota_reads_status_live(self) -> None:
+        adapter = self._adapter()
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.headers = {"X-RateLimit-Limit": "1200"}
+        resp.json = AsyncMock(
+            return_value={"response": {"requests": {"current": 100, "limit_day": 300000}}}
+        )
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=resp)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.get = MagicMock(return_value=ctx)
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(type(adapter), "_make_session", return_value=session_ctx):
+            q = await adapter.get_live_quota(fallback_per_minute=900, fallback_daily=450000)
+        assert q.live is True
+        assert q.per_minute_limit == 1200
+        assert q.daily_limit == 300000
+        assert q.daily_remaining == 300000 - 100
+
+    @pytest.mark.asyncio
+    async def test_get_live_quota_failure_returns_fallback(self) -> None:
+        adapter = self._adapter()
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(side_effect=RuntimeError("boom"))
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(type(adapter), "_make_session", return_value=session_ctx):
+            q = await adapter.get_live_quota(fallback_per_minute=1200, fallback_daily=300000)
+        assert q.live is False
+        assert q.daily_remaining == 300000
+
+    @pytest.mark.asyncio
+    async def test_get_live_quota_uses_cache_within_ttl(self) -> None:
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            LiveQuota,
+        )
+
+        adapter = self._adapter()
+        import time
+
+        type(adapter)._live_quota_cache = LiveQuota(
+            per_minute_limit=1200, daily_limit=300000, daily_remaining=42, live=True
+        )
+        type(adapter)._live_quota_ts = time.monotonic()
+        # No HTTP mock — a cache hit must NOT touch the network.
+        q = await adapter.get_live_quota(fallback_per_minute=1, fallback_daily=1)
+        assert q.daily_remaining == 42
+        assert q.live is True
