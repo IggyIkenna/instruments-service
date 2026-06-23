@@ -133,13 +133,20 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
         self._last_markets = []  # Reset for new fetch
         now = datetime.now(UTC)
 
-        if date:
-            # Historical mode: use CLOB API directly — Gamma prunes old
+        _today = now.strftime("%Y-%m-%d")
+        if date and date < _today:
+            # Historical (PAST dates only): use CLOB API directly — Gamma prunes old
             # resolved markets so end_date_min/max returns 0 for most dates.
             # CLOB has the full 863K+ market history with no pruning.
             results = await self._fetch_clob_markets(date, now)
         else:
-            # Live mode: Gamma API for active markets (fast, sorted by volume)
+            # Current date (today) OR live (date is None): Gamma ACTIVE markets — fast,
+            # sorted by volume, and (critically) carries clob_token_ids per market AND is the
+            # currently-tradeable set. The CLOB-historical path for `date==today` returned
+            # markets that ENDED today (resolved), which `filter_instruments_by_date` then
+            # dropped ("0 records after filtering") → today's universe parquet carried no
+            # token_ids → the live Polymarket CLOB producer skipped everything. Routing
+            # today→gamma-active fixes the live universe (token_ids present, not date-filtered).
             results = []
             self._last_raw_page_size = 0
             async with self._make_session() as session:
