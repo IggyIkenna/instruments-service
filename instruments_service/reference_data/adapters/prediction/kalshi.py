@@ -8,6 +8,7 @@ Base URL: https://api.elections.kalshi.com/trade-api/v2
 Auth: API key passed as header (RSA key signing for production).
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -63,6 +64,13 @@ _HISTORICAL_GAP_EDGE_DAYS = 3
 _SERIES_CATEGORIES: tuple[str, ...] = ("Crypto", "Economics", "Financials")
 _MAX_SERIES_PAGES = 5  # per-series page budget (≤1000 markets per series)
 _MAX_SERIES_TOTAL = 200  # ceiling on total series fetched across all categories
+# Rate-limit guards for the series-scoped fan-out: ~40 non-OTHER series fired
+# back-to-back overruns Kalshi's read limit (HTTP 429). A small inter-series
+# delay (~3 req/s) keeps it under the limit, and a bounded exp-backoff retry
+# rescues the occasional 429 rather than shard-skipping (= losing) the series.
+_SERIES_FETCH_DELAY_S = 0.3  # inter-series throttle (proactive; ~3 req/s)
+_SERIES_RATE_LIMIT_BACKOFF_S = 1.0  # base for exp backoff on a 429
+_SERIES_MAX_429_RETRIES = 4  # bounded retries before shard-skipping a series
 
 
 _STATUS_MAP: dict[int, str] = {429: "429", 401: "401", 403: "403", 400: "400"}
@@ -516,7 +524,6 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         Reuses ``_parse_market()`` — no logic duplication. Failures are
         caught + logged (shard-isolated); caller skips failing series.
         """
-        url = f"{_KALSHI_BASE_URL}/markets"
         sign_path = f"{_KALSHI_API_PREFIX}/markets"
         records: list[InstrumentRecord] = []
         cursor: str | None = None
@@ -528,36 +535,9 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             }
             if cursor is not None:
                 params["cursor"] = cursor
-            headers = self._signed_headers("GET", sign_path)
-            try:
-                async with session.get(url, params=params, headers=headers) as resp:
-                    resp.raise_for_status()
-                    raw_json: object = cast(object, await resp.json())
-            except aiohttp.ClientError as exc:
-                error_code = _classify_kalshi_error(exc)
-                classification = classify_venue_error("kalshi", error_code)
-                action = classification.action.value if classification else "fail"
-                logger.warning(
-                    "Kalshi series-scoped market fetch failed for series=%s page=%d: %s (action: %s)",
-                    series_ticker,
-                    _page,
-                    exc,
-                    action,
-                )
-                log_event(
-                    "ADAPTER_FETCH_FAILED",
-                    details={
-                        "venue": "kalshi",
-                        "endpoint": "markets",
-                        "series_ticker": series_ticker,
-                        "error": str(exc),
-                        "error_code": error_code,
-                        "action": action,
-                        "retry_safe": classification.retry_safe if classification else False,
-                    },
-                )
-                break
-            raw_dict = cast(dict[str, object], raw_json)
+            raw_dict = await self._get_series_markets_page(session, params, sign_path)
+            if raw_dict is None:
+                break  # 429-exhausted or hard error → shard-skip this series
             markets_raw = raw_dict.get("markets")
             next_cursor_raw = raw_dict.get("cursor")
             cursor = str(next_cursor_raw) if next_cursor_raw else None
@@ -570,6 +550,54 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             if cursor is None or len(records) < _PAGE_LIMIT:
                 break
         return records
+
+    async def _get_series_markets_page(
+        self,
+        session: aiohttp.ClientSession,
+        params: dict[str, str],
+        sign_path: str,
+    ) -> dict[str, object] | None:
+        """GET ``/markets`` for one series page with bounded 429 backoff-retry.
+
+        Returns the parsed JSON dict, or ``None`` on rate-limit exhaustion / hard
+        error (caller shard-skips the series). The ~40 rapid per-series fetches
+        rate-limit (HTTP 429); back off (exp) and retry the page rather than
+        dropping the series' markets.
+        """
+        url = f"{_KALSHI_BASE_URL}/markets"
+        headers = self._signed_headers("GET", sign_path)
+        for _attempt in range(_SERIES_MAX_429_RETRIES + 1):
+            try:
+                async with session.get(url, params=params, headers=headers) as resp:
+                    if resp.status == 429:
+                        await asyncio.sleep(_SERIES_RATE_LIMIT_BACKOFF_S * (2**_attempt))
+                        continue
+                    resp.raise_for_status()
+                    return cast(dict[str, object], await resp.json())
+            except aiohttp.ClientError as exc:
+                error_code = _classify_kalshi_error(exc)
+                classification = classify_venue_error("kalshi", error_code)
+                action = classification.action.value if classification else "fail"
+                logger.warning(
+                    "Kalshi series-scoped market fetch failed for series=%s: %s (action: %s)",
+                    params.get("series_ticker"),
+                    exc,
+                    action,
+                )
+                log_event(
+                    "ADAPTER_FETCH_FAILED",
+                    details={
+                        "venue": "kalshi",
+                        "endpoint": "markets",
+                        "series_ticker": params.get("series_ticker", ""),
+                        "error": str(exc),
+                        "error_code": error_code,
+                        "action": action,
+                        "retry_safe": classification.retry_safe if classification else False,
+                    },
+                )
+                return None
+        return None  # 429 retries exhausted
 
     async def _fetch_series_scoped_batch(
         self,
@@ -606,6 +634,9 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
                 if group is None or group == CanonicalQuestionGroup.OTHER:
                     continue
                 series_count += 1
+                # Proactive throttle so the per-series fan-out stays under Kalshi's
+                # read rate limit (~3 req/s) instead of bursting into 429s.
+                await asyncio.sleep(_SERIES_FETCH_DELAY_S)
                 records = await self._fetch_series_scoped_markets(session, series_ticker, now)
                 for rec in records:
                     if rec.instrument_key not in seen_tickers:
