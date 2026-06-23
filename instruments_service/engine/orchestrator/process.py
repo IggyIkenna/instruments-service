@@ -71,11 +71,7 @@ def _fixtures_fetch_failed(
     / per-fixture entities) no fixtures fetch was attempted, so an empty
     ``non_error_venues`` is NOT a failure (→ keep the honest-absence path).
     """
-    return (
-        not skip_urdi
-        and bool(active_venues)
-        and not all(v in non_error_venues for v in active_venues)
-    )
+    return not skip_urdi and bool(active_venues) and not all(v in non_error_venues for v in active_venues)
 
 
 async def process_instruments(
@@ -205,6 +201,33 @@ async def process_instruments(
         skip_urdi=_skip_urdi,
     )
     records = fetch_outcome.records
+
+    # Rate-limit retry: API-Football enforces a per-minute burst limit.
+    # When 0 records come back AND the URDI was not skipped AND at least one
+    # venue had a retryable failure (RATE_LIMIT, NETWORK, TIMEOUT), sleep 65 s
+    # so the minute window resets, then retry once.  Without this, a fresh VM
+    # started within 60 s of the previous VM's last API-Football request
+    # cascades dozens of attempted_failed rows at startup before the loop
+    # naturally slows down.  The guard `not _skip_urdi` ensures we only retry
+    # when we actually made a URDI request (enrichment-only / per-fixture paths
+    # set _skip_urdi=True and never hit the rate limit here).
+    if not records and not _skip_urdi and fetch_outcome.retryable_venues:
+        _orch.logger.warning(
+            "URDI fetch returned 0 records with retryable error(s) for date=%s "
+            "(venues=%s) — sleeping 65s for rate-limit reset then retrying once",
+            date,
+            sorted(fetch_outcome.retryable_venues),
+        )
+        await _orch.asyncio.sleep(65)
+        fetch_outcome = await _fetch_urdi_records(
+            active_venues=active_venues,
+            api_keys=api_keys,
+            date=date,
+            mode=mode,
+            source=source,
+            skip_urdi=_skip_urdi,
+        )
+        records = fetch_outcome.records
 
     # Per-fixture URDI skip: read fixture IDs from GCS and jump to enrichment.
     # This avoids the URDI fetch + date filter which returns 0 for historical dates.
