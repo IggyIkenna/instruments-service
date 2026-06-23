@@ -247,6 +247,13 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
                 raw = await self._get_with_retry(session, url, headers=headers)
         except Exception as exc:
             error_code = self._classify_error(exc, status=getattr(exc, "status", None))
+            if error_code == "HTTP_NOT_FOUND":
+                # 404 from /getMatch/{id} means Understat has no shot data for this match (expected
+                # for early-season or low-coverage matches). Do NOT count as a fetch error —
+                # callers use _fetch_error_count>0 to decide record_failed vs
+                # record_empty(EXPECTED_NO_FIXTURE); a 404 here should resolve to record_empty.
+                logger.debug("get_match_shots: no shot data for match_id=%s (HTTP 404, expected)", match_id)
+                return []
             self._emit_fetch_failed(error_code, exc)
             self._fetch_error_count += 1
             return []
