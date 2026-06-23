@@ -1,5 +1,6 @@
 """Hyperliquid reference data adapter — REST only, no WebSocket."""
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -36,6 +37,26 @@ _BASE = "https://api.hyperliquid.xyz"
 _HYPERLIQUID_LAUNCH_DATE = datetime.fromisoformat(
     cast(str, VenueMapping().get_instrument_discovery_start("HYPERLIQUID"))
 ).replace(tzinfo=UTC)
+
+# BUG #4 (B) — per-instrument earliest-funding-date probe. The catalogue rollup +
+# the MTDS catalogue-driven backfill key the historical universe off each
+# instrument's ``available_from``. Without a per-instrument genesis date every perp
+# would inherit the coarse venue launch date (over-attempts pre-listing history) or
+# the single observed day (under-attempts history → small-coin funding NEVER
+# captured, the exact BUG #4 gap). HL ``fundingHistory`` from ``startTime=0`` returns
+# the instrument's genesis funding entry, so its timestamp is the true listing date.
+# One-off at enumeration time; bounded concurrency; falls back to the venue launch
+# date on any probe failure (never blocks the universe). SSOT:
+# plans/active/issues/cefi_hl_aster_batch_data_gaps_2026_06_22.md BUG #4 (B).
+# HL /info is aggressively rate-limited (429 under burst) → low concurrency + a
+# longer backoff. An UNRESOLVED probe falls back to the venue launch date, which is
+# the SAFE direction (over-attempt history → honest-absence on pre-listing dates,
+# never lost data) — so the probe is an efficiency optimisation, not a correctness
+# dependency.
+_FUNDING_PROBE_CONCURRENCY = 2
+_FUNDING_PROBE_TIMEOUT_S = 20.0
+_FUNDING_PROBE_RETRIES = 4
+_FUNDING_PROBE_BACKOFF_BASE_S = 1.0
 
 
 def _classify_hyperliquid_error(exc: Exception, status: int | None = None) -> str:
@@ -115,19 +136,19 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
                 f"Hyperliquid meta fetch failed (error_code={error_code}, retry_safe={retry_safe}): {exc}"
             ) from exc
         universe: list[HyperliquidAssetInfo] = data.universe or []
+        # BUG #4 (2026-06-22): the base-asset majors whitelist capped HL at ~33
+        # instruments. The operator wants the FULL active perp universe enumerated
+        # (funding rates valuable even for small/illiquid coins), so the whitelist
+        # is REMOVED — every non-delisted perp in the /info meta universe is
+        # catalogued. Delisted perps are skipped (stale meta entries).
+        # SSOT: plans/active/issues/cefi_hl_aster_batch_data_gaps_2026_06_22.md BUG #4.
+        active = [a for a in universe if a.name and not a.isDelisted]
+        # BUG #4 (B): probe each instrument's genesis funding date concurrently so its
+        # available_from reflects the true listing date (history-accurate universe).
+        listing_dates = await self._probe_earliest_funding_dates([cast(str, a.name) for a in active])
         results: list[InstrumentRecord] = []
-        for asset in universe:
-            name = asset.name
-            if not name:
-                continue
-            # BUG #4 (2026-06-22): the base-asset majors whitelist capped HL at ~33
-            # instruments. The operator wants the FULL active perp universe
-            # enumerated (funding rates valuable even for small/illiquid coins), so
-            # the whitelist is REMOVED — every non-delisted perp in the /info meta
-            # universe is catalogued. Delisted perps are skipped (stale meta entries).
-            # SSOT: plans/active/issues/cefi_hl_aster_batch_data_gaps_2026_06_22.md BUG #4.
-            if asset.isDelisted:
-                continue
+        for asset in active:
+            name = cast(str, asset.name)
             sz_decimals: int = asset.szDecimals or 3
             lot = Decimal(10) ** -sz_decimals
             results.append(
@@ -143,12 +164,55 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
                     tick_size=Decimal("0.001"),
                     min_size=lot,
                     contract_size=Decimal("1"),
-                    available_from_datetime=_HYPERLIQUID_LAUNCH_DATE,
+                    available_from_datetime=listing_dates.get(name, _HYPERLIQUID_LAUNCH_DATE),
                     status=InstrumentStatus.ACTIVE,
                     timezone="UTC",
                 )
             )
         return results
+
+    async def _probe_earliest_funding_dates(self, coins: list[str]) -> dict[str, datetime]:
+        """Probe each coin's genesis funding date (HL fundingHistory startTime=0).
+
+        Bounded-concurrent; per-coin timeout; any failure falls back (the coin is
+        simply omitted → caller uses the venue launch date). BUG #4 (B).
+        """
+        sem = asyncio.Semaphore(_FUNDING_PROBE_CONCURRENCY)
+
+        async def _one(coin: str) -> tuple[str, datetime | None]:
+            async with sem:
+                last_exc: Exception | None = None
+                for attempt in range(_FUNDING_PROBE_RETRIES):
+                    try:
+                        return coin, await asyncio.wait_for(
+                            self._fetch_earliest_funding_date(coin), timeout=_FUNDING_PROBE_TIMEOUT_S
+                        )
+                    except (TimeoutError, aiohttp.ClientError, ValueError, KeyError, TypeError) as exc:
+                        last_exc = exc
+                        await asyncio.sleep(_FUNDING_PROBE_BACKOFF_BASE_S * (2.0**attempt))  # backoff on 429
+                logger.warning("HL earliest-funding probe failed for %s: %s — using launch date", coin, last_exc)
+                return coin, None
+
+        out: dict[str, datetime] = {}
+        for coin, dt in await asyncio.gather(*(_one(c) for c in coins)):
+            if dt is not None:
+                out[coin] = dt
+        logger.info("HL earliest-funding probe: resolved %d/%d genesis dates", len(out), len(coins))
+        return out
+
+    async def _fetch_earliest_funding_date(self, coin: str) -> datetime | None:
+        """Return the datetime of the coin's first-ever funding entry, or None."""
+        payload = {"type": "fundingHistory", "coin": coin, "startTime": 0}
+        async with self._make_session() as session, session.post(f"{_BASE}/info", json=payload) as resp:
+            resp.raise_for_status()
+            data = cast(object, await resp.json())
+        if not isinstance(data, list) or not data:
+            return None
+        first = cast(dict[str, object], data[0])
+        ts_ms = first.get("time")
+        if not isinstance(ts_ms, (int, float)):
+            return None
+        return datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=UTC)
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single instrument by identifier."""
