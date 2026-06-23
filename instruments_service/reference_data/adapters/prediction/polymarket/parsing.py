@@ -104,6 +104,29 @@ class PolymarketParsingMixin:
         # canonical_question_group + current_status.
         lifecycle = self.classify_lifecycle(market)
 
+        # Lifecycle BOUNDS (available_from / available_to) are the honest-absence
+        # gate: MTDS / UTL must only emit a manifest cell (captured / empty /
+        # failed) for dates WITHIN [available_from, available_to]; outside the
+        # market's life is an honest BLANK, never empty_confirmed (the operator
+        # 2026-06-23 drill-down: ~49.6k POLYMARKET empties were
+        # EXPECTED_INSTRUMENT_NOT_LISTED for dates the market did not exist,
+        # inflating honest coverage). classify_lifecycle() is STRICT — it returns
+        # None unless BOTH a creation AND a resolution timestamp parse, so it
+        # populated only ~16% of records (it is the MARKET_LIFECYCLE data_type's
+        # full row). The InstrumentRecord bounds need only "when could this market
+        # have data", so derive them DIRECTLY + best-effort from the gamma fields
+        # (independent of the strict lifecycle): available_from from the listing
+        # date (startDate / createdAt), available_to from the resolution date
+        # (closedTime / endDateIso). Prefer the strict lifecycle's values when
+        # present (they carry the settlement-lag-adjusted settlement_time), else
+        # fall back to the raw gamma bound so out-of-life dates are bounded even
+        # for markets where one timestamp is absent.
+        available_from = self._parse_end_date(market.start_date) or self._parse_end_date(market.created_at)
+        available_to = self._parse_end_date(market.closed_time) or self._parse_end_date(market.end_date_iso)
+        if lifecycle is not None:
+            available_from = lifecycle.market_created_at
+            available_to = lifecycle.settlement_time
+
         # InstrumentRecord (UAC) carries no clob_token_ids field, so register the
         # per-outcome decimal CLOB token-ids in the package side-table keyed by
         # condition_id (== instrument_key below). The orchestrator's
@@ -130,8 +153,8 @@ class PolymarketParsingMixin:
             option_type=None,
             is_active=is_active,
             updated_at=now,
-            available_from_datetime=lifecycle.market_created_at if lifecycle else None,
-            available_to_datetime=lifecycle.settlement_time if lifecycle else None,
+            available_from_datetime=available_from,
+            available_to_datetime=available_to,
         )
 
     def _build_instrument_id(
