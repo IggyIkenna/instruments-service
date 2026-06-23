@@ -458,13 +458,25 @@ def _split_kraken_symbol(upper_id: str) -> tuple[str, str]:
 def _split_symbol(symbol: str) -> tuple[str, str]:
     """Split a concatenated symbol like BNBBTC into (BNB, BTC) using known quote currencies.
 
-    Also handles underscore-separated symbols: BTC_USDC → (BTC, USDC).
+    Also handles underscore-separated symbols: BTC_USDC → (BTC, USDC) and the
+    dated-future shape ``<BASE><QUOTE>_<YYMMDD|EXPIRY>`` (e.g. ``BTCUSDT_260626``,
+    ``BTCBUSD_210129``) where the part AFTER ``_`` is a settlement/expiry tag, NOT
+    a quote — the real ``<BASE><QUOTE>`` is the part BEFORE the underscore, which
+    is then concatenated-suffix-matched (full-universe enumeration 2026-06-23: the
+    binance-futures dated quarterlies previously fell through to an empty quote →
+    raised InstrumentRecord's non-empty-quote guard → killed the whole venue).
     """
-    # Underscore-separated: BTC_USDC, ETH_USDT, STETH_ETH
+    # Underscore-separated: BTC_USDC, ETH_USDT, STETH_ETH (suffix IS a quote)
     if "_" in symbol:
         sub_parts = symbol.split("_", 1)
         if sub_parts[1] in _tardis._QUOTE_CURRENCIES_SET:
             return sub_parts[0], sub_parts[1]
+        # Suffix is an expiry/settlement tag (e.g. 260626) — quote is embedded in the
+        # left ``<BASE><QUOTE>`` body; concatenated-match that.
+        left = sub_parts[0]
+        for quote in _tardis._QUOTE_CURRENCIES:
+            if left.endswith(quote) and len(left) > len(quote):
+                return left[: -len(quote)], quote
     # Concatenated suffix match: BTCUSDT → (BTC, USDT)
     for quote in _tardis._QUOTE_CURRENCIES:
         if symbol.endswith(quote) and len(symbol) > len(quote):
