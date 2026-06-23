@@ -105,6 +105,8 @@ from instruments_service.reference_data.adapters.prediction.polymarket.markets i
     _SINGLE_TEAM_PATTERN,
     _VS_PATTERN,
     _classify_polymarket_error,
+    _clob_token_ids_for_condition_id,
+    _enrich_clob_token_ids,
     _enrich_raw_event_fields,
     _extract_series_slug,
     _get_first_event,
@@ -113,6 +115,7 @@ from instruments_service.reference_data.adapters.prediction.polymarket.markets i
     _normalize_team_pair,
     _parse_single_team_question,
     _parse_vs_string,
+    _register_clob_token_ids,
     _selection_from_outcomes,
 )
 from instruments_service.reference_data.adapters.prediction.polymarket.parsing import (
@@ -153,6 +156,8 @@ __all__ = [
     "PolymarketReferenceDataAdapter",
     "PredictionMarketMapper",
     "_classify_polymarket_error",
+    "_clob_token_ids_for_condition_id",
+    "_enrich_clob_token_ids",
     "_enrich_raw_event_fields",
     "_extract_series_slug",
     "_get_first_event",
@@ -161,6 +166,7 @@ __all__ = [
     "_normalize_team_pair",
     "_parse_single_team_question",
     "_parse_vs_string",
+    "_register_clob_token_ids",
     "_selection_from_outcomes",
     "adapter",
     "aiohttp",

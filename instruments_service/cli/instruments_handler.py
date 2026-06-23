@@ -27,7 +27,10 @@ from unified_trading_library import (
     publish_coordination_event,  # pyright: ignore[reportPrivateImportUsage]
     resolve_bucket_name,
 )
-from unified_trading_library.events import emit_pipeline_heartbeat  # noqa: qg-deep-import
+from unified_trading_library.events import (  # noqa: qg-deep-import
+    PipelineHeartbeatTimer,
+    emit_pipeline_heartbeat,
+)
 
 from instruments_service.engine import orchestrator as engine_orchestrator
 from instruments_service.engine.orchestrator import (
@@ -100,6 +103,11 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # cross-check. VM_NAME is the per-VM shard tag.
         self._vm_name: str = getattr(runtime, "vm_name", "") or "instruments-backfill"
         self._rows_captured_cum: int = 0
+        # Background 60s heartbeat timer (Phase 2): per-CHUNK heartbeats go silent for a
+        # whole slow date (a hung scrape emits nothing for 15 min+); this timer ticks every
+        # ~60s on a daemon thread INDEPENDENT of the per-date loop so a mid-date hang trips
+        # DP_VM_STALL within ~60s + watcher poll. Started in preflight(), joined in cleanup().
+        self._heartbeat_timer: PipelineHeartbeatTimer | None = None
         # Live-mode trigger name (Phase A.7 of instruments_master).
         # When set under --mode live, names which entity-type subset to refresh +
         # which source adapter to invoke. Closed-set per-asset-group taxonomy lives
@@ -139,6 +147,20 @@ class InstrumentsHandler(UnifiedServiceHandler):
         if self._source == "massive":
             active_venues = [*active_venues, "MASSIVE"]
         self._start_key_reloader(active_venues)
+        self._start_heartbeat_timer(asset_groups)
+
+    def _start_heartbeat_timer(self, asset_groups: list[str]) -> None:
+        """Start the 60s background-timer heartbeat (Phase 2 mid-date stall detection)."""
+        primary_ag = next((c for c in asset_groups if c.upper() != "ALL"), "") or "all"
+        self._heartbeat_timer = PipelineHeartbeatTimer(
+            vm_name=self._vm_name,
+            asset_group=primary_ag.lower(),
+            data_type="instruments",
+            rows_captured_cum=lambda: self._rows_captured_cum,
+            source=self._source or "",
+            extra={"service": "instruments", "cadence": "60s-timer"},
+        )
+        self._heartbeat_timer.start()
 
     def _wire_cli_filters_from_args(self) -> None:
         """Map instruments CLI flags from parsed args onto handler fields."""
@@ -333,6 +355,10 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
     async def cleanup(self) -> None:
         """Flush any buffered manifest writes to GCS at end of batch."""
+        # Stop the background heartbeat timer cleanly (join, no orphan thread) before flush.
+        if self._heartbeat_timer is not None:
+            self._heartbeat_timer.stop()
+            self._heartbeat_timer = None
         flushed: list[str] = []
         for asset_group in ("SPORTS", "CEFI", "DEFI", "TRADFI"):
             try:
