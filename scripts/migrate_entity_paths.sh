@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 # migrate_entity_paths.sh — Migrate GCS entity paths for sports reference data.
 #
 # Renames:

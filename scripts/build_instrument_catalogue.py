@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Roll-up producer — derive the lifecycle instrument catalogue from the per-date definitions.
 
 The v2 expected-universe enumerator (``enumerate_expected_universe.py --enumerator-version v2``)

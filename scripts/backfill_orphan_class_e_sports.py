@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 """backfill_orphan_class_e_sports.py — sports class-E orphan → record_captured (R8).
 
 The SPORTS recorder companion to ``migration_orphan_sweep_sports.py`` (the analogue

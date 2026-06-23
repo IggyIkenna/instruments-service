@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """One-shot manifest migration: split ``entity=fixtures`` parquets into
 ``entity=fixtures_schedule`` + ``entity=fixtures_outcomes``.
 

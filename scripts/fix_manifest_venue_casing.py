@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after fix confirmed in live consolidated _index + GCS orphan-sweep = 0
 """Fix manifest venue name casing — normalize all venues to UPPER CASE.
 
 Reads availability_index.parquet, upper-cases venue names, deduplicates

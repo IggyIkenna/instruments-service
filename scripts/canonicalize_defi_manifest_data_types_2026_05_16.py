@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: campaign
+# Delete-when: after instruments-service manifest-canonicalisation complete for all asset_groups and campaign plan archived (instruments_manifest_canonicalisation_2026_06_01)
 # pyright: reportAny=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportMissingTypeStubs=false
 """Canonicalize DeFi canonical-manifest ``data_type`` column vocabulary drift.
 

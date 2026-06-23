@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """migration_orphan_sweep_sports.py — the SPORTS GCS→manifest orphan sweep (R8).
 
 Sports is the one asset group EXCLUDED from ``migration_orphan_sweep.py`` by design:

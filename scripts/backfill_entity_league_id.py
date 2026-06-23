@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 """Backfill league_id into sports entity parquets by joining to fixtures.
 
 Existing sports entity parquets (fixture_stats, fixture_events, lineups, etc.)

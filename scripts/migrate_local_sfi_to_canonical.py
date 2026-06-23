@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """Migrate local SFI bulk dumps into canonical ``progressive_stats`` parquets.
 
 Two local files in ``~/Downloads`` carry SFI in-match data dumped from a

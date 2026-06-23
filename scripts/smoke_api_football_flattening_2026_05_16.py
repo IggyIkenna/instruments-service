@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after smoke findings actioned + parent plan archived
 """Smoke test: api_football flattening produces multi-row output per fixture.
 
 Closes Phase 3.B of ``api_football_minimal_flattening_removal_2026_05_07.md``:

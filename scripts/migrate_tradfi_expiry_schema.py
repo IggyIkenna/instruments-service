@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """One-shot migration: backfill missing ``expiration`` in legacy TradFi options-chain parquets.
 
 Background

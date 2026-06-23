@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """reconcile_expected_absence_reasons.py — Layer 4 retrospective backfill.
 
 Phase 3.D of the writegate honest-coverage umbrella plan

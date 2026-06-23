@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after purge confirmed in live consolidated _index (zero rows of target type)
 """One-shot purge of `PANCAKESWAP_V3-ZKSYNC` rows from the DeFi manifest.
 
 Why:
