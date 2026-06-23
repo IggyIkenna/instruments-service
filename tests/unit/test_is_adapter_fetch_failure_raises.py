@@ -202,7 +202,7 @@ class TestTardisFetchFailureRaises:
 
         call_count = 0
 
-        async def _side_effect(session: object, api_key: object, exchange: str) -> list[InstrumentRecord]:
+        async def _side_effect(session: object, exchange: str) -> list[InstrumentRecord]:
             nonlocal call_count
             call_count += 1
             if exchange == "deribit":
