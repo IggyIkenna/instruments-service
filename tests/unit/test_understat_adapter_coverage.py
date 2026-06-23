@@ -634,8 +634,14 @@ class TestUnderstatFetchErrorTracking:
         assert adapter._fetch_error_count == 6
 
     @pytest.mark.asyncio
-    async def test_get_match_shots_404_increments_error_count(self) -> None:
-        """A 404 on getMatch increments _fetch_error_count."""
+    async def test_get_match_shots_404_does_not_increment_error_count(self) -> None:
+        """A 404 on getMatch does NOT increment _fetch_error_count.
+
+        404 from /getMatch/{id} means Understat has no shot data for this match
+        (expected for early-season / low-coverage matches). The orchestrator uses
+        _fetch_error_count>0 to decide record_failed vs record_empty(EXPECTED_NO_FIXTURE),
+        so a 404 here must NOT be counted as an error — it should resolve to record_empty.
+        """
         adapter = UnderstatAdapter()
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
@@ -644,6 +650,25 @@ class TestUnderstatFetchErrorTracking:
                 "_get_with_retry",
                 AsyncMock(side_effect=Exception("HTTP 404")),
             ),
+            patch.object(adapter, "_classify_error", return_value="HTTP_NOT_FOUND"),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            shots = await adapter.get_match_shots("12345")
+        assert shots == []
+        assert adapter._fetch_error_count == 0
+
+    @pytest.mark.asyncio
+    async def test_get_match_shots_non_404_error_increments_error_count(self) -> None:
+        """A non-404 error on getMatch increments _fetch_error_count."""
+        adapter = UnderstatAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                AsyncMock(side_effect=Exception("connection timeout")),
+            ),
+            patch.object(adapter, "_classify_error", return_value="TIMEOUT"),
             patch.object(adapter, "_emit_fetch_failed"),
         ):
             shots = await adapter.get_match_shots("12345")
