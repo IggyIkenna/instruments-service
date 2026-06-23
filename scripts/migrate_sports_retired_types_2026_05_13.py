@@ -67,14 +67,13 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+import gcsfs
 import pandas as pd
-from google.cloud import storage
+from unified_trading_library import resolve_bucket_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-PROJECT_ID = "central-element-323112"
-SPORTS_BUCKET = f"instruments-store-sports-{PROJECT_ID}"
 MANIFEST_BLOB = "_index/availability_index.parquet"
 NEW_REASON = "EXPECTED_DEPRECATED_DATA_TYPE"
 
@@ -108,6 +107,10 @@ def main() -> int:
     )
     args = p.parse_args()
 
+    if not os.environ.get("DEPLOYMENT_ENV_SHORT"):
+        logger.error("DEPLOYMENT_ENV_SHORT must be set (e.g. prd). Refusing — would resolve wrong bucket.")
+        return 1
+
     retired_types = frozenset(s.strip() for s in args.data_types.split(",") if s.strip())
     if not retired_types:
         logger.error("--data-types resolved to empty set. Refusing.")
@@ -121,22 +124,13 @@ def main() -> int:
         )
         return 1
 
-    client = storage.Client(project=PROJECT_ID)
-    bucket = client.bucket(SPORTS_BUCKET)
-    blob = bucket.blob(MANIFEST_BLOB)
+    sports_bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+    fs = gcsfs.GCSFileSystem()
 
-    logger.info("Loading sports manifest from gs://%s/%s", SPORTS_BUCKET, MANIFEST_BLOB)
+    logger.info("Loading sports manifest from gs://%s/%s", sports_bucket, MANIFEST_BLOB)
     logger.info("Retired data_types to flip: %s", sorted(retired_types))
-    with tempfile.NamedTemporaryFile(prefix="migrate-sports-retired-", suffix=".parquet", delete=False) as _tf:
-        manifest_path = _tf.name
-    try:
-        blob.download_to_filename(manifest_path)
-        df = pd.read_parquet(manifest_path)
-    finally:
-        import contextlib
-
-        with contextlib.suppress(OSError):
-            os.unlink(manifest_path)
+    with fs.open(f"{sports_bucket}/{MANIFEST_BLOB}", "rb") as fh:
+        df = pd.read_parquet(fh)
     logger.info("Manifest rows: %d", len(df))
 
     retired_mask = df["data_type"].fillna("").isin(retired_types)
@@ -202,7 +196,8 @@ def main() -> int:
     df.to_parquet(out, index=False)
     out.seek(0)
     logger.info("Uploading flipped manifest (%d rows total, %d flipped)", len(df), n_to_flip)
-    blob.upload_from_file(out, content_type="application/octet-stream")
+    with fs.open(f"{sports_bucket}/{MANIFEST_BLOB}", "wb") as fh:
+        fh.write(out.read())
     logger.info("Done. CSV audit at %s", csv_path)
     return 0
 
