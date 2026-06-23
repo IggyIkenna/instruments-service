@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reclassification/relabelling confirmed + parent plan archived
 """Reclassify ``attempted_failed`` manifest rows whose ``error_reason``
 indicates a definitive 404 from the source archive into
 ``empty_confirmed``.

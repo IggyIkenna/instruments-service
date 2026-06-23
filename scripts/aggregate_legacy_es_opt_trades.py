@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after aggregation confirmed + parent plan archived
 """Aggregate legacy per-strike ES options parquets into canonical chain-bundled shards.
 
 Source (WRONG path + WRONG granularity, written by the 2026-04-19 migration):

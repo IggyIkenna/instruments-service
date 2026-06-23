@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """reconcile_legacy_blank_to_typed_reason.py — Wave 3.X Track C reclassifier.
 
 Second-pass companion to ``reconcile_expected_absence_reasons.py`` (Phase 3.D

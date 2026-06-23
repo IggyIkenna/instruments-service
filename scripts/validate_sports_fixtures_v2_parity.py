@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after validation confirmed + parent plan archived
 """Phase 4 parity validation: compare legacy ↔ rewritten fixtures parquets.
 
 Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.md``.

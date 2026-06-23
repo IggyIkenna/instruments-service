@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after purge confirmed in live consolidated _index (zero rows of target type)
 """Purge pre-launch manifest rows that should never have existed.
 
 A pre-launch row is a manifest entry whose ``date`` is BEFORE the source's

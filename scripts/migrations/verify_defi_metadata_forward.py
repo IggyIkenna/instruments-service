@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + parent plan archived
 """Phase 2.5 — Forward verification — confirm new instruments-service runs write the new fields.
 
 Reads the most recent ``instruments.parquet`` for each (venue, chain) pair
