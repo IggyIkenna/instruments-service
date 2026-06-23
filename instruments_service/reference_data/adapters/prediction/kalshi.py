@@ -57,6 +57,12 @@ _MAX_HISTORICAL_PAGES = 40
 # Only attempt live↔historical gap-edge pagination within this many days of the
 # cutoff; deeper dates are honest-absence (served by the bulk corpus seed).
 _HISTORICAL_GAP_EDGE_DAYS = 3
+# Series-scoped capture: fetches `/series?category=X` then `/markets?status=open&series_ticker=Y`
+# for each non-OTHER series — sidesteps the KXMVE multivariate flood that consumes all
+# 2000 cap slots in the plain `/markets?status=open` snapshot. LIVE path only.
+_SERIES_CATEGORIES: tuple[str, ...] = ("Crypto", "Economics", "Financials")
+_MAX_SERIES_PAGES = 5  # per-series page budget (≤1000 markets per series)
+_MAX_SERIES_TOTAL = 200  # ceiling on total series fetched across all categories
 
 
 _STATUS_MAP: dict[int, str] = {429: "429", 401: "401", 403: "403", 400: "400"}
@@ -317,6 +323,21 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
                 "Kalshi get_instruments: market fetch failed with no records "
                 "(see ADAPTER_FETCH_FAILED) — recording attempted_failed, not empty"
             )
+        # Series-scoped capture (LIVE path only): supplement the snapshot with
+        # markets from cross-venue-relevant series (Crypto/Economics/Financials)
+        # whose tickers classify as non-OTHER canonical groups.  The plain
+        # /markets?status=open snapshot is dominated by KXMVE* multivariate parlay
+        # markets which consume all 2000 cap slots → KXBTCD/KXETHD/KXCPI/etc. are
+        # never reached.  Fetching per-series sidesteps the flood.
+        if target is None:
+            async with self._make_session() as session:
+                series_records = await self._fetch_series_scoped_batch(session)
+            if series_records:
+                existing_tickers = {r.instrument_key for r in results}
+                for rec in series_records:
+                    if rec.instrument_key not in existing_tickers:
+                        results.append(rec)
+                        existing_tickers.add(rec.instrument_key)
         return results
 
     async def _fetch_markets_page(
@@ -430,6 +451,183 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             # (every market on this page already closed before it) → stop.
             next_cursor = None
         return records, next_cursor
+
+    async def _fetch_series_for_category(
+        self,
+        session: aiohttp.ClientSession,
+        category: str,
+    ) -> list[str]:
+        """Fetch series tickers for a Kalshi category via ``/series?category=X``.
+
+        NO trailing slash (Kalshi 301-redirects it). Returns empty list on
+        failure — per-category failure is shard-isolated.
+        """
+        url = f"{_KALSHI_BASE_URL}/series"
+        sign_path = f"{_KALSHI_API_PREFIX}/series"
+        params: dict[str, str] = {"category": category}
+        headers = self._signed_headers("GET", sign_path)
+        try:
+            async with session.get(url, params=params, headers=headers) as resp:
+                resp.raise_for_status()
+                raw_json: object = cast(object, await resp.json())
+        except aiohttp.ClientError as exc:
+            error_code = _classify_kalshi_error(exc)
+            classification = classify_venue_error("kalshi", error_code)
+            action = classification.action.value if classification else "fail"
+            logger.warning(
+                "Kalshi series fetch failed for category=%s: %s (action: %s)",
+                category,
+                exc,
+                action,
+            )
+            log_event(
+                "ADAPTER_FETCH_FAILED",
+                details={
+                    "venue": "kalshi",
+                    "endpoint": "series",
+                    "category": category,
+                    "error": str(exc),
+                    "error_code": error_code,
+                    "action": action,
+                    "retry_safe": classification.retry_safe if classification else False,
+                },
+            )
+            return []
+        raw_dict = cast(dict[str, object], raw_json)
+        series_list = raw_dict.get("series")
+        if not isinstance(series_list, list):
+            return []
+        tickers: list[str] = []
+        for item in series_list:
+            if isinstance(item, dict):
+                ticker_val = item.get("ticker")
+                if isinstance(ticker_val, str) and ticker_val:
+                    tickers.append(ticker_val)
+        return tickers
+
+    async def _fetch_series_scoped_markets(
+        self,
+        session: aiohttp.ClientSession,
+        series_ticker: str,
+        now: datetime,
+    ) -> list[InstrumentRecord]:
+        """Fetch ``/markets?status=open&series_ticker=<ticker>`` up to ``_MAX_SERIES_PAGES`` pages.
+
+        Reuses ``_parse_market()`` — no logic duplication. Failures are
+        caught + logged (shard-isolated); caller skips failing series.
+        """
+        url = f"{_KALSHI_BASE_URL}/markets"
+        sign_path = f"{_KALSHI_API_PREFIX}/markets"
+        records: list[InstrumentRecord] = []
+        cursor: str | None = None
+        for _page in range(_MAX_SERIES_PAGES):
+            params: dict[str, str] = {
+                "limit": str(_PAGE_LIMIT),
+                "status": "open",
+                "series_ticker": series_ticker,
+            }
+            if cursor is not None:
+                params["cursor"] = cursor
+            headers = self._signed_headers("GET", sign_path)
+            try:
+                async with session.get(url, params=params, headers=headers) as resp:
+                    resp.raise_for_status()
+                    raw_json: object = cast(object, await resp.json())
+            except aiohttp.ClientError as exc:
+                error_code = _classify_kalshi_error(exc)
+                classification = classify_venue_error("kalshi", error_code)
+                action = classification.action.value if classification else "fail"
+                logger.warning(
+                    "Kalshi series-scoped market fetch failed for series=%s page=%d: %s (action: %s)",
+                    series_ticker,
+                    _page,
+                    exc,
+                    action,
+                )
+                log_event(
+                    "ADAPTER_FETCH_FAILED",
+                    details={
+                        "venue": "kalshi",
+                        "endpoint": "markets",
+                        "series_ticker": series_ticker,
+                        "error": str(exc),
+                        "error_code": error_code,
+                        "action": action,
+                        "retry_safe": classification.retry_safe if classification else False,
+                    },
+                )
+                break
+            raw_dict = cast(dict[str, object], raw_json)
+            markets_raw = raw_dict.get("markets")
+            next_cursor_raw = raw_dict.get("cursor")
+            cursor = str(next_cursor_raw) if next_cursor_raw else None
+            if not isinstance(markets_raw, list):
+                break
+            for raw_item in markets_raw:
+                record = self._parse_market(cast(dict[str, object], raw_item), now)
+                if record is not None:
+                    records.append(record)
+            if cursor is None or len(records) < _PAGE_LIMIT:
+                break
+        return records
+
+    async def _fetch_series_scoped_batch(
+        self,
+        session: aiohttp.ClientSession,
+    ) -> list[InstrumentRecord]:
+        """Fetch markets for non-OTHER series across ``_SERIES_CATEGORIES``.
+
+        For each category: fetch ``/series?category=X``, classify each
+        series ticker, keep non-OTHER groups, then fetch per-series markets.
+        Returns deduplicated InstrumentRecord list (by instrument_key).
+        """
+        now = datetime.now(UTC)
+        all_records: list[InstrumentRecord] = []
+        seen_tickers: set[str] = set()
+        seen_series: set[str] = set()
+        series_count = 0
+        all_categories_failed = True
+
+        for category in _SERIES_CATEGORIES:
+            tickers = await self._fetch_series_for_category(session, category)
+            if tickers:
+                all_categories_failed = False
+            for series_ticker in tickers:
+                if series_ticker in seen_series:
+                    continue
+                seen_series.add(series_ticker)
+                if series_count >= _MAX_SERIES_TOTAL:
+                    logger.info(
+                        "KalshiAdapter series-scoped: reached _MAX_SERIES_TOTAL=%d; stopping",
+                        _MAX_SERIES_TOTAL,
+                    )
+                    break
+                group = classify_kalshi_to_canonical_group(ticker=series_ticker)
+                if group is None or group == CanonicalQuestionGroup.OTHER:
+                    continue
+                series_count += 1
+                records = await self._fetch_series_scoped_markets(session, series_ticker, now)
+                for rec in records:
+                    if rec.instrument_key not in seen_tickers:
+                        all_records.append(rec)
+                        seen_tickers.add(rec.instrument_key)
+            else:
+                # Inner loop completed without break → proceed to next category.
+                continue
+            # Inner loop broke (hit _MAX_SERIES_TOTAL) → stop outer loop too.
+            break
+
+        logger.info(
+            "KalshiAdapter series-scoped: %d series across categories %s → %d records",
+            series_count,
+            _SERIES_CATEGORIES,
+            len(all_records),
+        )
+        if all_categories_failed and not all_records:
+            logger.warning(
+                "KalshiAdapter series-scoped: all category fetches failed — falling back to snapshot-only results"
+            )
+        return all_records
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch single market by ticker."""
@@ -630,12 +828,16 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         * ``current_status``: derived from ``status`` enum via
           :meth:`_kalshi_status_to_lifecycle_status`.
 
-        Currently the Kalshi rule classifier path is override-only
-        (:data:`unified_api_contracts.predictions.KALSHI_TICKER_TO_GROUP`);
-        unrecognised tickers route to
-        :class:`CanonicalQuestionGroup.OTHER` so the cluster gate can
-        still apply per-day market_id counts even before the rule
-        classifier lands.
+        The Kalshi canonical-group classifier is the full three-tier
+        :func:`unified_api_contracts.predictions.classify_kalshi_to_canonical_group`
+        (override dict → ticker-prefix rules → OTHER fallback): crypto-daily,
+        macro, equity-index and FX series map to the SAME
+        :class:`CanonicalQuestionGroup` values as their Polymarket counterparts
+        (enabling cross-venue dispersion); only genuinely venue-unique markets
+        (FDV / token-launch / airdrop / single-coin niche) fall to
+        :class:`CanonicalQuestionGroup.OTHER`. (Prior docstring said
+        "override-only" — STALE since the prefix classifier landed
+        unified-api-contracts@c3bf51d1; the call below has always invoked it.)
         """
         ticker = market.ticker
         if not ticker:
