@@ -135,11 +135,18 @@ def _classify_tardis_error(exc: Exception, status: int | None = None) -> str:
 class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
     """Tardis reference data adapter.
 
-    Fetches instrument metadata from the Tardis exchanges REST endpoint.
-    Exchanges iterated by default: binance-futures, bybit, okex, deribit.
-    Pass exchanges=[...] to the constructor to override.
+    Fetches the instrument universe from the FREE, NO-AUTH Tardis metadata
+    endpoint ``GET /v1/exchanges/{exchange}`` (symbol list + per-instrument
+    availability window). No API key is sent or consumed for enumeration —
+    instruments-service does not need Tardis auth for reference data, and must
+    not burn the academic-unlimited key's limits (operator 2026-06-23).
 
-    Not applicable: live funding rates, OHLCV bars (requires /replay endpoint).
+    Exchanges iterated by default: the full canonical ``VenueMapping`` Tardis
+    set. Pass exchanges=[...] to the constructor to override.
+
+    Not applicable: live funding rates, OHLCV bars (those hit the authenticated
+    ``datasets.tardis.dev`` / ``/data-feeds`` tick-data path — MTDS's job, not
+    IS reference data).
     """
 
     def __init__(
@@ -166,14 +173,22 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
-        """Fetch all instruments from the venue."""
-        api_key = self._optional_api_key()
+        """Fetch all instruments from the venue.
+
+        Instrument ENUMERATION uses the FREE, NO-AUTH Tardis metadata endpoint
+        ``GET /v1/exchanges/{exchange}`` (returns ``availableSymbols`` with
+        id / type / availableSince / availableTo). No API key is sent or
+        consumed — instruments-service does NOT need Tardis auth for the
+        reference-data universe (the authenticated ``datasets.tardis.dev`` /
+        ``/data-feeds`` tick-data path is MTDS's job, not IS). Operator decision
+        2026-06-23: "IS doesn't need auth for tardis; don't waste API limits".
+        """
         results: list[InstrumentRecord] = []
         failures: list[str] = []
         async with self._make_session() as session:
             for exchange in self._exchanges:
                 try:
-                    batch = await self._fetch_exchange_instruments(session, api_key, exchange)
+                    batch = await self._fetch_exchange_instruments(session, exchange)
                 except RuntimeError as exc:
                     # CF-11: isolate a per-exchange failure (don't abort sibling
                     # exchanges) but TRACK it. A genuine fetch failure must not be
@@ -553,130 +568,74 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
     async def _fetch_exchange_instruments(
         self,
         session: aiohttp.ClientSession,
-        api_key: str | None,
         exchange: str,
     ) -> list[InstrumentRecord]:
-        # Primary: /v1/instruments/{exchange} — full metadata (priceIncrement, contractMultiplier).
-        # Requires Tardis pro/business subscription. Falls back to /v1/exchanges/{exchange}
-        # (free tier, basic availability only — tick sizes use exchange-specific defaults).
+        # Instrument enumeration uses the FREE, NO-AUTH metadata endpoint
+        # /v1/exchanges/{exchange} ONLY — returns availableSymbols (id / type /
+        # availableSince / availableTo). NO Authorization header, NO API key
+        # consumed. The authenticated /v1/instruments/{exchange} (pro-tier rich
+        # tick-size metadata) is deliberately NOT called: instruments-service
+        # only needs the symbol universe + lifecycle window, and the operator
+        # mandate (2026-06-23) is that IS must not burn Tardis API limits on
+        # the academic-unlimited key. Tick sizes use exchange-specific defaults
+        # in _parse_tardis_instrument (priceIncrement is None from this endpoint).
         instruments_list: list[TardisInstrumentDetail] | None = None
         last_exc: Exception | None = None
-        headers: dict[str, str] = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
 
-        # Try /v1/instruments first (rich metadata)
-        url = f"{_TARDIS_BASE}/instruments/{exchange}"
-        used_instruments_api = False
-
+        url = f"{_TARDIS_BASE}/exchanges/{exchange}"
         for attempt in range(_TARDIS_RETRY_ATTEMPTS):
             delay = _TARDIS_RETRY_BASE_DELAY * (1 << attempt)
             try:
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status == 401:
-                        # Pro subscription required — fall back to /v1/exchanges
-                        _tardis.logger.debug(
-                            "Tardis %r: /v1/instruments requires pro tier, falling back to /v1/exchanges", exchange
-                        )
-                        break
+                # No headers: the metadata endpoint is public (no Bearer token).
+                async with session.get(url) as resp:
                     if resp.status == 404:
                         _tardis.logger.warning("Tardis exchange %r not found — skipping", exchange)
                         return []
                     if resp.status in _TARDIS_RETRYABLE_CODES:
-                        _tardis.logger.warning(
-                            "Tardis %r: HTTP %d (attempt %d/%d, retry in %.0fs)",
-                            exchange,
-                            resp.status,
-                            attempt + 1,
-                            _TARDIS_RETRY_ATTEMPTS,
-                            delay,
-                        )
                         if attempt < _TARDIS_RETRY_ATTEMPTS - 1:
                             await asyncio.sleep(delay)
                             continue
                         resp.raise_for_status()
                     resp.raise_for_status()
                     raw_json: object = cast("object", await resp.json())
-                    if isinstance(raw_json, list):
-                        instruments_list = [_tardis.TardisInstrumentDetail.model_validate(item) for item in raw_json]
-                        used_instruments_api = True
+                    exchange_detail = _tardis.TardisExchangeDetail.model_validate(raw_json)
+                    instruments_list = exchange_detail.instruments
                     break
             except aiohttp.ClientError as exc:
                 last_exc = exc
                 if attempt < _TARDIS_RETRY_ATTEMPTS - 1:
-                    _tardis.logger.warning(
-                        "Tardis %r: %s (attempt %d/%d, retry in %.0fs)",
-                        exchange,
-                        exc,
-                        attempt + 1,
-                        _TARDIS_RETRY_ATTEMPTS,
-                        delay,
-                    )
                     await asyncio.sleep(delay)
                     continue
-                # Final attempt failed — fall back to /v1/exchanges
-                _tardis.logger.debug(
-                    "Tardis %r: /v1/instruments failed, falling back to /v1/exchanges: %s", exchange, exc
+                error_code = _tardis._classify_tardis_error(exc)
+                classification = _tardis.classify_venue_error("tardis", error_code)
+                action = classification.action.value if classification else "fail"
+                retry_safe = classification.retry_safe if classification else False
+                _tardis.logger.error(
+                    "Tardis request failed for exchange %r after %d attempts: %s (classified: %s, action: %s, retry=%s)",
+                    exchange,
+                    _TARDIS_RETRY_ATTEMPTS,
+                    exc,
+                    error_code,
+                    action,
+                    retry_safe,
                 )
-                break
-
-        # Fallback: /v1/exchanges/{exchange} (free tier — basic availability, no tick sizes)
-        if instruments_list is None:
-            url = f"{_TARDIS_BASE}/exchanges/{exchange}"
-            for attempt in range(_TARDIS_RETRY_ATTEMPTS):
-                delay = _TARDIS_RETRY_BASE_DELAY * (1 << attempt)
-                try:
-                    async with session.get(url, headers=headers) as resp:
-                        if resp.status == 404:
-                            _tardis.logger.warning("Tardis exchange %r not found — skipping", exchange)
-                            return []
-                        if resp.status in _TARDIS_RETRYABLE_CODES:
-                            if attempt < _TARDIS_RETRY_ATTEMPTS - 1:
-                                await asyncio.sleep(delay)
-                                continue
-                            resp.raise_for_status()
-                        resp.raise_for_status()
-                        raw_json = cast("object", await resp.json())
-                        exchange_detail = _tardis.TardisExchangeDetail.model_validate(raw_json)
-                        instruments_list = exchange_detail.instruments
-                        break
-                except aiohttp.ClientError as exc:
-                    last_exc = exc
-                    if attempt < _TARDIS_RETRY_ATTEMPTS - 1:
-                        await asyncio.sleep(delay)
-                        continue
-                    error_code = _tardis._classify_tardis_error(exc)
-                    classification = _tardis.classify_venue_error("tardis", error_code)
-                    action = classification.action.value if classification else "fail"
-                    retry_safe = classification.retry_safe if classification else False
-                    _tardis.logger.error(
-                        "Tardis request failed for exchange %r after %d attempts: %s "
-                        "(classified: %s, action: %s, retry=%s)",
-                        exchange,
-                        _TARDIS_RETRY_ATTEMPTS,
-                        exc,
-                        error_code,
-                        action,
-                        retry_safe,
-                    )
-                    _tardis.log_event(
-                        "ADAPTER_FETCH_FAILED",
-                        details={
-                            "venue": "tardis",
-                            "exchange": exchange,
-                            "error": str(exc),
-                            "error_code": error_code,
-                            "action": action,
-                            "retry_safe": retry_safe,
-                        },
-                    )
-                    # CF-11: re-raise so get_instruments tracks this exchange as
-                    # failed (→ venue failed[] if it leaves the universe empty),
-                    # not a silent clean-empty. Mirrors the tradfi databento fix.
-                    raise RuntimeError(
-                        f"Tardis {exchange!r}: all {_TARDIS_RETRY_ATTEMPTS} attempts failed "
-                        f"(error_code={error_code}): {exc}"
-                    ) from exc
+                _tardis.log_event(
+                    "ADAPTER_FETCH_FAILED",
+                    details={
+                        "venue": "tardis",
+                        "exchange": exchange,
+                        "error": str(exc),
+                        "error_code": error_code,
+                        "action": action,
+                        "retry_safe": retry_safe,
+                    },
+                )
+                # CF-11: re-raise so get_instruments tracks this exchange as
+                # failed (→ venue failed[] if it leaves the universe empty),
+                # not a silent clean-empty. Mirrors the tradfi databento fix.
+                raise RuntimeError(
+                    f"Tardis {exchange!r}: all {_TARDIS_RETRY_ATTEMPTS} attempts failed (error_code={error_code}): {exc}"
+                ) from exc
 
         if instruments_list is None:
             _tardis.logger.error(
@@ -685,8 +644,8 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                 _TARDIS_RETRY_ATTEMPTS,
                 last_exc,
             )
-            # CF-11: no parseable response after both API paths is a genuine
-            # fetch failure — raise (not return []) so the venue threads state.
+            # CF-11: no parseable response is a genuine fetch failure —
+            # raise (not return []) so the venue threads state.
             raise RuntimeError(
                 f"Tardis {exchange!r}: no instruments after {_TARDIS_RETRY_ATTEMPTS} attempts (last={last_exc})"
             )
@@ -701,11 +660,9 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                 results.append(record)
             else:
                 filtered_count += 1
-        api_label = "instruments" if used_instruments_api else "exchanges"
         _tardis.logger.info(
-            "Tardis %s: API /%s returned %d symbols, parsed %d instruments, filtered %d",
+            "Tardis %s: API /exchanges (no-auth) returned %d symbols, parsed %d instruments, filtered %d",
             exchange,
-            api_label,
             api_count,
             len(results),
             filtered_count,
