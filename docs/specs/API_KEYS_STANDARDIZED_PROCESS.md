@@ -81,13 +81,13 @@ api_key = get_secret_client(
 
 All secret names come from config (UnifiedCloudConfig). Never hardcode secret names.
 
-| Config Field            | Env Var                 | Default               | Used For           |
-| ----------------------- | ----------------------- | --------------------- | ------------------ |
-| `tardis_secret_name`    | `TARDIS_SECRET_NAME`    | `tardis-api-key-full` | CEFI (Tardis)      |
-| `databento_secret_name` | `DATABENTO_SECRET_NAME` | `databento-api-key`   | TRADFI (Databento) |
-| `graph_secret_name`     | `GRAPH_SECRET_NAME`     | `graph-api-key`       | DEFI (The Graph)   |
-| `alchemy_secret_name`   | `ALCHEMY_SECRET_NAME`   | `alchemy-api-key`     | DEFI (Alchemy RPC) |
-| `aavescan_secret_name`  | `AAVESCAN_SECRET_NAME`  | `aavescan-api-key`    | DEFI (AaveScan)    |
+| Config Field            | Env Var                 | Default             | Used For           |
+| ----------------------- | ----------------------- | ------------------- | ------------------ |
+| `tardis_secret_name`    | `TARDIS_SECRET_NAME`    | `tardis-api-key`    | CEFI (Tardis)      |
+| `databento_secret_name` | `DATABENTO_SECRET_NAME` | `databento-api-key` | TRADFI (Databento) |
+| `graph_secret_name`     | `GRAPH_SECRET_NAME`     | `graph-api-key`     | DEFI (The Graph)   |
+| `alchemy_secret_name`   | `ALCHEMY_SECRET_NAME`   | `alchemy-api-key`   | DEFI (Alchemy RPC) |
+| `aavescan_secret_name`  | `AAVESCAN_SECRET_NAME`  | `aavescan-api-key`  | DEFI (AaveScan)    |
 
 Instruments-service inherits these from `UnifiedCloudConfig` (unified-config-interface). Override in `InstrumentsServiceConfig` only if needed.
 
@@ -135,10 +135,10 @@ When adding a new data source, verify we have a secret for it:
 
 **Known data sources and keys:**
 
-| Data Source | Secret                | Status                                |
-| ----------- | --------------------- | ------------------------------------- |
-| Tardis      | tardis_secret_name    | ✅                                    |
-| Databento   | databento_secret_name | ✅                                    |
-| The Graph   | graph_secret_name     | ✅                                    |
-| Alchemy     | alchemy_secret_name   | ✅                                    |
-| AaveScan    | aavescan_secret_name  | ✅                                    |
+| Data Source | Secret                | Status |
+| ----------- | --------------------- | ------ |
+| Tardis      | tardis_secret_name    | ✅     |
+| Databento   | databento_secret_name | ✅     |
+| The Graph   | graph_secret_name     | ✅     |
+| Alchemy     | alchemy_secret_name   | ✅     |
+| AaveScan    | aavescan_secret_name  | ✅     |
