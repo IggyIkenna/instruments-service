@@ -680,18 +680,21 @@ def test_cefi_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(r
     d1, d2, d3, d4 = date(2024, 6, 1), date(2024, 6, 2), date(2024, 6, 3), date(2024, 6, 4)
 
     # Producer roll-up: OLDCOIN only on d1 (delisted, latest=d3); BTC on d2,d3 (active).
+    # MVP-qualifying fixtures (cefi_universe_capture_rule_2026_06_23): BINANCE-FUTURES
+    # PERPETUAL bases (ETH/BTC) self-qualify the perp-gate, so the lifecycle assertions
+    # (NOT_LISTED / DELISTED / expected_unattempted) are exercised through the MVP gate.
     catalogue_df = rollup.build_catalogue_dataframe(
         [
-            (d1, _snapshot([{"instrument_key": "OLDCOIN", "venue": "TESTVENUE", "instrument_type": "SPOT_PAIR"}])),
-            (d2, _snapshot([{"instrument_key": "BTC", "venue": "TESTVENUE", "instrument_type": "SPOT_PAIR"}])),
-            (d3, _snapshot([{"instrument_key": "BTC", "venue": "TESTVENUE", "instrument_type": "SPOT_PAIR"}])),
+            (d1, _snapshot([{"instrument_key": "ETH", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "ETH"}])),
+            (d2, _snapshot([{"instrument_key": "BTC", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "BTC"}])),
+            (d3, _snapshot([{"instrument_key": "BTC", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "BTC"}])),
         ]
     )
     catalog = enumerator._catalog_from_dataframe(catalogue_df)
 
     # Manifest says BTC was captured on d3 only.
     # present_cols default: venue, chain, data_type, instrument_type, instrument_id, league_id, date
-    present_set = {("TESTVENUE", "", "INSTRUMENTS", "SPOT_PAIR", "BTC", "", "2024-06-03")}
+    present_set = {("BINANCE-FUTURES", "", "INSTRUMENTS", "PERPETUAL", "BTC", "", "2024-06-03")}
 
     rows = list(
         enumerator.enumerate_v2(
@@ -713,8 +716,8 @@ def test_cefi_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(r
     assert ("BTC", "2024-06-03") not in by_key
     # BTC alive on d4 (available_to=None), no manifest row → expected_unattempted
     assert by_key[("BTC", "2024-06-04")].capture_status == "expected_unattempted"
-    # OLDCOIN after available_to (d1) → DELISTED
-    assert by_key[("OLDCOIN", "2024-06-02")].reason == "EXPECTED_INSTRUMENT_DELISTED"
+    # ETH after available_to (d1) → DELISTED
+    assert by_key[("ETH", "2024-06-02")].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
 # ---------------------------------------------------------------------------

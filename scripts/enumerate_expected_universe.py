@@ -86,6 +86,7 @@ from unified_api_contracts import (
     external_sources_for,
     grain_for_instrument_type,
     has_source_priority,
+    is_in_mvp_capture_universe,
     pipeline_mode_for_source,
     valid_data_types_for_venue_instrument_type,
 )
@@ -776,6 +777,14 @@ class InstrumentCatalogEntry(NamedTuple):
     # Underlying asset for derivatives (G1-ENUM bundle-grain roll-up key). Read
     # from the instruments-store ``underlying`` column; "" for non-derivatives.
     underlying: str = ""
+    # Base asset for spot/perp legs (the cefi MVP base_ccy axis). Read from the
+    # instruments-store ``base_asset`` column; "" when absent.
+    base_asset: str = ""
+    # MVP capture-universe tag from the catalogue ``mvp`` column (the rollup tags
+    # it with the shared UAC ``is_in_mvp_capture_universe`` SSOT). ``None`` = column
+    # absent → the cefi enumerator computes the predicate itself (same SSOT) so the
+    # denominator stays the MVP universe even on a pre-mvp-tag catalogue.
+    mvp: bool | None = None
 
 
 def _row_data_types(
@@ -828,6 +837,68 @@ def _row_data_types(
     return [dt for dt in data_types if dt in valid or dt not in known_ag_dts]
 
 
+# ---------------------------------------------------------------------------
+# CeFi MVP capture-universe gate (cefi_universe_capture_rule_2026_06_23)
+# Shared helpers so the bundle roll-up + the cefi enumerator apply the SAME
+# perp-gated MVP predicate (the UAC ``is_in_mvp_capture_universe`` SSOT).
+# ---------------------------------------------------------------------------
+
+
+def _mvp_capture_itype(instrument_type: str) -> str:
+    """Normalise an option/futures BUNDLE (or COMBO) instrument_type to the
+    leaf-equivalent the MVP predicate recognises: options_chain/combo → OPTION
+    (the Deribit BTC/ETH options carve-out), futures_chain → FUTURE.
+    """
+    norm = instrument_type.strip().upper()
+    if norm in ("OPTIONS_CHAIN", "COMBO"):
+        return "OPTION"
+    if norm == "FUTURES_CHAIN":
+        return "FUTURE"
+    return instrument_type
+
+
+def _base_exchange(venue: str) -> str:
+    """Base-exchange token of a canonical venue (``BINANCE-SPOT`` → ``BINANCE``).
+
+    The perp-gate is per EXCHANGE, not per sub-venue: a ``BINANCE-SPOT`` spot is
+    gated by a ``BINANCE-FUTURES`` perp.
+    """
+    return venue.strip().upper().split("-", 1)[0]
+
+
+def _cefi_perp_bases(catalog: list[InstrumentCatalogEntry]) -> set[tuple[str, str]]:
+    """``(base_exchange, base_upper)`` set of exchanges that list a PERPETUAL/EQUITY_PERP."""
+    return {
+        (_base_exchange(e.venue), (e.base_asset or e.underlying).strip().upper())
+        for e in catalog
+        if e.instrument_type.strip().upper() in ("PERPETUAL", "EQUITY_PERP")
+        and e.venue
+        and (e.base_asset or e.underlying)
+    }
+
+
+def _cefi_entry_in_mvp_universe(
+    instr: InstrumentCatalogEntry,
+    perp_bases: set[tuple[str, str]],
+) -> bool:
+    """Whether a cefi catalogue entry is in the MVP capture universe.
+
+    Prefers the catalogue's pre-tagged ``mvp`` column (the rollup tags it with the
+    SAME shared predicate); falls back to computing the shared UAC predicate when
+    the column is absent (``mvp is None``) — bundle instrument_types are normalised
+    via :func:`_mvp_capture_itype`.
+    """
+    if instr.mvp is not None:
+        return instr.mvp
+    base = (instr.base_asset or instr.underlying).strip().upper()
+    return is_in_mvp_capture_universe(
+        instr.venue,
+        base,
+        _mvp_capture_itype(instr.instrument_type),
+        has_perp_for_base=(_base_exchange(instr.venue), base) in perp_bases,
+    )
+
+
 def _enumerate_v2_cefi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -851,7 +922,17 @@ def _enumerate_v2_cefi(
     # Pre-compute window bounds once for overlap filter below.
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
+    # MVP capture-universe denominator gate (cefi_universe_capture_rule_2026_06_23):
+    # the expected_unattempted denominator is the perp-gated MVP universe — NOT the
+    # full IS catalogue. Out-of-MVP cells are NOT seeded (excluded from the
+    # denominator entirely). ``_cefi_perp_bases`` is the venue/base property the
+    # shared UAC predicate needs; computed once over the catalog list.
+    _perp_bases = _cefi_perp_bases(catalog)
     for instr in catalog:
+        # Skip cells outside the MVP capture universe (prefer the pre-tagged ``mvp``
+        # column; fall back to the shared predicate — same SSOT).
+        if not _cefi_entry_in_mvp_universe(instr, _perp_bases):
+            continue
         af_raw = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_raw = pd.Timestamp(instr.available_to) if instr.available_to else None
         # Normalize to tz-naive date-only for comparison with the date axis
@@ -1239,12 +1320,12 @@ def _enumerate_v2_sports(
     ``main``. A data_type with no source mapping (e.g. a test stub) gets no
     coverage filter.
     """
+    from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
     from unified_api_contracts.sports import (
         SPORTS_DATA_TYPE_TO_SOURCE,
         get_entity_league_coverage,
         get_source_coverage_start,
     )
-    from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
 
     _pcols = present_cols or list(_SPORTS_PRESENT_COLS)
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
@@ -1548,6 +1629,26 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
     # key (venue, chain, underlying, bundle_it) → [min available_from, max available_to (None = open)]
     bundles: dict[tuple[str, str, str, str], list[str | None]] = {}
     saw_open_end: set[tuple[str, str, str, str]] = set()
+    # MVP roll-up (cefi_universe_capture_rule_2026_06_23): a bundle (options_chain /
+    # futures_chain) is MVP iff ANY of its leaves is MVP, so the perp-gated mvp tag
+    # survives the bundle collapse and the cefi expected-universe gate reads it
+    # directly (the bundle's instrument_type is options_chain/futures_chain, NOT a
+    # type the predicate recognises). For cefi we OR each leaf's mvp (catalogue
+    # column when present, else the shared predicate) into the bundle key.
+    bundle_mvp: dict[tuple[str, str, str, str], bool] = {}
+    _perp_bases: set[tuple[str, str]] = _cefi_perp_bases(catalog) if asset_group == "cefi" else set()
+
+    def _leaf_is_mvp(e: InstrumentCatalogEntry, base_override: str = "") -> bool:
+        if e.mvp is not None:
+            return e.mvp
+        _base = (base_override or e.base_asset or e.underlying).strip().upper()
+        return is_in_mvp_capture_universe(
+            e.venue,
+            _base,
+            _mvp_capture_itype(e.instrument_type),
+            has_perp_for_base=(_base_exchange(e.venue), _base) in _perp_bases,
+        )
+
     for instr in catalog:
         # Venue-aware (F2): a bare FUTURE leaf bundles to futures_chain only at
         # DERIBIT/OKX; at BYBIT (+ venue-unknown) it stays a per-contract leaf.
@@ -1572,6 +1673,10 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
             )
             continue
         key = (instr.venue, instr.chain, underlying, bundle_it)  # pyright: ignore[reportArgumentType]
+        if asset_group == "cefi":
+            # Use the DERIVED underlying as the MVP base (the leaf may carry a blank
+            # underlying — derived above from the instrument_id).
+            bundle_mvp[key] = bundle_mvp.get(key, False) or _leaf_is_mvp(instr, underlying)
         if key not in bundles:
             bundles[key] = [instr.available_from, instr.available_to]
             if instr.available_to is None:
@@ -1603,6 +1708,11 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
                 # one candidate with data_type=trades (NOT data_type=options_chain).
                 data_type=None,
                 underlying=underlying,
+                base_asset=underlying,
+                # Carry the rolled-up MVP tag so the cefi enumerator gate reads it
+                # directly (the bundle instrument_type is options_chain/futures_chain,
+                # which the predicate doesn't recognise). None for non-cefi.
+                mvp=bundle_mvp.get((venue, chain, underlying, bundle_it)),
             )
         )
     return passthrough + synthetic
@@ -1725,6 +1835,17 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
             pass
         return str(val)
 
+    def _opt_bool(val: object) -> bool | None:
+        """Return bool, or None when the ``mvp`` column is absent/NaN."""
+        if val is None:
+            return None
+        try:
+            if pd.isna(val):  # pyright: ignore[reportArgumentType]
+                return None
+        except (TypeError, ValueError):
+            pass
+        return bool(val)
+
     entries: list[InstrumentCatalogEntry] = []
     for row in df.itertuples(index=False, name=None):
         row_dict: dict[str, object] = dict(zip(df.columns, row, strict=True))
@@ -1749,6 +1870,8 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
                 settlement_time=_opt_date(row_dict.get("settlement_time")),
                 data_type=(_safe_str(row_dict.get("data_type", "")) or None),
                 underlying=_safe_str(row_dict.get("underlying", "")),
+                base_asset=_safe_str(row_dict.get("base_asset", "")),
+                mvp=_opt_bool(row_dict.get("mvp")),
             )
         )
     return entries
