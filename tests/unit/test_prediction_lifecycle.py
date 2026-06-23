@@ -121,6 +121,53 @@ class TestPolymarketLifecycle:
         misc_lag = CANONICAL_GROUP_METADATA[CanonicalQuestionGroup.MISC_NOVELTY].settlement_lag
         assert lifecycle.settlement_time == lifecycle.resolution_time + misc_lag
 
+    def test_parse_market_populates_lifecycle_bounds_from_gamma(self) -> None:
+        """available_from/to come from the full lifecycle when it classifies.
+
+        Honest-absence gate (operator 2026-06-23): the InstrumentRecord MUST
+        carry available_from_datetime / available_to_datetime so MTDS/UTL only
+        emit a manifest cell within the market's life — out-of-life dates are an
+        honest BLANK, not empty_confirmed.
+        """
+        adapter = PolymarketReferenceDataAdapter()
+        market = _polymarket_btc_hourly_market()
+        record = adapter._parse_market(market, datetime(2026, 3, 26, tzinfo=UTC))  # pyright: ignore[reportPrivateUsage]
+
+        assert record is not None
+        # Full lifecycle classified → bounds = lifecycle (settlement-lag adjusted).
+        assert record.available_from_datetime == datetime(2026, 3, 25, 9, 0, tzinfo=UTC)
+        expected_lag = CANONICAL_GROUP_METADATA[CanonicalQuestionGroup.BTC_UP_DOWN_HOURLY].settlement_lag
+        assert record.available_to_datetime == datetime(2026, 3, 26, 13, 0, tzinfo=UTC) + expected_lag
+
+    def test_parse_market_bounds_from_gamma_when_lifecycle_unclassifiable(self) -> None:
+        """Partial gamma bounds populate even when strict classify_lifecycle is None.
+
+        A market with a listing date (startDate) but NO resolution timestamp
+        (neither closedTime nor endDateIso) fails the STRICT classify_lifecycle
+        (it needs both), but available_from must still be bounded from the gamma
+        startDate so the honest-absence gate has a lower bound — partial bounds
+        beat no bounds (the prior code left BOTH NULL → out-of-life dates emitted
+        as empty_confirmed, inflating coverage).
+        """
+        adapter = PolymarketReferenceDataAdapter()
+        market = PolymarketGammaMarket.model_validate(
+            {
+                "conditionId": "0xpartial",
+                "marketSlug": "bitcoin-up-or-down-partial",
+                "question": "Will Bitcoin be up or down?",
+                "outcomes": ["Up", "Down"],
+                "startDate": "2026-03-20T00:00:00Z",
+                "active": True,
+                "closed": False,
+            }
+        )
+
+        assert adapter.classify_lifecycle(market) is None  # no resolution timestamp
+        record = adapter._parse_market(market, datetime(2026, 3, 26, tzinfo=UTC))  # pyright: ignore[reportPrivateUsage]
+        assert record is not None
+        assert record.available_from_datetime == datetime(2026, 3, 20, 0, 0, tzinfo=UTC)
+        assert record.available_to_datetime is None
+
     def test_missing_condition_id_returns_none(self) -> None:
         adapter = PolymarketReferenceDataAdapter()
         market = PolymarketGammaMarket.model_validate(
