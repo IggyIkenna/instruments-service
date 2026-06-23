@@ -57,6 +57,30 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         description="Route writes to test bucket instead of prod (E2E test mode)",
     )
 
+    sports_adapter_rate_rpm: int = Field(
+        default=0,
+        validation_alias=AliasChoices("SPORTS_ADAPTER_RATE_RPM"),
+        description=(
+            "Allocated fleet rate-budget for this VM's sports adapter, in requests-per-minute "
+            "(deterministic launch-time split of the source ceiling: per_vm_rpm = source_rpm // N_vms, "
+            "stamped by the launcher from deployment-service launch_budget_registry.allocate_rate_budget). "
+            "When > 0 the adapter's self-enforced token-bucket throttle runs at this rate as the PRIMARY "
+            "control (min_request_interval = 60 / rpm); the 429 / JSON-envelope backoff stays only as the "
+            "safety net. 0 = unset -> adapter keeps its class-default throttle. SSOT: "
+            "plans/active/data_completion_to_100_all_ag_2026_06_21.md."
+        ),
+    )
+
+    sports_adapter_concurrency: int = Field(
+        default=0,
+        validation_alias=AliasChoices("SPORTS_ADAPTER_CONCURRENCY"),
+        description=(
+            "Matched in-flight concurrency for this VM's per-fixture sports fetch fan-out "
+            "(concurrency x max-per-query-rate <= per_vm_rpm). Stamped by the launcher alongside "
+            "SPORTS_ADAPTER_RATE_RPM. 0 = unset -> the orchestrator keeps its default semaphore width."
+        ),
+    )
+
     sports_v9_enforced: bool = Field(
         default=False,
         validation_alias=AliasChoices("SPORTS_V9_ENFORCED"),
