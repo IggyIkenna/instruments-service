@@ -662,11 +662,8 @@ def get_adapter_for_canonical_venue(
                 f"venue_instrument_type_to_tardis for this venue."
             )
         _logger.debug("Tardis: %s → exchange=%s", canonical_venue, tardis_exchange)
-        adapter = TardisReferenceDataAdapter(
-            project_id=project_id,
-            api_key=api_key,
-            exchanges=[tardis_exchange],
-        )
+        # NO api_key — IS enumeration uses the free no-auth /v1/exchanges path (operator 2026-06-23).
+        adapter = TardisReferenceDataAdapter(project_id=project_id, exchanges=[tardis_exchange])
     elif adapter_key in _DATE_AWARE_TRADFI_ADAPTER_KEYS:
         adapter = _build_date_aware_tradfi_adapter(
             adapter_key,
