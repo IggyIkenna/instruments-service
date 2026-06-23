@@ -1326,6 +1326,7 @@ def _enumerate_v2_sports(
         get_entity_league_coverage,
         get_source_coverage_start,
     )
+    from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
 
     _pcols = present_cols or list(_SPORTS_PRESENT_COLS)
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
