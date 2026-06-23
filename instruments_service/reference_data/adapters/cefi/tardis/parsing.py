@@ -32,6 +32,8 @@ else:  # pragma: no cover - runtime namespace indirection
     from instruments_service.reference_data.adapters.cefi.tardis._pkg_ref import tardis_namespace as _tardis
 
 __all__ = [
+    "_BITFINEX_BASE_ALIASES",
+    "_BITFINEX_QUOTE_ALIASES",
     "_DERIBIT_MONTHS",
     "_QUOTE_CURRENCIES",
     "_QUOTE_CURRENCIES_SET",
@@ -45,6 +47,7 @@ __all__ = [
     "_parse_yymmdd_symbol_expiry",
     "_passes_asset_filter",
     "_resolve_base_quote",
+    "_resolve_bitfinex_spot",
     "_resolve_option_fields",
     "_split_kraken_symbol",
     "_split_symbol",
@@ -232,6 +235,65 @@ def _parse_underscore_yymmdd_symbol_expiry(raw_id: str) -> datetime | None:
     return None
 
 
+#: Bitfinex uses non-standard short BASE tickers on its concatenated spot symbols
+#: (``ALGUSD`` = ALGO/USD). Map them back to the canonical ``CEFI_BASE_ASSET_UNIVERSE``
+#: tickers so the base-membership leg of the MVP capture predicate passes (the
+#: 25-base spot↔perp overlap incl. ALG/ATO; cefi_universe_capture_rule 2026-06-23).
+_BITFINEX_BASE_ALIASES: dict[str, str] = {
+    "ALG": "ALGO",
+    "ATO": "ATOM",
+    "DSH": "DASH",
+    "IOT": "IOTA",
+    "UDC": "USDC",
+    "UST": "USDT",  # Bitfinex code for Tether USDT (NOT TerraUSD)
+    "DOG": "DOGE",
+    "MNA": "MANA",
+    "AGI": "FET",  # legacy SingularityNET (now FET)
+    "QSH": "QASH",
+    "DAT": "DATA",
+    "SNG": "SNGLS",
+}
+
+#: Bitfinex QUOTE pseudo-codes → canonical quote tickers.
+_BITFINEX_QUOTE_ALIASES: dict[str, str] = {
+    "UST": "USDT",  # Tether USDT
+    "UDC": "USDC",
+}
+
+
+def _resolve_bitfinex_spot(raw_id: str) -> tuple[str, str]:
+    """Resolve a Bitfinex spot ``raw_id`` to canonical ``(base, quote)``.
+
+    Bitfinex spot symbols come in TWO shapes:
+      * ``<BASE>:<QUOTE>`` (modern / >3-char tickers): ``AAVE:USD``, ``LINK:UST``,
+        ``1INCH:UST``. The colon is the base/quote separator.
+      * concatenated 3-char short tickers (legacy): ``ALGUSD`` (ALG/USD),
+        ``ATOUST`` (ATO/UST), ``DSHBTC``. No separator, no metadata.
+
+    Bitfinex's short base codes (``ALG``/``ATO``/``DSH``/``IOT``) and its quote
+    pseudo-codes (``UST``=USDT, ``UDC``=USDC) are mapped back to canonical tickers
+    (cefi_universe_capture_rule 2026-06-23). Returns ``("", "")`` when neither shape
+    resolves (caller falls back).
+    """
+    upper = raw_id.upper()
+    # Colon-delimited: BASE:QUOTE
+    if ":" in upper:
+        left, _, right = upper.partition(":")
+        base = _BITFINEX_BASE_ALIASES.get(left, left)
+        quote = _BITFINEX_QUOTE_ALIASES.get(right, right)
+        return base, quote
+    # Concatenated short ticker: <BASE><QUOTE>. Quote suffixes longest-first;
+    # include Bitfinex pseudo-quotes UST/UDC before the canonical set.
+    bfx_quotes = ("USDT", "USDC", "UST", "UDC", "USD", "BTC", "ETH", "EUR", "GBP", "JPY")
+    for q in bfx_quotes:
+        if upper.endswith(q) and len(upper) > len(q):
+            raw_base = upper[: -len(q)]
+            base = _BITFINEX_BASE_ALIASES.get(raw_base, raw_base)
+            quote = _BITFINEX_QUOTE_ALIASES.get(q, q)
+            return base, quote
+    return "", ""
+
+
 def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str) -> tuple[str, str]:
     """Parse base/quote from Tardis metadata or fall back to symbol splitting.
 
@@ -271,9 +333,18 @@ def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str
         left, right = upper_id.split(":", 1)
         base = left[:-2] if left.endswith("F0") else left
         quote = right[:-2] if right.endswith("F0") else right
-        # Bitfinex pseudo-tickers → canonical
-        bfx_quote_aliases = {"UST": "USDT"}
-        return base, bfx_quote_aliases.get(quote, quote)
+        # Bitfinex pseudo-tickers → canonical (base ALG→ALGO/ATO→ATOM/…; quote UST→USDT)
+        return (
+            _tardis._BITFINEX_BASE_ALIASES.get(base, base),
+            _tardis._BITFINEX_QUOTE_ALIASES.get(quote, quote),
+        )
+    # Bitfinex SPOT (Tardis ``bitfinex``): BASE:QUOTE (modern) or concatenated
+    # 3-char short tickers (ALGUSD/ATOUST). Non-standard base + quote codes are
+    # mapped to canonical (cefi_universe_capture_rule 2026-06-23).
+    if exchange == "bitfinex":
+        bfx_base, bfx_quote = _tardis._resolve_bitfinex_spot(upper_id)
+        if bfx_base:
+            return bfx_base, bfx_quote
     if "-" in upper_id:
         parts = upper_id.split("-")
         # UPBIT uses QUOTE-BASE format: KRW-BTC, BTC-DOT, USDT-SOL
@@ -354,7 +425,7 @@ def _infer_margin_type(
     return MarginType.LINEAR
 
 
-def _passes_asset_filter(base: str, quote: str, instrument_type: str) -> bool:
+def _passes_asset_filter(base: str, quote: str, instrument_type: str, venue: str | None = None) -> bool:
     """Check if the instrument passes the CeFi venue universe filter.
 
     FULL-UNIVERSE enumeration (operator 2026-06-23, mirrors the BUG #4 HL/ASTER
@@ -365,19 +436,29 @@ def _passes_asset_filter(base: str, quote: str, instrument_type: str) -> bool:
     universe must equal the venues' real listed universe so the catalogue is
     ⊇ the captured present-set). The two surviving gates are venue-volume-safe,
     not coin-curation:
-      1. ``CEFI_ACCEPTED_QUOTE_ASSETS`` (USDT/USDC/USD) — drops exotic cross
-         pairs (e.g. BASE/EUR, BASE/BTC) that are not part of the USD-quote
-         universe; derivatives carry no quote and pass.
+      1. accepted-quote gate — USDT/USDC/USD fleet-wide, PLUS the per-venue
+         extensions from the UAC SSOT ``accepted_quotes_for_venue`` (KRW is
+         accepted ONLY for UPBIT — the kimchi-premium venue, operator 2026-06-23).
+         Drops exotic cross pairs (BASE/EUR, BASE/BTC) elsewhere; derivatives
+         carry no quote and pass.
       2. OPTIONS underlyings stay restricted to ``CEFI_OPTIONS_UNDERLYINGS``
          (BTC/ETH) — a Deribit-options-per-coin explosion is a genuine
          data-volume constraint (DERIBIT already ~213k historical rows), and the
          operator universe SSOT documents options as BTC/ETH-only by design.
+
+    Args:
+        base: Base asset ticker.
+        quote: Quote asset ticker ("" for derivatives).
+        instrument_type: Canonical instrument type string.
+        venue: Canonical venue (e.g. ``UPBIT``) for the per-venue accepted-quote
+            extension. ``None`` → fleet-default quotes (USDT/USDC/USD).
     """
     base_upper = base.upper()
     quote_upper = quote.upper() if quote else ""
-    # Quote gate: only USD + major stablecoin quotes (no exotic cross pairs).
+    accepted_quotes = _tardis.accepted_quotes_for_venue(venue)
+    # Quote gate: USD + major stablecoins (+ KRW for UPBIT). No exotic cross pairs.
     # Derivatives (perps, futures, options) have no quote — allow them through.
-    if quote_upper and quote_upper not in _tardis.CEFI_ACCEPTED_QUOTE_ASSETS:
+    if quote_upper and quote_upper not in accepted_quotes:
         return False
     # Options: only BTC and ETH underlyings (per-coin option chains explode data).
     return not (instrument_type == "OPTION" and base_upper not in _tardis.CEFI_OPTIONS_UNDERLYINGS)
