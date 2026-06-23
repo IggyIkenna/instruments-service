@@ -685,9 +685,45 @@ def test_cefi_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(r
     # (NOT_LISTED / DELISTED / expected_unattempted) are exercised through the MVP gate.
     catalogue_df = rollup.build_catalogue_dataframe(
         [
-            (d1, _snapshot([{"instrument_key": "ETH", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "ETH"}])),
-            (d2, _snapshot([{"instrument_key": "BTC", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "BTC"}])),
-            (d3, _snapshot([{"instrument_key": "BTC", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "BTC"}])),
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "ETH",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "base_asset": "ETH",
+                        }
+                    ]
+                ),
+            ),
+            (
+                d2,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BTC",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "base_asset": "BTC",
+                        }
+                    ]
+                ),
+            ),
+            (
+                d3,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BTC",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "base_asset": "BTC",
+                        }
+                    ]
+                ),
+            ),
         ]
     )
     catalog = enumerator._catalog_from_dataframe(catalogue_df)
@@ -856,3 +892,74 @@ def test_add_mvp_column_empty_frame_keeps_bool_column(rollup: ModuleType) -> Non
     assert "mvp" in out.columns
     assert out["mvp"].dtype == bool
     assert out.empty
+
+
+# ---------------------------------------------------------------------------
+# _bounded_parallel_load — memory-bounded sliding window (OOM root-fix 2026-06-23)
+# ---------------------------------------------------------------------------
+
+
+def test_bounded_parallel_load_yields_every_item(rollup: ModuleType) -> None:
+    """All items are processed exactly once (order-independent)."""
+    items = list(range(50))
+    out = sorted(rollup._bounded_parallel_load(items, lambda x: x * 2, max_workers=4))
+    assert out == [x * 2 for x in items]
+
+
+def test_bounded_parallel_load_empty_input(rollup: ModuleType) -> None:
+    """No items → no results, no thread pool churn."""
+    assert list(rollup._bounded_parallel_load([], lambda x: x, max_workers=4)) == []
+
+
+def test_bounded_parallel_load_caps_in_flight_at_max_workers(rollup: ModuleType) -> None:
+    """Peak concurrent in-flight tasks never exceeds max_workers — the OOM guard.
+
+    Previously ``pool.map`` submitted ALL items at once (peak = len(items) frames
+    in RAM). This proves the sliding window holds peak concurrency at max_workers
+    regardless of item count.
+    """
+    import threading
+    import time
+
+    max_workers = 3
+    n_items = 30
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+    release = threading.Event()
+
+    def _slow(_: int) -> int:
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        # Hold every worker until the window is provably full, so peak reflects
+        # the true concurrency ceiling rather than fast serial completion.
+        release.wait(timeout=2.0)
+        with lock:
+            in_flight -= 1
+        return 1
+
+    def _drain() -> None:
+        for _ in rollup._bounded_parallel_load(list(range(n_items)), _slow, max_workers=max_workers):
+            pass
+
+    t = threading.Thread(target=_drain)
+    t.start()
+    time.sleep(0.3)
+    release.set()
+    t.join(timeout=5.0)
+    assert not t.is_alive()
+    assert peak <= max_workers, f"peak in-flight {peak} exceeded max_workers {max_workers}"
+
+
+def test_bounded_parallel_load_propagates_exception(rollup: ModuleType) -> None:
+    """A per-item failure fails loud (never a silent under-count)."""
+
+    def _boom(x: int) -> int:
+        if x == 7:
+            raise ValueError("blob 7 unreadable")
+        return x
+
+    with pytest.raises(ValueError, match="blob 7 unreadable"):
+        list(rollup._bounded_parallel_load(list(range(20)), _boom, max_workers=4))

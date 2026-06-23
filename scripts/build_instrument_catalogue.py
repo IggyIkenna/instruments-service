@@ -51,10 +51,11 @@ import io
 import logging
 import re
 import sys
-from collections.abc import Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from typing import TypeVar
 
 import pandas as pd
 from unified_api_contracts import is_in_mvp_capture_universe, is_mvp
@@ -99,6 +100,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+#: Generic item/result types for the memory-bounded parallel loader below.
+_LoadItemT = TypeVar("_LoadItemT")
+_LoadResultT = TypeVar("_LoadResultT")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -814,6 +819,54 @@ def _tune_download_pool(storage: StorageClient, size: int) -> None:
     logger.info("Tuned GCS HTTP connection pool to %d (matches download workers)", size)
 
 
+def _bounded_parallel_load(
+    items: list[_LoadItemT],
+    load: Callable[[_LoadItemT], _LoadResultT],
+    *,
+    max_workers: int,
+) -> Iterator[_LoadResultT]:
+    """Stream ``load(item)`` over ``items`` with a memory-bounded sliding window.
+
+    **Why this exists (OOM root-fix, 2026-06-23).** The previous
+    ``yield from pool.map(load, items)`` submitted ALL ~11.6k by_date download
+    tasks at once. ``ThreadPoolExecutor.map`` yields results in SUBMISSION order,
+    so if blob #0 is slow EVERY later completed frame buffers in RAM waiting its
+    turn — peak memory is O(len(items)) decoded parquet frames (the whole corpus
+    in memory at once → the catalogue-regen Cloud Run job hit "configured memory
+    limit was reached" and OOM-died even at 32Gi, leaving ``catalog.parquet`` stale).
+
+    This keeps at most ``max_workers`` futures in flight (a sliding window): submit
+    a window, then for each completed future yield its result and immediately drop
+    the reference + top the window back up with the next item. Peak in-flight
+    decoded frames is O(max_workers), NOT O(len(items)). Results are yielded in
+    COMPLETION order — order does NOT matter to the lifecycle roll-up
+    (:func:`build_catalogue_dataframe` accumulates per-instrument min/max across all
+    snapshots regardless of arrival order; ``all_days`` is a set), so completion
+    order is correct and strictly more memory-efficient than submission order.
+
+    A per-item ``load`` exception propagates (the run fails loud rather than
+    silently producing an under-counted catalogue the monotonic guard rejects).
+    """
+    if not items:
+        return
+    window = max(1, max_workers)
+    with ThreadPoolExecutor(max_workers=window) as pool:
+        pending: set[Future[_LoadResultT]] = set()
+        next_idx = 0
+        # Prime the window.
+        while next_idx < len(items) and len(pending) < window:
+            pending.add(pool.submit(load, items[next_idx]))
+            next_idx += 1
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for fut in done:
+                yield fut.result()  # propagates the first worker exception
+                # Top the window back up as each slot frees.
+                if next_idx < len(items):
+                    pending.add(pool.submit(load, items[next_idx]))
+                    next_idx += 1
+
+
 def _iter_by_date_snapshots(
     storage: StorageClient,
     bucket: str,
@@ -857,9 +910,11 @@ def _iter_by_date_snapshots(
         payload = storage.download_bytes(bucket, name)
         return day, pd.read_parquet(io.BytesIO(payload))
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        # pool.map preserves order and re-raises the first worker exception.
-        yield from pool.map(_load, targets)
+    # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
+    # — see _bounded_parallel_load: the full-corpus pool.map() OOM-killed the
+    # catalogue-regen Cloud Run job. Completion-order yield is correct here (the
+    # lifecycle roll-up is order-independent).
+    yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
 
 
 def _iter_prediction_by_date_snapshots(
@@ -918,9 +973,11 @@ def _iter_prediction_by_date_snapshots(
         payload = storage.download_bytes(bucket, name)
         return day, venue, cqg, pd.read_parquet(io.BytesIO(payload))
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        # pool.map preserves order and re-raises the first worker exception.
-        yield from pool.map(_load, targets)
+    # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
+    # — see _bounded_parallel_load: the full-corpus pool.map() OOM-killed the
+    # catalogue-regen Cloud Run job. Completion-order yield is correct here (the
+    # lifecycle roll-up is order-independent).
+    yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
 
 
 def _iter_sports_by_date_snapshots(
@@ -967,9 +1024,11 @@ def _iter_sports_by_date_snapshots(
         payload = storage.download_bytes(bucket, name)
         return day, pd.read_parquet(io.BytesIO(payload))
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        # pool.map preserves order and re-raises the first worker exception.
-        yield from pool.map(_load, targets)
+    # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
+    # — see _bounded_parallel_load: the full-corpus pool.map() OOM-killed the
+    # catalogue-regen Cloud Run job. Completion-order yield is correct here (the
+    # lifecycle roll-up is order-independent).
+    yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
 
 
 def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str) -> int | None:
