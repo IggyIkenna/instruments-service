@@ -13,7 +13,6 @@ from typing import ClassVar, cast
 import aiohttp
 from unified_api_contracts import (
     CEFI_ACCEPTED_QUOTE_ASSETS,
-    CEFI_BASE_ASSET_UNIVERSE,
     AsterExchangeInfo,
     UnsupportedCapabilityError,
     VenueMapping,
@@ -163,8 +162,13 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
             raw_symbol: str = str(sym_raw.get("symbol", ""))
             if not base_asset or not raw_symbol:
                 continue
-            if base_asset.upper() not in CEFI_BASE_ASSET_UNIVERSE:
-                continue
+            # BUG #4 (2026-06-22): the base-asset majors whitelist capped ASTER at
+            # ~33 instruments. The operator wants the FULL active perp universe
+            # enumerated (funding rates valuable even for small/illiquid coins), so
+            # the base-asset whitelist is REMOVED — every TRADING perp on a
+            # supported quote asset is catalogued. The quote-asset filter stays
+            # (USDT/USDC/USD only) to exclude non-canonical settlement pairs.
+            # SSOT: plans/active/issues/cefi_hl_aster_batch_data_gaps_2026_06_22.md BUG #4.
             if quote_asset.upper() not in CEFI_ACCEPTED_QUOTE_ASSETS:
                 continue
 
