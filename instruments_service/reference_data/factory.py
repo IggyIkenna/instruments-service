@@ -110,6 +110,9 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     # Historical option data comes via the Tardis adapter (DERIBIT → tardis).
     "DERIBIT-OPTIONS": "deribit_options",
     "COINBASE-SPOT": "tardis",
+    # Coinbase Derivatives (perps) via Tardis ``coinbase-international`` — distinct
+    # canonical venue so the perp-gate pairs it with COINBASE-SPOT (2026-06-23).
+    "COINBASE-FUTURES": "tardis",
     "UPBIT": "tardis",
     # Tier-3 CeFi (added 2026-05-01) — Tardis archives spot + perp/dated futures.
     "BITFINEX-SPOT": "tardis",
