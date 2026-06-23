@@ -170,7 +170,16 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
             expiry=expiry,
             strike=strike,
             option_type=option_type,
-            available_from_datetime=datetime(2010, 1, 1, tzinfo=UTC),
+            # ccxt ``load_markets`` exposes NO listing/genesis date, so the
+            # honest value is None — NEVER a 2010 placeholder. A hardcoded
+            # 2010-01-01 here poisoned the cumulative catalogue rollup, whose
+            # ``available_from = MIN(observed first snapshot day, declared
+            # available_from_datetime)`` then pinned every ccxt-sourced
+            # instrument's earliest date to an impossible 2010 (incident
+            # 2026-06-23: COINBASE-SPOT + OKX-SWAP). With None the rollup uses
+            # the real first-observed snapshot day. The Tardis adapter (the
+            # canonical cefi reference source) carries the true ``availableSince``.
+            available_from_datetime=None,
         )
 
     @staticmethod
