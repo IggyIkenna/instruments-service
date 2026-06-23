@@ -57,11 +57,18 @@ ExpectedRow = enumerator_module.ExpectedRow
 
 def _make_cefi_entry(
     instrument_id: str = "BTC-USDT",
-    instrument_type: str = "SPOT",
-    venue: str = "BINANCE",
+    instrument_type: str = "PERPETUAL",
+    venue: str = "BINANCE-FUTURES",
     available_from: str | None = "2019-01-01",
     available_to: str | None = None,
+    base_asset: str = "BTC",
+    mvp: bool | None = True,
 ) -> InstrumentCatalogEntry:
+    # Default to a canonical, MVP-qualifying cefi instrument (BINANCE-FUTURES BTC
+    # perp) so the lifecycle tests pass the MVP capture gate
+    # (cefi_universe_capture_rule_2026_06_23). ``mvp=True`` short-circuits the gate
+    # for these lifecycle-focused fixtures; the gate itself is exercised by the
+    # dedicated gate tests below (with mvp=None / non-MVP fixtures).
     return InstrumentCatalogEntry(
         instrument_id=instrument_id,
         instrument_type=instrument_type,
@@ -72,6 +79,8 @@ def _make_cefi_entry(
         available_to=available_to,
         market_created_at=None,
         settlement_time=None,
+        base_asset=base_asset,
+        mvp=mvp,
     )
 
 
@@ -965,7 +974,8 @@ def test_cefi_v2_alive_date_in_present_set_skipped() -> None:
             "venue": "BINANCE",
             "chain": "",
             "data_type": "ohlcv_1d",
-            "instrument_type": "SPOT",
+            # Match the canonical instrument_type the MVP-qualifying fixture emits.
+            "instrument_type": "PERPETUAL",
             "instrument_id": "BTC-USDT",
             "league_id": "",
             "date": "2023-06-01",
@@ -2047,3 +2057,74 @@ def test_defi_v2_legacy_venue_pre_genesis_uses_split_chain() -> None:
         "chain was likely still blank (split chain not forwarded to CHAIN_GENESIS_DATES)"
     )
     assert rows[0].chain == "ARBITRUM"
+
+
+# ---------------------------------------------------------------------------
+# MVP capture-universe denominator gate (cefi_universe_capture_rule_2026_06_23)
+# The expected_unattempted denominator = the perp-gated MVP universe, NOT the
+# full IS catalogue. Out-of-MVP cells are NOT seeded.
+# ---------------------------------------------------------------------------
+
+
+def test_cefi_v2_mvp_gate_excludes_non_mvp_via_column() -> None:
+    """A catalogue row tagged mvp=False is NOT seeded (excluded from denominator)."""
+    catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE-FUTURES", mvp=False)]
+    rows = list(
+        enumerator_module._enumerate_v2_cefi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    )
+    assert rows == []
+
+
+def test_cefi_v2_mvp_gate_includes_mvp_via_column() -> None:
+    """An mvp=True row with no manifest entry IS seeded expected_unattempted."""
+    catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE-FUTURES", mvp=True)]
+    rows = list(
+        enumerator_module._enumerate_v2_cefi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    )
+    assert rows
+    assert all(r.capture_status == "expected_unattempted" for r in rows)
+
+
+def test_cefi_v2_mvp_gate_computes_predicate_when_column_absent() -> None:
+    """mvp=None → the gate computes the shared predicate. Spot-with-no-perp is dropped;
+    the same spot with a sibling perp in the catalog is seeded."""
+    # SPOT BTC on BINANCE-SPOT with NO perp anywhere → dropped by the perp-gate.
+    spot_only = [
+        _make_cefi_entry(
+            instrument_id="BTC-USDT",
+            instrument_type="SPOT_PAIR",
+            venue="BINANCE-SPOT",
+            base_asset="BTC",
+            mvp=None,
+            available_from="2019-01-01",
+        )
+    ]
+    rows_drop = list(
+        enumerator_module._enumerate_v2_cefi(spot_only, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    )
+    assert rows_drop == []
+
+    # Same spot + a sibling perp for BTC on the venue-family → seeded.
+    spot_plus_perp = [
+        _make_cefi_entry(
+            instrument_id="BTC-USDT",
+            instrument_type="SPOT_PAIR",
+            venue="BINANCE-SPOT",
+            base_asset="BTC",
+            mvp=None,
+            available_from="2019-01-01",
+        ),
+        _make_cefi_entry(
+            instrument_id="BTC-PERP",
+            instrument_type="PERPETUAL",
+            venue="BINANCE-SPOT",
+            base_asset="BTC",
+            mvp=None,
+            available_from="2019-01-01",
+        ),
+    ]
+    rows_keep = list(
+        enumerator_module._enumerate_v2_cefi(spot_plus_perp, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    )
+    spot_rows = [r for r in rows_keep if r.instrument_id == "BTC-USDT"]
+    assert spot_rows  # spot now rides the perp-gate
