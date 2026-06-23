@@ -401,6 +401,37 @@ def test_defi_v2_delisted_instrument() -> None:
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
+def test_defi_v2_pool_seeds_canonical_pool_address_id_and_lowercase_type() -> None:
+    """POOL seed atoms MUST match the MTDS writer grain (canonical pool_address + lowercase type).
+
+    Root cause (defi_instrument_catalogue_and_capture_pipeline_2026_06_23): the catalogue carries a
+    POOL row's ``instrument_id`` as the glued ``VENUE-CHAIN:POOL:PAIR:fee`` ``instrument_key``
+    composite + UPPERCASE ``POOL`` ``instrument_type``, while MTDS captures key on
+    ``pool_address.lower()`` + lowercase ``pool``. The seeder re-keys from ``raw_symbol`` (the pool
+    address) so the seeded cell reconciles against the captured cell instead of sitting DELISTED.
+    """
+    pool_addr = "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"
+    entry = _make_defi_entry(
+        instrument_id="UNISWAP_V3-ARBITRUM:POOL:WETH-USDC:500",  # glued composite (catalogue form)
+        instrument_type="POOL",  # uppercase leaf (catalogue form)
+        venue="UNISWAP_V3",
+        chain="ARBITRUM",
+        available_from="2022-01-01",
+        available_to="2023-06-30",
+    )._replace(raw_symbol=pool_addr)
+    # 2024-01-01 > available_to → a DELISTED seed row; assert its canonical atoms.
+    rows = list(
+        enumerator_module._enumerate_v2_defi([entry], _date_axis("2023-01-01", "2024-01-01"), ["dex_pool_state"])
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.reason == "EXPECTED_INSTRUMENT_DELISTED"
+    assert row.instrument_id == pool_addr.lower()  # canonical pool_address.lower(), NOT the glued composite
+    assert row.instrument_type == "pool"  # lowercase (matches the writer), NOT uppercase POOL
+    assert row.venue == "UNISWAP_V3"  # bare protocol
+    assert row.chain == "ARBITRUM"  # populated chain
+
+
 def test_defi_v2_empty_catalog() -> None:
     rows = list(enumerator_module._enumerate_v2_defi([], _date_axis("2024-01-01"), ["lending_indices"]))
     assert rows == []
@@ -1015,7 +1046,7 @@ def test_defi_v2_alive_date_in_present_set_skipped() -> None:
             "venue": "AAVE_V3",
             "chain": "ARBITRUM",
             "data_type": "lending_indices",
-            "instrument_type": "LENDING",
+            "instrument_type": "lending",
             "instrument_id": "ETH-USDC",
             "league_id": "",
             "date": "2024-06-01",
@@ -1055,7 +1086,7 @@ def test_defi_v2_denominator_is_could_exist_universe_not_just_manifest() -> None
                 "venue": "AAVE_V3",
                 "chain": "ARBITRUM",
                 "data_type": "lending_indices",
-                "instrument_type": "LENDING",
+                "instrument_type": "lending",
                 "instrument_id": "ETH-USDC",
                 "league_id": "",
                 "date": "2024-06-01",
@@ -2027,7 +2058,7 @@ def test_defi_v2_canonical_venue_present_set_suppresses_seed() -> None:
             "venue": "AAVE_V3",
             "chain": "ARBITRUM",
             "data_type": "lending_indices",
-            "instrument_type": "LENDING",
+            "instrument_type": "lending",
             "instrument_id": "ETH-USDC",
             "league_id": "",
             "date": "2024-06-01",
