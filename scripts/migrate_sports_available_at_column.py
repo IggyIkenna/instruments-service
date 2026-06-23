@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """Migrate sports parquets: rename ``data_available_at`` → ``available_at``.
 
 Sports adapters historically stamped a prefixed column name ``data_available_at``;

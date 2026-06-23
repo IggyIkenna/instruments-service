@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """Re-key glued DeFi venue partitions to canonical (underscore) form in GCS.
 
 Bug 5 (defi_coverage_capability_alignment_2026_05_22.md § B5.3/B5.5): DeFi

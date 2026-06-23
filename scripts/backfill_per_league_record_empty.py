@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 """Manifest-only backfill of per-(date, league) record_empty rows.
 
 Adapter fix on 2026-05-06 made the footystats matches and transfermarkt

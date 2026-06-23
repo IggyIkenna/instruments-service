@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after audit findings actioned and parent plan archived
 """Phase 1 — Smart audit: api_football per-(league, season) truth-set.
 
 Plan: ``unified-trading-pm/plans/active/sports_fixtures_truthset_recovery_2026_05_06.md``.

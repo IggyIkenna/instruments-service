@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after patch confirmed + GCS orphan-sweep = 0
 """Patch PREDICTION availability index with per-underlying shard entries.
 
 Reads existing instrument parquets from GCS for each date, extracts the

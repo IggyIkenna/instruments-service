@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """migration_schema_completeness.py — schema-attribute completeness audit (CF-18 / V3).
 
 Closes the operator's deepest "no v10" fear: **a v10 forced because we silently dropped

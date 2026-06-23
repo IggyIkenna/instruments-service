@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 # Fill a list of (venue, date) instrument-availability shards locally.
 #
 # Reads pairs from a file (one "VENUE,DATE" per line) or stdin. Spawns one

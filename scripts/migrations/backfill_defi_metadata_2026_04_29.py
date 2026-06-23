@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 """Phase 2.5 — Backfill DeFi metadata onto historical instruments-store-defi parquets.
 
 Phase 2a (`d0d9a0d`) and Phase 2b (concurrent) update the DeFi reference-data

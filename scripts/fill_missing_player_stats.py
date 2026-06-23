@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after fill confirmed in live consolidated _index
 """Targeted gap-fill for PLAYER_STATS — only the missing (date, league) pairs.
 
 Mirrors ``/tmp/fill_missing_ohlcv.py`` (Databento OHLCV pattern) for

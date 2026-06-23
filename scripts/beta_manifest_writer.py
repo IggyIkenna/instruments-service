@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: campaign
+# Delete-when: after beta validated and replaced by production path in instruments-service CLI
 """beta_manifest_writer.py — projected v9 ``_index`` preview writer (CF-20 / V5).
 
 The operator's "dump the dry-run somewhere and look at it" idea: a migrator/rebuild

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """Reconcile manifest rows after entity (venue/data_type/chain/etc.) add or remove.
 
 --mode remove:
