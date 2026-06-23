@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 #
 # setup-workspace.sh — instruments-service
 #

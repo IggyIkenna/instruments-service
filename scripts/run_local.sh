@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 # Run instruments-service in real dev mode against live GCP.
 #
 # Uses the real project from .env (CLOUD_MOCK_MODE=false), real Secret Manager

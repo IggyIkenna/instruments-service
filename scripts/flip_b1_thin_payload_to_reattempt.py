@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after flip confirmed in live consolidated _index + parent plan archived
 """B.1 migration — flip FIXTURE_STATS / EVENTS / LINEUPS / INJURIES manifest rows.
 
 Before flattening normalizers shipped (UAC@c76e6d0, 2026-05-13), the four

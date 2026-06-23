@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """Lowercase ``instrument_type=`` GCS hive segments where uppercase exists.
 
 Per CLAUDE.md SSOT, on-disk paths use lowercase instrument_type

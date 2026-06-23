@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """migrate_sports_retired_types_2026_05_13.py — flip retired sports data_types.
 
 Generalization of ``migrate_leagues_kill_2026_05_07.py`` covering the full set of

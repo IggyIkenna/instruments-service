@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """reconcile_legacy_nan_placeholder_bars.py — Phase 3C audit reconciler.
 
 Scans the availability manifest for ``capture_status=captured`` rows where

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after cleanup confirmed + GCS orphan-sweep = 0
 """cleanup_legacy_twins.py - verified-delete of legacy duplicate objects (CF-21 / G4.5).
 
 The migration is **copy-not-move** (rebuild dedup + migrate-before-rebuild), so after a

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after dump data used + parent plan archived
 """Full Polymarket instrument dump via CLOB API cursor pagination.
 
 Scans ALL 863K+ markets on CLOB API (cursor pagination), groups by end_date,

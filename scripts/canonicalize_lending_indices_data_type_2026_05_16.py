@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: campaign
+# Delete-when: after instruments-service manifest-canonicalisation complete for all asset_groups and campaign plan archived (instruments_manifest_canonicalisation_2026_06_01)
 """Canonicalize ``data_type`` in the lending-indices manifest — kebab → snake.
 
 Per ``plans/active/issues/lending_indices_data_type_vocabulary_drift_2026_05_16.md``

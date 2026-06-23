@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """Relocate rogue bucket-root ``day=*/...`` parquets under the canonical
 ``raw_tick_data/by_date/day=*/...`` prefix.
 

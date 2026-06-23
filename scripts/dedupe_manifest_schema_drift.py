@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after cleanup confirmed + GCS orphan-sweep = 0
 """Dedupe manifest rows that represent the same shard under different schema versions.
 
 Background — verified 2026-05-04 against

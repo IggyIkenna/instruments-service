@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 # pyright: reportAny=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 # pyright: reportUnknownArgumentType=false, reportUnknownParameterType=false
 # pyright: reportMissingParameterType=false, reportUnknownLambdaType=false

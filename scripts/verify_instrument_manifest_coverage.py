@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Verify manifest coverage for a venue/date range.
 
 Checks `availability_index.parquet` for:
