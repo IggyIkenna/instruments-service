@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 # Sequential write-mode manifest rebuild across all instruments-service asset groups.
 #
 # Each rebuild:

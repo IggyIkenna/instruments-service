@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after write confirmed + parent plan archived
 """Write the corrective-flipped phantom rows to a per-VM shard.
 
 Background: ``flip_phantom_to_attempted_failed.py`` (instruments-service

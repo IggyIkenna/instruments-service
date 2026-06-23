@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Re-scan PREDICTION availability index with expanded v4 underlyings.
 
 Reads the existing v4 index, identifies dates where data_type=OTHER might

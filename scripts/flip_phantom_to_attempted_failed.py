@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after flip confirmed in live consolidated _index + parent plan archived
 """Phase 1b — re-flip phantom rows to attempted_failed for orchestrator re-attempt.
 
 Correction to ``flip_phantom_fixtures_zero_rows.py`` (commit ``962982e``):

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after audit findings actioned and parent plan archived
 """IS completeness gate — is ``instrument_availability/by_date/`` 100% complete per AG?
 
 The lifecycle catalogue (``build_instrument_catalogue.py``) and every downstream "could-exist"

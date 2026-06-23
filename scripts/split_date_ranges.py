@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Split a date range into inclusive chunks.
 
 Output format (CSV-like, one chunk per line):

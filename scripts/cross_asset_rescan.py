@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Cross-asset manifest rescan — Phase 3.A of manifest_schema_final_gate_2026_05_09.
 
 Walks every asset_group's availability manifest + cross-checks each captured row

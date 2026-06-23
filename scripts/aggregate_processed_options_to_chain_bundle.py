@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after aggregation confirmed + parent plan archived
 """Aggregate per-strike MDPS processed_candles into chain-bundled parquets.
 
 Source (current MDPS output — per strike, suboptimal for chain-level features):

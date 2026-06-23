@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after purge confirmed in live consolidated _index (zero rows of target type)
 """One-time purge of legacy ``league_id=""`` manifest rows when per-league shards exist.
 
 SSOT
