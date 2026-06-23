@@ -74,6 +74,30 @@ class BaseSportsReferenceAdapter(ABC):
     _next_slot: float = 0.0
     _rate_lock: asyncio.Lock | None = None
 
+    # UTC-boundary-aligned fixed-window counters (operator priority 2026-06-23).
+    # Providers reset quota on FIXED UTC wall-clock boundaries: the per-minute
+    # budget resets at every UTC :00 second (what the response X-RateLimit-Remaining
+    # counts down within), the per-day budget at 00:00 UTC. The monotonic _next_slot
+    # spacer smooths bursts but has ARBITRARY phase vs those boundaries -- a window
+    # opening mid-minute straddles two provider minutes and bunches ~2x of its share
+    # into one provider minute -> 429. So in ADDITION to the spacer we keep a
+    # FIXED-WINDOW counter keyed to floor(now_utc, minute) (resets at :00) and to the
+    # UTC day (resets 00:00 UTC): when this VM has spent its allocated share of the
+    # CURRENT provider window, _throttle sleeps to the NEXT boundary rather than
+    # spilling over. So our "remaining this minute" equals the provider's
+    # X-RateLimit-Remaining (same window, same phase) -- proactively, not via the
+    # reactive 429-then-sleep-to-next-minute backoff in _get_with_retry.
+    # _window_max_per_min/_window_max_per_day = THIS VM's allocated share of the
+    # provider per-window ceiling (set from the fleet rate-budget via
+    # set_rate_budget_rpm / set_window_quota; 0 = uncapped = window check skipped).
+    # State keyed by the integer window epoch so a boundary cross auto-resets it.
+    _window_max_per_min: int = 0
+    _window_max_per_day: int = 0
+    _window_minute_epoch: int = -1
+    _window_minute_count: int = 0
+    _window_day_epoch: int = -1
+    _window_day_count: int = 0
+
     @classmethod
     def _get_rate_lock(cls) -> asyncio.Lock:
         """Lazily create a per-subclass asyncio.Lock (must run inside the loop)."""
@@ -107,12 +131,42 @@ class BaseSportsReferenceAdapter(ABC):
         """
         if rate_rpm <= 0:
             return
-        type(self)._min_request_interval = 60.0 / float(rate_rpm)
+        cls = type(self)
+        cls._min_request_interval = 60.0 / float(rate_rpm)
+        # The allocated per-minute rpm is ALSO this VM's per-UTC-minute fixed-window
+        # ceiling -- so the proactive limiter's "remaining this minute" equals the
+        # provider's X-RateLimit-Remaining (same UTC-minute window, same phase).
+        cls._window_max_per_min = int(rate_rpm)
         logger.info(
-            "Sports adapter %s rate-budget set: %d req/min -> _min_request_interval=%.4fs (PRIMARY throttle)",
+            "Sports adapter %s rate-budget set: %d req/min -> _min_request_interval=%.4fs"
+            " + UTC-minute window cap=%d (PRIMARY throttle)",
             self.venue,
             rate_rpm,
-            type(self)._min_request_interval,
+            cls._min_request_interval,
+            cls._window_max_per_min,
+        )
+
+    def set_window_quota(self, *, per_minute: int = 0, per_day: int = 0) -> None:
+        """Set this VM's UTC-boundary-aligned fixed-window quotas directly.
+
+        ``per_minute`` is this VM's allocated share of the provider's per-UTC-minute
+        ceiling (resets at every ``:00`` second -- the window ``X-RateLimit-Remaining``
+        counts within); ``per_day`` its share of the per-day ceiling (resets at
+        ``00:00 UTC``). ``set_rate_budget_rpm`` already sets ``per_minute`` from the
+        fleet rpm; call this to ALSO carry the daily quota share (e.g. api_football's
+        450,000/day split across the fleet). A value ``<= 0`` leaves that window
+        uncapped (the spacer alone governs it). Class-attr write (per-VM singleton).
+        """
+        cls = type(self)
+        if per_minute > 0:
+            cls._window_max_per_min = int(per_minute)
+        if per_day > 0:
+            cls._window_max_per_day = int(per_day)
+        logger.info(
+            "Sports adapter %s window quota set: per_minute=%d per_day=%d (UTC-boundary-aligned)",
+            self.venue,
+            cls._window_max_per_min,
+            cls._window_max_per_day,
         )
 
     @staticmethod
@@ -324,14 +378,68 @@ class BaseSportsReferenceAdapter(ABC):
 
         cls = type(self)
         interval = cls._min_request_interval
+        # The window sleep is computed under the lock but performed OUTSIDE it so a
+        # boundary wait doesn't serialise the whole fleet of concurrent tasks behind
+        # one sleeper holding the lock.
+        window_sleep = 0.0
+        slot = 0.0
         async with cls._get_rate_lock():
+            window_sleep = cls._reserve_utc_window_slot()
             now = time.monotonic()
             slot = cls._next_slot if cls._next_slot > now else now
             cls._next_slot = slot + interval
             cls._last_request_time = slot
+        if window_sleep > 0:
+            await asyncio.sleep(window_sleep)
         wait = slot - time.monotonic()
         if wait > 0:
             await asyncio.sleep(wait)
+
+    @classmethod
+    def _reserve_utc_window_slot(cls) -> float:
+        """Reserve one slot in the current UTC fixed window(s); return seconds to sleep.
+
+        MUST be called holding ``_get_rate_lock()``. Increments the per-UTC-minute
+        and per-UTC-day counters (auto-resetting them when the integer window epoch
+        rolls over a boundary). When a window is full, returns the seconds until that
+        window's next UTC boundary (``:00`` for the minute, ``00:00 UTC`` for the
+        day) and re-seeds the counter for the boundary the caller will land in -- so
+        the request fires in the NEXT provider window, never bunched into the current
+        one. ``0`` caps (uncapped) skip that window. Returns the LARGER of the two
+        required sleeps (the binding window).
+        """
+        import time
+
+        now = time.time()
+        sleep_needed = 0.0
+
+        if cls._window_max_per_min > 0:
+            minute_epoch = int(now // 60)
+            if minute_epoch != cls._window_minute_epoch:
+                cls._window_minute_epoch = minute_epoch
+                cls._window_minute_count = 0
+            if cls._window_minute_count >= cls._window_max_per_min:
+                next_boundary = float((minute_epoch + 1) * 60)
+                sleep_needed = max(sleep_needed, next_boundary - now)
+                cls._window_minute_epoch = minute_epoch + 1
+                cls._window_minute_count = 1
+            else:
+                cls._window_minute_count += 1
+
+        if cls._window_max_per_day > 0:
+            day_epoch = int(now // 86400)
+            if day_epoch != cls._window_day_epoch:
+                cls._window_day_epoch = day_epoch
+                cls._window_day_count = 0
+            if cls._window_day_count >= cls._window_max_per_day:
+                next_day_boundary = float((day_epoch + 1) * 86400)
+                sleep_needed = max(sleep_needed, next_day_boundary - now)
+                cls._window_day_epoch = day_epoch + 1
+                cls._window_day_count = 1
+            else:
+                cls._window_day_count += 1
+
+        return sleep_needed
 
     async def _get_with_retry(
         self,
