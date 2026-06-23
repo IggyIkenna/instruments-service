@@ -61,9 +61,17 @@ _HISTORICAL_GAP_EDGE_DAYS = 3
 # Series-scoped capture: fetches `/series?category=X` then `/markets?status=open&series_ticker=Y`
 # for each non-OTHER series — sidesteps the KXMVE multivariate flood that consumes all
 # 2000 cap slots in the plain `/markets?status=open` snapshot. LIVE path only.
-_SERIES_CATEGORIES: tuple[str, ...] = ("Crypto", "Economics", "Financials")
+# Cross-venue-relevant Kalshi categories to series-scope enumerate. Crypto /
+# Economics / Financials carry the crypto-daily + macro + index + FX families;
+# Sports carries the per-game markets (KX{LEAGUE}…GAME / *SPREAD / *TOTAL / *NRFI)
+# that map to the shared SPORTS_{LEAGUE}_{BETTYPE} groups; Politics is included so
+# election/geo markets are captured (the classifier currently OTHERs most — they
+# ride along for when they become canonically grouped). The non-OTHER classifier
+# filter keeps only cross-venue-relevant series, so adding broad categories is
+# cheap (all-in-memory classification; only matched series are fetched).
+_SERIES_CATEGORIES: tuple[str, ...] = ("Crypto", "Economics", "Financials", "Sports", "Politics")
 _MAX_SERIES_PAGES = 5  # per-series page budget (≤1000 markets per series)
-_MAX_SERIES_TOTAL = 200  # ceiling on total series fetched across all categories
+_MAX_SERIES_TOTAL = 350  # ceiling on total series fetched across all categories
 # Rate-limit guards for the series-scoped fan-out: ~40 non-OTHER series fired
 # back-to-back overruns Kalshi's read limit (HTTP 429). A small inter-series
 # delay (~3 req/s) keeps it under the limit, and a bounded exp-backoff retry
@@ -331,13 +339,20 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
                 "Kalshi get_instruments: market fetch failed with no records "
                 "(see ADAPTER_FETCH_FAILED) — recording attempted_failed, not empty"
             )
-        # Series-scoped capture (LIVE path only): supplement the snapshot with
-        # markets from cross-venue-relevant series (Crypto/Economics/Financials)
-        # whose tickers classify as non-OTHER canonical groups.  The plain
-        # /markets?status=open snapshot is dominated by KXMVE* multivariate parlay
-        # markets which consume all 2000 cap slots → KXBTCD/KXETHD/KXCPI/etc. are
-        # never reached.  Fetching per-series sidesteps the flood.
-        if target is None:
+        # Series-scoped capture (LIVE path = no date OR an on/after-cutoff date;
+        # both serve today's tradeable universe via /markets?status=open):
+        # supplement the snapshot with markets from cross-venue-relevant series
+        # (Crypto/Economics/Financials/Sports/Politics) whose tickers classify as
+        # non-OTHER canonical groups.  The plain /markets?status=open snapshot is
+        # dominated by KXMVE* multivariate parlay markets which consume all 2000 cap
+        # slots → KXBTCD/KXETHD/KXCPI/KX{LEAGUE}GAME/etc. are never reached.  Fetching
+        # per-series sidesteps the flood.  Gated on `not historical` (NOT `target is
+        # None`): a current-day batch enumeration passes a date but is still the live
+        # path — the `target is None` gate silently skipped it (catalogue stayed
+        # all-OTHER on a dated `--mode batch` re-enum; fixed 2026-06-23).  Deep
+        # pre-cutoff dates (`historical`) skip — the live /markets?series_ticker= only
+        # returns currently-open markets.
+        if not historical:
             async with self._make_session() as session:
                 series_records = await self._fetch_series_scoped_batch(session)
             if series_records:
