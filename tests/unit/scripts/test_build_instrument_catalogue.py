@@ -171,6 +171,142 @@ def test_rollup_raw_symbol_blank_when_source_absent(rollup: ModuleType) -> None:
     assert row["base_asset"] == ""
 
 
+def test_rollup_defi_pool_emits_dual_form_ids(rollup: ModuleType) -> None:
+    """DeFi POOL row (operator Refinement 1): catalogue instrument_id becomes the
+    canonical ``pool_address.lower()``, venue splits to the bare protocol, chain is
+    populated, and ``glued_pair_id`` carries the human-readable UI form."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "UNISWAP_V3-POLYGON:POOL:USDC-WETH:500",
+                            "venue": "UNISWAP_V3-POLYGON",
+                            "instrument_type": "POOL",
+                            "raw_symbol": "0x45dda9cb7c25131df268515131f647d726f50608",
+                            "pool_address": "0x45dDa9cb7c25131DF268515131f647d726f50608",
+                            "base_asset": "USDC",
+                            "quote_asset": "WETH",
+                            "pool_fee_tier": 5.0,
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "0x45dda9cb7c25131df268515131f647d726f50608"
+    assert row["venue"] == "UNISWAP_V3"
+    assert row["chain"] == "POLYGON"
+    assert row["glued_pair_id"] == "UNISWAPV3-POLYGON:POOL:USDC-WETH:500"
+    assert row["pool_address"] == "0x45dda9cb7c25131df268515131f647d726f50608"
+
+
+def test_rollup_defi_pool_dual_form_round_trips_via_converter(rollup: ModuleType) -> None:
+    """The emitted glued_pair_id parses back to the same venue/chain/pair/fee (SSOT converter)."""
+    from unified_api_contracts import parse_glued_pool_id
+
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "UNISWAPV3-ARBITRUM:POOL:AAVE-USDC:100",
+                            "venue": "UNISWAPV3-ARBITRUM",
+                            "instrument_type": "POOL",
+                            "raw_symbol": "0xf9188aff",
+                            "pool_address": "0xF9188AFF",
+                            "base_asset": "AAVE",
+                            "quote_asset": "USDC",
+                            "pool_fee_tier": 1.0,
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    parsed = parse_glued_pool_id(str(row["glued_pair_id"]))
+    assert parsed is not None
+    assert parsed.venue == "UNISWAP_V3"
+    assert parsed.chain == "ARBITRUM"
+    assert parsed.base_asset == "AAVE"
+    assert parsed.quote_asset == "USDC"
+    assert parsed.fee == "100"
+
+
+def test_rollup_defi_pool_spelling_variants_collapse_to_one_open_lifecycle(rollup: ModuleType) -> None:
+    """Phase 2 premature-delisting fix: the SAME physical pool seen under two venue
+    spellings (``UNISWAPV3`` early, ``UNISWAP_V3`` later — the ~2026-05-08 adapter
+    switchover) collapses into ONE lifecycle keyed by pool_address, so the pool is
+    present on the latest day → ``available_to`` is None (NOT wrongly DELISTED)."""
+    addr = "0x45dda9cb7c25131df268515131f647d726f50608"
+    d_old, d_switch, d_now = date(2026, 5, 1), date(2026, 5, 8), date(2026, 6, 20)
+    old_spelling = {
+        "instrument_key": "UNISWAPV3-POLYGON:POOL:USDC-WETH:500",
+        "venue": "UNISWAPV3-POLYGON",
+        "instrument_type": "POOL",
+        "raw_symbol": addr,
+        "pool_address": addr,
+        "base_asset": "USDC",
+        "quote_asset": "WETH",
+        "pool_fee_tier": 5.0,
+    }
+    new_spelling = {
+        **old_spelling,
+        "instrument_key": "UNISWAP_V3-POLYGON:POOL:USDC-WETH:500",
+        "venue": "UNISWAP_V3-POLYGON",
+    }
+    df = rollup.build_catalogue_dataframe(
+        [
+            (d_old, _snapshot([old_spelling])),
+            (d_switch, _snapshot([new_spelling])),
+            (d_now, _snapshot([new_spelling])),
+        ]
+    )
+    pool_rows = df[df["instrument_type"].astype(str).str.upper() == "POOL"].to_dict("records")
+    assert len(pool_rows) == 1
+    row = pool_rows[0]
+    assert row["instrument_id"] == addr
+    assert row["available_to"] is None
+    assert row["available_from"] == "2026-05-01"
+    assert row["venue"] == "UNISWAP_V3"
+    assert row["chain"] == "POLYGON"
+
+
+def test_rollup_non_pool_row_has_blank_dual_form(rollup: ModuleType) -> None:
+    """A CeFi/non-pool row carries blank glued_pair_id + pool_address (no fabrication)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-FUTURES:PERPETUAL:ADA-USDT",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "raw_symbol": "ADA-PERP",
+                            "base_asset": "ADA",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "BINANCE-FUTURES:PERPETUAL:ADA-USDT"
+    assert row["glued_pair_id"] == ""
+    assert row["pool_address"] == ""
+
+
 def test_rollup_supports_instrument_id_column(rollup: ModuleType) -> None:
     """The id column falls back to instrument_id when instrument_key is absent."""
     d1 = date(2024, 1, 1)
@@ -685,9 +821,45 @@ def test_cefi_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(r
     # (NOT_LISTED / DELISTED / expected_unattempted) are exercised through the MVP gate.
     catalogue_df = rollup.build_catalogue_dataframe(
         [
-            (d1, _snapshot([{"instrument_key": "ETH", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "ETH"}])),
-            (d2, _snapshot([{"instrument_key": "BTC", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "BTC"}])),
-            (d3, _snapshot([{"instrument_key": "BTC", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "BTC"}])),
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "ETH",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "base_asset": "ETH",
+                        }
+                    ]
+                ),
+            ),
+            (
+                d2,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BTC",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "base_asset": "BTC",
+                        }
+                    ]
+                ),
+            ),
+            (
+                d3,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BTC",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "base_asset": "BTC",
+                        }
+                    ]
+                ),
+            ),
         ]
     )
     catalog = enumerator._catalog_from_dataframe(catalogue_df)

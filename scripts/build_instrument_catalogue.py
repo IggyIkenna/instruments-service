@@ -57,7 +57,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 import pandas as pd
-from unified_api_contracts import is_in_mvp_capture_universe, is_mvp
+from unified_api_contracts import build_pool_identity, is_in_mvp_capture_universe, is_mvp
 from unified_trading_library import (
     StorageClient,
     get_config,
@@ -161,6 +161,18 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # Read by deployment-api's ``scope=mvp`` coverage denominator + the data-status
     # MVP toggle. On-the-fly at roll-up time — never a baked rule (UAC owns the rule).
     "mvp",
+    # DUAL-FORM DeFi pool ids (defi_instrument_catalogue_and_capture_pipeline_2026_06_23,
+    # operator Refinement 1 — keep BOTH forms per pool): the manifest-canonical
+    # ``instrument_id`` above is ``pool_address.lower()`` (for DeFi POOL rows), while
+    # ``glued_pair_id`` carries the HUMAN-READABLE UI id
+    # ``UNISWAPV3-ARBITRUM:POOL:AAVE-USDC:100`` (venue-chain glued + POOL + token0-token1
+    # PAIR + FEE). Built via the UAC SSOT converter ``build_pool_identity`` so the two
+    # forms are reversible. Blank for non-DeFi-pool rows (cefi/tradfi/sports/prediction).
+    "glued_pair_id",
+    # On-chain pool contract address (DeFi POOL rows) — the canonical-id source +
+    # the address the bidirectional converter needs to re-resolve from a glued-pair.
+    # Blank for non-pool rows.
+    "pool_address",
 )
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
@@ -272,6 +284,113 @@ def _declared_from(row: dict[str, object]) -> date | None:
     return None
 
 
+#: DeFi pool instrument_type values (lowercased) the dual-form id applies to.
+#: A pool's canonical manifest atom is ``pool_address.lower()``; the glued-pair
+#: id is the human-readable UI form. Other DeFi instrument_types (lending / lst /
+#: spot_asset / perpetual) key on a contract address too but are not pools.
+_DEFI_POOL_ITYPES: frozenset[str] = frozenset({"pool"})
+
+
+def _fee_from_instrument_key(instrument_key: str) -> str:
+    """Extract the fee token from a legacy glued ``…:POOL:PAIR:FEE`` instrument_key.
+
+    The by_date ``pool_fee_tier`` column is in BPS (Uniswap feeTier / 100, e.g.
+    ``5.0``) but the human-readable glued id the operator specified uses the RAW
+    fee amount (``:500`` / ``:3000`` / ``:100``) the adapter stamped into
+    ``instrument_key``. So prefer the instrument_key's trailing fee segment for a
+    faithful UI id; return "" when the key is not a 4-part POOL key.
+    """
+    parts = instrument_key.split(":")
+    if len(parts) >= 4 and parts[1] == "POOL":
+        return parts[-1]
+    return ""
+
+
+def _pool_address_of(meta: dict[str, str | None]) -> str:
+    """Return the canonical pool address for a row's meta, or "" when not a pool.
+
+    Prefers the explicit ``pool_address`` column; falls back to ``raw_symbol`` when
+    it is a 0x address (the IS adapter sets ``raw_symbol = str(pool_id)``).
+    """
+    pool_address = (meta.get("pool_address") or "").strip()
+    if not pool_address:
+        raw_sym = (meta.get("raw_symbol") or "").strip()
+        if raw_sym.lower().startswith("0x"):
+            pool_address = raw_sym
+    return pool_address
+
+
+def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
+    """Lifecycle-aggregation key for one per-date row.
+
+    DeFi POOL rows key on the CANONICAL pool identity (``pool::<chain>::<pool_address>``)
+    so spelling-variant ``instrument_key``s of the SAME physical pool
+    (``UNISWAPV3-ARBITRUM`` vs ``UNISWAP_V3-ARBITRUM``) collapse into ONE continuous
+    lifecycle — the Phase 2 premature-delisting fix. All other rows key on the
+    ``instrument_id`` (= instrument_key) as before, so non-pool behaviour is
+    unchanged.
+    """
+    itype = str(row.get("instrument_type") or "").strip().lower()
+    if itype in _DEFI_POOL_ITYPES:
+        pool_address = _pool_address_of(_extract_meta(row))
+        if pool_address:
+            chain = str(row.get("chain") or "").strip().upper()
+            if not chain:
+                # venue carries the chain in the glued PROTOCOL-CHAIN form.
+                venue = str(row.get("venue") or "")
+                if "-" in venue:
+                    chain = venue.rsplit("-", 1)[1].upper()
+            return f"pool::{chain}::{pool_address.lower()}"
+    return instrument_id
+
+
+def _defi_pool_dual_form(
+    meta: dict[str, str | None],
+) -> tuple[str, str, str, str, str]:
+    """Derive the dual-form pool ids + canonicalised venue/chain for a POOL row.
+
+    Returns ``(canonical_instrument_id, glued_pair_id, bare_venue, chain, pool_address)``.
+
+    For a DeFi POOL row the canonical manifest ``instrument_id`` is
+    ``pool_address.lower()`` (matching the MTDS writer + ``_canonical_defi_id``),
+    the ``venue`` is split to the bare protocol (``UNISWAP_V3``), the ``chain`` is
+    populated (``ARBITRUM``), and ``glued_pair_id`` is the human-readable UI form
+    ``UNISWAPV3-ARBITRUM:POOL:AAVE-USDC:100`` — all via the UAC SSOT converter
+    ``build_pool_identity`` so the two forms stay reversible. For a non-pool /
+    non-DeFi row this returns the instrument_key unchanged (instrument_id, "",
+    venue, chain, "") so the catalogue row is untouched.
+    """
+    # Non-pool pass-through uses the row's RESOLVED id (``_row_id`` = instrument_key
+    # OR instrument_id), not just instrument_key — a catalogue keyed only on
+    # instrument_id (no instrument_key column) must keep that id.
+    resolved_id = meta.get("_resolved_id") or meta.get("instrument_key") or ""
+    itype = (meta.get("instrument_type") or "").strip().lower()
+    pool_address = _pool_address_of(meta)
+    if itype not in _DEFI_POOL_ITYPES or not pool_address:
+        return resolved_id, "", meta.get("venue") or "", meta.get("chain") or "", ""
+
+    venue_raw = meta.get("venue") or ""
+    chain_raw = meta.get("chain") or ""
+    # The legacy glued ``instrument_key`` carries the faithful raw fee token; the
+    # by_date ``pool_fee_tier`` is bps. Prefer the key's fee for the UI id, else bps.
+    fee = _fee_from_instrument_key(meta.get("instrument_key") or "") or (meta.get("pool_fee_tier") or "")
+    identity = build_pool_identity(
+        venue=venue_raw,
+        chain=chain_raw,
+        pool_address=pool_address,
+        base_asset=meta.get("base_asset") or "",
+        quote_asset=meta.get("quote_asset") or "",
+        fee=fee or None,
+    )
+    return (
+        identity.canonical_instrument_id,
+        identity.glued_pair_id,
+        identity.venue,
+        identity.chain,
+        identity.pool_address,
+    )
+
+
 def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) -> pd.DataFrame:
     """Roll the per-date instrument definitions up into one lifecycle catalogue.
 
@@ -301,10 +420,22 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
             iid = _row_id(row)
             if iid is None:
                 continue
+            # DUAL-FORM lifecycle key (operator Refinement 1 + Phase 2 premature-delisting fix):
+            # a DeFi POOL must accumulate ONE lifecycle keyed by its canonical pool
+            # identity (chain + pool_address), NOT by the spelling-variant
+            # ``instrument_key`` — the IS adapter switched the venue spelling
+            # (``UNISWAPV3`` → ``UNISWAP_V3``) on ~2026-05-08, so the SAME physical
+            # pool appears under two ``instrument_key``s; keyed by instrument_key the
+            # OLD-spelling lifecycle CLOSES at the switchover (``available_to``=05-08)
+            # → the canonical pool wrongly reads DELISTED on every later date (the
+            # 2,311-pool 05-08 cliff; 2,199 pool_addresses present BOTH closed+open).
+            # Keying the aggregate by the canonical pool identity collapses the
+            # spelling variants into ONE continuous lifecycle → ``available_to``=None.
+            agg_key = _aggregate_key(iid, row)
             declared = _declared_from(row)
-            existing = aggregates.get(iid)
+            existing = aggregates.get(agg_key)
             if existing is None:
-                aggregates[iid] = _InstrumentAggregate(
+                aggregates[agg_key] = _InstrumentAggregate(
                     first_day=day,
                     last_day=day,
                     meta_day=day,
@@ -330,8 +461,8 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
     latest_day = max(all_days)
 
     rows: list[dict[str, str | None]] = []
-    for iid in sorted(aggregates):
-        agg = aggregates[iid]
+    for agg_key in sorted(aggregates):
+        agg = aggregates[agg_key]
         available_to = None if agg.last_day >= latest_day else agg.last_day.isoformat()
         # BUG #4 (B): available_from = MIN(observed first snapshot day, declared
         # listing date). A perp only observed on one recent snapshot still carries
@@ -340,12 +471,19 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         available_from = agg.first_day
         if agg.declared_from is not None and agg.declared_from < available_from:
             available_from = agg.declared_from
+        # DUAL-FORM (operator Refinement 1): for a DeFi POOL row re-key the
+        # catalogue ``instrument_id`` to the canonical ``pool_address.lower()``
+        # (matching the MTDS writer + the seeder), split ``venue`` to the bare
+        # protocol + populate ``chain``, and carry the human-readable
+        # ``glued_pair_id`` alongside. Non-pool / non-DeFi rows pass through
+        # unchanged (canonical_id == the original instrument_key, glued_pair_id "").
+        canonical_id, glued_pair_id, bare_venue, chain, pool_address = _defi_pool_dual_form(agg.meta)
         rows.append(
             {
-                "instrument_id": iid,
+                "instrument_id": canonical_id,
                 "instrument_type": agg.meta["instrument_type"] or "",
-                "venue": agg.meta["venue"] or "",
-                "chain": agg.meta["chain"] or "",
+                "venue": bare_venue,
+                "chain": chain,
                 "league_id": agg.meta["league_id"] or "",
                 "available_from": available_from.isoformat(),
                 "available_to": available_to,
@@ -357,6 +495,8 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 "underlying": agg.meta.get("underlying") or "",
                 "raw_symbol": agg.meta.get("raw_symbol") or "",
                 "base_asset": agg.meta.get("base_asset") or "",
+                "glued_pair_id": glued_pair_id,
+                "pool_address": pool_address,
             }
         )
 
@@ -375,6 +515,19 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         "underlying": _str_field(row, "underlying"),
         "raw_symbol": _str_field(row, "raw_symbol"),
         "base_asset": _str_field(row, "base_asset"),
+        # DeFi dual-form pool-id source fields (operator Refinement 1) — used by
+        # ``_defi_pool_dual_form`` to derive the canonical instrument_id +
+        # glued_pair_id. Blank for non-DeFi rows.
+        "quote_asset": _str_field(row, "quote_asset"),
+        "pool_address": _str_field(row, "pool_address"),
+        "pool_fee_tier": _opt_field(row, "pool_fee_tier"),
+        # The original glued ``instrument_key`` — carried so ``_defi_pool_dual_form``
+        # can recover the faithful raw fee token for the human-readable glued_pair_id
+        # even though the lifecycle is keyed by the canonical pool identity.
+        "instrument_key": _str_field(row, "instrument_key"),
+        # The row's RESOLVED id (instrument_key OR instrument_id) — the non-pool
+        # pass-through canonical id (a catalogue keyed only on instrument_id keeps it).
+        "_resolved_id": _row_id(row) or "",
     }
 
 
@@ -524,6 +677,9 @@ def build_prediction_catalogue_dataframe(
                 "market_created_at": lc.created,
                 "settlement_time": lc.settled,
                 "data_type": data_type,
+                # Non-DeFi grain → no dual-form pool ids.
+                "glued_pair_id": "",
+                "pool_address": "",
             }
         )
 
@@ -638,6 +794,9 @@ def build_sports_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFram
                 # Single-grain-per-league: the enumerator iterates the sports
                 # data_types (source-coverage-aware), so leave data_type unbound.
                 "data_type": None,
+                # Non-DeFi grain → no dual-form pool ids.
+                "glued_pair_id": "",
+                "pool_address": "",
             }
         )
 
@@ -716,6 +875,8 @@ def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFr
             "market_created_at": None,
             "settlement_time": None,
             "data_type": None,
+            "glued_pair_id": "",
+            "pool_address": "",
         }
         for lid in sorted(first_seen.index)
     ]
