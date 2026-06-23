@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 # SCHEMA_PROVENANCE_EXEMPT — script-local result dataclass for backfill operation output.
 """Backfill availability manifest with canonical league_id for ALL sports entities.
 

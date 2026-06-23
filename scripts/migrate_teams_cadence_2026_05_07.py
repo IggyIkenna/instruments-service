@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """migrate_teams_cadence_2026_05_07.py — flip TEAMS daily-cadence manifest rows.
 
 C.11 audit (manifest_migration_SUPERSEDED_2026_05_21.md § Refdata cadence

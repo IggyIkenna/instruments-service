@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after validation confirmed + parent plan archived
 """Phase 4 — Cohesion validation between DeFi subgraph and instruments-store-defi parquets.
 
 This script is the audit gate before MTDS Phase 3 fully relies on the

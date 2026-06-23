@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """migrate_leagues_kill_2026_05_07.py — flip retired LEAGUES manifest rows.
 
 C.1 audit (manifest_migration_SUPERSEDED_2026_05_21.md § Audit findings

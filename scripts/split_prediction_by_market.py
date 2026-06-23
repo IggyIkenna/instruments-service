@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Split existing PREDICTION instruments into per-market partitions.
 
 Reads instrument_availability/by_date/day={date}/venue=POLYMARKET/instruments.parquet,

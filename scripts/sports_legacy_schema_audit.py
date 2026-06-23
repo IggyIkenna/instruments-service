@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + parent plan archived
 """Phase 0 audit: classify every sports_reference fixtures.parquet as LEGACY or NEW schema.
 
 Two-pass design:

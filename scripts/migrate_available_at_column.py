@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """Migrate GCS parquets: add or repair the ``available_at`` column.
 
 Generalized version of ``migrate_sports_available_at_column.py``.  Handles all

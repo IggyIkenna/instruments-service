@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 # Local-only sports backfill with 30-day chunks to avoid OOM from accumulating
 # leagues/teams/standings caches in a single 6-year proc.
 #

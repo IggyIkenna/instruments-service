@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after fix confirmed in live consolidated _index + GCS orphan-sweep = 0
 """Phase 3 of data_status_coverage_gaps_and_prediction_manifest_fix_2026_05_22.
 
 Combines 3.2 + 3.3:
