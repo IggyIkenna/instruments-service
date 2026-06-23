@@ -656,6 +656,64 @@ class TestTardisAdapterMocked:
         assert results == []
 
     @pytest.mark.asyncio
+    async def test_enumeration_is_no_auth_free_metadata_endpoint(self) -> None:
+        """IS instrument enumeration MUST use the FREE, NO-AUTH Tardis metadata
+        endpoint GET /v1/exchanges/{exchange} only — NEVER the authenticated
+        /v1/instruments/{exchange} tick-metadata path, and NEVER send an
+        Authorization header. Regression guard for the operator mandate
+        2026-06-23: "IS doesn't need auth for tardis; don't waste API limits".
+
+        Proves: (1) an adapter with NO api_key enumerates the symbol universe;
+        (2) every HTTP call targets /v1/exchanges/ (free) — none targets
+        /v1/instruments/ (pro/auth); (3) no Bearer token is ever sent.
+        """
+        # No api_key passed — the IS reference-data factory no longer supplies one.
+        adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
+        assert adapter._optional_api_key() is None  # pyright: ignore[reportPrivateUsage]
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(
+            return_value={
+                "id": "deribit",
+                "name": "Deribit",
+                "availableSymbols": [
+                    {
+                        "id": "BTC-PERPETUAL",
+                        "type": "perpetual",
+                        "availableSince": "2020-01-01T00:00:00Z",
+                        "availableTo": None,
+                    }
+                ],
+            }
+        )
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+
+        # (1) Universe enumerated without a key.
+        assert len(results) == 1
+        assert str(results[0].instrument_type) == "PERPETUAL"
+
+        # (2)+(3) Inspect every session.get call: free endpoint only, no auth.
+        assert mock_session_obj.get.call_count >= 1
+        for call in mock_session_obj.get.call_args_list:
+            url = call.args[0] if call.args else call.kwargs.get("url", "")
+            assert "/v1/exchanges/" in url, f"enumeration hit a non-free endpoint: {url}"
+            assert "/v1/instruments/" not in url, f"enumeration hit the authenticated endpoint: {url}"
+            headers = call.kwargs.get("headers")
+            # No Authorization header is sent on the no-auth metadata call.
+            assert not (headers and "Authorization" in headers), f"enumeration sent an auth header: {headers}"
+
+    @pytest.mark.asyncio
     async def test_get_options_chain_mocked(self) -> None:
         adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
         call_inst = _make_record(
