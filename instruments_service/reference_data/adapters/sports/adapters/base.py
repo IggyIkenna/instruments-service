@@ -84,6 +84,37 @@ class BaseSportsReferenceAdapter(ABC):
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key
 
+    def set_rate_budget_rpm(self, rate_rpm: int) -> None:
+        """Set this adapter's PRIMARY throttle from an allocated fleet rate-budget.
+
+        ``rate_rpm`` is this VM's deterministic share of the source's fleet
+        ceiling (``per_vm_rpm = source_rpm // N_vms``), stamped at launch by
+        deployment-service ``launch_budget_registry.allocate_rate_budget`` and
+        injected via ``SPORTS_ADAPTER_RATE_RPM`` -> the typed service config ->
+        ``create_sports_reference_adapter(rate_rpm=...)``. It becomes the
+        SELF-ENFORCED token-bucket interval (``60 / rate_rpm``) so the fleet runs
+        at the full allowed throughput WITHOUT relying on the 429 /
+        JSON-envelope backoff (which stays only as the safety net).
+
+        The concurrency-safe ``_throttle`` reads ``type(self)._min_request_interval``
+        for its shared token bucket, so the class attr is written (one VM = one
+        source = one budget; the adapter is a per-VM singleton). ``rate_rpm <= 0``
+        is a no-op (keep the class default).
+
+        Args:
+            rate_rpm: Allocated requests-per-minute for THIS VM. Must be > 0 to
+                take effect.
+        """
+        if rate_rpm <= 0:
+            return
+        type(self)._min_request_interval = 60.0 / float(rate_rpm)
+        logger.info(
+            "Sports adapter %s rate-budget set: %d req/min -> _min_request_interval=%.4fs (PRIMARY throttle)",
+            self.venue,
+            rate_rpm,
+            type(self)._min_request_interval,
+        )
+
     @staticmethod
     def _make_session() -> aiohttp.ClientSession:
         """Create an aiohttp session with ThreadedResolver (OS DNS) + bounded timeouts.
