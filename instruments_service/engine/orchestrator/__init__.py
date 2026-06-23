@@ -66,6 +66,8 @@ from unified_api_contracts.predictions import (
 from unified_api_contracts.registry import get_supported_chains_for_protocol, is_league_entity_covered
 from unified_api_contracts.registry.source_data_latency import SFI_DATA_LAG_P95_SECONDS
 from unified_api_contracts.sports import (
+    FIXTURES_OUTCOMES,
+    FIXTURES_SCHEDULE,
     FOOTYSTATS_HISTORICAL_SEASON_IDS,
     SOCCER_FOOTBALL_INFO_IDS,
     get_all_prediction_league_ids,
@@ -203,7 +205,7 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
 # baselines clean across sports adapters (see
 # ``plans/active/instruments_service_write_gate_validation_2026_04_22.md``).
 # ---------------------------------------------------------------------------
-_WRITE_GATE = InstrumentsWriteGate(mode="warn")
+_WRITE_GATE = InstrumentsWriteGate(mode="strict")
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +663,8 @@ __all__ = [
     "CANONICAL_TO_UNDERSTAT_EPL",
     "DEX_VENUE_KEYWORDS",
     "EPL_TEAM_ALIASES",
+    "FIXTURES_OUTCOMES",
+    "FIXTURES_SCHEDULE",
     "FOOTYSTATS_HISTORICAL_SEASON_IDS",
     "SFI_DATA_LAG_P95_SECONDS",
     "SOCCER_FOOTBALL_INFO_IDS",
