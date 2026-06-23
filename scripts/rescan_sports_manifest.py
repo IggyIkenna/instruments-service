@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Rescan GCS sports reference data and rebuild the availability manifest.
 
 Walks every day=X/entity=Y/*.parquet path in GCS, reads parquet metadata

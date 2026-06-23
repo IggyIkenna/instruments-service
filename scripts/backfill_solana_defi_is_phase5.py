@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 # pyright: reportAny=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 """Phase 5 IS backfill: populate instruments-store-defi with archive-metadata fields.
 

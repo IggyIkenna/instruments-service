@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 """Backfill script — Solana AMM/DEX dex_swaps data for Plan C venues.
 
 Backfills dex_swaps instrument coverage for the 4 new Solana AMM/CLOB venues

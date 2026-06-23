@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: campaign
+# Delete-when: after instruments-service manifest-canonicalisation complete for all asset_groups and campaign plan archived (instruments_manifest_canonicalisation_2026_06_01)
 """Option G fix: DROP kebab rows from canonical _index (not write parallel snake rows).
 
 Per ``plans/active/issues/vocab_drift_canonicalisation_didnt_stick_2026_05_16.md``:

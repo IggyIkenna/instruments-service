@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 """backfill_orphan_class_e.py — class-E orphan characterise → canonicalise → record_captured.
 
 The R1 deliverable of the 2026-06-11 operator ratification (decision #1,

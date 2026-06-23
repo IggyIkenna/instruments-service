@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after purge confirmed in live consolidated _index (zero rows of target type)
 """Purge bad IS prediction manifest rows and stale per-VM shards.
 
 Context (data_status_coverage_gaps_and_prediction_manifest_fix_2026_05_22.md Phase 3.2):
