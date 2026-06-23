@@ -5,6 +5,7 @@ Base URL: https://www.aster.exchange (fapi subdomain deprecated)
 API docs: https://github.com/asterdex/api-docs
 """
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -52,6 +53,18 @@ _BASE = "https://fapi.asterdex.com"
 _ASTER_LAUNCH_DATE = datetime.fromisoformat(cast(str, VenueMapping().get_instrument_discovery_start("ASTER"))).replace(
     tzinfo=UTC
 )
+
+# BUG #4 (B) — per-instrument earliest-funding-date probe (Binance-compat
+# /fapi/v1/fundingRate?startTime=0&limit=1 returns the genesis funding entry). Sets
+# each perp's available_from to its true listing date so the catalogue-driven
+# historical backfill attempts each instrument from the right date forward (small-coin
+# funding history captured, not lost). One-off at enumeration; bounded concurrency;
+# falls back to the venue launch date on probe failure. SSOT:
+# plans/active/issues/cefi_hl_aster_batch_data_gaps_2026_06_22.md BUG #4 (B).
+_FUNDING_PROBE_CONCURRENCY = 4
+_FUNDING_PROBE_TIMEOUT_S = 20.0
+_FUNDING_PROBE_RETRIES = 3
+_FUNDING_PROBE_BACKOFF_BASE_S = 0.5
 
 
 def _classify_aster_error(exc: Exception, status: int | None = None) -> str:
@@ -149,6 +162,12 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
         symbols: list[object] = data.symbols or []
         results: list[InstrumentRecord] = []
 
+        # Pass 1 — collect the eligible TRADING perps. BUG #4 (2026-06-22): the
+        # base-asset majors whitelist capped ASTER at ~33; it is REMOVED so every
+        # TRADING perp on a canonical quote asset is catalogued (funding valuable for
+        # small coins). The quote-asset filter stays (USDT/USDC/USD only).
+        # SSOT: plans/active/issues/cefi_hl_aster_batch_data_gaps_2026_06_22.md BUG #4.
+        eligible: list[tuple[str, str, str, Decimal, Decimal]] = []
         for sym_raw in symbols:
             if not isinstance(sym_raw, dict):
                 continue
@@ -156,29 +175,24 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
             status = sym_raw.get("status")
             if contract_type != "PERPETUAL" or status != "TRADING":
                 continue
-
             base_asset: str = str(sym_raw.get("baseAsset", ""))
             quote_asset: str = str(sym_raw.get("quoteAsset", "USDC"))
             raw_symbol: str = str(sym_raw.get("symbol", ""))
             if not base_asset or not raw_symbol:
                 continue
-            # BUG #4 (2026-06-22): the base-asset majors whitelist capped ASTER at
-            # ~33 instruments. The operator wants the FULL active perp universe
-            # enumerated (funding rates valuable even for small/illiquid coins), so
-            # the base-asset whitelist is REMOVED — every TRADING perp on a
-            # supported quote asset is catalogued. The quote-asset filter stays
-            # (USDT/USDC/USD only) to exclude non-canonical settlement pairs.
-            # SSOT: plans/active/issues/cefi_hl_aster_batch_data_gaps_2026_06_22.md BUG #4.
             if quote_asset.upper() not in CEFI_ACCEPTED_QUOTE_ASSETS:
                 continue
-
             filters: list[object] = sym_raw.get("filters", [])
             tick_str = _extract_filter_value(filters, "PRICE_FILTER", "tickSize")
             lot_str = _extract_filter_value(filters, "LOT_SIZE", "stepSize")
-
             tick_size = Decimal(tick_str) if tick_str else Decimal("0.01")
             lot_size = Decimal(lot_str) if lot_str else Decimal("0.001")
+            eligible.append((raw_symbol, base_asset, quote_asset, tick_size, lot_size))
 
+        # Pass 2 — BUG #4 (B): probe each perp's genesis funding date concurrently so
+        # available_from is the true listing date (history-accurate universe).
+        listing_dates = await self._probe_earliest_funding_dates([e[0] for e in eligible])
+        for raw_symbol, base_asset, quote_asset, tick_size, lot_size in eligible:
             results.append(
                 InstrumentRecord(
                     instrument_key=f"ASTER:PERP:{raw_symbol}",
@@ -192,7 +206,7 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
                     tick_size=tick_size,
                     min_size=lot_size,
                     contract_size=Decimal("1"),
-                    available_from_datetime=_ASTER_LAUNCH_DATE,
+                    available_from_datetime=listing_dates.get(raw_symbol, _ASTER_LAUNCH_DATE),
                     status=InstrumentStatus.ACTIVE,
                     timezone="UTC",
                 )
@@ -200,6 +214,57 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
 
         logger.info("Aster: fetched %d perpetual instruments", len(results))
         return results
+
+    async def _probe_earliest_funding_dates(self, symbols: list[str]) -> dict[str, datetime]:
+        """Probe each symbol's genesis funding date (fundingRate startTime=0&limit=1).
+
+        Bounded-concurrent; per-symbol timeout; any failure is omitted → caller uses
+        the venue launch date. BUG #4 (B).
+        """
+        sem = asyncio.Semaphore(_FUNDING_PROBE_CONCURRENCY)
+
+        async def _one(symbol: str) -> tuple[str, datetime | None]:
+            async with sem:
+                last_exc: Exception | None = None
+                for attempt in range(_FUNDING_PROBE_RETRIES):
+                    try:
+                        return symbol, await asyncio.wait_for(
+                            self._fetch_earliest_funding_date(symbol), timeout=_FUNDING_PROBE_TIMEOUT_S
+                        )
+                    except (TimeoutError, aiohttp.ClientError, ValueError, KeyError, TypeError) as exc:
+                        last_exc = exc
+                        await asyncio.sleep(_FUNDING_PROBE_BACKOFF_BASE_S * (2.0**attempt))  # backoff on 429
+                logger.warning("Aster earliest-funding probe failed for %s: %s — using launch date", symbol, last_exc)
+                return symbol, None
+
+        out: dict[str, datetime] = {}
+        for symbol, dt in await asyncio.gather(*(_one(s) for s in symbols)):
+            if dt is not None:
+                out[symbol] = dt
+        logger.info("Aster earliest-funding probe: resolved %d/%d genesis dates", len(out), len(symbols))
+        return out
+
+    async def _fetch_earliest_funding_date(self, symbol: str) -> datetime | None:
+        """Return the datetime of the symbol's first-ever funding entry, or None.
+
+        Binance-compat ``fundingRate`` clamps ``startTime=0`` to "recent" (returns
+        today). Passing an explicit early ``startTime`` (before any possible listing)
+        + ``limit=1`` returns the EARLIEST entry at/after it ascending → the genesis
+        funding date. Use a pre-history floor well before the ASTER launch.
+        """
+        url = f"{_BASE}/fapi/v1/fundingRate"
+        early_ms = int(datetime(2020, 1, 1, tzinfo=UTC).timestamp() * 1000)
+        params = {"symbol": symbol, "startTime": str(early_ms), "limit": "1"}
+        async with self._make_session() as session, session.get(url, params=params) as resp:
+            resp.raise_for_status()
+            data = cast(object, await resp.json())
+        if not isinstance(data, list) or not data:
+            return None
+        first = cast(dict[str, object], data[0])
+        ts_ms = first.get("fundingTime")
+        if not isinstance(ts_ms, (int, float)):
+            return None
+        return datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=UTC)
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single instrument by identifier."""
