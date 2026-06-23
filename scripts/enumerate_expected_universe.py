@@ -124,6 +124,20 @@ PROJECT_ID = "central-element-323112"
 # match the league-grain manifest → every cell would inflate the denominator.
 _SPORTS_PRESENT_COLS: list[str] = ["data_type", "league_id", "date"]
 
+# Sports data_types retired as of 2026-05-05 — were provider-catalog mappings (now
+# live in UAC as static ID tables) rather than captured GCS data.  They are NOT in
+# ``SPORTS_DATA_TYPE_TO_SOURCE``, so ``_sports_data_types()`` never returns them;
+# this set is a defensive guard in case a caller passes a legacy data_types list.
+_RETIRED_SPORTS_DATA_TYPES: frozenset[str] = frozenset(
+    {
+        "TM_LEAGUES",
+        "TRANSFERMARKT_LEAGUES",
+        "TRANSFERMARKT_VALUES",
+        "SFI_LEAGUES",
+        "SFI_STANDINGS",
+    }
+)
+
 # Full per-instrument present-set columns for cefi / defi / prediction.
 _DEFAULT_PRESENT_COLS: list[str] = [
     "venue",
@@ -1230,11 +1244,14 @@ def _enumerate_v2_sports(
         get_entity_league_coverage,
         get_source_coverage_start,
     )
+    from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
 
     _pcols = present_cols or list(_SPORTS_PRESENT_COLS)
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
 
+    # Pre-resolve each data_type's source key (used by is_expected_for_source in alive branch).
+    dt_source: dict[str, str | None] = {}
     # Pre-resolve each data_type's source coverage start once (None = unmapped).
     coverage_starts: dict[str, pd.Timestamp | None] = {}
     # Pre-resolve each data_type's per-LEAGUE entity coverage once. ``None`` = the
@@ -1245,6 +1262,7 @@ def _enumerate_v2_sports(
     entity_coverage: dict[str, frozenset[str] | None] = {}
     for dt in data_types:
         source = SPORTS_DATA_TYPE_TO_SOURCE.get(dt)
+        dt_source[dt] = source
         cov = get_source_coverage_start(source, dt) if source is not None else None
         coverage_starts[dt] = pd.Timestamp(cov) if cov is not None else None
         _ec = get_entity_league_coverage(dt)
@@ -1263,13 +1281,32 @@ def _enumerate_v2_sports(
         if not row_dts:
             continue  # unmapped sports instrument type → skip entirely
         for dt in row_dts:
-            # Per-league entity coverage: skip a data_type whose source does NOT
-            # cover this league (e.g. XG for a non-Understat league) — seeding it
-            # would be a false expected_unattempted, not an honest owed cell.
+            if dt in _RETIRED_SPORTS_DATA_TYPES:
+                continue  # retired — not a coverage gap, skip entirely
+            cov_ts = coverage_starts.get(dt)
+            # Per-league entity coverage: the source does NOT cover this league for
+            # this data_type (e.g. XG for a non-Understat league) — emit
+            # EXPECTED_NO_PROVIDER_COVERAGE (empty_confirmed) so the shard is
+            # excluded from the denominator honestly, rather than inflating
+            # expected_unattempted with cells the provider can never supply.
             _cov_leagues = entity_coverage.get(dt)
             if _cov_leagues is not None and league_id.upper() not in _cov_leagues:
+                for d in date_axis:
+                    d_ts = pd.Timestamp(d)
+                    if cov_ts is not None and d_ts < cov_ts:
+                        continue  # pre-coverage dates owned by v1 (league_id="" grain)
+                    yield ExpectedRow(
+                        asset_group="sports",
+                        venue="",
+                        chain="",
+                        data_type=dt,
+                        instrument_type="",
+                        instrument_id="",
+                        league_id=league_id,
+                        date=d.isoformat(),
+                        reason="EXPECTED_NO_PROVIDER_COVERAGE",
+                    )
                 continue
-            cov_ts = coverage_starts.get(dt)
             for d in date_axis:
                 d_ts = pd.Timestamp(d)
                 iso = d.isoformat()
@@ -1281,6 +1318,25 @@ def _enumerate_v2_sports(
                 elif at_ts is not None and d_ts > at_ts:
                     reason = "EXPECTED_INSTRUMENT_DELISTED"
                 else:
+                    # Per-day source-rule gate: footystats off-season, transfer-window,
+                    # understat-league whitelist (already guarded by entity_coverage above
+                    # for understat — this catches any residual + footystats season logic).
+                    _src = dt_source.get(dt)
+                    if _src is not None:
+                        _in_scope, _oos_reason = is_expected_for_source(_src, league_id, d, data_type=dt)
+                        if not _in_scope and _oos_reason is not None:
+                            yield ExpectedRow(
+                                asset_group="sports",
+                                venue="",
+                                chain="",
+                                data_type=dt,
+                                instrument_type="",
+                                instrument_id="",
+                                league_id=league_id,
+                                date=iso,
+                                reason=_oos_reason,
+                            )
+                            continue
                     if present_set is None:
                         continue  # legacy mode: alive on this day — skip
                     row_key = tuple(
