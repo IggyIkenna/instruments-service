@@ -47,6 +47,7 @@ def create_sports_reference_adapter(
     api_key: str | None = None,
     date: str | None = None,
     bucket: str | None = None,
+    rate_rpm: int | None = None,
 ) -> BaseSportsReferenceAdapter:
     """Create and return a sports reference data adapter for the given venue.
 
@@ -63,6 +64,12 @@ def create_sports_reference_adapter(
         bucket: Optional sports-reference bucket name for the pre-flight
             check. When None, resolved from ``InstrumentsServiceConfig``
             honouring ``IS_TEST_RUN``.
+        rate_rpm: Optional allocated fleet rate-budget for THIS VM, in
+            requests-per-minute (the deterministic launch-time split of the
+            source ceiling). When > 0 the adapter's token-bucket throttle is set
+            to this rate as the PRIMARY control (60 / rate_rpm); None / 0 keeps
+            the class default. Resolved from the typed service config when the
+            arg is None -- never via a raw OS-env read.
 
     Returns:
         A sports reference data adapter instance.
@@ -82,4 +89,18 @@ def create_sports_reference_adapter(
     if date is not None and venue_requires_api_football(venue_lower):
         check_api_football_dependency(date=date, bucket=bucket)
 
-    return adapter_class(api_key=api_key)
+    # Resolve the allocated fleet rate-budget. Explicit arg wins; otherwise read
+    # the launcher-injected SPORTS_ADAPTER_RATE_RPM via the typed service config
+    # (never a raw OS-env read). 0 / unset -> adapter keeps its class-default throttle.
+    effective_rate_rpm = rate_rpm
+    if effective_rate_rpm is None:
+        from instruments_service.config import get_config
+
+        effective_rate_rpm = get_config().sports_adapter_rate_rpm
+
+    adapter = adapter_class(api_key=api_key)
+    if effective_rate_rpm < 0:
+        raise ValueError(f"rate_rpm must be >= 0 (got {effective_rate_rpm})")
+    if effective_rate_rpm > 0:
+        adapter.set_rate_budget_rpm(effective_rate_rpm)
+    return adapter
