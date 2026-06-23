@@ -57,7 +57,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 import pandas as pd
-from unified_api_contracts import is_mvp
+from unified_api_contracts import is_in_mvp_capture_universe, is_mvp
 from unified_trading_library import (
     StorageClient,
     get_config,
@@ -1108,6 +1108,26 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
             pass
         return str(raw)
 
+    # CeFi capture universe is PERP-GATED (cefi_universe_capture_rule_2026_06_23):
+    # a SPOT / dated-FUTURE cell is mvp ONLY IF the venue also lists a PERP for the
+    # same base. The rollup sees ALL instruments per venue/day, so it can compute
+    # the per-(venue, base) ``has_perp_for_base`` flag the shared UAC predicate
+    # ``is_in_mvp_capture_universe`` needs. We compute it ONCE over the frame (the
+    # catalogue is the full could-exist universe; the gate is a venue/base property,
+    # not per-expiry) and pass it per row. Non-cefi asset_groups keep the plain
+    # ``is_mvp`` rule (no perp-gate concept).
+    perp_bases: set[tuple[str, str]] = set()
+    if asset_group == "cefi" and not df.empty and "instrument_type" in df.columns:
+        for _, _prow in df.iterrows():
+            _itype = _cell(_prow, "instrument_type").strip().upper()
+            if _itype in ("PERPETUAL", "EQUITY_PERP"):
+                _v = _cell(_prow, "venue")
+                _b = _cell(_prow, "base_asset") or _cell(_prow, "underlying")
+                if _v and _b:
+                    # Key on the base-exchange token — the perp-gate is per EXCHANGE,
+                    # not per sub-venue (BINANCE-SPOT spot ↔ BINANCE-FUTURES perp).
+                    perp_bases.add((_v.strip().upper().split("-", 1)[0], _b.strip().upper()))
+
     def _row_is_mvp(row: pd.Series[object]) -> bool:
         league = _cell(row, "league_id") or None
         # Unbound (single-grain) catalogue rows carry no data_type → pass "" straight
@@ -1119,6 +1139,21 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
         # base_ccy axis); ``underlying`` carries it for derivatives/options. "" → None
         # so a non-derivative row is not over-constrained.
         base = _cell(row, "base_asset") or _cell(row, "underlying") or None
+
+        if asset_group == "cefi":
+            # Perp-gated CeFi capture predicate — the shared UAC SSOT. ``base`` ""
+            # (no base) → not in universe; pass through as "" so the predicate's
+            # base-membership check fails cleanly.
+            venue = _cell(row, "venue")
+            base_norm = (base or "").strip().upper()
+            has_perp = (venue.strip().upper().split("-", 1)[0], base_norm) in perp_bases
+            return is_in_mvp_capture_universe(
+                venue,
+                base_norm,
+                _cell(row, "instrument_type"),
+                has_perp_for_base=has_perp,
+            )
+
         return is_mvp(
             asset_group,
             venue=_cell(row, "venue"),
