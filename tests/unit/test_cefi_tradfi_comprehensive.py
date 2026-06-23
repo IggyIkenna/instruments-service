@@ -1364,7 +1364,11 @@ class TestAsterAdapterComprehensive:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_get_instruments_filters_unknown_base_asset(self) -> None:
+    async def test_get_instruments_enumerates_full_universe_obscure_base(self) -> None:
+        """BUG #4: the base-asset majors whitelist is REMOVED — every TRADING perp on
+        a supported quote asset is catalogued (funding rates valuable even for small
+        coins). An obscure base on USDC is now enumerated, not filtered. The
+        quote-asset filter stays (non-canonical quotes still excluded)."""
         adapter = AsterReferenceDataAdapter()
         mock_session = _make_aiohttp_session_mock(
             resp_json={
@@ -1377,12 +1381,21 @@ class TestAsterAdapterComprehensive:
                         "quoteAsset": "USDC",
                         "filters": [],
                     },
+                    {
+                        "symbol": "OBSCUREBTC",  # non-canonical quote → still filtered
+                        "status": "TRADING",
+                        "contractType": "PERPETUAL",
+                        "baseAsset": "OBSCURECOIN999",
+                        "quoteAsset": "BTC",
+                        "filters": [],
+                    },
                 ]
             }
         )
         with patch("aiohttp.ClientSession", return_value=mock_session):
             results = await adapter.get_instruments()
-        assert results == []
+        ids = {r.raw_symbol for r in results}
+        assert ids == {"OBSCUREUSDC"}  # USDC kept, BTC-quote dropped
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
@@ -1574,16 +1587,20 @@ class TestHyperliquidAdapterComprehensive:
                     {"name": "BTC", "szDecimals": 5},
                     {"name": "ETH", "szDecimals": 4},
                     {"name": "", "szDecimals": 3},  # empty name → skipped
-                    {"name": "OBSCURECOIN999", "szDecimals": 3},  # not in universe
+                    {"name": "OBSCURECOIN999", "szDecimals": 3},  # BUG #4: now catalogued (whitelist removed)
+                    {"name": "DELISTEDCOIN", "szDecimals": 3, "isDelisted": True},  # delisted → skipped
                 ]
             }
         )
         with patch("aiohttp.ClientSession", return_value=mock_session):
             results = await adapter.get_instruments()
-        assert len(results) == 2
-        assert results[0].base_asset == "BTC"
-        assert results[0].quote_asset == "USD"
-        assert results[0].settle_asset == "USDC"
+        # BUG #4: full active-perp universe enumerated (BTC, ETH, OBSCURECOIN999) —
+        # empty-name skipped, delisted skipped; the majors whitelist no longer caps.
+        names = {r.base_asset for r in results}
+        assert names == {"BTC", "ETH", "OBSCURECOIN999"}
+        btc = next(r for r in results if r.base_asset == "BTC")
+        assert btc.quote_asset == "USD"
+        assert btc.settle_asset == "USDC"
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:

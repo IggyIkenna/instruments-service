@@ -27,7 +27,34 @@ if TYPE_CHECKING:
 else:  # pragma: no cover - runtime namespace indirection
     from instruments_service.reference_data.adapters.prediction.polymarket._pkg_ref import polymarket_namespace as _pm
 
+# Per-condition_id CLOB token-id registry, populated by ``_parse_market`` (parsing.py)
+# at the moment a ``PolymarketGammaMarket`` is turned into an ``InstrumentRecord``.
+# ``InstrumentRecord`` (UAC) has no ``clob_token_ids`` field, so this side-table is the
+# join carrier into the availability parquet: ``_records_to_dataframe`` (orchestrator)
+# looks each record's ``instrument_key`` (== ``condition_id``) up here to materialise the
+# per-row ``clob_token_ids`` column the Polymarket CLOB WS subscribes by. Keyed by the
+# globally-unique, immutable ``condition_id`` (0x…64hex), so cross-date reuse is correct;
+# bounded to the captured universe size (same lifetime class as ``_clob_raw_markets``).
+_CLOB_TOKEN_IDS_BY_CONDITION_ID: dict[str, list[str]] = {}
+
+
+def _register_clob_token_ids(condition_id: str, clob_token_ids: list[str] | None) -> None:
+    """Record a market's per-outcome decimal CLOB token-ids by ``condition_id``.
+
+    No-op when ``clob_token_ids`` is empty/None so a market with unknown tokens never
+    overwrites a previously-registered non-empty entry.
+    """
+    if condition_id and clob_token_ids:
+        _CLOB_TOKEN_IDS_BY_CONDITION_ID[condition_id] = [str(t) for t in clob_token_ids]
+
+
+def _clob_token_ids_for_condition_id(condition_id: str) -> list[str] | None:
+    """Return the registered per-outcome CLOB token-ids for a ``condition_id`` (or None)."""
+    return _CLOB_TOKEN_IDS_BY_CONDITION_ID.get(condition_id)
+
+
 __all__ = [
+    "_CLOB_TOKEN_IDS_BY_CONDITION_ID",
     "_CRYPTO_KEYWORDS",
     "_CRYPTO_LONG_FORMS",
     "_CRYPTO_SHORT_PATTERNS",
@@ -42,6 +69,8 @@ __all__ = [
     "_SINGLE_TEAM_PATTERN",
     "_VS_PATTERN",
     "_classify_polymarket_error",
+    "_clob_token_ids_for_condition_id",
+    "_enrich_clob_token_ids",
     "_enrich_raw_event_fields",
     "_extract_series_slug",
     "_get_first_event",
@@ -50,6 +79,7 @@ __all__ = [
     "_normalize_team_pair",
     "_parse_single_team_question",
     "_parse_vs_string",
+    "_register_clob_token_ids",
     "_selection_from_outcomes",
 ]
 
@@ -233,11 +263,40 @@ def _get_first_event(raw_item: object) -> dict[str, object] | None:
     return event if isinstance(event, dict) else None
 
 
+def _enrich_clob_token_ids(raw_item: dict[str, object]) -> None:
+    """Map the CLOB market shape's ``tokens[].token_id`` → top-level ``clobTokenIds``.
+
+    The Gamma API returns the per-outcome decimal CLOB token-ids as a top-level
+    ``clobTokenIds`` JSON string (parsed by ``PolymarketGammaMarket``'s
+    ``clob_token_ids`` field-validator). The CLOB ``/markets`` shape instead nests
+    them as ``tokens[].token_id`` (one per binary outcome) and has NO top-level
+    ``clobTokenIds`` — so a batch/date-mode market validated straight from the CLOB
+    raw dict produced ``clob_token_ids=None``, and the Polymarket CLOB WS (which
+    subscribes by per-outcome decimal ``token_id``, NOT the ``condition_id``) had
+    nothing to subscribe to → zero ``book_snapshot_5`` capture. Lift the CLOB
+    ``tokens[].token_id`` list into ``clobTokenIds`` (only when absent + non-empty)
+    so batch and live resolve the same per-outcome token-ids. Mirrors the
+    ``_enrich_clob_outcomes`` ``tokens[].outcome`` → ``outcomes`` extraction.
+    """
+    if "clobTokenIds" in raw_item:
+        return
+    tokens = raw_item.get("tokens")
+    if not isinstance(tokens, list):
+        return
+    token_ids = [str(t["token_id"]) for t in tokens if isinstance(t, dict) and t.get("token_id")]
+    if token_ids:
+        raw_item["clobTokenIds"] = token_ids
+
+
 def _enrich_raw_event_fields(raw_item: object) -> None:
     """Extract nested event fields into top-level dict keys before Pydantic validation.
 
-    Populates series_slug, event_title, event_slug from events[0] if not already set.
+    Populates series_slug, event_title, event_slug from events[0] if not already set,
+    and lifts the CLOB ``tokens[].token_id`` list into ``clobTokenIds`` (date/batch
+    mode — the CLOB shape lacks the top-level ``clobTokenIds`` the Gamma shape has).
     """
+    if isinstance(raw_item, dict):
+        _enrich_clob_token_ids(raw_item)
     event = _pm._get_first_event(raw_item)
     if event is None or not isinstance(raw_item, dict):
         return

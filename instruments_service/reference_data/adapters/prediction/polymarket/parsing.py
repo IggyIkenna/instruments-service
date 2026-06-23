@@ -104,6 +104,14 @@ class PolymarketParsingMixin:
         # canonical_question_group + current_status.
         lifecycle = self.classify_lifecycle(market)
 
+        # InstrumentRecord (UAC) carries no clob_token_ids field, so register the
+        # per-outcome decimal CLOB token-ids in the package side-table keyed by
+        # condition_id (== instrument_key below). The orchestrator's
+        # _records_to_dataframe joins on instrument_key to materialise the
+        # clob_token_ids availability-parquet column the Polymarket CLOB WS
+        # subscribes by (live + batch resolve the same per-outcome token-ids).
+        _pm._register_clob_token_ids(condition_id, market.clob_token_ids)
+
         return _pm.InstrumentRecord(
             instrument_key=condition_id,
             venue=self.venue,
