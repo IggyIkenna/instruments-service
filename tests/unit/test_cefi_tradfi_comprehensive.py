@@ -372,8 +372,11 @@ class TestTardisHelperFunctions:
     def test_passes_asset_filter_valid(self) -> None:
         assert _passes_asset_filter("BTC", "USDT", "PERPETUAL") is True
 
-    def test_passes_asset_filter_invalid_base(self) -> None:
-        assert _passes_asset_filter("OBSCURECOIN123", "USDT", "PERPETUAL") is False
+    def test_passes_asset_filter_full_universe_base(self) -> None:
+        # FULL-UNIVERSE (operator 2026-06-23): an obscure base on a canonical
+        # quote now PASSES — the CEFI_BASE_ASSET_UNIVERSE majors whitelist is no
+        # longer a gate for spot/perp/future (small-coin funding is valuable).
+        assert _passes_asset_filter("OBSCURECOIN123", "USDT", "PERPETUAL") is True
 
     def test_passes_asset_filter_invalid_quote(self) -> None:
         assert _passes_asset_filter("BTC", "INVALIDQUOTE", "PERPETUAL") is False
