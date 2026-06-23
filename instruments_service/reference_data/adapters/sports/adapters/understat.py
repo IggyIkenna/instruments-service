@@ -135,6 +135,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
             return []
 
         matches = _extract_dates_from_json(raw_response)
+        raw_response = None  # free the season JSON blob (players/teams arrays are the OOM source)
         return _filter_and_normalize_matches(matches, target_date, league, season)
 
     async def get_leagues(self) -> list[CanonicalLeague]:
@@ -214,6 +215,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
                 try:
                     raw = await self._get_with_retry(session, url, headers=headers)
                     matches = _extract_dates_from_json(raw)
+                    raw = None  # free the season JSON blob (players/teams arrays are the OOM source)
                     for m in matches:
                         if not isinstance(m, dict):
                             continue
