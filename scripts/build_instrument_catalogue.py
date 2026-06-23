@@ -205,6 +205,14 @@ class _InstrumentAggregate:
     last_day: date
     meta_day: date
     meta: dict[str, str | None]
+    # BUG #4 (B): the earliest DECLARED listing date the writer stamped on the row
+    # (``available_from_datetime`` — e.g. the IS cefi adapters' per-instrument
+    # genesis-funding probe). The catalogue ``available_from`` is the MIN of the
+    # observed first snapshot day and this declared date, so a perp only observed on
+    # one recent snapshot still carries its true historical listing date (else the
+    # catalogue-driven backfill would never attempt its history). None = no declared
+    # date (legacy rows) → observed-day only, unchanged.
+    declared_from: date | None = None
 
 
 def _row_id(row: dict[str, object]) -> str | None:
@@ -242,6 +250,25 @@ def _str_field(row: dict[str, object], col: str) -> str:
     return _opt_field(row, col) or ""
 
 
+def _declared_from(row: dict[str, object]) -> date | None:
+    """Parse the writer-declared listing date (``available_from_datetime`` /
+    ``available_from``) from a per-date row → ``date``, or None when absent/unparseable.
+
+    BUG #4 (B): lets the rollup honour a per-instrument genesis date the writer
+    stamped (the IS cefi adapters' earliest-funding probe) as the ``available_from``
+    lower bound, independent of which snapshot day the instrument was observed on.
+    """
+    for col in ("available_from_datetime", "available_from"):
+        raw = _opt_field(row, col)
+        if not raw:
+            continue
+        try:
+            return pd.Timestamp(raw).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
 def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) -> pd.DataFrame:
     """Roll the per-date instrument definitions up into one lifecycle catalogue.
 
@@ -271,6 +298,7 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
             iid = _row_id(row)
             if iid is None:
                 continue
+            declared = _declared_from(row)
             existing = aggregates.get(iid)
             if existing is None:
                 aggregates[iid] = _InstrumentAggregate(
@@ -278,12 +306,16 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                     last_day=day,
                     meta_day=day,
                     meta=_extract_meta(row),
+                    declared_from=declared,
                 )
                 continue
             if day < existing.first_day:
                 existing.first_day = day
             if day > existing.last_day:
                 existing.last_day = day
+            # BUG #4 (B): keep the EARLIEST declared listing date seen across snapshots.
+            if declared is not None and (existing.declared_from is None or declared < existing.declared_from):
+                existing.declared_from = declared
             # Metadata follows the most-recent definition of the instrument.
             if day >= existing.meta_day:
                 existing.meta_day = day
@@ -298,6 +330,13 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
     for iid in sorted(aggregates):
         agg = aggregates[iid]
         available_to = None if agg.last_day >= latest_day else agg.last_day.isoformat()
+        # BUG #4 (B): available_from = MIN(observed first snapshot day, declared
+        # listing date). A perp only observed on one recent snapshot still carries
+        # its true historical listing date so the catalogue-driven backfill attempts
+        # its full history. Legacy rows (no declared date) keep observed-day behaviour.
+        available_from = agg.first_day
+        if agg.declared_from is not None and agg.declared_from < available_from:
+            available_from = agg.declared_from
         rows.append(
             {
                 "instrument_id": iid,
@@ -305,7 +344,7 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 "venue": agg.meta["venue"] or "",
                 "chain": agg.meta["chain"] or "",
                 "league_id": agg.meta["league_id"] or "",
-                "available_from": agg.first_day.isoformat(),
+                "available_from": available_from.isoformat(),
                 "available_to": available_to,
                 "market_created_at": agg.meta["market_created_at"],
                 "settlement_time": agg.meta["settlement_time"],
@@ -1048,7 +1087,7 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
         out["mvp"] = pd.Series([], dtype="bool")
         return out
 
-    def _cell(row: "pd.Series[object]", col: str) -> str:
+    def _cell(row: pd.Series[object], col: str) -> str:
         """Return a row's string cell, treating NaN/None/empty as "".
 
         ``str(np.nan)`` is ``"nan"`` and ``np.nan or x`` keeps the NaN (NaN is
@@ -1066,7 +1105,7 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
             pass
         return str(raw)
 
-    def _row_is_mvp(row: "pd.Series[object]") -> bool:
+    def _row_is_mvp(row: pd.Series[object]) -> bool:
         league = _cell(row, "league_id") or None
         # Unbound (single-grain) catalogue rows carry no data_type → pass "" straight
         # through; ``is_mvp`` treats a blank data_type as "any MVP data_type" so the
