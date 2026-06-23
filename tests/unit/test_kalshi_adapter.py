@@ -9,6 +9,14 @@ import pytest
 from instruments_service.reference_data.adapters.prediction.kalshi import KalshiReferenceDataAdapter
 
 
+def _make_cm(resp: object) -> MagicMock:
+    """Wrap a mock response in a context-manager mock (for ``async with session.get(...)`` usage)."""
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=resp)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm
+
+
 class TestKalshiAdapter:
     def test_venue_name(self) -> None:
         adapter = KalshiReferenceDataAdapter()
@@ -83,8 +91,11 @@ class TestKalshiAdapter:
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
             await adapter.get_instruments()
 
-        mock_session_obj.get.assert_called_once()
-        _args, kwargs = mock_session_obj.get.call_args
+        # The snapshot call is the first call to session.get; the series-scoped batch
+        # makes additional calls.  Assert the snapshot call uses status=open.
+        mock_session_obj.get.assert_called()
+        first_call = mock_session_obj.get.call_args_list[0]
+        _args, kwargs = first_call
         params = kwargs.get("params", {})
         assert params.get("status") == "open"
         assert params.get("status") != "active"
@@ -199,6 +210,212 @@ class TestKalshiAdapter:
             await adapter.get_ohlcv("BTC")
 
     # -- date-aware live↔historical routing + RSA-PSS auth (2026-06-20) --
+
+    # -- series-scoped capture (KXMVE-flood fix, 2026-06-23) --
+
+    @pytest.mark.asyncio
+    async def test_series_scoped_capture_adds_kxbtcd_markets(self) -> None:
+        """Series-scoped path fetches KXBTCD markets that the KXMVE-flood snapshot misses.
+
+        /markets?status=open (snapshot) returns only KXMVE markets.
+        /series?category=Crypto returns [KXBTCD, KXMVESPORTS].
+        classify_kalshi_to_canonical_group: KXBTCD → non-OTHER, KXMVESPORTS → OTHER.
+        /markets?status=open&series_ticker=KXBTCD returns one BTC-daily market.
+        Expected: KXBTCD-26JUN23-T90000 is in the final output.
+        """
+        adapter = KalshiReferenceDataAdapter()
+
+        snapshot_resp = AsyncMock()
+        snapshot_resp.status = 200
+        snapshot_resp.raise_for_status = MagicMock()
+        snapshot_resp.json = AsyncMock(return_value={"markets": [], "cursor": ""})
+
+        series_crypto_resp = AsyncMock()
+        series_crypto_resp.status = 200
+        series_crypto_resp.raise_for_status = MagicMock()
+        series_crypto_resp.json = AsyncMock(return_value={"series": [{"ticker": "KXBTCD"}, {"ticker": "KXMVESPORTS"}]})
+
+        series_empty_resp = AsyncMock()
+        series_empty_resp.status = 200
+        series_empty_resp.raise_for_status = MagicMock()
+        series_empty_resp.json = AsyncMock(return_value={"series": []})
+
+        btc_market_resp = AsyncMock()
+        btc_market_resp.status = 200
+        btc_market_resp.raise_for_status = MagicMock()
+        btc_market_resp.json = AsyncMock(
+            return_value={
+                "markets": [
+                    {
+                        "ticker": "KXBTCD-26JUN23-T90000",
+                        "event_ticker": "KXBTCD-26JUN23",
+                        "series_ticker": "KXBTCD",
+                        "title": "BTC daily above $90k?",
+                        "category": "Crypto",
+                        "status": "active",
+                        "yes_bid": 60,
+                        "yes_ask": 65,
+                        "open_time": "2026-06-23T00:00:00Z",
+                        "close_time": "2026-06-23T23:59:59Z",
+                        "expiration_time": "2026-06-23T23:59:59Z",
+                    }
+                ],
+                "cursor": "",
+            }
+        )
+
+        def get_side_effect(url: str, **kwargs: object) -> object:
+            params = kwargs.get("params", {})
+            if isinstance(params, dict) and params.get("series_ticker") == "KXBTCD":
+                return _make_cm(btc_market_resp)
+            if "/series" in url:
+                cat = params.get("category") if isinstance(params, dict) else None
+                if cat == "Crypto":
+                    return _make_cm(series_crypto_resp)
+                return _make_cm(series_empty_resp)
+            return _make_cm(snapshot_resp)
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(side_effect=get_side_effect)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+
+        tickers = {r.instrument_key for r in results}
+        assert "KXBTCD-26JUN23-T90000" in tickers, f"Series-scoped capture must include KXBTCD markets; got: {tickers}"
+
+    @pytest.mark.asyncio
+    async def test_series_scoped_per_series_failure_is_shard_isolated(self) -> None:
+        """A 500 on one series' /markets fetch must NOT abort the batch.
+
+        KXBTCD /markets 500s; KXETHD /markets succeeds.
+        Expected: KXETHD market present, no RuntimeError raised.
+        """
+        import aiohttp as _aiohttp
+
+        adapter = KalshiReferenceDataAdapter()
+
+        snapshot_resp = AsyncMock()
+        snapshot_resp.status = 200
+        snapshot_resp.raise_for_status = MagicMock()
+        snapshot_resp.json = AsyncMock(return_value={"markets": [], "cursor": ""})
+
+        series_crypto_resp = AsyncMock()
+        series_crypto_resp.status = 200
+        series_crypto_resp.raise_for_status = MagicMock()
+        series_crypto_resp.json = AsyncMock(return_value={"series": [{"ticker": "KXBTCD"}, {"ticker": "KXETHD"}]})
+
+        series_empty_resp = AsyncMock()
+        series_empty_resp.status = 200
+        series_empty_resp.raise_for_status = MagicMock()
+        series_empty_resp.json = AsyncMock(return_value={"series": []})
+
+        btc_500_resp = AsyncMock()
+        btc_500_resp.status = 500
+        btc_500_resp.raise_for_status = MagicMock(side_effect=_aiohttp.ClientError("HTTP 500"))
+
+        eth_market_resp = AsyncMock()
+        eth_market_resp.status = 200
+        eth_market_resp.raise_for_status = MagicMock()
+        eth_market_resp.json = AsyncMock(
+            return_value={
+                "markets": [
+                    {
+                        "ticker": "KXETHD-26JUN23-T3000",
+                        "event_ticker": "KXETHD-26JUN23",
+                        "series_ticker": "KXETHD",
+                        "title": "ETH daily above $3k?",
+                        "category": "Crypto",
+                        "status": "active",
+                        "yes_bid": 40,
+                        "yes_ask": 45,
+                        "open_time": "2026-06-23T00:00:00Z",
+                        "close_time": "2026-06-23T23:59:59Z",
+                        "expiration_time": "2026-06-23T23:59:59Z",
+                    }
+                ],
+                "cursor": "",
+            }
+        )
+
+        def get_side_effect(url: str, **kwargs: object) -> object:
+            params = kwargs.get("params", {})
+            if isinstance(params, dict) and params.get("series_ticker") == "KXBTCD":
+                return _make_cm(btc_500_resp)
+            if isinstance(params, dict) and params.get("series_ticker") == "KXETHD":
+                return _make_cm(eth_market_resp)
+            if "/series" in url:
+                cat = params.get("category") if isinstance(params, dict) else None
+                if cat == "Crypto":
+                    return _make_cm(series_crypto_resp)
+                return _make_cm(series_empty_resp)
+            return _make_cm(snapshot_resp)
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(side_effect=get_side_effect)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()  # must NOT raise
+
+        tickers = {r.instrument_key for r in results}
+        assert "KXETHD-26JUN23-T3000" in tickers, f"KXETHD market must survive when KXBTCD fetch 500s; got: {tickers}"
+
+    @pytest.mark.asyncio
+    async def test_series_scoped_skips_historical_path(self) -> None:
+        """Series-scoped capture must NOT run for a dated (historical) request."""
+        adapter = KalshiReferenceDataAdapter()
+
+        cutoff_resp = AsyncMock()
+        cutoff_resp.status = 200
+        cutoff_resp.raise_for_status = MagicMock()
+        cutoff_resp.json = AsyncMock(return_value={"market_settled_ts": "2026-06-20T00:00:00Z"})
+
+        hist_resp = AsyncMock()
+        hist_resp.status = 200
+        hist_resp.raise_for_status = MagicMock()
+        hist_resp.json = AsyncMock(
+            return_value={
+                "markets": [
+                    {
+                        "ticker": "KXBTCD-26JUN19-T90000",
+                        "event_ticker": "KXBTCD-26JUN19",
+                        "series_ticker": "KXBTCD",
+                        "title": "BTC daily",
+                        "category": "Crypto",
+                        "status": "settled",
+                        "yes_bid": 0,
+                        "yes_ask": 0,
+                        "open_time": "2026-06-19T00:00:00Z",
+                        "close_time": "2026-06-19T23:59:59Z",
+                        "expiration_time": "2026-06-19T23:59:59Z",
+                    }
+                ],
+                "cursor": "",
+            }
+        )
+
+        series_called: list[str] = []
+
+        def get_side_effect(url: str, **kwargs: object) -> object:
+            if "/series" in url:
+                series_called.append(url)
+            if "historical/cutoff" in url:
+                return _make_cm(cutoff_resp)
+            return _make_cm(hist_resp)
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(side_effect=get_side_effect)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            await adapter.get_instruments(date="2026-06-19")
+
+        assert series_called == [], f"/series must NOT be called for a dated historical request; got: {series_called}"
 
     def test_parse_kalshi_creds_rsa_blob(self) -> None:
         """RSA credential JSON blob → (api_key_id, private_key_pem); enables signing."""

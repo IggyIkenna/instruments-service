@@ -1185,6 +1185,78 @@ def _canonical_writer_instrument_type(asset_group: str, instr: InstrumentCatalog
     return (instr.instrument_type or "").strip().lower()
 
 
+#: TradFi data_types we actually FETCH from Databento at L0/free (``ohlcv-1s`` /
+#: ``ohlcv-1m``). 15m/24h bars are DERIVED downstream by aggregation
+#: (``aggregate_from_15s_efficient`` / the OHLCV roll-up), NOT fetched — and FX
+#: 24h rides Yahoo (also not Databento) — so neither is floor-clipped by this
+#: path (a derived/Yahoo output is not a Databento fetch target). The data_type
+#: form here is the underscore manifest spelling; the floor map below converts to
+#: the hyphenated Databento schema the allowlist keys on.
+_TRADFI_DATABENTO_FETCHED_DATA_TYPES: frozenset[str] = frozenset({"ohlcv_1s", "ohlcv_1m"})
+
+
+def _tradfi_floor_start_for_data_type(data_type: str, today: date) -> date | None:
+    """Return the oldest date the Databento subscription will FETCH for ``data_type``.
+
+    The Databento subscription includes only a rolling, trailing-from-today window
+    of history per billing LEVEL (L0 16y / L1 1y / L2+L3 1mo — the SSOT is UAC
+    ``databento_subscription_allowlist``). Seeding ``expected_unattempted`` cells
+    OLDER than that floor is wrong twice over: (1) it inflates the honest-coverage
+    denominator with cells we can never fetch, and (2) a real backfill of such a
+    cell would trip ``assert_lookback_allowed`` (metered-billing guard) — so the
+    universe must stop at the floor.
+
+    Returns the floor ``date`` for a Databento-FETCHED tradfi data_type
+    (``ohlcv_1s`` / ``ohlcv_1m``), else ``None`` for a data_type this path must NOT
+    floor-clip — the DERIVED bars (``ohlcv_15m`` / ``ohlcv_24h``, aggregated from
+    1s/1m, not fetched) and the Yahoo FX daily path. ``None`` => the caller seeds
+    the full alive window (no floor).
+    """
+    if data_type not in _TRADFI_DATABENTO_FETCHED_DATA_TYPES:
+        return None
+    # ohlcv_1s / ohlcv_1m are both L0 (hyphenated ``ohlcv-1s`` / ``ohlcv-1m``) — the
+    # allowlist resolves the level + its rolling window; ask it for the floor so the
+    # single SSOT (not a hardcoded year count) decides the boundary.
+    from unified_api_contracts.registry.databento_subscription_allowlist import earliest_allowed_start
+
+    now = datetime(today.year, today.month, today.day, tzinfo=UTC)
+    return earliest_allowed_start(data_type, now=now).date()
+
+
+def _is_vix_cash_index(instr: InstrumentCatalogEntry) -> bool:
+    """True for the VIX *cash index* catalogue entry — the leg we DELETE from the universe.
+
+    Operator decision (2026-06-23): keep VIX *futures* (the CBOE/CFE VX contracts,
+    Databento ``XCBF.PITCH``, ``instrument_type`` future/futures_chain) and DELETE
+    the VIX *cash index* entirely — it is not tradable, is derivable from the
+    futures (which trade more often, over a longer window, at finer granularity),
+    and is sourced from Barchart/massive (``ohlcv_15m`` / ``ohlcv_24h``). So the
+    cash-index cells must never be seeded into the expected universe.
+
+    Discriminator = ``instrument_type == index`` AND the instrument is VIX — its
+    canonical id / underlying names VIX (``CBOE:INDEX:VIX`` / ``CBOE:INDEX:VIX-USD``),
+    OR it is a CBOE index row with a blank id/underlying (the legacy VIX-index cells
+    whose id was never stamped — CBOE's only cash index is VIX). Scoped this way so
+    other cash indices that have NO futures equivalent in our subscription (DXY, US
+    treasury-yield — which DO carry their own non-VIX ``CBOE:INDEX:<X>`` id) are
+    UNAFFECTED and keep their daily series.
+    """
+    if (instr.instrument_type or "").strip().lower() != "index":
+        return False
+    tokens = (instr.instrument_id or "", instr.underlying or "", instr.base_asset or "")
+    if any("VIX" in str(tok).upper() for tok in tokens):
+        return True
+    # Legacy blank-id CBOE index cell: CBOE's only cash index is VIX, so an
+    # unnamed CBOE index row is the VIX series too. A future named DXY/treasury
+    # index carries its own non-blank id and is NOT caught here.
+    return (instr.venue or "").strip().upper() == "CBOE" and all(_blank_token(t) for t in tokens)
+
+
+def _blank_token(v: object) -> bool:
+    """True for a None / empty / whitespace token (legacy unstamped id/underlying)."""
+    return not str(v or "").strip()
+
+
 def _enumerate_v2_tradfi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1225,6 +1297,13 @@ def _enumerate_v2_tradfi(
             continue  # fully delisted before window started
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
             continue  # not yet listed when window ended
+        # Operator 2026-06-23: the VIX *cash index* is DELETED from the expected
+        # universe entirely (keep the VIX *futures* — VX — instead; the index is
+        # derivable from them, not tradable, and only inflates the denominator).
+        # Skip the whole instrument so NO cash-index cell (EU seed OR pre/post-
+        # genesis empty_confirmed) is ever emitted.
+        if _is_vix_cash_index(instr):
+            continue
         # G1-ENUM: filter data_types to those valid for this instrument's shape.
         row_dts = _row_data_types("tradfi", instr, data_types)
         if not row_dts:
@@ -1252,6 +1331,15 @@ def _enumerate_v2_tradfi(
         else:
             seed_instrument_id = instr.instrument_id
             seed_underlying = ""
+        # Databento rolling-history floor per data_type (Operator 2026-06-23): the
+        # subscription only includes trailing-from-today history per billing level,
+        # so a Databento-FETCHED data_type (ohlcv_1s / ohlcv_1m, L0/16y) MUST NOT
+        # seed expected_unattempted OLDER than its floor — those cells are
+        # unfetchable (would trip the metered-billing guard) and only inflate the
+        # honest-coverage denominator. ``None`` (15m/24h derived, Yahoo FX) => no
+        # clip. Resolved once per instrument from today's date.
+        _today = datetime.now(UTC).date()
+        _dt_floor: dict[str, date | None] = {dt: _tradfi_floor_start_for_data_type(dt, _today) for dt in row_dts}
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -1263,6 +1351,9 @@ def _enumerate_v2_tradfi(
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
                 for dt in row_dts:
+                    _floor = _dt_floor[dt]
+                    if _floor is not None and d < _floor:
+                        continue  # older than the Databento rolling-history floor — unfetchable, do not seed
                     row_key = tuple(
                         {
                             "venue": instr.venue,
