@@ -102,6 +102,12 @@ _CEFI_VENUES: list[str] = [
     # from the Deribit public REST API (kind=combo, expired=false).
     "DERIBIT-COMBO",
     "COINBASE-SPOT",
+    # Coinbase Derivatives (perps) via Tardis ``coinbase-international`` — distinct
+    # canonical venue so the perp-gate pairs it with COINBASE-SPOT (2026-06-23).
+    "COINBASE-FUTURES",
+    # Bybit spot via Tardis ``bybit-spot`` — distinct from the BYBIT perp/future
+    # endpoint; pairs with BYBIT perps on the shared entity prefix (2026-06-23).
+    "BYBIT-SPOT",
     "HYPERLIQUID",
     "UPBIT",
     "ASTER",
