@@ -401,6 +401,14 @@ class TestTardisHelperFunctions:
         assert base == "UNKNOWNSYMBOL"
         assert quote == ""
 
+    def test_split_symbol_dated_future_underscore_expiry(self) -> None:
+        # full-universe (2026-06-23): binance-futures dated quarterlies carry the
+        # quote in the <BASE><QUOTE> body before the expiry-tag underscore — the
+        # suffix (260626) is NOT a quote, so the body must be concatenated-matched.
+        assert _split_symbol("BTCUSDT_260626") == ("BTC", "USDT")
+        assert _split_symbol("ETHUSDT_260925") == ("ETH", "USDT")
+        assert _split_symbol("BTCBUSD_210129") == ("BTC", "BUSD")
+
     # ── _parse_deribit_combo_legs ─────────────────────────────────────────
 
     def test_parse_combo_legs_future_spread(self) -> None:
