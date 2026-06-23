@@ -184,7 +184,12 @@ _DATABENTO_VENUE_DATASETS: dict[str, list[str]] = {
 _TARDIS_VENUE_EXCHANGES: dict[str, list[str]] = {
     "binance": ["binance-futures"],
     "bybit": ["bybit"],
+    # Bybit spot is a distinct canonical venue → its own Tardis spot endpoint
+    # (cefi_universe_capture_rule 2026-06-23).
+    "bybit-spot": ["bybit-spot"],
     "deribit": ["deribit"],
+    # Coinbase Derivatives (perps) via the Tardis coinbase-international endpoint.
+    "coinbase-futures": ["coinbase-international"],
     # OKX is 3 distinct Tardis exchanges — each suffixed venue must resolve to its
     # OWN exchange (matches UAC venue_mapping.to_tardis_exchanges). Without these,
     # the lookup fell through to the adapter default ("okex" spot), so OKX-FUTURES /

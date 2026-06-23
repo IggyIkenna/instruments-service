@@ -726,3 +726,236 @@ class TestBaseSportsAdapterErrorClassification:
         adapter = _ConcreteAdapter()
         result = await adapter.get_fixture_player_stats(123)
         assert result == []
+
+
+# ===========================================================================
+# Rate-limit retry tests — JSON-envelope rateLimit (HTTP 200 + errors dict)
+# ===========================================================================
+
+
+class TestApiFootballRateLimitRetry:
+    """Verify ``_fetch_and_extract`` retries on JSON-envelope rateLimit errors.
+
+    API-Football signals quota exhaustion as HTTP 200 +
+    ``{"errors": {"rateLimit": "Too many requests..."}, "response": []}``.
+    The old code path called ``_extract_response`` on the successful HTTP
+    response and let the resulting ``ApiFootballResponseError`` propagate as
+    a hard failure (``attempted_failed``).  After the fix, it should sleep to
+    the next minute boundary and retry — NOT call ``_emit_fetch_failed``.
+    """
+
+    def test_api_football_response_error_is_rate_limit_flag(self) -> None:
+        """``ApiFootballResponseError.is_rate_limit`` is True for rateLimit key."""
+        exc = ApiFootballResponseError("rateLimit error", is_rate_limit=True)
+        assert exc.is_rate_limit is True
+
+    def test_api_football_response_error_hard_error_flag(self) -> None:
+        """``ApiFootballResponseError.is_rate_limit`` is False for plan/token errors."""
+        exc = ApiFootballResponseError("plan error", is_rate_limit=False)
+        assert exc.is_rate_limit is False
+
+    def test_raise_on_api_errors_sets_rate_limit_flag(self) -> None:
+        """``_raise_on_api_errors`` sets ``is_rate_limit=True`` on rateLimit key."""
+        raw = {"errors": {"rateLimit": "Too many requests."}, "response": []}
+        with pytest.raises(ApiFootballResponseError) as exc_info:
+            _raise_on_api_errors(raw)
+        assert exc_info.value.is_rate_limit is True
+
+    def test_raise_on_api_errors_hard_error_not_rate_limit(self) -> None:
+        """``_raise_on_api_errors`` sets ``is_rate_limit=False`` for plan errors."""
+        raw = {"errors": {"plan": "Upgrade your plan."}, "response": []}
+        with pytest.raises(ApiFootballResponseError) as exc_info:
+            _raise_on_api_errors(raw)
+        assert exc_info.value.is_rate_limit is False
+
+    @pytest.mark.asyncio
+    async def test_get_injuries_retries_on_rate_limit_then_succeeds(self) -> None:
+        """get_injuries retries on a rateLimit JSON-envelope error, then returns data."""
+        adapter = ApiFootballAdapter(api_key="test-key")
+
+        rate_limit_body = {
+            "errors": {"rateLimit": "Too many requests. You have exceeded the limit of requests per minute."},
+            "results": 0,
+            "response": [],
+        }
+        success_body = {
+            "errors": [],
+            "results": 1,
+            "response": [
+                {
+                    "player": {"id": 1, "name": "Alice", "photo": ""},
+                    "team": {"id": 10, "name": "TeamA"},
+                    "fixture": {"id": 999},
+                    "league": {"id": 39, "season": 2025},
+                    "type": "Knee",
+                    "reason": "Knee injury",
+                    "comment": None,
+                }
+            ],
+        }
+
+        call_count = 0
+
+        async def _mock_json(**_kwargs: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            return rate_limit_body if call_count == 1 else success_body
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {}
+        mock_resp.json = _mock_json
+
+        resp_cm = MagicMock()
+        resp_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        resp_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=resp_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.ApiFootballAdapter._make_session",
+                return_value=mock_session_cm,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.ApiFootballAdapter._throttle",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.log_event",
+            ) as mock_log_event,
+        ):
+            result = await adapter.get_injuries("2026-06-21")
+
+        # Should have retried once (1 rateLimit + 1 success) → 2 HTTP calls
+        assert call_count == 2
+        # Should have slept (minute-boundary backoff)
+        mock_sleep.assert_called_once()
+        # Should have emitted DP_SOURCE_RATE_LIMITED
+        assert any(call.args[0] == "DP_SOURCE_RATE_LIMITED" for call in mock_log_event.call_args_list)
+        # Should return the successful data, NOT an empty list
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_get_fixture_statistics_retries_on_rate_limit_then_succeeds(self) -> None:
+        """get_fixture_statistics retries on rateLimit, then returns data."""
+        adapter = ApiFootballAdapter(api_key="test-key")
+
+        rate_limit_body = {
+            "errors": {"rateLimit": "Too many requests."},
+            "results": 0,
+            "response": [],
+        }
+        success_body = {
+            "errors": [],
+            "results": 1,
+            "response": [
+                {
+                    "team": {"id": 40, "name": "Liverpool"},
+                    "statistics": [
+                        {"type": "Shots on Goal", "value": 5},
+                        {"type": "Ball Possession", "value": "60%"},
+                    ],
+                }
+            ],
+        }
+
+        call_count = 0
+
+        async def _mock_json(**_kwargs: object) -> object:
+            nonlocal call_count
+            call_count += 1
+            return rate_limit_body if call_count == 1 else success_body
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {}
+        mock_resp.json = _mock_json
+
+        resp_cm = MagicMock()
+        resp_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        resp_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=resp_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.ApiFootballAdapter._make_session",
+                return_value=mock_session_cm,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.ApiFootballAdapter._throttle",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            result = await adapter.get_fixture_statistics(12345)
+
+        assert call_count == 2
+        # Stats normalizer returns flat dicts; we got at least one row
+        assert isinstance(result, list)
+
+    @pytest.mark.asyncio
+    async def test_hard_api_error_not_retried(self) -> None:
+        """A hard plan/token error is NOT retried — propagates to _emit_fetch_failed."""
+        adapter = ApiFootballAdapter(api_key="test-key")
+
+        hard_error_body = {
+            "errors": {"plan": "Free plans do not have access to this endpoint."},
+            "results": 0,
+            "response": [],
+        }
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {}
+        mock_resp.json = AsyncMock(return_value=hard_error_body)
+
+        resp_cm = MagicMock()
+        resp_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        resp_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=resp_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        emit_calls: list[str] = []
+
+        def _capture_emit(error_code: str, exc: Exception) -> None:
+            emit_calls.append(error_code)
+
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.ApiFootballAdapter._make_session",
+                return_value=mock_session_cm,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.api_football.ApiFootballAdapter._throttle",
+                new_callable=AsyncMock,
+            ),
+            patch.object(adapter, "_emit_fetch_failed", side_effect=_capture_emit),
+        ):
+            result = await adapter.get_injuries("2026-06-21")
+
+        # Hard error → returned empty list + _emit_fetch_failed called once
+        assert result == []
+        assert len(emit_calls) == 1
+        # Only 1 HTTP call made — no retry
+        assert mock_resp.json.call_count == 1
