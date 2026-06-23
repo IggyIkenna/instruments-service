@@ -365,6 +365,83 @@ class TestKalshiAdapter:
         assert "KXETHD-26JUN23-T3000" in tickers, f"KXETHD market must survive when KXBTCD fetch 500s; got: {tickers}"
 
     @pytest.mark.asyncio
+    async def test_series_scoped_429_is_retried_not_dropped(self) -> None:
+        """A 429 on a series' /markets fetch is backed-off + retried, not shard-skipped.
+
+        The ~40 rapid per-series fetches rate-limit; the page helper must retry the
+        page (bounded exp backoff) so the series' markets survive a transient 429.
+        KXBTCD /markets returns 429 once, then 200 — the BTC market must appear.
+        """
+        adapter = KalshiReferenceDataAdapter()
+
+        snapshot_resp = AsyncMock()
+        snapshot_resp.status = 200
+        snapshot_resp.raise_for_status = MagicMock()
+        snapshot_resp.json = AsyncMock(return_value={"markets": [], "cursor": ""})
+
+        series_crypto_resp = AsyncMock()
+        series_crypto_resp.status = 200
+        series_crypto_resp.raise_for_status = MagicMock()
+        series_crypto_resp.json = AsyncMock(return_value={"series": [{"ticker": "KXBTCD"}]})
+
+        series_empty_resp = AsyncMock()
+        series_empty_resp.status = 200
+        series_empty_resp.raise_for_status = MagicMock()
+        series_empty_resp.json = AsyncMock(return_value={"series": []})
+
+        btc_429_resp = AsyncMock()
+        btc_429_resp.status = 429
+        btc_429_resp.raise_for_status = MagicMock()  # never reached — code checks status first
+
+        btc_ok_resp = AsyncMock()
+        btc_ok_resp.status = 200
+        btc_ok_resp.raise_for_status = MagicMock()
+        btc_ok_resp.json = AsyncMock(
+            return_value={
+                "markets": [
+                    {
+                        "ticker": "KXBTCD-26JUN23-T90000",
+                        "event_ticker": "KXBTCD-26JUN23",
+                        "series_ticker": "KXBTCD",
+                        "title": "BTC daily above $90k?",
+                        "category": "Crypto",
+                        "status": "active",
+                        "yes_bid": 60,
+                        "yes_ask": 65,
+                        "open_time": "2026-06-23T00:00:00Z",
+                        "close_time": "2026-06-23T23:59:59Z",
+                        "expiration_time": "2026-06-23T23:59:59Z",
+                    }
+                ],
+                "cursor": "",
+            }
+        )
+
+        btc_calls = {"n": 0}
+
+        def get_side_effect(url: str, **kwargs: object) -> object:
+            params = kwargs.get("params", {})
+            if isinstance(params, dict) and params.get("series_ticker") == "KXBTCD":
+                btc_calls["n"] += 1
+                return _make_cm(btc_429_resp if btc_calls["n"] == 1 else btc_ok_resp)
+            if "/series" in url:
+                cat = params.get("category") if isinstance(params, dict) else None
+                return _make_cm(series_crypto_resp if cat == "Crypto" else series_empty_resp)
+            return _make_cm(snapshot_resp)
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(side_effect=get_side_effect)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm), patch("asyncio.sleep", AsyncMock()):
+            results = await adapter.get_instruments()
+
+        tickers = {r.instrument_key for r in results}
+        assert btc_calls["n"] >= 2, "KXBTCD page must be retried after the 429"
+        assert "KXBTCD-26JUN23-T90000" in tickers, f"429 must be retried, not dropped; got: {tickers}"
+
+    @pytest.mark.asyncio
     async def test_series_scoped_skips_historical_path(self) -> None:
         """Series-scoped capture must NOT run for a dated (historical) request."""
         adapter = KalshiReferenceDataAdapter()
