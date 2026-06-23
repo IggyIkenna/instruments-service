@@ -355,15 +355,31 @@ def _infer_margin_type(
 
 
 def _passes_asset_filter(base: str, quote: str, instrument_type: str) -> bool:
-    """Check if the instrument passes the curated asset universe filter."""
+    """Check if the instrument passes the CeFi venue universe filter.
+
+    FULL-UNIVERSE enumeration (operator 2026-06-23, mirrors the BUG #4 HL/ASTER
+    whitelist drop in ``aster.py``/``hyperliquid.py``): SPOT/PERP/FUTURE on a
+    canonical quote enumerate for EVERY base asset — the curated
+    ``CEFI_BASE_ASSET_UNIVERSE`` majors whitelist is NO LONGER a gate for them
+    (funding/price history for small/illiquid coins is valuable; the reference
+    universe must equal the venues' real listed universe so the catalogue is
+    ⊇ the captured present-set). The two surviving gates are venue-volume-safe,
+    not coin-curation:
+      1. ``CEFI_ACCEPTED_QUOTE_ASSETS`` (USDT/USDC/USD) — drops exotic cross
+         pairs (e.g. BASE/EUR, BASE/BTC) that are not part of the USD-quote
+         universe; derivatives carry no quote and pass.
+      2. OPTIONS underlyings stay restricted to ``CEFI_OPTIONS_UNDERLYINGS``
+         (BTC/ETH) — a Deribit-options-per-coin explosion is a genuine
+         data-volume constraint (DERIBIT already ~213k historical rows), and the
+         operator universe SSOT documents options as BTC/ETH-only by design.
+    """
     base_upper = base.upper()
     quote_upper = quote.upper() if quote else ""
-    if base_upper not in _tardis.CEFI_BASE_ASSET_UNIVERSE:
-        return False
-    # Derivatives (perps, futures, options) have no quote — allow them through
+    # Quote gate: only USD + major stablecoin quotes (no exotic cross pairs).
+    # Derivatives (perps, futures, options) have no quote — allow them through.
     if quote_upper and quote_upper not in _tardis.CEFI_ACCEPTED_QUOTE_ASSETS:
         return False
-    # Options: only BTC and ETH underlyings (too much data otherwise)
+    # Options: only BTC and ETH underlyings (per-coin option chains explode data).
     return not (instrument_type == "OPTION" and base_upper not in _tardis.CEFI_OPTIONS_UNDERLYINGS)
 
 
