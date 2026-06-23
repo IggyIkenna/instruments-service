@@ -8,6 +8,7 @@ Ref: https://www.api-football.com/documentation-v3
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from datetime import date as date_
@@ -35,6 +36,8 @@ from unified_api_contracts.sports import (
     CanonicalStanding,
     CanonicalTeam,
 )
+from unified_trading_library import log_event
+from unified_trading_library.events import DP_SOURCE_RATE_LIMITED  # noqa: qg-deep-import
 
 from .base import BaseSportsReferenceAdapter
 
@@ -473,6 +476,72 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         )
         return results
 
+    async def _fetch_and_extract(
+        self,
+        url: str,
+        params: dict[str, str],
+        *,
+        max_retries: int = 10,
+    ) -> list[dict[str, object]]:
+        """GET + JSON-envelope extraction with rateLimit-aware retry.
+
+        API-Football signals quota exhaustion as HTTP 200 + JSON body
+        ``{"errors": {"rateLimit": "Too many requests..."}, "response": []}``.
+        ``_get_with_retry`` only retries on HTTP-level 429 status codes — it
+        returns the raw dict without inspecting the body. ``_extract_response``
+        then raises ``ApiFootballResponseError(is_rate_limit=True)``, which
+        previously propagated straight to the caller's ``except Exception`` block
+        (recorded as ``attempted_failed`` — no retry).
+
+        This helper wraps both calls in a retry loop so that a JSON-envelope
+        ``rateLimit`` error is treated the same as an HTTP 429: sleep to the
+        next UTC minute boundary, emit ``DP_SOURCE_RATE_LIMITED``, then retry.
+        Hard errors (plan/token/params — ``is_rate_limit=False``) are
+        re-raised immediately so they surface as ``attempted_failed``.
+
+        ``max_retries`` caps the retry loop. The default (10) matches
+        ``_RETRY_ATTEMPTS`` in the base class.
+        """
+        last_exc: ApiFootballResponseError | None = None
+        _max = max_retries
+        async with self._make_session() as session:
+            for attempt in range(_max):
+                raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
+                try:
+                    return _extract_response(raw_response)
+                except ApiFootballResponseError as exc:
+                    if not exc.is_rate_limit:
+                        # Hard error (plan/token/params) — not retryable; bubble up.
+                        raise
+                    last_exc = exc
+                    delay = self._seconds_to_next_minute()
+                    if delay < 3.0:
+                        delay = 60.0  # Just missed boundary; wait a full minute.
+                    type(self)._rate_limit_429_count += 1
+                    logger.warning(
+                        "JSON-envelope rateLimit from %s — sleeping %.0fs to next minute (attempt %d/%d)",
+                        url,
+                        delay,
+                        attempt + 1,
+                        _max,
+                    )
+                    # DP-RATE-003: surface throttled backfill in alerts
+                    # (mirrors the HTTP 429 path in _get_with_retry).
+                    log_event(
+                        DP_SOURCE_RATE_LIMITED,
+                        details={
+                            "source": self.venue,
+                            "venue": self.venue,
+                            "http_429_count": type(self)._rate_limit_429_count,
+                            "url": url,
+                            "sleep_seconds": delay,
+                            "rate_limit_type": "json_envelope",
+                        },
+                    )
+                    if attempt < _max - 1:
+                        await asyncio.sleep(delay)
+        raise RuntimeError(f"All {_max} rateLimit retries exhausted for {url}") from last_exc
+
     async def get_injuries(self, date: str) -> list[dict[str, object]]:
         """Fetch injuries for a given date from API Football.
 
@@ -480,17 +549,20 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         Returns one flat dict per injury row — see UAC SPORTS_INJURIES
         SchemaContract for the column shape (player_id/name/photo/type/
         reason, team_id/name, fixture_id, league_id, league_season).
+
+        Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
+        response (HTTP 200 + ``{"errors": {"rateLimit": "..."}}```) is
+        retried with a minute-boundary sleep instead of propagating as a
+        hard failure (``attempted_failed``).
         """
         url = f"{_BASE_URL}/injuries"
         params: dict[str, str] = {"date": date}
         try:
-            async with self._make_session() as session:
-                raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
+            raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        raw_rows = _extract_response(raw_response)
         # INJURIES — single dict per row; no chain.from_iterable needed.
         results = [normalize_api_football_injury(row) for row in raw_rows]
         logger.info("Fetched %d injuries for date=%s", len(results), date)
@@ -504,17 +576,18 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         fixture, one for home and one for away. See UAC SPORTS_FIXTURE_STATS
         for the full ~22-column schema (shots_on_target, expected_goals,
         ball_possession_pct, …).
+
+        Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
+        response is retried rather than recorded as ``attempted_failed``.
         """
         url = f"{_BASE_URL}/fixtures/statistics"
         params: dict[str, str] = {"fixture": str(fixture_id)}
         try:
-            async with self._make_session() as session:
-                raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
+            raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        raw_rows = _extract_response(raw_response)
         # Each raw_rows item is one team-stats block; the normalizer returns
         # list[dict] of length 1 per team. Flatten across all teams.
         results = list(
@@ -532,17 +605,18 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         Returns one flat dict per event — see UAC SPORTS_FIXTURE_EVENTS
         for the column shape (time_elapsed/extra, team/player/assist
         IDs + names, event_type/detail/comments).
+
+        Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
+        response is retried rather than recorded as ``attempted_failed``.
         """
         url = f"{_BASE_URL}/fixtures/events"
         params: dict[str, str] = {"fixture": str(fixture_id)}
         try:
-            async with self._make_session() as session:
-                raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
+            raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        raw_rows = _extract_response(raw_response)
         # Each raw_rows item is one event; the normalizer returns list[dict]
         # of length 1. chain.from_iterable preserves caller symmetry with the
         # other list-returning normalizers (stats, lineup).
@@ -563,17 +637,18 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         SPORTS_FIXTURE_LINEUPS for the column shape (team_id/name,
         formation, coach_id/name, player_id/name/number/pos/grid,
         is_starter).
+
+        Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
+        response is retried rather than recorded as ``attempted_failed``.
         """
         url = f"{_BASE_URL}/fixtures/lineups"
         params: dict[str, str] = {"fixture": str(fixture_id)}
         try:
-            async with self._make_session() as session:
-                raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
+            raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        raw_rows = _extract_response(raw_response)
         # Each raw_rows item is one team's lineup block; the normalizer
         # returns list[dict] with ~18 rows (startXI + substitutes).
         results = list(
@@ -587,17 +662,18 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
 
         API endpoint: GET /fixtures/players?fixture={id}
         Returns 33+ stat fields per player.
+
+        Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
+        response is retried rather than recorded as ``attempted_failed``.
         """
         url = f"{_BASE_URL}/fixtures/players"
         params: dict[str, str] = {"fixture": str(fixture_id)}
         try:
-            async with self._make_session() as session:
-                raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
+            raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        raw_rows = _extract_response(raw_response)
         results: list[CanonicalPlayerPerformance] = []
         for row in raw_rows:
             results.extend(normalize_api_football_player_stats(row, fixture_id=str(fixture_id)))
@@ -614,7 +690,15 @@ class ApiFootballResponseError(RuntimeError):
     masks a fetch failure as honest absence (``empty_confirmed``), inflating
     honest-coverage. Raising here routes the venue to ``failed_venues`` (caught
     by ``_fetch_one_venue``'s ``RuntimeError`` branch) → ``attempted_failed``.
+
+    ``is_rate_limit`` is set to ``True`` when the errors dict contains a
+    ``rateLimit`` key — so callers can distinguish transient quota exhaustion
+    (retryable via minute-boundary sleep) from hard API errors (plan/token/params).
     """
+
+    def __init__(self, message: str, *, is_rate_limit: bool = False) -> None:
+        super().__init__(message)
+        self.is_rate_limit = is_rate_limit
 
 
 def _raise_on_api_errors(raw: object) -> None:
@@ -624,12 +708,20 @@ def _raise_on_api_errors(raw: object) -> None:
     ``errors`` dict (e.g. ``{"plan": "..."}`` / ``{"requests": "..."}`` /
     ``{"token": "..."}``) or non-empty list on failure. Empty list / empty dict
     / absent ⇒ success (no raise).
+
+    Sets ``is_rate_limit=True`` when the error key is ``rateLimit`` — callers
+    use this to distinguish transient quota exhaustion (retryable after sleeping
+    to the next UTC minute) from hard plan/token/param errors (not retryable).
     """
     if not isinstance(raw, dict):
         return
     errors = raw.get("errors")
     if isinstance(errors, dict) and errors:
-        raise ApiFootballResponseError(f"API-Football returned errors: {errors!r}")
+        is_rate_limit = "rateLimit" in errors
+        raise ApiFootballResponseError(
+            f"API-Football returned errors: {errors!r}",
+            is_rate_limit=is_rate_limit,
+        )
     if isinstance(errors, list) and errors:
         raise ApiFootballResponseError(f"API-Football returned errors: {errors!r}")
 
