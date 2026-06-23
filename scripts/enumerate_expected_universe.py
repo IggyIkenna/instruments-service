@@ -785,6 +785,14 @@ class InstrumentCatalogEntry(NamedTuple):
     # absent → the cefi enumerator computes the predicate itself (same SSOT) so the
     # denominator stays the MVP universe even on a pre-mvp-tag catalogue.
     mvp: bool | None = None
+    # Raw exchange/on-chain symbol — for DeFi POOL rows this is the
+    # ``pool_address.lower()`` (the IS adapter sets ``raw_symbol=str(pool_id)``). The
+    # defi seeder uses it to stamp the CANONICAL per-pool ``instrument_id`` =
+    # ``pool_address.lower()`` (matching MTDS ``_canonical_defi_id`` + the captured
+    # rows), NOT the glued ``VENUE-CHAIN:POOL:PAIR:fee`` ``instrument_key`` composite
+    # the catalogue carries — else the shard atoms differ and a capture never converts
+    # the seed (defi_instrument_catalogue_and_capture_pipeline_2026_06_23 root cause).
+    raw_symbol: str = ""
 
 
 def _row_data_types(
@@ -1052,6 +1060,22 @@ def _enumerate_v2_defi(
         else:
             canonical_venue = canonical_venue_str
             chain_upper = instr.chain.upper() if instr.chain else ""
+        # Canonical instrument_id + instrument_type — the SAME shard-atom axes MTDS captures at
+        # (defi_instrument_catalogue_and_capture_pipeline_2026_06_23 root cause: the seeded cell
+        # must match the captured cell on ALL of venue/chain/instrument_type/instrument_id or a
+        # capture can never convert the seed → live pools sit permanently EXPECTED_INSTRUMENT_DELISTED).
+        #   * instrument_id: a POOL row's catalogue ``instrument_id`` is the glued
+        #     ``VENUE-CHAIN:POOL:PAIR:fee`` ``instrument_key`` composite, but the writer +
+        #     ``_canonical_defi_id`` key per-pool on ``pool_address.lower()`` (carried in
+        #     ``raw_symbol``). Re-key POOL seeds to ``raw_symbol.lower()`` when it is a 0x address.
+        #   * instrument_type: the catalogue carries UPPERCASE leaf (``POOL``); the writer stamps
+        #     lowercase (``pool``). Lowercase it so the atoms match.
+        canonical_itype = (instr.instrument_type or "").strip().lower()
+        _raw_sym = (instr.raw_symbol or "").strip()
+        if canonical_itype == "pool" and _raw_sym.startswith("0x"):
+            canonical_instrument_id = _raw_sym.lower()
+        else:
+            canonical_instrument_id = instr.instrument_id
         chain_genesis_str = CHAIN_GENESIS_DATES.get(chain_upper)
         chain_genesis_ts = pd.Timestamp(chain_genesis_str) if chain_genesis_str else None
         # G1-ENUM: filter data_types to those valid for this instrument's shape.
@@ -1079,8 +1103,8 @@ def _enumerate_v2_defi(
                             "venue": canonical_venue,
                             "chain": chain_upper,
                             "data_type": dt,
-                            "instrument_type": instr.instrument_type,
-                            "instrument_id": instr.instrument_id,
+                            "instrument_type": canonical_itype,
+                            "instrument_id": canonical_instrument_id,
                             "league_id": "",
                             "date": iso,
                         }.get(c, "")
@@ -1092,8 +1116,8 @@ def _enumerate_v2_defi(
                             venue=canonical_venue,
                             chain=chain_upper,
                             data_type=dt,
-                            instrument_type=instr.instrument_type,
-                            instrument_id=instr.instrument_id,
+                            instrument_type=canonical_itype,
+                            instrument_id=canonical_instrument_id,
                             league_id="",
                             date=iso,
                             reason="",
@@ -1106,8 +1130,8 @@ def _enumerate_v2_defi(
                     venue=canonical_venue,
                     chain=chain_upper,
                     data_type=dt,
-                    instrument_type=instr.instrument_type,
-                    instrument_id=instr.instrument_id,
+                    instrument_type=canonical_itype,
+                    instrument_id=canonical_instrument_id,
                     league_id="",
                     date=iso,
                     reason=reason,
@@ -1873,6 +1897,7 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
                 underlying=_safe_str(row_dict.get("underlying", "")),
                 base_asset=_safe_str(row_dict.get("base_asset", "")),
                 mvp=_opt_bool(row_dict.get("mvp")),
+                raw_symbol=_safe_str(row_dict.get("raw_symbol", "")),
             )
         )
     return entries
