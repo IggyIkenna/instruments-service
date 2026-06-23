@@ -38,8 +38,7 @@ from __future__ import annotations
 import argparse
 import logging
 
-from unified_trading_library import resolve_bucket_name
-from unified_trading_library.cloud_interface import gcs_delete_object, gcs_describe_object
+from unified_trading_library import gcs_delete_object, gcs_describe_object, resolve_bucket_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
