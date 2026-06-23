@@ -7,7 +7,6 @@ from typing import ClassVar, cast
 
 import aiohttp
 from unified_api_contracts import (
-    CEFI_BASE_ASSET_UNIVERSE,
     HyperliquidAssetInfo,
     HyperliquidMeta,
     UnsupportedCapabilityError,
@@ -121,7 +120,13 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
             name = asset.name
             if not name:
                 continue
-            if name.upper() not in CEFI_BASE_ASSET_UNIVERSE:
+            # BUG #4 (2026-06-22): the base-asset majors whitelist capped HL at ~33
+            # instruments. The operator wants the FULL active perp universe
+            # enumerated (funding rates valuable even for small/illiquid coins), so
+            # the whitelist is REMOVED — every non-delisted perp in the /info meta
+            # universe is catalogued. Delisted perps are skipped (stale meta entries).
+            # SSOT: plans/active/issues/cefi_hl_aster_batch_data_gaps_2026_06_22.md BUG #4.
+            if asset.isDelisted:
                 continue
             sz_decimals: int = asset.szDecimals or 3
             lot = Decimal(10) ** -sz_decimals
