@@ -325,12 +325,30 @@ async def _gather_per_fixture_rows(
 ) -> tuple[dict[str, list[dict[str, object]]], dict[str, tuple[int, str]]]:
     """Concurrent per-fixture fetching with rate-limit semaphore.
 
-    API Football Mega plan: 900 req/min. With multiple processes sharing
-    the key, cap per-process concurrency at 50 to leave headroom.
-    The adapter's _get_with_retry reads X-RateLimit-Remaining and
-    preemptively sleeps when near-exhausted.
+    API Football Mega plan: 900 req/min shared across the fleet. The
+    adapter's ``_throttle()`` serialises per-process requests at
+    ``_min_request_interval`` (0.067s = 15 req/sec per VM), so with
+    ~20 concurrent backfill VMs the fleet can burst to 300 req/sec =
+    18 000 req/min — far over the 900/min cap.
+
+    ``concurrency = 10`` limits in-flight tasks per-process. Combined
+    with the per-class token-bucket throttle (0.067s/req), this yields
+    at most 10 tasks x 1/0.067 ≈ 150 req/sec per VM — but the lock
+    in ``_throttle`` serialises ALL tasks onto the one token-bucket
+    slot, so the actual throughput is still capped at 15 req/sec per VM.
+    The semaphore's role is to cap the queue depth (avoids spawning
+    thousands of coroutines that all immediately block on the lock),
+    not to control the send rate (that's the lock). 10 gives the
+    throttle lock enough in-flight coroutines to keep the pipe full
+    without overwhelming the VM's async loop.
+
+    The ``_fetch_and_extract`` helper in ``ApiFootballAdapter`` handles
+    JSON-envelope ``rateLimit`` responses (HTTP 200 +
+    ``{"errors": {"rateLimit": "..."}}```) with minute-boundary back-off
+    + retry, so transient fleet-level quota exhaustion no longer records
+    every fixture as ``attempted_failed``.
     """
-    concurrency = 50
+    concurrency = 10
     sem = _orch.asyncio.Semaphore(concurrency)
     entity_rows: dict[str, list[dict[str, object]]] = {name: [] for name, _ in per_fixture_entities}
     # Per-entity failure tracking for honest-coverage: map entity → (failed_count, sample_error_code).
