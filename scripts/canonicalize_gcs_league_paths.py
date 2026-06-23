@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: campaign
+# Delete-when: after instruments-service manifest-canonicalisation complete for all asset_groups and campaign plan archived (instruments_manifest_canonicalisation_2026_06_01)
 """Canonicalize GCS sports parquets that live at ``league={NUMERIC}/`` paths.
 
 For each per-league parquet under

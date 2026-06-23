@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: campaign
+# Delete-when: after cutover confirmed in live consolidated _index + parent plan archived
 """Phase 4 cutover: per-day in-place overwrite of legacy fixtures with v2 outputs.
 
 Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.md``.

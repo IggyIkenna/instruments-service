@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after rebuild confirmed + GCS orphan-sweep = 0
 """Rebuild CeFi manifest from actual GCS blobs.
 
 Scans instrument_availability/by_date/ partitions and adds any (date, venue)

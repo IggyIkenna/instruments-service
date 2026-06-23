@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after flip confirmed in live consolidated _index + parent plan archived
 """Phase 1 of sports_phantom_fixtures_recovery_2026_05_06 — flip phantom FIXTURES rows.
 
 The sports availability manifest carries ~100,000 ``captured`` rows where

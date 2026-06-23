@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """Delete corrupt legacy kebab rows from lst-rates + oracle-prices canonical manifests.
 
 Per ``plans/active/issues/lst_rates_oracle_prices_corrupt_kebab_rows_2026_05_16.md``

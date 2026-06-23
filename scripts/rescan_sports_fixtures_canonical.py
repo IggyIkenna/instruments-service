@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Rescan GCS sports parquets and emit per-(date, data_type, league_id) manifest rows.
 
 SSOT: ``codex/02-data/sports-data-source-coverage-matrix.md`` (Phase 5 fix)

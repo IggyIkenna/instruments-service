@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Reconcile phantom-captured manifest rows by flipping them to attempted_failed.
 
 A "phantom" row claims ``capture_status=captured`` but no parquet exists at

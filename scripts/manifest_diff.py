@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """manifest_diff.py — projected-vs-current ``_index`` diff (CF-20 / V2, the goalpost delta).
 
 The manifest-vs-manifest diff — distinct from the orphan sweep's GCS-vs-manifest walk

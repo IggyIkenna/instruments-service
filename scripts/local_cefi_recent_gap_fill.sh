@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 # Local backfill of CeFi recent-window gaps (last 30 days).
 #
 # Strategy: spawn 1 process per venue with --start-date 2026-04-04 --end-date

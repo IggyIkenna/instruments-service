@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """reconcile_cefi_tardis_thirdkey_drift_2026_05_07.py — MTDS Tardis third_key drift cleanup.
 
 Reconciler for the MTDS Tardis third_key drift bug fixed in MTDS@97206bc

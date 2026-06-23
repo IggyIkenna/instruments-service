@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Query the instruments-service sports manifest for attempted_failed gaps.
 
 Reads the live manifest, finds (date, data_type) cells with attempted_failed
