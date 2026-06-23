@@ -702,6 +702,26 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         if not _tardis._passes_asset_filter(base, quote, instrument_type):
             return None
 
+        # Per-instrument SKIP (never raise) when the quote can't be resolved for a
+        # pair-identity instrument: InstrumentRecord REQUIRES a non-empty quote_asset
+        # for SPOT_PAIR/FUTURE/PERPETUAL (hard_schema_enforcement Phase 1). A single
+        # unparseable symbol must NOT raise inside the per-venue parse loop (CF-11
+        # re-raises → the WHOLE venue is dropped to 0 rows — the full-universe
+        # enumeration exposed binance-futures dated quarterlies / odd suffixes here).
+        # Shard-level isolation: skip the one symbol, keep the venue's universe.
+        if not quote and instrument_type in (
+            InstrumentType.SPOT_PAIR,
+            InstrumentType.FUTURE,
+            InstrumentType.PERPETUAL,
+        ):
+            _tardis.logger.debug(
+                "Tardis %s: skipping %r — unresolved quote for %s (pair-identity required)",
+                exchange,
+                raw_id,
+                instrument_type,
+            )
+            return None
+
         # Canonical symbol: BASE-QUOTE for spot/perp (one per pair),
         # raw_id for derivatives where expiry/strike/structure matter for uniqueness.
         if instrument_type in (InstrumentType.SPOT_PAIR, InstrumentType.PERPETUAL):
