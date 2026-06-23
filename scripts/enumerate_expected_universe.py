@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """enumerate_expected_universe.py — Phase 3.D.4 backward-fill (writegate honest-coverage).
 
 Enumerates the expected universe per asset_group, finds (shard_key, day) tuples

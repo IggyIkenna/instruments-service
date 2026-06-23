@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """Reverse-phantom reconciler — flip ``attempted_failed`` back to ``captured`` when parquet actually exists.
 
 Background

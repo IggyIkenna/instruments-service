@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 # SCHEMA_PROVENANCE_EXEMPT — script-local result dataclasses for smoke harness output.
 """instruments-service smoke matrix (Phase 2 — institutional smoke matrix plan).
 

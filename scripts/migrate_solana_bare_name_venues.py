@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """Migrate legacy bare-name Solana DeFi manifest rows to canonical {PROTOCOL}-SOLANA naming.
 
 Category A venues (MARINADE, RAYDIUM, ORCA, KAMINO, SOLEND, MARGINFI):

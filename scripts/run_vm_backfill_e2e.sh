@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 # Resumable VM backfill runner for instruments-service.
 # Splits date ranges into chunks, supports parallel workers, and writes checkpoints.
 set -euo pipefail

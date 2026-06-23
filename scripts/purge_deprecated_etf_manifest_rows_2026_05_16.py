@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after purge confirmed in live consolidated _index (zero rows of target type)
 """Purge manifest rows for deprecated TradFi ETFs.
 
 MVP scope reduction 2026-05-05 dropped from launch-tradfi-backfill-vm.sh:

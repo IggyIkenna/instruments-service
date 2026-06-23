@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after cleanup confirmed + GCS orphan-sweep = 0
 """Post-recovery phantom dedup — drop empty_confirmed / attempted_failed / captured-zero
 rows for any (date, data_type, league_id) cell where we now have a real
 captured row with instrument_count > 0.

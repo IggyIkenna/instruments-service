@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + GCS orphan-sweep = 0 for migration targets
 """One-shot migration: rewrite legacy DeFi manifest rows into v5 canonical form.
 
 Problem:

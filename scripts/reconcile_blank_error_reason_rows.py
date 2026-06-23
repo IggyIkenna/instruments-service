@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """reconcile_blank_error_reason_rows.py — Wave 2.M of writegate Phase 3.D.5.
 
 Walks an asset-group manifest, finds rows where ``capture_status=empty_confirmed``

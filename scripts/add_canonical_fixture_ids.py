@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after add confirmed + GCS orphan-sweep = 0
 """Add canonical fixture_id to existing Understat/FootyStats parquets in GCS.
 
 Reads each parquet, resolves team names to canonical IDs using UAC mappings,

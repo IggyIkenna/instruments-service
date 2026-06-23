@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: campaign
+# Delete-when: after instruments-service manifest-canonicalisation complete for all asset_groups and campaign plan archived (instruments_manifest_canonicalisation_2026_06_01)
 """Canonicalise the DeFi availability-``_index`` ``venue`` column to the single
 canonical ``PROTOCOL-CHAIN`` identity (operator 2026-06-14: "manifest should
 migrate to canonical via migration mappings").
