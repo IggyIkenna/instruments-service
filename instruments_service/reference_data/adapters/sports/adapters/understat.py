@@ -12,6 +12,7 @@ xG, goals, and team info.
 
 from __future__ import annotations
 
+import gc
 import logging
 
 from unified_api_contracts.external.understat import (
@@ -106,6 +107,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         for league in _UNDERSTAT_LEAGUES:
             league_fixtures = await self._fetch_league_fixtures(league, season, date)
             fixtures.extend(league_fixtures)
+            gc.collect()  # release prior league's season JSON blob before fetching the next
 
         logger.info("Fetched %d xG-enriched fixtures for date=%s", len(fixtures), date)
         return fixtures
