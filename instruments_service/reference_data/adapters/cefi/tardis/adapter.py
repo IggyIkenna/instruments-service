@@ -698,8 +698,8 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         # Parse base/quote — prefer Tardis metadata, fall back to symbol splitting
         base, quote = _tardis._resolve_base_quote(item, raw_id, exchange)
 
-        # Filter: base must be in curated universe, quote (if present) must be accepted
-        if not _tardis._passes_asset_filter(base, quote, instrument_type):
+        # Filter: quote (if present) must be accepted (venue-aware — KRW for UPBIT).
+        if not _tardis._passes_asset_filter(base, quote, instrument_type, canonical_venue):
             return None
 
         # Per-instrument SKIP (never raise) when the quote can't be resolved for a

@@ -49,6 +49,7 @@ from unified_api_contracts import (
     TardisExchangeDetail,
     TardisInstrumentDetail,
     VenueMapping,
+    accepted_quotes_for_venue,
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentLeg, InstrumentRecord, InstrumentType, MarginType, OptionType
@@ -86,6 +87,8 @@ from instruments_service.reference_data.adapters.cefi.tardis.combos import (
     _parse_deribit_combo_legs,
 )
 from instruments_service.reference_data.adapters.cefi.tardis.parsing import (
+    _BITFINEX_BASE_ALIASES,
+    _BITFINEX_QUOTE_ALIASES,
     _DERIBIT_MONTHS,
     _QUOTE_CURRENCIES,
     _QUOTE_CURRENCIES_SET,
@@ -99,6 +102,7 @@ from instruments_service.reference_data.adapters.cefi.tardis.parsing import (
     _parse_yymmdd_symbol_expiry,
     _passes_asset_filter,
     _resolve_base_quote,
+    _resolve_bitfinex_spot,
     _resolve_option_fields,
     _split_kraken_symbol,
     _split_symbol,
@@ -109,6 +113,8 @@ __all__ = [
     "CEFI_BASE_ASSET_UNIVERSE",
     "CEFI_OPTIONS_UNDERLYINGS",
     "UTC",
+    "_BITFINEX_BASE_ALIASES",
+    "_BITFINEX_QUOTE_ALIASES",
     "_DEFAULT_EXCHANGES",
     "_DERIBIT_COMBO_STRUCTURES",
     "_DERIBIT_DUAL_EXPIRY_CODES",
@@ -149,9 +155,11 @@ __all__ = [
     "_parse_yymmdd_symbol_expiry",
     "_passes_asset_filter",
     "_resolve_base_quote",
+    "_resolve_bitfinex_spot",
     "_resolve_option_fields",
     "_split_kraken_symbol",
     "_split_symbol",
+    "accepted_quotes_for_venue",
     "adapter",
     "aiohttp",
     "asyncio",
