@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + manifest captured count climbed + GCS orphan-sweep = 0
 """Backfill weather data for all fixture venues across all historical dates.
 
 Strategy: bulk-download entire year of hourly data per venue (1 API call per

@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """Correct rows wrongly flipped to attempted_failed/LegacyBlankErrorReasonError.
 
 Background

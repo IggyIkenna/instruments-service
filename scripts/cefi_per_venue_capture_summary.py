@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """MVP CeFi coverage probe — what's missing for the scoped universe.
 
 MVP scope (per unified-trading-pm/codex/11-project-management/mvp-universe.yaml):

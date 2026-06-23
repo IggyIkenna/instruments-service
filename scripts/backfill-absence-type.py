@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after prod-run confirmed + parent plan archived
 """Backfill absence_type column on existing injury parquets in GCS.
 
 Option A: reads existing parquets, applies the deterministic classifier

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Profile a single instruments-service DERIBIT backfill chunk.
 
 Wraps the CLI entrypoint with tracemalloc + RSS sampling so we can find which

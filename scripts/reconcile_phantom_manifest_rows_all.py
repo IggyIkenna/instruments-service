@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Reconcile phantom-captured manifest rows for ANY asset_group.
 
 A phantom row claims ``capture_status=captured`` in the manifest but no

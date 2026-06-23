@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after deletion confirmed in live consolidated _index
 """Delete phantom rows from canonical + per-VM shards so orchestrator sees them as missing.
 
 Targeted alternative to passing ``--force`` to the orchestrator: instead of

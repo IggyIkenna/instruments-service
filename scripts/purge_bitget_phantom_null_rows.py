@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after purge confirmed in live consolidated _index (zero rows of target type)
 """Purge the 11 BITGET phantom null-capture_status rows from the CeFi manifest.
 
 Phase 1 of data_status_coverage_gaps_and_prediction_manifest_fix_2026_05_22.

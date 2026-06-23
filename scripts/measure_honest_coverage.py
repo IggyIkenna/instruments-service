@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Cross-asset-group honest coverage measurement.
 
 Reads the availability manifest for every asset_group, computes honest

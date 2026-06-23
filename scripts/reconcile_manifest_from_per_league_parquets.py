@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: instruments_master
+# Lifecycle: oneoff
+# Delete-when: after reconciliation confirmed complete in live consolidated _index
 """Reconcile manifest by adding captured rows for per-league parquets that exist on disk.
 
 Companion to ``migrate_bare_to_per_league.py``. The migration writes
