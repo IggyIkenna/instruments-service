@@ -214,7 +214,16 @@ async def _fetch_weather_data(
             frames = []
             for blob_meta in parquet_blobs:
                 data = storage_client.download_bytes(bucket=bucket, blob_path=blob_meta.name)
-                frames.append(_orch.pd.read_parquet(_orch.io.BytesIO(data)))
+                _frame = _orch.pd.read_parquet(_orch.io.BytesIO(data))
+                # Hive-partition enrichment: per-league fixtures parquets encode
+                # league_id in the GCS path (league=X/) but may omit it from the
+                # data columns. Extract and inject so _venue_to_leagues can be built.
+                if "league_id" not in _frame.columns:
+                    _league_m = re.search(r"/league=([^/]+)/", blob_meta.name)
+                    if _league_m:
+                        _frame = _frame.copy()
+                        _frame["league_id"] = _league_m.group(1)
+                frames.append(_frame)
             fixtures_df = _orch.pd.concat(frames, ignore_index=True) if frames else None
     except Exception as exc:
         _orch.logger.warning("Weather: could not read fixtures for date=%s: %s", date, exc)
