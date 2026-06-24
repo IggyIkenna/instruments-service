@@ -144,7 +144,6 @@ async def _fetch_weather_data(
     from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
 
     adapter = OpenMeteoAdapter(api_key=api_key) if api_key else OpenMeteoAdapter()
-    sink = _orch._sports_ref_sink_for(bucket, date, "weather")
     counts: dict[str, int] = {}
 
     manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
@@ -524,6 +523,11 @@ async def _fetch_weather_data(
         _orphan_count = 0
 
         if _venue_to_leagues:
+            # Lazily build the DataSink only when there is data to write — the
+            # off-season / coverage-start / known-gap guards above all `return`
+            # before this point, so a skipped date must NOT eagerly init a GCS
+            # client (skip = zero I/O, matching the guards' design intent).
+            sink = _orch._sports_ref_sink_for(bucket, date, "weather")
             # Build per-league dataframes by expanding each row into one row
             # per (venue, league) pair for venues hosting in multiple leagues
             # that date.  Track orphan rows separately for the warning log.
