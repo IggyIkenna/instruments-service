@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as date_
 from itertools import chain
+from typing import ClassVar
 
 from unified_api_contracts.external.api_football import (
     ApiFootballFixture,
@@ -208,6 +209,14 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
     _live_quota_cache: LiveQuota | None = None
     _live_quota_ts: float = 0.0
 
+    # Class-level season fixture cache: keyed by (league_id, season_year).
+    # Populated by ``_fetch_season_fixtures_with_raw`` on first access and
+    # reused for all subsequent date-filtered calls in the same process.
+    # A single per-(league, season) call fetches the FULL season; callers
+    # then filter in-memory by date -- cutting per-(league, day) probe calls
+    # by 5-10x for multi-date backfills and the 9-day repoll trigger window.
+    _season_fixture_cache: ClassVar[dict[tuple[int, int], list[tuple[CanonicalFixture, dict[str, object]]]]] = {}
+
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
@@ -331,12 +340,68 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             )
         return {"x-apisports-key": self._api_key}
 
+    async def _fetch_season_fixtures_with_raw(
+        self,
+        league_id: int,
+        season_year: int,
+    ) -> list[tuple[CanonicalFixture, dict[str, object]]]:
+        """Fetch ALL fixtures for a (league, season) pair and cache the result.
+
+        API endpoint: GET /fixtures?league=<id>&season=<year>  (no ``date=``).
+        Returns every match in the season so callers can filter in-memory by
+        date -- a single call replaces one call per (league, day), cutting the
+        fixtures quota by 5-10x for multi-date backfills and the 9-day repoll
+        window.
+
+        Uses ``_fetch_and_extract`` for JSON-envelope rateLimit retry resilience.
+        The result is stored in the class-level ``_season_fixture_cache`` keyed
+        by ``(league_id, season_year)``; subsequent calls for the same key return
+        the cached list without a provider round-trip.
+        """
+        cls = type(self)
+        cache_key = (league_id, season_year)
+        if cache_key in cls._season_fixture_cache:
+            return cls._season_fixture_cache[cache_key]
+
+        url = f"{_BASE_URL}/fixtures"
+        params: dict[str, str] = {
+            "league": str(league_id),
+            "season": str(season_year),
+        }
+        try:
+            raw_rows = await self._fetch_and_extract(url, params)
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            raise
+
+        result = _parse_fixture_list_with_raw(raw_rows)
+        cls._season_fixture_cache[cache_key] = result
+        logger.info(
+            "Fetched %d season fixtures for league=%d season=%d (cached)",
+            len(result),
+            league_id,
+            season_year,
+        )
+        return result
+
     async def get_fixtures(
         self,
         date: str,
         league_ids: list[int] | None = None,
     ) -> list[CanonicalFixture]:
         """Fetch fixtures for a given date from API Football.
+
+        When ``league_ids`` are supplied, fetches the FULL season for each
+        league via :meth:`_fetch_season_fixtures_with_raw` (cached class-level)
+        and filters in-memory by date — one provider call per (league, season)
+        rather than one per (league, day).  Subsequent dates in the same
+        backfill run or the 9-day repoll window reuse the cache.
+
+        When ``league_ids`` is ``None``, falls back to the original per-date
+        call (``GET /fixtures?date=<date>``) for the no-filter path used by
+        :meth:`~instruments_service.engine.orchestrator.sports_reference_fixtures
+        .SportsReferenceFixturesOrchestrator._ensure_canonical_fixtures_for_override`.
 
         Args:
             date: Date string in YYYY-MM-DD format.
@@ -345,17 +410,22 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         Returns:
             List of canonical fixtures normalized via UAC.
         """
-        url = f"{_BASE_URL}/fixtures"
-        # API Football season = start year of the season.
-        # Use league-aware season calculation when a specific league is requested.
-        # Parse the fetch date so historical queries get the correct season.
         ref_date = date_.fromisoformat(date)
-        params: dict[str, str] = {"date": date}
-        if league_ids:
-            season_year = _effective_season_for_league(league_ids[0], reference_date=ref_date)
-            params["league"] = str(league_ids[0])
-            params["season"] = str(season_year)
 
+        if league_ids:
+            fixtures: list[CanonicalFixture] = []
+            for lid in league_ids:
+                season_year = _effective_season_for_league(lid, reference_date=ref_date)
+                season_pairs = await self._fetch_season_fixtures_with_raw(lid, season_year)
+                fixtures.extend(
+                    fx for fx, _ in season_pairs if fx.kickoff_utc.date().isoformat() == date
+                )
+            logger.info("Fetched %d fixtures for date=%s (season cache)", len(fixtures), date)
+            return fixtures
+
+        # No league filter — original per-date path.
+        url = f"{_BASE_URL}/fixtures"
+        params: dict[str, str] = {"date": date}
         try:
             async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
@@ -364,15 +434,9 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             self._emit_fetch_failed(error_code, exc)
             raise
 
-        fixtures = _parse_fixture_list(_extract_response(raw_response))
-
-        if league_ids and len(league_ids) > 1:
-            for lid in league_ids[1:]:
-                additional = await self._fetch_league_fixtures(date, lid)
-                fixtures.extend(additional)
-
-        logger.info("Fetched %d fixtures for date=%s", len(fixtures), date)
-        return fixtures
+        fixtures_no_filter = _parse_fixture_list(_extract_response(raw_response))
+        logger.info("Fetched %d fixtures for date=%s", len(fixtures_no_filter), date)
+        return fixtures_no_filter
 
     async def get_fixtures_with_raw(
         self,
@@ -390,18 +454,30 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         ``score.extratime`` / ``score.penalty``). Additive — ``get_fixtures``
         is unchanged for callers that don't need the lifecycle columns.
 
+        When ``league_ids`` are supplied, uses the season cache (one provider
+        call per (league, season), filtered in-memory by date).  When
+        ``league_ids`` is ``None``, falls back to the original per-date call.
+
         Returns:
             ``[(canonical_fixture, raw_af_item), …]`` for every fixture that
             parsed + normalised. Order matches ``get_fixtures``.
         """
-        url = f"{_BASE_URL}/fixtures"
         ref_date = date_.fromisoformat(date)
-        params: dict[str, str] = {"date": date}
-        if league_ids:
-            season_year = _effective_season_for_league(league_ids[0], reference_date=ref_date)
-            params["league"] = str(league_ids[0])
-            params["season"] = str(season_year)
 
+        if league_ids:
+            paired: list[tuple[CanonicalFixture, dict[str, object]]] = []
+            for lid in league_ids:
+                season_year = _effective_season_for_league(lid, reference_date=ref_date)
+                season_pairs = await self._fetch_season_fixtures_with_raw(lid, season_year)
+                paired.extend(
+                    (fx, raw) for fx, raw in season_pairs if fx.kickoff_utc.date().isoformat() == date
+                )
+            logger.info("Fetched %d fixtures (with raw) for date=%s (season cache)", len(paired), date)
+            return paired
+
+        # No league filter — original per-date path.
+        url = f"{_BASE_URL}/fixtures"
+        params: dict[str, str] = {"date": date}
         try:
             async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
@@ -410,14 +486,9 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             self._emit_fetch_failed(error_code, exc)
             raise
 
-        paired = _parse_fixture_list_with_raw(_extract_response(raw_response))
-
-        if league_ids and len(league_ids) > 1:
-            for lid in league_ids[1:]:
-                paired.extend(await self._fetch_league_fixtures_with_raw(date, lid))
-
-        logger.info("Fetched %d fixtures (with raw) for date=%s", len(paired), date)
-        return paired
+        paired_no_filter = _parse_fixture_list_with_raw(_extract_response(raw_response))
+        logger.info("Fetched %d fixtures (with raw) for date=%s", len(paired_no_filter), date)
+        return paired_no_filter
 
     async def _fetch_league_fixtures_with_raw(
         self, date: str, league_id: int
