@@ -350,13 +350,24 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
     # ------------------------------------------------------------------
 
     def _get_equity_symbols(self) -> list[str]:
-        """Build the equity symbol list from TRADFI_TICKER_UNIVERSE."""
+        """Build the equity symbol list from TRADFI_TICKER_UNIVERSE.
+
+        Includes sp500 + nasdaq + nyse-tradfi-perp single stocks + ETFs. The
+        nasdaq + nyse-tradfi-perp lists were previously omitted, so NASDAQ-only
+        names (HOOD/INTC/RIVN/UBER/CRWD/MRVL/ZM, etc.) declared in the universe
+        were never actually fetched from DBEQ.BASIC — leaving the captured
+        tradfi equity universe a strict subset of the enumerated one and
+        failing the Binance TradFi-perp basis-arb superset invariant
+        (operator 2026-06-24: "some extra ones are fine, but NOT LESS").
+        """
         sp500 = TRADFI_TICKER_UNIVERSE.get("sp500_tickers", [])
+        nasdaq = TRADFI_TICKER_UNIVERSE.get("nasdaq_tickers", [])
+        nyse_perp = TRADFI_TICKER_UNIVERSE.get("nyse_tradfi_perp_tickers", [])
         etfs = TRADFI_TICKER_UNIVERSE.get("etf_tickers", [])
         # Deduplicate, preserving order
         seen: set[str] = set()
         symbols: list[str] = []
-        for s in [*sp500, *etfs]:
+        for s in [*sp500, *nasdaq, *nyse_perp, *etfs]:
             if s not in seen:
                 seen.add(s)
                 symbols.append(s)
