@@ -70,6 +70,7 @@ from unified_api_contracts.sports import (
     FIXTURES_SCHEDULE,
     FOOTYSTATS_HISTORICAL_SEASON_IDS,
     SOCCER_FOOTBALL_INFO_IDS,
+    footystats_season_status_for_day,
     get_all_prediction_league_ids,
     get_entity_league_coverage,
     get_expected_leagues_for_source,
@@ -81,6 +82,7 @@ from unified_api_contracts.sports import (
     get_source_coverage_start,
     is_any_league_refresh_date,
     is_in_known_gap,
+    is_transfer_window_open,
 )
 from unified_api_contracts.sports import (
     canonicalize_league_id as _uac_canonicalize_league_id,
@@ -827,6 +829,7 @@ __all__ = [
     "filter_defi_instruments_by_relevance",
     "filter_instruments_by_date",
     "footystats",
+    "footystats_season_status_for_day",
     "get_all_prediction_league_ids",
     "get_config",
     "get_data_sink",
@@ -848,6 +851,7 @@ __all__ = [
     "is_in_known_gap",
     "is_league_entity_covered",
     "is_non_trading_day",
+    "is_transfer_window_open",
     "is_venue_available",
     "json",
     "log_event",

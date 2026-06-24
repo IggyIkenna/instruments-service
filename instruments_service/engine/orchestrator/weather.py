@@ -144,7 +144,6 @@ async def _fetch_weather_data(
     from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
 
     adapter = OpenMeteoAdapter(api_key=api_key) if api_key else OpenMeteoAdapter()
-    sink = _orch._sports_ref_sink_for(bucket, date, "weather")
     counts: dict[str, int] = {}
 
     manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
@@ -215,6 +214,24 @@ async def _fetch_weather_data(
             manifest.record_expected_empty(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 reason=_om_reason,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+            )
+        return counts
+
+    # Season-window guard — when EVERY expected league is in its off-season
+    # gap on this date, skip the API call and record per-league expected-empty
+    # with the typed pre/post-season reason (mirrors the genesis-floor guard).
+    _om_day = _orch.date_type.fromisoformat(date)
+    _om_season = {_lid: _orch.footystats_season_status_for_day(_lid, _om_day) for _lid in _expected_weather_league_ids}
+    if _om_season and all(_s is not None for _s in _om_season.values()):
+        _orch.logger.info("Weather: skipping date=%s (all expected leagues off-season)", date)
+        for _exp_lid, _status in sorted(_om_season.items()):
+            if _status is None:
+                continue
+            manifest.record_expected_empty(
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
+                reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
             )
@@ -506,6 +523,11 @@ async def _fetch_weather_data(
         _orphan_count = 0
 
         if _venue_to_leagues:
+            # Lazily build the DataSink only when there is data to write — the
+            # off-season / coverage-start / known-gap guards above all `return`
+            # before this point, so a skipped date must NOT eagerly init a GCS
+            # client (skip = zero I/O, matching the guards' design intent).
+            sink = _orch._sports_ref_sink_for(bucket, date, "weather")
             # Build per-league dataframes by expanding each row into one row
             # per (venue, league) pair for venues hosting in multiple leagues
             # that date.  Track orphan rows separately for the warning log.

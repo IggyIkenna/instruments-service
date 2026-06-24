@@ -109,6 +109,24 @@ async def _fetch_understat_xg(
             )
         return counts
 
+    # Season-window guard — when EVERY expected league is in its off-season
+    # gap on this date, skip the API call and record per-league expected-empty
+    # with the typed pre/post-season reason (mirrors the genesis-floor guard).
+    _us_day = _orch.date_type.fromisoformat(date)
+    _us_season = {_lid: _orch.footystats_season_status_for_day(_lid, _us_day) for _lid in _expected_understat_leagues}
+    if _us_season and all(_s is not None for _s in _us_season.values()):
+        _orch.logger.info("Understat xG: skipping date=%s (all expected leagues off-season)", date)
+        for _exp_lid, _status in sorted(_us_season.items()):
+            if _status is None:
+                continue
+            xg_manifest.record_expected_empty(
+                row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
+                reason=_status,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+            )
+        return counts
+
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_understat_team
 
@@ -347,6 +365,24 @@ async def _run_understat_shots_date(
             shots_manifest.record_expected_empty(
                 row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
                 reason=_uss_reason,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+            )
+        return counts
+
+    # Season-window guard — when EVERY expected league is in its off-season
+    # gap on this date, skip the API call and record per-league expected-empty
+    # with the typed pre/post-season reason (mirrors the genesis-floor guard).
+    _uss_day = _orch.date_type.fromisoformat(date)
+    _uss_season = {_lid: _orch.footystats_season_status_for_day(_lid, _uss_day) for _lid in _expected_leagues}
+    if _uss_season and all(_s is not None for _s in _uss_season.values()):
+        _orch.logger.info("Understat XG_SHOTS: skipping date=%s (all expected leagues off-season)", date)
+        for _exp_lid, _status in sorted(_uss_season.items()):
+            if _status is None:
+                continue
+            shots_manifest.record_expected_empty(
+                row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
+                reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
             )
