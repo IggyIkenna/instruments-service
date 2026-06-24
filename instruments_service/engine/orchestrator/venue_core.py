@@ -90,6 +90,10 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
 _CEFI_VENUES: list[str] = [
     "BINANCE-SPOT",
     "BINANCE-FUTURES",
+    # Binance COIN-M (inverse/delivery) perps + dated futures.
+    # Distinct Tardis endpoint ``binance-delivery`` from USDT-M (BINANCE-FUTURES).
+    # cefi_universe_capture_rule 2026-06-24.
+    "BINANCE-DELIVERY",
     "BYBIT",
     # OKX: 3 separate Tardis exchanges — okex (spot), okex-swap (perps), okex-futures (fixed-expiry)
     # Do NOT add bare "OKX" — it maps to same Tardis exchange as OKX-SPOT (duplicate data).
