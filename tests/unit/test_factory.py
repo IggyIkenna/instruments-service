@@ -180,3 +180,30 @@ class TestCreateReferenceDataAdapterExtended:
         for venue in solana_venues:
             adapter = create_reference_data_adapter(venue)
             assert adapter is not None, f"Factory failed for venue {venue}"
+
+
+class TestKRXRouting:
+    """Bug-1 regression: KRX was missing from CANONICAL_VENUE_TO_ADAPTER (2026-06-24).
+
+    Symptoms: 'No URDI adapter for ['KRX']' + 'URDI fetch: (KRX, UNSUPPORTED)'
+    causing shard catastrophic failure (3/7 venues written, CME/KRX/NASDAQ/NYSE missing).
+    """
+
+    def test_krx_in_canonical_venue_to_adapter(self) -> None:
+        """CANONICAL_VENUE_TO_ADAPTER must map KRX to the databento adapter."""
+        assert "KRX" in CANONICAL_VENUE_TO_ADAPTER, (
+            "KRX missing from CANONICAL_VENUE_TO_ADAPTER — add 'KRX': 'databento'"
+        )
+        assert CANONICAL_VENUE_TO_ADAPTER["KRX"] == "databento"
+
+    def test_krx_get_adapter_resolves(self) -> None:
+        """get_adapter_for_canonical_venue('KRX') must not raise ValueError."""
+        clear_adapter_pool()
+        adapter = get_adapter_for_canonical_venue("KRX", date="2026-06-24")
+        assert adapter is not None
+
+    def test_tradfi_venues_all_in_adapter_map(self) -> None:
+        """All TradFi canonical venues (CME/NASDAQ/NYSE/CBOE/ICE/FX/KRX) must be mapped."""
+        expected_tradfi = {"CME", "NASDAQ", "NYSE", "CBOE", "ICE", "FX", "KRX"}
+        missing = expected_tradfi - set(CANONICAL_VENUE_TO_ADAPTER)
+        assert not missing, f"TradFi venues missing from CANONICAL_VENUE_TO_ADAPTER: {missing}"
