@@ -306,7 +306,7 @@ async def _fetch_sfi_data(
             # match descriptors by championship_id BEFORE the per-match
             # progressive call so we don't burn ~10x RapidAPI quota on
             # leagues we'll never use as features.
-            _sfi_descriptors = await adapter.get_match_descriptors_for_date(date)
+            _sfi_descriptors = await _orch.asyncio.wait_for(adapter.get_match_descriptors_for_date(date), timeout=60.0)
             _expected_sfi_hex_ids = {
                 _orch.get_provider_league_id(_canonical, "soccer_football_info")
                 for _canonical in _expected_sfi_league_ids
@@ -341,7 +341,7 @@ async def _fetch_sfi_data(
                 all_progressive: list[dict[str, str | int | float | None]] = []
                 for mid in sfi_match_ids:
                     try:
-                        stats = await adapter.get_progressive_stats(mid)
+                        stats = await _orch.asyncio.wait_for(adapter.get_progressive_stats(mid), timeout=30.0)
                         _canonical_for_match = _match_to_canonical.get(str(mid), "")
                         # Derive match_end_time + report_time once per match
                         # (detect_match_end_time needs CanonicalProgressiveStats objects,
