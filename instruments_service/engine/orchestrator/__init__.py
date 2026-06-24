@@ -454,6 +454,9 @@ from instruments_service.engine.orchestrator.footystats import (
     _fetch_footystats_predictions as _fetch_footystats_predictions,
 )
 from instruments_service.engine.orchestrator.footystats import (
+    _load_scheduled_footystats_fixture_map as _load_scheduled_footystats_fixture_map,
+)
+from instruments_service.engine.orchestrator.footystats import (
     _validate_predictions_null_rates as _validate_predictions_null_rates,
 )
 from instruments_service.engine.orchestrator.prediction import (
@@ -748,6 +751,7 @@ __all__ = [
     "_get_or_fetch_defi_universe",
     "_get_venue_epoch",
     "_lifecycle_columns_from_af_response",
+    "_load_scheduled_footystats_fixture_map",
     "_load_venue_coordinates",
     "_master_blob_path",
     "_maybe_emit_drift_anomaly",
