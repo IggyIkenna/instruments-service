@@ -361,6 +361,15 @@ class TestTardisHelperFunctions:
     def test_infer_margin_type_binance_coin_margined(self) -> None:
         assert _infer_margin_type(InstrumentType.FUTURE, "USD", "BTCUSD_PERP", "binance-futures") == MarginType.INVERSE
 
+    def test_infer_margin_type_binance_delivery_inverse(self) -> None:
+        """binance-delivery (COIN-M) is always inverse — cefi_universe_capture_rule 2026-06-24."""
+        assert (
+            _infer_margin_type(InstrumentType.PERPETUAL, "USD", "BTCUSD_PERP", "binance-delivery") == MarginType.INVERSE
+        )
+        assert (
+            _infer_margin_type(InstrumentType.FUTURE, "USD", "BTCUSD_241227", "binance-delivery") == MarginType.INVERSE
+        )
+
     def test_infer_margin_type_deribit_inverse(self) -> None:
         assert _infer_margin_type(InstrumentType.PERPETUAL, "USD", "BTC-PERPETUAL", "deribit") == MarginType.INVERSE
 
