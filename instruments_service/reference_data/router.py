@@ -183,6 +183,9 @@ _DATABENTO_VENUE_DATASETS: dict[str, list[str]] = {
 
 _TARDIS_VENUE_EXCHANGES: dict[str, list[str]] = {
     "binance": ["binance-futures"],
+    # Binance COIN-M (inverse/delivery) perps + dated futures. Distinct from
+    # the USDT-M ``binance-futures`` endpoint (2026-06-24).
+    "binance-delivery": ["binance-delivery"],
     "bybit": ["bybit"],
     # Bybit spot is a distinct canonical venue → its own Tardis spot endpoint
     # (cefi_universe_capture_rule 2026-06-23).
