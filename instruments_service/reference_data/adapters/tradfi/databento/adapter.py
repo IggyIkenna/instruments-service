@@ -171,6 +171,11 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         if vf is None or vf in _yahoo_venues:
             results.extend(self._create_yahoo_index_records(venue_filter=vf))
 
+        # 3c. Static KRX (Korea Exchange) single stocks — Yahoo-sourced (.KS), only
+        #     for the KRX venue (2026-06-24 close-out).
+        if vf in (None, "KRX"):
+            results.extend(self._create_krx_equity_records())
+
         # 4. Enrich with session metadata (trading hours, holidays, early closes)
         self._enrich_session_metadata(results)
 
@@ -592,6 +597,39 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     available_from_datetime=datetime(2020, 1, 1, tzinfo=UTC),
                     timezone="UTC",
                     holiday_calendar="FX",
+                )
+            )
+        return records
+
+    def _create_krx_equity_records(self) -> list[InstrumentRecord]:
+        """Create static InstrumentRecords for KRX single stocks (Yahoo Finance .KS).
+
+        venue=KRX, instrument_type=EQUITY, asset_group=EQUITY. The 3 Korean
+        underliers of the Binance tradfi-perps (HYUNDAI 005380 / SAMSUNG 005930 /
+        SKHYNIX 000660) — added 2026-06-24 (KRX venue close-out). Genesis is the
+        per-entry Yahoo history floor (never a shared hardcoded date). The bare KRX
+        numeric code is the canonical symbol; the ``.KS`` Yahoo ticker is raw_symbol.
+        """
+        from unified_api_contracts.registry import KRX_EQUITIES
+
+        records: list[InstrumentRecord] = []
+        for eq in KRX_EQUITIES:
+            genesis = eq.first_available_date
+            records.append(
+                InstrumentRecord(
+                    instrument_key=f"KRX:EQUITY:{eq.symbol}",
+                    venue="KRX",
+                    asset_group=AssetClass.EQUITY,
+                    instrument_type=InstrumentType.EQUITY,
+                    raw_symbol=eq.yahoo_ticker,
+                    base_asset=eq.symbol,
+                    quote_asset="KRW",
+                    tick_size=Decimal("1"),
+                    min_size=Decimal("1"),
+                    contract_size=Decimal("1"),
+                    available_from_datetime=datetime(genesis.year, genesis.month, genesis.day, tzinfo=UTC),
+                    timezone="Asia/Seoul",
+                    holiday_calendar="KRX",
                 )
             )
         return records

@@ -536,7 +536,14 @@ def _write_per_fixture_entities(
 
                 for _pf_lid, _pf_league_df in _with_league.groupby("_league_id"):
                     _pf_lid_str = str(_pf_lid)
-                    _pf_captured.add(_pf_lid_str)
+                    _pf_canon = _orch._canonical_league_id(_pf_lid_str)
+                    # WRITE-UNIVERSE gate: fixtures roll-up spans the whole api_football
+                    # universe; only write per-fixture captures for tracked leagues so
+                    # out-of-universe (numeric-keyed) leagues don't pollute the manifest
+                    # with a second schema (incident 2026-06-24).
+                    if not _orch._is_in_canonical_write_universe(_pf_canon):
+                        continue
+                    _pf_captured.add(_pf_canon)
                     _pf_clean = _pf_league_df.drop(columns=["_league_id"])
 
                     # Recovery mode: read existing per-league parquet (if

@@ -65,8 +65,6 @@ def _get_instruments_bucket(asset_group: str | None = None) -> str:
     Prediction resolves via the dedicated flat kind ``instruments-store-prediction``
     (→ instruments-store-pred-{env}-{pid}) — see :func:`_resolve_instruments_store_kind`.
     """
-    import os
-
     cfg = _orch.get_config()
     # resolve_bucket_name is strict-lowercase (canonical asset_group keys: cefi/defi/
     # prediction/sports/tradfi) since the Option B bucket-SSOT migration (library@6c8a1175,
@@ -75,17 +73,11 @@ def _get_instruments_bucket(asset_group: str | None = None) -> str:
     # handler's _get_instruments_bucket_for_asset_group which already lowercases.
     ag: str | None = asset_group.lower() if asset_group else None
     kind, kind_ag = _orch.resolve_instruments_store_kind(ag)
-    if cfg.is_test_run:
-        prev = os.environ.get("DEPLOYMENT_ENV")
-        os.environ["DEPLOYMENT_ENV"] = "test"
-        try:
-            return _orch.resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag)
-        finally:
-            if prev is None:
-                os.environ.pop("DEPLOYMENT_ENV", None)
-            else:
-                os.environ["DEPLOYMENT_ENV"] = prev
-    return _orch.resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag)
+    # IS_TEST_RUN → resolve the ``test`` bucket tier via the explicit
+    # ``deployment_env`` param (library@bucket_naming) — NOT by mutating the
+    # process env (the banned config-env write the QG flags).
+    deployment_env = "test" if cfg.is_test_run else None
+    return _orch.resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag, deployment_env=deployment_env)
 
 
 def _check_emission_policy(

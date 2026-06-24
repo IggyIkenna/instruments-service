@@ -95,6 +95,10 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     # Mode-aware routing in get_adapter_for_canonical_venue() selects the adapter.
     "BINANCE-SPOT": "tardis",
     "BINANCE-FUTURES": "tardis",
+    # Binance COIN-M (inverse/delivery) perps + dated futures. Distinct Tardis
+    # endpoint ``binance-delivery`` from the USDT-M ``binance-futures`` endpoint.
+    # Captured via the Tardis adapter (free /v1/exchanges path, no auth needed).
+    "BINANCE-DELIVERY": "tardis",
     "BYBIT": "tardis",
     "BYBIT-SPOT": "tardis",
     "BYBIT-FUTURES": "tardis",
