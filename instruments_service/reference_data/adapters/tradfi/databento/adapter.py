@@ -904,10 +904,17 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         against the curated registry. Falls back to exchange code prefix extraction,
         then to dataset-level mapping.
         """
+        # AssetClass valid values (equity/fx/commodity). The _EXCHANGE_CODE_asset_group
+        # map can also contain domain designators ("cefi", "tradfi", "defi") for
+        # _NET_PROFITABLE_EQUITY_PERP_SINGLES and similar cross-domain defs — these are
+        # intentionally kept out of the tradfi pipeline. Skip any value that is not a
+        # valid AssetClass member and fall through to the dataset-level fallback.
+        _valid_asset_classes = frozenset(AssetClass)
+
         # 1. Try underlying directly (best match for parent-stype queries)
         if underlying:
             ac = _db._EXCHANGE_CODE_asset_group.get(underlying)
-            if ac:
+            if ac and ac in _valid_asset_classes:
                 return AssetClass(ac)
 
         # 2. Try known exchange code prefixes (longest match first)
@@ -916,7 +923,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             if len(raw_symbol) >= length:
                 prefix = raw_symbol[:length]
                 ac = _db._EXCHANGE_CODE_asset_group.get(prefix)
-                if ac:
+                if ac and ac in _valid_asset_classes:
                     return AssetClass(ac)
 
         # 3. Fallback to dataset-level mapping
