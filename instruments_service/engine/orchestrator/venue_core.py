@@ -90,6 +90,10 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
 _CEFI_VENUES: list[str] = [
     "BINANCE-SPOT",
     "BINANCE-FUTURES",
+    # Binance COIN-M (inverse/delivery) perps + dated futures.
+    # Distinct Tardis endpoint ``binance-delivery`` from USDT-M (BINANCE-FUTURES).
+    # cefi_universe_capture_rule 2026-06-24.
+    "BINANCE-DELIVERY",
     "BYBIT",
     # OKX: 3 separate Tardis exchanges — okex (spot), okex-swap (perps), okex-futures (fixed-expiry)
     # Do NOT add bare "OKX" — it maps to same Tardis exchange as OKX-SPOT (duplicate data).
@@ -134,6 +138,11 @@ _TRADFI_VENUES: list[str] = [
     "CBOE",
     "ICE",
     "FX",
+    # KRX (Korea Exchange) single stocks — Yahoo-sourced (.KS), added 2026-06-24
+    # (KRX venue close-out). Mirrors NASDAQ/NYSE as a tradfi equities venue; the
+    # 3 underliers (HYUNDAI 005380 / SAMSUNG 005930 / SKHYNIX 000660) are in UAC
+    # KRX_EQUITIES. source=yahoo (data source, not a venue).
+    "KRX",
 ]
 
 
