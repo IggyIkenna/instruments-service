@@ -385,3 +385,46 @@ class TestClassifyPolymarketError:
 
     def test_unknown(self) -> None:
         assert _classify_polymarket_error(Exception("something else")) == "UNKNOWN"
+
+
+# ---------------------------------------------------------------------------
+# 43a — CLOB-history lifecycle lower bound (best-effort available_from)
+# ---------------------------------------------------------------------------
+
+
+class TestClobLifecycleLowerBound:
+    def test_clob_history_lifts_game_start_time_into_start_date(self) -> None:
+        """A CLOB-history market (no gamma createdAt/startDate) gets a non-NULL
+        start_date from game_start_time so available_from isn't NULL."""
+        raw: dict[str, object] = {
+            "condition_id": "0xabc",
+            "end_date_iso": "2023-03-15T00:00:00Z",
+            "game_start_time": "2023-03-14T01:10:00Z",
+            "accepting_order_timestamp": None,
+        }
+        _enrich_raw_event_fields(raw)
+        assert raw.get("start_date") == "2023-03-14T01:10:00Z"
+
+    def test_accepting_order_timestamp_preferred_over_game_start_time(self) -> None:
+        raw: dict[str, object] = {
+            "condition_id": "0x1",
+            "accepting_order_timestamp": "2022-02-02T00:00:00Z",
+            "game_start_time": "2023-03-03T00:00:00Z",
+        }
+        _enrich_raw_event_fields(raw)
+        assert raw.get("start_date") == "2022-02-02T00:00:00Z"
+
+    def test_gamma_creation_field_not_overridden(self) -> None:
+        """A real gamma createdAt is NEVER overridden by the CLOB best-effort lift."""
+        raw: dict[str, object] = {
+            "conditionId": "0xdef",
+            "createdAt": "2024-01-01T00:00:00Z",
+            "game_start_time": "2099-01-01T00:00:00Z",
+        }
+        _enrich_raw_event_fields(raw)
+        assert raw.get("start_date") is None
+
+    def test_no_clob_timestamp_leaves_start_date_absent(self) -> None:
+        raw: dict[str, object] = {"condition_id": "0x2", "end_date_iso": "2023-03-15T00:00:00Z"}
+        _enrich_raw_event_fields(raw)
+        assert raw.get("start_date") is None
