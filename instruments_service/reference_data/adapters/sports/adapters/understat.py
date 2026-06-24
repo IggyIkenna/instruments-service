@@ -57,6 +57,17 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         # (e.g. season not yet indexed → HTTP 404). Reset at the start of
         # get_fixtures() and get_match_ids_for_date().
         self._fetch_error_count: int = 0
+        # Tracks WHICH Understat league names (e.g. "EPL", "La_Liga") actually
+        # errored on the current call, so the orchestrator can scope its
+        # record_failed(HTTP_NOT_FOUND) to ONLY the leagues that genuinely
+        # failed — and record_empty(EXPECTED_NO_FIXTURE) for leagues Understat
+        # simply doesn't index (which return [] without erroring). Without this,
+        # ANY single per-league 404 flips ALL expected leagues to
+        # attempted_failed (the XG_SHOTS 0% / 165-failed bug). Reset alongside
+        # _fetch_error_count at the start of get_fixtures() /
+        # get_match_ids_for_date(). League names map to canonical league_ids via
+        # the orchestrator's _canonical_league_id (La_Liga -> LA_LIGA etc.).
+        self._failed_league_names: set[str] = set()
 
     @property
     def venue(self) -> str:
@@ -103,6 +114,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         season = season_year if month >= 8 else season_year - 1
 
         self._fetch_error_count = 0
+        self._failed_league_names = set()
         fixtures: list[CanonicalFixture] = []
         for league in _UNDERSTAT_LEAGUES:
             league_fixtures = await self._fetch_league_fixtures(league, season, date)
@@ -134,6 +146,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
             error_code = self._classify_error(exc, status=getattr(exc, "status", None))
             self._emit_fetch_failed(error_code, exc)
             self._fetch_error_count += 1
+            self._failed_league_names.add(league)
             return []
 
         matches = _extract_dates_from_json(raw_response)
@@ -209,6 +222,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         season = season_year if month >= 8 else season_year - 1
 
         self._fetch_error_count = 0
+        self._failed_league_names = set()
         result: list[tuple[str, str]] = []
         async with self._make_session() as session:
             for league in _UNDERSTAT_LEAGUES:
@@ -229,6 +243,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
                     error_code = self._classify_error(exc, status=getattr(exc, "status", None))
                     self._emit_fetch_failed(error_code, exc)
                     self._fetch_error_count += 1
+                    self._failed_league_names.add(league)
         logger.info("get_match_ids_for_date: found %d matches for date=%s", len(result), date)
         return result
 
