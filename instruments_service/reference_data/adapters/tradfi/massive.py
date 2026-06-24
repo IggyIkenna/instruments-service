@@ -101,10 +101,20 @@ def _classify_massive_error(exc: Exception) -> str:
 
 
 def _curated_equity_symbols() -> set[str]:
-    """Curated equity/ETF universe (same set Databento fetches)."""
+    """Curated equity/ETF universe (same set Databento fetches).
+
+    Includes sp500 + nasdaq + nyse-tradfi-perp single stocks + ETFs — MUST stay
+    identical to ``DatabentoReferenceDataAdapter._get_equity_symbols`` so the
+    massive (primary) + databento (secondary) dual-source pair fetch the SAME
+    equity universe. The nasdaq + nyse-tradfi-perp lists were previously omitted
+    (same bug as the databento side), leaving the Binance TradFi-perp basis-arb
+    underlyings un-fetched from Massive. Operator 2026-06-24: extra fine, NOT LESS.
+    """
     sp500 = TRADFI_TICKER_UNIVERSE.get("sp500_tickers", [])
+    nasdaq = TRADFI_TICKER_UNIVERSE.get("nasdaq_tickers", [])
+    nyse_perp = TRADFI_TICKER_UNIVERSE.get("nyse_tradfi_perp_tickers", [])
     etfs = TRADFI_TICKER_UNIVERSE.get("etf_tickers", [])
-    return {*sp500, *etfs}
+    return {*sp500, *nasdaq, *nyse_perp, *etfs}
 
 
 def _futures_roots_for_venue(venue: str) -> list[str]:

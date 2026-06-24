@@ -415,8 +415,10 @@ def _infer_margin_type(
     # OKX coin-margined: symbol contains USD_UM or USD_CM
     if "USD_UM" in upper_id or "USD_CM" in upper_id:
         return MarginType.INVERSE
-    # Binance COIN-M futures: exchange is "binance-futures" and quote is USD (not USDT/USDC)
-    if exchange == "binance-futures" and quote.upper() == "USD":
+    # Binance COIN-M futures: exchange is "binance-futures" (USDT-M, has coin-M perps
+    # on the same endpoint via USD quote) OR "binance-delivery" (the dedicated COIN-M
+    # delivery endpoint — always inverse). Quote is USD (not USDT/USDC) for both.
+    if exchange in ("binance-futures", "binance-delivery") and quote.upper() == "USD":
         return MarginType.INVERSE
     # Deribit inverse: settled in BTC/ETH (USD quote but coin-margined)
     if exchange == "deribit" and quote.upper() == "USD":

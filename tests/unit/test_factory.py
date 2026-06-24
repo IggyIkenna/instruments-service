@@ -112,6 +112,9 @@ class TestCanonicalVenueToAdapter:
         assert "BINANCE-FUTURES" in CANONICAL_VENUE_TO_ADAPTER
         assert "DERIBIT" in CANONICAL_VENUE_TO_ADAPTER
         assert "HYPERLIQUID" in CANONICAL_VENUE_TO_ADAPTER
+        # Binance COIN-M (inverse/delivery) — cefi_universe_capture_rule 2026-06-24
+        assert "BINANCE-DELIVERY" in CANONICAL_VENUE_TO_ADAPTER
+        assert CANONICAL_VENUE_TO_ADAPTER["BINANCE-DELIVERY"] == "tardis"
 
     def test_defi_venues_present(self) -> None:
         assert any("AAVE_V3" in k for k in CANONICAL_VENUE_TO_ADAPTER)
