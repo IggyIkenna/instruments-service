@@ -18,6 +18,7 @@ split, and mutable caches remain package-level attributes.
 
 from __future__ import annotations
 
+import functools as _functools
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,6 +31,7 @@ __all__ = [
     "_canonical_league_id",
     "_empty_lifecycle_columns",
     "_flatten_canonical_fixture_for_disk",
+    "_is_in_canonical_write_universe",
     "_lifecycle_columns_from_af_response",
     "_pipeline_mode_for_sports_data_type",
     "_set_cached_leagues",
@@ -81,6 +83,35 @@ def _canonical_league_id(lid_raw: object) -> str:
         s = league.league_id if league is not None else s
     # Pass 2: strip provider-id suffix via UAC canonicalizer (CF-7 write-path)
     return _orch._uac_canonicalize_league_id(s)
+
+
+# Cached set of canonical league_ids we actually track for api_football — the
+# WRITE-UNIVERSE gate. The date-wide adapter calls (get_injuries(date), the
+# fixtures roll-up, standings) return data for the ENTIRE api_football universe
+# (~1200 leagues); without this gate the per-league capture loops write a row for
+# every returned league — including the ~1100 leagues OUTSIDE our canonical set,
+# which (having no canonical mapping) stay NUMERIC-keyed forever and pollute the
+# manifest with two schemas (incident 2026-06-24: 1.68M of 4.6M sports _index rows
+# were out-of-universe). The honest-absence emit (emit_empty_gaps_for_entity)
+# already scopes to this same set; the CAPTURE path must too. SSOT:
+# unified_api_contracts.sports.get_expected_leagues_for_source.
+@_functools.lru_cache(maxsize=1)
+def _expected_af_league_ids() -> frozenset[str]:
+    """Memoised set of canonical league_ids we track for api_football."""
+    return frozenset(lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football"))
+
+
+def _is_in_canonical_write_universe(canonical_league_id: str) -> bool:
+    """True if ``canonical_league_id`` is a league we track for api_football.
+
+    Used to GATE per-league captured writes so out-of-universe (and therefore
+    un-canonicalisable / numeric-keyed) leagues from the date-wide adapter calls
+    are never written as captured rows — keeping the manifest single-schema. The
+    expected-league set is cached (the adapter call fans out per (date, league),
+    so this is hit thousands of times per run). An empty/unknown id is treated as
+    NOT in-universe (the bare-path fallback already drops blank-league rows).
+    """
+    return bool(canonical_league_id) and canonical_league_id in _expected_af_league_ids()
 
 
 def _af_id_from_canonical(obj: object) -> int | None:

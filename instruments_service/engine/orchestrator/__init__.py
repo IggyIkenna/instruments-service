@@ -499,6 +499,9 @@ from instruments_service.engine.orchestrator.sports import (
     _flatten_canonical_fixture_for_disk as _flatten_canonical_fixture_for_disk,
 )
 from instruments_service.engine.orchestrator.sports import (
+    _is_in_canonical_write_universe as _is_in_canonical_write_universe,
+)
+from instruments_service.engine.orchestrator.sports import (
     _lifecycle_columns_from_af_response as _lifecycle_columns_from_af_response,
 )
 from instruments_service.engine.orchestrator.sports import (
@@ -750,6 +753,7 @@ __all__ = [
     "_get_instruments_bucket",
     "_get_or_fetch_defi_universe",
     "_get_venue_epoch",
+    "_is_in_canonical_write_universe",
     "_lifecycle_columns_from_af_response",
     "_load_scheduled_footystats_fixture_map",
     "_load_venue_coordinates",
