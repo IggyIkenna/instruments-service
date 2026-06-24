@@ -63,6 +63,7 @@ class TestDatabentoAdapterMocked:
             patch.object(adapter, "_get_equity_symbols", return_value=[]),
             patch.object(adapter, "_create_fx_spot_records", return_value=[]),
             patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_create_krx_equity_records", return_value=[]),
             patch.object(adapter, "_enrich_session_metadata"),
         ):
             results = await adapter.get_instruments()
@@ -78,6 +79,7 @@ class TestDatabentoAdapterMocked:
             patch.object(adapter, "_get_equity_symbols", return_value=[]),
             patch.object(adapter, "_create_fx_spot_records", return_value=[]),
             patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_create_krx_equity_records", return_value=[]),
             patch.object(adapter, "_enrich_session_metadata"),
         ):
             results = await adapter.get_instruments(instrument_type="FUTURE")
@@ -110,6 +112,7 @@ class TestDatabentoAdapterMocked:
             patch.object(adapter, "_get_equity_symbols", return_value=["AAPL"]),
             patch.object(adapter, "_create_fx_spot_records", return_value=[]),
             patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_create_krx_equity_records", return_value=[]),
             patch.object(adapter, "_enrich_session_metadata"),
         ):
             # Must NOT raise — the banned dataset isolates, GLBX survivor returns.
@@ -396,6 +399,7 @@ class TestDatabentoFetchFailureStateThreading:
             patch.object(adapter, "_get_equity_symbols", return_value=[]),
             patch.object(adapter, "_create_fx_spot_records", return_value=[]),
             patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_create_krx_equity_records", return_value=[]),
             patch.object(adapter, "_enrich_session_metadata"),
         ):
             mock_hist = MagicMock()
@@ -423,6 +427,7 @@ class TestDatabentoFetchFailureStateThreading:
             patch.object(adapter, "_get_equity_symbols", return_value=[]),
             patch.object(adapter, "_create_fx_spot_records", return_value=[]),
             patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_create_krx_equity_records", return_value=[]),
             patch.object(adapter, "_enrich_session_metadata"),
         ):
             mock_hist = MagicMock()
@@ -451,6 +456,7 @@ class TestDatabentoFetchFailureStateThreading:
             patch.object(adapter, "_get_equity_symbols", return_value=[]),
             patch.object(adapter, "_create_fx_spot_records", return_value=[]),
             patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_create_krx_equity_records", return_value=[]),
             patch.object(adapter, "_enrich_session_metadata"),
         ):
             mock_hist = MagicMock()
@@ -478,6 +484,7 @@ class TestDatabentoFetchFailureStateThreading:
             patch.object(adapter, "_get_equity_symbols", return_value=[]),
             patch.object(adapter, "_create_fx_spot_records", return_value=[]),
             patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_create_krx_equity_records", return_value=[]),
             patch.object(adapter, "_enrich_session_metadata"),
         ):
             mock_hist = MagicMock()
