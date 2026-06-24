@@ -407,6 +407,26 @@ async def _fetch_transfermarkt_data(
             _orch.logger.info("PLAYER_VALUES: skipping date=%s (all canonical leagues captured)", date)
             return counts
 
+        # Transfer-window guard — Transfermarkt player-value snapshots are
+        # refreshed around transfer windows + season starts; on a date that is
+        # outside every expected league's transfer window AND is not a
+        # refresh-trigger for any league, there is nothing to fetch. Record
+        # per-league honest-empty without an API call.
+        _tm_day = _orch.date_type.fromisoformat(date)
+        _tm_window_open = any(_orch.is_transfer_window_open(_lid, _tm_day) for _lid in _expected_pv_league_ids)
+        _tm_needs_refresh = bool(_orch.get_leagues_needing_refresh(_tm_day))
+        if _expected_pv_league_ids and not _tm_window_open and not _tm_needs_refresh and not force:
+            _orch.logger.info("PLAYER_VALUES: skipping date=%s (outside all transfer windows)", date)
+            for _exp_lid in sorted(_expected_pv_league_ids):
+                manifest.record_empty(
+                    row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_OUTSIDE_TRANSFER_WINDOW,
+                    pipeline_mode=_orch.PipelineMode.BATCH_TRANSFERMARKT,
+                )
+            manifest.write()
+            return counts
+
         effective_season = season if season is not None else _orch.datetime.now(_orch.UTC).year
 
         # Cache short-circuit: skip API calls on non-trigger dates when we
