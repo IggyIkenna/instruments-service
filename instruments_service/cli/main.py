@@ -101,6 +101,76 @@ def _run_coverage_status(argv: list[str] | None = None) -> None:  # pragma: no c
     print(json.dumps({"bucket": bucket, "rows": rows}, indent=2))
 
 
+def _run_refresh_league_entity_coverage(argv: list[str] | None = None) -> None:  # pragma: no cover
+    """Regenerate the UAC observed (league x per-fixture-entity) coverage map from captured rows.
+
+    Called when ``--operation=refresh-league-entity-coverage`` is passed. Bypasses the
+    ServiceBootstrap date-loop — this is a corpus-wide maintenance verb, not a date-fetch.
+
+    The map ``unified_api_contracts/registry/data/sports_league_entity_coverage.json`` is DERIVED
+    data: a ``(league, entity)`` pair is *covered* iff >=1 ``captured`` manifest row exists for it
+    across history. ``is_league_entity_covered`` reads it to gate enrichment capture so a league
+    lacking provider coverage records ``EXPECTED_NO_PROVIDER_COVERAGE`` (honest absence, not
+    retried). This verb keeps the registry honest as new (league, entity) cells start producing
+    captured rows (the 2014-2026 backfill, promotion/relegation, a league newly gaining coverage).
+
+    Default prints the diff vs the committed map; ``--write`` overwrites the UAC JSON in place
+    (then commit it in UAC via quickmerge). READ-ONLY against GCS — never writes the manifest.
+    Replaces the retired one-off ``scripts/refresh_sports_league_entity_coverage_2026_06_21.py``.
+    """
+    from pathlib import Path  # noqa: imports-inside-functions
+
+    import unified_api_contracts.registry.sports_league_entity_coverage as _cov_mod  # noqa: imports-inside-functions
+    from unified_api_contracts.registry import (  # noqa: imports-inside-functions
+        LEAGUE_ENTITY_COVERAGE_ENTITIES,
+    )
+    from unified_trading_library import read_availability_index  # noqa: imports-inside-functions
+
+    _default_json = Path(_cov_mod.__file__).parent / "data" / "sports_league_entity_coverage.json"
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--write", action="store_true", help="Overwrite the UAC JSON in place (then commit in UAC).")
+    parser.add_argument("--uac-json", default=None, help="Override the UAC coverage JSON path.")
+    args, _ = parser.parse_known_args(argv)
+    uac_json = Path(str(args.uac_json)) if args.uac_json else _default_json  # pyright: ignore[reportAny]
+
+    bucket: str = get_write_bucket_name("instruments", "sports")
+    index: pd.DataFrame = read_availability_index(bucket)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+    if index.empty or "data_type" not in index.columns:  # pyright: ignore[reportUnknownMemberType]
+        print(json.dumps({"error": "empty or schema-less _index", "bucket": bucket}), file=sys.stderr)
+        sys.exit(1)
+
+    entities = frozenset(str(e).upper() for e in LEAGUE_ENTITY_COVERAGE_ENTITIES)
+    dt = index["data_type"].astype("string").str.upper()  # pyright: ignore[reportUnknownMemberType]
+    cap = index[(index["capture_status"].astype("string") == "captured") & dt.isin(entities)].copy()  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    cap["e"] = cap["data_type"].astype("string").str.upper()  # pyright: ignore[reportUnknownMemberType]
+    cap["l"] = cap["league_id"].astype("string").str.upper()  # pyright: ignore[reportUnknownMemberType]
+    cap = cap[cap["l"].notna() & (cap["l"].str.len() > 0)]  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    accum: dict[str, set[str]] = {entity: set() for entity in sorted(entities)}
+    for entity, lg in zip(cap["e"].tolist(), cap["l"].tolist(), strict=True):  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAny]
+        accum.setdefault(str(entity), set()).add(str(lg))  # pyright: ignore[reportAny]
+    new_map: dict[str, list[str]] = {entity: sorted(leagues) for entity, leagues in sorted(accum.items())}
+
+    pairs = sum(len(v) for v in new_map.values())
+    print(f"Observed coverage: {len(new_map)} entities, {pairs} (entity, league) pairs (bucket={bucket})")
+    old_map: dict[str, list[str]] = json.loads(uac_json.read_text()) if uac_json.exists() else {}
+    added = {e: sorted(set(new_map.get(e, [])) - set(old_map.get(e, []))) for e in new_map}
+    added = {e: lg for e, lg in added.items() if lg}
+    removed = {e: sorted(set(old_map.get(e, [])) - set(new_map.get(e, []))) for e in old_map}
+    removed = {e: lg for e, lg in removed.items() if lg}
+    if added:
+        print(f"New (entity, league) pairs vs committed map: {json.dumps(added, sort_keys=True)}")
+    if removed:
+        print(f"Leagues absent from new scan (kept unless --write): {json.dumps(removed, sort_keys=True)}")
+    if not added and not removed:
+        print("No drift vs committed coverage map.")
+
+    if bool(args.write):  # pyright: ignore[reportAny]
+        uac_json.write_text(json.dumps(new_map, indent=2, sort_keys=True) + "\n")
+        print(f"Wrote refreshed map -> {uac_json} (commit in UAC via quickmerge).")
+    else:
+        print("DRY RUN — committed UAC JSON untouched (use --write to overwrite).")
+
+
 def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pragma: no cover
     parser.add_argument(
         "--source",
@@ -244,6 +314,14 @@ def main_service_cli() -> None:  # pragma: no cover
     _argv = sys.argv[1:]
     if "--operation=status" in _argv or ("--operation" in _argv and _argv[_argv.index("--operation") + 1] == "status"):
         _run_coverage_status(_argv)
+        return
+    # --operation=refresh-league-entity-coverage regenerates the UAC observed-coverage map from
+    # captured rows (recurring successor to the retired one-off refresh script); read-only diagnostic.
+    _refresh_op = "refresh-league-entity-coverage"
+    if f"--operation={_refresh_op}" in _argv or (
+        "--operation" in _argv and _argv[_argv.index("--operation") + 1] == _refresh_op
+    ):
+        _run_refresh_league_entity_coverage(_argv)
         return
     # Daily recon run self-defaults its date window to TODAY so the scheduled
     # 06:00 UTC job never re-fetches a stale hardcoded date (incident 2026-06-23).
