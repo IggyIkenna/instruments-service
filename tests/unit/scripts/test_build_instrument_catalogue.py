@@ -493,9 +493,13 @@ def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted
 def test_sports_enumerator_skips_pre_source_coverage_dates(rollup: ModuleType) -> None:
     """Dates before the data_type's source coverage start are owned by v1 → v2 emits nothing."""
     enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_v2_sports_precov")
-    # XG → understat, coverage starts 2015-01-16. 2015-01-01 is pre-coverage.
-    d_pre = date(2015, 1, 1)
-    df = rollup.build_sports_catalogue_dataframe([(d_pre, _league_snap([{"league_id": "39"}]))])
+    # XG → understat, coverage starts 2014-01-01. Use a canonical understat league_id
+    # ("EPL" — in UNDERSTAT_NAMES) and a date well before coverage start so the
+    # pre-coverage path fires cleanly.  "39" is a FootyStats integer ID and is NOT
+    # in the understat league coverage set, so it takes the EXPECTED_NO_PROVIDER_COVERAGE
+    # branch instead — wrong scenario for this test.
+    d_pre = date(2013, 6, 1)
+    df = rollup.build_sports_catalogue_dataframe([(d_pre, _league_snap([{"league_id": "EPL"}]))])
     catalog = enumerator._catalog_from_dataframe(df)
     rows = list(
         enumerator.enumerate_v2(
