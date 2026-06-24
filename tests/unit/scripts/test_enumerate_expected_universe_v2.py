@@ -112,7 +112,11 @@ def _make_tradfi_entry(
     available_from: str | None = "2020-01-01",
     available_to: str | None = None,
     underlying: str = "",
+    base_asset: str = "",
+    mvp: bool | None = True,
 ) -> InstrumentCatalogEntry:
+    # Default mvp=True so existing lifecycle tests pass the new MVP gate without
+    # needing fixture changes.  Dedicated gate tests use mvp=False / mvp=None.
     return InstrumentCatalogEntry(
         instrument_id=instrument_id,
         instrument_type=instrument_type,
@@ -124,6 +128,8 @@ def _make_tradfi_entry(
         market_created_at=None,
         settlement_time=None,
         underlying=underlying,
+        base_asset=base_asset,
+        mvp=mvp,
     )
 
 
@@ -685,6 +691,75 @@ def test_tradfi_v2_equity_and_etf_seed_canonical_lowercase() -> None:
     assert ("SPY", "etf") in seeded
     # never the raw uppercase leaf
     assert not any(r.instrument_type in {"EQUITY", "ETF"} for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# MVP capture-universe denominator gate (tradfi, operator-directed 2026-06-24)
+# The expected_unattempted denominator = the MVP universe, NOT the full IS
+# catalogue.  Out-of-MVP tradfi cells are NOT seeded.
+# ---------------------------------------------------------------------------
+
+
+def test_tradfi_v2_mvp_gate_excludes_non_mvp_via_column() -> None:
+    """A catalogue row tagged mvp=False is NOT seeded (excluded from denominator)."""
+    catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=False)]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    )
+    assert rows == []
+
+
+def test_tradfi_v2_mvp_gate_includes_mvp_via_column() -> None:
+    """A catalogue row tagged mvp=True IS seeded as expected_unattempted."""
+    catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    )
+    assert rows
+    assert all(r.capture_status == "expected_unattempted" for r in rows)
+
+
+def test_tradfi_v2_mvp_gate_computes_predicate_when_column_absent() -> None:
+    """mvp=None → gate computes the UAC is_mvp predicate.
+
+    A CME FUTURE with underlying="ES" (TradfiMvpRule CME/CBOE futures scope) IS in
+    the MVP set.  A random NASDAQ equity NOT in TRADFI_EQUITY_PERP_BASIS_UNIVERSE
+    is NOT in the MVP set and must NOT be seeded.
+    """
+    # MVP instrument: CME futures (ES underlier) → must be seeded.
+    mvp_catalog = [
+        _make_tradfi_entry(
+            instrument_id="ESM26",
+            instrument_type="FUTURE",
+            venue="CME",
+            underlying="ES",
+            available_from="2019-01-01",
+            mvp=None,
+        )
+    ]
+    mvp_rows = list(
+        enumerator_module._enumerate_v2_tradfi(mvp_catalog, _date_axis("2023-06-01"), ["ohlcv_1m"], present_set=set())
+    )
+    assert mvp_rows, "MVP CME future must be seeded when mvp column is absent"
+    assert all(r.capture_status == "expected_unattempted" for r in mvp_rows)
+
+    # Non-MVP instrument: a NASDAQ equity NOT in the basis universe → must be dropped.
+    non_mvp_catalog = [
+        _make_tradfi_entry(
+            instrument_id="ZZZNOTMVP",
+            instrument_type="EQUITY",
+            venue="NASDAQ",
+            base_asset="ZZZNOTMVP",
+            available_from="2019-01-01",
+            mvp=None,
+        )
+    ]
+    non_mvp_rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            non_mvp_catalog, _date_axis("2023-06-01"), ["ohlcv_1m"], present_set=set()
+        )
+    )
+    assert non_mvp_rows == [], "Non-MVP equity must NOT be seeded — it inflates the denominator"
 
 
 # ---------------------------------------------------------------------------
