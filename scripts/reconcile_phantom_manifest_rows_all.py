@@ -333,7 +333,15 @@ def _audit_sports(
             real_or_phantom[idx] = True
             _axis9_known_gap += 1
             continue
-        candidates = candidate_parquet_paths(data_type, date, league_id)
+        # Pass the row's pipeline_mode so the CANONICAL pipeline_mode= path is probed.
+        # Post-Phase-3 migration the parquet lives at
+        # day={D}/pipeline_mode=batch_<source>/entity=...; candidate_parquet_paths only
+        # emits that path when pipeline_mode is supplied (it still appends the legacy
+        # non-pipeline_mode fallback after). Omitting it probed ONLY the legacy path →
+        # false phantom flip of real captured rows (e.g. PLAYER_VALUES/transfermarkt +
+        # FIXTURE_LINEUPS/FIXTURE_STATS, golden-window 2026-06-24 — data was on disk).
+        pipeline_mode = str(row.get("pipeline_mode", "") or "")
+        candidates = candidate_parquet_paths(data_type, date, league_id, pipeline_mode=pipeline_mode or None)
         blobs = day_blobs.get(date, set())
         is_real = False
         for c in candidates:
