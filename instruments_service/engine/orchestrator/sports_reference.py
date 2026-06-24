@@ -127,8 +127,12 @@ async def _fetch_sports_reference_data(
     # orchestrator path; teams fetch reads `get_prediction_leagues()` from UAC
     # instead of the freshly-fetched leagues_df.
 
-    # Teams + standings — for each prediction league (cached across dates)
-    if not enrichment_only and _should_fetch("leagues"):
+    # Teams + standings — for each prediction league (cached across dates).
+    # Guard accepts "leagues" (legacy umbrella), "teams", or "standings" so that
+    # entity-scoped VM runs (e.g. --entity STANDINGS) still invoke the combined
+    # fetcher.  DP-VM-002 root-cause: only "leagues" was checked, so a
+    # STANDINGS-only VM skipped _fetch_teams_and_standings entirely → 0 rows.
+    if not enrichment_only and (_should_fetch("leagues") or _should_fetch("teams") or _should_fetch("standings")):
         await _fetch_teams_and_standings(
             adapter=adapter,
             date=date,
