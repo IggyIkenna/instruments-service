@@ -236,17 +236,40 @@ async def _fetch_understat_xg(
             # is set by _fetch_league_fixtures on each per-league error.
             _xg_fetch_errors: int = getattr(adapter, "_fetch_error_count", 0)
             if _xg_fetch_errors > 0:
+                # Scope record_failed to ONLY the leagues that genuinely errored
+                # (mapped adapter-name → canonical league_id). Leagues Understat
+                # simply doesn't index returned [] without erroring → they are
+                # honest-absence (record_empty), not failures. Without this
+                # scoping ANY single per-league 404 flipped ALL expected leagues
+                # to attempted_failed (the XG / XG_SHOTS over-fail bug). Mirrors
+                # the per-league error-dict pattern in
+                # engine/orchestrator/transfermarkt.py.
+                _failed_names: set[str] = getattr(adapter, "_failed_league_names", set())
+                _failed_canonical = {_orch._canonical_league_id(_n) for _n in _failed_names}
+                _xg_failed_lids = _expected_understat_leagues & _failed_canonical
+                _xg_empty_lids = _expected_understat_leagues - _xg_failed_lids
                 _orch.logger.info(
                     "Understat xG: no fixtures for date=%s — %d league fetch(es) errored"
-                    " (not honest-absence); recording attempted_failed",
+                    " (not honest-absence); recording attempted_failed for %d errored"
+                    " league(s) %s, record_empty for %d non-errored",
                     date,
                     _xg_fetch_errors,
+                    len(_xg_failed_lids),
+                    sorted(_xg_failed_lids),
+                    len(_xg_empty_lids),
                 )
-                for _exp_lid in sorted(_expected_understat_leagues):
+                for _exp_lid in sorted(_xg_failed_lids):
                     xg_manifest.record_failed(
                         row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
                         error="HTTP_NOT_FOUND",
                         attempted_at=attempt_ts,
+                        pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                    )
+                for _exp_lid in sorted(_xg_empty_lids):
+                    xg_manifest.record_empty(
+                        row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
+                        attempted_at=attempt_ts,
+                        reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
                     )
             else:
@@ -391,11 +414,24 @@ async def _run_understat_shots_date(
     try:
         match_ids = await adapter.get_match_ids_for_date(date)
 
+        # Track WHICH canonical leagues actually errored, so record_failed is
+        # scoped to them only (mirrors the XG branch + transfermarkt.py). The
+        # per-league getLeagueData errors land in adapter._failed_league_names
+        # (set in get_match_ids_for_date); per-MATCH get_match_shots errors are
+        # only reflected in _fetch_error_count, so we attribute them to the
+        # match's league here by snapshotting the counter around each call.
+        _shots_failed_canonical: set[str] = {
+            _orch._canonical_league_id(_n) for _n in getattr(adapter, "_failed_league_names", set())
+        }
+
         league_shots: dict[str, list[dict[str, object]]] = {}
         for match_id, league_name in match_ids:
-            shots: list[UnderstatShot] = await adapter.get_match_shots(match_id)
-            normalized = [normalize_understat_shot(s) for s in shots]
             canonical_lid = _orch._canonical_league_id(league_name)
+            _err_before = adapter._fetch_error_count
+            shots: list[UnderstatShot] = await adapter.get_match_shots(match_id)
+            if adapter._fetch_error_count > _err_before:
+                _shots_failed_canonical.add(canonical_lid)
+            normalized = [normalize_understat_shot(s) for s in shots]
             if canonical_lid not in league_shots:
                 league_shots[canonical_lid] = []
             league_shots[canonical_lid].extend(normalized)
@@ -429,12 +465,15 @@ async def _run_understat_shots_date(
             )
             counts[f"understat_xg_shots_{lid}"] = len(shot_rows)
 
-        # Honest-coverage: use record_failed for leagues with no captured shots when
-        # any fetch error occurred (getLeagueData 404 or getMatch 404). adapter._fetch_error_count
-        # accumulates across get_match_ids_for_date() and get_match_shots() calls.
-        _had_errors = adapter._fetch_error_count > 0
+        # Honest-coverage: record_failed ONLY for the expected leagues that
+        # genuinely errored (getLeagueData 404 in get_match_ids_for_date, or a
+        # per-match getMatch error attributed to its league above) AND have no
+        # captured shots. Leagues Understat simply doesn't index returned no
+        # match_ids without erroring → honest-absence (record_empty), NOT
+        # attempted_failed. This is the XG_SHOTS 0% / 165-failed fix: previously
+        # ANY single error flipped ALL uncaptured expected leagues to failed.
         for _exp_lid in sorted(_expected_leagues - _captured_leagues):
-            if _had_errors:
+            if _exp_lid in _shots_failed_canonical:
                 shots_manifest.record_failed(
                     row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
                     error="HTTP_NOT_FOUND",
