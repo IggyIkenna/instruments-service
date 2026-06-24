@@ -1047,3 +1047,115 @@ def test_create_yahoo_index_records_unknown_venue_returns_empty() -> None:
     adapter = DatabentoReferenceDataAdapter()
     records = adapter._create_yahoo_index_records(venue_filter="UNKNOWN_VENUE")
     assert records == []
+
+
+# ---------------------------------------------------------------------------
+# Bug-2 regression: 'cefi' is not a valid AssetClass (2026-06-24)
+#
+# _NET_PROFITABLE_EQUITY_PERP_SINGLES in UAC tradfi_instrument_universe.py carries
+# DatabentoInstrumentDef entries (NVDA/MSFT/TSLA/…) with asset_group="cefi" — they are
+# equity legs of a crypto-venue arb trade, DELIBERATELY excluded from the tradfi pipeline.
+# _resolve_asset_group reads _EXCHANGE_CODE_asset_group which returns "cefi" for those
+# symbols, then did AssetClass("cefi") → ValueError: 'cefi' is not a valid AssetClass.
+# Fix: guard with `ac in frozenset(AssetClass)` before calling AssetClass(ac); if the
+# value is a domain designator (cefi/tradfi/defi) rather than an instrument class, fall
+# through to the dataset-level default.
+# ---------------------------------------------------------------------------
+
+
+class TestResolveAssetGroupCefiExclusion:
+    """Regression: _resolve_asset_group must not raise on cefi-tagged defs."""
+
+    def test_does_not_raise_on_cefi_underlying(self) -> None:
+        """NVDA/MSFT etc. are in _EXCHANGE_CODE_asset_group with value 'cefi'.
+        _resolve_asset_group must NOT raise ValueError and must NOT emit them as
+        tradfi records — it returns the dataset-level fallback (AssetClass.EQUITY from
+        DBEQ.BASIC) since cefi is not a valid AssetClass member.
+        """
+        from unified_api_contracts.internal import AssetClass
+
+        from instruments_service.reference_data.adapters.tradfi.databento.adapter import (
+            DatabentoReferenceDataAdapter,
+        )
+        from instruments_service.reference_data.adapters.tradfi.databento.symbology import (
+            _EXCHANGE_CODE_asset_group,
+        )
+
+        # Confirm that NVDA IS in the map with value "cefi" (precondition of the bug)
+        assert _EXCHANGE_CODE_asset_group.get("NVDA") == "cefi", (
+            "Precondition: NVDA must be in _EXCHANGE_CODE_asset_group with value 'cefi'"
+        )
+
+        # Must not raise — previously crashed with ValueError: 'cefi' is not a valid AssetClass
+        result = DatabentoReferenceDataAdapter._resolve_asset_group("DBEQ.BASIC", "NVDA", "NVDA")
+        # Fallback: dataset DBEQ.BASIC maps to EQUITY (the _DATASET_TO_asset_group default)
+        assert result == AssetClass.EQUITY
+
+    def test_does_not_raise_on_other_cefi_singles(self) -> None:
+        """MSFT, TSLA, AAPL — all cefi-tagged — must not raise."""
+        from unified_api_contracts.internal import AssetClass
+
+        from instruments_service.reference_data.adapters.tradfi.databento.adapter import (
+            DatabentoReferenceDataAdapter,
+        )
+
+        cefi_symbols = ["MSFT", "TSLA", "AAPL", "AMD", "AMZN", "META", "GOOGL"]
+        for sym in cefi_symbols:
+            # Should never raise — fallback to dataset default
+            result = DatabentoReferenceDataAdapter._resolve_asset_group("DBEQ.BASIC", sym, sym)
+            assert isinstance(result, AssetClass), f"{sym}: expected AssetClass instance, got {result!r}"
+
+    def test_genuine_tradfi_equity_returns_equity(self) -> None:
+        """A symbol in TRADFI_EQUITY_PERP_BASIS_UNIVERSE (asset_group='tradfi') must resolve
+        correctly — DBEQ.BASIC dataset fallback returns AssetClass.EQUITY.
+        """
+        from unified_api_contracts.internal import AssetClass
+
+        from instruments_service.reference_data.adapters.tradfi.databento.adapter import (
+            DatabentoReferenceDataAdapter,
+        )
+
+        # SPY is a genuine tradfi ETF — must resolve to EQUITY, not raise
+        result = DatabentoReferenceDataAdapter._resolve_asset_group("DBEQ.BASIC", "SPY", "SPY")
+        assert result == AssetClass.EQUITY
+
+    def test_genuine_futures_symbol_returns_correct_class(self) -> None:
+        """ES (S&P 500 future, CME) must still resolve to EQUITY or COMMODITY (registry value),
+        not crash. Regression guard — the cefi fix must not break valid futures resolution.
+        """
+        from unified_api_contracts.internal import AssetClass
+
+        from instruments_service.reference_data.adapters.tradfi.databento.adapter import (
+            DatabentoReferenceDataAdapter,
+        )
+
+        result = DatabentoReferenceDataAdapter._resolve_asset_group("GLBX.MDP3", "ESZ6", "ES")
+        assert isinstance(result, AssetClass)
+
+
+class TestKRXStaticRecords:
+    """Bug-1 regression: KRX static records must be emitted with valid AssetClass (2026-06-24)."""
+
+    def test_krx_records_venue_and_instrument_type(self) -> None:
+        """_create_krx_equity_records must return non-empty records with venue=KRX
+        and instrument_type=EQUITY (the static Korean single-stock entries).
+
+        This is the routing regression guard: if KRX is missing from
+        CANONICAL_VENUE_TO_ADAPTER, the factory raises ValueError("No URDI adapter for
+        ['KRX']") and these records are never emitted — the shard silently loses KRX.
+        """
+        from instruments_service.reference_data.adapters.tradfi.databento.adapter import (
+            DatabentoReferenceDataAdapter,
+        )
+
+        adapter = DatabentoReferenceDataAdapter()
+        records = adapter._create_krx_equity_records()
+        assert records, "Expected at least one KRX record"
+        for rec in records:
+            assert rec.venue == "KRX", f"Expected venue=KRX, got {rec.venue!r}"
+            assert rec.instrument_type == "EQUITY", (
+                f"KRX record {rec.instrument_key}: expected instrument_type=EQUITY, got {rec.instrument_type!r}"
+            )
+            assert rec.instrument_key.startswith("KRX:EQUITY:"), (
+                f"KRX record has wrong instrument_key prefix: {rec.instrument_key!r}"
+            )
