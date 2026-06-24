@@ -88,6 +88,27 @@ async def _fetch_understat_xg(
     # reflect the attempt time, not the manifest write time.
     attempt_ts = _orch.datetime.now(_orch.UTC)
 
+    # Coverage-start / known-gap guard — emit expected-empty rows without an
+    # API call for dates before Understat's coverage window or in a gap window.
+    _us_floor = _orch.get_source_coverage_start("understat", data_type="XG")
+    _us_pre_cutoff = bool(_us_floor) and date < _us_floor.isoformat()
+    _us_in_known_gap = _orch.is_in_known_gap("understat", "XG", date)
+    if _us_pre_cutoff or _us_in_known_gap:
+        _orch.logger.info(
+            "Understat xG: skipping date=%s (%s)",
+            date,
+            "pre-coverage-start" if _us_pre_cutoff else "known-gap",
+        )
+        _us_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _us_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+        for _exp_lid in sorted(_expected_understat_leagues):
+            xg_manifest.record_expected_empty(
+                row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
+                reason=_us_reason,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+            )
+        return counts
+
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_understat_team
 
@@ -310,6 +331,26 @@ async def _run_understat_shots_date(
         return counts
 
     attempt_ts = _orch.datetime.now(_orch.UTC)
+
+    # Coverage-start / known-gap guard for XG_SHOTS.
+    _uss_floor = _orch.get_source_coverage_start("understat", data_type="XG_SHOTS")
+    _uss_pre_cutoff = bool(_uss_floor) and date < _uss_floor.isoformat()
+    _uss_in_known_gap = _orch.is_in_known_gap("understat", "XG_SHOTS", date)
+    if _uss_pre_cutoff or _uss_in_known_gap:
+        _orch.logger.info(
+            "Understat XG_SHOTS: skipping date=%s (%s)",
+            date,
+            "pre-coverage-start" if _uss_pre_cutoff else "known-gap",
+        )
+        _uss_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _uss_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+        for _exp_lid in sorted(_expected_leagues):
+            shots_manifest.record_expected_empty(
+                row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
+                reason=_uss_reason,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+            )
+        return counts
 
     try:
         match_ids = await adapter.get_match_ids_for_date(date)
