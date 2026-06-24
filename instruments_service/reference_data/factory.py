@@ -135,6 +135,7 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "CBOE": "databento",
     "ICE": "databento",
     "FX": "databento",
+    "KRX": "databento",
     # Prediction markets
     "POLYMARKET": "polymarket",
     "KALSHI": "kalshi",
