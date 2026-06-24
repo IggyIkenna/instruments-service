@@ -49,8 +49,11 @@ class TestInstrumentsBucketRoutingRegressionG9:
             is_test_run=True,
         )
 
-        def _resolve(cloud, kind, asset_group=None):
-            tier = os.environ.get("DEPLOYMENT_ENV", "prod")
+        # The bucket resolver now receives the tier via the explicit ``deployment_env``
+        # kwarg (no os.environ mutation) — the mock honours it (defaulting to the
+        # process env then prod), mirroring the real ``resolve_bucket_name`` contract.
+        def _resolve(cloud, kind, asset_group=None, deployment_env=None):
+            tier = deployment_env or os.environ.get("DEPLOYMENT_ENV", "prod")
             return f"instruments-store-{(asset_group or '').lower()}-{tier}-my-project"
 
         with (
@@ -74,8 +77,8 @@ class TestInstrumentsBucketRoutingRegressionG9:
             is_test_run=False,
         )
 
-        def _resolve(cloud, kind, asset_group=None):
-            tier = os.environ.get("DEPLOYMENT_ENV", "prod")
+        def _resolve(cloud, kind, asset_group=None, deployment_env=None):
+            tier = deployment_env or os.environ.get("DEPLOYMENT_ENV", "prod")
             return f"instruments-store-{(asset_group or '').lower()}-{tier}-my-project"
 
         with (
