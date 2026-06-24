@@ -34,7 +34,6 @@ SSOT: ``unified-trading-pm/codex/02-data/sports-adapter-dependency-order.md``
 from __future__ import annotations
 
 import logging
-import os
 from typing import cast
 
 import pandas as pd
@@ -86,17 +85,13 @@ def _resolve_sports_bucket() -> str:
     - IS_TEST_RUN=true     → DEPLOYMENT_ENV=test → ``instruments-store-sports-test-{pid}``
     """
     cfg = get_config()
-    if cfg.is_test_run:
-        prev = os.environ.get("DEPLOYMENT_ENV")
-        os.environ["DEPLOYMENT_ENV"] = "test"
-        try:
-            return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
-        finally:
-            if prev is None:
-                os.environ.pop("DEPLOYMENT_ENV", None)
-            else:
-                os.environ["DEPLOYMENT_ENV"] = prev
-    return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+    # IS_TEST_RUN → resolve the ``test`` bucket tier via the explicit
+    # ``deployment_env`` param (library@bucket_naming) — NOT by mutating the
+    # process env (the banned config-env write the QG flags).
+    deployment_env = "test" if cfg.is_test_run else None
+    return resolve_bucket_name(
+        cloud="gcp", kind="instruments-store", asset_group="sports", deployment_env=deployment_env
+    )
 
 
 def _blob_exists(bucket: str, path: str) -> bool:

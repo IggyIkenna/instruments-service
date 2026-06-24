@@ -79,14 +79,29 @@ def test_dep_check_raises_when_no_fixtures_anywhere() -> None:
 
 
 def test_resolve_sports_bucket_uses_resolve_bucket_name() -> None:
-    """_resolve_sports_bucket delegates to resolve_bucket_name with canonical args."""
-    with patch(
-        "instruments_service.reference_data.sports_dependency.resolve_bucket_name",
-        return_value="instruments-store-sports-prd-test-project",
-    ) as mock_rbn:
+    """_resolve_sports_bucket delegates to resolve_bucket_name with canonical args.
+
+    Non-test-run (default config) → ``deployment_env=None`` (resolve from the process
+    env, no override). The call now carries the explicit ``deployment_env`` kwarg
+    (the os.environ-mutation mechanism was replaced).
+    """
+    import instruments_service.config.service_config as sc
+
+    fake_cfg = sc.InstrumentsServiceConfig()
+    fake_cfg.is_test_run = False
+    with (
+        patch(
+            "instruments_service.reference_data.sports_dependency.resolve_bucket_name",
+            return_value="instruments-store-sports-prd-test-project",
+        ) as mock_rbn,
+        patch(
+            "instruments_service.reference_data.sports_dependency.get_config",
+            return_value=fake_cfg,
+        ),
+    ):
         out = sports_dependency._resolve_sports_bucket()
     assert "sports" in out.lower()
-    mock_rbn.assert_called_once_with(cloud="gcp", kind="instruments-store", asset_group="sports")
+    mock_rbn.assert_called_once_with(cloud="gcp", kind="instruments-store", asset_group="sports", deployment_env=None)
 
 
 def test_resolve_sports_bucket_prod_no_env_override() -> None:
@@ -122,17 +137,20 @@ def test_resolve_sports_bucket_prod_no_env_override() -> None:
     assert os.environ.get("DEPLOYMENT_ENV") == original_env
 
 
-def test_resolve_sports_bucket_test_run_sets_env() -> None:
-    """IS_TEST_RUN=True temporarily sets DEPLOYMENT_ENV=test for resolve_bucket_name."""
+def test_resolve_sports_bucket_test_run_passes_deployment_env_test() -> None:
+    """IS_TEST_RUN=True resolves the test tier via the explicit ``deployment_env="test"``
+    kwarg — NOT by mutating the process ``DEPLOYMENT_ENV`` (the banned config-env write)."""
     import instruments_service.config.service_config as sc
 
     fake_cfg = sc.InstrumentsServiceConfig()
     fake_cfg.is_test_run = True
 
-    captured_env: list[str | None] = []
+    captured: list[object] = []
+    env_during: list[str | None] = []
 
     def spy_resolve(**kwargs: object) -> str:
-        captured_env.append(os.environ.get("DEPLOYMENT_ENV"))
+        captured.append(kwargs.get("deployment_env"))
+        env_during.append(os.environ.get("DEPLOYMENT_ENV"))
         return "instruments-store-sports-test-my-project"
 
     with (
@@ -145,7 +163,6 @@ def test_resolve_sports_bucket_test_run_sets_env() -> None:
             return_value=fake_cfg,
         ),
     ):
-        # Ensure DEPLOYMENT_ENV is not "test" before the call so we can detect the override.
         env_before = os.environ.pop("DEPLOYMENT_ENV", None)
         try:
             out = sports_dependency._resolve_sports_bucket()
@@ -154,14 +171,16 @@ def test_resolve_sports_bucket_test_run_sets_env() -> None:
                 os.environ["DEPLOYMENT_ENV"] = env_before
 
     assert "sports" in out.lower()
-    # resolve_bucket_name was called while DEPLOYMENT_ENV == "test"
-    assert captured_env == ["test"]
-    # env is restored after the call
+    # The tier is forced via the kwarg, NOT via the process env.
+    assert captured == ["test"]
+    # The process env was NOT mutated to "test" during the call.
+    assert env_during == [None]
     assert os.environ.get("DEPLOYMENT_ENV") == env_before
 
 
-def test_resolve_sports_bucket_restores_env_on_exception() -> None:
-    """DEPLOYMENT_ENV is restored even if resolve_bucket_name raises."""
+def test_resolve_sports_bucket_does_not_mutate_env_on_exception() -> None:
+    """The process DEPLOYMENT_ENV is never mutated, even if resolve_bucket_name raises
+    (the os.environ-mutation try/finally was removed — the tier is a pure kwarg)."""
     import instruments_service.config.service_config as sc
 
     fake_cfg = sc.InstrumentsServiceConfig()
@@ -185,5 +204,5 @@ def test_resolve_sports_bucket_restores_env_on_exception() -> None:
         if env_before is not None:
             os.environ["DEPLOYMENT_ENV"] = env_before
 
-    # env must be restored (None == absent, matching env_before)
+    # env must be unchanged (None == absent, matching env_before)
     assert os.environ.get("DEPLOYMENT_ENV") == env_before
