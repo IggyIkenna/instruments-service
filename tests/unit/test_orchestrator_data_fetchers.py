@@ -19,6 +19,8 @@ import pandas as pd
 import pytest
 
 from instruments_service.engine.orchestrator import (
+    _fetch_footystats_matches,
+    _fetch_footystats_predictions,
     _fetch_sfi_data,
     _fetch_transfermarkt_data,
     _fetch_understat_xg,
@@ -172,6 +174,37 @@ class TestFetchUnderstatXg:
         mock_mw.record_failed.assert_called_once()
         mock_mw.write.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_pre_cutoff_date_records_expected_empty(self) -> None:
+        """Understat xG skipped when date is before source coverage start."""
+        from datetime import date as date_type
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(return_value=[])
+        mock_adapter._fetch_error_count = 0
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        future_floor = date_type(2027, 1, 1)
+
+        with _stack(
+            patch(
+                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET)
+        mock_mw.record_expected_empty.assert_called()
+        assert isinstance(result, dict)
+
 
 # ---------------------------------------------------------------------------
 # _run_understat_shots_date
@@ -289,6 +322,36 @@ class TestRunUnderstatShotsDate:
         ):
             result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
         # Shard isolation: no raise
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_pre_cutoff_date_records_expected_empty(self) -> None:
+        """Understat XG_SHOTS skipped when date is before source coverage start."""
+        from datetime import date as date_type
+
+        mock_adapter = MagicMock()
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        future_floor = date_type(2027, 1, 1)
+
+        with _stack(
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.understat.UnderstatAdapter",
+                return_value=mock_adapter,
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
+        mock_mw.record_expected_empty.assert_called()
         assert isinstance(result, dict)
 
 
@@ -436,6 +499,33 @@ class TestFetchWeatherData:
         assert result == {}
         mock_mw.record_empty.assert_called()
         mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_pre_cutoff_date_records_expected_empty(self) -> None:
+        """Weather skipped when date is before open_meteo coverage start."""
+        from datetime import date as date_type
+
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = []
+        future_floor = date_type(2027, 1, 1)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+        ):
+            result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET)
+        mock_mw.record_expected_empty.assert_called()
+        assert isinstance(result, dict)
 
 
 # ---------------------------------------------------------------------------
@@ -882,3 +972,125 @@ class TestFetchTransfermarktData:
         # Cache hit path: record_captured_from_counts for each canonical league in cache
         mock_mw.record_captured_from_counts.assert_called()
         assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# _fetch_footystats_predictions
+# ---------------------------------------------------------------------------
+
+
+class TestFetchFootystatsPredictions:
+    """Tests for _fetch_footystats_predictions season-window clip guard."""
+
+    @pytest.mark.asyncio
+    async def test_pre_cutoff_date_records_expected_empty(self) -> None:
+        """FootyStats predictions skipped when date is before source coverage start."""
+        from datetime import date as date_type
+
+        mock_adapter = MagicMock()
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        future_floor = date_type(2027, 1, 1)
+
+        with _stack(
+            patch(
+                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_footystats_predictions(date=_DATE, api_key="key", bucket=_BUCKET)
+        mock_mw.record_expected_empty.assert_called()
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_all_leagues_captured_skip_returns_empty(self) -> None:
+        """When every expected league is captured, returns early without touching the API."""
+        mock_adapter = MagicMock()
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch(
+                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=True),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_footystats_predictions(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _fetch_footystats_matches
+# ---------------------------------------------------------------------------
+
+
+class TestFetchFootystatsMatches:
+    """Tests for _fetch_footystats_matches season-window clip guard."""
+
+    @pytest.mark.asyncio
+    async def test_pre_cutoff_date_records_expected_empty(self) -> None:
+        """FootyStats matches skipped when date is before source coverage start."""
+        from datetime import date as date_type
+
+        mock_adapter = MagicMock()
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        future_floor = date_type(2027, 1, 1)
+
+        with _stack(
+            patch(
+                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
+        mock_mw.record_expected_empty.assert_called()
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_all_leagues_captured_skip_returns_empty(self) -> None:
+        """When every expected league is captured, returns early without touching the API."""
+        mock_adapter = MagicMock()
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch(
+                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=True),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert result == {}
