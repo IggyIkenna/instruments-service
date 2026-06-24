@@ -299,6 +299,30 @@ async def _fetch_sfi_data(
                 pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
             )
         _want_sfi_progressive = False
+    # Season-window guard — when EVERY expected league is in its off-season
+    # gap on this date, skip the API call and record per-league expected-empty
+    # with the typed pre/post-season reason (mirrors the genesis-floor guard).
+    if _want_sfi_progressive:
+        _sfi_day = _orch.date_type.fromisoformat(date)
+        _sfi_season = {
+            _lid: _orch.footystats_season_status_for_day(_lid, _sfi_day) for _lid in _expected_sfi_league_ids
+        }
+        if _sfi_season and all(_s is not None for _s in _sfi_season.values()):
+            _orch.logger.info("SFI progressive stats: skipping date=%s (all expected leagues off-season)", date)
+            for _exp_lid, _status in sorted(_sfi_season.items()):
+                if _status is None:
+                    continue
+                manifest.record_expected_empty(
+                    row_key={
+                        "date": date,
+                        "data_type": "SFI_PROGRESSIVE_STATS",
+                        "league_id": _exp_lid,
+                    },
+                    reason=_status,
+                    attempted_at=attempt_ts,
+                    pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                )
+            _want_sfi_progressive = False
     if _want_sfi_progressive:
         try:
             # League-scoped fetch: SFI's day-list returns ~50 championships'

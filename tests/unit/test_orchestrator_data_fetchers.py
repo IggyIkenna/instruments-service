@@ -187,9 +187,7 @@ class TestFetchUnderstatXg:
         future_floor = date_type(2027, 1, 1)
 
         with _stack(
-            patch(
-                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
-            ),
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
             patch(
@@ -993,9 +991,7 @@ class TestFetchFootystatsPredictions:
         future_floor = date_type(2027, 1, 1)
 
         with _stack(
-            patch(
-                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
-            ),
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
             patch(
@@ -1019,9 +1015,7 @@ class TestFetchFootystatsPredictions:
         mock_mw_cls = MagicMock(return_value=mock_mw)
 
         with _stack(
-            patch(
-                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
-            ),
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
             patch(
@@ -1054,9 +1048,7 @@ class TestFetchFootystatsMatches:
         future_floor = date_type(2027, 1, 1)
 
         with _stack(
-            patch(
-                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
-            ),
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
             patch(
@@ -1080,9 +1072,7 @@ class TestFetchFootystatsMatches:
         mock_mw_cls = MagicMock(return_value=mock_mw)
 
         with _stack(
-            patch(
-                "instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter
-            ),
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
             patch(
@@ -1094,3 +1084,323 @@ class TestFetchFootystatsMatches:
         ):
             result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Season-window guard — off-season skip (per-date sources)
+#
+# Each guard runs AFTER the genesis-floor guard: when EVERY expected league is
+# in its off-season gap on the date, the whole date is skipped call-free and
+# per-league expected-empty rows carry the typed EXPECTED_PRE_SEASON /
+# EXPECTED_POST_SEASON reason. We patch ``footystats_season_status_for_day`` to
+# return a fixed status (calendar-independent) and assert (a) NO adapter network
+# call is made and (b) the off-season reason reaches record_expected_empty.
+# ---------------------------------------------------------------------------
+
+
+class TestOffSeasonSeasonWindowGuard:
+    """Off-season season-window guard across the per-date fetchers."""
+
+    @pytest.mark.asyncio
+    async def test_understat_xg_all_off_season_skips_call(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(return_value=[])
+        mock_adapter._fetch_error_count = 0
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch(
+                "instruments_service.engine.orchestrator.footystats_season_status_for_day",
+                return_value="EXPECTED_POST_SEASON",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            # mid-June date — European leagues off-season
+            result = await _fetch_understat_xg(date="2026-06-15", bucket=_BUCKET)
+        mock_adapter.get_fixtures.assert_not_called()
+        mock_mw.record_expected_empty.assert_called()
+        _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
+        assert "EXPECTED_POST_SEASON" in _reasons
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_understat_shots_all_off_season_skips_call(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_match_ids_for_date = AsyncMock(return_value=[])
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch(
+                "instruments_service.engine.orchestrator.footystats_season_status_for_day",
+                return_value="EXPECTED_PRE_SEASON",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _run_understat_shots_date(date="2026-06-15", bucket=_BUCKET)
+        mock_adapter.get_match_ids_for_date.assert_not_called()
+        mock_mw.record_expected_empty.assert_called()
+        _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
+        assert "EXPECTED_PRE_SEASON" in _reasons
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_weather_all_off_season_skips_call(self) -> None:
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL"), _mk_league("BUNDESLIGA")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch(
+                "instruments_service.engine.orchestrator.footystats_season_status_for_day",
+                return_value="EXPECTED_POST_SEASON",
+            ),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_weather_data(date="2026-06-15", bucket=_BUCKET)
+        # Skipped before the GCS fixtures read → no captured/empty rows, only expected-empty.
+        mock_mw.record_captured.assert_not_called()
+        mock_mw.record_empty.assert_not_called()
+        mock_mw.record_expected_empty.assert_called()
+        _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
+        assert "EXPECTED_POST_SEASON" in _reasons
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_sfi_all_off_season_skips_call(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_leagues = AsyncMock(return_value=[])
+        mock_adapter.get_match_descriptors_for_date = AsyncMock(return_value=[])
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch(
+                "instruments_service.engine.orchestrator.footystats_season_status_for_day",
+                return_value="EXPECTED_POST_SEASON",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_sfi_data(date="2026-06-15", api_key="key", bucket=_BUCKET)
+        mock_adapter.get_match_descriptors_for_date.assert_not_called()
+        mock_mw.record_expected_empty.assert_called()
+        _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
+        assert "EXPECTED_POST_SEASON" in _reasons
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_footystats_predictions_all_off_season_skips_call(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixture_predictions = AsyncMock(return_value=[])
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch(
+                "instruments_service.engine.orchestrator.footystats_season_status_for_day",
+                return_value="EXPECTED_PRE_SEASON",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_footystats_predictions(date="2026-06-15", api_key="key", bucket=_BUCKET)
+        mock_adapter.get_fixture_predictions.assert_not_called()
+        mock_mw.record_expected_empty.assert_called()
+        _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
+        assert "EXPECTED_PRE_SEASON" in _reasons
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_footystats_matches_all_off_season_skips_call(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(return_value=[])
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
+            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
+            patch(
+                "instruments_service.engine.orchestrator.footystats_season_status_for_day",
+                return_value="EXPECTED_POST_SEASON",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_footystats_matches(date="2026-06-15", api_key="key", bucket=_BUCKET)
+        mock_adapter.get_fixtures.assert_not_called()
+        mock_mw.record_expected_empty.assert_called()
+        _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
+        assert "EXPECTED_POST_SEASON" in _reasons
+        assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# Transfer-window guard — Transfermarkt PLAYER_VALUES
+#
+# Outside every expected league's transfer window AND no league needs a refresh
+# today → skip the API call, record per-league EXPECTED_OUTSIDE_TRANSFER_WINDOW.
+# A within-window date (or a refresh trigger) still fetches.
+# ---------------------------------------------------------------------------
+
+
+class TestTransfermarktTransferWindowGuard:
+    """Transfer-window guard on _fetch_transfermarkt_data (PLAYER_VALUES)."""
+
+    @pytest.mark.asyncio
+    async def test_outside_window_non_trigger_skips_call(self) -> None:
+        from unified_api_contracts.canonical.crosscutting.honest_coverage import EmptyConfirmedReason
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_teams = AsyncMock(return_value=[{"name": "Arsenal", "team_id": "1", "squad_size": "20"}])
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator.get_prediction_leagues", return_value=[]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.is_transfer_window_open", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=[]),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_transfermarkt_data(
+                date=_DATE,
+                api_key="key",
+                bucket=_BUCKET,
+                entity_filter="PLAYER_VALUES",
+                season=2025,
+            )
+        mock_adapter.get_teams.assert_not_called()
+        mock_mw.record_empty.assert_called()
+        _reasons = {c.kwargs.get("reason") for c in mock_mw.record_empty.call_args_list}
+        assert EmptyConfirmedReason.EXPECTED_OUTSIDE_TRANSFER_WINDOW in _reasons
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_within_window_still_fetches(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_teams = AsyncMock(return_value=[{"name": "Arsenal", "team_id": "1", "squad_size": "20"}])
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator.get_prediction_leagues", return_value=[]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.is_transfer_window_open", return_value=True),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=[]),
+            patch("instruments_service.engine.orchestrator._read_transfermarkt_team_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="531"),
+            patch("instruments_service.engine.orchestrator._maybe_emit_drift_anomaly"),
+            patch("instruments_service.engine.orchestrator.get_expected_team_count_for_league", return_value=20),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch("instruments_service.engine.orchestrator._write_transfermarkt_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_master_append"),
+            patch("instruments_service.engine.orchestrator._write_snapshot_player_values"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_transfermarkt_data(
+                date=_DATE,
+                api_key="key",
+                bucket=_BUCKET,
+                entity_filter="PLAYER_VALUES",
+                season=2025,
+            )
+        # Within the transfer window → the guard does NOT short-circuit; the API is hit.
+        mock_adapter.get_teams.assert_awaited()
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_force_bypasses_window_guard(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_teams = AsyncMock(return_value=[{"name": "Arsenal", "team_id": "1", "squad_size": "20"}])
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch("instruments_service.engine.orchestrator.get_prediction_leagues", return_value=[]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.is_transfer_window_open", return_value=False),
+            patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=[]),
+            patch("instruments_service.engine.orchestrator._read_transfermarkt_team_mapping", return_value=None),
+            patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="531"),
+            patch("instruments_service.engine.orchestrator._maybe_emit_drift_anomaly"),
+            patch("instruments_service.engine.orchestrator.get_expected_team_count_for_league", return_value=20),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch("instruments_service.engine.orchestrator._write_transfermarkt_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_master_append"),
+            patch("instruments_service.engine.orchestrator._write_snapshot_player_values"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_transfermarkt_data(
+                date=_DATE,
+                api_key="key",
+                bucket=_BUCKET,
+                entity_filter="PLAYER_VALUES",
+                season=2025,
+                force=True,
+            )
+        # force=True → window guard is skipped even outside the window.
+        mock_adapter.get_teams.assert_awaited()
+        assert isinstance(result, dict)
