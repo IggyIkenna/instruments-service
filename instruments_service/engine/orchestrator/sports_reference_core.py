@@ -242,7 +242,13 @@ async def _fetch_teams_and_standings(
             _std_captured: set[str] = set()
             for _s_lid, _s_league_df in standings_df.groupby("league_id"):
                 _s_lid_str = str(_s_lid)
-                _std_captured.add(_s_lid_str)
+                _s_canon = _orch._canonical_league_id(_s_lid_str)
+                # WRITE-UNIVERSE gate (incident 2026-06-24): never write a captured
+                # standings row for a league outside our tracked api_football set —
+                # un-canonicalisable leagues stay numeric-keyed and split the schema.
+                if not _orch._is_in_canonical_write_universe(_s_canon):
+                    continue
+                _std_captured.add(_s_canon)
                 _stamped_std_df = _orch.stamp_available_at_explicit(_s_league_df, when=_orch.datetime.now(_orch.UTC))
                 _orch._gated_sink_write(
                     _orch._sports_ref_sink_for(bucket, date, "standings"),
@@ -321,7 +327,15 @@ async def _fetch_injuries(
 
                 for _inj_lid, _inj_league_df in _with_league.groupby(_inj_league_col):
                     _inj_lid_str = str(_inj_lid)
-                    _inj_captured.add(_inj_lid_str)
+                    _inj_canon = _orch._canonical_league_id(_inj_lid_str)
+                    # WRITE-UNIVERSE gate: get_injuries(date) is date-wide and returns
+                    # injuries for the ENTIRE api_football universe (~1200 leagues). Only
+                    # write captured rows for leagues we actually track — otherwise the
+                    # ~1100 out-of-universe leagues (un-canonicalisable → numeric-keyed)
+                    # pollute the manifest with a second schema (incident 2026-06-24).
+                    if not _orch._is_in_canonical_write_universe(_inj_canon):
+                        continue
+                    _inj_captured.add(_inj_canon)
                     _inj_clean = _inj_league_df.drop(columns=["_inj_league"], errors="ignore")
                     _stamped_inj_df = _orch.stamp_available_at_explicit(_inj_clean, when=_orch.datetime.now(_orch.UTC))
                     _orch._gated_sink_write(
