@@ -66,16 +66,27 @@ def _make_session_cm(json_return: object) -> MagicMock:
 
 
 class TestApiFootballGetFixturesWithRaw:
-    """Lines 238-261: get_fixtures_with_raw method."""
+    """get_fixtures_with_raw — season-cache path (league_ids supplied) and no-filter fallback."""
 
     @pytest.fixture(autouse=True)
     def _no_sleep(self):
         with patch("asyncio.sleep", new_callable=AsyncMock):
             yield
 
+    @pytest.fixture(autouse=True)
+    def _clear_season_cache(self):
+        """Isolate tests: clear the class-level season fixture cache before each run."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        ApiFootballAdapter._season_fixture_cache.clear()
+        yield
+        ApiFootballAdapter._season_fixture_cache.clear()
+
     @pytest.mark.asyncio
     async def test_single_league_success(self) -> None:
-        """Lines 238-261: single league returns paired (canonical, raw) tuples."""
+        """Single league with league_ids: uses season cache, filters by date, returns pairs."""
         from instruments_service.reference_data.adapters.sports.adapters.api_football import (
             ApiFootballAdapter,
         )
@@ -93,8 +104,8 @@ class TestApiFootballGetFixturesWithRaw:
         assert raw_item == _minimal_fixture_item()
 
     @pytest.mark.asyncio
-    async def test_multi_league_fan_out(self) -> None:
-        """Lines 256-259: multi-league triggers _fetch_league_fixtures_with_raw fan-out."""
+    async def test_multi_league_season_cache(self) -> None:
+        """Multi-league: each league fetches its own season, results merged and filtered."""
         from instruments_service.reference_data.adapters.sports.adapters.api_football import (
             ApiFootballAdapter,
         )
@@ -106,12 +117,30 @@ class TestApiFootballGetFixturesWithRaw:
         with patch("aiohttp.ClientSession", return_value=session_cm):
             result = await adapter.get_fixtures_with_raw("2026-03-22", league_ids=[39, 140])
 
-        # First batch (league 39) + fan-out for league 140
+        # One fixture per league call (both on 2026-03-22) — combined
         assert isinstance(result, list)
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_league_ids_uses_date_path(self) -> None:
+        """No league_ids: falls back to original per-date GET /fixtures?date= call."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        raw_response = {"response": [_minimal_fixture_item()]}
+        session_cm = _make_session_cm(raw_response)
+
+        with patch("aiohttp.ClientSession", return_value=session_cm):
+            result = await adapter.get_fixtures_with_raw("2026-03-22")
+
+        assert isinstance(result, list)
+        assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_exception_reraises(self) -> None:
-        """Lines 249-252: HTTP exception re-raises after emit_fetch_failed."""
+        """HTTP exception from season fetch re-raises after emit_fetch_failed."""
         from instruments_service.reference_data.adapters.sports.adapters.api_football import (
             ApiFootballAdapter,
         )
@@ -129,6 +158,101 @@ class TestApiFootballGetFixturesWithRaw:
         ):
             await adapter.get_fixtures_with_raw("2026-03-22", league_ids=[39])
 
+    @pytest.mark.asyncio
+    async def test_date_filter_excludes_other_days(self) -> None:
+        """Season fixtures for different dates are excluded by date filter."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        # Fixture on 2026-03-22; query for 2026-03-23 → empty
+        adapter = ApiFootballAdapter(api_key="test-key")
+        raw_response = {"response": [_minimal_fixture_item()]}
+        session_cm = _make_session_cm(raw_response)
+
+        with patch("aiohttp.ClientSession", return_value=session_cm):
+            result = await adapter.get_fixtures_with_raw("2026-03-23", league_ids=[39])
+
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# ApiFootballAdapter — _fetch_season_fixtures_with_raw (season cache)
+# ---------------------------------------------------------------------------
+
+
+class TestApiFootballFetchSeasonFixturesWithRaw:
+    """_fetch_season_fixtures_with_raw: cache hit, success, exception re-raise."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.fixture(autouse=True)
+    def _clear_season_cache(self):
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        ApiFootballAdapter._season_fixture_cache.clear()
+        yield
+        ApiFootballAdapter._season_fixture_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_fetches_and_stores(self) -> None:
+        """First call for (league, season) fetches from API and stores in cache."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        raw_response = {"response": [_minimal_fixture_item()]}
+        session_cm = _make_session_cm(raw_response)
+
+        with patch("aiohttp.ClientSession", return_value=session_cm):
+            result = await adapter._fetch_season_fixtures_with_raw(39, 2025)
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert ApiFootballAdapter._season_fixture_cache[(39, 2025)] is result
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_skips_api(self) -> None:
+        """Second call for same (league, season) returns cached result without HTTP."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+            CanonicalFixture,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        sentinel: list[tuple[CanonicalFixture, dict[str, object]]] = []
+        ApiFootballAdapter._season_fixture_cache[(39, 2025)] = sentinel
+
+        # Even if the HTTP layer would raise, we should get the cached sentinel.
+        with patch.object(adapter, "_fetch_and_extract", side_effect=RuntimeError("should not call")):
+            result = await adapter._fetch_season_fixtures_with_raw(39, 2025)
+
+        assert result is sentinel
+
+    @pytest.mark.asyncio
+    async def test_exception_emits_and_reraises(self) -> None:
+        """HTTP failure calls emit_fetch_failed and re-raises the original exception."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+
+        with (
+            patch.object(adapter, "_fetch_and_extract", side_effect=RuntimeError("api down")),
+            patch.object(adapter, "_emit_fetch_failed") as mock_emit,
+            pytest.raises(RuntimeError, match="api down"),
+        ):
+            await adapter._fetch_season_fixtures_with_raw(39, 2025)
+
+        mock_emit.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # ApiFootballAdapter — _fetch_league_fixtures_with_raw
@@ -136,7 +260,7 @@ class TestApiFootballGetFixturesWithRaw:
 
 
 class TestApiFootballFetchLeagueFixturesWithRaw:
-    """Lines 267-282: _fetch_league_fixtures_with_raw (single-league fan-out)."""
+    """_fetch_league_fixtures_with_raw (single-league, legacy per-date fan-out helper)."""
 
     @pytest.fixture(autouse=True)
     def _no_sleep(self):
