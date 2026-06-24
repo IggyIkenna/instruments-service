@@ -1014,6 +1014,14 @@ def _enumerate_v2_cefi(
                 )
 
 
+# DeFi instrument_types whose seed instrument_id re-keys to the on-chain ADDRESS (raw_symbol)
+# so the seed atom matches the MTDS per-instrument capture (pool_address / underlying-asset /
+# market / reserve address). See the re-key block in _enumerate_v2_defi.
+_ADDRESS_KEYED_ITYPES: frozenset[str] = frozenset(
+    {"pool", "lending", "a_token", "debt_token", "lending_market", "solana_lending"}
+)
+
+
 def _enumerate_v2_defi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1070,9 +1078,19 @@ def _enumerate_v2_defi(
         #     ``raw_symbol``). Re-key POOL seeds to ``raw_symbol.lower()`` when it is a 0x address.
         #   * instrument_type: the catalogue carries UPPERCASE leaf (``POOL``); the writer stamps
         #     lowercase (``pool``). Lowercase it so the atoms match.
+        # POOL + the LENDING-FAMILY instrument_types all key per-instrument on the on-chain
+        # ADDRESS (carried in raw_symbol): POOL = pool_address, lending = underlying-asset /
+        # market / reserve address. The MTDS writers (dex per-pool + the 6-handler per-instrument
+        # grain fix, mtds@02e50cb2) record_captured(instrument_id=<addr>.lower()), so the seed MUST
+        # re-key to raw_symbol.lower() when it is an on-chain address (0x or Solana base58) — else
+        # the glued ``VENUE-CHAIN:A_TOKEN:SYMBOL`` seed never reconciles the address-keyed capture
+        # (the ~1.04M lending/liquidation EU stuck-flat class). Non-address raw_symbols (or the
+        # residual unkeyable rows) keep the catalogue instrument_id. ``_ADDRESS_KEYED_ITYPES`` is a
+        # module constant (see top of file).
         canonical_itype = (instr.instrument_type or "").strip().lower()
         _raw_sym = (instr.raw_symbol or "").strip()
-        if canonical_itype == "pool" and _raw_sym.startswith("0x"):
+        _is_onchain_addr = _raw_sym.startswith("0x") or (32 <= len(_raw_sym) <= 44 and _raw_sym.isalnum())
+        if canonical_itype in _ADDRESS_KEYED_ITYPES and _is_onchain_addr:
             canonical_instrument_id = _raw_sym.lower()
         else:
             canonical_instrument_id = instr.instrument_id
@@ -1441,7 +1459,6 @@ def _enumerate_v2_sports(
         get_entity_league_coverage,
         get_source_coverage_start,
     )
-    from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
 
     _pcols = present_cols or list(_SPORTS_PRESENT_COLS)
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
