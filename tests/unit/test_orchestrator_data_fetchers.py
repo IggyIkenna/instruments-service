@@ -1166,6 +1166,7 @@ class TestOffSeasonSeasonWindowGuard:
 
         with _stack(
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch(
                 "unified_api_contracts.sports.get_expected_leagues_for_source",
                 return_value=[_mk_league("EPL"), _mk_league("BUNDESLIGA")],
