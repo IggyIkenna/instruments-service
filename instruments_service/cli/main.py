@@ -114,9 +114,12 @@ def _run_refresh_league_entity_coverage(argv: list[str] | None = None) -> None: 
     retried). This verb keeps the registry honest as new (league, entity) cells start producing
     captured rows (the 2014-2026 backfill, promotion/relegation, a league newly gaining coverage).
 
-    Default prints the diff vs the committed map; ``--write`` overwrites the UAC JSON in place
-    (then commit it in UAC via quickmerge). READ-ONLY against GCS — never writes the manifest.
-    Replaces the retired one-off ``scripts/refresh_sports_league_entity_coverage_2026_06_21.py``.
+    Default prints the diff vs the committed map; ``--write`` applies it. The write is an additive
+    UNION (committed entries + newly-observed) so it is SAFE to run mid-backfill — a league not yet
+    captured stays covered rather than being falsely flipped to out-of-coverage; ``--prune`` (post-
+    backfill only) replaces with the current scan to retire stale/numeric entries. Commit the JSON
+    in UAC via quickmerge. READ-ONLY against GCS — never writes the manifest. Replaces the retired
+    one-off ``scripts/refresh_sports_league_entity_coverage_2026_06_21.py``.
     """
     from pathlib import Path  # noqa: imports-inside-functions
 
@@ -128,7 +131,17 @@ def _run_refresh_league_entity_coverage(argv: list[str] | None = None) -> None: 
 
     _default_json = Path(_cov_mod.__file__).parent / "data" / "sports_league_entity_coverage.json"
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--write", action="store_true", help="Overwrite the UAC JSON in place (then commit in UAC).")
+    parser.add_argument("--write", action="store_true", help="Write the UAC JSON in place (then commit in UAC).")
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help=(
+            "Replace the map with ONLY the current scan (drops leagues no longer observed). "
+            "Default is additive UNION (keep committed entries + add newly-observed) — safe to run "
+            "mid-backfill since a not-yet-captured league is not falsely marked out-of-coverage. "
+            "Use --prune only AFTER the backfill completes to retire stale/numeric entries."
+        ),
+    )
     parser.add_argument("--uac-json", default=None, help="Override the UAC coverage JSON path.")
     args, _ = parser.parse_known_args(argv)
     uac_json = Path(str(args.uac_json)) if args.uac_json else _default_json  # pyright: ignore[reportAny]
@@ -148,27 +161,39 @@ def _run_refresh_league_entity_coverage(argv: list[str] | None = None) -> None: 
     accum: dict[str, set[str]] = {entity: set() for entity in sorted(entities)}
     for entity, lg in zip(cap["e"].tolist(), cap["l"].tolist(), strict=True):  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAny]
         accum.setdefault(str(entity), set()).add(str(lg))  # pyright: ignore[reportAny]
-    new_map: dict[str, list[str]] = {entity: sorted(leagues) for entity, leagues in sorted(accum.items())}
+    observed_map: dict[str, list[str]] = {entity: sorted(leagues) for entity, leagues in sorted(accum.items())}
 
-    pairs = sum(len(v) for v in new_map.values())
-    print(f"Observed coverage: {len(new_map)} entities, {pairs} (entity, league) pairs (bucket={bucket})")
+    pairs = sum(len(v) for v in observed_map.values())
+    print(f"Observed coverage: {len(observed_map)} entities, {pairs} (entity, league) pairs (bucket={bucket})")
     old_map: dict[str, list[str]] = json.loads(uac_json.read_text()) if uac_json.exists() else {}
-    added = {e: sorted(set(new_map.get(e, [])) - set(old_map.get(e, []))) for e in new_map}
+
+    # Additive UNION by default (keep committed + add newly-observed); --prune replaces with the
+    # current scan only. Union is safe mid-backfill — a not-yet-captured league stays covered
+    # rather than being falsely flipped to out-of-coverage.
+    prune = bool(args.prune)  # pyright: ignore[reportAny]
+    all_entities = sorted(set(observed_map) | set(old_map))
+    if prune:
+        final_map: dict[str, list[str]] = observed_map
+    else:
+        final_map = {e: sorted(set(old_map.get(e, [])) | set(observed_map.get(e, []))) for e in all_entities}
+
+    added = {e: sorted(set(observed_map.get(e, [])) - set(old_map.get(e, []))) for e in all_entities}
     added = {e: lg for e, lg in added.items() if lg}
-    removed = {e: sorted(set(old_map.get(e, [])) - set(new_map.get(e, []))) for e in old_map}
-    removed = {e: lg for e, lg in removed.items() if lg}
+    dropped = {e: sorted(set(old_map.get(e, [])) - set(final_map.get(e, []))) for e in all_entities}
+    dropped = {e: lg for e, lg in dropped.items() if lg}
     if added:
-        print(f"New (entity, league) pairs vs committed map: {json.dumps(added, sort_keys=True)}")
-    if removed:
-        print(f"Leagues absent from new scan (kept unless --write): {json.dumps(removed, sort_keys=True)}")
-    if not added and not removed:
+        print(f"Newly-observed (entity, league) pairs added: {json.dumps(added, sort_keys=True)}")
+    if dropped:
+        _verb = "DROPPED (--prune)" if prune else "absent from scan (KEPT — union; use --prune to drop)"
+        print(f"Committed leagues {_verb}: {json.dumps(dropped, sort_keys=True)}")
+    if not added and not dropped:
         print("No drift vs committed coverage map.")
 
     if bool(args.write):  # pyright: ignore[reportAny]
-        uac_json.write_text(json.dumps(new_map, indent=2, sort_keys=True) + "\n")
-        print(f"Wrote refreshed map -> {uac_json} (commit in UAC via quickmerge).")
+        uac_json.write_text(json.dumps(final_map, indent=2, sort_keys=True) + "\n")
+        print(f"Wrote {'pruned' if prune else 'union'} map -> {uac_json} (commit in UAC via quickmerge).")
     else:
-        print("DRY RUN — committed UAC JSON untouched (use --write to overwrite).")
+        print("DRY RUN — committed UAC JSON untouched (use --write to apply).")
 
 
 def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pragma: no cover
