@@ -87,6 +87,7 @@ from unified_api_contracts import (
     grain_for_instrument_type,
     has_source_priority,
     is_in_mvp_capture_universe,
+    is_mvp,
     pipeline_mode_for_source,
     valid_data_types_for_venue_instrument_type,
 )
@@ -907,6 +908,38 @@ def _cefi_entry_in_mvp_universe(
     )
 
 
+def _tradfi_entry_in_mvp_universe(instr: InstrumentCatalogEntry) -> bool:
+    """Return True iff the tradfi catalogue entry is within the MVP capture universe.
+
+    Mirrors :func:`_cefi_entry_in_mvp_universe` for the tradfi asset group:
+
+    1. Prefer the catalogue's pre-tagged ``mvp`` column (set by the rollup via UAC
+       ``is_in_mvp_capture_universe``): ``True``/``False`` short-circuits the predicate.
+    2. If absent (``None``), fall back to the shared UAC ``is_mvp`` predicate for
+       ``asset_group="tradfi"`` — uses the ``TradfiMvpRule`` (underliers/base_ccys/
+       instrument_types; equity carve-out via ``TRADFI_EQUITY_PERP_BASIS_UNIVERSE`` +
+       KRX stocks + CME/CBOE futures).
+
+    The ``base_ccy`` axis carries the underlier code for futures (e.g. ``"ES"``,
+    ``"VX"``), or the ticker for equities/ETFs (e.g. ``"SPY"``).  The enumerator
+    passes ``instr.base_asset or instr.underlying`` (stripped, uppercased) so the
+    call mirrors what the capture writer computes.
+
+    Bundle instrument_types are normalised via :func:`_mvp_capture_itype` (asset-group-
+    agnostic: ``OPTIONS_CHAIN``/``COMBO`` → ``OPTION``, ``FUTURES_CHAIN`` → ``FUTURE``).
+    """
+    if instr.mvp is not None:
+        return instr.mvp
+    base_ccy = (instr.base_asset or instr.underlying).strip().upper() or None
+    return is_mvp(
+        "tradfi",
+        instr.venue,
+        _mvp_capture_itype(instr.instrument_type),
+        data_type=None,
+        base_ccy=base_ccy,
+    )
+
+
 def _enumerate_v2_cefi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1309,6 +1342,12 @@ def _enumerate_v2_tradfi(
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
     for instr in catalog:
+        # Operator 2026-06-24: bound the EU denominator to the MVP capture universe
+        # (mirrors the cefi gate: cefi_universe_capture_rule_2026_06_23).  Instruments
+        # outside the MVP set MUST NOT be seeded — seeding them inflates the denominator
+        # and deflates honest-coverage even though we never intend to capture them.
+        if not _tradfi_entry_in_mvp_universe(instr):
+            continue
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
         if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
@@ -1810,6 +1849,14 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
             # Use the DERIVED underlying as the MVP base (the leaf may carry a blank
             # underlying — derived above from the instrument_id).
             bundle_mvp[key] = bundle_mvp.get(key, False) or _leaf_is_mvp(instr, underlying)
+        elif asset_group == "tradfi":
+            # Carry the rolled-up MVP tag for tradfi bundles so the MVP gate in
+            # _enumerate_v2_tradfi can read it directly from the synthetic entry's
+            # ``mvp`` column (the bundle instrument_type — options_chain/futures_chain/
+            # combo — is not directly recognisable by the leaf-level ``is_mvp``
+            # predicate, which keys off the LEAF instrument_type). A bundle is MVP
+            # iff ANY of its leaves is MVP (the leaf's mvp column or _tradfi_entry_in_mvp_universe).
+            bundle_mvp[key] = bundle_mvp.get(key, False) or _tradfi_entry_in_mvp_universe(instr)
         if key not in bundles:
             bundles[key] = [instr.available_from, instr.available_to]
             if instr.available_to is None:
@@ -1842,9 +1889,10 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
                 data_type=None,
                 underlying=underlying,
                 base_asset=underlying,
-                # Carry the rolled-up MVP tag so the cefi enumerator gate reads it
-                # directly (the bundle instrument_type is options_chain/futures_chain,
-                # which the predicate doesn't recognise). None for non-cefi.
+                # Carry the rolled-up MVP tag so the cefi/tradfi enumerator gates
+                # read it directly (the bundle instrument_type is options_chain/
+                # futures_chain/combo, which the leaf-level predicates don't
+                # recognise). None for other asset groups.
                 mvp=bundle_mvp.get((venue, chain, underlying, bundle_it)),
             )
         )
