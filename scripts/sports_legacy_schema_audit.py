@@ -49,7 +49,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pyarrow.types as pat
 from google.api_core.exceptions import NotFound
-from google.cloud import storage
+from google.cloud import storage  # noqa: TID251 — scripts/ direct GCS access, consistent with all other one-off scripts in this repo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
