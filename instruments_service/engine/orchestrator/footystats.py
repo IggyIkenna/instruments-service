@@ -18,6 +18,7 @@ split, and mutable caches remain package-level attributes.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ __all__ = [
     "_fetch_footystats_matches",
     "_fetch_footystats_odds",
     "_fetch_footystats_predictions",
+    "_load_scheduled_footystats_fixture_map",
     "_validate_predictions_null_rates",
 ]
 
@@ -548,6 +550,66 @@ async def _fetch_footystats_matches(
     return counts
 
 
+def _load_scheduled_footystats_fixture_map(bucket: str, date: str) -> dict[str, _orch.pd.Timestamp | None]:
+    """Read the FootyStats matches parquet (written by _fetch_footystats_matches) for *date*.
+
+    Returns a mapping ``{canonical_fixture_id: kickoff_utc_or_None}`` for every
+    fixture that was scheduled for the day.  Used by ``_fetch_footystats_odds`` to
+    inject NaN-fill rows for scheduled fixtures that the odds API did not return
+    (``has_odds=False``), preserving honest-coverage denominator integrity.
+
+    Returns an empty dict when the matches parquet is absent (e.g. ODDS-only reruns
+    where ``_fetch_footystats_matches`` was not run) — in that case NaN-fill is
+    skipped silently.
+    """
+    result: dict[str, _orch.pd.Timestamp | None] = {}
+    try:
+        storage_client = _orch.get_storage_client()
+        pm = _orch._sports_ref_pm("footystats_matches")
+        # Try canonical path (pipeline_mode= prefix) first, fall back to legacy.
+        canon_prefix = f"sports_reference/by_date/day={date}/pipeline_mode={pm}/entity=footystats_matches/"
+        legacy_prefix = f"sports_reference/by_date/day={date}/entity=footystats_matches/"
+        blobs = list(storage_client.list_blobs(bucket=bucket, prefix=canon_prefix, max_results=100))
+        if not blobs:
+            blobs = list(storage_client.list_blobs(bucket=bucket, prefix=legacy_prefix, max_results=100))
+        parquet_blobs = [b for b in blobs if b.name.endswith(".parquet")]
+        if not parquet_blobs:
+            _orch.logger.debug(
+                "FootyStats odds NaN-fill: no footystats_matches parquets found for date=%s — skipping fill",
+                date,
+            )
+            return result
+        for blob_meta in parquet_blobs:
+            data = storage_client.download_bytes(bucket=bucket, blob_path=blob_meta.name)
+            frame = _orch.pd.read_parquet(_orch.io.BytesIO(data), columns=None)
+            if "canonical_fixture_id" not in frame.columns:
+                continue
+            ko_col = "kickoff_utc" if "kickoff_utc" in frame.columns else None
+            for _, row in frame.iterrows():
+                fid = str(row["canonical_fixture_id"]) if row["canonical_fixture_id"] else ""
+                if not fid:
+                    continue
+                kickoff: _orch.pd.Timestamp | None = None
+                if ko_col:
+                    raw_ko = row[ko_col]
+                    if raw_ko and raw_ko == raw_ko:  # not NaT / NaN
+                        with contextlib.suppress(Exception):
+                            kickoff = _orch.pd.Timestamp(raw_ko, tz="UTC")
+                result[fid] = kickoff
+        _orch.logger.debug(
+            "FootyStats odds NaN-fill: %d scheduled fixtures loaded from GCS for date=%s",
+            len(result),
+            date,
+        )
+    except Exception as exc:
+        _orch.logger.warning(
+            "FootyStats odds NaN-fill: failed to load scheduled fixture map for date=%s (%s) — skipping fill",
+            date,
+            exc,
+        )
+    return result
+
+
 async def _fetch_footystats_odds(
     date: str,
     api_key: str,
@@ -601,6 +663,12 @@ async def _fetch_footystats_odds(
         _orch.logger.info("FootyStats odds: skipping date=%s (all canonical leagues captured)", date)
         return counts
     attempt_ts = _orch.datetime.now(_orch.UTC)
+    # NaN-fill: load the scheduled fixture set from the footystats_matches parquet
+    # written earlier in the same day's orchestration run.  Missing fixtures (those
+    # the API did not return because has_odds=False) receive a NaN-fill row so the
+    # honest-coverage denominator stays intact.  Returns {} on any GCS error so the
+    # NaN-fill step degrades gracefully without blocking the odds write.
+    _scheduled_fixture_map = _load_scheduled_footystats_fixture_map(bucket, date)
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
@@ -609,6 +677,20 @@ async def _fetch_footystats_odds(
             _orch.cast(_orch.FootystatsAdapter, adapter).get_fixture_odds_snapshot(date),
             timeout=_FS_PER_DATE_TIMEOUT_SECS,
         )
+        # NaN-fill (complete absence): if the odds API returned nothing but there
+        # ARE scheduled fixtures, seed the DataFrame from the scheduled map so the
+        # normal per-league write pipeline runs with NaN market columns for each
+        # fixture.  Partial-absence NaN-fill (some fixtures returned, some not) is
+        # handled further below, after canonical_fixture_id is computed.
+        if not odds_rows and _scheduled_fixture_map:
+            odds_rows = [
+                {"canonical_fixture_id": fid, "kickoff_utc": ko} for fid, ko in _scheduled_fixture_map.items() if fid
+            ]
+            _orch.logger.info(
+                "FootyStats odds: no API data for date=%s — NaN-filling %d scheduled fixtures",
+                date,
+                len(odds_rows),
+            )
         if odds_rows:
             df = _orch.pd.DataFrame(odds_rows)
             # PIT safety: FootyStats publishes odds ~3 days before kickoff (empirically verified
@@ -640,6 +722,30 @@ async def _fetch_footystats_odds(
 
             if "home_team" in df.columns and "away_team" in df.columns:
                 df["canonical_fixture_id"] = df.apply(_odds_canonical, axis=1)
+
+            # NaN-fill: add one row per scheduled fixture that the API did not return.
+            # The adapter's ``get_fixture_odds_snapshot`` filters out has_odds=False
+            # rows, so fixtures scheduled for today but without odds are silently
+            # absent from ``odds_rows``.  Injecting NaN-fill rows keeps them in the
+            # parquet (all market columns = NaN) so the honest-coverage denominator
+            # accounts for every scheduled fixture.
+            if _scheduled_fixture_map:
+                _returned_ids: set[str] = (
+                    set(df["canonical_fixture_id"].dropna().astype(str).unique())
+                    if "canonical_fixture_id" in df.columns
+                    else set()
+                )
+                _missing = {fid: ko for fid, ko in _scheduled_fixture_map.items() if fid and fid not in _returned_ids}
+                if _missing:
+                    _nan_rows = [{"canonical_fixture_id": fid, "kickoff_utc": ko} for fid, ko in _missing.items()]
+                    _nan_df = _orch.pd.DataFrame(_nan_rows)
+                    df = _orch.pd.concat([df, _nan_df], ignore_index=True)
+                    _orch.logger.info(
+                        "FootyStats odds NaN-fill: %d/%d scheduled fixtures had no odds on date=%s",
+                        len(_missing),
+                        len(_scheduled_fixture_map),
+                        date,
+                    )
             counts["footystats_odds"] = len(df)
 
             if "canonical_fixture_id" in df.columns:
@@ -755,10 +861,11 @@ async def _fetch_footystats_odds(
             odds_manifest.write()
             _orch.logger.info("FootyStats odds: %d rows written for date=%s", len(df), date)
         else:
-            _orch.logger.info("FootyStats odds: no odds data for date=%s", date)
-            # Honest-coverage: legitimate empty (no odds for this date).
+            # No odds API rows AND no scheduled fixtures in the matches parquet
+            # (or matches parquet absent — e.g. ODDS-only rerun).  Genuine empty.
             # ODDS slice tagged BATCH_FOOTYSTATS (source='footystats'); fixed
             # from BATCH_ODDS_API 2026-06-22 — prior stamp caused fail_fast rejects.
+            _orch.logger.info("FootyStats odds: no odds data and no scheduled fixtures for date=%s", date)
             odds_manifest.record_empty(
                 row_key=_row_key,
                 attempted_at=attempt_ts,
