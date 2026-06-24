@@ -294,15 +294,42 @@ def _enrich_raw_event_fields(raw_item: object) -> None:
     Populates series_slug, event_title, event_slug from events[0] if not already set,
     and lifts the CLOB ``tokens[].token_id`` list into ``clobTokenIds`` (date/batch
     mode — the CLOB shape lacks the top-level ``clobTokenIds`` the Gamma shape has).
+
+    43a (2026-06-23): the CLOB-history enumeration shape carries no gamma
+    ``createdAt``/``startDate`` (so ``_parse_market``'s lifecycle ``available_from``
+    derivation gets None), but it DOES carry ``accepting_order_timestamp`` (when
+    orders opened) and ``game_start_time`` (event start) — best-effort lifecycle
+    lower bounds. Lift one into ``start_date`` so CLOB-history catalogue rows carry
+    a non-NULL ``available_from``; without it the honest-absence enumerator treats
+    out-of-life dates as in-window and emits ``empty_confirmed`` rather than a blank.
+    Only applied when NO gamma creation field is present — never overrides a real
+    gamma bound.
     """
     if isinstance(raw_item, dict):
         _enrich_clob_token_ids(raw_item)
+        _enrich_clob_lifecycle_lower_bound(raw_item)
     event = _pm._get_first_event(raw_item)
     if event is None or not isinstance(raw_item, dict):
         return
     raw_item.setdefault("series_slug", _pm._extract_series_slug(raw_item))
     raw_item.setdefault("event_title", event.get("title"))
     raw_item.setdefault("event_slug", event.get("slug"))
+
+
+def _enrich_clob_lifecycle_lower_bound(raw_item: dict[str, object]) -> None:
+    """Best-effort ``available_from`` for CLOB-history markets (43a, 2026-06-23).
+
+    The CLOB ``/markets`` shape lacks gamma ``createdAt``/``startDate`` but carries
+    ``accepting_order_timestamp`` / ``game_start_time``. When neither gamma creation
+    field is present, lift the earliest available CLOB timestamp into ``start_date``
+    so ``PolymarketGammaMarket`` validation yields a non-NULL lifecycle lower bound.
+    """
+    has_creation = any(raw_item.get(key) for key in ("start_date", "startDate", "created_at", "createdAt"))
+    if has_creation:
+        return
+    clob_from = raw_item.get("accepting_order_timestamp") or raw_item.get("game_start_time")
+    if isinstance(clob_from, str) and clob_from:
+        raw_item["start_date"] = clob_from
 
 
 def _extract_series_slug(raw: dict[str, object]) -> str | None:
