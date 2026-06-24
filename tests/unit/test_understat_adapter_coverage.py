@@ -686,3 +686,91 @@ class TestUnderstatFetchErrorTracking:
         ):
             await adapter.get_match_shots("12345")
         assert adapter._fetch_error_count == 0
+
+
+class TestUnderstatFailedLeagueNameTracking:
+    """Tests for _failed_league_names — records WHICH leagues errored so the
+    orchestrator scopes record_failed(HTTP_NOT_FOUND) to ONLY the errored
+    leagues and record_empty for the rest (the XG_SHOTS over-fail fix)."""
+
+    def test_initial_failed_league_names_is_empty(self) -> None:
+        adapter = UnderstatAdapter()
+        assert adapter._failed_league_names == set()
+
+    @pytest.mark.asyncio
+    async def test_get_fixtures_resets_failed_league_names(self) -> None:
+        """get_fixtures resets _failed_league_names before each call."""
+        adapter = UnderstatAdapter()
+        adapter._failed_league_names = {"STALE_LEAGUE"}
+        raw = {"dates": []}
+        mock_session = _make_aiohttp_mock(raw)
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            await adapter.get_fixtures("2026-09-15")
+        assert adapter._failed_league_names == set()
+
+    @pytest.mark.asyncio
+    async def test_fetch_league_fixtures_error_records_league_name(self) -> None:
+        """A per-league error records that league's NAME in _failed_league_names."""
+        adapter = UnderstatAdapter()
+        adapter._failed_league_names = set()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                AsyncMock(side_effect=Exception("HTTP 404")),
+            ),
+            patch.object(adapter, "_classify_error", return_value="HTTP_NOT_FOUND"),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            await adapter._fetch_league_fixtures("La_Liga", 2019, "2019-10-05")
+        assert adapter._failed_league_names == {"La_Liga"}
+
+    @pytest.mark.asyncio
+    async def test_get_fixtures_all_leagues_404_records_all_names(self) -> None:
+        """All 6 leagues erroring records all 6 league NAMES."""
+        adapter = UnderstatAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                AsyncMock(side_effect=Exception("HTTP 404")),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            await adapter.get_fixtures("2019-10-05")
+        assert adapter._failed_league_names == {
+            "EPL",
+            "La_Liga",
+            "Bundesliga",
+            "Serie_A",
+            "Ligue_1",
+            "RFPL",
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_match_ids_for_date_resets_and_records_failed_names(self) -> None:
+        """get_match_ids_for_date resets then records errored league names."""
+        adapter = UnderstatAdapter()
+        adapter._failed_league_names = {"STALE"}
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(
+                adapter,
+                "_get_with_retry",
+                AsyncMock(side_effect=Exception("HTTP 404")),
+            ),
+            patch.object(adapter, "_emit_fetch_failed"),
+        ):
+            await adapter.get_match_ids_for_date("2019-10-05")
+        # All 6 leagues errored; STALE was reset out.
+        assert "STALE" not in adapter._failed_league_names
+        assert adapter._failed_league_names == {
+            "EPL",
+            "La_Liga",
+            "Bundesliga",
+            "Serie_A",
+            "Ligue_1",
+            "RFPL",
+        }
