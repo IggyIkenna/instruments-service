@@ -916,6 +916,22 @@ def main() -> int:
         ),
     )
     p.add_argument(
+        "--unphantom-only",
+        action="store_true",
+        help=(
+            "Run ONLY the reverse re-validation pass (implies --unphantom) and "
+            "SKIP the forward phantom-flagging pass entirely. Safe-by-construction: "
+            "--unphantom-only --apply can ONLY flip phantom->captured "
+            "(attempted_failed -> captured), NEVER captured -> attempted_failed, so "
+            "there is ZERO forward-flip risk even while candidate_parquet_paths "
+            "still misses some path shapes (e.g. the sports footystats "
+            "fetched_at_hour= / transfermarkt_teams.parquet / league=-without-season= "
+            "shapes that make the FORWARD pass over-flag real captured rows). Use this "
+            "to heal genuinely-false phantoms (data IS on disk under pipeline_mode=) "
+            "without the destructive forward --apply."
+        ),
+    )
+    p.add_argument(
         "--manifest-bucket",
         type=str,
         default="",
@@ -1002,6 +1018,10 @@ def main() -> int:
     )
     args = p.parse_args()
 
+    # --unphantom-only implies --unphantom (it runs the reverse re-validation only).
+    if args.unphantom_only:
+        args.unphantom = True
+
     os.environ.setdefault("CLOUD_PROVIDER", args.cloud)
     cfg = dict(ASSET_GROUP_CONFIG[args.asset_group])
     # Resolve bucket via UTL SSOT; --manifest-bucket overrides for per-data-type buckets
@@ -1068,48 +1088,21 @@ def main() -> int:
             logger.info("DRY-RUN — pass --apply to DELETE the phantom set. No writes.")
         return 0
 
-    captured_mask = df["capture_status"].fillna("") == "captured"
-    if args.venues:
-        wanted_venues = {v.strip() for v in args.venues.split(",") if v.strip()}
-        captured_mask = captured_mask & df["venue"].isin(wanted_venues)
-    if args.data_types:
-        wanted_dts = {d.strip() for d in args.data_types.split(",") if d.strip()}
-        captured_mask = captured_mask & df["data_type"].isin(wanted_dts)
-    if args.start_date:
-        captured_mask = captured_mask & (df["date"].astype(str) >= args.start_date)
-    if args.end_date:
-        captured_mask = captured_mask & (df["date"].astype(str) <= args.end_date)
+    # --unphantom-only: skip the FORWARD phantom-flagging pass ENTIRELY. We never
+    # build captured_idx, never audit captured rows, never compute phantom_idx — so
+    # no captured row can be flipped to attempted_failed. Only the reverse
+    # re-validation (--unphantom logic) runs below.
+    forward_pass_enabled = not args.unphantom_only
 
-    # 2026-05-04: drop schema_v4 vestigial rows from audit scope. These are
-    # pre-v5 daily-manifest records with only ``venue`` populated (no
-    # ``data_type``, ``instrument_type``, etc.) and represent informational
-    # "this venue was touched on this date" markers, not real shards. The
-    # audit can't probe an empty ``data_type=`` substring, so these
-    # systematically false-positive as phantoms (9,757 rows on 2026-05-04
-    # CeFi). They're harmless legacy and should be filtered out, not flipped
-    # to attempted_failed (which would force VMs to retry venues that don't
-    # have a target data_type to retry against).
-    if "schema_version" in df.columns:
-        v4_empty_dt = (df["schema_version"] == 4) & (df["data_type"].fillna("").astype(str).str.len() == 0)
-        v4_in_scope = (captured_mask & v4_empty_dt).sum()
-        if v4_in_scope > 0:
-            logger.info(
-                "Dropping %d schema_v4 vestigial rows (empty data_type — "
-                "pre-v5 informational manifest records, not real shards)",
-                v4_in_scope,
-            )
-        captured_mask = captured_mask & ~v4_empty_dt
-
-    captured_idx = df[captured_mask].index
-    logger.info("Captured rows in scope: %d", len(captured_idx))
-    # Early exit only when there's no forward pass AND no reverse-unphantom pass to do.
-    # (--unphantom alone, with no captured rows in scope, is still meaningful.)
-    if len(captured_idx) == 0 and not args.unphantom:
-        logger.info("Nothing to audit. Exiting.")
-        return 0
+    captured_idx: pd.Index = df.index[:0]  # empty by default (overwritten if forward runs)
+    if forward_pass_enabled:
+        captured_idx = _build_forward_captured_idx(df, args)
+        logger.info("Captured rows in scope: %d", len(captured_idx))
+    else:
+        logger.info("--unphantom-only: SKIPPING forward phantom-flagging pass (reverse re-validation only).")
 
     real_or_phantom: dict[int, bool] = {}
-    if len(captured_idx) > 0:
+    if forward_pass_enabled and len(captured_idx) > 0:
         if args.asset_group == "sports":
             real_or_phantom = _audit_sports(storage_client, bucket_name, df, captured_idx, args.workers)
         else:
@@ -1119,11 +1112,12 @@ def main() -> int:
 
     phantom_idx = [i for i, real in real_or_phantom.items() if not real]
     real_count = sum(1 for r in real_or_phantom.values() if r)
-    logger.info("=" * 60)
-    logger.info("Audit summary (forward — captured rows missing parquet):")
-    logger.info("  Real captures:    %d", real_count)
-    logger.info("  Phantom captures: %d  ← will flip to attempted_failed", len(phantom_idx))
-    logger.info("=" * 60)
+    if forward_pass_enabled:
+        logger.info("=" * 60)
+        logger.info("Audit summary (forward — captured rows missing parquet):")
+        logger.info("  Real captures:    %d", real_count)
+        logger.info("  Phantom captures: %d  ← will flip to attempted_failed", len(phantom_idx))
+        logger.info("=" * 60)
 
     # Reverse pass: re-validate previously phantom-flagged rows. The forward
     # audit can only ADD phantoms — it never UN-flags rows that earlier audit
@@ -1215,6 +1209,49 @@ def main() -> int:
     storage_client.upload_from_file_obj(bucket_name, cfg["index"], out)
     logger.info("Done.")
     return 0
+
+
+def _build_forward_captured_idx(df: pd.DataFrame, args: argparse.Namespace) -> pd.Index:
+    """Build the captured-rows index for the FORWARD phantom-flagging pass.
+
+    Applies the venue / data_type / start-date / end-date scope filters and the
+    schema_v4 vestigial-row drop, returning the captured rows in scope. Extracted
+    from ``main`` so ``--unphantom-only`` can cleanly skip the entire forward pass
+    (it never calls this).
+    """
+    captured_mask = df["capture_status"].fillna("") == "captured"
+    if args.venues:
+        wanted_venues = {v.strip() for v in args.venues.split(",") if v.strip()}
+        captured_mask = captured_mask & df["venue"].isin(wanted_venues)
+    if args.data_types:
+        wanted_dts = {d.strip() for d in args.data_types.split(",") if d.strip()}
+        captured_mask = captured_mask & df["data_type"].isin(wanted_dts)
+    if args.start_date:
+        captured_mask = captured_mask & (df["date"].astype(str) >= args.start_date)
+    if args.end_date:
+        captured_mask = captured_mask & (df["date"].astype(str) <= args.end_date)
+
+    # 2026-05-04: drop schema_v4 vestigial rows from audit scope. These are
+    # pre-v5 daily-manifest records with only ``venue`` populated (no
+    # ``data_type``, ``instrument_type``, etc.) and represent informational
+    # "this venue was touched on this date" markers, not real shards. The
+    # audit can't probe an empty ``data_type=`` substring, so these
+    # systematically false-positive as phantoms (9,757 rows on 2026-05-04
+    # CeFi). They're harmless legacy and should be filtered out, not flipped
+    # to attempted_failed (which would force VMs to retry venues that don't
+    # have a target data_type to retry against).
+    if "schema_version" in df.columns:
+        v4_empty_dt = (df["schema_version"] == 4) & (df["data_type"].fillna("").astype(str).str.len() == 0)
+        v4_in_scope = (captured_mask & v4_empty_dt).sum()
+        if v4_in_scope > 0:
+            logger.info(
+                "Dropping %d schema_v4 vestigial rows (empty data_type — "
+                "pre-v5 informational manifest records, not real shards)",
+                v4_in_scope,
+            )
+        captured_mask = captured_mask & ~v4_empty_dt
+
+    return df[captured_mask].index
 
 
 if __name__ == "__main__":

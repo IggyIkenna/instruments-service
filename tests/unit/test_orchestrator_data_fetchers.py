@@ -151,10 +151,16 @@ class TestFetchUnderstatXg:
 
     @pytest.mark.asyncio
     async def test_fetch_errors_on_adapter_writes_record_failed(self) -> None:
-        """When adapter has _fetch_error_count > 0 and no fixtures, writes record_failed."""
+        """When the EPL league fetch errored (in _failed_league_names) and there are
+        no fixtures, record_failed is written for EPL only (the errored league)."""
         mock_adapter = MagicMock()
         mock_adapter.get_fixtures = AsyncMock(return_value=[])
         mock_adapter._fetch_error_count = 3  # simulate partial league fetch errors
+        # The orchestrator now scopes record_failed to the leagues that GENUINELY
+        # errored (mapped name->canonical). EPL errored → record_failed(EPL); a
+        # non-errored league would get record_empty instead. _canonical_league_id
+        # is the real one here (not patched), and "EPL" canonicalises to "EPL".
+        mock_adapter._failed_league_names = {"EPL"}
         mock_mw = MagicMock()
         mock_mw_cls = MagicMock(return_value=mock_mw)
 
@@ -265,6 +271,10 @@ class TestRunUnderstatShotsDate:
         mock_adapter.get_match_ids_for_date = AsyncMock(return_value=[("match1", "EPL")])
         # Return one shot dict; _coerce_adapter_output handles dicts
         mock_adapter.get_match_shots = AsyncMock(return_value=[{"x": 0.5, "y": 0.3, "xG": 0.12}])
+        # int (not a MagicMock) so the per-match error-attribution comparison
+        # (_fetch_error_count > snapshot) works; no shots-call error here.
+        mock_adapter._fetch_error_count = 0
+        mock_adapter._failed_league_names = set()
         mock_mw = MagicMock()
         mock_mw_cls = MagicMock(return_value=mock_mw)
 
