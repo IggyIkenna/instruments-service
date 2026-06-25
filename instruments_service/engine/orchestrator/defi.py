@@ -26,7 +26,6 @@ else:  # pragma: no cover - runtime namespace indirection
     from instruments_service.engine.orchestrator._pkg_ref import orch_namespace as _orch
 
 __all__ = [
-    "_L2_DEX_PERP_VENUES",
     "_SOLANA_DEFI_VENUES",
     "_STATIC_DEFI_VENUES",
     "_SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX",
@@ -90,19 +89,14 @@ _SOLANA_DEFI_VENUES: list[str] = [
     "ORCA-SOLANA",
     "MARINADE-SOLANA",
     "JITO-SOLANA",
-    # Pacifica: Solana DEX perp clone (mainnet 2025-06). Added 2026-05-12.
-    "PACIFICA-SOLANA",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
 ]
-
-
-# L2 + other chain DEX perp venues (non-EVM-mainnet, non-Solana, REST API discovery).
-_L2_DEX_PERP_VENUES: list[str] = [
-    # Lighter: zkSync L2 CLOB perp DEX (mainnet 2024-08). Added 2026-05-12.
-    "LIGHTER-ZKSYNC",
-    # Extended: StarkNet perp DEX (mainnet 2024-07). Added 2026-05-12.
-    "EXTENDED-STARKNET",
-]
+# NOTE: PACIFICA-SOLANA / LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp
+# CLOBs classified as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, same as HYPERLIQUID/
+# ASTER). They were wrongly enumerated here → captured into the defi
+# instrument-catalog. Reclassified to `_CEFI_VENUES` (venue_core.py) 2026-06-25
+# (instruments_foundation_completeness_2026_06_24.md): they ride the cefi
+# backfill like HYPERLIQUID/ASTER, not the defi path.
 
 
 def _build_defi_venues() -> list[str]:
@@ -113,7 +107,6 @@ def _build_defi_venues() -> list[str]:
             venues.append(f"{prefix}-{chain}")
     venues.extend(_orch._STATIC_DEFI_VENUES)
     venues.extend(_orch._SOLANA_DEFI_VENUES)
-    venues.extend(_orch._L2_DEX_PERP_VENUES)
     return venues
 
 
