@@ -179,14 +179,10 @@ _SOURCE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
 def _pipeline_mode_for_spec(spec: EntitySpec) -> PipelineMode:
     """Return the batch PipelineMode for an EntitySpec.
 
-    Special-case ODDS data_type: tagged BATCH_ODDS_API per SOURCE_PRIORITY
-    even though spec.source == "footystats" (the odds adapter wraps the
-    odds_api source). Singleton VENUES spec carries empty source — fall
-    back to BATCH_INSTRUMENTS_SERVICE since the venues table is the
+    Singleton VENUES spec carries empty source — fall back to
+    BATCH_INSTRUMENTS_SERVICE since the venues table is the
     instruments-service catalog's own reference data.
     """
-    if spec.data_type == "ODDS":
-        return PipelineMode.BATCH_ODDS_API
     if not spec.source:
         return PipelineMode.BATCH_INSTRUMENTS_SERVICE
     return _SOURCE_TO_PIPELINE_MODE[spec.source]
