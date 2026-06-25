@@ -1014,7 +1014,7 @@ def test_create_yahoo_index_records_no_filter_returns_all() -> None:
     # Canonical keys carry the -USD base-quote suffix (match GCS/symbology + resolver).
     assert "CBOE:INDEX:VIX-USD" not in keys  # VIX cash-index retired 2026-06-25
     assert "ICE:INDEX:DXY-USD" in keys
-    for symbol in ("US3M", "US5Y", "US10Y", "US30Y"):
+    for symbol in ("US3M", "US2Y", "US5Y", "US10Y", "US30Y"):
         assert f"CBOE:INDEX:{symbol}-USD" in keys
 
 
