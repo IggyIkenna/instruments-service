@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 from unified_trading_library import resolve_bucket_name
-from unified_trading_library.cloud_interface import gcs_copy_object, gcs_delete_object, get_storage_client
+from unified_trading_library import gcs_copy_object, gcs_delete_object, get_storage_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("wipe_footystats_odds")
