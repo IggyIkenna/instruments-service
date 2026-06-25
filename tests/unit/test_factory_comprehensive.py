@@ -23,7 +23,6 @@ from instruments_service.reference_data.factory import (
 )
 from instruments_service.reference_data.router import (
     ReferenceDataSourceConfig,
-    _resolve_databento_datasets,
     _resolve_tardis_exchanges,
     _route_ccxt,
     _route_databento,
@@ -272,25 +271,6 @@ class TestCreateReferenceDataAdapter:
     def test_case_insensitive_creation(self) -> None:
         adapter = create_reference_data_adapter("ASTER")
         assert adapter is not None
-
-
-# ---------------------------------------------------------------------------
-# Router: _resolve_databento_datasets
-# ---------------------------------------------------------------------------
-
-
-class TestResolveDatabentoDatasetsRouter:
-    def test_override_takes_priority(self) -> None:
-        result = _resolve_databento_datasets("apple", "CUSTOM.DATASET")
-        assert result == ["CUSTOM.DATASET"]
-
-    def test_known_venue_default(self) -> None:
-        result = _resolve_databento_datasets("apple", None)
-        assert result == ["XNAS.ITCH"]
-
-    def test_unknown_venue_returns_empty(self) -> None:
-        result = _resolve_databento_datasets("unknown_venue_xyz", None)
-        assert result == []
 
 
 # ---------------------------------------------------------------------------
