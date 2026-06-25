@@ -96,7 +96,19 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         # 1. Fetch curated futures/options from TRADFI_DATABENTO_INSTRUMENTS
         #    Filter to only instruments matching the requested venue.
         #    Grouped by (dataset, stype_in) to batch API calls.
-        filtered_defs = [d for d in TRADFI_DATABENTO_INSTRUMENTS if vf is None or d.venue == vf]
+        # G1.b (2026-06-25): EXCLUDE cross-domain defs whose asset_group is NOT a valid
+        # AssetClass — e.g. _NET_PROFITABLE_EQUITY_PERP_SINGLES carry asset_group="cefi"
+        # (the equity legs of crypto-venue arb; they belong to the CEFI pipeline, not tradfi).
+        # The registry comment intends exactly this ("grouping with cefi keeps them out of the
+        # tradfi data pipeline"); 50bf1c8 only un-crashed them (fell through to EQUITY) — this
+        # is the ACTUAL exclusion. SP500-overlap tickers (AAPL/AMZN/…) still enter tradfi via
+        # the SP500 equity path below (_get_equity_symbols), correctly tagged EQUITY.
+        _valid_asset_groups = frozenset(AssetClass)
+        filtered_defs = [
+            d
+            for d in TRADFI_DATABENTO_INSTRUMENTS
+            if (vf is None or d.venue == vf) and d.asset_group in _valid_asset_groups
+        ]
         if not filtered_defs and vf:
             _db.logger.info("Databento: no instruments registered for venue %s", vf)
 
@@ -750,6 +762,18 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         # Databento returns CME event contracts (EC* roots) as instrument_class="BAG"
         if inst_class == "BAG" and raw_symbol[:2] == "EC":
             instrument_type = InstrumentType.EVENT_CONTRACT
+        # G1.c (2026-06-25): XCBF.PITCH (VX/VIX) — outright futures ONLY. The VX.FUT parent
+        # symbology also returns calendar-spread definitions (instrument_class "S",
+        # e.g. "VX/F1:1:S - VX/G1:1:B") that are NOT in the MVP universe (the VIX-15m source
+        # is the outright front contract); they were polluting CBOE as 4,216 mis-typed
+        # SPOT_PAIR rows. Keep only outright futures (class "F"/"M"); drop every non-outright.
+        if dataset == "XCBF.PITCH" and inst_class not in ("F", "M"):
+            return None
+        # G1.d (2026-06-25): DBEQ.BASIC class "S" is an EQUITY spot listing, not an FX
+        # SPOT_PAIR — the default _CLASS_TO_TYPE["S"]=SPOT_PAIR mis-typed 318 NASDAQ/NYSE
+        # equities as SPOT_PAIR (a separate, polluting row beside the real EQUITY row).
+        if dataset == "DBEQ.BASIC" and inst_class == "S":
+            instrument_type = InstrumentType.EQUITY
         currency = str(getattr(row, "currency", "USD") or "USD")
 
         expiry = self._parse_expiry_from_row(row)
