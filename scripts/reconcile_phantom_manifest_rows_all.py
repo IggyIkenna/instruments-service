@@ -571,7 +571,7 @@ def _build_triage_records(
             recommendation = "accept_expected_gap"
         elif asset_group == "tradfi" and date_str:
             try:
-                dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
+                dt = datetime.strptime(date_str[:10], "%Y-%m-%d")  # noqa: DTZ007  # date-only parse, no tz needed — weekday check only
                 if dt.weekday() >= 5:  # 5=Saturday, 6=Sunday
                     reason = "PHANTOM_WEEKEND_TRADFI"
                     confidence = "HIGH"
