@@ -141,9 +141,6 @@ async def _fetch_weather_data(
         get_expected_leagues_for_source,
     )
 
-    from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
-
-    adapter = OpenMeteoAdapter(api_key=api_key) if api_key else OpenMeteoAdapter()
     counts: dict[str, int] = {}
 
     manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
@@ -428,6 +425,11 @@ async def _fetch_weather_data(
 
     # 4. Fetch weather match window for each fixture venue.
     # Each venue gets a 3-hour window (KO, KO+1h, KO+2h) at each lead time.
+    # Deferred until after all skip-guards so off-season / coverage-start / no-fixture
+    # paths never instantiate the adapter (and never trigger any network call).
+    from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
+
+    adapter = OpenMeteoAdapter(api_key=api_key) if api_key else OpenMeteoAdapter()
     weather_rows: list[dict[str, object]] = []
     _per_venue_errors: dict[str, str] = {}
     for lat, lon, venue_key, ko_hour in venues_with_coords:
