@@ -185,9 +185,7 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # workaround stamp on 2026-05-12).
     "PREDICTIONS": PipelineMode.BATCH_FOOTYSTATS,
     "MATCHES": PipelineMode.BATCH_FOOTYSTATS,
-    # ODDS slice — footystats is the writer; stamp BATCH_FOOTYSTATS to match
-    # source='footystats' (UAC SOURCE_PRIORITY@40751840 aligned to BATCH_FOOTYSTATS).
-    "ODDS": PipelineMode.BATCH_FOOTYSTATS,
+    # ODDS removed — belongs in MTDS, not IS (ODDS=MTDS #6 migration)
     # understat catalog
     "XG": PipelineMode.BATCH_UNDERSTAT,
     # transfermarkt catalog
@@ -450,13 +448,7 @@ from instruments_service.engine.orchestrator.footystats import (
     _fetch_footystats_matches as _fetch_footystats_matches,
 )
 from instruments_service.engine.orchestrator.footystats import (
-    _fetch_footystats_odds as _fetch_footystats_odds,
-)
-from instruments_service.engine.orchestrator.footystats import (
     _fetch_footystats_predictions as _fetch_footystats_predictions,
-)
-from instruments_service.engine.orchestrator.footystats import (
-    _load_scheduled_footystats_fixture_map as _load_scheduled_footystats_fixture_map,
 )
 from instruments_service.engine.orchestrator.footystats import (
     _validate_predictions_null_rates as _validate_predictions_null_rates,
@@ -742,7 +734,6 @@ __all__ = [
     "_extract_fixture_venue_ids",
     "_extract_prediction_canonical_group",
     "_fetch_footystats_matches",
-    "_fetch_footystats_odds",
     "_fetch_footystats_predictions",
     "_fetch_sfi_data",
     "_fetch_sports_reference_data",
@@ -757,7 +748,6 @@ __all__ = [
     "_get_venue_epoch",
     "_is_in_canonical_write_universe",
     "_lifecycle_columns_from_af_response",
-    "_load_scheduled_footystats_fixture_map",
     "_load_venue_coordinates",
     "_master_blob_path",
     "_maybe_emit_drift_anomaly",

@@ -109,7 +109,7 @@ class TestFootystatsFetchedAtHourPartitionRegressionG9:
     ``strftime("%Y-%m-%dT%H")``.
     """
 
-    @pytest.mark.parametrize("fn_name", ["_fetch_footystats_odds", "_fetch_footystats_predictions"])
+    @pytest.mark.parametrize("fn_name", ["_fetch_footystats_predictions"])
     def test_source_constructs_fetched_at_hour_partition(self, fn_name: str) -> None:
         from instruments_service.engine import orchestrator as orch_mod
 

@@ -120,13 +120,7 @@ SPECS: tuple[EntitySpec, ...] = (
         ("canonical_fixture_id", "fixture_id", "af_fixture_id"),
         source="footystats",
     ),
-    EntitySpec(
-        "ODDS",
-        "footystats_odds",
-        "fixture",
-        ("canonical_fixture_id", "fixture_id", "af_fixture_id"),
-        source="footystats",
-    ),
+    # ODDS removed — belongs in MTDS, not IS (ODDS=MTDS #6 migration)
     EntitySpec(
         "PREDICTIONS",
         "footystats_predictions",
