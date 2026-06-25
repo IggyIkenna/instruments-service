@@ -52,7 +52,6 @@ def _row(uri_path: str, **kw: str) -> dict[str, str]:
 
 def test_source_and_mode_resolution() -> None:
     # SOURCE_PRIORITY-allowed entity-map source is kept; mode follows source
-    assert _mod.resolve_source_and_mode("ODDS", "footystats") == ("footystats", PipelineMode.BATCH_FOOTYSTATS)
     assert _mod.resolve_source_and_mode("PREDICTIONS", "footystats") == ("footystats", PipelineMode.BATCH_FOOTYSTATS)
     assert _mod.resolve_source_and_mode("FIXTURES", "api_football") == ("api_football", PipelineMode.BATCH_API_FOOTBALL)
     assert _mod.resolve_source_and_mode("WEATHER", "open_meteo") == ("open_meteo", PipelineMode.BATCH_OPEN_METEO)
@@ -104,17 +103,17 @@ def test_reverify_drops_now_covered_rows() -> None:
 
 def test_build_cells_groups_by_day_dt_league_and_splits_definitions() -> None:
     rows = [
-        # two fetched_at_hour twins of the SAME (day, ODDS, EPL) cell
+        # two fetched_at_hour twins of the SAME (day, PREDICTIONS, EPL) cell
         _row(
-            "sports_reference/by_date/day=2018-01-01/entity=footystats_odds/fetched_at_hour=A/league=EPL/footystats_odds.parquet",
-            entity="footystats_odds",
-            data_type="ODDS",
+            "sports_reference/by_date/day=2018-01-01/entity=footystats_matches/fetched_at_hour=A/league=EPL/footystats_matches.parquet",
+            entity="footystats_matches",
+            data_type="MATCHES",
             day="2018-01-01",
         ),
         _row(
-            "sports_reference/by_date/day=2018-01-01/entity=footystats_odds/fetched_at_hour=B/league=EPL/footystats_odds.parquet",
-            entity="footystats_odds",
-            data_type="ODDS",
+            "sports_reference/by_date/day=2018-01-01/entity=footystats_matches/fetched_at_hour=B/league=EPL/footystats_matches.parquet",
+            entity="footystats_matches",
+            data_type="MATCHES",
             day="2018-01-01",
         ),
         _row(
@@ -131,8 +130,8 @@ def test_build_cells_groups_by_day_dt_league_and_splits_definitions() -> None:
     ]
     cells, definition_rows = _mod.build_cells(_BUCKET, rows)
     assert len(cells) == 2
-    odds_cell = next(c for c in cells if c.data_type == "ODDS")
-    assert len(odds_cell.members) == 2  # twins grouped into ONE cell
-    assert odds_cell.source == "footystats"
+    matches_cell = next(c for c in cells if c.data_type == "MATCHES")
+    assert len(matches_cell.members) == 2  # twins grouped into ONE cell
+    assert matches_cell.source == "footystats"
     assert all(not m[0].startswith("gs://") for c in cells for m in c.members)  # bucket prefix stripped
     assert len(definition_rows) == 1 and definition_rows[0]["venue"] == "BETFAIR"
