@@ -198,7 +198,7 @@ async def _run_footystats_enrichment(
     entity_wanted: Callable[[str], bool],
     redo_all: bool,
 ) -> None:
-    """FootyStats predictions / matches / odds enrichment fetches."""
+    """FootyStats predictions / matches enrichment fetches."""
     if entity_wanted("PREDICTIONS"):
         try:
             pred_counts = await _orch._fetch_footystats_predictions(
@@ -235,23 +235,6 @@ async def _run_footystats_enrichment(
                 shard=date,
             )
 
-    if entity_wanted("ODDS"):
-        try:
-            odds_counts = await _orch._fetch_footystats_odds(
-                date=date,
-                api_key=footystats_key,
-                bucket=bucket,
-                force=redo_all,
-            )
-            for k, v in odds_counts.items():
-                counts[k] = counts.get(k, 0) + v
-        except Exception as exc:
-            _orch.classify_and_emit_error(
-                exc,
-                service_name="instruments-service",
-                operation="footystats_odds_fetch",
-                shard=date,
-            )
 
 
 async def _run_remaining_enrichment(
