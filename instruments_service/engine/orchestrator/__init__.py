@@ -397,9 +397,6 @@ from instruments_service.engine.orchestrator.catalogue import (
     resolve_instruments_store_kind as resolve_instruments_store_kind,
 )
 from instruments_service.engine.orchestrator.defi import (
-    _L2_DEX_PERP_VENUES as _L2_DEX_PERP_VENUES,
-)
-from instruments_service.engine.orchestrator.defi import (
     _SOLANA_DEFI_VENUES as _SOLANA_DEFI_VENUES,
 )
 from instruments_service.engine.orchestrator.defi import (
@@ -670,7 +667,6 @@ __all__ = [
     "_CEFI_VENUES",
     "_DEFI_VENUES",
     "_ENTITY_NAME_TO_PIPELINE_MODE",
-    "_L2_DEX_PERP_VENUES",
     "_Q5_SCHEDULE_COLUMNS",
     "_Q6_OUTCOME_COLUMNS",
     "_SERVICE_NAME",
