@@ -110,7 +110,7 @@ from unified_trading_library import (
     stamp_available_at_explicit,
 )
 from unified_trading_library import unified_config as _uc
-from unified_trading_library.fixtures import extract_match_lifecycle  # noqa: qg-deep-import — not on UTL root facade
+from unified_trading_library.fixtures import extract_match_lifecycle  # noqa: qg-deep-import
 
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
@@ -162,11 +162,9 @@ class _ModelDumpable(Protocol):
 # UAC@52d289c): footystats-served catalog rows previously tagged with
 # ``BATCH_API_FOOTBALL`` as a documented workaround. With the canonical
 # ``BATCH_FOOTYSTATS`` member now present in UAC ``PipelineMode``,
-# all footystats-served data_types (``PREDICTIONS`` / ``MATCHES`` / ``ODDS``)
-# are stamped with ``BATCH_FOOTYSTATS``. Fix 2026-06-22: ODDS was previously
-# mislabelled ``BATCH_ODDS_API``, causing UAC record_captured fail_fast
-# rejects because source='footystats' disagreed with pipeline_mode
-# batch_odds_api (which expects source='odds_api').
+# footystats-served data_types (``PREDICTIONS`` / ``MATCHES``) are stamped
+# with ``BATCH_FOOTYSTATS``. ODDS removed 2026-06-25: ODDS is now MTDS-only
+# (UAC#8fb1f54f); the footystats ODDS pipeline was retired.
 _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # api_football catalog (FIXTURES + per-fixture entities + reference data)
     "FIXTURES": PipelineMode.BATCH_API_FOOTBALL,
@@ -185,7 +183,6 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # workaround stamp on 2026-05-12).
     "PREDICTIONS": PipelineMode.BATCH_FOOTYSTATS,
     "MATCHES": PipelineMode.BATCH_FOOTYSTATS,
-    # ODDS removed — belongs in MTDS, not IS (ODDS=MTDS #6 migration)
     # understat catalog
     "XG": PipelineMode.BATCH_UNDERSTAT,
     # transfermarkt catalog

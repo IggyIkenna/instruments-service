@@ -56,8 +56,7 @@ def _sports_ref_pm(entity_name: str) -> str:
 # default path-key-derived value (``batch_<pathkey>`` stripped). The source must
 # match the UAC ``SOURCE_PRIORITY``/``SPORTS_DATA_TYPE_TO_SOURCE`` SSOT accepted by
 # ``record_captured`` (a mismatch raises ``MissingSourceError`` fail_fast).
-#
-# footystats_odds removed — ODDS=MTDS #6 migration; IS no longer writes ODDS rows.
+# footystats_odds was removed 2026-06-25 (ODDS retired to MTDS-only; UAC@8fb1f54f).
 _SPORTS_REF_SOURCE_OVERRIDE: dict[str, str] = {}
 
 

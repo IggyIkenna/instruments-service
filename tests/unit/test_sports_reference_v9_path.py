@@ -82,7 +82,6 @@ class TestSportsRefSource:
             ("fixtures", "api_football"),
             ("injuries", "api_football"),
             ("footystats_predictions", "footystats"),
-            # footystats_odds removed — ODDS=MTDS #6 migration
             ("understat_xg", "understat"),
             ("player_values", "transfermarkt"),
             ("progressive_stats", "soccer_football_info"),
