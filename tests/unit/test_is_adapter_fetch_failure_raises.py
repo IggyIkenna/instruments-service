@@ -294,7 +294,7 @@ class TestLighterFetchFailureRaises:
     @pytest.mark.asyncio
     async def test_get_instruments_raises_on_client_error(self) -> None:
         """aiohttp.ClientError from _get_with_retry → RuntimeError raised."""
-        from instruments_service.reference_data.adapters.defi.lighter import (
+        from instruments_service.reference_data.adapters.cefi.lighter import (
             LighterReferenceDataAdapter,
         )
 
@@ -307,7 +307,7 @@ class TestLighterFetchFailureRaises:
                 "_get_with_retry",
                 side_effect=err,
             ),
-            patch("instruments_service.reference_data.adapters.defi.lighter.log_event"),
+            patch("instruments_service.reference_data.adapters.cefi.lighter.log_event"),
             pytest.raises((RuntimeError, aiohttp.ClientError)),
         ):
             # _get_with_retry is called inside an open _make_session context —
@@ -322,7 +322,7 @@ class TestLighterFetchFailureRaises:
     @pytest.mark.asyncio
     async def test_get_instruments_raises_on_retry_exhausted_runtime_error(self) -> None:
         """RuntimeError from _get_with_retry (retry-exhausted) also propagates out."""
-        from instruments_service.reference_data.adapters.defi.lighter import (
+        from instruments_service.reference_data.adapters.cefi.lighter import (
             LighterReferenceDataAdapter,
         )
 
@@ -337,7 +337,7 @@ class TestLighterFetchFailureRaises:
         with (
             patch.object(adapter, "_make_session", return_value=mock_session_cm),
             patch.object(adapter, "_get_with_retry", side_effect=retry_err),
-            patch("instruments_service.reference_data.adapters.defi.lighter.log_event"),
+            patch("instruments_service.reference_data.adapters.cefi.lighter.log_event"),
             pytest.raises(RuntimeError),
         ):
             await adapter.get_instruments()
@@ -345,7 +345,7 @@ class TestLighterFetchFailureRaises:
     @pytest.mark.asyncio
     async def test_get_instruments_non_perpetual_returns_empty_cleanly(self) -> None:
         """Lighter: non-PERPETUAL instrument_type → returns [] without any HTTP call."""
-        from instruments_service.reference_data.adapters.defi.lighter import (
+        from instruments_service.reference_data.adapters.cefi.lighter import (
             LighterReferenceDataAdapter,
         )
 

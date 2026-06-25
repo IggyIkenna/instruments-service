@@ -31,33 +31,33 @@ def _make_session_cm() -> MagicMock:
 
 class TestLighterAdapter:
     def test_venue_name(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         assert LighterReferenceDataAdapter().venue == "LIGHTER-ZKSYNC"
 
     def test_classify_rate_limit_status(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import _classify_lighter_error
+        from instruments_service.reference_data.adapters.cefi.lighter import _classify_lighter_error
 
         assert _classify_lighter_error(Exception("err"), status=429) == "RATE_LIMIT"
 
     def test_classify_rate_limit_message(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import _classify_lighter_error
+        from instruments_service.reference_data.adapters.cefi.lighter import _classify_lighter_error
 
         assert _classify_lighter_error(Exception("rate limit exceeded")) == "RATE_LIMIT"
 
     def test_classify_500(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import _classify_lighter_error
+        from instruments_service.reference_data.adapters.cefi.lighter import _classify_lighter_error
 
         assert _classify_lighter_error(Exception("err"), status=503) == "500"
 
     def test_classify_unknown(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import _classify_lighter_error
+        from instruments_service.reference_data.adapters.cefi.lighter import _classify_lighter_error
 
         assert _classify_lighter_error(Exception("network error")) == "UNKNOWN"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type_returns_empty(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
@@ -65,7 +65,7 @@ class TestLighterAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_success(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         raw = {
@@ -90,7 +90,7 @@ class TestLighterAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_non_dict_response(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         with (
@@ -102,7 +102,7 @@ class TestLighterAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_empty_details(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         with (
@@ -115,13 +115,13 @@ class TestLighterAdapter:
     @pytest.mark.asyncio
     async def test_get_instruments_client_error_raises(self) -> None:
         """ClientError from _get_with_retry must raise, not return [] (CF-11 regression)."""
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
             patch.object(adapter, "_get_with_retry", AsyncMock(side_effect=aiohttp.ClientError("failed"))),
-            patch("instruments_service.reference_data.adapters.defi.lighter.log_event"),
+            patch("instruments_service.reference_data.adapters.cefi.lighter.log_event"),
             pytest.raises((RuntimeError, aiohttp.ClientError)),
         ):
             await adapter.get_instruments()
@@ -129,7 +129,7 @@ class TestLighterAdapter:
     @pytest.mark.asyncio
     async def test_get_instruments_runtime_error_raises(self) -> None:
         """RuntimeError from _get_with_retry must raise, not return [] (CF-11 regression)."""
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         with (
@@ -141,7 +141,7 @@ class TestLighterAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         raw = {"order_book_details": [{"symbol": "ETH-USDC", "market_type": "perp"}]}
@@ -155,7 +155,7 @@ class TestLighterAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instrument_not_found(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         raw = {"order_book_details": [{"symbol": "ETH-USDC", "market_type": "perp"}]}
@@ -168,7 +168,7 @@ class TestLighterAdapter:
 
     @pytest.mark.asyncio
     async def test_symbol_with_hyphen_splits_base(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         raw = {"order_book_details": [{"symbol": "BTC-USDC", "market_type": "perp"}]}
@@ -181,7 +181,7 @@ class TestLighterAdapter:
 
     @pytest.mark.asyncio
     async def test_symbol_no_hyphen_uses_full_sym(self) -> None:
-        from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         raw = {"order_book_details": [{"symbol": "BTCUSD", "market_type": "perp"}]}
@@ -200,33 +200,33 @@ class TestLighterAdapter:
 
 class TestExtendedAdapter:
     def test_venue_name(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import ExtendedReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.extended import ExtendedReferenceDataAdapter
 
         assert ExtendedReferenceDataAdapter().venue == "EXTENDED-STARKNET"
 
     def test_classify_rate_limit_status(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import _classify_extended_error
+        from instruments_service.reference_data.adapters.cefi.extended import _classify_extended_error
 
         assert _classify_extended_error(Exception("err"), status=429) == "RATE_LIMIT"
 
     def test_classify_rate_limit_message(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import _classify_extended_error
+        from instruments_service.reference_data.adapters.cefi.extended import _classify_extended_error
 
         assert _classify_extended_error(Exception("rate exceeded")) == "RATE_LIMIT"
 
     def test_classify_500(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import _classify_extended_error
+        from instruments_service.reference_data.adapters.cefi.extended import _classify_extended_error
 
         assert _classify_extended_error(Exception("err"), status=500) == "500"
 
     def test_classify_unknown(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import _classify_extended_error
+        from instruments_service.reference_data.adapters.cefi.extended import _classify_extended_error
 
         assert _classify_extended_error(Exception("conn reset")) == "UNKNOWN"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type_returns_empty(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import ExtendedReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.extended import ExtendedReferenceDataAdapter
 
         adapter = ExtendedReferenceDataAdapter()
         results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
@@ -234,7 +234,7 @@ class TestExtendedAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_success(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import ExtendedReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.extended import ExtendedReferenceDataAdapter
 
         adapter = ExtendedReferenceDataAdapter()
         raw = {
@@ -255,7 +255,7 @@ class TestExtendedAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_empty_active_falls_back(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import (
+        from instruments_service.reference_data.adapters.cefi.extended import (
             _EXTENDED_FALLBACK_MARKETS,
             ExtendedReferenceDataAdapter,
         )
@@ -272,7 +272,7 @@ class TestExtendedAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_non_dict_falls_back(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import (
+        from instruments_service.reference_data.adapters.cefi.extended import (
             _EXTENDED_FALLBACK_MARKETS,
             ExtendedReferenceDataAdapter,
         )
@@ -288,7 +288,7 @@ class TestExtendedAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_client_error_uses_fallback(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import (
+        from instruments_service.reference_data.adapters.cefi.extended import (
             _EXTENDED_FALLBACK_MARKETS,
             ExtendedReferenceDataAdapter,
         )
@@ -297,15 +297,24 @@ class TestExtendedAdapter:
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
             patch.object(adapter, "_get_with_retry", AsyncMock(side_effect=aiohttp.ClientError("failed"))),
-            patch("instruments_service.reference_data.adapters.defi.extended.log_event"),
+            patch("instruments_service.reference_data.adapters.cefi.extended.log_event") as mock_log_event,
         ):
             results = await adapter.get_instruments()
 
         assert len(results) == len(_EXTENDED_FALLBACK_MARKETS)
+        # Contract (adapter_contract_baseline.yaml count=3): a ClientError MUST
+        # emit ADAPTER_FETCH_FAILED — the honest failure signal — even though
+        # Extended degrades to the fallback list rather than raising. Asserting
+        # the emit (not just patching it) locks it against the lint-sweep
+        # regression class (deleted contract calls) at the TEST level, not only
+        # the count baseline.
+        assert any(
+            call.args and call.args[0] == "ADAPTER_FETCH_FAILED" for call in mock_log_event.call_args_list
+        ), "ClientError on /info/markets must emit ADAPTER_FETCH_FAILED"
 
     @pytest.mark.asyncio
     async def test_get_instruments_runtime_error_uses_fallback(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import (
+        from instruments_service.reference_data.adapters.cefi.extended import (
             _EXTENDED_FALLBACK_MARKETS,
             ExtendedReferenceDataAdapter,
         )
@@ -321,7 +330,7 @@ class TestExtendedAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import ExtendedReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.extended import ExtendedReferenceDataAdapter
 
         adapter = ExtendedReferenceDataAdapter()
         raw = {"data": [{"name": "ETH-USD", "active": True, "status": "ACTIVE"}]}
@@ -334,7 +343,7 @@ class TestExtendedAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instrument_not_found(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import ExtendedReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.extended import ExtendedReferenceDataAdapter
 
         adapter = ExtendedReferenceDataAdapter()
         raw = {"data": [{"name": "ETH-USD", "active": True, "status": "ACTIVE"}]}
@@ -347,7 +356,7 @@ class TestExtendedAdapter:
 
     @pytest.mark.asyncio
     async def test_base_asset_split_from_hyphen(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import ExtendedReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.extended import ExtendedReferenceDataAdapter
 
         adapter = ExtendedReferenceDataAdapter()
         raw = {"data": [{"name": "BTC-USD", "active": True, "status": "ACTIVE"}]}
@@ -360,7 +369,7 @@ class TestExtendedAdapter:
 
     @pytest.mark.asyncio
     async def test_base_asset_no_hyphen(self) -> None:
-        from instruments_service.reference_data.adapters.defi.extended import ExtendedReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.extended import ExtendedReferenceDataAdapter
 
         adapter = ExtendedReferenceDataAdapter()
         raw = {"data": [{"name": "BTCUSD", "active": True, "status": "ACTIVE"}]}
@@ -379,13 +388,13 @@ class TestExtendedAdapter:
 
 class TestPacificaAdapter:
     def test_venue_name(self) -> None:
-        from instruments_service.reference_data.adapters.defi.pacifica import PacificaReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
 
         assert PacificaReferenceDataAdapter().venue == "PACIFICA-SOLANA"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type_returns_empty(self) -> None:
-        from instruments_service.reference_data.adapters.defi.pacifica import PacificaReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
 
         adapter = PacificaReferenceDataAdapter()
         results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
@@ -393,7 +402,7 @@ class TestPacificaAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_returns_all_perps(self) -> None:
-        from instruments_service.reference_data.adapters.defi.pacifica import (
+        from instruments_service.reference_data.adapters.cefi.pacifica import (
             _PACIFICA_TOP_COINS,
             PacificaReferenceDataAdapter,
         )
@@ -406,7 +415,7 @@ class TestPacificaAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_perpetual_type_filter(self) -> None:
-        from instruments_service.reference_data.adapters.defi.pacifica import (
+        from instruments_service.reference_data.adapters.cefi.pacifica import (
             _PACIFICA_TOP_COINS,
             PacificaReferenceDataAdapter,
         )
@@ -417,7 +426,7 @@ class TestPacificaAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
-        from instruments_service.reference_data.adapters.defi.pacifica import PacificaReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
 
         adapter = PacificaReferenceDataAdapter()
         found = await adapter.get_instrument("BTC-PERP")
@@ -426,7 +435,7 @@ class TestPacificaAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instrument_not_found(self) -> None:
-        from instruments_service.reference_data.adapters.defi.pacifica import PacificaReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
 
         adapter = PacificaReferenceDataAdapter()
         result = await adapter.get_instrument("AAPL-PERP")
@@ -434,7 +443,7 @@ class TestPacificaAdapter:
 
     @pytest.mark.asyncio
     async def test_instrument_fields(self) -> None:
-        from instruments_service.reference_data.adapters.defi.pacifica import PacificaReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
 
         adapter = PacificaReferenceDataAdapter()
         results = await adapter.get_instruments()
@@ -447,7 +456,7 @@ class TestPacificaAdapter:
 
     @pytest.mark.asyncio
     async def test_unsupported_methods_raise(self) -> None:
-        from instruments_service.reference_data.adapters.defi.pacifica import PacificaReferenceDataAdapter
+        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
 
         adapter = PacificaReferenceDataAdapter()
         with pytest.raises(NotImplementedError):
