@@ -57,16 +57,8 @@ def _sports_ref_pm(entity_name: str) -> str:
 # match the UAC ``SOURCE_PRIORITY``/``SPORTS_DATA_TYPE_TO_SOURCE`` SSOT accepted by
 # ``record_captured`` (a mismatch raises ``MissingSourceError`` fail_fast).
 #
-# ``footystats_odds``: the odds snapshot is FETCHED by the FootyStats adapter
-# (``_fetch_footystats_odds``), so the upstream vendor/source is ``footystats``
-# (UAC ``SPORTS_DATA_TYPE_TO_SOURCE[ODDS] == "footystats"``). Since 2026-06-22
-# the GCS pipeline_mode path key is also ``batch_footystats`` (fixed from the prior
-# ``batch_odds_api`` mislabel — that stamp caused ``record_captured`` fail_fast
-# rejects: ``source='footystats'`` disagreed with ``pipeline_mode=batch_odds_api``).
-# This override keeps source='footystats' explicit as a guard.
-_SPORTS_REF_SOURCE_OVERRIDE: dict[str, str] = {
-    "footystats_odds": "footystats",
-}
+# footystats_odds removed — ODDS=MTDS #6 migration; IS no longer writes ODDS rows.
+_SPORTS_REF_SOURCE_OVERRIDE: dict[str, str] = {}
 
 
 def _sports_ref_source(entity_name: str) -> str:

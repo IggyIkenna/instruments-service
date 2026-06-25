@@ -3,9 +3,9 @@
 Targets uncovered branches in orchestrator.py:
   - process_instruments enrichment-provider short-circuit (lines 1339-1445)
     OPEN_METEO / UNDERSTAT / FOOTYSTATS / TRANSFERMARKT / SOCCER_FOOTBALL_INFO / unknown
-  - _fetch_footystats_predictions (lines 5556-5770) skip / happy / empty / exception
-  - _fetch_footystats_matches (lines 5824-6040) skip / happy / empty
-  - _fetch_footystats_odds (lines 6048-6240) skip / happy / empty
+  - _fetch_footystats_predictions skip / happy / empty / exception
+  - _fetch_footystats_matches skip / happy / empty
+  Note: _fetch_footystats_odds removed — ODDS belongs in MTDS, not IS (ODDS=MTDS #6).
 """
 
 from __future__ import annotations
@@ -18,9 +18,7 @@ import pytest
 
 from instruments_service.engine.orchestrator import (
     _fetch_footystats_matches,
-    _fetch_footystats_odds,
     _fetch_footystats_predictions,
-    _load_scheduled_footystats_fixture_map,
     process_instruments,
 )
 
@@ -141,16 +139,14 @@ class TestProcessInstrumentsSportsProviderRouting:
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_footystats_with_key_calls_all_three_fetchers(self) -> None:
+    async def test_footystats_with_key_calls_predictions_and_matches(self) -> None:
         mock_pred = AsyncMock(return_value={"footystats_predictions": 12})
         mock_match = AsyncMock(return_value={"footystats_matches": 8})
-        mock_odds = AsyncMock(return_value={"footystats_odds": 15})
         with _entry_stack(
             ["FOOTYSTATS"],
             _BUCKET,
             patch("instruments_service.engine.orchestrator._fetch_footystats_predictions", mock_pred),
             patch("instruments_service.engine.orchestrator._fetch_footystats_matches", mock_match),
-            patch("instruments_service.engine.orchestrator._fetch_footystats_odds", mock_odds),
         ):
             result = await process_instruments(
                 _DATE,
@@ -159,22 +155,19 @@ class TestProcessInstrumentsSportsProviderRouting:
                 api_keys={"footystats": "fs-key"},
                 redo_all=True,
             )
-        assert result == {"footystats_predictions": 12, "footystats_matches": 8, "footystats_odds": 15}
+        assert result == {"footystats_predictions": 12, "footystats_matches": 8}
         mock_pred.assert_called_once()
         mock_match.assert_called_once()
-        mock_odds.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_footystats_entity_filter_predictions_only(self) -> None:
         mock_pred = AsyncMock(return_value={"footystats_predictions": 7})
         mock_match = AsyncMock(return_value={"footystats_matches": 3})
-        mock_odds = AsyncMock(return_value={"footystats_odds": 9})
         with _entry_stack(
             ["FOOTYSTATS"],
             _BUCKET,
             patch("instruments_service.engine.orchestrator._fetch_footystats_predictions", mock_pred),
             patch("instruments_service.engine.orchestrator._fetch_footystats_matches", mock_match),
-            patch("instruments_service.engine.orchestrator._fetch_footystats_odds", mock_odds),
         ):
             result = await process_instruments(
                 _DATE,
@@ -185,20 +178,17 @@ class TestProcessInstrumentsSportsProviderRouting:
             )
         mock_pred.assert_called_once()
         mock_match.assert_not_called()
-        mock_odds.assert_not_called()
         assert "footystats_predictions" in result
 
     @pytest.mark.asyncio
     async def test_footystats_entity_filter_matches_only(self) -> None:
         mock_pred = AsyncMock(return_value={})
         mock_match = AsyncMock(return_value={"footystats_matches": 5})
-        mock_odds = AsyncMock(return_value={})
         with _entry_stack(
             ["FOOTYSTATS"],
             _BUCKET,
             patch("instruments_service.engine.orchestrator._fetch_footystats_predictions", mock_pred),
             patch("instruments_service.engine.orchestrator._fetch_footystats_matches", mock_match),
-            patch("instruments_service.engine.orchestrator._fetch_footystats_odds", mock_odds),
         ):
             result = await process_instruments(
                 _DATE,
@@ -209,31 +199,6 @@ class TestProcessInstrumentsSportsProviderRouting:
             )
         mock_pred.assert_not_called()
         mock_match.assert_called_once()
-        mock_odds.assert_not_called()
-        assert isinstance(result, dict)
-
-    @pytest.mark.asyncio
-    async def test_footystats_entity_filter_odds_only(self) -> None:
-        mock_pred = AsyncMock(return_value={})
-        mock_match = AsyncMock(return_value={})
-        mock_odds = AsyncMock(return_value={"footystats_odds": 11})
-        with _entry_stack(
-            ["FOOTYSTATS"],
-            _BUCKET,
-            patch("instruments_service.engine.orchestrator._fetch_footystats_predictions", mock_pred),
-            patch("instruments_service.engine.orchestrator._fetch_footystats_matches", mock_match),
-            patch("instruments_service.engine.orchestrator._fetch_footystats_odds", mock_odds),
-        ):
-            result = await process_instruments(
-                _DATE,
-                ["SPORTS"],
-                sports_provider="FOOTYSTATS",
-                sports_entity_filter="ODDS",
-                api_keys={"footystats": "fs-key"},
-            )
-        mock_pred.assert_not_called()
-        mock_match.assert_not_called()
-        mock_odds.assert_called_once()
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
@@ -523,221 +488,3 @@ class TestFetchFootystatsMatches:
             result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
         assert result == {}
         mock_mw.record_failed.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _fetch_footystats_odds
-# ---------------------------------------------------------------------------
-
-
-def _ft_odds_stack(
-    skip: bool = False,
-    odds_rows: list | None = None,
-    scheduled_fixture_map: dict | None = None,
-) -> tuple:
-    mock_adapter = MagicMock()
-    mock_adapter.get_fixture_odds_snapshot = AsyncMock(return_value=odds_rows if odds_rows is not None else [])
-    mock_mw = MagicMock()
-    mock_mw_cls = MagicMock(return_value=mock_mw)
-    # Default to empty scheduled map so existing tests don't trigger GCS calls.
-    _sched_map = scheduled_fixture_map if scheduled_fixture_map is not None else {}
-
-    patches = _stack(
-        patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
-        patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
-        patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
-        patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_make_league("EPL")]),
-        patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=skip),
-        patch("instruments_service.engine.orchestrator._gated_sink_write"),
-        patch("instruments_service.engine.orchestrator.stamp_available_at_explicit", side_effect=lambda df, **kw: df),
-        patch("instruments_service.engine.orchestrator._canonical_league_id", side_effect=lambda lid: str(lid)),
-        patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="footystats"),
-        patch("unified_api_contracts.sports.build_fixture_id", return_value="EPL:ARSENAL_v_CHELSEA:2026-01-15"),
-        patch("unified_api_contracts.sports.resolve_footystats_team", side_effect=lambda t: t.upper()),
-        patch("instruments_service.engine.orchestrator.FOOTYSTATS_HISTORICAL_SEASON_IDS", {123: "EPL"}),
-        patch(
-            "instruments_service.engine.orchestrator.footystats._load_scheduled_footystats_fixture_map",
-            return_value=_sched_map,
-        ),
-    )
-    return patches, mock_adapter, mock_mw
-
-
-class TestFetchFootystatsOdds:
-    """Direct unit tests for _fetch_footystats_odds."""
-
-    @pytest.mark.asyncio
-    async def test_skip_returns_empty_dict(self) -> None:
-        stack, _, _ = _ft_odds_stack(skip=True)
-        with stack:
-            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
-        assert result == {}
-
-    @pytest.mark.asyncio
-    async def test_empty_odds_writes_empty_manifest(self) -> None:
-        stack, _, mock_mw = _ft_odds_stack(skip=False, odds_rows=[])
-        with stack:
-            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
-        assert result == {}
-        mock_mw.record_empty.assert_called_once()
-        mock_mw.write.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_happy_path_writes_odds_rows(self) -> None:
-        odds_rows = [
-            {
-                "home_team": "Arsenal",
-                "away_team": "Chelsea",
-                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
-                "kickoff_utc": "2026-01-15T15:00:00Z",
-                "home_odds": 1.8,
-                "away_odds": 4.2,
-            }
-        ]
-        stack, _, mock_mw = _ft_odds_stack(skip=False, odds_rows=odds_rows)
-        with stack:
-            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
-        assert isinstance(result, dict)
-        assert result.get("footystats_odds", 0) >= 0
-        mock_mw.write.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_exception_records_failed_shard(self) -> None:
-        mock_adapter = MagicMock()
-        mock_adapter.get_fixture_odds_snapshot = AsyncMock(side_effect=ConnectionError("503"))
-        mock_mw = MagicMock()
-        mock_mw_cls = MagicMock(return_value=mock_mw)
-
-        with _stack(
-            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
-            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
-            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
-            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[]),
-            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
-            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
-            patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="ConnectionError"),
-            patch("instruments_service.engine.orchestrator.FOOTYSTATS_HISTORICAL_SEASON_IDS", {}),
-        ):
-            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
-        assert result == {}
-        mock_mw.record_failed.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_record_captured_passes_cluster_validation_kwargs(self) -> None:
-        """SP-10-ODDS regression: record_captured for ODDS with canonical_fixture_id must
-        supply expected_root_clusters, cluster_extractor, and cluster_symbol_column so the
-        per-fixture cluster gate is active (not silently skipped)."""
-        odds_rows = [
-            {
-                "home_team": "Arsenal",
-                "away_team": "Chelsea",
-                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
-                "kickoff_utc": "2026-01-15T15:00:00Z",
-                "home_odds": 1.8,
-                "away_odds": 4.2,
-            }
-        ]
-        stack, _, mock_mw = _ft_odds_stack(skip=False, odds_rows=odds_rows)
-        with stack:
-            await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
-
-        mock_mw.record_captured.assert_called()
-        call_kwargs = mock_mw.record_captured.call_args.kwargs
-        # cluster_symbol_column must point to the fixture-id column
-        assert call_kwargs.get("cluster_symbol_column") == "canonical_fixture_id"
-        # cluster_extractor must be callable
-        assert callable(call_kwargs.get("cluster_extractor"))
-        # expected_root_clusters must be a non-None dict (non-empty for mapped fixtures)
-        erc = call_kwargs.get("expected_root_clusters")
-        assert erc is not None
-        assert isinstance(erc, dict)
-        assert len(erc) > 0, "non-empty expected_root_clusters required for mapped fixtures"
-
-
-class TestFootystatsOddsNanFill:
-    """Tests for the NaN-fill step in _fetch_footystats_odds."""
-
-    @pytest.mark.asyncio
-    async def test_nan_fill_injects_rows_for_scheduled_fixtures_missing_from_api(
-        self,
-    ) -> None:
-        """Scheduled fixtures absent from the API response get NaN-fill rows injected."""
-        odds_rows = [
-            {
-                "home_team": "Arsenal",
-                "away_team": "Chelsea",
-                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
-                "kickoff_utc": "2026-01-15T15:00:00Z",
-                "home_odds": 1.8,
-                "away_odds": 4.2,
-            }
-        ]
-        # Two scheduled fixtures; only one is returned by the API.
-        scheduled_map = {
-            "EPL:ARSENAL_v_CHELSEA:2026-01-15": None,
-            "EPL:LIVERPOOL_v_MANUTD:2026-01-15": None,
-        }
-        stack, _, mock_mw = _ft_odds_stack(
-            skip=False,
-            odds_rows=odds_rows,
-            scheduled_fixture_map=scheduled_map,
-        )
-        with stack:
-            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
-        # record_captured should be called (not record_empty)
-        mock_mw.record_captured.assert_called()
-        # The total row count should include the NaN-fill row: ≥ 2
-        assert result.get("footystats_odds", 0) >= 2
-
-    @pytest.mark.asyncio
-    async def test_nan_fill_all_scheduled_when_api_returns_nothing(self) -> None:
-        """When API returns empty but scheduled fixtures exist, they become NaN rows."""
-        scheduled_map = {
-            "EPL:ARSENAL_v_CHELSEA:2026-01-15": None,
-        }
-        stack, _, mock_mw = _ft_odds_stack(
-            skip=False,
-            odds_rows=[],
-            scheduled_fixture_map=scheduled_map,
-        )
-        with stack:
-            await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
-        # With scheduled fixtures, we write record_captured (NaN rows), NOT record_empty
-        mock_mw.record_empty.assert_not_called()
-        mock_mw.record_captured.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_no_nan_fill_when_no_scheduled_fixtures(self) -> None:
-        """No scheduled fixtures and no API data → genuine record_empty (unchanged behaviour)."""
-        # _ft_odds_stack defaults scheduled_fixture_map to {}
-        stack, _, mock_mw = _ft_odds_stack(skip=False, odds_rows=[])
-        with stack:
-            await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
-        mock_mw.record_empty.assert_called_once()
-        mock_mw.record_captured.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_nan_fill_skipped_when_all_scheduled_fixtures_returned(self) -> None:
-        """When every scheduled fixture is returned by the API, no extra rows are injected."""
-        odds_rows = [
-            {
-                "home_team": "Arsenal",
-                "away_team": "Chelsea",
-                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
-                "kickoff_utc": "2026-01-15T15:00:00Z",
-                "home_odds": 1.8,
-            }
-        ]
-        # The scheduled map matches exactly what the API returns (same canonical_fixture_id).
-        scheduled_map = {
-            "EPL:ARSENAL_v_CHELSEA:2026-01-15": None,
-        }
-        stack, _, _mock_mw = _ft_odds_stack(
-            skip=False,
-            odds_rows=odds_rows,
-            scheduled_fixture_map=scheduled_map,
-        )
-        with stack:
-            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
-        # Only the single real row should be written
-        assert result.get("footystats_odds", 0) == 1
