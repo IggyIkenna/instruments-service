@@ -2274,7 +2274,12 @@ class TestDatabentoHelpers:
         assert is_non_trading_day("CME", saturday) is True
 
     def test_is_non_trading_day_unknown_venue(self) -> None:
-        assert is_non_trading_day("UNKNOWN_VENUE", date.today()) is False
+        # FAIL-CLOSED (G1.e, 2026-06-25): an undeclared tradfi venue is a config error and
+        # RAISES, rather than silently defaulting to 24/7-trading (the old `is False`).
+        from instruments_service.reference_data.adapters.tradfi.databento import UndeclaredTradfiVenueError
+
+        with pytest.raises(UndeclaredTradfiVenueError):
+            is_non_trading_day("UNKNOWN_VENUE", date.today())
 
 
 class TestDatabentoAdapter:

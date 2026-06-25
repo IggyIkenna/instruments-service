@@ -1159,3 +1159,134 @@ class TestKRXStaticRecords:
             assert rec.instrument_key.startswith("KRX:EQUITY:"), (
                 f"KRX record has wrong instrument_key prefix: {rec.instrument_key!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Tradfi instruments-foundation G1 regression guards (2026-06-25, slot-3).
+# Each guards a fix that STOPS a catalogue pollutant at source — reverting any
+# re-introduces the pollution (ICE/OPRA enumeration, VX-spread SPOT_PAIR,
+# equity-spot mis-class, cefi-singles in tradfi, VX=EQUITY, KRX-silent-24/7).
+# ---------------------------------------------------------------------------
+class TestTradfiG1FoundationRegression:
+    """Regression guards for the gated tradfi instruments-foundation rebuild (G1.a-e)."""
+
+    @staticmethod
+    def _row(
+        raw_symbol: str,
+        instrument_class: str,
+        expiry: str | None = None,
+    ) -> object:
+        row = MagicMock()
+        row.raw_symbol = raw_symbol
+        row.symbol = raw_symbol
+        row.instrument_class = instrument_class
+        row.currency = "USD"
+        row.underlying = ""
+        row.expiration = expiry
+        row.activation = None
+        row.strike_price = None
+        row.option_type = ""
+        row.min_price_increment = 0.01
+        row.min_lot_size_round_lot = 1
+        return row
+
+    @staticmethod
+    def _adapter() -> DatabentoReferenceDataAdapter:
+        from datetime import date
+
+        adapter = DatabentoReferenceDataAdapter(api_key="test-key")
+        adapter._target_date = date(2026, 5, 20)
+        return adapter
+
+    def test_g1a_billable_dataset_maps_only_three(self) -> None:
+        """§7.1 billable-venue guard: only the 3 subscribed datasets are mapped."""
+        from unified_api_contracts.internal import AssetClass
+
+        from instruments_service.reference_data.adapters.tradfi.databento import (
+            _DATASET_TO_VENUE,
+            _FUTURES_DATASETS,
+            _DATASET_TO_asset_group,
+        )
+
+        allowed = {"GLBX.MDP3", "DBEQ.BASIC", "XCBF.PITCH"}
+        assert set(_DATASET_TO_VENUE) == allowed
+        assert set(_DATASET_TO_asset_group) == allowed
+        for non_billable in ("IFEU.IMPACT", "IFUS.IMPACT", "OPRA.PILLAR", "XNAS.ITCH", "XNAS.BASIC", "XNYS.PILLAR"):
+            assert non_billable not in _DATASET_TO_VENUE
+            assert non_billable not in _DATASET_TO_asset_group
+        # G1.c: XCBF.PITCH (VX/VIX) is COMMODITY, not EQUITY.
+        assert _DATASET_TO_asset_group["XCBF.PITCH"] == AssetClass.COMMODITY
+        # XCBF deliberately NOT a futures-dataset (VX spreads are dropped, not COMBO-kept).
+        assert frozenset({"GLBX.MDP3"}) == _FUTURES_DATASETS
+
+    # NB: the UAC VX.FUT asset_group=commodity assertion lives in UAC's own test suite
+    # (test_net_profitable_equity_perp_singles.py::test_vx_future_asset_group_is_commodity) —
+    # an IS test must not assert UAC's raw registry content (it would false-fail under UAC
+    # promotion lag, since IS CI tests against the baked UAC). IS's symbology-map view of
+    # XCBF.PITCH=COMMODITY is covered by test_g1a_billable_dataset_maps_only_three.
+
+    def test_g1b_cefi_singles_excluded_from_tradfi_enumeration(self) -> None:
+        """cefi-domain equity singles (asset_group='cefi') are filtered out of the tradfi curated set."""
+        from unified_api_contracts import TRADFI_DATABENTO_INSTRUMENTS
+        from unified_api_contracts.internal import AssetClass
+
+        valid = frozenset(AssetClass)
+        cefi_singles = [d for d in TRADFI_DATABENTO_INSTRUMENTS if d.asset_group == "cefi"]
+        assert cefi_singles, "precondition: _NET_PROFITABLE_EQUITY_PERP_SINGLES carry asset_group='cefi'"
+        assert {"NVDA", "MSFT", "CRCL"} <= {d.symbol for d in cefi_singles}
+        # The enumeration filter (get_instruments) keeps only valid-AssetClass defs.
+        kept = [d for d in TRADFI_DATABENTO_INSTRUMENTS if d.asset_group in valid]
+        assert all(d.asset_group != "cefi" for d in kept), "cefi-singles must not survive the tradfi filter"
+
+    def test_g1c_xcbf_outright_only_drops_vx_spreads(self) -> None:
+        """XCBF.PITCH class-S VX calendar spreads are dropped; outright VX futures are kept."""
+        adapter = self._adapter()
+        spread = self._row("VX/F1:1:S - VX/G1:1:B", instrument_class="S")
+        assert adapter._parse_row_to_record(spread, dataset="XCBF.PITCH", canonical_venue="CBOE") is None
+        outright = self._row("VX/F1", instrument_class="F", expiry="2026-06-18T21:00:00+00:00")
+        rec = adapter._parse_row_to_record(outright, dataset="XCBF.PITCH", canonical_venue="CBOE")
+        assert rec is not None and rec.instrument_type == "FUTURE"
+
+    def test_g1d_dbeq_class_s_is_equity_not_spot_pair(self) -> None:
+        """DBEQ.BASIC equity-spot (class 'S') maps to EQUITY, not the default SPOT_PAIR."""
+        adapter = self._adapter()
+        row = self._row("AAPL", instrument_class="S")
+        rec = adapter._parse_row_to_record(row, dataset="DBEQ.BASIC", canonical_venue="NASDAQ")
+        assert rec is not None and rec.instrument_type == "EQUITY"
+
+    def test_g1e_krx_uses_korean_calendar(self) -> None:
+        """KRX is declared with the Korean (XKRX) calendar — not the silent 24/7 default."""
+        from datetime import date
+
+        from instruments_service.reference_data.adapters.tradfi.databento import (
+            _EXCHANGE_HOURS,
+            _XCAL_MAPPING,
+            is_non_trading_day,
+        )
+
+        assert "KRX" in _EXCHANGE_HOURS and _XCAL_MAPPING.get("KRX") == "XKRX"
+        # Children's Day (2026-05-05, Tue): KRX closed, US (NYSE) open — proves distinct calendars.
+        assert is_non_trading_day("KRX", date(2026, 5, 5)) is True
+        assert is_non_trading_day("NYSE", date(2026, 5, 5)) is False
+        # A normal Korean trading Thursday is a trading day.
+        assert is_non_trading_day("KRX", date(2026, 5, 7)) is False
+
+    def test_g1e_fx_is_24_7(self) -> None:
+        """FX is the declared 24/7 exception — never a non-trading day."""
+        from datetime import date
+
+        from instruments_service.reference_data.adapters.tradfi.databento import is_non_trading_day
+
+        assert is_non_trading_day("FX", date(2026, 4, 11)) is False  # Saturday
+
+    def test_g1e_undeclared_venue_fail_closed(self) -> None:
+        """An undeclared tradfi venue raises (fail-closed) rather than silently defaulting to 24/7."""
+        from datetime import date
+
+        from instruments_service.reference_data.adapters.tradfi.databento import (
+            UndeclaredTradfiVenueError,
+            is_non_trading_day,
+        )
+
+        with pytest.raises(UndeclaredTradfiVenueError):
+            is_non_trading_day("NONEXISTENT_VENUE", date(2026, 5, 7))
