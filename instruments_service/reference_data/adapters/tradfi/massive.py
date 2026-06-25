@@ -13,14 +13,20 @@ the UAC normalisers. Every fetched record is stamped ``source="massive"`` by the
 orchestrator at ``record_captured`` time.
 
 Endpoint paths (verified 2026-06-07 against the active Massive subscription —
-Stocks Starter / Options Developer / Indices Basic / Futures Developer /
-Currencies Basic):
+Stocks Starter / Futures Developer / Currencies Basic; base host unchanged by
+the 2025-10-30 Polygon.io -> Massive rebrand):
 
-* equities/ETF : ``GET /v3/reference/tickers?market=stocks``
-* indices      : ``GET /v3/reference/tickers?market=indices``
+* equities/ETF : ``GET /v3/reference/tickers?market=stocks``  (NASDAQ + NYSE)
 * FX           : ``GET /v3/reference/tickers?market=fx``
 * futures      : ``GET /futures/vX/contracts`` + ``GET /futures/vX/products``
-  (NOT ``/v3/reference/futures/*`` — that path 404s)
+  (CME only; NOT ``/v3/reference/futures/*`` — that path 404s)
+
+CBOE cash-indices (VIX) + OPRA cash-index options (SPX/VIX) and ICE futures were
+REMOVED 2026-06-25: the CBOE cash-index is retired (VX vol rides Databento
+XCBF.PITCH) and ICE is Databento-billing-blocked, so neither has a canonical
+source — fetching them here only emitted CBOE-OPTION / VIX-cash / ICE pollution
+into the tradfi catalogue. Massive is the fallback for NASDAQ/NYSE equities + FX
++ CME futures only.
 
 Auth: ``Authorization: Bearer {api_key}``; the service fetches ``MASSIVE_API_KEY``
 from Secret Manager and injects it via the ``api_key`` constructor parameter.
@@ -40,17 +46,13 @@ from unified_api_contracts import (
     MassiveFuturesContractsResponse,
     MassiveFuturesProduct,
     MassiveFuturesProductsResponse,
-    MassiveOptionContractsResponse,
     MassiveTickersResponse,
     classify_venue_error,
     normalize_massive_equity,
     normalize_massive_futures,
     normalize_massive_fx,
-    normalize_massive_index,
-    normalize_massive_option,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
-from unified_api_contracts.registry import YAHOO_INDICES
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -72,12 +74,12 @@ _PAGE_LIMIT = 1000
 _MAX_PAGES = 30  # cap at 30k rows per surface — bounds runaway pagination
 
 _EQUITY_VENUES = frozenset({"NASDAQ", "NYSE"})
-_FUTURES_VENUES = frozenset({"CME", "ICE"})
-
-#: Cash-index OPRA option underlyings to capture, tagged to their canonical
-#: venue. SPX + VIX are the CBOE index-vol complex (Massive has no CME
-#: futures-options, so these OPRA index options are the relevant options layer).
-_INDEX_OPTION_UNDERLYINGS: dict[str, str] = {"SPX": "CBOE", "VIX": "CBOE"}
+#: TradFi fallback futures venues. ICE removed 2026-06-25 (databento-billing-blocked
+#: -> no canonical source -> purge everywhere); massive carries CME only. CBOE
+#: index/options (VIX-cash + OPRA SPX/VIX) were ALSO removed 2026-06-25: the CBOE
+#: cash-index is retired and VX vol rides Databento XCBF.PITCH, so massive no longer
+#: emits the CBOE-OPTION / VIX-cash pollution into the tradfi catalogue.
+_FUTURES_VENUES = frozenset({"CME"})
 
 
 def _meta_str(meta: dict[str, str | bool | None], key: str) -> str | None:
@@ -173,12 +175,9 @@ class MassiveReferenceDataAdapter(BaseReferenceDataAdapter):
         async with self._make_session() as session:
             if vf in (None, "NASDAQ", "NYSE"):
                 results.extend(await self._fetch_equities(session, headers, vf))
-            if vf in (None, "CBOE"):
-                results.extend(await self._fetch_indices(session, headers))
-                results.extend(await self._fetch_index_options(session, headers))
             if vf in (None, "FX"):
                 results.extend(await self._fetch_fx(session, headers))
-            if vf in (None, "CME", "ICE"):
+            if vf in (None, "CME"):
                 results.extend(await self._fetch_futures(session, headers, vf))
 
         self._enrich_session_metadata(results)
@@ -263,56 +262,6 @@ class MassiveReferenceDataAdapter(BaseReferenceDataAdapter):
             url = resp.next_url
             params = None
             pages += 1
-        return out
-
-    async def _fetch_indices(
-        self,
-        session: aiohttp.ClientSession,
-        headers: dict[str, str],
-    ) -> list[InstrumentRecord]:
-        """Fetch the curated index universe (VIX etc.) from market=indices, tagged CBOE."""
-        out: list[InstrumentRecord] = []
-        for idx in YAHOO_INDICES:
-            if idx.venue != "CBOE":
-                continue
-            params = {"market": "indices", "ticker": f"I:{idx.symbol}", "limit": "1"}
-            raw = await self._get_json(session, f"{_MASSIVE_BASE}/v3/reference/tickers", headers, params, "indices")
-            if raw is None:
-                continue
-            resp = MassiveTickersResponse.model_validate(raw)
-            for ticker in resp.results or []:
-                rec = normalize_massive_index(ticker, venue="CBOE")
-                if rec is not None:
-                    out.append(rec)
-        return out
-
-    async def _fetch_index_options(
-        self,
-        session: aiohttp.ClientSession,
-        headers: dict[str, str],
-    ) -> list[InstrumentRecord]:
-        """Fetch OPRA cash-index option chains (SPX/VIX) tagged to their venue.
-
-        Massive has no CME futures-options; these CBOE index options are the
-        relevant options layer (SPX + VIX vol complex). Paginated per underlying.
-        """
-        out: list[InstrumentRecord] = []
-        for underlying, venue in _INDEX_OPTION_UNDERLYINGS.items():
-            url: str | None = f"{_MASSIVE_BASE}/v3/reference/options/contracts"
-            params: dict[str, str] | None = {"underlying_ticker": underlying, "limit": str(_PAGE_LIMIT)}
-            pages = 0
-            while url and pages < _MAX_PAGES:
-                raw = await self._get_json(session, url, headers, params, "index_options")
-                if raw is None:
-                    break
-                resp = MassiveOptionContractsResponse.model_validate(raw)
-                for contract in resp.results or []:
-                    rec = normalize_massive_option(contract, venue=venue)
-                    if rec is not None:
-                        out.append(rec)
-                url = resp.next_url
-                params = None
-                pages += 1
         return out
 
     async def _fetch_fx(
