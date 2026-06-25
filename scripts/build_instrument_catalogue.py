@@ -354,6 +354,51 @@ def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
     return instrument_id
 
 
+#: Known chain suffixes for the glued PROTOCOL-CHAIN venue split (catalogue read-side
+#: canonicalisation). Mirrors the UAC ``KNOWN_CHAINS`` set the manifest writer uses.
+_CATALOGUE_KNOWN_CHAINS = frozenset(
+    {
+        "ETHEREUM",
+        "ARBITRUM",
+        "BASE",
+        "OPTIMISM",
+        "POLYGON",
+        "BSC",
+        "AVALANCHE",
+        "SOLANA",
+        "ZKSYNC",
+        "SCROLL",
+        "LINEA",
+        "HYPERLIQUID",
+        "STARKNET",
+        "PLASMA",
+    }
+)
+
+
+def _canonical_bare_venue_chain(venue: str, chain: str) -> tuple[str, str]:
+    """Map any DeFi venue drift form ``(venue, chain)`` → canonical ``(bare_protocol, chain)``.
+
+    1. ghost-normalise the full venue (``AAVEV3-ARBITRUM`` → ``AAVE_V3-ARBITRUM``) via the
+       UAC authority ``canonicalize_defi_venue_combined`` (no-op for bare/non-DeFi venues).
+    2. if the result is glued (ends ``-<KNOWN_CHAIN>``), split → bare protocol + that chain.
+    3. else keep the venue; preserve the existing chain column (upper).
+    Pure + idempotent. A non-DeFi or already-bare canonical venue passes through unchanged.
+    """
+    from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
+
+    v = str(venue).strip()
+    c = str(chain).strip().upper()
+    if not v:
+        return v, c
+    normed = canonicalize_defi_venue_combined(v)
+    if "-" in normed:
+        for ch in _CATALOGUE_KNOWN_CHAINS:
+            if normed.endswith("-" + ch):
+                return normed[: -(len(ch) + 1)], ch
+    return normed, c
+
+
 def _defi_pool_dual_form(
     meta: dict[str, str | None],
 ) -> tuple[str, str, str, str, str]:
@@ -377,7 +422,16 @@ def _defi_pool_dual_form(
     itype = (meta.get("instrument_type") or "").strip().lower()
     pool_address = _pool_address_of(meta)
     if itype not in _DEFI_POOL_ITYPES or not pool_address:
-        return resolved_id, "", meta.get("venue") or "", meta.get("chain") or "", ""
+        # Non-pool / non-DeFi fallthrough. For a non-pool DeFi row (lending / lst /
+        # staking / perpetual) the venue may still arrive glued ``PROTOCOL-CHAIN`` or
+        # no-underscore ghost (``AAVEV3-ARBITRUM``) from the by_date snapshot — split
+        # it to the SINGLE canonical bare ``venue=PROTOCOL`` + a populated ``chain``
+        # so a fresh catalogue regen NEVER re-introduces glued/ghost (the treadmill).
+        # ``_canonical_bare_venue_chain`` is a no-op for an already-bare canonical
+        # venue + for non-DeFi venues (no known chain suffix). SSOT:
+        # codex/02-data/defi-canonical-naming-ssot.md.
+        bare_v, bare_c = _canonical_bare_venue_chain(meta.get("venue") or "", meta.get("chain") or "")
+        return resolved_id, "", bare_v, bare_c, ""
 
     venue_raw = meta.get("venue") or ""
     chain_raw = meta.get("chain") or ""
