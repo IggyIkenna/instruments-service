@@ -153,8 +153,6 @@ class TestMassiveInstrumentTypeFilter:
                 new_callable=AsyncMock,
                 return_value=[mock_record_equity, mock_record_future],
             ),
-            patch.object(adapter, "_fetch_indices", new_callable=AsyncMock, return_value=[]),
-            patch.object(adapter, "_fetch_index_options", new_callable=AsyncMock, return_value=[]),
             patch.object(adapter, "_fetch_fx", new_callable=AsyncMock, return_value=[]),
             patch.object(adapter, "_fetch_futures", new_callable=AsyncMock, return_value=[]),
             patch.object(adapter, "_enrich_session_metadata"),
@@ -345,119 +343,11 @@ class TestDatabentoGetFuturesContracts:
 
 
 # ===========================================================================
-# MassiveReferenceDataAdapter — private methods (lines 267, 271, 275->273,
-#   297, 301->299, 319, 323->321, 358, 387, 397->389, 407-410, 426-434)
+# MassiveReferenceDataAdapter — private methods (FX + futures)
+# CBOE indices/options + ICE futures removed 2026-06-25 (§7.1 pollution cleanup):
+# the CBOE cash-index is retired (VX vol rides Databento XCBF.PITCH) and ICE is
+# Databento-billing-blocked, so massive no longer fetches either.
 # ===========================================================================
-
-
-class TestMassiveFetchIndices:
-    """_fetch_indices: non-CBOE skip, raw=None skip, normalize=None skip."""
-
-    @pytest.mark.asyncio
-    async def test_non_cboe_index_skipped(self) -> None:
-        """Line 267: non-CBOE venue → continue (no _get_json call)."""
-        from instruments_service.reference_data.adapters.tradfi.massive import MassiveReferenceDataAdapter
-
-        adapter = MassiveReferenceDataAdapter(api_key="test-key")
-        non_cboe = MagicMock()
-        non_cboe.venue = "NYSE"
-        non_cboe.symbol = "VXUS"
-
-        with (
-            patch("instruments_service.reference_data.adapters.tradfi.massive.YAHOO_INDICES", [non_cboe]),
-            patch.object(adapter, "_get_json", new_callable=AsyncMock) as mock_get,
-        ):
-            result = await adapter._fetch_indices(MagicMock(), {})
-
-        assert result == []
-        mock_get.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_raw_none_skipped(self) -> None:
-        """Line 271: CBOE index but _get_json returns None → continue."""
-        from instruments_service.reference_data.adapters.tradfi.massive import MassiveReferenceDataAdapter
-
-        adapter = MassiveReferenceDataAdapter(api_key="test-key")
-        cboe_idx = MagicMock()
-        cboe_idx.venue = "CBOE"
-        cboe_idx.symbol = "VIX"
-
-        with (
-            patch("instruments_service.reference_data.adapters.tradfi.massive.YAHOO_INDICES", [cboe_idx]),
-            patch.object(adapter, "_get_json", new_callable=AsyncMock, return_value=None),
-        ):
-            result = await adapter._fetch_indices(MagicMock(), {})
-
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_normalize_none_skipped(self) -> None:
-        """Lines 275->273: normalize_massive_index returns None → not appended."""
-        from instruments_service.reference_data.adapters.tradfi.massive import MassiveReferenceDataAdapter
-
-        adapter = MassiveReferenceDataAdapter(api_key="test-key")
-        cboe_idx = MagicMock()
-        cboe_idx.venue = "CBOE"
-        cboe_idx.symbol = "VIX"
-
-        mock_resp = MagicMock()
-        mock_resp.results = [MagicMock()]
-
-        with (
-            patch("instruments_service.reference_data.adapters.tradfi.massive.YAHOO_INDICES", [cboe_idx]),
-            patch.object(adapter, "_get_json", new_callable=AsyncMock, return_value={"results": [{}]}),
-            patch("instruments_service.reference_data.adapters.tradfi.massive.MassiveTickersResponse") as m,
-            patch(
-                "instruments_service.reference_data.adapters.tradfi.massive.normalize_massive_index",
-                return_value=None,
-            ),
-        ):
-            m.model_validate.return_value = mock_resp
-            result = await adapter._fetch_indices(MagicMock(), {})
-
-        assert result == []
-
-
-class TestMassiveFetchIndexOptions:
-    """_fetch_index_options: raw=None break, normalize=None skip."""
-
-    @pytest.mark.asyncio
-    async def test_raw_none_breaks_loop(self) -> None:
-        """Line 297: raw=None → break."""
-        from instruments_service.reference_data.adapters.tradfi.massive import (
-            _INDEX_OPTION_UNDERLYINGS,
-            MassiveReferenceDataAdapter,
-        )
-
-        adapter = MassiveReferenceDataAdapter(api_key="test-key")
-
-        with patch.object(adapter, "_get_json", new_callable=AsyncMock, return_value=None):
-            result = await adapter._fetch_index_options(MagicMock(), {})
-
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_normalize_none_skipped(self) -> None:
-        """Lines 301->299: normalize_massive_option returns None → no append."""
-        from instruments_service.reference_data.adapters.tradfi.massive import MassiveReferenceDataAdapter
-
-        adapter = MassiveReferenceDataAdapter(api_key="test-key")
-        mock_resp = MagicMock()
-        mock_resp.results = [MagicMock()]
-        mock_resp.next_url = None
-
-        with (
-            patch.object(adapter, "_get_json", new_callable=AsyncMock, return_value={"results": [{}]}),
-            patch("instruments_service.reference_data.adapters.tradfi.massive.MassiveOptionContractsResponse") as m,
-            patch(
-                "instruments_service.reference_data.adapters.tradfi.massive.normalize_massive_option",
-                return_value=None,
-            ),
-        ):
-            m.model_validate.return_value = mock_resp
-            result = await adapter._fetch_index_options(MagicMock(), {})
-
-        assert result == []
 
 
 class TestMassiveFetchFx:

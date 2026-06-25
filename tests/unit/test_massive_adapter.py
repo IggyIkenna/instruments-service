@@ -82,24 +82,6 @@ _FX_PAGE = {
         {"ticker": "C:KRWUSD", "market": "fx", "base_currency_symbol": "KRW", "currency_symbol": "USD"},
     ],
 }
-_INDEX_PAGE = {
-    "status": "OK",
-    "results": [{"ticker": "I:VIX", "name": "Cboe Volatility Index", "market": "indices"}],
-}
-_INDEX_OPTIONS_PAGE = {
-    "status": "OK",
-    "results": [
-        {
-            "ticker": "O:SPX260618C05000000",
-            "underlying_ticker": "SPX",
-            "contract_type": "call",
-            "expiration_date": "2026-06-18",
-            "strike_price": 5000,
-            "shares_per_contract": 100,
-            "primary_exchange": "XCBO",
-        }
-    ],
-}
 
 
 def _surface_router(*pages: dict[str, object]) -> AsyncMock:
@@ -111,8 +93,6 @@ def _surface_router(*pages: dict[str, object]) -> AsyncMock:
             "futures_products": _FUTURES_PRODUCT_PAGE,
             "futures_contracts": _FUTURES_CONTRACT_PAGE,
             "fx": _FX_PAGE,
-            "indices": _INDEX_PAGE,
-            "index_options": _INDEX_OPTIONS_PAGE,
         }
         return mapping.get(surface)
 
@@ -156,17 +136,16 @@ class TestMassiveAdapterUnit:
             recs = await adapter.get_instruments()
         assert any(r.instrument_key == "FX:SPOT_PAIR:KRW-USD" for r in recs)
 
-    async def test_cboe_index_and_index_options(self) -> None:
-        adapter = MassiveReferenceDataAdapter(api_key="k", venue_filter="CBOE", target_date=_TARGET)
-        with patch.object(MassiveReferenceDataAdapter, "_get_json", _surface_router()):
-            recs = await adapter.get_instruments()
-        assert any(r.instrument_key == "CBOE:INDEX:VIX-USD" for r in recs)
-        # SPX index option present + tagged CBOE (OPRA XCBO MIC overridden to CBOE).
-        opt = next((r for r in recs if r.instrument_key == "CBOE:OPTION:O:SPX260618C05000000"), None)
-        assert opt is not None
-        assert opt.venue == "CBOE"
-        assert opt.instrument_type == InstrumentType.OPTION
-        assert opt.underlying == "SPX"
+    async def test_cboe_and_ice_filters_yield_no_pollution(self) -> None:
+        # G1 §7.1 (2026-06-25): massive no longer fetches CBOE cash-indices (VIX-cash)
+        # or OPRA cash-index options (SPX/VIX) — retired pollution (VX vol rides
+        # Databento XCBF.PITCH) — nor ICE futures (Databento-billing-blocked, no
+        # canonical source). Both venue filters must now yield ZERO records.
+        for venue in ("CBOE", "ICE"):
+            adapter = MassiveReferenceDataAdapter(api_key="k", venue_filter=venue, target_date=_TARGET)
+            with patch.object(MassiveReferenceDataAdapter, "_get_json", _surface_router()):
+                recs = await adapter.get_instruments()
+            assert recs == [], f"{venue} filter should yield no records after §7.1 cleanup"
 
     async def test_honest_absence_on_fetch_failure(self) -> None:
         adapter = MassiveReferenceDataAdapter(api_key="k", venue_filter="NASDAQ", target_date=_TARGET)
