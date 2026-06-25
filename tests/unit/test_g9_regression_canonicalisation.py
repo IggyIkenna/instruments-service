@@ -102,11 +102,10 @@ class TestInstrumentsBucketRoutingRegressionG9:
 
 
 class TestFootystatsFetchedAtHourPartitionRegressionG9:
-    """FootyStats odds and predictions writers MUST include a
-    ``fetched_at_hour`` partition key — repeated polls otherwise overwrite
-    the same file. We assert the source for each writer carries the
-    ``fetched_at_hour`` key in the partition dict and computes it via
-    ``strftime("%Y-%m-%dT%H")``.
+    """FootyStats predictions writer MUST include a ``fetched_at_hour`` partition key
+    — repeated polls otherwise overwrite the same file. We assert the source for each
+    writer carries the ``fetched_at_hour`` key in the partition dict and computes it
+    via ``strftime("%Y-%m-%dT%H")``.
     """
 
     @pytest.mark.parametrize("fn_name", ["_fetch_footystats_predictions"])

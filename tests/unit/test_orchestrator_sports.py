@@ -1,11 +1,10 @@
 """Coverage tests for sports-provider routing and footystats sub-functions.
 
 Targets uncovered branches in orchestrator.py:
-  - process_instruments enrichment-provider short-circuit (lines 1339-1445)
+  - process_instruments enrichment-provider short-circuit
     OPEN_METEO / UNDERSTAT / FOOTYSTATS / TRANSFERMARKT / SOCCER_FOOTBALL_INFO / unknown
   - _fetch_footystats_predictions skip / happy / empty / exception
   - _fetch_footystats_matches skip / happy / empty
-  Note: _fetch_footystats_odds removed — ODDS belongs in MTDS, not IS (ODDS=MTDS #6).
 """
 
 from __future__ import annotations
@@ -139,7 +138,7 @@ class TestProcessInstrumentsSportsProviderRouting:
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_footystats_with_key_calls_predictions_and_matches(self) -> None:
+    async def test_footystats_with_key_calls_both_fetchers(self) -> None:
         mock_pred = AsyncMock(return_value={"footystats_predictions": 12})
         mock_match = AsyncMock(return_value={"footystats_matches": 8})
         with _entry_stack(

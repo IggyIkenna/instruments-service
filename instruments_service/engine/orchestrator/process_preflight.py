@@ -166,7 +166,6 @@ _SPORTS_PER_LEAGUE_ENTITIES: frozenset[str] = frozenset(
         "FIXTURES",
         "PREDICTIONS",
         "MATCHES",
-        "ODDS",
         "STANDINGS",
         "TEAMS",
         "INJURIES",
@@ -314,7 +313,6 @@ async def _sports_provider_short_circuit(
                 date=date, api_key=fs_key, bucket=bucket, force=redo_all
             )
             result.update(match_result)
-        # ODDS removed — belongs in MTDS, not IS (ODDS=MTDS #6 migration)
     elif sports_provider == "TRANSFERMARKT":
         tm_key = _keys.get("transfermarkt")
         if not tm_key:

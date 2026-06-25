@@ -1,4 +1,4 @@
-"""Footystats data: predictions, matches, odds fetches + null-rate validation.
+"""Footystats data: predictions, matches fetches + null-rate validation.
 
 Cohesion module of the ``engine.orchestrator`` package (split from the former
 monolithic ``engine/orchestrator.py``; plan:
