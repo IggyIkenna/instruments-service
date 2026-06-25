@@ -72,9 +72,11 @@ from instruments_service.reference_data.adapters.tradfi.databento.adapter import
 )
 from instruments_service.reference_data.adapters.tradfi.databento.sessions import (
     _EXCHANGE_HOURS,
+    _FX_VENUES_24_7,
     _XCAL_CACHE,
     _XCAL_MAPPING,
     EXCHANGE_HOURS,
+    UndeclaredTradfiVenueError,
     _apply_early_close,
     _compute_utc_hours,
     _get_session_metadata,
@@ -114,6 +116,7 @@ __all__ = [
     "_DEFAULT_TRADFI_FLOOR",
     "_EXCHANGE_HOURS",
     "_FUTURES_DATASETS",
+    "_FX_VENUES_24_7",
     "_SORTED_EXCHANGE_CODES",
     "_VENUE_FLOOR_DATES",
     "_VENUE_MAPPING",
@@ -133,6 +136,7 @@ __all__ = [
     "InstrumentType",
     "OHLCVRef",
     "OptionType",
+    "UndeclaredTradfiVenueError",
     "VenueMapping",
     "ZoneInfo",
     "_DATASET_TO_asset_group",
