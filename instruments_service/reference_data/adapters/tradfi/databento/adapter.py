@@ -64,11 +64,13 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
     def __init__(
         self,
         project_id: str | None = None,
-        datasets: list[str] | None = None,
         target_date: date | None = None,
         api_key: str | None = None,
         venue_filter: str | None = None,
     ) -> None:
+        # NB: no ``datasets`` param — the per-instrument Databento dataset is resolved
+        # from the curated TRADFI_DATABENTO_INSTRUMENTS registry (each def carries its
+        # own ``dataset``, gated by the §7.1 billable allowlist), not a venue→dataset map.
         super().__init__(project_id=project_id, api_key=api_key)
         self._target_date: date = target_date or date.today()
         self._venue_filter: str | None = venue_filter
