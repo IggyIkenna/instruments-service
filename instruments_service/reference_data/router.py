@@ -17,22 +17,21 @@ Crypto
   hyperliquid / direct  → HyperliquidReferenceDataAdapter
   aster     / direct    → AsterReferenceDataAdapter
 
-TradFi equities
-  apple     / databento → DatabentoReferenceDataAdapter(datasets=["XNAS.ITCH"])
-  apple     / ibkr      → IBKRReferenceDataAdapter
-  nasdaq    / databento → DatabentoReferenceDataAdapter(datasets=["XNAS.ITCH"])
-  nyse      / databento → DatabentoReferenceDataAdapter(datasets=["XNYS.PILLAR"])
-
-TradFi futures
-  cme_futures / databento → DatabentoReferenceDataAdapter(datasets=["GLBX.MDP3"])
+TradFi (the databento adapter resolves its dataset PER-INSTRUMENT from the curated
+TRADFI_DATABENTO_INSTRUMENTS registry — DBEQ.BASIC equities / GLBX.MDP3 CME futures
+/ XCBF.PITCH CFE VX, gated by the §7.1 billable allowlist; there is NO venue→dataset
+routing here. The old cboe_options→OPRA.PILLAR + nasdaq/nyse→XNAS.ITCH/XNYS.PILLAR
+map was DEAD non-billable config and was removed 2026-06-25.)
+  apple       / databento → DatabentoReferenceDataAdapter
+  apple       / ibkr      → IBKRReferenceDataAdapter
+  nasdaq      / databento → DatabentoReferenceDataAdapter
+  nyse        / databento → DatabentoReferenceDataAdapter
+  cme_futures / databento → DatabentoReferenceDataAdapter
   cme_futures / ibkr      → IBKRReferenceDataAdapter
   ibkr        / ibkr      → IBKRReferenceDataAdapter
 
-TradFi options
-  cboe_options / databento → DatabentoReferenceDataAdapter(datasets=["OPRA.PILLAR"])
-
 Generic data-source-only
-  databento / databento → DatabentoReferenceDataAdapter (default datasets)
+  databento / databento → DatabentoReferenceDataAdapter
   tardis    / tardis    → TardisReferenceDataAdapter (default exchanges)
 
 DeFi protocols
@@ -159,25 +158,6 @@ class ReferenceDataSourceConfig(BaseModel):  # CORRECT-LOCAL — service routing
 
 
 # ---------------------------------------------------------------------------
-# Databento dataset defaults per venue
-# ---------------------------------------------------------------------------
-
-_DATABENTO_VENUE_DATASETS: dict[str, list[str]] = {
-    # Crypto
-    "binance": ["XNAS.ITCH"],
-    # TradFi equities
-    "apple": ["XNAS.ITCH"],
-    "nasdaq": ["XNAS.ITCH"],
-    "nyse": ["XNYS.PILLAR"],
-    # TradFi futures
-    "cme_futures": ["GLBX.MDP3"],
-    # TradFi options
-    "cboe_options": ["OPRA.PILLAR"],
-    # Generic Databento (all default datasets)
-    "databento": [],  # empty → DatabentoReferenceDataAdapter uses its own default
-}
-
-# ---------------------------------------------------------------------------
 # Tardis exchange defaults per venue
 # ---------------------------------------------------------------------------
 
@@ -283,14 +263,14 @@ def _route_databento(
     project_id: str | None,
     api_key: str | None = None,
 ) -> BaseReferenceDataAdapter:
-    """Route source='databento' to the Databento adapter with resolved datasets."""
-    datasets = _resolve_databento_datasets(venue, config.dataset)
-    if datasets:
-        return DatabentoReferenceDataAdapter(
-            project_id=project_id,
-            datasets=datasets,
-            api_key=api_key,
-        )
+    """Route source='databento' to the Databento adapter.
+
+    The adapter resolves its own per-instrument dataset from the curated
+    TRADFI_DATABENTO_INSTRUMENTS registry (each def carries its ``dataset``, gated by
+    the §7.1 billable allowlist) — there is no venue→dataset routing here. ``venue`` /
+    ``config`` are accepted for the uniform router-dispatch signature.
+    """
+    _ = (venue, config)
     return DatabentoReferenceDataAdapter(project_id=project_id, api_key=api_key)
 
 
@@ -363,18 +343,6 @@ def _route_direct(
     if adapter_class is None:
         raise ValueError(f"No direct adapter for venue {venue!r}. Supported: {sorted(_direct_map.keys())}")
     return adapter_class(project_id=project_id, api_key=api_key)
-
-
-def _resolve_databento_datasets(venue: str, override: str | None) -> list[str]:
-    """Resolve Databento dataset list for a venue.
-
-    If config.dataset is provided, it takes priority.
-    Otherwise falls back to _DATABENTO_VENUE_DATASETS.
-    Returns empty list for unknown venues (adapter uses its own default).
-    """
-    if override:
-        return [override]
-    return _DATABENTO_VENUE_DATASETS.get(venue, [])
 
 
 def _resolve_tardis_exchanges(venue: str, override: str | None) -> list[str]:
