@@ -115,6 +115,14 @@ _CEFI_VENUES: list[str] = [
     "HYPERLIQUID",
     "UPBIT",
     "ASTER",
+    # On-chain perp CLOBs classified as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, like
+    # HYPERLIQUID/ASTER). Reclassified here from the defi enumeration 2026-06-25
+    # (instruments_foundation_completeness_2026_06_24.md) — they were wrongly
+    # captured into the defi instrument-catalog; adapters relocated to
+    # adapters/cefi/. They ride the standard cefi backfill.
+    "EXTENDED-STARKNET",
+    "PACIFICA-SOLANA",
+    "LIGHTER-ZKSYNC",
     # Tier-3 CeFi (Tardis archive — factory entries exist, added to orchestrator 2026-05-12)
     "KRAKEN-FUTURES",
     # KRAKEN-SPOT: Tardis ``kraken`` exchange (BASE/QUOTE spot pairs). Added 2026-06-17
