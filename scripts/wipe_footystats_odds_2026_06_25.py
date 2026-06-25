@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 from unified_trading_library import resolve_bucket_name
-from unified_trading_library.cloud_interface import gcs_delete_object, get_storage_client
+from unified_trading_library.cloud_interface import gcs_copy_object, gcs_delete_object, get_storage_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("wipe_footystats_odds")
@@ -63,22 +63,20 @@ def _snapshot_and_write(
     """Snapshot current parquet then write df_new. No-op if dry_run."""
     blob_full = f"{bucket}/{blob_path}"
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    snap_blob = f"{bucket}/{SNAPSHOT_PREFIX}/{snap_label}_{ts}.parquet"
+    snap_blob = f"gs://{bucket}/{SNAPSHOT_PREFIX}/{snap_label}_{ts}.parquet"
 
     if dry_run:
         logger.info("DRY-RUN: would snapshot %s → %s and write %d rows", blob_full, snap_blob, len(df_new))
         return
 
-    # Snapshot: download existing and upload as snapshot
-    tmp_snap = tempfile.mktemp(suffix="_snap.parquet")
-    client.bucket(bucket).blob(blob_path).download_to_filename(tmp_snap)
-    client.bucket(bucket).blob(f"{SNAPSHOT_PREFIX}/{snap_label}_{ts}.parquet").upload_from_filename(tmp_snap)
+    # Snapshot: server-side GCS copy (no local temp needed)
+    gcs_copy_object(f"gs://{bucket}/{blob_path}", snap_blob)
     logger.info("Snapshot written: %s", snap_blob)
 
     # Write cleaned parquet
     tmp_out = tempfile.mktemp(suffix="_out.parquet")
     df_new.to_parquet(tmp_out, index=False)
-    client.bucket(bucket).blob(blob_path).upload_from_filename(tmp_out)
+    client.upload_file(bucket=bucket, blob_path=blob_path, local_path=tmp_out)
     logger.info("Written %d rows to %s", len(df_new), blob_full)
 
 
