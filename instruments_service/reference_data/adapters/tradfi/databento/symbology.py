@@ -61,30 +61,29 @@ _CLASS_TO_TYPE: dict[str, InstrumentType] = {
     "X": InstrumentType.SPOT_PAIR,  # Index
 }
 
-# Dataset → canonical venue mapping
+# Dataset → canonical venue mapping.
+# §7.1 BILLABLE-VENUE GUARD (operator 2026-06-18 subscription lockdown + 2026-06-25 cleanup):
+# ONLY the 3 subscribed Databento datasets are mapped. The non-billable datasets
+# (XNAS.ITCH / XNAS.BASIC / XNYS.PILLAR / IFEU.IMPACT / IFUS.IMPACT / OPRA.PILLAR) are
+# REMOVED so a stray off-allowlist definition row can never resolve to a (polluting) venue —
+# they were the source of the stale ICE-Brent (IFEU/IFUS→ICE) + CBOE-OPRA-SPX (OPRA→CBOE)
+# catalogue pollution. ICE is databento-billing-blocked → purged everywhere; the Yahoo-sourced
+# DXY currency index re-homes to venue=FX (NOT ICE). Enumeration is curated-list-driven
+# (TRADFI_DATABENTO_INSTRUMENTS, all billable) and the fetch path asserts
+# assert_databento_request_allowed; this map is the last-mile canonical-venue resolve.
 _DATASET_TO_VENUE: dict[str, str] = {
     "GLBX.MDP3": "CME",
-    "XNAS.ITCH": "NASDAQ",
-    "XNAS.BASIC": "NASDAQ",
-    "XNYS.PILLAR": "NYSE",
-    "DBEQ.BASIC": "NYSE",
-    "IFEU.IMPACT": "ICE",
-    "IFUS.IMPACT": "ICE",
-    "OPRA.PILLAR": "CBOE",
-    "XCBF.PITCH": "CBOE",
+    "DBEQ.BASIC": "NYSE",  # equity dataset; adapter re-routes NASDAQ vs NYSE by ticker
+    "XCBF.PITCH": "CBOE",  # Cboe Futures Exchange — VX/VIX futures
 }
 
-# Dataset → fallback asset class (used when no per-instrument match exists)
+# Dataset → fallback asset class (used when no per-instrument match exists).
+# Billable datasets only (see _DATASET_TO_VENUE). XCBF.PITCH = COMMODITY (VX/VIX volatility
+# futures — was the mis-classified EQUITY fallback; G1.c 2026-06-25).
 _DATASET_TO_asset_group: dict[str, AssetClass] = {
     "GLBX.MDP3": AssetClass.COMMODITY,
-    "XNAS.ITCH": AssetClass.EQUITY,
-    "XNAS.BASIC": AssetClass.EQUITY,
-    "XNYS.PILLAR": AssetClass.EQUITY,
     "DBEQ.BASIC": AssetClass.EQUITY,
-    "IFEU.IMPACT": AssetClass.COMMODITY,
-    "IFUS.IMPACT": AssetClass.COMMODITY,
-    "OPRA.PILLAR": AssetClass.EQUITY,
-    "XCBF.PITCH": AssetClass.EQUITY,
+    "XCBF.PITCH": AssetClass.COMMODITY,
 }
 
 # Per-instrument asset class from UAC registry.
@@ -102,8 +101,11 @@ for _inst in TRADFI_DATABENTO_INSTRUMENTS:
 
 _VENUE_MAPPING = VenueMapping()
 
-# Futures datasets where class "S" = exchange-defined calendar spread (not equity spot).
-_FUTURES_DATASETS = frozenset({"GLBX.MDP3", "IFEU.IMPACT", "IFUS.IMPACT"})
+# Futures datasets where class "S" = exchange-defined calendar spread → COMBO (not equity spot).
+# GLBX.MDP3 only — IFEU/IFUS removed (ICE billing-blocked, purged). XCBF.PITCH is deliberately
+# NOT here: VX class-"S" calendar spreads are dropped (outright-only universe — G1.c), so they
+# must not be reclassified COMBO-and-kept. DBEQ.BASIC class-"S" is equity-spot → EQUITY (G1.d).
+_FUTURES_DATASETS = frozenset({"GLBX.MDP3"})
 
 # Floor dates for venues where Databento doesn't populate the activation field.
 # These are conservative "data available from" dates based on Databento coverage.
