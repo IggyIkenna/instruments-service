@@ -211,8 +211,8 @@ def test_cleanup_flushes_manifest_writers_and_emits_coordination_events(
 
     asyncio.run(handler.cleanup())
 
-    # All four categories flushed.
-    assert len(flushed_buckets) == 4
+    # Only the SPORTS bucket should be flushed — cleanup() now scopes to --asset-group.
+    assert flushed_buckets == ["instruments-store-sports-test-project"]
     # DATA_READY always published; SPORTS_LIVE_STATS because SPORTS is in category.
     assert "DATA_READY" in published_events
     assert "SPORTS_LIVE_STATS" in published_events

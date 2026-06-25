@@ -360,7 +360,15 @@ class InstrumentsHandler(UnifiedServiceHandler):
             self._heartbeat_timer.stop()
             self._heartbeat_timer = None
         flushed: list[str] = []
-        for asset_group in ("SPORTS", "CEFI", "DEFI", "TRADFI"):
+        _args = self.args
+        cli_asset_groups: list[str] | None = None
+        if _args is not None:
+            cli_asset_groups = getattr(_args, "asset_group", None) or getattr(_args, "category", None)
+        is_all = not cli_asset_groups or any(c.upper() == "ALL" for c in cli_asset_groups)
+        flush_groups: tuple[str, ...] = (
+            ("SPORTS", "CEFI", "DEFI", "TRADFI") if is_all else tuple(c.upper() for c in cli_asset_groups)
+        )
+        for asset_group in flush_groups:
             try:
                 bucket = _get_instruments_bucket_for_asset_group(asset_group)
                 if bucket:
