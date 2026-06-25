@@ -1003,23 +1003,30 @@ def test_derivatives_only_classifies_kraken_futures() -> None:
 
 
 def test_create_yahoo_index_records_no_filter_returns_all() -> None:
-    """venue_filter=None returns one record per YAHOO_INDICES entry (VIX + DXY + treasuries)."""
+    """venue_filter=None returns one record per YAHOO_INDICES entry (DXY + treasuries).
+
+    The VIX cash-index was removed from YAHOO_INDICES 2026-06-25 (retired; VIX-15m rides
+    the VX FUTURES front contract), so the adapter no longer emits CBOE:INDEX:VIX-USD.
+    """
     adapter = DatabentoReferenceDataAdapter()
     records = adapter._create_yahoo_index_records(venue_filter=None)
     keys = {r.instrument_key for r in records}
     # Canonical keys carry the -USD base-quote suffix (match GCS/symbology + resolver).
-    assert "CBOE:INDEX:VIX-USD" in keys
+    assert "CBOE:INDEX:VIX-USD" not in keys  # VIX cash-index retired 2026-06-25
     assert "ICE:INDEX:DXY-USD" in keys
     for symbol in ("US3M", "US5Y", "US10Y", "US30Y"):
         assert f"CBOE:INDEX:{symbol}-USD" in keys
 
 
 def test_create_yahoo_index_records_cboe_filter_returns_cboe_only() -> None:
-    """venue_filter='CBOE' returns the CBOE records (VIX + treasuries), not DXY (ICE)."""
+    """venue_filter='CBOE' returns the CBOE records (treasuries), not DXY (ICE).
+
+    VIX cash-index removed 2026-06-25, so the CBOE Yahoo indices are the treasury tenors.
+    """
     adapter = DatabentoReferenceDataAdapter()
     records = adapter._create_yahoo_index_records(venue_filter="CBOE")
     keys = {r.instrument_key for r in records}
-    assert "CBOE:INDEX:VIX-USD" in keys
+    assert "CBOE:INDEX:VIX-USD" not in keys  # VIX cash-index retired 2026-06-25
     assert "CBOE:INDEX:US10Y-USD" in keys
     assert "ICE:INDEX:DXY-USD" not in keys
 
@@ -1030,7 +1037,6 @@ def test_create_yahoo_index_records_carry_per_instrument_genesis() -> None:
     records = {r.instrument_key: r for r in adapter._create_yahoo_index_records(venue_filter=None)}
     assert records["ICE:INDEX:DXY-USD"].available_from_datetime.year == 2019
     assert records["CBOE:INDEX:US10Y-USD"].available_from_datetime.year == 2000
-    assert records["CBOE:INDEX:VIX-USD"].available_from_datetime.year == 1990
 
 
 def test_create_yahoo_index_records_ice_filter_returns_only_dxy() -> None:
