@@ -238,18 +238,84 @@ def _process(st, bucket: str, blob: str, ts: str, *, apply: bool, label: str) ->
     return {**stats, "captured_before": cap0, "captured_after": cap1, "glued_after": g1, "ghost_after": gh1}
 
 
+def _mtds_venue_only_rewrite(st, bucket: str, ts: str, *, apply: bool) -> int:
+    """Rewrite ONLY glued venue/chain values in the MTDS defi _index — NO dedup, NO row drop.
+
+    The MTDS manifest grain is wider than IS (pipeline_mode + capture_status are part of the cell
+    key), so the IS-tuned dedup is unsafe here. This maps glued venue→bare + fills chain in place
+    on every row and writes back the full frame (row count UNCHANGED).
+    """
+    raw = st.download_bytes(bucket, INDEX_BLOB)
+    df = pd.read_parquet(io.BytesIO(raw))
+    rows_in = len(df)
+    g0, gh0 = _glued_ghost_count(df)
+    cap0 = int((df.get("capture_status", pd.Series(dtype=str)).astype(str) == "captured").sum())
+    orig_v = df["venue"].astype(str)
+    orig_c = df["chain"].astype(str) if "chain" in df.columns else pd.Series([""] * len(df), index=df.index)
+    pairs = {(v, c) for v, c in zip(orig_v, orig_c, strict=True)}
+    pmap = {p: canonicalise_venue_chain(p[0], p[1]) for p in pairs}
+    new_v = [pmap[(v, c)][0] for v, c in zip(orig_v, orig_c, strict=True)]
+    new_c = [pmap[(v, c)][1] for v, c in zip(orig_v, orig_c, strict=True)]
+    df["venue"] = new_v
+    df["chain"] = new_c
+    venue_changed = int((pd.Series(new_v, index=df.index) != orig_v).sum())
+    g1, gh1 = _glued_ghost_count(df)
+    cap1 = int((df["capture_status"].astype(str) == "captured").sum()) if "capture_status" in df.columns else 0
+    logger.info(
+        "  [MTDS-defi] %s rows %d→%d (UNCHANGED) | venue_changed=%d | glued %d→%d ghost %d→%d | captured %d→%d",
+        INDEX_BLOB,
+        rows_in,
+        len(df),
+        venue_changed,
+        g0,
+        g1,
+        gh0,
+        gh1,
+        cap0,
+        cap1,
+    )
+    if len(df) != rows_in or cap1 != cap0:
+        logger.error("  ❌ row/captured count changed (%d→%d / %d→%d) — REFUSING", rows_in, len(df), cap0, cap1)
+        return 1
+    if apply and venue_changed:
+        st.upload_bytes(bucket, _bak(INDEX_BLOB, ts), raw)
+        buf = io.BytesIO()
+        df.to_parquet(buf, index=False, engine="pyarrow")
+        buf.seek(0)
+        st.upload_bytes(bucket, INDEX_BLOB, buf.read())
+        logger.info("    ✅ wrote %s (bak → %s)", INDEX_BLOB, _bak(INDEX_BLOB, ts))
+    logger.info("Done (mode=%s, target=market-data).", "APPLY" if apply else "DRY-RUN")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     m = ap.add_mutually_exclusive_group(required=True)
     m.add_argument("--dry-run", action="store_true")
     m.add_argument("--apply", action="store_true")
+    ap.add_argument(
+        "--target",
+        choices=["instruments", "market-data"],
+        default="instruments",
+        help="Which DeFi bucket's _index to collapse (default: instruments-store). "
+        "market-data = the MTDS defi tick bucket (only the _index column is rewritten; "
+        "raw_tick_data paths are handled by the path-migration, not this script).",
+    )
     args = ap.parse_args(argv)
     apply = bool(args.apply)
 
-    bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="defi")
+    kind = "market-data" if args.target == "market-data" else "instruments-store"
+    bucket = resolve_bucket_name(cloud="gcp", kind=kind, asset_group="defi")
     st = get_storage_client(project_id=None)
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    logger.info("Mode=%s bucket=%s", "APPLY" if apply else "DRY-RUN", bucket)
+    logger.info("Mode=%s target=%s bucket=%s", "APPLY" if apply else "DRY-RUN", args.target, bucket)
+    if args.target == "market-data":
+        # MTDS: VENUE-ONLY rewrite, NO DEDUP. The MTDS _index natural key is WIDER than the IS
+        # instruments grain (pipeline_mode + capture_status vary per cell — 345k legit rows would
+        # be wrongly merged by the IS-tuned dedup). So for MTDS we ONLY remap the venue/chain
+        # columns of glued rows in place and write back EVERY row (no drop). Verified safe: the
+        # only MTDS defect is the 6 UNISWAP_V4-ETHEREUM glued strings.
+        return _mtds_venue_only_rewrite(st, bucket, ts, apply=apply)
 
     any_regression = 0
     # _index + per-VM shards + catalogue
