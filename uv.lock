@@ -1360,7 +1360,7 @@ wheels = [
 
 [[package]]
 name = "instruments-service"
-version = "0.46.0"
+version = "0.79.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -1375,6 +1375,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pandas-stubs" },
+    { name = "pip" },
     { name = "pip-audit" },
     { name = "plotly" },
     { name = "polars" },
@@ -1415,6 +1416,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.0,<2.4.0" },
     { name = "pandas", specifier = ">=2.3.0,<3.0.0" },
     { name = "pandas-stubs", specifier = ">=2.2.0,<3.0.0" },
+    { name = "pip", specifier = ">=26.1.2" },
     { name = "pip-audit", specifier = ">=2.7.0,<3.0.0" },
     { name = "plotly", specifier = ">=6.4.0,<7.0.0" },
     { name = "polars", specifier = ">=1.37.0,<2.0.0" },
@@ -3017,7 +3019,7 @@ wheels = [
 
 [[package]]
 name = "unified-api-contracts"
-version = "0.50.0"
+version = "0.66.0"
 source = { editable = "../unified-api-contracts" }
 dependencies = [
     { name = "bandit" },
@@ -3030,6 +3032,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pandas-stubs" },
+    { name = "pip" },
     { name = "pip-audit" },
     { name = "polars" },
     { name = "prek" },
@@ -3062,6 +3065,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.0,<2.4.0" },
     { name = "pandas", specifier = ">=2.3.0,<3.0.0" },
     { name = "pandas-stubs", specifier = ">=2.2.0,<3.0.0" },
+    { name = "pip", specifier = ">=26.1.2" },
     { name = "pip-audit", specifier = ">=2.7.0,<3.0.0" },
     { name = "polars", specifier = ">=1.37.0,<2.0.0" },
     { name = "prek", specifier = ">=0.3.0,<1.0.0" },
@@ -3084,7 +3088,7 @@ requires-dist = [
 
 [[package]]
 name = "unified-trading-library"
-version = "0.39.0"
+version = "0.49.0"
 source = { editable = "../unified-trading-library" }
 dependencies = [
     { name = "aiohttp" },
