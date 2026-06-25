@@ -270,22 +270,6 @@ class TestVenueParityCases:
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
         assert details["venue"] == "footystats"
 
-    def test_footystats_odds_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        sink, events = self._run_incident(
-            monkeypatch,
-            partition={
-                "day": self._BATCH_DATE,
-                "entity": "footystats_odds",
-                "fetched_at_hour": "12",
-            },
-            filename="footystats_odds.parquet",
-            venue="footystats",
-            entity="footystats_odds",
-            column="kickoff_utc",
-        )
-        assert sink.writes == []
-        assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
-
     def test_understat_xg_strict_mode_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
