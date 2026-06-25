@@ -326,7 +326,7 @@ def test_reference_bare_aggregate_covered_by_finer_manifest() -> None:
 
 
 def test_reference_extra_hive_segment_tolerated() -> None:
-    # the footystats_odds fetched_at_hour= intermediate segment must not break parsing
+    # an extra fetched_at_hour= intermediate segment must not break parsing (historical footystats_odds pattern)
     path = (
         "sports_reference/by_date/day=2026-05-01/entity=fixtures/"
         "fetched_at_hour=2026-04-29T09/league=EPL/fixtures.parquet"
