@@ -37,8 +37,10 @@ else:  # pragma: no cover - runtime namespace indirection
 __all__ = [
     "EXCHANGE_HOURS",
     "_EXCHANGE_HOURS",
+    "_FX_VENUES_24_7",
     "_XCAL_CACHE",
     "_XCAL_MAPPING",
+    "UndeclaredTradfiVenueError",
     "_apply_early_close",
     "_compute_utc_hours",
     "_get_session_metadata",
@@ -55,8 +57,13 @@ _XCAL_MAPPING: dict[str, str] = {
     "NASDAQ": "XNAS",
     "NYSE": "XNYS",
     "CME": "CMES",
-    "CBOE": "XNYS",  # CBOE equity products follow NYSE calendar
-    "ICE": "XNYS",  # ICE US follows NYSE calendar
+    "CBOE": "XNYS",  # CBOE equity/VX products follow NYSE calendar
+    "KRX": "XKRX",  # Korea Exchange — Korean holiday calendar (Seollal/Chuseok), KST (G1.e 2026-06-25)
+    # ICE stays DECLARED here pending the ICE whole-venue retirement unit (databento
+    # billing-blocked → purge sessions+registry+EU+GCS together; operator 2026-06-25). Keeping
+    # it declared now means is_non_trading_day("ICE") resolves (no spurious fail-closed raise)
+    # while the curated enumeration already drops ICE instruments.
+    "ICE": "XNYS",  # ICE US follows NYSE calendar (pending ICE retirement)
 }
 
 # Exchange-specific trading hours (local timezone, static per venue)
@@ -69,6 +76,19 @@ _EXCHANGE_HOURS: dict[str, dict[str, str | None]] = {
         "auction_open": None,
         "auction_close": None,
     },
+    "KRX": {
+        # Korea Exchange regular session 09:00-15:30 KST (G1.e 2026-06-25). The XKRX
+        # exchange_calendars feed supplies the Korean holiday set (Seollal / Chuseok / etc.)
+        # so a Korean market holiday is recorded EXPECTED_HOLIDAY, not a false attempted_failed.
+        "open": "09:00:00",
+        "close": "15:30:00",
+        "tz": "Asia/Seoul",
+        "calendar": "KRX",
+        "auction_open": "08:30:00",
+        "auction_close": "15:20:00",
+    },
+    # ICE: declared pending the whole-venue retirement (databento billing-blocked, curated
+    # enumeration already drops ICE instruments; sessions+registry+EU+GCS purge together).
     "ICE": {
         "open": "20:00:00",
         "close": "17:00:00",  # 8pm-5pm ET (spans midnight)
@@ -108,6 +128,22 @@ _EXCHANGE_HOURS: dict[str, dict[str, str | None]] = {
 }
 
 _XCAL_CACHE: dict[str, object] = {}
+
+# FX is the DECLARED 24/7 exception (operator 2026-06-25): the Yahoo-sourced currency /
+# conversion series (KRWUSD=X, DXY) have no exchange calendar — every day is an available
+# day. Declared EXPLICITLY here, never reached by accident, so the fail-closed guard below
+# can distinguish "legit 24/7" from "undeclared venue config error".
+_FX_VENUES_24_7: frozenset[str] = frozenset({"FX"})
+
+
+class UndeclaredTradfiVenueError(ValueError):
+    """A tradfi venue was queried that is not declared in the session/calendar SSOT.
+
+    Fail-CLOSED (G1.e, 2026-06-25): the old behaviour silently defaulted an undeclared venue
+    to 24/7-trading (so KRX was treated 24/7 and its Korean holidays mis-handled). An
+    undeclared tradfi venue is a G1 CONFIG ERROR — declare it in ``_EXCHANGE_HOURS`` +
+    ``_XCAL_MAPPING`` (or as a 24/7 FX venue), never silently assume it trades every day.
+    """
 
 
 def _get_xcal(calendar_name: str) -> object | None:
@@ -151,6 +187,8 @@ def _resolve_trading_status(venue: str, target_date: date, is_holiday: bool) -> 
     weekday = target_date.weekday()  # 0=Mon, 5=Sat, 6=Sun
     is_saturday = weekday == 5
     is_sunday = weekday == 6
+    # Sunday-evening-open futures venues. CBOE/VX + KRX equities are closed weekends;
+    # FX is handled 24/7 upstream in is_non_trading_day. (ICE pending whole-venue retirement.)
     futures_venues = {"CME", "ICE"}
 
     if is_saturday:
@@ -218,10 +256,20 @@ def is_non_trading_day(venue: str, target_date: date) -> bool:
 
     This is the public interface used by the orchestrator to decide whether
     zero instruments from Databento is expected (non-trading day) vs an error.
+
+    FAIL-CLOSED (G1.e, 2026-06-25): FX is the declared 24/7 exception (always trading);
+    any other venue NOT declared in the calendar SSOT raises ``UndeclaredTradfiVenueError``
+    instead of silently defaulting to 24/7-trading (the old ``return False`` mis-handled KRX).
     """
+    if venue in _db._FX_VENUES_24_7:
+        return False  # FX: declared 24/7 — every day is an available (trading) day.
     cfg = _db._EXCHANGE_HOURS.get(venue)
     if cfg is None:
-        return False  # Unknown venue — assume trading (fail-safe)
+        raise _db.UndeclaredTradfiVenueError(
+            f"is_non_trading_day: tradfi venue {venue!r} is not declared in the session/calendar "
+            f"SSOT (_EXCHANGE_HOURS / _XCAL_MAPPING). Declare it (or as a 24/7 FX venue) — an "
+            f"undeclared tradfi venue must never silently default to 24/7-trading."
+        )
     calendar_name = cfg.get("calendar", venue)
     is_holiday = _db._is_trading_holiday(target_date, calendar_name)
     is_trading, _label = _db._resolve_trading_status(venue, target_date, is_holiday)
@@ -330,6 +378,10 @@ def _get_session_metadata(venue: str, target_date: date) -> dict[str, str | bool
 
     Returns a dict with keys matching InstrumentRecord session fields.
     """
+    # FX: declared 24/7 (operator 2026-06-25) — currency/conversion series have no exchange
+    # session, so mark every day a regular trading day (no holiday/early-close enrichment).
+    if venue in _db._FX_VENUES_24_7:
+        return {"trading_session": "regular", "is_trading_day": True, "holiday_calendar": "FX"}
     cfg = _db._EXCHANGE_HOURS.get(venue)
     if cfg is None:
         return {}
