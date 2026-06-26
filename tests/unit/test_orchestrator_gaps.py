@@ -35,6 +35,7 @@ from instruments_service.engine.orchestrator import (
     clear_defi_universe_cache,
     process_instruments,
 )
+from instruments_service.engine.orchestrator.process_write import _asset_group_for_venue
 from instruments_service.engine.urdi_reference_provider import VenueFetchResult
 
 # ---------------------------------------------------------------------------
@@ -844,3 +845,146 @@ class TestProcessInstrumentsSchemaValidation:
             pytest.raises(RuntimeError, match="All records rejected"),
         ):
             await process_instruments("2026-01-06", ["CEFI"])
+
+
+# ---------------------------------------------------------------------------
+# ALL-group / empty-asset-group expansion fix
+# Regression tests for the crash introduced when asset_groups=["ALL"] was
+# passed to _get_instruments_bucket which doesn't accept "all" as a key.
+# ---------------------------------------------------------------------------
+
+
+class TestAssetGroupForVenue:
+    """Unit tests for the _asset_group_for_venue lookup helper."""
+
+    def test_cefi_venue(self) -> None:
+        assert _asset_group_for_venue("BINANCE-SPOT") == "cefi"
+
+    def test_tradfi_venue(self) -> None:
+        assert _asset_group_for_venue("CME") == "tradfi"
+
+    def test_defi_venue_protocol_chain_format(self) -> None:
+        assert _asset_group_for_venue("AAVE_V3-ETHEREUM") == "defi"
+
+    def test_sports_venue(self) -> None:
+        assert _asset_group_for_venue("API_FOOTBALL") == "sports"
+
+    def test_prediction_kalshi(self) -> None:
+        assert _asset_group_for_venue("KALSHI") == "prediction"
+
+    def test_prediction_polymarket(self) -> None:
+        assert _asset_group_for_venue("POLYMARKET") == "prediction"
+
+
+class TestAllGroupExpansionNocrash:
+    """Regression: asset_groups=["ALL"] must not raise BucketNamingError.
+
+    Before the fix, _freshness_preflight and _write_all_venues called
+    _get_instruments_bucket("all") which raised BucketNamingError because
+    "all" is not a valid asset_group key.  The shard-level isolation in
+    _adapter.py swallowed the error silently → container exit(1) with no
+    Python traceback.
+
+    Both crash sites are exercised indirectly through process_instruments.
+    The critical assertion is: no BucketNamingError raised.
+    """
+
+    @staticmethod
+    def _make_cefi_record(key: str = "BTC:SPOT:BTCUSDT") -> InstrumentRecord:
+        return InstrumentRecord(
+            instrument_key=key,
+            venue="BINANCE-SPOT",
+            instrument_type="SPOT_PAIR",
+            base_asset="BTC",
+            quote_asset="USDT",
+            tick_size=Decimal("0.01"),
+            available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
+        )
+
+    @pytest.mark.asyncio
+    async def test_all_group_process_instruments_does_not_raise_bucket_naming_error(self) -> None:
+        """asset_groups=["ALL"] must traverse both _freshness_preflight and
+        _write_all_venues without BucketNamingError."""
+        good = self._make_cefi_record()
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        mock_manifest = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_venues_for_asset_groups", return_value=["BINANCE-SPOT"]),
+            patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
+            patch(
+                "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
+                AsyncMock(return_value=VenueFetchResult(records=[good])),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator.validate_instrument_records", return_value=([good], [])),
+            patch("instruments_service.engine.orchestrator.DomainValidationService"),
+            # Patch _get_instruments_bucket at the orchestrator level — this covers both
+            # _freshness_preflight (process_preflight module) and _write_all_venues
+            # (process_write module) because both import orchestrator as _orch.
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=mock_manifest),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, [], ["BINANCE-SPOT"]),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.filter_instruments_by_date",
+                side_effect=lambda r, *a, **k: r,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch(
+                "instruments_service.engine.orchestrator.filter_defi_instruments_by_relevance",
+                side_effect=lambda r: r,
+            ),
+            patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=False),
+        ):
+            # Must not raise BucketNamingError (the pre-fix crash).
+            result = await process_instruments("2026-06-26", ["ALL"], redo_all=True)
+
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_freshness_preflight_with_all_resolves_sports_bucket(self) -> None:
+        """_freshness_preflight called with asset_groups=["ALL"] must resolve
+        the bucket via "sports" (not "all") — the fix in process_preflight.py."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        bucket_calls: list[str | None] = []
+
+        def _capturing_get_bucket(ag: str | None = None) -> str:
+            bucket_calls.append(ag)
+            return "test-bucket"
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", side_effect=_capturing_get_bucket),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, [], []),
+            ),
+        ):
+            outcome = _freshness_preflight(
+                date="2026-06-26",
+                asset_groups=["ALL"],
+                active_venues=["BINANCE-SPOT"],
+                is_sports_run=True,
+                sports_entity_filter=None,
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        # The bucket must have been resolved via "sports", NOT via None/"ALL"/"all".
+        assert bucket_calls, "Expected _get_instruments_bucket to be called"
+        assert all(c == "sports" for c in bucket_calls), (
+            f"_get_instruments_bucket must be called with 'sports' for ALL runs, got: {bucket_calls}"
+        )
