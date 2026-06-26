@@ -60,6 +60,10 @@ class _FakeManifest:
             return None
         return SimpleNamespace(capture_status=hit[0], error_reason=hit[1])
 
+    def record_expected_empty(self, *, row_key: Mapping[str, object], reason: str, **_: object) -> None:
+        # Pre-launch stamps land here (Fix 1). Tracked separately from EU calls.
+        pass
+
     def record_expected_unattempted(self, *, row_key: Mapping[str, object], **_: object) -> None:
         self.eu_calls.append(_key_tuple(row_key))
 
