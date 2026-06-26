@@ -631,6 +631,9 @@ from instruments_service.engine.orchestrator.writers import (
     _build_market_lifecycle_df as _build_market_lifecycle_df,
 )
 from instruments_service.engine.orchestrator.writers import (
+    _canonical_manifest_venue_chain as _canonical_manifest_venue_chain,
+)
+from instruments_service.engine.orchestrator.writers import (
     _derive_instrument_type as _derive_instrument_type,
 )
 from instruments_service.engine.orchestrator.writers import (
@@ -714,6 +717,7 @@ __all__ = [
     "_cached_standings_df",
     "_cached_teams_df",
     "_canonical_league_id",
+    "_canonical_manifest_venue_chain",
     "_check_emission_policy",
     "_classify_adapter_failure",
     "_coerce_adapter_output",
