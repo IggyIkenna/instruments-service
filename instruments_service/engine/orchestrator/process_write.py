@@ -37,6 +37,29 @@ __all__ = [
     "_write_all_venues",
 ]
 
+# Asset-group tokens whose IS instruments-manifest atom is (date, venue[, chain]) —
+# the venue-grain AGs that get EU seeded. Sports/prediction use a (date, data_type)
+# grain (materialised elsewhere) so they are excluded. Mirrors the cefi/defi/tradfi
+# branches of get_venues_for_asset_groups (venue_core.py). Defined as a frozenset
+# constant (not an inline list) so it is a single source of truth + token-checkable.
+_VENUE_GRAIN_ASSET_GROUP_TOKENS: frozenset[str] = frozenset({"CEFI", "DEFI", "TRADFI", "ALL"})
+
+# Sports/prediction venue NAMES that an "ALL" run pulls into the venue list but which
+# are NOT venue-grain (their honest-absence is materialised on the data_type grain by
+# the zero-fixture / empty paths) — excluded from venue-grain EU seeding.
+_NON_VENUE_GRAIN_VENUE_NAMES: frozenset[str] = frozenset(
+    {
+        "API_FOOTBALL",
+        "FOOTYSTATS",
+        "UNDERSTAT",
+        "TRANSFERMARKT",
+        "SOCCER_FOOTBALL_INFO",
+        "OPEN_METEO",
+        "POLYMARKET",
+        "KALSHI",
+    }
+)
+
 
 @dataclass
 class _WriteOutcome:
@@ -450,8 +473,99 @@ def _write_all_venues(
                 sorted(non_trading),
             )
 
+    # EU seeding (HARD RULE — the WRITER materialises expected_unattempted, never
+    # re-derived downstream): for every TARGET-universe (venue x this-day) cell that
+    # was NOT captured this run and has no prior captured/empty/EU row, write an
+    # expected_unattempted marker so a missing day reads 0% (honest gap) instead of
+    # being silently ABSENT. Out-of-universe (pre-venue-launch) venues are NOT seeded
+    # — they stay honestly absent. Rides the same per-run manifest (no extra GCS walk).
+    _seed_expected_unattempted_for_target_universe(
+        manifest=manifest,
+        date=date,
+        asset_groups=asset_groups,
+        captured_venues=set(counts.keys()),
+    )
+
     # Flush all manifest records in one batched write (one GCS round-trip
     # instead of N per venue). Generation-match lock handles concurrency.
     manifest.close()
 
     return _WriteOutcome(counts=counts, bucket=bucket, sink=sink, sampler=sampler)
+
+
+def _seed_expected_unattempted_for_target_universe(
+    *,
+    manifest: _orch.ManifestWriter,
+    date: str,
+    asset_groups: list[str],
+    captured_venues: set[str],
+) -> None:
+    """Seed ``expected_unattempted`` for target-universe (venue x day) cells with no row.
+
+    The IS instruments-capture manifest grain is ``(date, venue)`` (+ ``chain`` for
+    DeFi). Coverage is dishonest when a missing day is silently ABSENT rather than a
+    0% cell — so the producer materialises the expected universe for the dates it
+    runs: every configured venue for ``asset_groups`` whose discovery API is live on
+    ``date`` (``is_venue_available``) gets an ``expected_unattempted`` row UNLESS it
+    was captured this run or already carries a captured / empty_confirmed / EXPECTED_*
+    row (``_should_skip_shard``). A later ``record_captured`` / ``record_empty`` /
+    ``record_failed`` for the same ``row_key`` cleanly supersedes the seed via the
+    consolidator's last-writer-wins merge.
+
+    Scope = the TARGET universe only (the configured cefi/defi venue lists). Venues
+    whose discovery API is not yet live on ``date`` (pre-launch) are NOT seeded — they
+    stay honestly absent, not a fake 0%. SPORTS / PREDICTION are intentionally excluded
+    here: their manifest grain is ``(date, data_type[, league_id])``, not ``(date,
+    venue)``, and their honest-absence is already materialised by the zero-fixture /
+    empty paths + the sports could-exist roll-up — venue-grain EU seeding would write
+    the wrong atom. Only the venue-grain AGs (cefi / defi / tradfi) are seeded.
+
+    Idempotent: re-running a captured day re-seeds nothing (every venue is either in
+    ``captured_venues`` or skip-gated by its existing captured row).
+    """
+    # Only the venue-grain asset_groups carry a (date, venue) EU atom. Sports/
+    # prediction use a different grain (see docstring) and are materialised elsewhere.
+    _venue_grain_ags = [c for c in asset_groups if c.upper() in _VENUE_GRAIN_ASSET_GROUP_TOKENS]
+    if not _venue_grain_ags:
+        return
+
+    target_venues = _orch.get_venues_for_asset_groups(_venue_grain_ags)
+    _seed_ts = _orch.datetime.now(_orch.UTC)
+    _seeded = 0
+    for venue_str in target_venues:
+        # Drop the sports/prediction venue names that "ALL" pulls in — they are NOT
+        # venue-grain (their EU is materialised on the data_type grain elsewhere).
+        if venue_str in _NON_VENUE_GRAIN_VENUE_NAMES:
+            continue
+        # Out-of-universe for this day: the venue's discovery API is not live yet
+        # (pre-launch). Do NOT seed — it stays honestly absent, not a fake 0%.
+        if not _orch.is_venue_available(venue_str, date):
+            continue
+        if venue_str in captured_venues:
+            continue  # captured this run — record_captured already wrote the cell
+        # Canonical manifest key (DeFi PROTOCOL-CHAIN → venue=PROTOCOL + chain) so the
+        # seed matches the captured-row atom exactly.
+        manifest_venue, manifest_chain = _orch._canonical_manifest_venue_chain(venue_str)
+        row_key: dict[str, str] = {"date": date, "venue": manifest_venue}
+        if manifest_chain:
+            row_key["chain"] = manifest_chain
+        # NEVER overwrite ANY existing row. EU is the LOWEST-information state — seeding
+        # it over a captured / empty_confirmed / attempted_failed / EXPECTED_* cell
+        # would MASK the real status (esp. attempted_failed → a hidden fetch failure
+        # read as a 0% gap, breaking the honest 4-state). NB: this is a STRICTER test
+        # than the capture-path ``_should_skip_shard`` (which re-attempts failed shards
+        # on purpose) — EU seeding must leave attempted_failed visible.
+        if manifest.lookup(row_key) is not None:
+            continue
+        manifest.record_expected_unattempted(
+            row_key=row_key,
+            attempted_at=_seed_ts,
+            pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+        )
+        _seeded += 1
+    if _seeded:
+        _orch.logger.info(
+            "EU seeding: wrote expected_unattempted for %d target-universe venue cells on date=%s",
+            _seeded,
+            date,
+        )
