@@ -497,7 +497,13 @@ def _zero_records_non_sports(
     if tradfi_active:
         target_dt = _orch.date_type.fromisoformat(date)
         non_trading_venues = [v for v in tradfi_active if _orch.is_non_trading_day(v, target_dt)]
-        if non_trading_venues and len(non_trading_venues) == len(tradfi_active):
+        # Stamp each non-trading venue individually — do NOT require ALL tradfi venues
+        # to be non-trading.  The old ``len(non_trading_venues) == len(tradfi_active)``
+        # guard blocked the stamp whenever FX (declared 24/7; never non-trading) was
+        # in the active set, which is always the case for a TRADFI backfill run.
+        # Result: every weekend/holiday the entire tradfi non-trading-day path was
+        # unreachable, leaving CME/NASDAQ/NYSE/CBOE cells silently absent.
+        if non_trading_venues:
             primary_asset_group = asset_groups[0] if asset_groups else None
             bucket = _orch._get_instruments_bucket(primary_asset_group)
             manifest = _orch.ManifestWriter(
@@ -537,7 +543,12 @@ def _zero_records_non_sports(
                     "non_trading_venues": sorted(non_trading_venues),
                 },
             )
-            return dict.fromkeys(non_trading_venues, 0)
+            # FX is 24/7 — if it is in tradfi_active it returns records normally
+            # (not suppressed here).  Return only the non-trading venues as 0-count.
+            if len(non_trading_venues) == len(tradfi_active):
+                # All tradfi venues are non-trading (FX absent or a pure-non-trading
+                # subset): zero records is fully accounted for — signal clean exit.
+                return dict.fromkeys(non_trading_venues, 0)
 
     # Active-day-zero diagnostic: TradFi venues that are trading today but
     # returned 0 records indicate a likely upstream data source issue (not a
