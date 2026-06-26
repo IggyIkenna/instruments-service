@@ -20,6 +20,7 @@ split, and mutable caches remain package-level attributes.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -32,9 +33,11 @@ else:  # pragma: no cover - runtime namespace indirection
 
 __all__ = [
     "_WriteOutcome",
+    "_asset_group_for_venue",
     "_records_to_dataframe",
     "_validate_records",
     "_write_all_venues",
+    "_write_tradfi_non_trading_day_entries",
 ]
 
 # Asset-group tokens whose IS instruments-manifest atom is (date, venue[, chain]) —
@@ -59,6 +62,43 @@ _NON_VENUE_GRAIN_VENUE_NAMES: frozenset[str] = frozenset(
         "KALSHI",
     }
 )
+
+
+def _asset_group_for_venue(venue_str: str) -> str:
+    """Return the lowercase asset-group ('cefi'/'defi'/'tradfi'/'sports'/'prediction') for a venue.
+
+    Used by ``_write_all_venues`` when ``asset_groups == ["ALL"]`` so each venue's
+    instruments parquet and manifest row land in the correct per-group bucket.
+
+    Lookup order (fast-path first):
+    1. Sports/prediction venue names known at module-load time (frozensets, O(1)).
+    2. CEFI and TradFi venue lists (O(n), typically small; both imported from _orch).
+    3. DeFi: any remaining venue with a "-" in the name (PROTOCOL-CHAIN format).
+    4. Fallback → "sports" (conservative; sports bucket is the default primary for
+       ALL runs and is the correct target for un-categorised API_FOOTBALL sub-venues).
+    """
+    upper = venue_str.upper()
+    if upper in ("POLYMARKET", "KALSHI"):
+        return "prediction"
+    if upper in (
+        "API_FOOTBALL",
+        "FOOTYSTATS",
+        "UNDERSTAT",
+        "TRANSFERMARKT",
+        "SOCCER_FOOTBALL_INFO",
+        "OPEN_METEO",
+    ):
+        return "sports"
+    cefi_set = frozenset(_orch._CEFI_VENUES)
+    if venue_str in cefi_set:
+        return "cefi"
+    tradfi_set = frozenset(_orch._TRADFI_VENUES)
+    if venue_str in tradfi_set:
+        return "tradfi"
+    # DeFi venues use PROTOCOL-CHAIN format; the "-" is the discriminator.
+    if "-" in venue_str:
+        return "defi"
+    return "sports"
 
 
 @dataclass
@@ -360,6 +400,48 @@ def _write_prediction_venue(
         )
 
 
+def _write_tradfi_non_trading_day_entries(
+    *,
+    date: str,
+    non_error_venues: set[str],
+    counts: dict[str, int],
+    manifest_for_venue: Callable[[str], _orch.ManifestWriter],
+) -> None:
+    """Write 0-count manifest entries for TRADFI venues that returned 0 instruments
+    because the date is a non-trading day (weekend/holiday).
+
+    Without this, those venues have no manifest entry and appear as permanent gaps
+    in the data status. ``manifest_for_venue`` allows the caller to route each
+    venue to the correct per-group manifest (required for ALL-group runs).
+    """
+
+    _tradfi_set = frozenset(_orch._TRADFI_VENUES)
+    tradfi_empty = {v for v in (non_error_venues - set(counts.keys())) if v in _tradfi_set}
+    if not tradfi_empty:
+        return
+    target_dt = _orch.date_type.fromisoformat(date)
+    non_trading = {v for v in tradfi_empty if _orch.is_non_trading_day(v, target_dt)}
+    if not non_trading:
+        return
+    _nt_attempt_ts = _orch.datetime.now(_orch.UTC)
+    for venue in sorted(non_trading):
+        # Honest-coverage Phase 2.E.2: discriminate weekend vs holiday so the
+        # manifest carries an EXPECTED_* row per (shard_key, day).
+        _reason = _orch.non_trading_day_reason(venue, target_dt) or "EXPECTED_WEEKEND"
+        manifest_for_venue(venue).record_expected_empty(
+            row_key={"date": date, "venue": venue},
+            reason=_reason,
+            attempted_at=_nt_attempt_ts,
+            pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+        )
+        counts[venue] = 0
+    _orch.logger.info(
+        "TRADFI non-trading day manifest: date=%s venues=%s — wrote empty_confirmed entries",
+        date,
+        sorted(non_trading),
+    )
+
+
 def _write_all_venues(
     *,
     records: list[_orch.InstrumentRecord],
@@ -384,10 +466,27 @@ def _write_all_venues(
             "sample_dir": _orch._uc.csv_sample_dir,
         }
     )
-    # Use the first (primary) category to route to the correct category-specific bucket.
-    # UCI naming: instruments-store-{category.lower()}-{project}
-    # e.g. DEFI → instruments-store-defi-{gcp_project_id}
-    primary_asset_group = asset_groups[0] if asset_groups else None
+    # Resolve the primary asset group and the per-venue bucket router.
+    #
+    # For single-AG runs (e.g. "--asset-group CEFI"), primary_asset_group = "cefi"
+    # and all venues share one (bucket, sink, manifest) — the existing fast path.
+    #
+    # For ALL-group runs ("--asset-group" omitted), asset_groups = ["ALL"].
+    # "ALL" is NOT a valid bucket key; _get_instruments_bucket("ALL") raises
+    # BucketNamingError.  We resolve the bucket PER VENUE so CEFI instruments
+    # land in the CEFI bucket, DeFi in the DeFi bucket, sports in the sports
+    # bucket, and prediction in the prediction bucket.
+    #
+    # ``_is_all_run`` is the discriminator.  When True we use a per-bucket
+    # dict of (sink, lifecycle_sink, manifest) keyed by resolved bucket name.
+    # The "primary" bucket (sports) is returned in WriteOutcome so downstream
+    # stages that need ONE bucket (sports enrichment, completeness check) keep
+    # working correctly.
+    _raw_primary = asset_groups[0] if asset_groups else None
+    _is_all_run = _raw_primary is None or _raw_primary.upper() == "ALL"
+    # Primary bucket: "sports" for ALL runs (correct for downstream sports
+    # stages); per-group bucket otherwise (existing single-AG behaviour).
+    primary_asset_group: str | None = "sports" if _is_all_run else _raw_primary
     bucket = _orch._get_instruments_bucket(primary_asset_group)
     # prefix ensures writes land at instrument_availability/by_date/{day=X}/{venue=Y}/
     sink = _orch.get_data_sink(bucket=bucket, prefix="instrument_availability/by_date")
@@ -396,17 +495,54 @@ def _write_all_venues(
     lifecycle_sink = _orch.get_data_sink(bucket=bucket, prefix="market_lifecycle/by_canonical_group")
 
     manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+
+    # Per-bucket helper objects for ALL runs: lazily created on first use so
+    # asset groups whose records are absent produce no spurious GCS round-trips.
+    # Keyed by resolved bucket name (string).
+    # Pre-seeded with the primary bucket objects to avoid creating a duplicate
+    # ManifestWriter for the primary bucket (would cause double-writes to GCS).
+    _extra_sinks: dict[str, _orch.DataSink] = {bucket: sink}
+    _extra_lc_sinks: dict[str, _orch.DataSink] = {bucket: lifecycle_sink}
+    _extra_manifests: dict[str, _orch.ManifestWriter] = {bucket: manifest}
+
+    def _sink_for_bucket(b: str) -> _orch.DataSink:
+        if b not in _extra_sinks:
+            _extra_sinks[b] = _orch.get_data_sink(bucket=b, prefix="instrument_availability/by_date")
+        return _extra_sinks[b]
+
+    def _lc_sink_for_bucket(b: str) -> _orch.DataSink:
+        if b not in _extra_lc_sinks:
+            _extra_lc_sinks[b] = _orch.get_data_sink(bucket=b, prefix="market_lifecycle/by_canonical_group")
+        return _extra_lc_sinks[b]
+
+    def _manifest_for_bucket(b: str) -> _orch.ManifestWriter:
+        if b not in _extra_manifests:
+            _extra_manifests[b] = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=b)
+        return _extra_manifests[b]
+
+    def _get_venue_bucket(venue_str: str) -> str:
+        """For ALL runs, resolve the correct per-group bucket; otherwise use primary."""
+        if not _is_all_run:
+            return bucket
+        return _orch._get_instruments_bucket(_asset_group_for_venue(venue_str))
+
     if "venue" in df.columns:
         for venue_name, venue_df in df.groupby("venue"):
             venue_str = str(venue_name)
+            _v_bucket = _get_venue_bucket(venue_str)
+            # For ALL runs use the per-venue bucket objects; for single-AG runs
+            # all three vars alias the shared objects (identical to pre-fix behaviour).
+            _v_sink = _sink_for_bucket(_v_bucket) if _is_all_run else sink
+            _v_lc_sink = _lc_sink_for_bucket(_v_bucket) if _is_all_run else lifecycle_sink
+            _v_manifest = _manifest_for_bucket(_v_bucket) if _is_all_run else manifest
             if venue_str == "API_FOOTBALL":
                 _write_sports_fixture_venue(
                     venue_str=venue_str,
                     venue_df=venue_df,
                     date=date,
                     league_filter=league_filter,
-                    sink=sink,
-                    manifest=manifest,
+                    sink=_v_sink,
+                    manifest=_v_manifest,
                     counts=counts,
                     sampler=sampler,
                 )
@@ -415,14 +551,14 @@ def _write_all_venues(
                     venue_str=venue_str,
                     venue_df=venue_df,
                     date=date,
-                    sink=sink,
-                    lifecycle_sink=lifecycle_sink,
-                    manifest=manifest,
+                    sink=_v_sink,
+                    lifecycle_sink=_v_lc_sink,
+                    manifest=_v_manifest,
                     counts=counts,
                     sampler=sampler,
                 )
             else:
-                _orch._write_venue(venue_str, venue_df, date, bucket, sink, counts, sampler, manifest)
+                _orch._write_venue(venue_str, venue_df, date, _v_bucket, _v_sink, counts, sampler, _v_manifest)
                 # Phase 4.2 (tradfi_canonical_futures_contract_hard_required_fields_2026_05_13):
                 # For TradFi futures venues (CME, ICE), also write CanonicalFuturesContract
                 # records alongside the InstrumentRecord instruments.parquet.
@@ -436,42 +572,19 @@ def _write_all_venues(
                         venue_str=venue_str,
                         instrument_records=_venue_instrument_records,
                         date=date,
-                        bucket=bucket,
-                        sink=sink,
+                        bucket=_v_bucket,
+                        sink=_v_sink,
                     )
     else:
         _orch._write_venue("all", df, date, bucket, sink, counts, sampler, manifest)
 
-    # Write 0-count manifest entries for TRADFI venues that returned 0 instruments
-    # because the date is a non-trading day (weekend/holiday). Without this, those
-    # venues have no manifest entry and appear as permanent gaps in the data status.
-    _tradfi_set_for_manifest = frozenset(_orch._TRADFI_VENUES)
-    tradfi_empty = non_error_venues - set(counts.keys())
-    tradfi_empty = {v for v in tradfi_empty if v in _tradfi_set_for_manifest}
-    if tradfi_empty:
-        target_dt = _orch.date_type.fromisoformat(date)
-        non_trading = {v for v in tradfi_empty if _orch.is_non_trading_day(v, target_dt)}
-        if non_trading:
-            _nt_attempt_ts = _orch.datetime.now(_orch.UTC)
-            for venue in sorted(non_trading):
-                # Honest-coverage Phase 2.E.2: discriminate weekend vs holiday
-                # so the manifest carries an EXPECTED_* row per (shard_key, day).
-                # See header note on TradFi non-trading day pipeline_mode: this
-                # is the instruments-service catalog asserting absence; tag
-                # with BATCH_INSTRUMENTS_SERVICE.
-                _reason = _orch.non_trading_day_reason(venue, target_dt) or "EXPECTED_WEEKEND"
-                manifest.record_expected_empty(
-                    row_key={"date": date, "venue": venue},
-                    reason=_reason,
-                    attempted_at=_nt_attempt_ts,
-                    pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
-                )
-                counts[venue] = 0
-            _orch.logger.info(
-                "TRADFI non-trading day manifest: date=%s venues=%s — wrote empty_confirmed entries",
-                date,
-                sorted(non_trading),
-            )
+    # Write 0-count manifest entries for TRADFI non-trading days.
+    _write_tradfi_non_trading_day_entries(
+        date=date,
+        non_error_venues=non_error_venues,
+        counts=counts,
+        manifest_for_venue=lambda v: _manifest_for_bucket(_get_venue_bucket(v)) if _is_all_run else manifest,
+    )
 
     # EU seeding (HARD RULE — the WRITER materialises expected_unattempted, never
     # re-derived downstream): for every TARGET-universe (venue x this-day) cell that
@@ -479,16 +592,40 @@ def _write_all_venues(
     # expected_unattempted marker so a missing day reads 0% (honest gap) instead of
     # being silently ABSENT. Out-of-universe (pre-venue-launch) venues are NOT seeded
     # — they stay honestly absent. Rides the same per-run manifest (no extra GCS walk).
-    _seed_expected_unattempted_for_target_universe(
-        manifest=manifest,
-        date=date,
-        asset_groups=asset_groups,
-        captured_venues=set(counts.keys()),
-    )
+    #
+    # For ALL runs, _seed_expected_unattempted_for_target_universe must run once per
+    # bucket (CEFI/DEFI/TRADFI each have their own manifest and write to their own
+    # bucket; sports/prediction EU seeding is handled by their own data paths and is
+    # explicitly excluded from venue-grain EU seeding in the helper's docstring).
+    if _is_all_run:
+        # Expand "ALL" to the explicit venue-grain asset groups so each group seeds
+        # its EU markers into the correct per-group manifest.
+        for _ag in ("CEFI", "DEFI", "TRADFI"):
+            _ag_bucket = _orch._get_instruments_bucket(_ag.lower())
+            _seed_expected_unattempted_for_target_universe(
+                manifest=_manifest_for_bucket(_ag_bucket),
+                date=date,
+                asset_groups=[_ag],
+                captured_venues=set(counts.keys()),
+            )
+    else:
+        _seed_expected_unattempted_for_target_universe(
+            manifest=manifest,
+            date=date,
+            asset_groups=asset_groups,
+            captured_venues=set(counts.keys()),
+        )
 
     # Flush all manifest records in one batched write (one GCS round-trip
     # instead of N per venue). Generation-match lock handles concurrency.
-    manifest.close()
+    # For ALL runs _extra_manifests already contains the primary manifest (pre-seeded
+    # above), so we flush all per-group manifests together and skip the duplicate
+    # manifest.close() that would otherwise double-flush the primary bucket.
+    if _is_all_run:
+        for _extra_manifest in _extra_manifests.values():
+            _extra_manifest.close()
+    else:
+        manifest.close()
 
     return _WriteOutcome(counts=counts, bucket=bucket, sink=sink, sampler=sampler)
 

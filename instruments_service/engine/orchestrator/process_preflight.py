@@ -491,7 +491,18 @@ def _freshness_preflight(
             core_entities=core_entities,
             per_fixture_entities=per_fixture_entities,
         )
-    primary_asset_group = asset_groups[0] if asset_groups else None
+    # "ALL" is not a valid bucket key — _get_instruments_bucket("ALL") raises
+    # BucketNamingError.  When asset_groups is empty or contains only "ALL",
+    # use "sports" as the canonical primary bucket.  This is correct because:
+    #   * FIXTURES (the manifest-freshness signal for sports) live in the sports
+    #     bucket, so _fixture_leagues_for_date reads from the right place.
+    #   * For ALL+sports runs is_sports_run=True causes the freshness check to
+    #     defer to per-league handlers (check_shard_freshness is never reached),
+    #     so the bucket choice does not affect non-sports freshness.
+    _raw_primary = asset_groups[0] if asset_groups else None
+    primary_asset_group = (
+        "sports" if (_raw_primary is None or _raw_primary.upper() == "ALL") else _raw_primary
+    )
     bucket = _orch._get_instruments_bucket(primary_asset_group)
 
     expected, core_entities, per_fixture_entities = _build_expected_entities(
