@@ -630,6 +630,30 @@ def _write_all_venues(
     return _WriteOutcome(counts=counts, bucket=bucket, sink=sink, sampler=sampler)
 
 
+def _pre_launch_empty_reason(venue_str: str, manifest_chain: str, date: str) -> str:
+    """Return the typed EXPECTED_* reason for a pre-launch (venue, date) cell.
+
+    For DeFi venues (manifest_chain non-empty), compare ``date`` against the chain
+    genesis date first. A date before chain genesis stamps
+    ``EXPECTED_PRE_GENESIS_CHAIN``; a date between chain genesis and the protocol
+    discovery start stamps ``EXPECTED_PRE_VENUE_LAUNCH`` (chain is live but the
+    specific protocol/adapter is not yet).
+
+    For CeFi/TradFi venues (no chain) the venue's discovery API is simply not live
+    yet: ``EXPECTED_PRE_VENUE_LAUNCH``.
+    """
+    if manifest_chain:
+        # Lazy import to avoid circular imports at module load time.
+        from unified_api_contracts.registry.chain_env import (  # noqa: imports-inside-functions
+            get_chain_genesis_date,
+        )
+
+        chain_genesis = get_chain_genesis_date(manifest_chain)
+        if chain_genesis and date < chain_genesis:
+            return _orch.EmptyConfirmedReason.EXPECTED_PRE_GENESIS_CHAIN.value
+    return _orch.EmptyConfirmedReason.EXPECTED_PRE_VENUE_LAUNCH.value
+
+
 def _seed_expected_unattempted_for_target_universe(
     *,
     manifest: _orch.ManifestWriter,
@@ -669,17 +693,12 @@ def _seed_expected_unattempted_for_target_universe(
     target_venues = _orch.get_venues_for_asset_groups(_venue_grain_ags)
     _seed_ts = _orch.datetime.now(_orch.UTC)
     _seeded = 0
+    _pre_launch_stamped = 0
     for venue_str in target_venues:
         # Drop the sports/prediction venue names that "ALL" pulls in — they are NOT
         # venue-grain (their EU is materialised on the data_type grain elsewhere).
         if venue_str in _NON_VENUE_GRAIN_VENUE_NAMES:
             continue
-        # Out-of-universe for this day: the venue's discovery API is not live yet
-        # (pre-launch). Do NOT seed — it stays honestly absent, not a fake 0%.
-        if not _orch.is_venue_available(venue_str, date):
-            continue
-        if venue_str in captured_venues:
-            continue  # captured this run — record_captured already wrote the cell
         # Canonical manifest key (DeFi PROTOCOL-CHAIN → venue=PROTOCOL + chain) so the
         # seed matches the captured-row atom exactly.
         manifest_venue, manifest_chain = _orch._canonical_manifest_venue_chain(venue_str)
@@ -694,6 +713,21 @@ def _seed_expected_unattempted_for_target_universe(
         # on purpose) — EU seeding must leave attempted_failed visible.
         if manifest.lookup(row_key) is not None:
             continue
+        # Out-of-universe for this day: the venue's discovery API is not live yet
+        # (pre-launch). Stamp honest absence with typed reason instead of leaving cell
+        # absent (Fix 1 — silent-absent for pre-genesis / pre-venue-launch dates).
+        if not _orch.is_venue_available(venue_str, date):
+            _pre_launch_reason = _pre_launch_empty_reason(venue_str, manifest_chain, date)
+            manifest.record_expected_empty(
+                row_key=row_key,
+                reason=_pre_launch_reason,
+                attempted_at=_seed_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            )
+            _pre_launch_stamped += 1
+            continue
+        if venue_str in captured_venues:
+            continue  # captured this run — record_captured already wrote the cell
         manifest.record_expected_unattempted(
             row_key=row_key,
             attempted_at=_seed_ts,
@@ -704,5 +738,11 @@ def _seed_expected_unattempted_for_target_universe(
         _orch.logger.info(
             "EU seeding: wrote expected_unattempted for %d target-universe venue cells on date=%s",
             _seeded,
+            date,
+        )
+    if _pre_launch_stamped:
+        _orch.logger.info(
+            "EU seeding: wrote pre-launch empty_confirmed for %d out-of-universe venue cells on date=%s",
+            _pre_launch_stamped,
             date,
         )
