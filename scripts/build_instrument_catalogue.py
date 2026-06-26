@@ -1394,6 +1394,22 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
             pass
         return str(raw)
 
+    # DeFi tag-all default (defi_mvp_tag_all_2026_06_26): the UAC ``is_mvp``
+    # predicate returns False for most DeFi catalogue rows because the DeFi MVP
+    # rule in UAC is scoped to a small set of specific EVM+Solana venues (Uniswap
+    # V3, Curve, Orca, etc.) and instrument types (POOL, DEX_POOL, LST, LENDING),
+    # but the production catalogue contains 7 416 rows spanning a much wider set
+    # of venues and instrument types. Until a real per-instrument MVP screen exists
+    # in UAC, the operator has instructed that ALL DeFi catalogue rows are MVP.
+    # DEFI-ONLY GUARD: this shortcut applies exclusively to ``asset_group == "defi"``
+    # (every other asset group continues to use the UAC ``is_mvp`` predicate below).
+    # Remove this block once the UAC DeFi MVP rule is expanded to cover the full
+    # production catalogue (defi_instrument_catalogue_and_capture_pipeline_2026_06_23).
+    if asset_group == "defi":
+        out = df.copy()
+        out["mvp"] = True
+        return out
+
     # CeFi capture universe is PERP-GATED (cefi_universe_capture_rule_2026_06_23):
     # a SPOT / dated-FUTURE cell is mvp ONLY IF the venue also lists a PERP for the
     # same base. The rollup sees ALL instruments per venue/day, so it can compute
