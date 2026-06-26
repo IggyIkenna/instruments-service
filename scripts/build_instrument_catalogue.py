@@ -1465,8 +1465,18 @@ def run_rollup(
 ) -> int:
     """Roll up the per-date definitions for ``asset_group`` and promote the catalogue."""
     run_id = f"catalogue-rollup-{asset_group}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+
+    # Phase A: storage-client init
+    # Cloud Run Logging truncates multi-line tracebacks — bisection markers below
+    # (print+flush=True) surface exactly which phase dies before the logger's
+    # structured output reaches Cloud Logging. See plan Folded-in I-1 §"Make the cloud
+    # lifecycle-catalogue-regen job log, then fix the real error".
+    print(f"[BISECT-A] storage-client init asset_group={asset_group}", flush=True)
     storage = storage or get_storage_client()
     _tune_download_pool(storage, MAX_DOWNLOAD_WORKERS)
+
+    # Phase B: bucket resolve
+    print(f"[BISECT-B] bucket resolve asset_group={asset_group}", flush=True)
     bucket = _instruments_store_bucket_for(asset_group)
     env = get_config("DEPLOYMENT_ENV", "prod")
 
@@ -1495,6 +1505,8 @@ def run_rollup(
         env,
     )
 
+    # Phase C: by_date listing + download-pool
+    print(f"[BISECT-C] by_date listing / download-pool asset_group={asset_group} bucket={bucket}", flush=True)
     if asset_group == "prediction":
         # Multi-grain roll-up: the cqg bundle is per-canonical_question_group while
         # trades/market_lifecycle are per-conditionId. Parse the cqg from the path.
@@ -1510,6 +1522,9 @@ def run_rollup(
         df = build_sports_catalogue_from_manifest(_read_sports_manifest_index(storage, bucket))
     else:
         df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
+
+    # Phase D: dedup / row-count
+    print(f"[BISECT-D] dedup complete rows={len(df)} asset_group={asset_group}", flush=True)
     logger.info("Rolled up %d catalogue rows", len(df))
 
     # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean via
@@ -1518,6 +1533,8 @@ def run_rollup(
     _mvp_count = int(df["mvp"].sum()) if not df.empty else 0
     logger.info("MVP-tagged catalogue: %d / %d rows in MVP scope", _mvp_count, len(df))
 
+    # Phase E: monotonic-guard + promote-write
+    print(f"[BISECT-E] monotonic-guard + promote-write asset_group={asset_group} rows={len(df)}", flush=True)
     code = promote_catalogue(
         storage,
         bucket,
@@ -1533,6 +1550,7 @@ def run_rollup(
         rows=len(df),
         exit_code=code,
     )
+    print(f"[BISECT-DONE] exit_code={code} asset_group={asset_group}", flush=True)
     return code
 
 

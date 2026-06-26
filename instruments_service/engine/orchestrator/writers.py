@@ -27,11 +27,42 @@ else:  # pragma: no cover - runtime namespace indirection
 
 __all__ = [
     "_build_market_lifecycle_df",
+    "_canonical_manifest_venue_chain",
     "_write_futures_contracts",
     "_write_market_lifecycle",
     "_write_venue",
     "_write_venues_from_teams",
 ]
+
+
+def _canonical_manifest_venue_chain(venue_str: str) -> tuple[str, str]:
+    """Return the canonical ``(manifest_venue, manifest_chain)`` for a non-sports venue.
+
+    The IS instruments manifest atom for cefi/tradfi is ``(date, venue)``; for DeFi
+    it is ``(date, venue=PROTOCOL, chain)``. A DeFi orchestrator venue string is the
+    glued ``PROTOCOL-CHAIN`` form (e.g. ``AAVE_V3-ETHEREUM``), which the manifest
+    splits into ``venue=AAVE_V3`` + ``chain=ETHEREUM`` (canonical v5 shard-key
+    matrix — the DeFi axis is ``chain``, not packed into ``venue``).
+
+    Returns ``(venue_str, "")`` for cefi/tradfi (no chain). The captured-row writer
+    (:func:`_write_venue`) and the EU seeder (``process_eu_seed``) MUST share this
+    split so an ``expected_unattempted`` seed and a later ``record_captured`` land on
+    the IDENTICAL ``row_key`` and the capture cleanly supersedes the seed.
+    """
+    if "-" not in venue_str:
+        return venue_str, ""
+    from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: imports-inside-functions
+        KNOWN_CHAINS,
+        parse_defi_venue,
+    )
+
+    try:
+        _protocol, _chain = parse_defi_venue(venue_str)
+    except ValueError:
+        return venue_str, ""
+    if _chain in KNOWN_CHAINS:
+        return _protocol.upper(), _chain
+    return venue_str, ""
 
 
 def _derive_instrument_type(df: _orch.pd.DataFrame) -> str:
@@ -148,19 +179,11 @@ def _write_venue(
             # as `venue=AAVE_V3-ETHEREUM, chain=''` and were filtered out by the
             # coverage-summary's legacy-row drop, hiding recent DeFi captures.
             manifest_chain = ""
-            if not is_sports_ref and "-" in venue_str:
-                from unified_api_contracts.registry.capability_declarations._defi import (
-                    KNOWN_CHAINS,
-                    parse_defi_venue,
-                )
-
-                try:
-                    _protocol, _chain = parse_defi_venue(venue_str)
-                except ValueError:
-                    _protocol, _chain = "", ""
-                if _chain in KNOWN_CHAINS:
-                    manifest_venue = _protocol.upper()
-                    manifest_chain = _chain
+            if not is_sports_ref:
+                # Shared canonical split (DeFi PROTOCOL-CHAIN → venue=PROTOCOL +
+                # chain=CHAIN) — the SAME helper the EU seeder uses, so a seed and a
+                # later capture key-match exactly. No-op for cefi/tradfi.
+                manifest_venue, manifest_chain = _canonical_manifest_venue_chain(venue_str)
             if manifest is not None:
                 _stamped_venue_df = _stamped_df
                 if is_sports_ref:
