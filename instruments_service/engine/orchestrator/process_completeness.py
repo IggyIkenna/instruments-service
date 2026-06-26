@@ -101,6 +101,39 @@ async def _completeness_and_retry(
             len(empty_ok_venues),
             sorted(empty_ok_venues),
         )
+        # Fix 2 — stamp SOURCE_RETURNED_ZERO for venues that ran clean but returned 0
+        # records (PREDICTION venues on no-activity days, DeFi with subgraph returning 0).
+        # Without this stamp the (venue, day) cell is silently absent from the manifest.
+        # Routes via record_zero_rows(was_expected=False) — the adapter ran without error
+        # and the absence is honest (no live instrument expected on this day for these
+        # venues). FetchEvidence: http_status=200, response_received=True, rows=0.
+        _empty_ok_ts = _orch.datetime.now(_orch.UTC)
+        _empty_ok_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+        for _eov in sorted(empty_ok_venues):
+            _eov_evidence = _orch.FetchEvidence(
+                http_status=200,
+                response_received=True,
+                rows_in_response=0,
+                source=f"instruments_service_{_eov.lower()}",
+                endpoint=f"instruments_service_{_eov.lower()}",
+                attempted_at=_empty_ok_ts,
+                error_signal="",
+            )
+            _empty_ok_manifest.record_zero_rows(
+                row_key={"date": date, "venue": _eov},
+                attempted_at=_empty_ok_ts,
+                reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO.value,
+                was_expected=False,
+                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                fetch_evidence=_eov_evidence,
+            )
+        _empty_ok_manifest.close()
+        _orch.logger.info(
+            "Honest-coverage: wrote SOURCE_RETURNED_ZERO empty_confirmed for %d empty-ok venue(s) on date=%s: %s",
+            len(empty_ok_venues),
+            date,
+            sorted(empty_ok_venues),
+        )
     expected_venues -= empty_ok_venues
     expected_venues -= validation_failed_venues
 
@@ -364,22 +397,51 @@ def _finalize_completeness(
     # Honest-coverage: venues still missing after all retries are permanently-failed
     # shards.  Write attempted_failed rows so the manifest gap is explicit rather
     # than silently absent.  Shard isolation preserved — no raise, just records.
+    #
+    # Fix 3: for TradFi venues that are in missing_shards because the adapter failed
+    # (raised an exception) but the date is a non-trading day (weekend/holiday),
+    # stamp empty_confirmed(EXPECTED_WEEKEND/EXPECTED_HOLIDAY) instead of
+    # attempted_failed — the absence is expected, not a failure to be retried.
     if missing_shards:
         _failed_attempt_ts = _orch.datetime.now(_orch.UTC)
         _failed_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+        _tradfi_set = frozenset(_orch._TRADFI_VENUES)
+        _missing_date_dt = _orch.date_type.fromisoformat(date)
+        _nt_stamped: list[str] = []
+        _failed_stamped: list[str] = []
         for _failed_venue in sorted(missing_shards):
-            _failed_manifest.record_failed(
-                row_key={"date": date, "venue": _failed_venue},
-                error=_orch.RecordFailedReason.UNCLASSIFIED_ADAPTER_ERROR,
-                attempted_at=_failed_attempt_ts,
-                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
-            )
+            if _failed_venue in _tradfi_set and _orch.is_non_trading_day(_failed_venue, _missing_date_dt):
+                # Non-trading day — honest absence, not a fetch failure.
+                _nt_reason = _orch.non_trading_day_reason(_failed_venue, _missing_date_dt) or "EXPECTED_WEEKEND"
+                _failed_manifest.record_expected_empty(
+                    row_key={"date": date, "venue": _failed_venue},
+                    reason=_nt_reason,
+                    attempted_at=_failed_attempt_ts,
+                    pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                )
+                _nt_stamped.append(_failed_venue)
+            else:
+                _failed_manifest.record_failed(
+                    row_key={"date": date, "venue": _failed_venue},
+                    error=_orch.RecordFailedReason.UNCLASSIFIED_ADAPTER_ERROR,
+                    attempted_at=_failed_attempt_ts,
+                    pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                )
+                _failed_stamped.append(_failed_venue)
         _failed_manifest.close()
-        _orch.logger.info(
-            "Honest-coverage: wrote attempted_failed manifest rows for %d permanently-missing venues: %s",
-            len(missing_shards),
-            sorted(missing_shards),
-        )
+        if _nt_stamped:
+            _orch.logger.info(
+                "Honest-coverage (Fix 3): wrote non-trading-day empty_confirmed for %d TradFi venues on date=%s: %s",
+                len(_nt_stamped),
+                date,
+                _nt_stamped,
+            )
+        if _failed_stamped:
+            _orch.logger.info(
+                "Honest-coverage: wrote attempted_failed manifest rows for %d permanently-missing venues: %s",
+                len(_failed_stamped),
+                _failed_stamped,
+            )
 
     # Emission policy check — PARTIAL_OK: emits PUBLISHED_DEGRADED when completeness < 1.0
     # but always allows write through. Per UAC seed Phase 6.8 PART B.
