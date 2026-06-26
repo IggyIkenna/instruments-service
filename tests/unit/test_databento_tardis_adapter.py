@@ -1056,6 +1056,69 @@ def test_create_yahoo_index_records_unknown_venue_returns_empty() -> None:
 
 
 # ---------------------------------------------------------------------------
+# FX major spot pairs — _create_fx_spot_records (2026-06-26)
+#
+# G10 FX majors were added to UAC FX_SPOT_PAIRS on 2026-06-26 (EUR/USD, GBP/USD,
+# USD/JPY, AUD/USD, USD/CAD, USD/CHF, NZD/USD, EUR/GBP, EUR/JPY, USD/MXN + KRW/USD).
+# _create_fx_spot_records iterates FX_SPOT_PAIRS and emits FX:SPOT_PAIR:<BASE>-<QUOTE>
+# records. This block verifies the new records enumerate correctly.
+# ---------------------------------------------------------------------------
+
+_FX_G10_INSTRUMENT_KEYS = {
+    "FX:SPOT_PAIR:EUR-USD",
+    "FX:SPOT_PAIR:GBP-USD",
+    "FX:SPOT_PAIR:USD-JPY",
+    "FX:SPOT_PAIR:AUD-USD",
+    "FX:SPOT_PAIR:USD-CAD",
+    "FX:SPOT_PAIR:USD-CHF",
+    "FX:SPOT_PAIR:NZD-USD",
+    "FX:SPOT_PAIR:EUR-GBP",
+    "FX:SPOT_PAIR:EUR-JPY",
+    "FX:SPOT_PAIR:USD-MXN",
+    "FX:SPOT_PAIR:KRW-USD",
+}
+
+
+def test_create_fx_spot_records_contains_g10_majors() -> None:
+    """_create_fx_spot_records must emit InstrumentRecords for all G10 FX majors.
+
+    Added 2026-06-26: G10 crosses were missing from FX_SPOT_PAIRS — only KRW/USD
+    was declared. All 10 G10 crosses + KRW/USD must now enumerate.
+    """
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_fx_spot_records()
+    keys = {r.instrument_key for r in records}
+    for expected_key in _FX_G10_INSTRUMENT_KEYS:
+        assert expected_key in keys, (
+            f"{expected_key} missing from _create_fx_spot_records — check UAC FX_SPOT_PAIRS"
+        )
+
+
+def test_create_fx_spot_records_all_are_fx_venue_spot_pair() -> None:
+    """Every record from _create_fx_spot_records must be venue=FX, type=SPOT_PAIR."""
+    from unified_api_contracts.internal import InstrumentType
+
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_fx_spot_records()
+    assert len(records) >= 11, f"Expected at least 11 FX pairs (10 G10 + KRW), got {len(records)}"
+    for r in records:
+        assert r.venue == "FX", f"{r.instrument_key}: venue={r.venue!r} (expected 'FX')"
+        assert r.instrument_type == InstrumentType.SPOT_PAIR, (
+            f"{r.instrument_key}: instrument_type={r.instrument_type!r} (expected SPOT_PAIR)"
+        )
+
+
+def test_create_fx_spot_records_yahoo_ticker_ends_with_equals_x() -> None:
+    """All FX SPOT_PAIR raw_symbols (Yahoo tickers) must end with '=X'."""
+    adapter = DatabentoReferenceDataAdapter()
+    records = adapter._create_fx_spot_records()
+    for r in records:
+        assert r.raw_symbol.endswith("=X"), (
+            f"{r.instrument_key}: raw_symbol={r.raw_symbol!r} must end with '=X'"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Bug-2 regression: 'cefi' is not a valid AssetClass (2026-06-24)
 #
 # _NET_PROFITABLE_EQUITY_PERP_SINGLES in UAC tradfi_instrument_universe.py carries
