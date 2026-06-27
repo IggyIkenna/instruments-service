@@ -238,6 +238,14 @@ class _InstrumentAggregate:
     # catalogue-driven backfill would never attempt its history). None = no declared
     # date (legacy rows) → observed-day only, unchanged.
     declared_from: date | None = None
+    # §7.3 venue-truth lifecycle close — the exchange-declared expiry (dated
+    # FUTURE/OPTION/COMBO) and explicit delisting date, taken from the
+    # most-recent snapshot row (``meta_day``). When either is present the catalogue
+    # ``available_to`` is set from venue truth instead of last-seen, so a thin
+    # latest snapshot day cannot false-delist a live perp/spot. None = no
+    # venue-truth close → fall back to per-venue last-trading-day liveness.
+    expiry: date | None = None
+    delisted_at: date | None = None
 
 
 def _row_id(row: dict[str, object]) -> str | None:
@@ -292,6 +300,63 @@ def _declared_from(row: dict[str, object]) -> date | None:
         except (ValueError, TypeError):
             continue
     return None
+
+
+def _parse_truth_date(raw: str | None) -> date | None:
+    """Parse a venue-truth lifecycle date (``expiry`` / ``delisted_at``) → ``date``.
+
+    §7.3: these come from the exchange-declared per-date instrument fields, so a
+    dated FUTURE/OPTION/COMBO's catalogue ``available_to`` is its real contract
+    expiry (and an explicitly delisted perp/spot its real removal day) rather than
+    the last snapshot day it happened to appear in our (possibly thin) capture.
+    Returns None for blank/unparseable values.
+    """
+    if not raw:
+        return None
+    try:
+        return pd.Timestamp(raw).date()
+    except (ValueError, TypeError):
+        return None
+
+
+#: A venue's latest day counts as a FULL trading day (rather than a thin/partial
+#: capture) when its instrument count is at least this fraction of the venue's
+#: recent median. A genuinely down day (e.g. mass expiry roll) still exceeds this;
+#: a half-written/partial capture (BINANCE-FUTURES 678 → 47 = ~7%) falls below it
+#: and is skipped so it cannot false-delist the venue's live universe (§7.3).
+_THIN_DAY_FRACTION = 0.5
+
+#: How many of a venue's most-recent days form the median baseline for thin-day
+#: detection (a short, recent window — robust to slow universe growth/shrink).
+_VENUE_RECENT_WINDOW = 14
+
+
+def _venue_last_full_day(day_counts: dict[date, int]) -> date | None:
+    """Return a venue's most-recent NON-THIN capture day (§7.3 liveness anchor).
+
+    Perp/spot ``available_to`` is ``None`` (active) iff the instrument is present on
+    its venue's last FULL day. A thin/partial latest snapshot (a half-completed
+    capture) would otherwise mass-false-delist the venue, so we walk back from the
+    latest day and return the first day whose instrument count is not a thin outlier
+    vs the venue's recent median. Falls back to the absolute latest day when every
+    recent day is thin (no better anchor exists) or the venue has a single day.
+    """
+    if not day_counts:
+        return None
+    days = sorted(day_counts)
+    if len(days) == 1:
+        return days[0]
+    # Recent-window median as the "full day" baseline (resistant to a thin tail).
+    recent = days[-_VENUE_RECENT_WINDOW:]
+    counts = sorted(day_counts[d] for d in recent)
+    mid = len(counts) // 2
+    median = counts[mid] if len(counts) % 2 else (counts[mid - 1] + counts[mid]) / 2
+    threshold = median * _THIN_DAY_FRACTION
+    for d in reversed(days):
+        if day_counts[d] >= threshold:
+            return d
+    # Every day thinner than threshold (degenerate) → the latest day is the anchor.
+    return days[-1]
 
 
 #: DeFi pool instrument_type values (lowercased) the dual-form id applies to.
@@ -466,14 +531,22 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
     Returns:
         A DataFrame with :data:`CATALOG_COLUMNS`, one row per distinct instrument:
         ``available_from`` = first day present (ISO ``YYYY-MM-DD``); ``available_to``
-        = last day present, or ``None`` when the instrument is present on the latest
-        snapshot day across all slices (still active). Metadata columns
-        (instrument_type / venue / chain / league_id / market_created_at /
-        settlement_time) are taken from the instrument's most-recent snapshot row.
-        Rows are sorted by ``instrument_id`` for deterministic output.
+        (§7.3 venue-truth) = the venue-declared ``delisted_at`` / dated-contract
+        ``expiry`` when present, else ``None`` (active) iff the instrument is present
+        on its OWN venue's last FULL trading day (a thin/partial latest capture day is
+        skipped so it cannot mass-false-delist live perps/spot), else the last day
+        present (a genuine delisting). Metadata columns (instrument_type / venue /
+        chain / league_id / market_created_at / settlement_time) are taken from the
+        instrument's most-recent snapshot row. Rows are sorted by ``instrument_id``
+        for deterministic output.
     """
     aggregates: dict[str, _InstrumentAggregate] = {}
     all_days: set[date] = set()
+    # §7.3 per-venue, thin-day-aware liveness: per (venue, day) the instrument
+    # count we observed, so a venue's last FULL capture day (not a thin/partial
+    # latest day) governs perp/spot delisting. Keyed on the RAW per-date ``venue``
+    # column (pre dual-form split) so the count matches the snapshot grain.
+    venue_day_counts: dict[str, dict[date, int]] = {}
 
     for day, frame in snapshots:
         all_days.add(day)
@@ -484,6 +557,10 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
             iid = _row_id(row)
             if iid is None:
                 continue
+            _venue = str(row.get("venue") or "").strip()
+            if _venue:
+                vc = venue_day_counts.setdefault(_venue, {})
+                vc[day] = vc.get(day, 0) + 1
             # DUAL-FORM lifecycle key (operator Refinement 1 + Phase 2 premature-delisting fix):
             # a DeFi POOL must accumulate ONE lifecycle keyed by its canonical pool
             # identity (chain + pool_address), NOT by the spelling-variant
@@ -497,14 +574,19 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
             # spelling variants into ONE continuous lifecycle → ``available_to``=None.
             agg_key = _aggregate_key(iid, row)
             declared = _declared_from(row)
+            _meta = _extract_meta(row)
+            _expiry = _parse_truth_date(_meta.get("expiry"))
+            _delisted = _parse_truth_date(_meta.get("delisted_at"))
             existing = aggregates.get(agg_key)
             if existing is None:
                 aggregates[agg_key] = _InstrumentAggregate(
                     first_day=day,
                     last_day=day,
                     meta_day=day,
-                    meta=_extract_meta(row),
+                    meta=_meta,
                     declared_from=declared,
+                    expiry=_expiry,
+                    delisted_at=_delisted,
                 )
                 continue
             if day < existing.first_day:
@@ -517,17 +599,44 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
             # Metadata follows the most-recent definition of the instrument.
             if day >= existing.meta_day:
                 existing.meta_day = day
-                existing.meta = _extract_meta(row)
+                existing.meta = _meta
+                # §7.3: venue-truth lifecycle dates follow the most-recent snapshot
+                # (the freshest exchange-declared expiry / delisting for this id).
+                existing.expiry = _expiry
+                existing.delisted_at = _delisted
 
     if not all_days:
         return pd.DataFrame(columns=list(CATALOG_COLUMNS))
 
-    latest_day = max(all_days)
+    # §7.3 fix — replace the global last-seen ``available_to`` (which mass-false-
+    # delists every venue off a single thin/partial latest capture day) with a
+    # PER-VENUE, thin-day-aware last-full-trading-day. ``_venue_last_full_day``
+    # returns, per venue, the most-recent day whose instrument count is NOT a thin
+    # outlier vs that venue's own recent history — so a partial capture of the
+    # latest day never delists a venue's live universe.
+    venue_last_full: dict[str, date] = {
+        venue: _venue_last_full_day(day_counts) for venue, day_counts in venue_day_counts.items()
+    }
 
     rows: list[dict[str, str | None]] = []
     for agg_key in sorted(aggregates):
         agg = aggregates[agg_key]
-        available_to = None if agg.last_day >= latest_day else agg.last_day.isoformat()
+        # §7.3 ``available_to`` priority (venue truth first, last-seen only as a
+        # labelled fallback for perps/spot with no venue-truth lifecycle field):
+        #   1. explicit ``delisted_at`` (the venue reported removal) — venue truth.
+        #   2. dated FUTURE/OPTION/COMBO ``expiry`` (the contract expiry) — venue truth.
+        #   3. else perp/spot: ACTIVE (None) iff present on its OWN venue's last FULL
+        #      trading day; else last-seen (a genuine delisting, not a thin-day artefact).
+        _raw_venue = str(agg.meta.get("venue") or "").strip()
+        _venue_full_day = venue_last_full.get(_raw_venue)
+        if agg.delisted_at is not None:
+            available_to = agg.delisted_at.isoformat()
+        elif agg.expiry is not None:
+            available_to = agg.expiry.isoformat()
+        elif _venue_full_day is not None and agg.last_day >= _venue_full_day:
+            available_to = None
+        else:
+            available_to = agg.last_day.isoformat()
         # BUG #4 (B): available_from = MIN(observed first snapshot day, declared
         # listing date). A perp only observed on one recent snapshot still carries
         # its true historical listing date so the catalogue-driven backfill attempts
@@ -579,6 +688,13 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         "league_id": _str_field(row, "league_id"),
         "market_created_at": _opt_field(row, "market_created_at"),
         "settlement_time": _opt_field(row, "settlement_time"),
+        # §7.3 venue-truth lifecycle close: the per-date instruments parquet carries
+        # the exchange-declared ``expiry`` (dated FUTURE/OPTION/COMBO) and an explicit
+        # ``delisted_at`` (when the venue reports a removal). ``available_to`` is keyed
+        # off these (venue truth) — NOT last-seen — so a thin/partial latest capture
+        # day cannot mass-false-delist live perps/spot. Blank for non-dated rows.
+        "expiry": _opt_field(row, "expiry"),
+        "delisted_at": _opt_field(row, "delisted_at"),
         "underlying": _str_field(row, "underlying"),
         "raw_symbol": _str_field(row, "raw_symbol"),
         "base_asset": _str_field(row, "base_asset"),
