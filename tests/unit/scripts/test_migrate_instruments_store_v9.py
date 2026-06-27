@@ -317,6 +317,36 @@ def test_sports_structural_only_preserves_semantics() -> None:
     assert out.iloc[1]["error_reason"] == "EXPECTED_PRE_SEASON"
 
 
+def test_cf1_schema_version_int64_when_input_is_string() -> None:
+    """CF-1 regression: existing parquet may store schema_version as str '9' (historical
+    write path).  The migrator must stamp int64 9, not propagate the string dtype."""
+    df = pd.DataFrame(
+        [
+            {
+                "date": "2020-01-01",
+                "venue": "API_FOOTBALL",
+                "instrument_count": 1,
+                "service_name": "instruments-service",
+                "written_at": "2026-01-01T00:00:00+00:00",
+                "error_reason": "",
+                "schema_version": "9",  # string — the IS CF-1 bug
+                "capture_status": "captured",
+                "data_type": "STANDINGS",
+                "pipeline_mode": "",
+                "source": "",
+                "transport": "",
+                "asset_group": "sports",
+                "league_id": "PREMIER_LEAGUE",
+                "row_count": 1,
+            }
+        ]
+    )
+    out, _ = MOD.transform_index_v9(df, "sports")
+    sv = out["schema_version"]
+    assert sv.dtype == "int64", f"expected int64, got {sv.dtype}"
+    assert (sv == 9).all(), f"expected all 9, got {sv.value_counts().to_dict()}"
+
+
 def test_sports_blank_status_phantom_skeletons_dropped() -> None:
     """384: sports rows with a blank capture_status AND blank data_type are PHANTOM
     skeletons (no valid v9 cell — the prod sports IS-store has 6,869, API_FOOTBALL*
