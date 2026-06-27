@@ -35,7 +35,7 @@ def _load_catalogue(bucket: str, storage: object) -> pd.DataFrame:
     """Download and load the prediction catalogue parquet."""
     import io
 
-    payload = storage.download_bytes(bucket, "prod/catalog.parquet")
+    payload = storage.download_bytes(bucket, "prd/catalog.parquet")
     return pd.read_parquet(io.BytesIO(payload))
 
 
@@ -148,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     dates_to_check = [date.fromisoformat(d) for d in args.dates]
 
     try:
-        storage = get_storage_client(cloud="gcp")
+        storage = get_storage_client()
         cat_bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store-prediction")
         mani_bucket = cat_bucket  # IS manifest lives in the same prediction bucket
     except Exception as exc:
