@@ -96,6 +96,8 @@ def test_writer_skips_gated_write_when_unchanged() -> None:
     fixture_df = pd.DataFrame([{"af_fixture_id": 1, "league_id": "PL", "home_team": "Arsenal", "away_team": "Chelsea"}])
     with (
         patch.object(orchestrator, "_per_league_fixtures_data_unchanged", return_value=True),
+        # Mock canonical gate so "PL" passes through (testing the skip-if-unchanged path).
+        patch.object(orchestrator, "_is_in_canonical_write_universe", return_value=True),
         # When ``bucket`` is set the writer builds an entity-specific sink via
         # _sports_ref_sink_for() → get_data_sink(), which constructs a real GCS
         # client (google.auth → IMDS). Mock it so the unit test never touches
@@ -114,6 +116,9 @@ def test_writer_writes_when_changed() -> None:
     fixture_df = pd.DataFrame([{"af_fixture_id": 1, "league_id": "PL", "home_team": "Arsenal", "away_team": "Chelsea"}])
     with (
         patch.object(orchestrator, "_per_league_fixtures_data_unchanged", return_value=False),
+        # Mock canonical gate so "PL" is treated as in-universe in the unit test
+        # (UAC get_expected_leagues_for_source may not be populated in test env).
+        patch.object(orchestrator, "_is_in_canonical_write_universe", return_value=True),
         # See note above — the changed path reaches _sports_ref_sink_for() before
         # the gated write, so mock the sink builder to keep the test offline.
         patch.object(orchestrator, "_sports_ref_sink_for", return_value=MagicMock()),
@@ -130,6 +135,8 @@ def test_writer_writes_when_skip_disabled() -> None:
     fixture_df = pd.DataFrame([{"af_fixture_id": 1, "league_id": "PL", "home_team": "Arsenal", "away_team": "Chelsea"}])
     with (
         patch.object(orchestrator, "_per_league_fixtures_data_unchanged") as mock_guard,
+        # Mock canonical gate so "PL" is treated as in-universe in the unit test.
+        patch.object(orchestrator, "_is_in_canonical_write_universe", return_value=True),
         patch.object(orchestrator, "_gated_sink_write") as mock_write,
     ):
         orchestrator._write_fixtures_per_league(MagicMock(), fixture_df, "2026-06-10", source_label="test")
