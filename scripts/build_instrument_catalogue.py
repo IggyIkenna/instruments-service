@@ -395,15 +395,53 @@ def _pool_address_of(meta: dict[str, str | None]) -> str:
     return pool_address
 
 
+def _canonical_instrument_id(instrument_id: str) -> str:
+    """Normalise the venue-prefix portion of a DeFi non-pool ``instrument_id``.
+
+    Non-pool DeFi rows (lending / lst / staking) use instrument_keys of the form
+    ``VENUE-CHAIN:TYPE:SYMBOL`` (e.g. ``AAVEV3-ARBITRUM:A_TOKEN:USDC``).  When
+    the IS adapter switched from the no-underscore ghost spelling (``AAVEV3-``) to
+    the canonical underscore form (``AAVE_V3-``) around 2026-05-08, the SAME
+    logical market appeared under TWO distinct ``instrument_key`` strings → TWO
+    catalogue rows, both marked active (the "+171 AAVE_V3 / +26 COMPOUND_V3
+    dual-key ghosts" triad discrepancy).
+
+    Fix: for any instrument_id that contains a ``:``, split on the first ``:``,
+    run ``canonicalize_defi_venue_combined`` on the prefix (which is the
+    PROTOCOL-CHAIN combined form), and rejoin.  The canonicaliser is a no-op for
+    already-canonical or non-DeFi prefixes, so this is safe for ALL rows.
+
+    Pure + idempotent.  Only called from ``_aggregate_key`` (non-pool branch).
+    """
+    colon_idx = instrument_id.find(":")
+    if colon_idx < 0:
+        # No colon — not a structured DeFi key; return as-is.
+        return instrument_id
+    from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
+
+    prefix = instrument_id[:colon_idx]
+    canonical_prefix = canonicalize_defi_venue_combined(prefix)
+    if canonical_prefix == prefix:
+        return instrument_id
+    return canonical_prefix + instrument_id[colon_idx:]
+
+
 def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
     """Lifecycle-aggregation key for one per-date row.
 
     DeFi POOL rows key on the CANONICAL pool identity (``pool::<chain>::<pool_address>``)
     so spelling-variant ``instrument_key``s of the SAME physical pool
     (``UNISWAPV3-ARBITRUM`` vs ``UNISWAP_V3-ARBITRUM``) collapse into ONE continuous
-    lifecycle — the Phase 2 premature-delisting fix. All other rows key on the
-    ``instrument_id`` (= instrument_key) as before, so non-pool behaviour is
-    unchanged.
+    lifecycle — the Phase 2 premature-delisting fix.
+
+    Non-pool DeFi rows (lending / lst / staking) whose ``instrument_id`` prefix is
+    a ghost venue form (``AAVEV3-ARBITRUM``, ``COMPOUNDV3-BASE``) are normalised via
+    ``_canonical_instrument_id`` so they collapse onto the canonical key
+    (``AAVE_V3-ARBITRUM:…``, ``COMPOUND_V3-BASE:…``) — the dual-key-ghost collapse
+    fix (+171 AAVE_V3 / +26 COMPOUND_V3 triad discrepancy 2026-06-27).
+
+    All other rows key on the ``instrument_id`` (= instrument_key) as before, so
+    non-DeFi behaviour is unchanged.
     """
     itype = str(row.get("instrument_type") or "").strip().lower()
     if itype in _DEFI_POOL_ITYPES:
@@ -416,7 +454,10 @@ def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
                 if "-" in venue:
                     chain = venue.rsplit("-", 1)[1].upper()
             return f"pool::{chain}::{pool_address.lower()}"
-    return instrument_id
+    # Non-pool: normalise the venue-prefix portion of structured DeFi instrument_ids
+    # so ghost-spelling variants (AAVEV3-ARBITRUM:…) collapse onto the canonical key
+    # (AAVE_V3-ARBITRUM:…).  No-op for non-DeFi / already-canonical keys.
+    return _canonical_instrument_id(instrument_id)
 
 
 #: Known chain suffixes for the glued PROTOCOL-CHAIN venue split (catalogue read-side
@@ -544,9 +585,30 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
     all_days: set[date] = set()
     # §7.3 per-venue, thin-day-aware liveness: per (venue, day) the instrument
     # count we observed, so a venue's last FULL capture day (not a thin/partial
-    # latest day) governs perp/spot delisting. Keyed on the RAW per-date ``venue``
-    # column (pre dual-form split) so the count matches the snapshot grain.
+    # latest day) governs perp/spot delisting.
+    # Keyed on the CANONICAL venue form (ghost normalised via
+    # ``canonicalize_defi_venue_combined``) so that old-key-scheme ghost venues
+    # (``PANCAKESWAPV3-BSC``, ``AAVEV3-ARBITRUM``) are merged into their canonical
+    # counterpart's liveness window.  Without this, a ghost venue whose last snapshot
+    # was the May-8 switchover day generates its own tiny liveness window that marks
+    # every pool that was last seen on that day as "present on its venue's last full
+    # day" → ``available_to=None`` (false-active) — the +73 PANCAKESWAP_V3-BSC
+    # old-format discrepancy (2026-06-27).  Normalisation is a no-op for already-
+    # canonical or non-DeFi venues.
     venue_day_counts: dict[str, dict[date, int]] = {}
+    # Memoise canonicalization per unique raw venue string (the by_date walk hits
+    # the same venue thousands of times per run — avoid repeated UAC import calls).
+    _canon_venue_cache: dict[str, str] = {}
+
+    def _canonical_venue_key(raw: str) -> str:
+        cached = _canon_venue_cache.get(raw)
+        if cached is not None:
+            return cached
+        from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
+
+        canonical = canonicalize_defi_venue_combined(raw)
+        _canon_venue_cache[raw] = canonical
+        return canonical
 
     for day, frame in snapshots:
         all_days.add(day)
@@ -559,7 +621,8 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 continue
             _venue = str(row.get("venue") or "").strip()
             if _venue:
-                vc = venue_day_counts.setdefault(_venue, {})
+                _canonical_v = _canonical_venue_key(_venue)
+                vc = venue_day_counts.setdefault(_canonical_v, {})
                 vc[day] = vc.get(day, 0) + 1
             # DUAL-FORM lifecycle key (operator Refinement 1 + Phase 2 premature-delisting fix):
             # a DeFi POOL must accumulate ONE lifecycle keyed by its canonical pool
@@ -628,7 +691,12 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         #   3. else perp/spot: ACTIVE (None) iff present on its OWN venue's last FULL
         #      trading day; else last-seen (a genuine delisting, not a thin-day artefact).
         _raw_venue = str(agg.meta.get("venue") or "").strip()
-        _venue_full_day = venue_last_full.get(_raw_venue)
+        # venue_last_full is keyed on CANONICAL venue names (ghost-normalised);
+        # the aggregate's meta venue may still be the old ghost form if the
+        # instrument's last snapshot used the pre-switchover adapter — canonicalise
+        # before lookup so the liveness window resolves to the merged canonical entry.
+        _canonical_meta_venue = _canonical_venue_key(_raw_venue) if _raw_venue else _raw_venue
+        _venue_full_day = venue_last_full.get(_canonical_meta_venue)
         if agg.delisted_at is not None:
             available_to = agg.delisted_at.isoformat()
         elif agg.expiry is not None:
