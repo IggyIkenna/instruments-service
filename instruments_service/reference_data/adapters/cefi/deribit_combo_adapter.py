@@ -193,6 +193,31 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         ``instrument_name`` → leg ``instrument_key``. A failure raises so the
         caller's shard-isolation routes it to attempted_failed (CF-11). SSOT:
         https://docs.deribit.com/#public-get_combos.
+
+        SOURCE LIMITATION — DERIBIT-COMBO HISTORICAL DATA IS UNBACKFILLABLE:
+        ``public/get_combos`` returns ONLY currently-live (active) combo
+        instruments.  Deribit does NOT retain or expose the state of historical /
+        expired combos — once a combo expires it disappears from the endpoint
+        permanently.  Consequently:
+
+        * Instrument-history cells for DERIBIT-COMBO prior to the live-capture
+          window (i.e., dates before the adapter was deployed and running) are
+          **structurally unbackfillable via REST** — this is a genuine upstream
+          source limitation, NOT a pipeline gap or missing credential.
+        * The manifest must represent those historical cells as
+          ``empty_confirmed[EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE]`` (the
+          source has no historical endpoint for this data, ever).  A
+          ``SOURCE_RETURNED_ZERO`` would be incorrect (no fetch was made);
+          ``attempted_failed`` is incorrect (no retry will succeed).
+        * **DO NOT re-attempt a historical DERIBIT-COMBO backfill.**  The cefi
+          8-venue backfill correctly could not fill it.  Any future audit that
+          sees DERIBIT-COMBO historical cells as empty should classify them as
+          expected typed-empty, not a fillable gap.
+        * For live / forward capture the adapter works correctly: combos active
+          today are returned and written as ``captured``.
+
+        SSOT: ``codex/02-data/honest-absence-downstream-handling.md``
+        § "DERIBIT-COMBO historical unavailability".
         """
         url = f"{_BASE}/public/get_combos"
         params = {"currency": currency}
