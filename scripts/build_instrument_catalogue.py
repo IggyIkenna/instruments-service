@@ -731,9 +731,14 @@ class _PredLifecycle:
     last_day: date
     venue: str
     instrument_type: str
-    #: min ``start_date`` / max ``end_date_iso`` across the per-date rows, when the
-    #: prediction instruments.parquet carries them (more precise than day-presence).
+    #: min ``start_date`` / max ``end_date_iso`` / min ``available_from_datetime``
+    #: across per-date rows — when the snapshot carries them (more precise than day-presence).
     created: str | None = None
+    #: ISO date string of the market's settlement day (max ``end_date_iso`` /
+    #: ``available_to_datetime`` across rows).  ``None`` when the snapshot provides no
+    #: settlement date.  Used as ``available_to`` in the catalogue (settlement-date
+    #: convention — prediction settlement / availability semantics SSOT:
+    #: ``codex/02-data/prediction-settlement-availability-convention.md``).
     settled: str | None = None
 
 
@@ -799,8 +804,13 @@ def build_prediction_catalogue_dataframe(
             ``instrument_id=cqg``;
           * one row per ``(venue, conditionId)`` for EACH of
             :data:`_PREDICTION_CID_DATA_TYPES`, ``instrument_id=conditionId``.
-        ``available_from`` = first day present; ``available_to`` = last day present
-        or ``None`` when present on the latest snapshot day (still active).
+        ``available_from`` = first day present; ``available_to`` = settlement date
+        (from ``end_date_iso`` / ``available_to_datetime``) when the snapshot carries
+        one, else last snapshot day (``None`` = open-ended when last_day >= latest_day).
+        Settlement-date convention: a market is considered active on day D iff
+        ``available_from <= D <= available_to``, which equals the set of days the
+        market is capturable — see SSOT
+        ``codex/02-data/prediction-settlement-availability-convention.md``.
     """
     cqg_acc: dict[tuple[str, str], _PredLifecycle] = {}
     cid_acc: dict[tuple[str, str], _PredLifecycle] = {}
@@ -831,8 +841,21 @@ def build_prediction_catalogue_dataframe(
                 continue
             saw_member = True
             itype = _str_field(row, "instrument_type")
-            created = _opt_field(row, "start_date") or _opt_field(row, "market_created_at")
-            settled = _opt_field(row, "end_date_iso") or _opt_field(row, "settlement_time")
+            created = (
+                _opt_field(row, "start_date")
+                or _opt_field(row, "market_created_at")
+                or _opt_field(row, "available_from_datetime")
+            )
+            # Collect the settlement date from whichever field the venue's snapshot
+            # format carries: raw Polymarket → ``end_date_iso``; IS-normalised KALSHI
+            # → ``available_to_datetime``; explicit settlement field → ``settlement_time``.
+            # This populates ``lc.settled`` so that ``_emit`` can set ``available_to``
+            # from the venue-declared settlement date (not from last-snapshot-day).
+            settled = (
+                _opt_field(row, "end_date_iso")
+                or _opt_field(row, "settlement_time")
+                or _opt_field(row, "available_to_datetime")
+            )
             cqg_itype = cqg_itype or itype
             if created and (cqg_created is None or created < cqg_created):
                 cqg_created = created
@@ -851,7 +874,22 @@ def build_prediction_catalogue_dataframe(
     rows: list[dict[str, str | None]] = []
 
     def _emit(entity_id: str, data_type: str, lc: _PredLifecycle) -> None:
-        available_to = None if lc.last_day >= latest_day else lc.last_day.isoformat()
+        # Settlement-date convention (SSOT: codex/02-data/prediction-settlement-availability-convention.md):
+        # ``available_to`` = the market's settlement DATE (inclusive last day), so
+        # ``available_from <= D <= available_to`` iff the market was live/capturable on D.
+        # Priority: (1) venue-declared settlement date in ``lc.settled``; (2) last
+        # snapshot day (open-ended ``None`` when last_day >= latest_day — still active).
+        settled_date = _parse_truth_date(lc.settled)
+        if settled_date is not None:
+            # Venue-declared settlement: use that as the inclusive upper bound.
+            # Cap at latest_day so genuinely future dates don't create a false "delisted"
+            # signal in the enumerator when the market is still live (settlement in future
+            # but already in a snapshot → mark open-ended until that day arrives).
+            available_to = None if settled_date >= latest_day else settled_date.isoformat()
+        elif lc.last_day >= latest_day:
+            available_to = None  # still active (open-ended)
+        else:
+            available_to = lc.last_day.isoformat()
         rows.append(
             {
                 "instrument_id": entity_id,
