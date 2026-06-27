@@ -107,16 +107,17 @@ class TestCharacterizeTradfi:
         assert target.dest_path.endswith("data_type=ohlcv_1m/underlying=ES/ticks_migrated_20260418T132019Z.parquet")
         assert "pipeline_mode=batch_databento/" in target.dest_path
 
-    def test_instrument_key_vix_shape_maps_to_cboe_barchart(self) -> None:
+    def test_instrument_key_vix_shape_maps_to_cboe_databento(self) -> None:
+        # BATCH_BARCHART RETIRED 2026-06-24 — VIX 15m ohlcv re-attributed to BATCH_DATABENTO
         obj = "raw_tick_data/by_date/day=2025-01-02/data_type=ohlcv_15m/indices/CBOE/CBOE:INDEX:VIX-USD.parquet"
         target, reason = _mod.characterize_object("tradfi", obj)
         assert reason == ""
         assert target is not None
         assert target.venue == "CBOE"
         assert target.instrument_type == "index"
-        assert target.pipeline_mode == PipelineMode.BATCH_BARCHART
+        assert target.pipeline_mode == PipelineMode.BATCH_DATABENTO
         assert target.dest_path == (
-            "raw_tick_data/by_date/day=2025-01-02/pipeline_mode=batch_barchart/asset_group=tradfi/"
+            "raw_tick_data/by_date/day=2025-01-02/pipeline_mode=batch_databento/asset_group=tradfi/"
             "venue=CBOE/instrument_type=index/data_type=ohlcv_15m/CBOE:INDEX:VIX-USD.parquet"
         )
 
