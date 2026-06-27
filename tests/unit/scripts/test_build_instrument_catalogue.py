@@ -561,6 +561,155 @@ def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleTy
 
 
 # ---------------------------------------------------------------------------
+# Settlement-date convention tests (prediction available_to = settlement day)
+# SSOT: codex/02-data/prediction-settlement-availability-convention.md
+# ---------------------------------------------------------------------------
+
+
+def test_prediction_rollup_end_date_iso_used_as_available_to(rollup: ModuleType) -> None:
+    """POLYMARKET-style raw snapshot: ``end_date_iso`` sets ``available_to`` (settlement
+    date), not last-seen snapshot day.
+
+    Convention: available_to = settlement date (inclusive last day).  A market settling
+    on Jun 26 has available_to=Jun 26 even if it appeared in an earlier snapshot.
+    """
+    d1 = date(2026, 6, 24)  # snapshot day (earlier than settlement)
+    d2 = date(2026, 6, 26)  # settlement date in the row
+    latest = date(2026, 6, 29)  # catalogue's latest snapshot day (far future)
+
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "0xdeadbeef",
+                        "venue": "POLYMARKET",
+                        "end_date_iso": "2026-06-26T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+        # The "latest" day is provided via a dummy row to set latest_day = latest.
+        (
+            latest,
+            "POLYMARKET",
+            "",
+            _pred_snap([{"instrument_key": "0xfuture", "venue": "POLYMARKET"}]),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["instrument_id"] == "0xdeadbeef" and r["data_type"] == "trades")
+    # available_to must be the settlement date (Jun 26), NOT the last-seen day (Jun 24).
+    assert row["available_to"] == d2.isoformat(), (
+        f"Expected available_to={d2.isoformat()!r} (settlement date) but got {row['available_to']!r}. "
+        "The settlement-date convention requires available_to to equal the market's settlement day, "
+        "so that 'catalogue active on D' == 'manifest captured on D' for the reconciliation check."
+    )
+    # settlement_time should carry the raw value.
+    assert row["settlement_time"] == "2026-06-26T00:00:00Z"
+
+
+def test_prediction_rollup_available_to_datetime_used_as_settlement(rollup: ModuleType) -> None:
+    """KALSHI-style normalised snapshot: ``available_to_datetime`` (a Timestamp) sets
+    ``available_to`` as the settlement date.
+
+    KALSHI's IS-normalised by_date parquet carries ``instrument_key`` +
+    ``available_to_datetime`` (a tz-aware Timestamp); the raw ``end_date_iso`` /
+    ``settlement_time`` columns are absent.  The catalogue must still extract the
+    settlement day from ``available_to_datetime``.
+    """
+    d1 = date(2026, 6, 25)  # snapshot day
+    settlement_ts = pd.Timestamp("2026-06-27 05:59:59+00:00")
+    latest = date(2026, 6, 29)
+
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "BTC_UP_DOWN_DAILY",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KXBTCUSD-26JUN27",
+                        "venue": "KALSHI",
+                        "instrument_type": "prediction_market",
+                        "available_to_datetime": settlement_ts,
+                    }
+                ]
+            ),
+        ),
+        (latest, "KALSHI", "BTC_UP_DOWN_DAILY", _pred_snap([{"instrument_key": "0xfuture", "venue": "KALSHI"}])),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["instrument_id"] == "KXBTCUSD-26JUN27" and r["data_type"] == "trades")
+    # The Timestamp's DATE (Jun 27) should be the available_to.
+    assert row["available_to"] == "2026-06-27", (
+        f"Expected available_to='2026-06-27' from available_to_datetime but got {row['available_to']!r}."
+    )
+
+
+def test_prediction_rollup_settlement_date_convention_boundary(rollup: ModuleType) -> None:
+    """Logical-reconciliation boundary: ``available_to`` equals the settlement date so that
+    ``available_from <= D <= available_to`` is TRUE on the settlement day and FALSE on D+1.
+
+    This verifies the ``catalogue-active-on-D == manifest-captured-on-D`` property for the
+    same-day-settled market case (the 2,177-market off-by-one the operator observed):
+    a market settling Jun 26 must have ``available_to = Jun 26``, making it active on Jun 26
+    (matching the manifest captured count) and inactive on Jun 27 (not counted on Jun 27).
+    """
+    settlement_day = date(2026, 6, 26)
+    d_before = date(2026, 6, 25)
+    d_after = date(2026, 6, 27)
+    latest = date(2026, 6, 29)
+
+    snapshots = [
+        (
+            d_before,
+            "POLYMARKET",
+            "MISC_NOVELTY",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "0xmarket1",
+                        "venue": "POLYMARKET",
+                        "end_date_iso": f"{settlement_day.isoformat()}T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+        (latest, "POLYMARKET", "MISC_NOVELTY", _pred_snap([{"instrument_key": "0xfuture", "venue": "POLYMARKET"}])),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["instrument_id"] == "0xmarket1" and r["data_type"] == "trades")
+
+    # The ``available_to`` must be the settlement date string, not the last-seen day.
+    assert row["available_to"] == settlement_day.isoformat(), (
+        f"Settlement-date convention: available_to must equal {settlement_day!r} "
+        f"(settlement date) but got {row['available_to']!r}."
+    )
+
+    # Verify the boundary directly using the date-range check the enumerator uses:
+    avail_from = pd.Timestamp(row["available_from"])
+    avail_to = pd.Timestamp(row["available_to"])
+    d_on_ts = pd.Timestamp(settlement_day)
+    d_after_ts = pd.Timestamp(d_after)
+
+    # Settlement day inclusive: market IS active on Jun 26 (catalogue active == manifest captured).
+    assert avail_from <= d_on_ts <= avail_to, (
+        f"Market should be ACTIVE on settlement day {settlement_day} "
+        f"(available_from={row['available_from']}, available_to={row['available_to']})"
+    )
+    # Day after exclusive: market NOT active on Jun 27 (matches manifest no-longer-captured).
+    assert d_after_ts > avail_to, (
+        f"Market should be INACTIVE on {d_after} (day after settlement), "
+        f"but available_to={row['available_to']!r} <= {d_after!r}."
+    )
+
+
+# ---------------------------------------------------------------------------
 # build_sports_catalogue_dataframe — LEAGUE-grain roll-up (entity=leagues)
 # ---------------------------------------------------------------------------
 
