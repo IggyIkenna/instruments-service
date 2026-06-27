@@ -30,7 +30,17 @@ else:  # pragma: no cover - runtime namespace indirection
 
 __all__ = [
     "_completeness_and_retry",
+    "_detect_thin_day_venues",
 ]
+
+# G1.2 — thin-day partial-capture detection constants.
+# A written venue whose instrument count is < 50% of its trailing 14-day median
+# is a partial capture that must route to attempted_failed (never silently
+# propagate as captured, which would mass-false-delist the catalogue).
+_THIN_DAY_FRACTION: float = 0.5
+_THIN_DAY_WINDOW: int = 14
+_THIN_DAY_MIN_HISTORY: int = 2
+_THIN_DAY_ABS_FLOOR: int = 20  # counts below this are never CeFi (sports days, etc.)
 
 
 async def _completeness_and_retry(
@@ -338,6 +348,64 @@ async def _retry_missing_venues(
     return written_venues, missing_shards
 
 
+def _detect_thin_day_venues(
+    *,
+    counts: dict[str, int],
+    written_venues: set[str],
+    date: str,
+    bucket: str,
+) -> set[str]:
+    """Return written CeFi venues whose instrument count is a thin-day outlier (G1.2).
+
+    A thin day: today's count < ``_THIN_DAY_FRACTION`` x the venue's trailing
+    ``_THIN_DAY_WINDOW``-day median in the availability index.  Requires
+    ≥ ``_THIN_DAY_MIN_HISTORY`` prior days to form a baseline.  Ignores venues
+    with counts below ``_THIN_DAY_ABS_FLOOR`` (sports match-day counts, tiny
+    prediction venues) to avoid false positives.  Only considers CeFi asset-group
+    history because sports/prediction/tradfi counts legitimately vary by date.
+
+    Returns an empty set if the index cannot be loaded (fail-open so a transient
+    read failure never blocks capture progress).
+    """
+    if not written_venues:
+        return set()
+    try:
+        _idx = _orch.read_availability_index(bucket)
+    except Exception as exc:  # fail-open: never let a read error block capture progress
+        _orch.logger.debug("G1.2 thin-day check skipped (index unavailable): %s", exc)
+        return set()
+
+    _required = {"asset_group", "capture_status", "venue", "date", "instrument_count"}
+    if not _required.issubset(_idx.columns):
+        return set()  # index schema doesn't include the expected columns — skip silently
+
+    _cefi_mask = (
+        (_idx["asset_group"].astype(str) == "cefi")
+        & (_idx["capture_status"].astype(str) == "captured")
+        & (_idx["date"].astype(str) < date)  # exclude today's (not-yet-consolidated) cells
+    )
+    _cefi_hist = _idx[_cefi_mask]
+    if _cefi_hist.empty:
+        return set()
+
+    thin: set[str] = set()
+    for venue in sorted(written_venues):
+        today_count = counts.get(venue, 0)
+        if today_count < _THIN_DAY_ABS_FLOOR:
+            continue
+        _vh = _cefi_hist[_cefi_hist["venue"].astype(str) == venue]
+        if _vh.empty:
+            continue  # no CeFi history → not a CeFi venue, skip
+        _day_counts = _vh.groupby("date")["instrument_count"].sum().sort_index()
+        _recent = _day_counts.tail(_THIN_DAY_WINDOW)
+        if len(_recent) < _THIN_DAY_MIN_HISTORY:
+            continue
+        median = float(_recent.median())
+        if median > 0 and today_count < _THIN_DAY_FRACTION * median:
+            thin.add(venue)
+    return thin
+
+
 def _finalize_completeness(
     *,
     counts: dict[str, int],
@@ -442,6 +510,37 @@ def _finalize_completeness(
                 len(_failed_stamped),
                 _failed_stamped,
             )
+
+    # G1.2 — thin-day partial-capture correction.  A written venue whose count is
+    # < 50% of its trailing 14-day median is a partial capture that must route to
+    # attempted_failed so downstream systems (catalogue, MTDS URDI) don't treat the
+    # thinned snapshot as the full universe (the BINANCE-FUTURES 678→47 class).
+    # Writes a corrective record_failed row; consolidator last-write-wins semantics
+    # ensure it supersedes the earlier record_captured for this (date, venue) key.
+    _thin_venues = _detect_thin_day_venues(
+        counts=counts,
+        written_venues=written_venues,
+        date=date,
+        bucket=bucket,
+    )
+    if _thin_venues:
+        _thin_ts = _orch.datetime.now(_orch.UTC)
+        _thin_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+        for _tv in sorted(_thin_venues):
+            _thin_manifest.record_failed(
+                row_key={"date": date, "venue": _tv},
+                error=_orch.RecordFailedReason.UNCLASSIFIED_ADAPTER_ERROR,
+                attempted_at=_thin_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            )
+        _thin_manifest.close()
+        _orch.logger.warning(
+            "G1.2 thin-day routing: %d venue(s) reclassified captured→attempted_failed on date=%s "
+            "(count < 50%% of trailing 14-day median): %s",
+            len(_thin_venues),
+            date,
+            sorted(_thin_venues),
+        )
 
     # Emission policy check — PARTIAL_OK: emits PUBLISHED_DEGRADED when completeness < 1.0
     # but always allows write through. Per UAC seed Phase 6.8 PART B.
