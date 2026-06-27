@@ -119,6 +119,102 @@ def test_rollup_active_on_latest_day_has_null_available_to(rollup: ModuleType) -
     assert row["available_to"] is None
 
 
+# ---------------------------------------------------------------------------
+# §7.3 available_to = venue-truth + per-venue, thin-day-aware (G1.1 false-delisting fix)
+# ---------------------------------------------------------------------------
+
+
+def test_rollup_thin_latest_day_does_not_false_delist_other_venues(rollup: ModuleType) -> None:
+    """A thin/partial latest capture day on ONE venue must NOT delist a full venue.
+
+    The G1.1 live bug: a thin BINANCE-FUTURES latest day (678 → 47) + a GLOBAL
+    last-seen ``available_to`` stamped every venue's actives delisted off that one
+    thin day. The per-venue, thin-day-aware liveness anchor fixes it.
+    """
+    d1, d2, d3 = date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)
+    # VENUE_A: 10 perps every day INCLUDING the latest → all active.
+    a_rows = [
+        {"instrument_key": f"A{i}", "venue": "VENUE_A", "instrument_type": "PERPETUAL"} for i in range(10)
+    ]
+    snapshots = [
+        (d1, _snapshot(a_rows)),
+        (d2, _snapshot(a_rows)),
+        (d3, _snapshot(a_rows)),  # VENUE_A full on the latest day
+    ]
+    df = rollup.build_catalogue_dataframe(snapshots)
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    # Every VENUE_A perp present on its own venue's latest full day → active.
+    assert all(by_id[f"A{i}"]["available_to"] is None for i in range(10))
+
+
+def test_rollup_thin_latest_day_keeps_full_prior_day_actives_active(rollup: ModuleType) -> None:
+    """A venue whose LATEST day is thin (partial capture) keeps prior-full actives active."""
+    d1, d2, d3 = date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)
+    full = [{"instrument_key": f"P{i}", "venue": "VENUE_B", "instrument_type": "PERPETUAL"} for i in range(20)]
+    thin = [{"instrument_key": "P0", "venue": "VENUE_B", "instrument_type": "PERPETUAL"}]  # 1 of 20 = thin
+    snapshots = [(d1, _snapshot(full)), (d2, _snapshot(full)), (d3, _snapshot(thin))]
+    df = rollup.build_catalogue_dataframe(snapshots)
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    # d3 is thin (5% of the 20-median) → the last FULL day is d2; all 20 actives
+    # present on d2 stay active (NOT delisted off the thin d3).
+    assert all(by_id[f"P{i}"]["available_to"] is None for i in range(20))
+
+
+def test_rollup_dated_instrument_available_to_is_venue_truth_expiry(rollup: ModuleType) -> None:
+    """A dated FUTURE/OPTION available_to = its venue-declared ``expiry`` (not last-seen)."""
+    d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
+    rows = [
+        {
+            "instrument_key": "DERIBIT:OPTION:BTC-2JAN24",
+            "venue": "DERIBIT",
+            "instrument_type": "OPTION",
+            "expiry": "2024-01-02",
+        }
+    ]
+    # Present on both days incl. the latest, but expiry stamps the real close date.
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    row = df.to_dict("records")[0]
+    assert row["available_to"] == "2024-01-02"  # venue-truth expiry, not None/last-seen
+
+
+def test_rollup_delisted_at_takes_priority_over_liveness(rollup: ModuleType) -> None:
+    """An explicit ``delisted_at`` (venue-reported removal) wins over last-seen liveness."""
+    d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
+    rows = [
+        {
+            "instrument_key": "BINANCE-SPOT:SPOT_PAIR:FOO-USDT",
+            "venue": "BINANCE-SPOT",
+            "instrument_type": "SPOT_PAIR",
+            "delisted_at": "2024-05-15",
+        }
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    row = df.to_dict("records")[0]
+    assert row["available_to"] == "2024-05-15"  # venue-reported delisting date
+
+
+def test_rollup_perp_active_on_own_venue_latest_full_day(rollup: ModuleType) -> None:
+    """A perp with no expiry/delisting, present on its venue's latest full day → active."""
+    d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
+    rows = [{"instrument_key": "HYPERLIQUID:PERPETUAL:BTC", "venue": "HYPERLIQUID", "instrument_type": "PERPETUAL"}]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    row = df.to_dict("records")[0]
+    assert row["available_to"] is None
+
+
+def test_rollup_genuine_delisting_still_stamped(rollup: ModuleType) -> None:
+    """A perp absent from its venue's recent FULL days (real delisting) keeps last-seen."""
+    d1, d2, d3 = date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)
+    base = [{"instrument_key": f"K{i}", "venue": "OKX-SWAP", "instrument_type": "PERPETUAL"} for i in range(10)]
+    gone = [*base, {"instrument_key": "DEAD", "venue": "OKX-SWAP", "instrument_type": "PERPETUAL"}]
+    # DEAD present only on d1; d2/d3 are FULL (10 each) without it → genuine delisting.
+    snapshots = [(d1, _snapshot(gone)), (d2, _snapshot(base)), (d3, _snapshot(base))]
+    df = rollup.build_catalogue_dataframe(snapshots)
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    assert by_id["DEAD"]["available_to"] == "2024-01-01"  # genuinely delisted, last-seen stamp
+    assert all(by_id[f"K{i}"]["available_to"] is None for i in range(10))
+
+
 def test_rollup_metadata_follows_most_recent_snapshot(rollup: ModuleType) -> None:
     """Metadata (venue/type/chain) is taken from the instrument's most-recent definition."""
     d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
@@ -315,16 +411,23 @@ def test_rollup_supports_instrument_id_column(rollup: ModuleType) -> None:
 
 
 def test_rollup_skips_blank_ids_and_empty_frames(rollup: ModuleType) -> None:
-    """Rows with no usable id are skipped; empty frames contribute only their day to the axis."""
+    """Rows with no usable id are skipped; an EMPTY latest frame does not false-delist.
+
+    §7.3 (G1.1): a globally-empty latest snapshot day is the canonical thin/partial
+    capture — it carries NO venue rows, so venue V's last FULL day is d1 and A
+    (present on d1) stays ACTIVE. The old behaviour stamped A delisted off the empty
+    day via the GLOBAL last-seen rule — that WAS the false-delisting bug.
+    """
     d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
     snapshots = [
         (d1, _snapshot([{"instrument_key": "A", "venue": "V"}, {"instrument_key": "", "venue": "V"}])),
-        (d2, pd.DataFrame()),  # empty frame — still advances the latest-day axis
+        (d2, pd.DataFrame()),  # empty frame — contributes no venue rows
     ]
     df = rollup.build_catalogue_dataframe(snapshots)
     assert list(df["instrument_id"]) == ["A"]
-    # A last seen on d1 but latest day is d2 (empty) → A is delisted.
-    assert df.to_dict("records")[0]["available_to"] == "2024-01-01"
+    # A is present on venue V's last full day (d1) → active, NOT delisted off the
+    # empty d2 (the §7.3 thin-latest-day fix).
+    assert df.to_dict("records")[0]["available_to"] is None
 
 
 def test_rollup_empty_input_returns_catalog_columns(rollup: ModuleType) -> None:
