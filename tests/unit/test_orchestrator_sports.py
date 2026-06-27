@@ -140,14 +140,16 @@ class TestProcessInstrumentsSportsProviderRouting:
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_footystats_with_key_calls_both_fetchers(self) -> None:
+    async def test_footystats_with_key_calls_all_fetchers(self) -> None:
         mock_pred = AsyncMock(return_value={"footystats_predictions": 12})
         mock_match = AsyncMock(return_value={"footystats_matches": 8})
+        mock_odds = AsyncMock(return_value={"footystats_odds": 5})
         with _entry_stack(
             ["FOOTYSTATS"],
             _BUCKET,
             patch("instruments_service.engine.orchestrator._fetch_footystats_predictions", mock_pred),
             patch("instruments_service.engine.orchestrator._fetch_footystats_matches", mock_match),
+            patch("instruments_service.engine.orchestrator._fetch_footystats_odds", mock_odds),
         ):
             result = await process_instruments(
                 _DATE,
@@ -156,9 +158,10 @@ class TestProcessInstrumentsSportsProviderRouting:
                 api_keys={"footystats": "fs-key"},
                 redo_all=True,
             )
-        assert result == {"footystats_predictions": 12, "footystats_matches": 8}
+        assert result == {"footystats_predictions": 12, "footystats_matches": 8, "footystats_odds": 5}
         mock_pred.assert_called_once()
         mock_match.assert_called_once()
+        mock_odds.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_footystats_entity_filter_predictions_only(self) -> None:
