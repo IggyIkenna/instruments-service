@@ -16,6 +16,7 @@ from unified_api_contracts.external.footystats import (
 )
 from unified_api_contracts.external.footystats.normalize import (
     normalize_footystats_match,
+    normalize_footystats_odds_snapshot,
     normalize_footystats_predictions,
 )
 from unified_api_contracts.sports import (
@@ -267,14 +268,68 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
         logger.info("Extracted %d prediction rows for date=%s", len(predictions), date)
         return predictions
 
+    async def get_fixture_odds_snapshot(
+        self,
+        date: str,
+        league_ids: list[int] | None = None,
+    ) -> list[dict[str, object]]:
+        """Extract all 68 odds fields from FootyStats for a given date.
+
+        Uses the same ``/todays-matches`` endpoint. Returns flat dicts
+        suitable for writing to ``entity=footystats_odds`` in GCS.
+
+        Removal reversed 2026-06-27 (operator decision #6 REVERSED): footystats
+        pre-match snapshot odds are a predictive signal that stays in IS.
+        """
+        url = f"{_BASE_URL}/todays-matches"
+        params = self._params_with_key({"date": date})
+
+        try:
+            async with self._make_session() as session:
+                raw_response = await self._get_with_retry(session, url, params=params)
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            raise
+
+        odds_rows: list[dict[str, object]] = []
+        match_list = _extract_data(raw_response)
+        for item in match_list:
+            try:
+                match = _parse_match(item)
+                if match is None:
+                    continue
+                if league_ids and match.competition_id not in league_ids:
+                    continue
+                odds_dict = normalize_footystats_odds_snapshot(match)
+                has_odds = any(
+                    odds_dict.get(k) is not None
+                    for k in ("odds_ft_1", "odds_ft_x", "odds_ft_2", "odds_btts_yes", "odds_ft_over25")
+                )
+                if has_odds:
+                    odds_rows.append(odds_dict)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to extract FootyStats odds for match %s: %s",
+                    item.get("match_id", "unknown") if isinstance(item, dict) else "unknown",
+                    exc,
+                )
+                continue
+
+        logger.info("Extracted %d odds snapshot rows for date=%s", len(odds_rows), date)
+        return odds_rows
+
     async def get_odds(
         self,
         sport: str,
         regions: str = "uk",
         markets: str = "h2h",
     ) -> list[CanonicalOdds]:
-        """FootyStats does not provide odds via the standard interface."""
-        logger.info("get_odds not supported for FootyStats")
+        """FootyStats does not provide odds via the standard interface.
+
+        Use ``get_fixture_odds_snapshot()`` for pre-match odds (68 markets).
+        """
+        logger.info("get_odds not supported for FootyStats; use get_fixture_odds_snapshot()")
         return []
 
 
