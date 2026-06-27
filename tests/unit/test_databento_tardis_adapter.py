@@ -1359,3 +1359,74 @@ class TestTradfiG1FoundationRegression:
 
         with pytest.raises(UndeclaredTradfiVenueError):
             is_non_trading_day("NONEXISTENT_VENUE", date(2026, 5, 7))
+
+
+# ---------------------------------------------------------------------------
+# KRX KOSPI / KOSPI 200 — Yahoo-sourced index enumeration (2026-06-27)
+# Regression guards: the KOSPI index enumerates via the Yahoo indices path
+# (YAHOO_INDICES venue=KRX) and ICE no longer attempts an unsubscribed
+# Databento dataset (venue_to_databento must NOT contain ICE / IFUS.IMPACT).
+# ---------------------------------------------------------------------------
+class TestKRXKospiYahooEnumeration:
+    """KRX KOSPI/KOSPI200 enumerate as INDEX records via the Yahoo path (2026-06-27)."""
+
+    def test_create_yahoo_index_records_krx_filter_returns_kospi_indices(self) -> None:
+        """venue_filter='KRX' returns KOSPI and KOSPI200 index records (not DXY, not equities).
+
+        The KRX INDEX records (KOSPI/KOSPI200) route through _create_yahoo_index_records
+        (same as DXY/treasury indices), NOT through _create_krx_equity_records
+        (Samsung/Hyundai/SK Hynix). Both paths are active for venue='KRX'.
+        """
+        adapter = DatabentoReferenceDataAdapter()
+        records = adapter._create_yahoo_index_records(venue_filter="KRX")
+        keys = {r.instrument_key for r in records}
+        assert "KRX:INDEX:KOSPI-USD" in keys, "KOSPI index missing — add to YAHOO_INDICES"
+        assert "KRX:INDEX:KOSPI200-USD" in keys, "KOSPI200 index missing — add to YAHOO_INDICES"
+        # KRX filter must NOT bleed DXY (ICE) or CBOE treasury indices.
+        assert "ICE:INDEX:DXY-USD" not in keys
+        for symbol in ("US3M", "US2Y", "US5Y", "US10Y", "US30Y"):
+            assert f"CBOE:INDEX:{symbol}-USD" not in keys
+
+    def test_kospi_index_record_fields(self) -> None:
+        """KOSPI record has the correct venue, instrument_type, raw_symbol and genesis."""
+        adapter = DatabentoReferenceDataAdapter()
+        records = {r.instrument_key: r for r in adapter._create_yahoo_index_records(venue_filter="KRX")}
+        kospi = records["KRX:INDEX:KOSPI-USD"]
+        assert kospi.venue == "KRX"
+        assert kospi.instrument_type == "INDEX"
+        assert kospi.raw_symbol == "^KS11"
+        # Genesis year must be 2019 (the KRX_INDEX_DAILY_FIRST_DATE floor).
+        assert kospi.available_from_datetime is not None
+        assert kospi.available_from_datetime.year == 2019
+
+    def test_kospi200_index_record_fields(self) -> None:
+        """KOSPI200 record has the correct venue, instrument_type, raw_symbol and genesis."""
+        adapter = DatabentoReferenceDataAdapter()
+        records = {r.instrument_key: r for r in adapter._create_yahoo_index_records(venue_filter="KRX")}
+        k200 = records["KRX:INDEX:KOSPI200-USD"]
+        assert k200.venue == "KRX"
+        assert k200.instrument_type == "INDEX"
+        assert k200.raw_symbol == "^KS200"
+        assert k200.available_from_datetime is not None
+        assert k200.available_from_datetime.year == 2019
+
+    def test_ice_not_in_venue_to_databento(self) -> None:
+        """ICE must NOT appear in venue_to_databento (regression guard against IFUS.IMPACT).
+
+        ICE Databento datasets (IFUS.IMPACT / IFEU.IMPACT) are outside the 3-dataset
+        paid subscription. Previously venue_to_databento["ICE"] = "IFUS.IMPACT" caused
+        the producer to attempt enumeration → DatabentoDatasetNotAllowedError → 32 absent
+        ICE days. Fix (2026-06-27): ICE removed from venue_to_databento; ICE's only
+        retained instrument (DXY) routes via venue_to_data_provider["ICE"] = "yahoo_finance".
+        """
+        from unified_api_contracts.registry.venue_mapping import VenueMapping
+
+        vm = VenueMapping()
+        assert "ICE" not in vm.venue_to_databento, (
+            "ICE must NOT be in venue_to_databento — IFUS/IFEU datasets are out of "
+            "our subscription. Re-adding would cause DatabentoDatasetNotAllowedError."
+        )
+        # ICE must still resolve to a data source (yahoo_finance via DXY).
+        assert vm.venue_to_data_provider.get("ICE") == "yahoo_finance", (
+            "ICE must route to yahoo_finance via venue_to_data_provider for DXY."
+        )
