@@ -9,8 +9,13 @@
 # dies after the window (or earlier on completion), reclaiming all cached DFs.
 # Next chunk starts fresh. RAM bounded per chunk to ~500 MB.
 #
-# Usage: bash /tmp/sports-chunked-backfill.sh PROVIDER [START_DATE] [END_DATE]
-# Defaults: START=2020-06-01, END=today
+# Usage: bash sports_chunked_backfill.sh PROVIDER [START_DATE] [END_DATE] [ENTITY]
+# Defaults: START=2020-06-01, END=today, ENTITY='' (all entities)
+#
+# ENTITY (optional 4th arg): restrict to one sports manifest entity, e.g.
+#   FIXTURE_EVENTS, FIXTURE_LINEUPS, FIXTURE_STATS, PLAYER_STATS,
+#   INJURIES, STANDINGS, FIXTURES.
+#   Maps to --sports-entity CLI flag. Omit for all entities.
 #
 # Sequential within a provider (singleton-lock on shared API key respected).
 # Multiple providers in parallel is safe (different keys, different APIs).
@@ -19,8 +24,10 @@ set -euo pipefail
 PROVIDER="${1:?provider required: API_FOOTBALL|TRANSFERMARKT|FOOTYSTATS|UNDERSTAT|OPEN_METEO}"
 START="${2:-2020-06-01}"
 END="${3:-$(date -u +%Y-%m-%d)}"
+ENTITY="${4:-}"
 CHUNK_DAYS="${CHUNK_DAYS:-30}"
-LOG_DIR="/tmp/sports-chunked-${PROVIDER,,}"
+entity_slug="${ENTITY:+_${ENTITY,,}}"
+LOG_DIR="/tmp/sports-chunked-${PROVIDER,,}${entity_slug}"
 mkdir -p "$LOG_DIR"
 
 cd "${INSTRUMENTS_SERVICE_DIR:-/home/hk/unified-trading-system-repos/instruments-service}"
@@ -30,6 +37,7 @@ export CLOUD_MOCK_MODE=false
 
 echo "=== chunked sports backfill ==="
 echo "provider:    $PROVIDER"
+echo "entity:      ${ENTITY:-ALL}"
 echo "range:       $START → $END ($CHUNK_DAYS-day chunks)"
 echo "logs:        $LOG_DIR"
 echo
@@ -51,15 +59,22 @@ while [[ "$current" < "$END" || "$current" == "$END" ]]; do
   # CAS generation-conflict retry loop when many local procs share HOSTNAME=hk and all
   # race on the canonical _index/availability_index.parquet. The unconditional-write
   # fallback after 15 retries can clobber peer writes — this avoids it entirely.
-  # Tag = provider + chunk-start + short-random so it's stable per chunk but unique
-  # across providers/restarts/parallel chunks.
-  vm_tag="hk_${PROVIDER,,}_${current//-/}_$(od -An -N3 -tx1 /dev/urandom | tr -d ' ')"
+  # Tag = provider + entity + chunk-start + short-random so it's stable per chunk but
+  # unique across providers/entities/restarts/parallel chunks.
+  entity_tag="${ENTITY:+_${ENTITY,,}}"
+  vm_tag="hk_${PROVIDER,,}${entity_tag}_${current//-/}_$(od -An -N3 -tx1 /dev/urandom | tr -d ' ')"
+
+  # Build CLI args; add --sports-entity when entity filter is set.
+  ENTITY_ARG=""
+  [[ -n "$ENTITY" ]] && ENTITY_ARG="--sports-entity $ENTITY"
 
   # 60 min hard cap per chunk; if it stalls (rare), kill and continue.
+  # shellcheck disable=SC2086
   VM_NAME="$vm_tag" MANIFEST_PER_VM_SHARDS=true timeout 3600 .venv/bin/instruments-service \
     --operation instruments --mode batch \
     --asset-group SPORTS --sports-provider "$PROVIDER" \
     --start-date "$current" --end-date "$chunk_end" \
+    $ENTITY_ARG \
     > "$log" 2>&1
   rc=$?
 
@@ -74,4 +89,4 @@ while [[ "$current" < "$END" || "$current" == "$END" ]]; do
 done
 
 echo
-echo "=== $PROVIDER chunked backfill done ($chunk_n chunks) ==="
+echo "=== $PROVIDER chunked backfill done ($chunk_n chunks, entity=${ENTITY:-ALL}) ==="
