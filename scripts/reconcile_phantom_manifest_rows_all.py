@@ -346,7 +346,16 @@ def _audit_sports(
         is_real = False
         for c in candidates:
             if c.startswith(day_partition_prefix):
-                if c in blobs:
+                if "*" in c:
+                    # Wildcard candidate (fetched_at_hour=*): the * represents a
+                    # single unknown path segment (e.g. fetched_at_hour=2025-09-01T09).
+                    # Resolve by checking if any blob starts with the prefix before *
+                    # AND ends with the suffix after *.
+                    pre, _, post = c.partition("*")
+                    if any(b.startswith(pre) and b.endswith(post) for b in blobs):
+                        is_real = True
+                        break
+                elif c in blobs:
                     is_real = True
                     break
             else:
