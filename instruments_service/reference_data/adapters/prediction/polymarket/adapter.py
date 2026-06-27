@@ -141,12 +141,14 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
             results = await self._fetch_clob_markets(date, now)
         else:
             # Current date (today) OR live (date is None): Gamma ACTIVE markets — fast,
-            # sorted by volume, and (critically) carries clob_token_ids per market AND is the
-            # currently-tradeable set. The CLOB-historical path for `date==today` returned
-            # markets that ENDED today (resolved), which `filter_instruments_by_date` then
-            # dropped ("0 records after filtering") → today's universe parquet carried no
-            # token_ids → the live Polymarket CLOB producer skipped everything. Routing
-            # today→gamma-active fixes the live universe (token_ids present, not date-filtered).
+            # sorted by volume, and is the currently-tradeable set. The CLOB-historical path
+            # for `date==today` returned markets that ENDED today (resolved), which would drop
+            # "0 records after filtering" for the full active universe. Gamma gives the right
+            # universe but does NOT reliably return clobTokenIds in its response. When a
+            # specific date was given (date==today, backfill mode), supplement with a CLOB scan
+            # to register per-outcome token IDs for markets settling today — this populates the
+            # _CLOB_TOKEN_IDS_BY_CONDITION_ID side-table so _records_to_dataframe can write the
+            # clob_token_ids column the Polymarket CLOB WS subscribes by.
             results = []
             self._last_raw_page_size = 0
             async with self._make_session() as session:
@@ -156,6 +158,23 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
                     results.extend(batch)
                     if self._last_raw_page_size < _pm._PAGE_LIMIT:
                         break
+
+            # For date-specific runs (today's backfill), also run CLOB to register token IDs
+            # for markets settling today — Gamma doesn't return clobTokenIds so we supplement.
+            # Side-effect only: the return value is discarded (Gamma universe is authoritative).
+            if date:
+                try:
+                    await self._fetch_clob_markets(date, now)
+                    _pm.logger.info(
+                        "Polymarket: CLOB token-id supplement completed for date=%s", date
+                    )
+                except Exception as exc:
+                    _pm.logger.warning(
+                        "Polymarket: CLOB token-id supplement failed for date=%s: %s — "
+                        "clob_token_ids may be absent in today's IS parquet",
+                        date,
+                        exc,
+                    )
 
         _pm.logger.info("Polymarket: fetched %d instruments (date=%s)", len(results), date or "active")
         return results
