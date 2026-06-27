@@ -267,6 +267,20 @@ def _filter_and_enrich_records(
         len(records),
     )
 
+    # §1.5/G1.4 noise guard — reject junk/test/non-ASCII instruments at CAPTURE time
+    # (every AG), so CJK/meme test bases (龙虾/币安人生/我踏马来了) never enter by_date/ →
+    # never reach the catalogue roll-up / coverage / MTDS.
+    _before_junk = len(records)
+    records = _orch.reject_junk_instruments(records)
+    if len(records) != _before_junk:
+        _orch.logger.info(
+            "Junk-symbol guard %s: %d → %d instruments (rejected %d)",
+            date,
+            _before_junk,
+            len(records),
+            _before_junk - len(records),
+        )
+
     # 3b. Enrich CeFi/DeFi instruments with timezone=UTC (24/7 markets).
     # TradFi instruments get timezone from the databento adapter's session metadata.
     _tradfi_set = frozenset(_orch._TRADFI_VENUES)
