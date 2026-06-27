@@ -395,15 +395,53 @@ def _pool_address_of(meta: dict[str, str | None]) -> str:
     return pool_address
 
 
+def _canonical_instrument_id(instrument_id: str) -> str:
+    """Normalise the venue-prefix portion of a DeFi non-pool ``instrument_id``.
+
+    Non-pool DeFi rows (lending / lst / staking) use instrument_keys of the form
+    ``VENUE-CHAIN:TYPE:SYMBOL`` (e.g. ``AAVEV3-ARBITRUM:A_TOKEN:USDC``).  When
+    the IS adapter switched from the no-underscore ghost spelling (``AAVEV3-``) to
+    the canonical underscore form (``AAVE_V3-``) around 2026-05-08, the SAME
+    logical market appeared under TWO distinct ``instrument_key`` strings → TWO
+    catalogue rows, both marked active (the "+171 AAVE_V3 / +26 COMPOUND_V3
+    dual-key ghosts" triad discrepancy).
+
+    Fix: for any instrument_id that contains a ``:``, split on the first ``:``,
+    run ``canonicalize_defi_venue_combined`` on the prefix (which is the
+    PROTOCOL-CHAIN combined form), and rejoin.  The canonicaliser is a no-op for
+    already-canonical or non-DeFi prefixes, so this is safe for ALL rows.
+
+    Pure + idempotent.  Only called from ``_aggregate_key`` (non-pool branch).
+    """
+    colon_idx = instrument_id.find(":")
+    if colon_idx < 0:
+        # No colon — not a structured DeFi key; return as-is.
+        return instrument_id
+    from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
+
+    prefix = instrument_id[:colon_idx]
+    canonical_prefix = canonicalize_defi_venue_combined(prefix)
+    if canonical_prefix == prefix:
+        return instrument_id
+    return canonical_prefix + instrument_id[colon_idx:]
+
+
 def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
     """Lifecycle-aggregation key for one per-date row.
 
     DeFi POOL rows key on the CANONICAL pool identity (``pool::<chain>::<pool_address>``)
     so spelling-variant ``instrument_key``s of the SAME physical pool
     (``UNISWAPV3-ARBITRUM`` vs ``UNISWAP_V3-ARBITRUM``) collapse into ONE continuous
-    lifecycle — the Phase 2 premature-delisting fix. All other rows key on the
-    ``instrument_id`` (= instrument_key) as before, so non-pool behaviour is
-    unchanged.
+    lifecycle — the Phase 2 premature-delisting fix.
+
+    Non-pool DeFi rows (lending / lst / staking) whose ``instrument_id`` prefix is
+    a ghost venue form (``AAVEV3-ARBITRUM``, ``COMPOUNDV3-BASE``) are normalised via
+    ``_canonical_instrument_id`` so they collapse onto the canonical key
+    (``AAVE_V3-ARBITRUM:…``, ``COMPOUND_V3-BASE:…``) — the dual-key-ghost collapse
+    fix (+171 AAVE_V3 / +26 COMPOUND_V3 triad discrepancy 2026-06-27).
+
+    All other rows key on the ``instrument_id`` (= instrument_key) as before, so
+    non-DeFi behaviour is unchanged.
     """
     itype = str(row.get("instrument_type") or "").strip().lower()
     if itype in _DEFI_POOL_ITYPES:
@@ -416,7 +454,10 @@ def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
                 if "-" in venue:
                     chain = venue.rsplit("-", 1)[1].upper()
             return f"pool::{chain}::{pool_address.lower()}"
-    return instrument_id
+    # Non-pool: normalise the venue-prefix portion of structured DeFi instrument_ids
+    # so ghost-spelling variants (AAVEV3-ARBITRUM:…) collapse onto the canonical key
+    # (AAVE_V3-ARBITRUM:…).  No-op for non-DeFi / already-canonical keys.
+    return _canonical_instrument_id(instrument_id)
 
 
 #: Known chain suffixes for the glued PROTOCOL-CHAIN venue split (catalogue read-side
@@ -544,9 +585,30 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
     all_days: set[date] = set()
     # §7.3 per-venue, thin-day-aware liveness: per (venue, day) the instrument
     # count we observed, so a venue's last FULL capture day (not a thin/partial
-    # latest day) governs perp/spot delisting. Keyed on the RAW per-date ``venue``
-    # column (pre dual-form split) so the count matches the snapshot grain.
+    # latest day) governs perp/spot delisting.
+    # Keyed on the CANONICAL venue form (ghost normalised via
+    # ``canonicalize_defi_venue_combined``) so that old-key-scheme ghost venues
+    # (``PANCAKESWAPV3-BSC``, ``AAVEV3-ARBITRUM``) are merged into their canonical
+    # counterpart's liveness window.  Without this, a ghost venue whose last snapshot
+    # was the May-8 switchover day generates its own tiny liveness window that marks
+    # every pool that was last seen on that day as "present on its venue's last full
+    # day" → ``available_to=None`` (false-active) — the +73 PANCAKESWAP_V3-BSC
+    # old-format discrepancy (2026-06-27).  Normalisation is a no-op for already-
+    # canonical or non-DeFi venues.
     venue_day_counts: dict[str, dict[date, int]] = {}
+    # Memoise canonicalization per unique raw venue string (the by_date walk hits
+    # the same venue thousands of times per run — avoid repeated UAC import calls).
+    _canon_venue_cache: dict[str, str] = {}
+
+    def _canonical_venue_key(raw: str) -> str:
+        cached = _canon_venue_cache.get(raw)
+        if cached is not None:
+            return cached
+        from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
+
+        canonical = canonicalize_defi_venue_combined(raw)
+        _canon_venue_cache[raw] = canonical
+        return canonical
 
     for day, frame in snapshots:
         all_days.add(day)
@@ -559,7 +621,8 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 continue
             _venue = str(row.get("venue") or "").strip()
             if _venue:
-                vc = venue_day_counts.setdefault(_venue, {})
+                _canonical_v = _canonical_venue_key(_venue)
+                vc = venue_day_counts.setdefault(_canonical_v, {})
                 vc[day] = vc.get(day, 0) + 1
             # DUAL-FORM lifecycle key (operator Refinement 1 + Phase 2 premature-delisting fix):
             # a DeFi POOL must accumulate ONE lifecycle keyed by its canonical pool
@@ -628,7 +691,12 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         #   3. else perp/spot: ACTIVE (None) iff present on its OWN venue's last FULL
         #      trading day; else last-seen (a genuine delisting, not a thin-day artefact).
         _raw_venue = str(agg.meta.get("venue") or "").strip()
-        _venue_full_day = venue_last_full.get(_raw_venue)
+        # venue_last_full is keyed on CANONICAL venue names (ghost-normalised);
+        # the aggregate's meta venue may still be the old ghost form if the
+        # instrument's last snapshot used the pre-switchover adapter — canonicalise
+        # before lookup so the liveness window resolves to the merged canonical entry.
+        _canonical_meta_venue = _canonical_venue_key(_raw_venue) if _raw_venue else _raw_venue
+        _venue_full_day = venue_last_full.get(_canonical_meta_venue)
         if agg.delisted_at is not None:
             available_to = agg.delisted_at.isoformat()
         elif agg.expiry is not None:
@@ -731,9 +799,14 @@ class _PredLifecycle:
     last_day: date
     venue: str
     instrument_type: str
-    #: min ``start_date`` / max ``end_date_iso`` across the per-date rows, when the
-    #: prediction instruments.parquet carries them (more precise than day-presence).
+    #: min ``start_date`` / max ``end_date_iso`` / min ``available_from_datetime``
+    #: across per-date rows — when the snapshot carries them (more precise than day-presence).
     created: str | None = None
+    #: ISO date string of the market's settlement day (max ``end_date_iso`` /
+    #: ``available_to_datetime`` across rows).  ``None`` when the snapshot provides no
+    #: settlement date.  Used as ``available_to`` in the catalogue (settlement-date
+    #: convention — prediction settlement / availability semantics SSOT:
+    #: ``codex/02-data/prediction-settlement-availability-convention.md``).
     settled: str | None = None
 
 
@@ -799,8 +872,13 @@ def build_prediction_catalogue_dataframe(
             ``instrument_id=cqg``;
           * one row per ``(venue, conditionId)`` for EACH of
             :data:`_PREDICTION_CID_DATA_TYPES`, ``instrument_id=conditionId``.
-        ``available_from`` = first day present; ``available_to`` = last day present
-        or ``None`` when present on the latest snapshot day (still active).
+        ``available_from`` = first day present; ``available_to`` = settlement date
+        (from ``end_date_iso`` / ``available_to_datetime``) when the snapshot carries
+        one, else last snapshot day (``None`` = open-ended when last_day >= latest_day).
+        Settlement-date convention: a market is considered active on day D iff
+        ``available_from <= D <= available_to``, which equals the set of days the
+        market is capturable — see SSOT
+        ``codex/02-data/prediction-settlement-availability-convention.md``.
     """
     cqg_acc: dict[tuple[str, str], _PredLifecycle] = {}
     cid_acc: dict[tuple[str, str], _PredLifecycle] = {}
@@ -831,8 +909,21 @@ def build_prediction_catalogue_dataframe(
                 continue
             saw_member = True
             itype = _str_field(row, "instrument_type")
-            created = _opt_field(row, "start_date") or _opt_field(row, "market_created_at")
-            settled = _opt_field(row, "end_date_iso") or _opt_field(row, "settlement_time")
+            created = (
+                _opt_field(row, "start_date")
+                or _opt_field(row, "market_created_at")
+                or _opt_field(row, "available_from_datetime")
+            )
+            # Collect the settlement date from whichever field the venue's snapshot
+            # format carries: raw Polymarket → ``end_date_iso``; IS-normalised KALSHI
+            # → ``available_to_datetime``; explicit settlement field → ``settlement_time``.
+            # This populates ``lc.settled`` so that ``_emit`` can set ``available_to``
+            # from the venue-declared settlement date (not from last-snapshot-day).
+            settled = (
+                _opt_field(row, "end_date_iso")
+                or _opt_field(row, "settlement_time")
+                or _opt_field(row, "available_to_datetime")
+            )
             cqg_itype = cqg_itype or itype
             if created and (cqg_created is None or created < cqg_created):
                 cqg_created = created
@@ -851,7 +942,22 @@ def build_prediction_catalogue_dataframe(
     rows: list[dict[str, str | None]] = []
 
     def _emit(entity_id: str, data_type: str, lc: _PredLifecycle) -> None:
-        available_to = None if lc.last_day >= latest_day else lc.last_day.isoformat()
+        # Settlement-date convention (SSOT: codex/02-data/prediction-settlement-availability-convention.md):
+        # ``available_to`` = the market's settlement DATE (inclusive last day), so
+        # ``available_from <= D <= available_to`` iff the market was live/capturable on D.
+        # Priority: (1) venue-declared settlement date in ``lc.settled``; (2) last
+        # snapshot day (open-ended ``None`` when last_day >= latest_day — still active).
+        settled_date = _parse_truth_date(lc.settled)
+        if settled_date is not None:
+            # Venue-declared settlement: use that as the inclusive upper bound.
+            # Cap at latest_day so genuinely future dates don't create a false "delisted"
+            # signal in the enumerator when the market is still live (settlement in future
+            # but already in a snapshot → mark open-ended until that day arrives).
+            available_to = None if settled_date >= latest_day else settled_date.isoformat()
+        elif lc.last_day >= latest_day:
+            available_to = None  # still active (open-ended)
+        else:
+            available_to = lc.last_day.isoformat()
         rows.append(
             {
                 "instrument_id": entity_id,
