@@ -33,7 +33,7 @@ RUN useradd --create-home --shell /bin/bash appuser
 WORKDIR /app/instruments-service
 
 # Install uv package manager (bootstrap with pip - acceptable exception per quality gate)
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv  # uv bootstrap — acceptable QG exception (bootstraps uv before uv is available)
 
 # Install keyring FIRST (before pip.conf) to avoid auth loop
 # keyring must be installed from PyPI, not Artifact Registry
