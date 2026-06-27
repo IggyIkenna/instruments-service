@@ -55,7 +55,11 @@ _TM_PER_LEAGUE_TIMEOUT_SECS: float = 600.0
 
 
 def _transfermarkt_mapping_blob_path(season: int) -> str:
-    return f"sports_reference/mappings/transfermarkt_league_teams/season={season}/teams.parquet"
+    # GCS Hive partition path produced by data_sink.write(partition={"transfermarkt_league_teams": "", "season": N}).
+    # Partition keys are sorted alphabetically by the data_sink → season= first, then transfermarkt_league_teams=.
+    # Previously pointed at transfermarkt_league_teams/season=N/ (wrong, never matched), causing a cache miss on
+    # every date and re-fetching ~595 teams from the API per date even on non-trigger dates.
+    return f"sports_reference/mappings/season={season}/transfermarkt_league_teams=/teams.parquet"
 
 
 def _write_transfermarkt_team_mapping(
