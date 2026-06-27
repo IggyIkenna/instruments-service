@@ -406,23 +406,26 @@ def _write_tradfi_non_trading_day_entries(
     non_error_venues: set[str],
     counts: dict[str, int],
     manifest_for_venue: Callable[[str], _orch.ManifestWriter],
-) -> None:
+) -> set[str]:
     """Write 0-count manifest entries for TRADFI venues that returned 0 instruments
     because the date is a non-trading day (weekend/holiday).
 
     Without this, those venues have no manifest entry and appear as permanent gaps
     in the data status. ``manifest_for_venue`` allows the caller to route each
     venue to the correct per-group manifest (required for ALL-group runs).
-    """
 
+    Returns the set of non-trading venue names that were stamped so the caller can
+    suppress regular parquet writes for them (see the per-venue loop in
+    ``_write_all_venues``).
+    """
     _tradfi_set = frozenset(_orch._TRADFI_VENUES)
     tradfi_empty = {v for v in (non_error_venues - set(counts.keys())) if v in _tradfi_set}
     if not tradfi_empty:
-        return
+        return set()
     target_dt = _orch.date_type.fromisoformat(date)
     non_trading = {v for v in tradfi_empty if _orch.is_non_trading_day(v, target_dt)}
     if not non_trading:
-        return
+        return set()
     _nt_attempt_ts = _orch.datetime.now(_orch.UTC)
     for venue in sorted(non_trading):
         # Honest-coverage Phase 2.E.2: discriminate weekend vs holiday so the
@@ -440,6 +443,51 @@ def _write_tradfi_non_trading_day_entries(
         date,
         sorted(non_trading),
     )
+    return non_trading
+
+
+def _pre_stamp_non_trading_tradfi(
+    *,
+    date: str,
+    records: list[_orch.InstrumentRecord],
+    non_error_venues: set[str],
+    manifest_for_venue: Callable[[str], _orch.ManifestWriter],
+    counts: dict[str, int],
+) -> set[str]:
+    """Identify tradfi venues that are non-trading on ``date`` and pre-stamp
+    ``empty_confirmed`` for them before the per-venue write loop runs.
+
+    Scoped to venues that *actually ran* this call (present in ``non_error_venues``
+    or appearing in ``records``) so a CEFI-only call never stamps CME/NASDAQ.
+
+    FX is declared 24/7 — ``is_non_trading_day("FX", …)`` always returns ``False``
+    and FX will never appear in the returned set.
+
+    Returns the set of non-trading tradfi venues that were stamped (callers suppress
+    parquet writes for these venues to avoid writing look-back artefacts as captured).
+    """
+    _tradfi_set = frozenset(_orch._TRADFI_VENUES)
+    _attempted = _tradfi_set & (non_error_venues | {r.venue for r in records})
+    target_dt = _orch.date_type.fromisoformat(date)
+    non_trading: set[str] = {v for v in _attempted if _orch.is_non_trading_day(v, target_dt)}
+    if not non_trading:
+        return set()
+    _nt_attempt_ts = _orch.datetime.now(_orch.UTC)
+    for _ntv in sorted(non_trading):
+        _nt_reason = _orch.non_trading_day_reason(_ntv, target_dt) or "EXPECTED_WEEKEND"
+        manifest_for_venue(_ntv).record_expected_empty(
+            row_key={"date": date, "venue": _ntv},
+            reason=_nt_reason,
+            attempted_at=_nt_attempt_ts,
+            pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+        )
+        counts[_ntv] = 0
+    _orch.logger.info(
+        "TRADFI non-trading day (pre-stamp): date=%s venues=%s — wrote empty_confirmed entries",
+        date,
+        sorted(non_trading),
+    )
+    return non_trading
 
 
 def _write_all_venues(
@@ -466,41 +514,19 @@ def _write_all_venues(
             "sample_dir": _orch._uc.csv_sample_dir,
         }
     )
-    # Resolve the primary asset group and the per-venue bucket router.
-    #
-    # For single-AG runs (e.g. "--asset-group CEFI"), primary_asset_group = "cefi"
-    # and all venues share one (bucket, sink, manifest) — the existing fast path.
-    #
-    # For ALL-group runs ("--asset-group" omitted), asset_groups = ["ALL"].
-    # "ALL" is NOT a valid bucket key; _get_instruments_bucket("ALL") raises
-    # BucketNamingError.  We resolve the bucket PER VENUE so CEFI instruments
-    # land in the CEFI bucket, DeFi in the DeFi bucket, sports in the sports
-    # bucket, and prediction in the prediction bucket.
-    #
-    # ``_is_all_run`` is the discriminator.  When True we use a per-bucket
-    # dict of (sink, lifecycle_sink, manifest) keyed by resolved bucket name.
-    # The "primary" bucket (sports) is returned in WriteOutcome so downstream
-    # stages that need ONE bucket (sports enrichment, completeness check) keep
-    # working correctly.
+    # ALL runs use per-venue bucket routing; single-AG runs share one bucket.
+    # _is_all_run is the discriminator — "ALL" is not a valid bucket key.
     _raw_primary = asset_groups[0] if asset_groups else None
     _is_all_run = _raw_primary is None or _raw_primary.upper() == "ALL"
-    # Primary bucket: "sports" for ALL runs (correct for downstream sports
-    # stages); per-group bucket otherwise (existing single-AG behaviour).
+    # Primary bucket: "sports" for ALL runs (downstream sports stages need one bucket).
     primary_asset_group: str | None = "sports" if _is_all_run else _raw_primary
     bucket = _orch._get_instruments_bucket(primary_asset_group)
-    # prefix ensures writes land at instrument_availability/by_date/{day=X}/{venue=Y}/
     sink = _orch.get_data_sink(bucket=bucket, prefix="instrument_availability/by_date")
-    # Separate sink for prediction market lifecycle parquet (per predictions_master Phase 3 L618).
-    # Path: market_lifecycle/by_canonical_group/group={g}/day={d}/market_lifecycle.parquet
+    # Prediction market lifecycle parquet (predictions_master Phase 3 L618).
     lifecycle_sink = _orch.get_data_sink(bucket=bucket, prefix="market_lifecycle/by_canonical_group")
-
     manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
 
-    # Per-bucket helper objects for ALL runs: lazily created on first use so
-    # asset groups whose records are absent produce no spurious GCS round-trips.
-    # Keyed by resolved bucket name (string).
-    # Pre-seeded with the primary bucket objects to avoid creating a duplicate
-    # ManifestWriter for the primary bucket (would cause double-writes to GCS).
+    # Per-bucket helpers for ALL runs: lazily created, pre-seeded with primary bucket.
     _extra_sinks: dict[str, _orch.DataSink] = {bucket: sink}
     _extra_lc_sinks: dict[str, _orch.DataSink] = {bucket: lifecycle_sink}
     _extra_manifests: dict[str, _orch.ManifestWriter] = {bucket: manifest}
@@ -525,6 +551,20 @@ def _write_all_venues(
         if not _is_all_run:
             return bucket
         return _orch._get_instruments_bucket(_asset_group_for_venue(venue_str))
+
+    # Identify tradfi venues that are non-trading on this date and pre-stamp
+    # empty_confirmed for them.  Scoped to venues that actually ran (union of
+    # non_error_venues and record venues) so a CEFI-only run never stamps CME/NASDAQ.
+    # FX is 24/7 and is never in the returned set.  The write loop skips parquet
+    # writes for these venues (look-back artefact suppression — see helper docstring).
+    _tradfi_set_w = frozenset(_orch._TRADFI_VENUES)
+    _non_trading_tradfi = _pre_stamp_non_trading_tradfi(
+        date=date,
+        records=records,
+        non_error_venues=non_error_venues,
+        manifest_for_venue=lambda v: _manifest_for_bucket(_get_venue_bucket(v)),
+        counts=counts,
+    )
 
     if "venue" in df.columns:
         for venue_name, venue_df in df.groupby("venue"):
@@ -557,6 +597,20 @@ def _write_all_venues(
                     counts=counts,
                     sampler=sampler,
                 )
+            elif venue_str in _non_trading_tradfi:
+                # Non-trading day for this TradFi venue: the adapter returned records
+                # via its look-back window (e.g. DBEQ.BASIC 5-day equity look-back
+                # surfaces Friday's definitions on a Saturday query).  These records
+                # must NOT be written as captured for the non-trading date — the
+                # empty_confirmed stamp was already written in the pre-stamp block above.
+                # Shard-level isolation: log + skip, never raise.
+                _orch.logger.info(
+                    "TRADFI non-trading day: suppressing %d records for venue=%s date=%s "
+                    "(look-back artefact — empty_confirmed already stamped)",
+                    len(venue_df),
+                    venue_str,
+                    date,
+                )
             else:
                 _orch._write_venue(venue_str, venue_df, date, _v_bucket, _v_sink, counts, sampler, _v_manifest)
                 # Phase 4.2 (tradfi_canonical_futures_contract_hard_required_fields_2026_05_13):
@@ -566,7 +620,7 @@ def _write_all_venues(
                 # from InstrumentRecord.expiry using physical/cash-settled conventions.
                 # Shard-level isolation: a write failure here does NOT abort the instruments
                 # write — the futures_contracts.parquet is best-effort on the same date.
-                if venue_str in frozenset(_orch._TRADFI_VENUES):
+                if venue_str in _tradfi_set_w:
                     _venue_instrument_records = [r for r in records if r.venue == venue_str]
                     _orch._write_futures_contracts(
                         venue_str=venue_str,
@@ -578,10 +632,13 @@ def _write_all_venues(
     else:
         _orch._write_venue("all", df, date, bucket, sink, counts, sampler, manifest)
 
-    # Write 0-count manifest entries for TRADFI non-trading days.
+    # Write 0-count manifest entries for TRADFI non-trading days where the adapter
+    # returned zero records (i.e. venues in non_error_venues but not yet in counts).
+    # Non-trading venues that DID surface records (look-back artefacts) were already
+    # pre-stamped above and are excluded here via set subtraction.
     _write_tradfi_non_trading_day_entries(
         date=date,
-        non_error_venues=non_error_venues,
+        non_error_venues=non_error_venues - _non_trading_tradfi,
         counts=counts,
         manifest_for_venue=lambda v: _manifest_for_bucket(_get_venue_bucket(v)) if _is_all_run else manifest,
     )
