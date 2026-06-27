@@ -30,7 +30,7 @@ from instruments_service.engine.orchestrator import (
 class TestCacheBlobPaths:
     def test_transfermarkt_path_partitioned_by_season(self) -> None:
         assert _transfermarkt_mapping_blob_path(2024) == (
-            "sports_reference/mappings/transfermarkt_league_teams/season=2024/teams.parquet"
+            "sports_reference/mappings/season=2024/transfermarkt_league_teams=/teams.parquet"
         )
 
     def test_sfi_path_flat(self) -> None:
@@ -132,7 +132,7 @@ class TestReadTransfermarktTeamMapping:
         assert len(result) == 1
         mock_storage.download_bytes.assert_called_once_with(
             "bucket",
-            "sports_reference/mappings/transfermarkt_league_teams/season=2024/teams.parquet",
+            "sports_reference/mappings/season=2024/transfermarkt_league_teams=/teams.parquet",
         )
 
     def test_returns_none_on_exception(self) -> None:
