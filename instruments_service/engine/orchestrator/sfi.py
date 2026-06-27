@@ -415,6 +415,8 @@ async def _fetch_sfi_data(
 
                         for _pp_lid, _pp_league_df in _with_league.groupby("league_id"):
                             _pp_lid_str = str(_pp_lid)
+                            if not _orch._is_in_canonical_write_universe(_pp_lid_str):
+                                continue
                             _sfi_pp_captured.add(_pp_lid_str)
                             # C.6: use report_time (match_end + SFI_DATA_LAG_P95_SECONDS) as available_at for
                             # completed matches — more accurate than timer_seconds approximation. For in-progress

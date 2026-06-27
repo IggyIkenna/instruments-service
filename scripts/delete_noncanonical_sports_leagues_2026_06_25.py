@@ -39,6 +39,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
+from unified_api_contracts.sports import get_expected_leagues_for_source
 from unified_trading_library import resolve_bucket_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -88,35 +89,22 @@ def _blank(series: pd.Series) -> pd.Series:
     return s.isin(["", "none", "None", "nan", "NaN", "<NA>"])
 
 
-def _load_canonical_league_ids(df: pd.DataFrame) -> frozenset[str]:
-    """Derive canonical league IDs from the seed/index.
+def _load_canonical_league_ids() -> frozenset[str]:
+    """Derive canonical league IDs from UAC get_expected_leagues_for_source.
 
-    Canonical = has a non-blank league_id AND appears with data_type=LEAGUES at source=api_football.
-    Falls back to: all non-blank league_ids that appear for FIXTURES (highest-confidence canonical type).
+    Uses the authoritative UAC set (same source as _is_in_canonical_write_universe),
+    not the index contents — post-canonicalization the index `source` column reads
+    'instruments_service', so old LEAGUES+api_football filter returns 0 rows (2026-06-27).
     """
-    if "league_id" not in df.columns:
-        raise ValueError("No 'league_id' column in dataframe — cannot derive canonical set")
-
-    # Primary: LEAGUES rows from api_football with a valid league_id
-    mask_leagues = df.get("data_type", pd.Series(dtype=str)) == "LEAGUES"
-    mask_af = df.get("source", pd.Series(dtype=str)) == "api_football"
-    mask_valid_lid = ~_blank(df["league_id"])
-
-    canonical_via_leagues = set(df.loc[mask_leagues & mask_af & mask_valid_lid, "league_id"].dropna().unique())
-
-    if len(canonical_via_leagues) >= _CANONICAL_LEAGUE_COUNT:
-        logger.info("Canonical set derived from LEAGUES+api_football rows: %d leagues", len(canonical_via_leagues))
-        return frozenset(canonical_via_leagues)
-
-    # Fallback: FIXTURES rows (broad canonical footprint)
-    mask_fixtures = df.get("data_type", pd.Series(dtype=str)) == "FIXTURES"
-    canonical_via_fixtures = set(df.loc[mask_fixtures & mask_valid_lid, "league_id"].dropna().unique())
-    logger.info(
-        "Canonical set fallback via FIXTURES rows: %d leagues (LEAGUES+af gave %d)",
-        len(canonical_via_fixtures),
-        len(canonical_via_leagues),
-    )
-    return frozenset(canonical_via_fixtures)
+    canonical_ids = frozenset(lg.league_id for lg in get_expected_leagues_for_source("api_football"))
+    logger.info("Canonical set loaded from UAC get_expected_leagues_for_source: %d leagues", len(canonical_ids))
+    if len(canonical_ids) < _CANONICAL_LEAGUE_COUNT:
+        logger.warning(
+            "UAC returned fewer than %d canonical leagues (%d) — verify UAC data",
+            _CANONICAL_LEAGUE_COUNT,
+            len(canonical_ids),
+        )
+    return canonical_ids
 
 
 def _delete_noncanonical_rows(
@@ -221,9 +209,9 @@ def _process_parquet(
     df = pd.read_parquet(tmp_in)
     logger.info("%s: loaded %d rows", blob_label, len(df))
 
-    # Derive canonical IDs from the first parquet we process (seed), then reuse for index
+    # Derive canonical IDs from UAC (same set used at write time), reuse for index
     if canonical_ids is None:
-        canonical_ids = _load_canonical_league_ids(df)
+        canonical_ids = _load_canonical_league_ids()
         logger.info("%s: derived %d canonical league IDs", blob_label, len(canonical_ids))
 
     df, n_deleted, deleted_ids = _delete_noncanonical_rows(df, canonical_ids, blob_label)
