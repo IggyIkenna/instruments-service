@@ -250,6 +250,11 @@ def _write_fixtures_per_league(
 
     for _lid, _ldf in _with_league.groupby(_league_col):
         _lid_str = str(_lid)
+        _canonical_lid = _orch._canonical_league_id(_lid_str)
+        # WRITE-UNIVERSE gate: never write fixtures for a league outside the tracked
+        # api_football set — non-canonical leagues pollute the IS index (2026-06-27).
+        if not _orch._is_in_canonical_write_universe(_canonical_lid):
+            continue
         _ldf_clean = _orch.stamp_available_at_explicit(
             _ldf.drop(columns=["_canonical_league_id"], errors="ignore"), when=_orch.datetime.now(_orch.UTC)
         )
@@ -261,18 +266,16 @@ def _write_fixtures_per_league(
             skip_if_unchanged
             and bucket
             and _orch._per_league_fixtures_data_unchanged(
-                bucket, date, "fixtures_schedule", _orch._canonical_league_id(_lid_str), _ldf_clean
+                bucket, date, "fixtures_schedule", _canonical_lid, _ldf_clean
             )
         ):
             _orch.logger.debug(
                 "FIXTURES skip-if-unchanged: day=%s league=%s (source=%s) unchanged — skipping re-write",
                 date,
-                _orch._canonical_league_id(_lid_str),
+                _canonical_lid,
                 source_label,
             )
             continue
-
-        _canonical_lid = _orch._canonical_league_id(_lid_str)
 
         # --- Entity-split (fixture-schedule-split Phase 4) ---
         # FIXTURES_SCHEDULE: schedule + Q5 phase timestamps. Excludes Q6 outcome

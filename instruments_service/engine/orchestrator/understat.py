@@ -173,6 +173,9 @@ async def _fetch_understat_xg(
 
                 for _xg_lid, _xg_league_df in _with_league.groupby("league"):
                     _xg_lid_str = str(_xg_lid)
+                    _xg_canonical = _orch._canonical_league_id(_xg_lid_str)
+                    if not _orch._is_in_canonical_write_universe(_xg_canonical):
+                        continue
                     _captured_leagues.add(_xg_lid_str)
                     # C.6: available_at = kickoff + 24h already set on df at line ~5688 (understat
                     # data scraped the day after). Preserve it; fill NaT rows (missing kickoff_utc)
@@ -185,18 +188,18 @@ async def _fetch_understat_xg(
                     _orch._gated_sink_write(
                         sink,
                         data=_stamped_xg_df,
-                        partition={"entity": "understat_xg", "league": _orch._canonical_league_id(_xg_lid_str)},
+                        partition={"entity": "understat_xg", "league": _xg_canonical},
                         filename="understat_xg.parquet",
                         venue="understat",
                         entity="understat_xg",
                     )
                     xg_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
-                        row_key={"date": date, "data_type": "XG", "league_id": _orch._canonical_league_id(_xg_lid_str)},
+                        row_key={"date": date, "data_type": "XG", "league_id": _xg_canonical},
                         df=_stamped_xg_df,
                         asset_group="sports",
                         instrument_type="",
                         data_type="XG",
-                        league_id=_orch._canonical_league_id(_xg_lid_str),
+                        league_id=_xg_canonical,
                         pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
                         source=_orch._sports_ref_source("understat_xg"),
                         service_emission_state=None,
@@ -440,6 +443,8 @@ async def _run_understat_shots_date(
 
         for lid, shot_rows in league_shots.items():
             if not shot_rows:
+                continue
+            if not _orch._is_in_canonical_write_universe(lid):
                 continue
             _captured_leagues.add(lid)
             df = _orch.pd.DataFrame(shot_rows)
