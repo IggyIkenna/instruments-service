@@ -561,6 +561,155 @@ def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleTy
 
 
 # ---------------------------------------------------------------------------
+# Settlement-date convention tests (prediction available_to = settlement day)
+# SSOT: codex/02-data/prediction-settlement-availability-convention.md
+# ---------------------------------------------------------------------------
+
+
+def test_prediction_rollup_end_date_iso_used_as_available_to(rollup: ModuleType) -> None:
+    """POLYMARKET-style raw snapshot: ``end_date_iso`` sets ``available_to`` (settlement
+    date), not last-seen snapshot day.
+
+    Convention: available_to = settlement date (inclusive last day).  A market settling
+    on Jun 26 has available_to=Jun 26 even if it appeared in an earlier snapshot.
+    """
+    d1 = date(2026, 6, 24)  # snapshot day (earlier than settlement)
+    d2 = date(2026, 6, 26)  # settlement date in the row
+    latest = date(2026, 6, 29)  # catalogue's latest snapshot day (far future)
+
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "0xdeadbeef",
+                        "venue": "POLYMARKET",
+                        "end_date_iso": "2026-06-26T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+        # The "latest" day is provided via a dummy row to set latest_day = latest.
+        (
+            latest,
+            "POLYMARKET",
+            "",
+            _pred_snap([{"instrument_key": "0xfuture", "venue": "POLYMARKET"}]),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["instrument_id"] == "0xdeadbeef" and r["data_type"] == "trades")
+    # available_to must be the settlement date (Jun 26), NOT the last-seen day (Jun 24).
+    assert row["available_to"] == d2.isoformat(), (
+        f"Expected available_to={d2.isoformat()!r} (settlement date) but got {row['available_to']!r}. "
+        "The settlement-date convention requires available_to to equal the market's settlement day, "
+        "so that 'catalogue active on D' == 'manifest captured on D' for the reconciliation check."
+    )
+    # settlement_time should carry the raw value.
+    assert row["settlement_time"] == "2026-06-26T00:00:00Z"
+
+
+def test_prediction_rollup_available_to_datetime_used_as_settlement(rollup: ModuleType) -> None:
+    """KALSHI-style normalised snapshot: ``available_to_datetime`` (a Timestamp) sets
+    ``available_to`` as the settlement date.
+
+    KALSHI's IS-normalised by_date parquet carries ``instrument_key`` +
+    ``available_to_datetime`` (a tz-aware Timestamp); the raw ``end_date_iso`` /
+    ``settlement_time`` columns are absent.  The catalogue must still extract the
+    settlement day from ``available_to_datetime``.
+    """
+    d1 = date(2026, 6, 25)  # snapshot day
+    settlement_ts = pd.Timestamp("2026-06-27 05:59:59+00:00")
+    latest = date(2026, 6, 29)
+
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "BTC_UP_DOWN_DAILY",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KXBTCUSD-26JUN27",
+                        "venue": "KALSHI",
+                        "instrument_type": "prediction_market",
+                        "available_to_datetime": settlement_ts,
+                    }
+                ]
+            ),
+        ),
+        (latest, "KALSHI", "BTC_UP_DOWN_DAILY", _pred_snap([{"instrument_key": "0xfuture", "venue": "KALSHI"}])),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["instrument_id"] == "KXBTCUSD-26JUN27" and r["data_type"] == "trades")
+    # The Timestamp's DATE (Jun 27) should be the available_to.
+    assert row["available_to"] == "2026-06-27", (
+        f"Expected available_to='2026-06-27' from available_to_datetime but got {row['available_to']!r}."
+    )
+
+
+def test_prediction_rollup_settlement_date_convention_boundary(rollup: ModuleType) -> None:
+    """Logical-reconciliation boundary: ``available_to`` equals the settlement date so that
+    ``available_from <= D <= available_to`` is TRUE on the settlement day and FALSE on D+1.
+
+    This verifies the ``catalogue-active-on-D == manifest-captured-on-D`` property for the
+    same-day-settled market case (the 2,177-market off-by-one the operator observed):
+    a market settling Jun 26 must have ``available_to = Jun 26``, making it active on Jun 26
+    (matching the manifest captured count) and inactive on Jun 27 (not counted on Jun 27).
+    """
+    settlement_day = date(2026, 6, 26)
+    d_before = date(2026, 6, 25)
+    d_after = date(2026, 6, 27)
+    latest = date(2026, 6, 29)
+
+    snapshots = [
+        (
+            d_before,
+            "POLYMARKET",
+            "MISC_NOVELTY",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "0xmarket1",
+                        "venue": "POLYMARKET",
+                        "end_date_iso": f"{settlement_day.isoformat()}T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+        (latest, "POLYMARKET", "MISC_NOVELTY", _pred_snap([{"instrument_key": "0xfuture", "venue": "POLYMARKET"}])),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["instrument_id"] == "0xmarket1" and r["data_type"] == "trades")
+
+    # The ``available_to`` must be the settlement date string, not the last-seen day.
+    assert row["available_to"] == settlement_day.isoformat(), (
+        f"Settlement-date convention: available_to must equal {settlement_day!r} "
+        f"(settlement date) but got {row['available_to']!r}."
+    )
+
+    # Verify the boundary directly using the date-range check the enumerator uses:
+    avail_from = pd.Timestamp(row["available_from"])
+    avail_to = pd.Timestamp(row["available_to"])
+    d_on_ts = pd.Timestamp(settlement_day)
+    d_after_ts = pd.Timestamp(d_after)
+
+    # Settlement day inclusive: market IS active on Jun 26 (catalogue active == manifest captured).
+    assert avail_from <= d_on_ts <= avail_to, (
+        f"Market should be ACTIVE on settlement day {settlement_day} "
+        f"(available_from={row['available_from']}, available_to={row['available_to']})"
+    )
+    # Day after exclusive: market NOT active on Jun 27 (matches manifest no-longer-captured).
+    assert d_after_ts > avail_to, (
+        f"Market should be INACTIVE on {d_after} (day after settlement), "
+        f"but available_to={row['available_to']!r} <= {d_after!r}."
+    )
+
+
+# ---------------------------------------------------------------------------
 # build_sports_catalogue_dataframe — LEAGUE-grain roll-up (entity=leagues)
 # ---------------------------------------------------------------------------
 
@@ -1206,3 +1355,175 @@ def test_bounded_parallel_load_propagates_exception(rollup: ModuleType) -> None:
 
     with pytest.raises(ValueError, match="blob 7 unreadable"):
         list(rollup._bounded_parallel_load(list(range(20)), _boom, max_workers=4))
+
+
+# ---------------------------------------------------------------------------
+# Dual-key ghost collapse — AAVE_V3 / COMPOUND_V3 (+171 / +26 triad fix)
+# 2026-06-27: non-pool DeFi lending rows whose instrument_id prefix is a
+# no-underscore ghost form (AAVEV3- / COMPOUNDV3-) must collapse onto the
+# canonical key (AAVE_V3- / COMPOUND_V3-) via _canonical_instrument_id.
+# ---------------------------------------------------------------------------
+
+
+def test_rollup_non_pool_defi_ghost_lending_collapses_to_one_lifecycle(rollup: ModuleType) -> None:
+    """AAVE_V3 lending dual-key ghost fix: the same lending market under the
+    old ghost instrument_key prefix (``AAVEV3-ARBITRUM:A_TOKEN:USDC``) and the
+    new canonical prefix (``AAVE_V3-ARBITRUM:A_TOKEN:USDC``) collapses to ONE
+    catalogue row, NOT two.  Without the fix both keys produced separate rows
+    each marked active → +171 AAVE_V3 catalogue over-count vs manifest.
+    """
+    d_old = date(2026, 5, 1)   # old adapter (ghost prefix AAVEV3-)
+    d_switch = date(2026, 5, 8)  # adapter switched to canonical AAVE_V3-
+    d_now = date(2026, 6, 20)  # recent snapshot (canonical)
+
+    ghost_row = {
+        "instrument_key": "AAVEV3-ARBITRUM:A_TOKEN:USDC",
+        "venue": "AAVEV3-ARBITRUM",
+        "instrument_type": "lending",
+        "chain": "",
+    }
+    canonical_row = {
+        "instrument_key": "AAVE_V3-ARBITRUM:A_TOKEN:USDC",
+        "venue": "AAVE_V3-ARBITRUM",
+        "instrument_type": "lending",
+        "chain": "",
+    }
+    df = rollup.build_catalogue_dataframe(
+        [
+            (d_old, _snapshot([ghost_row])),
+            (d_switch, _snapshot([canonical_row])),
+            (d_now, _snapshot([canonical_row])),
+        ]
+    )
+    lending_rows = df[df["instrument_type"].astype(str).str.lower() == "lending"].to_dict("records")
+    # Must collapse to exactly ONE row (not two).
+    assert len(lending_rows) == 1, (
+        f"Expected 1 lending row (ghost+canonical collapsed) but got {len(lending_rows)}. "
+        "The dual-key ghost collapse fix is missing."
+    )
+    row = lending_rows[0]
+    # available_to=None: the market is present on the latest day (d_now).
+    assert row["available_to"] is None, (
+        f"Expected available_to=None (active on latest day) but got {row['available_to']!r}."
+    )
+    # available_from spans the first (ghost) day.
+    assert row["available_from"] == d_old.isoformat()
+
+
+def test_rollup_compound_v3_ghost_collapses_like_aave_v3(rollup: ModuleType) -> None:
+    """COMPOUND_V3 lending dual-key ghost: ``COMPOUNDV3-BASE:SUPPLY:USDC`` and
+    ``COMPOUND_V3-BASE:SUPPLY:USDC`` must collapse to ONE row."""
+    d_old = date(2026, 4, 1)
+    d_now = date(2026, 6, 20)
+
+    ghost_row = {
+        "instrument_key": "COMPOUNDV3-BASE:SUPPLY:USDC",
+        "venue": "COMPOUNDV3-BASE",
+        "instrument_type": "lending",
+        "chain": "",
+    }
+    canonical_row = {
+        "instrument_key": "COMPOUND_V3-BASE:SUPPLY:USDC",
+        "venue": "COMPOUND_V3-BASE",
+        "instrument_type": "lending",
+        "chain": "",
+    }
+    df = rollup.build_catalogue_dataframe(
+        [
+            (d_old, _snapshot([ghost_row])),
+            (d_now, _snapshot([canonical_row])),
+        ]
+    )
+    lending_rows = df[df["instrument_type"].astype(str).str.lower() == "lending"].to_dict("records")
+    assert len(lending_rows) == 1, (
+        f"COMPOUND_V3 ghost collapse failed: got {len(lending_rows)} rows."
+    )
+    assert lending_rows[0]["available_to"] is None  # active on latest day (d_now)
+
+
+# ---------------------------------------------------------------------------
+# PANCAKESWAP_V3-BSC old-format false-actives fix — §7.3 liveness via
+# canonical venue_day_counts (+73 triad discrepancy 2026-06-27).
+# ---------------------------------------------------------------------------
+
+
+def test_rollup_ghost_venue_liveness_merges_into_canonical_window(rollup: ModuleType) -> None:
+    """A ghost-venue pool stopped May 8; the canonical venue is still active today.
+
+    Without the fix: ghost venue ``PANCAKESWAPV3-BSC`` last full day = May 8 →
+    every pool with last_day=May 8 gets ``available_to=None`` (false-active).
+    With the fix: venue_day_counts is keyed on the CANONICAL venue, so the ghost
+    and canonical forms merge into one window extending to today → pools that
+    stopped May 8 are correctly delisted (``available_to=2026-05-08``).
+    """
+    addr_stopped = "0xdeadpool000000000000000000000000000000000"
+    addr_active = "0xlivepool000000000000000000000000000000000"
+
+    d_old = date(2026, 4, 1)
+    d_stop = date(2026, 5, 8)  # last day under the ghost venue
+    d_now = date(2026, 6, 20)  # captured under canonical venue today
+
+    # A pool that only existed under the OLD ghost venue (stopped May 8).
+    ghost_stopped = {
+        "instrument_key": "PANCAKESWAPV3-BSC:POOL:CAKE-BNB:500",
+        "venue": "PANCAKESWAPV3-BSC",
+        "instrument_type": "POOL",
+        "raw_symbol": addr_stopped,
+        "pool_address": addr_stopped,
+        "base_asset": "CAKE",
+        "quote_asset": "BNB",
+        "pool_fee_tier": 5.0,
+    }
+    # A pool that is STILL active — appeared under ghost May 8, new canonical today.
+    ghost_active = {
+        **ghost_stopped,
+        "instrument_key": "PANCAKESWAPV3-BSC:POOL:CAKE-USDT:2500",
+        "raw_symbol": addr_active,
+        "pool_address": addr_active,
+        "quote_asset": "USDT",
+    }
+    # Canonical form of the active pool (same pool_address → merges via pool:: key).
+    canonical_active = {
+        **ghost_active,
+        "instrument_key": "PANCAKESWAP_V3-BSC:POOL:CAKE-USDT:2500",
+        "venue": "PANCAKESWAP_V3-BSC",
+    }
+
+    # Add many canonical pools on d_old, d_stop, d_now to make it a "full" venue day.
+    full_canon = [
+        {
+            "instrument_key": f"PANCAKESWAP_V3-BSC:POOL:TOK{i}-BNB:500",
+            "venue": "PANCAKESWAP_V3-BSC",
+            "instrument_type": "POOL",
+            "raw_symbol": f"0x{i:040x}",
+            "pool_address": f"0x{i:040x}",
+            "base_asset": f"TOK{i}",
+            "quote_asset": "BNB",
+            "pool_fee_tier": 5.0,
+        }
+        for i in range(1, 21)  # 20 canonical pools — makes d_old/d_stop/d_now full days
+    ]
+
+    df = rollup.build_catalogue_dataframe(
+        [
+            (d_old, _snapshot([ghost_stopped, ghost_active, *full_canon])),
+            (d_stop, _snapshot([ghost_stopped, ghost_active, *full_canon])),
+            (d_now, _snapshot([canonical_active, *full_canon])),
+        ]
+    )
+    by_addr = {row["instrument_id"]: row for row in df.to_dict("records") if row["instrument_type"] == "POOL"}
+
+    # The pool that stopped May 8 (no canonical equivalent) must be DELISTED.
+    assert addr_stopped in by_addr, "Stopped pool should still be in catalogue (just delisted)."
+    assert by_addr[addr_stopped]["available_to"] == d_stop.isoformat(), (
+        f"Stopped pool should have available_to={d_stop.isoformat()!r} (last seen May 8), "
+        f"but got {by_addr[addr_stopped]['available_to']!r}. "
+        "The §7.3 ghost-venue liveness-merge fix is missing."
+    )
+
+    # The pool that is active under the canonical venue today must be ACTIVE.
+    assert addr_active in by_addr
+    assert by_addr[addr_active]["available_to"] is None, (
+        f"Active pool (still captured today) should be active (available_to=None), "
+        f"but got {by_addr[addr_active]['available_to']!r}."
+    )
