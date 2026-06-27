@@ -46,6 +46,8 @@ COPY pip.conf /etc/pip.conf
 COPY . .
 
 # Install service dependencies (base image already has UTL + UAC pre-installed)
+ARG SETUPTOOLS_SCM_PRETEND_VERSION_FOR_INSTRUMENTS_SERVICE
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_INSTRUMENTS_SERVICE=${SETUPTOOLS_SCM_PRETEND_VERSION_FOR_INSTRUMENTS_SERVICE:-}
 RUN uv pip install --system --no-sources -e .
 
 # Create data directories
