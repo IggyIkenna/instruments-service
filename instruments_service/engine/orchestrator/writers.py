@@ -51,6 +51,16 @@ def _canonical_manifest_venue_chain(venue_str: str) -> tuple[str, str]:
     """
     if "-" not in venue_str:
         return venue_str, ""
+    # On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET)
+    # are GLUED ``VENUE-CHAIN`` strings whose suffix IS a KNOWN_CHAIN, but they are
+    # CeFi venues (in ``_CEFI_VENUES``, like HYPERLIQUID/ASTER) — NOT defi pools. The
+    # split below is the DeFi PROTOCOL-CHAIN→venue+chain rule; applying it to these
+    # mis-stamped the manifest ``asset_group=defi`` + ``chain=<L2>`` (the G1.3 320-row
+    # contamination). Keep them as the full cefi venue with ``chain=""`` so the
+    # manifest row matches the by_date PATH (``venue=LIGHTER-ZKSYNC``) and the cefi
+    # asset_group resolution at the call site (_cat = "cefi" when chain is "").
+    if venue_str in _orch._CEFI_VENUES:
+        return venue_str, ""
     from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: imports-inside-functions
         KNOWN_CHAINS,
         parse_defi_venue,

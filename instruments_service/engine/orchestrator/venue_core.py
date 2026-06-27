@@ -36,6 +36,7 @@ __all__ = [
     "filter_instruments_by_date",
     "get_venues_for_asset_groups",
     "is_venue_available",
+    "reject_junk_instruments",
 ]
 
 
@@ -245,6 +246,62 @@ def filter_instruments_by_date(
                     )
             result.append(r)
     return result
+
+
+#: Known test / placeholder instrument BASES that leak from venue test listings
+#: (e.g. exchange-internal smoke symbols). Compared case-insensitively against the
+#: record's base_asset / raw_symbol / instrument_key. Non-ASCII rejection (below)
+#: already catches the CJK/meme junk (龙虾 / 币安人生 / 我踏马来了); this set covers
+#: ASCII placeholders venues occasionally list. Extend as new junk is observed.
+_KNOWN_TEST_BASES: frozenset[str] = frozenset({"TEST", "TESTUSDT", "DUMMY", "PLACEHOLDER"})
+
+
+def _is_junk_instrument(record: object) -> tuple[bool, str]:
+    """Return ``(is_junk, reason)`` for a fetched instrument record (§1.5 noise guard).
+
+    A capture-correctness reject (G1.4): an instrument whose identity carries a
+    NON-ASCII character (the 2026-06-24 audit found CJK/meme test bases —
+    龙虾/币安人生/我踏马来了 — on BINANCE/BITGET/ASTER) or a known ASCII test base is
+    junk and must NOT enter ``by_date/``. Checks ``base_asset``, ``raw_symbol`` and
+    ``instrument_key`` so the reject fires regardless of which field carries the junk.
+    Pure + side-effect-free (the caller logs + drops).
+    """
+    base = (getattr(record, "base_asset", None) or "").strip()
+    raw_symbol = (getattr(record, "raw_symbol", None) or "").strip()
+    key = (getattr(record, "instrument_key", None) or "").strip()
+    for field in (base, raw_symbol, key):
+        if field and not field.isascii():
+            return True, f"non-ascii ({field!r})"
+    if base.upper() in _KNOWN_TEST_BASES:
+        return True, f"known-test-base ({base!r})"
+    return False, ""
+
+
+def reject_junk_instruments(records: list) -> list:
+    """Drop junk/test/non-ASCII instruments at capture time (§1.5 noise guard, G1.4).
+
+    Applied to EVERY asset group right after the date filter, so junk symbols never
+    reach ``by_date/`` (and therefore never reach the catalogue roll-up / coverage /
+    MTDS). Rejected records are logged at WARNING with the reason; the surviving
+    list is returned. A no-op when no junk is present.
+    """
+    kept: list = []
+    rejected = 0
+    for r in records:
+        is_junk, reason = _is_junk_instrument(r)
+        if is_junk:
+            rejected += 1
+            _orch.logger.warning(
+                "Junk-symbol reject (§1.5/G1.4): venue=%s instrument_key=%s — %s",
+                getattr(r, "venue", "?"),
+                getattr(r, "instrument_key", "?"),
+                reason,
+            )
+            continue
+        kept.append(r)
+    if rejected:
+        _orch.logger.info("Junk-symbol guard: rejected %d junk/test instrument(s)", rejected)
+    return kept
 
 
 def get_venues_for_asset_groups(asset_groups: list[str]) -> list[str]:

@@ -23,6 +23,7 @@ from instruments_service.engine.orchestrator import (
     filter_instruments_by_date,
     get_venues_for_asset_groups,
     is_venue_available,
+    reject_junk_instruments,
 )
 
 
@@ -63,6 +64,93 @@ def _make_record(
         available_from_datetime=available_since,
         available_to_datetime=available_to,
     )
+
+
+# ---------------------------------------------------------------------------
+# reject_junk_instruments — §1.5/G1.4 capture-time noise guard
+# ---------------------------------------------------------------------------
+
+
+class TestRejectJunkInstruments:
+    """Non-ASCII / known-test instruments are dropped at capture time (G1.4)."""
+
+    def test_cjk_base_asset_is_rejected(self) -> None:
+        """The 2026-06-24 audit junk (龙虾/币安人生/我踏马来了) is rejected by non-ASCII base."""
+        records = [
+            _make_record(instrument_key="BITGET-FUTURES:PERPETUAL:龙虾-USDT", venue="BITGET-FUTURES", base_asset="龙虾"),
+            _make_record(instrument_key="ASTER:PERP:我踏马来了USDT", venue="ASTER", base_asset="我踏马来了"),
+            _make_record(instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生"),
+        ]
+        kept = reject_junk_instruments(records)
+        assert kept == []
+
+    def test_non_ascii_in_raw_symbol_or_key_is_rejected(self) -> None:
+        """Junk caught even when the non-ASCII char is in raw_symbol / instrument_key."""
+        r = _make_record(instrument_key="ASTER:PERP:龙虾USDT", venue="ASTER", base_asset="LOBSTER")
+        r.raw_symbol = "龙虾USDT"
+        assert reject_junk_instruments([r]) == []
+
+    def test_known_test_base_is_rejected(self) -> None:
+        """An ASCII known-test base (TEST/DUMMY) is rejected."""
+        records = [
+            _make_record(instrument_key="V:SPOT:TEST-USDT", venue="V", base_asset="TEST"),
+            _make_record(instrument_key="V:SPOT:DUMMY-USDT", venue="V", base_asset="DUMMY"),
+        ]
+        assert reject_junk_instruments(records) == []
+
+    def test_legitimate_instruments_pass_through(self) -> None:
+        """Normal ASCII instruments (incl. Binance stocks AAPL/XAU) are kept."""
+        records = [
+            _make_record(instrument_key="BINANCE-FUTURES:PERPETUAL:BTC-USDT", venue="BINANCE-FUTURES", base_asset="BTC"),
+            _make_record(instrument_key="BINANCE-FUTURES:PERPETUAL:AAPL-USDT", venue="BINANCE-FUTURES", base_asset="AAPL"),
+            _make_record(instrument_key="BINANCE-FUTURES:PERPETUAL:XAU-USDT", venue="BINANCE-FUTURES", base_asset="XAU"),
+        ]
+        kept = reject_junk_instruments(records)
+        assert len(kept) == 3
+
+    def test_mixed_keeps_only_clean(self) -> None:
+        """A mixed batch keeps the clean records and drops only the junk."""
+        good = _make_record(instrument_key="BINANCE-SPOT:SPOT_PAIR:ETH-USDT", venue="BINANCE-SPOT", base_asset="ETH")
+        junk = _make_record(instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生")
+        kept = reject_junk_instruments([good, junk])
+        assert kept == [good]
+
+
+# ---------------------------------------------------------------------------
+# _canonical_manifest_venue_chain — on-chain CeFi perps must NOT defi-split (G1.3)
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalManifestVenueChainCefiOnChain:
+    """On-chain CeFi perp CLOBs keep their full venue + chain="" (asset_group=cefi)."""
+
+    def test_on_chain_cefi_perps_not_split_to_defi_shape(self) -> None:
+        """LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET → (full_venue, "").
+
+        Regression for the G1.3 320-row contamination: the manifest writer split
+        these glued cefi venues on their KNOWN_CHAIN suffix → manifest
+        asset_group=defi + chain=<L2>. They are cefi venues (in _CEFI_VENUES, like
+        HYPERLIQUID/ASTER) and MUST carry chain="" so _cat resolves to cefi.
+        """
+        from instruments_service.engine.orchestrator import _canonical_manifest_venue_chain
+
+        for venue in ("LIGHTER-ZKSYNC", "PACIFICA-SOLANA", "EXTENDED-STARKNET"):
+            mv, mc = _canonical_manifest_venue_chain(venue)
+            assert (mv, mc) == (venue, ""), f"{venue}: expected ({venue!r}, '') got ({mv!r}, {mc!r})"
+
+    def test_real_defi_pool_venue_still_splits(self) -> None:
+        """A genuine DeFi PROTOCOL-CHAIN venue still splits to bare protocol + chain."""
+        from instruments_service.engine.orchestrator import _canonical_manifest_venue_chain
+
+        assert _canonical_manifest_venue_chain("AAVE_V3-ETHEREUM") == ("AAVE_V3", "ETHEREUM")
+        assert _canonical_manifest_venue_chain("UNISWAP_V3-ARBITRUM") == ("UNISWAP_V3", "ARBITRUM")
+
+    def test_plain_cefi_venue_unchanged(self) -> None:
+        """A plain cefi/tradfi venue (no DeFi split) passes through with chain=""."""
+        from instruments_service.engine.orchestrator import _canonical_manifest_venue_chain
+
+        assert _canonical_manifest_venue_chain("BINANCE-FUTURES") == ("BINANCE-FUTURES", "")
+        assert _canonical_manifest_venue_chain("HYPERLIQUID") == ("HYPERLIQUID", "")
 
 
 # ---------------------------------------------------------------------------
