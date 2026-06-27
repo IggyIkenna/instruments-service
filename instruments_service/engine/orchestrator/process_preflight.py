@@ -83,6 +83,7 @@ _ENRICHMENT_PROVIDERS: frozenset[str] = frozenset(
 _ENRICHMENT_ENTITY_VENUES: tuple[tuple[str, str], ...] = (
     ("MATCHES", "FOOTYSTATS"),
     ("PREDICTIONS", "FOOTYSTATS"),
+    ("ODDS", "FOOTYSTATS"),
     ("XG", "UNDERSTAT"),
     ("PLAYER_VALUES", "TRANSFERMARKT"),
     ("SFI_PROGRESSIVE_STATS", "SOCCER_FOOTBALL_INFO"),
