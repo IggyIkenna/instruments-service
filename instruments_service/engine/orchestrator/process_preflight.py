@@ -313,6 +313,11 @@ async def _sports_provider_short_circuit(
                 date=date, api_key=fs_key, bucket=bucket, force=redo_all
             )
             result.update(match_result)
+        if not _ef or _ef == "ODDS":
+            odds_result = await _orch._fetch_footystats_odds(
+                date=date, api_key=fs_key, bucket=bucket, force=redo_all
+            )
+            result.update(odds_result)
     elif sports_provider == "TRANSFERMARKT":
         tm_key = _keys.get("transfermarkt")
         if not tm_key:

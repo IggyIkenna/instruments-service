@@ -17,7 +17,9 @@ import pytest
 
 from instruments_service.engine.orchestrator import (
     _fetch_footystats_matches,
+    _fetch_footystats_odds,
     _fetch_footystats_predictions,
+    _load_scheduled_footystats_fixture_map,
     process_instruments,
 )
 
@@ -487,3 +489,154 @@ class TestFetchFootystatsMatches:
             result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
         assert result == {}
         mock_mw.record_failed.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _fetch_footystats_odds
+# ---------------------------------------------------------------------------
+
+
+def _ft_odds_stack(skip: bool = False, odds_rows: list | None = None) -> tuple:
+    mock_adapter = MagicMock()
+    mock_adapter.get_fixture_odds_snapshot = AsyncMock(return_value=odds_rows if odds_rows is not None else [])
+    mock_mw = MagicMock()
+    mock_mw_cls = MagicMock(return_value=mock_mw)
+
+    patches = _stack(
+        patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+        patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+        patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+        patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_make_league("EPL")]),
+        patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=skip),
+        patch("instruments_service.engine.orchestrator._gated_sink_write"),
+        patch("instruments_service.engine.orchestrator.stamp_available_at_explicit", side_effect=lambda df, **kw: df),
+        patch("instruments_service.engine.orchestrator._canonical_league_id", side_effect=lambda lid: str(lid)),
+        patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="footystats"),
+        patch("instruments_service.engine.orchestrator._load_scheduled_footystats_fixture_map", return_value={}),
+        patch("unified_api_contracts.sports.build_fixture_id", return_value="EPL:ARSENAL_v_CHELSEA:2026-01-15"),
+        patch("unified_api_contracts.sports.resolve_footystats_team", side_effect=lambda t: t.upper()),
+        patch("instruments_service.engine.orchestrator.FOOTYSTATS_HISTORICAL_SEASON_IDS", {123: "EPL"}),
+    )
+    return patches, mock_adapter, mock_mw
+
+
+class TestFetchFootystatsOdds:
+    """Direct unit tests for _fetch_footystats_odds."""
+
+    @pytest.mark.asyncio
+    async def test_skip_returns_empty_dict(self) -> None:
+        stack, _, _ = _ft_odds_stack(skip=True)
+        with stack:
+            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_empty_odds_no_scheduled_writes_empty_manifest(self) -> None:
+        stack, _, mock_mw = _ft_odds_stack(skip=False, odds_rows=[])
+        with stack:
+            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert result == {}
+        mock_mw.record_empty.assert_called_once()
+        mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_happy_path_with_league_writes_odds_rows(self) -> None:
+        odds_rows = [
+            {
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
+                "kickoff_utc": "2026-01-15T15:00:00Z",
+                "odds_ft_1": 1.8,
+                "odds_ft_x": 3.5,
+                "odds_ft_2": 4.2,
+            }
+        ]
+        stack, _, mock_mw = _ft_odds_stack(skip=False, odds_rows=odds_rows)
+        with stack:
+            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert isinstance(result, dict)
+        assert result.get("footystats_odds", 0) >= 1
+        mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_exception_records_failed_shard(self) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixture_odds_snapshot = AsyncMock(side_effect=RuntimeError("timeout"))
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._load_scheduled_footystats_fixture_map", return_value={}),
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+            patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="RuntimeError"),
+            patch("instruments_service.engine.orchestrator.FOOTYSTATS_HISTORICAL_SEASON_IDS", {}),
+        ):
+            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert result == {}
+        mock_mw.record_failed.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _load_scheduled_footystats_fixture_map
+# ---------------------------------------------------------------------------
+
+
+class TestLoadScheduledFootystatsFixtureMap:
+    """Unit tests for _load_scheduled_footystats_fixture_map."""
+
+    def test_no_parquets_returns_empty(self) -> None:
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = []
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator._sports_ref_pm", return_value="batch_footystats"),
+        ):
+            result = _load_scheduled_footystats_fixture_map(bucket=_BUCKET, date=_DATE)
+        assert result == {}
+
+    def test_exception_returns_empty(self) -> None:
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = RuntimeError("GCS unavailable")
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator._sports_ref_pm", return_value="batch_footystats"),
+        ):
+            result = _load_scheduled_footystats_fixture_map(bucket=_BUCKET, date=_DATE)
+        assert result == {}
+
+    def test_parquet_with_fixture_ids_returns_map(self) -> None:
+        import io
+
+        import pandas as pd
+
+        df = pd.DataFrame(
+            {
+                "canonical_fixture_id": ["EPL:ARSENAL_v_CHELSEA:2026-01-15", "EPL:CITY_v_UNITED:2026-01-15"],
+                "kickoff_utc": ["2026-01-15T15:00:00Z", "2026-01-15T17:30:00Z"],
+            }
+        )
+        buf = io.BytesIO()
+        df.to_parquet(buf)
+        parquet_bytes = buf.getvalue()
+
+        mock_blob = MagicMock()
+        mock_blob.name = f"sports_reference/by_date/day={_DATE}/entity=footystats_matches/matches.parquet"
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = [[], [mock_blob]]
+        mock_storage.download_bytes.return_value = parquet_bytes
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator._sports_ref_pm", return_value="batch_footystats"),
+        ):
+            result = _load_scheduled_footystats_fixture_map(bucket=_BUCKET, date=_DATE)
+        assert "EPL:ARSENAL_v_CHELSEA:2026-01-15" in result
+        assert "EPL:CITY_v_UNITED:2026-01-15" in result
