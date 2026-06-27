@@ -206,6 +206,30 @@ class TestProcessInstrumentsSportsProviderRouting:
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
+    async def test_footystats_entity_filter_odds_only(self) -> None:
+        mock_pred = AsyncMock(return_value={})
+        mock_match = AsyncMock(return_value={})
+        mock_odds = AsyncMock(return_value={"footystats_odds": 4})
+        with _entry_stack(
+            ["FOOTYSTATS"],
+            _BUCKET,
+            patch("instruments_service.engine.orchestrator._fetch_footystats_predictions", mock_pred),
+            patch("instruments_service.engine.orchestrator._fetch_footystats_matches", mock_match),
+            patch("instruments_service.engine.orchestrator._fetch_footystats_odds", mock_odds),
+        ):
+            result = await process_instruments(
+                _DATE,
+                ["SPORTS"],
+                sports_provider="FOOTYSTATS",
+                sports_entity_filter="ODDS",
+                api_keys={"footystats": "fs-key"},
+            )
+        mock_odds.assert_called_once()
+        mock_pred.assert_not_called()
+        mock_match.assert_not_called()
+        assert "footystats_odds" in result
+
+    @pytest.mark.asyncio
     async def test_transfermarkt_no_api_key_returns_empty(self) -> None:
         with _entry_stack(
             ["TRANSFERMARKT"],
