@@ -117,6 +117,43 @@ class TestRejectJunkInstruments:
 
 
 # ---------------------------------------------------------------------------
+# _canonical_manifest_venue_chain — on-chain CeFi perps must NOT defi-split (G1.3)
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalManifestVenueChainCefiOnChain:
+    """On-chain CeFi perp CLOBs keep their full venue + chain="" (asset_group=cefi)."""
+
+    def test_on_chain_cefi_perps_not_split_to_defi_shape(self) -> None:
+        """LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET → (full_venue, "").
+
+        Regression for the G1.3 320-row contamination: the manifest writer split
+        these glued cefi venues on their KNOWN_CHAIN suffix → manifest
+        asset_group=defi + chain=<L2>. They are cefi venues (in _CEFI_VENUES, like
+        HYPERLIQUID/ASTER) and MUST carry chain="" so _cat resolves to cefi.
+        """
+        from instruments_service.engine.orchestrator import _canonical_manifest_venue_chain
+
+        for venue in ("LIGHTER-ZKSYNC", "PACIFICA-SOLANA", "EXTENDED-STARKNET"):
+            mv, mc = _canonical_manifest_venue_chain(venue)
+            assert (mv, mc) == (venue, ""), f"{venue}: expected ({venue!r}, '') got ({mv!r}, {mc!r})"
+
+    def test_real_defi_pool_venue_still_splits(self) -> None:
+        """A genuine DeFi PROTOCOL-CHAIN venue still splits to bare protocol + chain."""
+        from instruments_service.engine.orchestrator import _canonical_manifest_venue_chain
+
+        assert _canonical_manifest_venue_chain("AAVE_V3-ETHEREUM") == ("AAVE_V3", "ETHEREUM")
+        assert _canonical_manifest_venue_chain("UNISWAP_V3-ARBITRUM") == ("UNISWAP_V3", "ARBITRUM")
+
+    def test_plain_cefi_venue_unchanged(self) -> None:
+        """A plain cefi/tradfi venue (no DeFi split) passes through with chain=""."""
+        from instruments_service.engine.orchestrator import _canonical_manifest_venue_chain
+
+        assert _canonical_manifest_venue_chain("BINANCE-FUTURES") == ("BINANCE-FUTURES", "")
+        assert _canonical_manifest_venue_chain("HYPERLIQUID") == ("HYPERLIQUID", "")
+
+
+# ---------------------------------------------------------------------------
 # get_venues_for_asset_groups
 # ---------------------------------------------------------------------------
 
