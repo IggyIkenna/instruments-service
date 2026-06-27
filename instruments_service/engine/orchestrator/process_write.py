@@ -220,6 +220,10 @@ def _write_sports_fixture_venue(
     _captured_lids: set[str] = set()
     for _lid, _league_df in _sports_df.groupby("_league_id"):
         _league_id_str = str(_lid)
+        _canonical_lid_str = _orch._canonical_league_id(_league_id_str)
+        # WRITE-UNIVERSE gate: skip non-canonical leagues to keep the IS index clean.
+        if not _orch._is_in_canonical_write_universe(_canonical_lid_str):
+            continue
         _captured_lids.add(_league_id_str)
         _league_df_clean = _league_df.drop(columns=["_league_id"])
         _stamped_fixture_df = _orch.stamp_available_at_explicit(_league_df_clean, when=_orch.datetime.now(_orch.UTC))
@@ -229,7 +233,7 @@ def _write_sports_fixture_venue(
             partition={
                 "day": date,
                 "venue": venue_str,
-                "league": _orch._canonical_league_id(_league_id_str),
+                "league": _canonical_lid_str,
             },
             filename="instruments.parquet",
             venue=venue_str,
@@ -239,13 +243,13 @@ def _write_sports_fixture_venue(
             row_key={
                 "date": date,
                 "data_type": "FIXTURES",
-                "league_id": _orch._canonical_league_id(_league_id_str),
+                "league_id": _canonical_lid_str,
             },
             df=_stamped_fixture_df,
             asset_group="sports",
             instrument_type="",
             data_type="FIXTURES",
-            league_id=_orch._canonical_league_id(_league_id_str),
+            league_id=_canonical_lid_str,
             pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
             # FIXTURES is multi-source (api_football + footystats) →
             # explicit source required (data_source_provenance Phase 4).
