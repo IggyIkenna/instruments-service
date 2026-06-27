@@ -181,6 +181,50 @@ class TestFetchUnderstatXg:
         mock_mw.write.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_one_of_five_leagues_errored_yields_one_failed_four_empty(self) -> None:
+        """A single per-league 404 on a 5-league day must NOT flip all 5 leagues to
+        attempted_failed. Only the errored league (EPL) gets record_failed; the other
+        four (LA_LIGA, BUNDESLIGA, SERIE_A, LIGUE_1) get record_empty(EXPECTED_NO_FIXTURE).
+        Gate for plan sports_p0_sourcing_and_honest_coverage_correctness_2026_06_27 todo #1.
+        """
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(return_value=[])
+        mock_adapter._fetch_error_count = 1  # one league errored
+        mock_adapter._failed_league_names = {"EPL"}
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        five_leagues = [
+            _mk_league("EPL"),
+            _mk_league("LA_LIGA"),
+            _mk_league("BUNDESLIGA"),
+            _mk_league("SERIE_A"),
+            _mk_league("LIGUE_1"),
+        ]
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=five_leagues,
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+        ):
+            result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET)
+
+        assert result == {}
+        # Exactly 1 league errored → exactly 1 record_failed
+        assert mock_mw.record_failed.call_count == 1
+        failed_call_kwargs = mock_mw.record_failed.call_args_list[0][1]
+        assert failed_call_kwargs["row_key"]["league_id"] == "EPL"
+        assert failed_call_kwargs["error"] == "HTTP_NOT_FOUND"
+        # The other 4 leagues get honest-absence empty_confirmed, NOT attempted_failed
+        assert mock_mw.record_empty.call_count == 4
+        mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_pre_cutoff_date_records_expected_empty(self) -> None:
         """Understat xG skipped when date is before source coverage start."""
         from datetime import date as date_type
@@ -361,6 +405,58 @@ class TestRunUnderstatShotsDate:
             result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
         mock_mw.record_expected_empty.assert_called()
         assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_one_of_five_leagues_errored_yields_one_failed_four_empty(self) -> None:
+        """XG_SHOTS: a single per-league getLeagueData 404 on a 5-league day must NOT flip
+        all 5 leagues to attempted_failed. Only the errored league (EPL) gets record_failed;
+        the other four (LA_LIGA, BUNDESLIGA, SERIE_A, LIGUE_1) get record_empty(EXPECTED_NO_FIXTURE).
+        Gate for plan sports_p0_sourcing_and_honest_coverage_correctness_2026_06_27 todo #1.
+        """
+        mock_adapter = MagicMock()
+        # get_match_ids_for_date returns empty (EPL errored → no match IDs)
+        mock_adapter.get_match_ids_for_date = AsyncMock(return_value=[])
+        mock_adapter._fetch_error_count = 1  # EPL's getLeagueData errored
+        mock_adapter._failed_league_names = {"EPL"}
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+
+        five_leagues = [
+            _mk_league("EPL"),
+            _mk_league("LA_LIGA"),
+            _mk_league("BUNDESLIGA"),
+            _mk_league("SERIE_A"),
+            _mk_league("LIGUE_1"),
+        ]
+
+        with _stack(
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.understat.UnderstatAdapter",
+                return_value=mock_adapter,
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=five_leagues,
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+        ):
+            result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
+
+        assert isinstance(result, dict)
+        # Exactly 1 league errored → exactly 1 record_failed
+        assert mock_mw.record_failed.call_count == 1
+        failed_call_kwargs = mock_mw.record_failed.call_args_list[0][1]
+        assert failed_call_kwargs["row_key"]["league_id"] == "EPL"
+        assert failed_call_kwargs["error"] == "HTTP_NOT_FOUND"
+        # The other 4 leagues get honest-absence empty_confirmed, NOT attempted_failed
+        assert mock_mw.record_empty.call_count == 4
+        mock_mw.write.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

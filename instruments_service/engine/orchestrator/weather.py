@@ -179,6 +179,7 @@ async def _fetch_weather_data(
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
                 reason=reason,
                 fetch_evidence=fetch_evidence,
+                source="open_meteo",
             )
 
     def _record_weather_failed(err_code: str) -> None:
@@ -193,6 +194,7 @@ async def _fetch_weather_data(
                 error=err_code,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+                source="open_meteo",
             )
 
     # Coverage-start / known-gap guard — skip the date without any API call
@@ -209,7 +211,7 @@ async def _fetch_weather_data(
         _om_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _om_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
         for _exp_lid in sorted(_expected_weather_league_ids):
             manifest.record_expected_empty(
-                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid, "source": "open_meteo"},
                 reason=_om_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
@@ -227,7 +229,7 @@ async def _fetch_weather_data(
             if _status is None:
                 continue
             manifest.record_expected_empty(
-                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid, "source": "open_meteo"},
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
@@ -406,6 +408,7 @@ async def _fetch_weather_data(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+                    source="open_meteo",
                 )
             _orch.logger.info(
                 "Weather: all %d venues already covered for date=%s — back-filled per-league manifest (%d captured, %d empty)",
@@ -610,6 +613,7 @@ async def _fetch_weather_data(
                 attempted_at=attempt_ts,
                 reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+                source="open_meteo",
             )
         # NOTE: Previously we also emitted a date-level aggregate row
         # (``manifest.add(data_type="WEATHER")`` with no ``league_id``) for

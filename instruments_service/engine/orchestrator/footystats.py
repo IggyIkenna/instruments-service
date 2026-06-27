@@ -192,6 +192,9 @@ async def _fetch_footystats_predictions(
 
                 for _pred_lid, _pred_league_df in _with_league.groupby("_pred_league"):
                     _pred_lid_str = str(_pred_lid)
+                    _pred_canonical = _orch._canonical_league_id(_pred_lid_str)
+                    if not _orch._is_in_canonical_write_universe(_pred_canonical):
+                        continue
                     _pred_clean = _pred_league_df.drop(columns=["_pred_league"])
                     _stamped_pred_clean = _orch.stamp_available_at_explicit(
                         _pred_clean, when=_orch.datetime.now(_orch.UTC)
@@ -212,13 +215,13 @@ async def _fetch_footystats_predictions(
                         row_key={
                             "date": date,
                             "data_type": "PREDICTIONS",
-                            "league_id": _orch._canonical_league_id(_pred_lid_str),
+                            "league_id": _pred_canonical,
                         },
                         df=_stamped_pred_clean,
                         asset_group="sports",
                         instrument_type="",
                         data_type="PREDICTIONS",
-                        league_id=_orch._canonical_league_id(_pred_lid_str),
+                        league_id=_pred_canonical,
                         pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                         source=_orch._sports_ref_source("footystats_predictions"),
                         service_emission_state=None,
@@ -522,6 +525,8 @@ async def _fetch_footystats_matches(
                 for _ft_lid, _ft_league_df in _with_league.groupby("_ft_league"):
                     _ft_lid_str = str(_ft_lid)
                     _ft_canonical = _orch._canonical_league_id(_ft_lid_str)
+                    if not _orch._is_in_canonical_write_universe(_ft_canonical):
+                        continue
                     _ft_clean = _ft_league_df.drop(columns=["_ft_league"])
                     _stamped_ft_df = _orch.stamp_available_at_explicit(_ft_clean, when=_orch.datetime.now(_orch.UTC))
                     _orch._gated_sink_write(
