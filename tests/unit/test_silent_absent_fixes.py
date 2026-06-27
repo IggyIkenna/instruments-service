@@ -14,6 +14,7 @@ Plan: instruments_foundation_completeness_2026_06_24.md.
 
 from __future__ import annotations
 
+import contextlib
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -407,3 +408,267 @@ class TestTradfiNonTradingDayInMissingShards:
         assert len(_failed_calls) == 1, f"Expected 1 attempted_failed, got {_failed_calls}"
         assert _failed_calls[0]["row_key"]["venue"] == "BYBIT"
         assert _expected_empty_calls == [], f"No empty_confirmed expected for BYBIT: {_expected_empty_calls}"
+
+
+# ---------------------------------------------------------------------------
+# Fix 4 tests — tradfi non-trading day write-stage stamping
+# (process_write._write_all_venues pre-stamp + _zero_records_non_sports fix)
+# ---------------------------------------------------------------------------
+
+
+class TestTradfiNonTradingDayWriteStage:
+    """Fix 4: tradfi weekend/holiday → empty_confirmed even when adapter
+    returned look-back records (DBEQ 5-day look-back artefact).
+
+    Root cause: the DBEQ.BASIC equity adapter uses a 5-day look-back window,
+    so a Saturday query returns Friday's instrument definitions.  Without the
+    fix these records were written as *captured* for the Saturday date.
+    The fix pre-stamps empty_confirmed in _write_all_venues and suppresses
+    the parquet write via the _non_trading_tradfi guard.
+
+    Tests here focus on _write_tradfi_non_trading_day_entries (which now returns
+    the stamped set) and the new return-value contract that the callers rely on
+    to exclude already-stamped venues from the non_error_venues fallback path.
+    """
+
+    def test_tradfi_weekend_write_stage_stamps_empty_confirmed(self) -> None:
+        """NASDAQ on Saturday: _write_tradfi_non_trading_day_entries returns
+        the set of stamped non-trading venues so callers can exclude them."""
+        from instruments_service.engine.orchestrator.process_write import _write_tradfi_non_trading_day_entries
+
+        _expected_empty_calls: list[dict[str, object]] = []
+        counts: dict[str, int] = {}
+
+        class _CapManifest:
+            def record_expected_empty(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                **_kw: object,
+            ) -> None:
+                _expected_empty_calls.append({"row_key": dict(row_key), "reason": reason})
+
+        # Saturday 2026-06-21 — NASDAQ/NYSE are non-trading; FX is 24/7
+        saturday = "2026-06-21"
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._TRADFI_VENUES",
+                ["NASDAQ", "NYSE", "FX"],
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.is_non_trading_day",
+                side_effect=lambda v, _d: v in {"NASDAQ", "NYSE"},
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.non_trading_day_reason",
+                return_value="EXPECTED_WEEKEND",
+            ),
+        ):
+            stamped = _write_tradfi_non_trading_day_entries(
+                date=saturday,
+                # non_error_venues includes NASDAQ/NYSE (ran OK, 0 records) AND FX
+                non_error_venues={"NASDAQ", "NYSE", "FX"},
+                counts=counts,
+                manifest_for_venue=lambda _v: _CapManifest(),  # pyright: ignore[reportArgumentType]
+            )
+
+        # Function must return the set of non-trading venues that were stamped.
+        assert "NASDAQ" in stamped, f"NASDAQ must be in returned stamped set; got {stamped}"
+        assert "NYSE" in stamped, f"NYSE must be in returned stamped set; got {stamped}"
+        # FX is 24/7 — must NOT be in the stamped set.
+        assert "FX" not in stamped, f"FX is 24/7 and must not be stamped: {stamped}"
+        # empty_confirmed calls must exist for NASDAQ and NYSE.
+        stamped_keys = {c["row_key"]["venue"] for c in _expected_empty_calls}
+        assert "NASDAQ" in stamped_keys, f"NASDAQ must have empty_confirmed call; got {stamped_keys}"
+        assert "NYSE" in stamped_keys, f"NYSE must have empty_confirmed call; got {stamped_keys}"
+        # counts must be set to 0 for the stamped venues.
+        assert counts.get("NASDAQ") == 0
+        assert counts.get("NYSE") == 0
+
+    def test_tradfi_trading_day_records_written_unaffected(self) -> None:
+        """On a trading day (Wed), _write_tradfi_non_trading_day_entries returns
+        an empty set (nothing pre-stamped, nothing suppressed)."""
+        from instruments_service.engine.orchestrator.process_write import _write_tradfi_non_trading_day_entries
+
+        counts: dict[str, int] = {}
+
+        class _NeverCalled:
+            def record_expected_empty(self, **_: object) -> None:
+                raise AssertionError("record_expected_empty must not be called on trading day")
+
+        wednesday = "2026-06-24"  # Wednesday — trading day
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._TRADFI_VENUES",
+                ["NASDAQ", "NYSE"],
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.is_non_trading_day",
+                return_value=False,  # All venues are trading on Wednesday
+            ),
+        ):
+            stamped = _write_tradfi_non_trading_day_entries(
+                date=wednesday,
+                non_error_venues={"NASDAQ"},
+                counts=counts,
+                manifest_for_venue=lambda _v: _NeverCalled(),  # pyright: ignore[reportArgumentType]
+            )
+
+        # On a trading day no venues are stamped and the function returns empty set.
+        assert stamped == set(), f"No venues should be stamped on a trading day; got {stamped}"
+        assert "NASDAQ" not in counts, f"NASDAQ must not be in counts on trading day: {counts}"
+
+
+class TestZeroRecordsNonSportsFixedForFX:
+    """Fix for _zero_records_non_sports: non-trading venues are stamped individually.
+
+    Root cause: old code required ALL tradfi venues to be non-trading.  FX is
+    declared 24/7 (is_non_trading_day returns False), so whenever FX is in
+    active_venues the condition ``len(non_trading) == len(tradfi_active)`` was
+    always False and the entire non-trading path was unreachable.
+    """
+
+    def test_zero_records_fx_present_stamps_non_trading_venues(self) -> None:
+        """FX in active_venues (24/7) does not block CME/NASDAQ from being stamped."""
+        from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
+
+        _expected_empty_calls: list[dict[str, object]] = []
+
+        class _CapManifest:
+            def __init__(self, *_: object, **__: object) -> None:
+                pass
+
+            def record_expected_empty(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                **_kw: object,
+            ) -> None:
+                _expected_empty_calls.append({"row_key": dict(row_key), "reason": reason})
+
+            def write(self) -> None:
+                pass
+
+        # FX is 24/7 and is in active_venues — old code would have blocked
+        # the stamp entirely (len(non_trading)=2 != len(tradfi_active)=3).
+        # New code stamps CME and NASDAQ individually; FX (24/7 trading but
+        # returned 0) causes the subsequent active-day-zero branch to raise.
+        # We suppress that RuntimeError here — the stamps happen before the raise.
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._TRADFI_VENUES",
+                ["CME", "NASDAQ", "FX"],
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.is_non_trading_day",
+                side_effect=lambda v, _d: v in {"CME", "NASDAQ"},
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.non_trading_day_reason",
+                return_value="EXPECTED_WEEKEND",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=_CapManifest,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="tradfi-bucket",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            contextlib.suppress(RuntimeError),
+        ):
+            _zero_records_non_sports(
+                date="2026-06-21",
+                asset_groups=["TRADFI"],
+                active_venues=["CME", "NASDAQ", "FX"],
+                mode="batch",
+            )
+
+        # CME and NASDAQ must have been stamped with EXPECTED_WEEKEND.
+        stamped_venues = {c["row_key"]["venue"] for c in _expected_empty_calls}
+        assert "CME" in stamped_venues, f"CME must be stamped; got {stamped_venues}"
+        assert "NASDAQ" in stamped_venues, f"NASDAQ must be stamped; got {stamped_venues}"
+        # FX must NOT be stamped as non-trading.
+        assert "FX" not in stamped_venues, f"FX must not be stamped: {stamped_venues}"
+
+    def test_zero_records_all_non_trading_returns_cleanly(self) -> None:
+        """When ALL tradfi venues are non-trading (FX absent), return dict cleanly."""
+        from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
+
+        _expected_empty_calls: list[dict[str, object]] = []
+
+        class _CapManifest:
+            def __init__(self, *_: object, **__: object) -> None:
+                pass
+
+            def record_expected_empty(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                **_kw: object,
+            ) -> None:
+                _expected_empty_calls.append({"row_key": dict(row_key), "reason": reason})
+
+            def write(self) -> None:
+                pass
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._TRADFI_VENUES",
+                ["CME", "NASDAQ"],
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.is_non_trading_day",
+                return_value=True,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.non_trading_day_reason",
+                return_value="EXPECTED_WEEKEND",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=_CapManifest,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="tradfi-bucket",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = _zero_records_non_sports(
+                date="2026-06-21",
+                asset_groups=["TRADFI"],
+                active_venues=["CME", "NASDAQ"],
+                mode="batch",
+            )
+
+        assert result == {"CME": 0, "NASDAQ": 0}, f"Expected clean dict; got {result}"
+        stamped = {c["row_key"]["venue"] for c in _expected_empty_calls}
+        assert "CME" in stamped and "NASDAQ" in stamped
+
+    def test_non_tradfi_unaffected(self) -> None:
+        """CeFi/DeFi venues are never touched by the tradfi non-trading logic."""
+        from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._TRADFI_VENUES",
+                [],  # No tradfi venues
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            # Active venues are CeFi — should raise RuntimeError (shard failure)
+            # because zero records from CeFi on an active trading day is an error.
+            import pytest
+
+            with pytest.raises(RuntimeError):
+                _zero_records_non_sports(
+                    date="2026-06-24",
+                    asset_groups=["CEFI"],
+                    active_venues=["BYBIT", "DERIBIT"],
+                    mode="batch",
+                )

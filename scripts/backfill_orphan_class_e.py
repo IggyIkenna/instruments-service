@@ -166,10 +166,10 @@ class OrphanPlan:
 def _derive_tradfi_pipeline_mode(class_segment: str, data_type: str) -> tuple[PipelineMode, str]:
     """TradFi source characterisation, per capture-time evidence (R1 2026-06-11):
 
-    * ``indices/`` ``ohlcv_15m`` → **barchart**: the VIX 15m corpus; objects were
-      written 2026-05-12 for 2025 days — outside Yahoo's rolling 60d 15m window, so
-      only the Barchart historical preload could have produced them (CLAUDE.md VIX
-      rule; UAC ``registry/data_source_continuity.py``).
+    * ``indices/`` ``ohlcv_15m`` → **databento**: the VIX 15m corpus; originally
+      attributed to Barchart (BATCH_BARCHART RETIRED 2026-06-24 — VIX 15m now
+      aggregates from VX futures via Databento per UAC pipeline_mode.py retirement
+      comment).  Re-attributed to BATCH_DATABENTO for GCS migration.
     * ``spot/`` ``ohlcv_24h`` → **yahoo**: leaf keys are ``YAHOO_FINANCE:SPOT_PAIR:*``
       (the writer names its own source) and Databento carries no FX spot pairs.
     * everything else (tbbo / trades / ohlcv_1m on CME/NYSE/NASDAQ/ICE/CBOE) →
@@ -179,8 +179,8 @@ def _derive_tradfi_pipeline_mode(class_segment: str, data_type: str) -> tuple[Pi
     """
     if class_segment == "indices" and data_type == "ohlcv_15m":
         return (
-            PipelineMode.BATCH_BARCHART,
-            "VIX 15m Barchart preload (2025 days written 2026-05-12 — outside Yahoo 60d)",
+            PipelineMode.BATCH_DATABENTO,
+            "VIX 15m (BATCH_BARCHART RETIRED 2026-06-24 — re-attributed to databento per UAC retirement comment)",
         )
     if class_segment == "spot" and data_type == "ohlcv_24h":
         return PipelineMode.BATCH_YAHOO, "YAHOO_FINANCE:* instrument keys; Databento has no FX spot pairs"
