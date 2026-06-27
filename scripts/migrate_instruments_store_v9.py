@@ -329,8 +329,10 @@ def transform_index_v9(df: pd.DataFrame, asset_group: str) -> tuple[pd.DataFrame
     # columns for the sports owner (sports_manifest_canonicalisation_2026_06_01.md).
     is_sports = asset_group == "sports"
 
-    # CF-1 schema_version
+    # CF-1 schema_version — explicit int64 cast so existing string-typed parquet columns
+    # (object dtype from historical writes) don't propagate as str '9' after to_parquet.
     out["schema_version"] = MANIFEST_SCHEMA_VERSION
+    out["schema_version"] = out["schema_version"].astype("int64")
     # CF-2 asset_group on rows
     blank_ag = out["asset_group"].str.len() == 0
     out.loc[blank_ag, "asset_group"] = asset_group
