@@ -1355,3 +1355,175 @@ def test_bounded_parallel_load_propagates_exception(rollup: ModuleType) -> None:
 
     with pytest.raises(ValueError, match="blob 7 unreadable"):
         list(rollup._bounded_parallel_load(list(range(20)), _boom, max_workers=4))
+
+
+# ---------------------------------------------------------------------------
+# Dual-key ghost collapse — AAVE_V3 / COMPOUND_V3 (+171 / +26 triad fix)
+# 2026-06-27: non-pool DeFi lending rows whose instrument_id prefix is a
+# no-underscore ghost form (AAVEV3- / COMPOUNDV3-) must collapse onto the
+# canonical key (AAVE_V3- / COMPOUND_V3-) via _canonical_instrument_id.
+# ---------------------------------------------------------------------------
+
+
+def test_rollup_non_pool_defi_ghost_lending_collapses_to_one_lifecycle(rollup: ModuleType) -> None:
+    """AAVE_V3 lending dual-key ghost fix: the same lending market under the
+    old ghost instrument_key prefix (``AAVEV3-ARBITRUM:A_TOKEN:USDC``) and the
+    new canonical prefix (``AAVE_V3-ARBITRUM:A_TOKEN:USDC``) collapses to ONE
+    catalogue row, NOT two.  Without the fix both keys produced separate rows
+    each marked active → +171 AAVE_V3 catalogue over-count vs manifest.
+    """
+    d_old = date(2026, 5, 1)   # old adapter (ghost prefix AAVEV3-)
+    d_switch = date(2026, 5, 8)  # adapter switched to canonical AAVE_V3-
+    d_now = date(2026, 6, 20)  # recent snapshot (canonical)
+
+    ghost_row = {
+        "instrument_key": "AAVEV3-ARBITRUM:A_TOKEN:USDC",
+        "venue": "AAVEV3-ARBITRUM",
+        "instrument_type": "lending",
+        "chain": "",
+    }
+    canonical_row = {
+        "instrument_key": "AAVE_V3-ARBITRUM:A_TOKEN:USDC",
+        "venue": "AAVE_V3-ARBITRUM",
+        "instrument_type": "lending",
+        "chain": "",
+    }
+    df = rollup.build_catalogue_dataframe(
+        [
+            (d_old, _snapshot([ghost_row])),
+            (d_switch, _snapshot([canonical_row])),
+            (d_now, _snapshot([canonical_row])),
+        ]
+    )
+    lending_rows = df[df["instrument_type"].astype(str).str.lower() == "lending"].to_dict("records")
+    # Must collapse to exactly ONE row (not two).
+    assert len(lending_rows) == 1, (
+        f"Expected 1 lending row (ghost+canonical collapsed) but got {len(lending_rows)}. "
+        "The dual-key ghost collapse fix is missing."
+    )
+    row = lending_rows[0]
+    # available_to=None: the market is present on the latest day (d_now).
+    assert row["available_to"] is None, (
+        f"Expected available_to=None (active on latest day) but got {row['available_to']!r}."
+    )
+    # available_from spans the first (ghost) day.
+    assert row["available_from"] == d_old.isoformat()
+
+
+def test_rollup_compound_v3_ghost_collapses_like_aave_v3(rollup: ModuleType) -> None:
+    """COMPOUND_V3 lending dual-key ghost: ``COMPOUNDV3-BASE:SUPPLY:USDC`` and
+    ``COMPOUND_V3-BASE:SUPPLY:USDC`` must collapse to ONE row."""
+    d_old = date(2026, 4, 1)
+    d_now = date(2026, 6, 20)
+
+    ghost_row = {
+        "instrument_key": "COMPOUNDV3-BASE:SUPPLY:USDC",
+        "venue": "COMPOUNDV3-BASE",
+        "instrument_type": "lending",
+        "chain": "",
+    }
+    canonical_row = {
+        "instrument_key": "COMPOUND_V3-BASE:SUPPLY:USDC",
+        "venue": "COMPOUND_V3-BASE",
+        "instrument_type": "lending",
+        "chain": "",
+    }
+    df = rollup.build_catalogue_dataframe(
+        [
+            (d_old, _snapshot([ghost_row])),
+            (d_now, _snapshot([canonical_row])),
+        ]
+    )
+    lending_rows = df[df["instrument_type"].astype(str).str.lower() == "lending"].to_dict("records")
+    assert len(lending_rows) == 1, (
+        f"COMPOUND_V3 ghost collapse failed: got {len(lending_rows)} rows."
+    )
+    assert lending_rows[0]["available_to"] is None  # active on latest day (d_now)
+
+
+# ---------------------------------------------------------------------------
+# PANCAKESWAP_V3-BSC old-format false-actives fix — §7.3 liveness via
+# canonical venue_day_counts (+73 triad discrepancy 2026-06-27).
+# ---------------------------------------------------------------------------
+
+
+def test_rollup_ghost_venue_liveness_merges_into_canonical_window(rollup: ModuleType) -> None:
+    """A ghost-venue pool stopped May 8; the canonical venue is still active today.
+
+    Without the fix: ghost venue ``PANCAKESWAPV3-BSC`` last full day = May 8 →
+    every pool with last_day=May 8 gets ``available_to=None`` (false-active).
+    With the fix: venue_day_counts is keyed on the CANONICAL venue, so the ghost
+    and canonical forms merge into one window extending to today → pools that
+    stopped May 8 are correctly delisted (``available_to=2026-05-08``).
+    """
+    addr_stopped = "0xdeadpool000000000000000000000000000000000"
+    addr_active = "0xlivepool000000000000000000000000000000000"
+
+    d_old = date(2026, 4, 1)
+    d_stop = date(2026, 5, 8)  # last day under the ghost venue
+    d_now = date(2026, 6, 20)  # captured under canonical venue today
+
+    # A pool that only existed under the OLD ghost venue (stopped May 8).
+    ghost_stopped = {
+        "instrument_key": "PANCAKESWAPV3-BSC:POOL:CAKE-BNB:500",
+        "venue": "PANCAKESWAPV3-BSC",
+        "instrument_type": "POOL",
+        "raw_symbol": addr_stopped,
+        "pool_address": addr_stopped,
+        "base_asset": "CAKE",
+        "quote_asset": "BNB",
+        "pool_fee_tier": 5.0,
+    }
+    # A pool that is STILL active — appeared under ghost May 8, new canonical today.
+    ghost_active = {
+        **ghost_stopped,
+        "instrument_key": "PANCAKESWAPV3-BSC:POOL:CAKE-USDT:2500",
+        "raw_symbol": addr_active,
+        "pool_address": addr_active,
+        "quote_asset": "USDT",
+    }
+    # Canonical form of the active pool (same pool_address → merges via pool:: key).
+    canonical_active = {
+        **ghost_active,
+        "instrument_key": "PANCAKESWAP_V3-BSC:POOL:CAKE-USDT:2500",
+        "venue": "PANCAKESWAP_V3-BSC",
+    }
+
+    # Add many canonical pools on d_old, d_stop, d_now to make it a "full" venue day.
+    full_canon = [
+        {
+            "instrument_key": f"PANCAKESWAP_V3-BSC:POOL:TOK{i}-BNB:500",
+            "venue": "PANCAKESWAP_V3-BSC",
+            "instrument_type": "POOL",
+            "raw_symbol": f"0x{i:040x}",
+            "pool_address": f"0x{i:040x}",
+            "base_asset": f"TOK{i}",
+            "quote_asset": "BNB",
+            "pool_fee_tier": 5.0,
+        }
+        for i in range(1, 21)  # 20 canonical pools — makes d_old/d_stop/d_now full days
+    ]
+
+    df = rollup.build_catalogue_dataframe(
+        [
+            (d_old, _snapshot([ghost_stopped, ghost_active, *full_canon])),
+            (d_stop, _snapshot([ghost_stopped, ghost_active, *full_canon])),
+            (d_now, _snapshot([canonical_active, *full_canon])),
+        ]
+    )
+    by_addr = {row["instrument_id"]: row for row in df.to_dict("records") if row["instrument_type"] == "POOL"}
+
+    # The pool that stopped May 8 (no canonical equivalent) must be DELISTED.
+    assert addr_stopped in by_addr, "Stopped pool should still be in catalogue (just delisted)."
+    assert by_addr[addr_stopped]["available_to"] == d_stop.isoformat(), (
+        f"Stopped pool should have available_to={d_stop.isoformat()!r} (last seen May 8), "
+        f"but got {by_addr[addr_stopped]['available_to']!r}. "
+        "The §7.3 ghost-venue liveness-merge fix is missing."
+    )
+
+    # The pool that is active under the canonical venue today must be ACTIVE.
+    assert addr_active in by_addr
+    assert by_addr[addr_active]["available_to"] is None, (
+        f"Active pool (still captured today) should be active (available_to=None), "
+        f"but got {by_addr[addr_active]['available_to']!r}."
+    )
