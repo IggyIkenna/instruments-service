@@ -27,7 +27,9 @@ else:  # pragma: no cover - runtime namespace indirection
 
 __all__ = [
     "_fetch_footystats_matches",
+    "_fetch_footystats_odds",
     "_fetch_footystats_predictions",
+    "_load_scheduled_footystats_fixture_map",
     "_validate_predictions_null_rates",
 ]
 
@@ -624,5 +626,329 @@ async def _fetch_footystats_matches(
         )
         with _orch.contextlib.suppress(Exception):
             _ft_manifest.write()
+
+    return counts
+
+
+def _load_scheduled_footystats_fixture_map(bucket: str, date: str) -> dict[str, _orch.pd.Timestamp | None]:
+    """Read the FootyStats matches parquet (written by _fetch_footystats_matches) for *date*.
+
+    Returns a mapping ``{canonical_fixture_id: kickoff_utc_or_None}`` for every
+    fixture that was scheduled for the day.  Used by ``_fetch_footystats_odds`` to
+    inject NaN-fill rows for scheduled fixtures that the odds API did not return
+    (``has_odds=False``), preserving honest-coverage denominator integrity.
+
+    Returns an empty dict when the matches parquet is absent (e.g. ODDS-only reruns
+    where ``_fetch_footystats_matches`` was not run) — in that case NaN-fill is
+    skipped silently.
+    """
+    result: dict[str, _orch.pd.Timestamp | None] = {}
+    try:
+        storage_client = _orch.get_storage_client()
+        pm = _orch._sports_ref_pm("footystats_matches")
+        # Try canonical path (pipeline_mode= prefix) first, fall back to legacy.
+        canon_prefix = f"sports_reference/by_date/day={date}/pipeline_mode={pm}/entity=footystats_matches/"
+        legacy_prefix = f"sports_reference/by_date/day={date}/entity=footystats_matches/"
+        blobs = list(storage_client.list_blobs(bucket=bucket, prefix=canon_prefix, max_results=100))
+        if not blobs:
+            blobs = list(storage_client.list_blobs(bucket=bucket, prefix=legacy_prefix, max_results=100))
+        parquet_blobs = [b for b in blobs if b.name.endswith(".parquet")]
+        if not parquet_blobs:
+            _orch.logger.debug(
+                "FootyStats odds NaN-fill: no footystats_matches parquets found for date=%s — skipping fill",
+                date,
+            )
+            return result
+        for blob_meta in parquet_blobs:
+            data = storage_client.download_bytes(bucket=bucket, blob_path=blob_meta.name)
+            frame = _orch.pd.read_parquet(_orch.io.BytesIO(data), columns=None)
+            if "canonical_fixture_id" not in frame.columns:
+                continue
+            ko_col = "kickoff_utc" if "kickoff_utc" in frame.columns else None
+            for _, row in frame.iterrows():
+                fid = str(row["canonical_fixture_id"]) if row["canonical_fixture_id"] else ""
+                if not fid:
+                    continue
+                kickoff: _orch.pd.Timestamp | None = None
+                if ko_col:
+                    raw_ko = row[ko_col]
+                    if raw_ko and raw_ko == raw_ko:  # not NaT / NaN
+                        with _orch.contextlib.suppress(Exception):
+                            kickoff = _orch.pd.Timestamp(raw_ko, tz="UTC")
+                result[fid] = kickoff
+        _orch.logger.debug(
+            "FootyStats odds NaN-fill: %d scheduled fixtures loaded from GCS for date=%s",
+            len(result),
+            date,
+        )
+    except Exception as exc:
+        _orch.logger.warning(
+            "FootyStats odds NaN-fill: failed to load scheduled fixture map for date=%s (%s) — skipping fill",
+            date,
+            exc,
+        )
+    return result
+
+
+async def _fetch_footystats_odds(
+    date: str,
+    api_key: str,
+    bucket: str,
+    *,
+    force: bool = False,
+) -> dict[str, int]:
+    """Fetch FootyStats pre-match odds (68 markets) and write to GCS.
+
+    FootyStats provides comprehensive pre-match odds from aggregated
+    bookmakers: full-time 1X2, O/U 0.5-4.5, 1st/2nd half results and
+    O/U, BTTS (full/per-half), corners (result + O/U), clean sheet,
+    team to score first, win to nil, double chance, draw no bet.
+
+    Same ``/todays-matches`` endpoint as predictions and matches — no
+    extra API calls needed.
+
+    GCS path (snapshots preserved per fetch for odds-evolution tracking):
+      sports_reference/by_date/day={date}/entity=footystats_odds/
+        fetched_at_hour={YYYY-MM-DDTHH}/league={league_id}/footystats_odds.parquet
+
+    Each fetch lands in its own ``fetched_at_hour`` partition so repeated polls
+    of the same future date accumulate snapshots instead of overwriting.
+
+    Removal reversed 2026-06-27 (operator decision #6 REVERSED): footystats ODDS
+    are pre-match snapshot reference data (predictive signal); stays in IS.
+    """
+    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key)
+    sink = _orch._sports_ref_sink_for(bucket, date, "footystats_odds")
+    counts: dict[str, int] = {}
+    fetched_at_ts = _orch.pd.Timestamp.now(tz="UTC")
+    fetched_at_hour = fetched_at_ts.strftime("%Y-%m-%dT%H")
+
+    odds_manifest = _orch.ManifestWriter(
+        service_name="instruments-service",
+        catalogue_bucket=bucket,
+    )
+    _row_key: dict[str, str] = {"date": date, "data_type": "ODDS"}
+    from unified_api_contracts.sports import (
+        get_expected_leagues_for_source,
+    )
+
+    _ft_expected = [
+        lg.league_id for lg in get_expected_leagues_for_source("footystats", classifications=["Prediction", "Features"])
+    ]
+    if _orch._should_skip_date_for_per_league(
+        odds_manifest,
+        date=date,
+        data_type="ODDS",
+        expected_canonical_leagues=_ft_expected,
+        force=force,
+    ):
+        _orch.logger.info("FootyStats odds: skipping date=%s (all canonical leagues captured)", date)
+        return counts
+    attempt_ts = _orch.datetime.now(_orch.UTC)
+    _scheduled_fixture_map = _load_scheduled_footystats_fixture_map(bucket, date)
+
+    try:
+        from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
+
+        odds_rows = await _orch.asyncio.wait_for(
+            _orch.cast(_orch.FootystatsAdapter, adapter).get_fixture_odds_snapshot(date),
+            timeout=_FS_PER_DATE_TIMEOUT_SECS,
+        )
+        if not odds_rows and _scheduled_fixture_map:
+            odds_rows = [
+                {"canonical_fixture_id": fid, "kickoff_utc": ko} for fid, ko in _scheduled_fixture_map.items() if fid
+            ]
+            _orch.logger.info(
+                "FootyStats odds: no API data for date=%s — NaN-filling %d scheduled fixtures",
+                date,
+                len(odds_rows),
+            )
+        if odds_rows:
+            df = _orch.pd.DataFrame(odds_rows)
+            if "kickoff_utc" in df.columns:
+                df["available_at"] = _orch.pd.to_datetime(df["kickoff_utc"], utc=True) - _orch.pd.Timedelta(hours=72)
+            df["fetched_at"] = fetched_at_ts
+            _ft_id_to_league = _orch.FOOTYSTATS_HISTORICAL_SEASON_IDS
+
+            def _odds_canonical(row: _orch.pd.Series) -> str:
+                home = str(row.get("home_team", "") or "")
+                away = str(row.get("away_team", "") or "")
+                if not home or not away:
+                    return ""
+                fid = str(row.get("fixture_id", "") or "")
+                league = ""
+                if ":" in fid:
+                    comp_str = fid.split(":")[0]
+                    if comp_str.isdigit():
+                        league = _ft_id_to_league.get(int(comp_str), "")
+                return build_fixture_id(
+                    league_id=league,
+                    home_team_id=resolve_footystats_team(home),
+                    away_team_id=resolve_footystats_team(away),
+                    date_str=date,
+                )
+
+            if "home_team" in df.columns and "away_team" in df.columns:
+                df["canonical_fixture_id"] = df.apply(_odds_canonical, axis=1)
+
+            if _scheduled_fixture_map:
+                _returned_ids: set[str] = (
+                    set(df["canonical_fixture_id"].dropna().astype(str).unique())
+                    if "canonical_fixture_id" in df.columns
+                    else set()
+                )
+                _missing = {fid: ko for fid, ko in _scheduled_fixture_map.items() if fid and fid not in _returned_ids}
+                if _missing:
+                    _nan_rows = [{"canonical_fixture_id": fid, "kickoff_utc": ko} for fid, ko in _missing.items()]
+                    _nan_df = _orch.pd.DataFrame(_nan_rows)
+                    df = _orch.pd.concat([df, _nan_df], ignore_index=True)
+                    _orch.logger.info(
+                        "FootyStats odds NaN-fill: %d/%d scheduled fixtures had no odds on date=%s",
+                        len(_missing),
+                        len(_scheduled_fixture_map),
+                        date,
+                    )
+            counts["footystats_odds"] = len(df)
+
+            if "canonical_fixture_id" in df.columns:
+                df["_odds_league"] = df["canonical_fixture_id"].str.split(":").str[0]
+                _has_league = df["_odds_league"].notna() & (df["_odds_league"] != "")
+                _with_league = df[_has_league]
+                _without_league = df[~_has_league]
+
+                for _odds_lid, _odds_league_df in _with_league.groupby("_odds_league"):
+                    _odds_lid_str = str(_odds_lid)
+                    _odds_clean = _odds_league_df.drop(columns=["_odds_league"])
+                    _stamped_odds_clean = _orch.stamp_available_at_explicit(
+                        _odds_clean, when=_orch.datetime.now(_orch.UTC)
+                    )
+                    _orch._gated_sink_write(
+                        sink,
+                        data=_stamped_odds_clean,
+                        partition={
+                            "entity": "footystats_odds",
+                            "fetched_at_hour": fetched_at_hour,
+                            "league": _odds_lid_str,
+                        },
+                        venue="footystats",
+                        entity="footystats_odds",
+                        filename="footystats_odds.parquet",
+                    )
+                    odds_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                        row_key={
+                            "date": date,
+                            "data_type": "ODDS",
+                            "league_id": _orch._canonical_league_id(_odds_lid_str),
+                        },
+                        df=_stamped_odds_clean,
+                        asset_group="sports",
+                        instrument_type="",
+                        data_type="ODDS",
+                        league_id=_orch._canonical_league_id(_odds_lid_str),
+                        pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                        source=_orch._sports_ref_source("footystats_odds"),
+                        service_emission_state=None,
+                        expected_root_clusters={
+                            str(fid): 1 for fid in _stamped_odds_clean["canonical_fixture_id"].dropna().unique() if fid
+                        },
+                        cluster_extractor=lambda sym: sym,
+                        cluster_symbol_column="canonical_fixture_id",
+                    )
+
+                if not _without_league.empty:
+                    _odds_unmapped = _without_league.drop(columns=["_odds_league"])
+                    _stamped_odds_unmapped = _orch.stamp_available_at_explicit(
+                        _odds_unmapped, when=_orch.datetime.now(_orch.UTC)
+                    )
+                    _orch._gated_sink_write(
+                        sink,
+                        data=_stamped_odds_unmapped,
+                        partition={
+                            "entity": "footystats_odds",
+                            "fetched_at_hour": fetched_at_hour,
+                        },
+                        venue="footystats",
+                        entity="footystats_odds",
+                        filename="footystats_odds.parquet",
+                    )
+                    odds_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                        row_key={"date": date, "data_type": "ODDS"},
+                        df=_stamped_odds_unmapped,
+                        asset_group="sports",
+                        instrument_type="",
+                        data_type="ODDS",
+                        pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                        source=_orch._sports_ref_source("footystats_odds"),
+                        service_emission_state=None,
+                        expected_root_clusters={
+                            str(fid): 1
+                            for fid in _stamped_odds_unmapped["canonical_fixture_id"].dropna().unique()
+                            if fid
+                        },
+                        cluster_extractor=lambda sym: sym,
+                        cluster_symbol_column="canonical_fixture_id",
+                    )
+            else:
+                _stamped_odds_df = _orch.stamp_available_at_explicit(df, when=_orch.datetime.now(_orch.UTC))
+                _orch._gated_sink_write(
+                    sink,
+                    data=_stamped_odds_df,
+                    partition={
+                        "entity": "footystats_odds",
+                        "fetched_at_hour": fetched_at_hour,
+                    },
+                    venue="footystats",
+                    entity="footystats_odds",
+                    filename="footystats_odds.parquet",
+                )
+                odds_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                    row_key={"date": date, "data_type": "ODDS"},
+                    df=_stamped_odds_df,
+                    asset_group="sports",
+                    instrument_type="",
+                    data_type="ODDS",
+                    pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                    source=_orch._sports_ref_source("footystats_odds"),
+                    service_emission_state=None,
+                    expected_root_clusters={},
+                    cluster_extractor=lambda sym: sym,
+                )
+            odds_manifest.write()
+            _orch.logger.info("FootyStats odds: %d rows written for date=%s", len(df), date)
+        else:
+            _orch.logger.info("FootyStats odds: no odds data and no scheduled fixtures for date=%s", date)
+            odds_manifest.record_empty(
+                row_key=_row_key,
+                attempted_at=attempt_ts,
+                reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+            )
+            odds_manifest.write()
+    except Exception as exc:
+        _orch.classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="footystats_odds_fetch",
+            shard=date,
+        )
+        _err_code = _orch._classify_adapter_failure(exc, "footystats")
+        _orch.log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": "footystats",
+                "endpoint": "get_fixture_odds_snapshot",
+                "date": date,
+                "error": str(exc),
+                "error_code": _err_code,
+            },
+        )
+        odds_manifest.record_failed(
+            row_key=_row_key,
+            error=_err_code,
+            attempted_at=attempt_ts,
+            pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+        )
+        with _orch.contextlib.suppress(Exception):
+            odds_manifest.write()
 
     return counts

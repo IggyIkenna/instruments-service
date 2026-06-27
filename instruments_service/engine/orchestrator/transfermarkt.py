@@ -55,7 +55,11 @@ _TM_PER_LEAGUE_TIMEOUT_SECS: float = 600.0
 
 
 def _transfermarkt_mapping_blob_path(season: int) -> str:
-    return f"sports_reference/mappings/transfermarkt_league_teams/season={season}/teams.parquet"
+    # GCS Hive partition path produced by data_sink.write(partition={"transfermarkt_league_teams": "", "season": N}).
+    # Partition keys are sorted alphabetically by the data_sink → season= first, then transfermarkt_league_teams=.
+    # Previously pointed at transfermarkt_league_teams/season=N/ (wrong, never matched), causing a cache miss on
+    # every date and re-fetching ~595 teams from the API per date even on non-trigger dates.
+    return f"sports_reference/mappings/season={season}/transfermarkt_league_teams=/teams.parquet"
 
 
 def _write_transfermarkt_team_mapping(
@@ -423,6 +427,7 @@ async def _fetch_transfermarkt_data(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_OUTSIDE_TRANSFER_WINDOW,
                     pipeline_mode=_orch.PipelineMode.BATCH_TRANSFERMARKT,
+                    source="transfermarkt",
                 )
             manifest.write()
             return counts
@@ -647,6 +652,8 @@ async def _fetch_transfermarkt_data(
                 observed_clusters={"": _cap_count},
                 available_at_envelope=_orch.pd.Timestamp(_orch.datetime.now(_orch.UTC)),
                 pipeline_mode=_orch.PipelineMode.BATCH_TRANSFERMARKT,
+                asset_group="sports",
+                source="transfermarkt",
                 service_emission_state=None,
             )
         for _emp_lid in sorted(_empty_leagues):
@@ -655,6 +662,7 @@ async def _fetch_transfermarkt_data(
                 attempted_at=attempt_ts,
                 reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=_orch.PipelineMode.BATCH_TRANSFERMARKT,
+                source="transfermarkt",
             )
         for _unm_lid in sorted(_unmapped_leagues):
             manifest.record_empty(
@@ -662,6 +670,7 @@ async def _fetch_transfermarkt_data(
                 attempted_at=attempt_ts,
                 reason=_orch.EmptyConfirmedReason.EXPECTED_NO_MAPPING,
                 pipeline_mode=_orch.PipelineMode.BATCH_TRANSFERMARKT,
+                source="transfermarkt",
             )
         for _f_lid, _f_err in sorted(_failed_leagues.items()):
             manifest.record_failed(
@@ -669,6 +678,7 @@ async def _fetch_transfermarkt_data(
                 error=_f_err,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_TRANSFERMARKT,
+                source="transfermarkt",
             )
 
     manifest.write()

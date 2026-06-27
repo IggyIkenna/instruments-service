@@ -162,9 +162,9 @@ class _ModelDumpable(Protocol):
 # UAC@52d289c): footystats-served catalog rows previously tagged with
 # ``BATCH_API_FOOTBALL`` as a documented workaround. With the canonical
 # ``BATCH_FOOTYSTATS`` member now present in UAC ``PipelineMode``,
-# footystats-served data_types (``PREDICTIONS`` / ``MATCHES``) are stamped
-# with ``BATCH_FOOTYSTATS``. ODDS removed 2026-06-25: ODDS is now MTDS-only
-# (UAC#8fb1f54f); the footystats ODDS pipeline was retired.
+# footystats-served data_types (``PREDICTIONS`` / ``MATCHES`` / ``ODDS``) are
+# stamped with ``BATCH_FOOTYSTATS``. ODDS removal reversed 2026-06-27 (operator
+# decision): footystats ODDS are pre-match snapshot reference data that stays in IS.
 _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # api_football catalog (FIXTURES + per-fixture entities + reference data)
     "FIXTURES": PipelineMode.BATCH_API_FOOTBALL,
@@ -183,6 +183,9 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # workaround stamp on 2026-05-12).
     "PREDICTIONS": PipelineMode.BATCH_FOOTYSTATS,
     "MATCHES": PipelineMode.BATCH_FOOTYSTATS,
+    # ODDS slice — footystats pre-match snapshot odds; BATCH_FOOTYSTATS to match
+    # source='footystats'. Removal reversed 2026-06-27 (operator decision #6 REVERSED).
+    "ODDS": PipelineMode.BATCH_FOOTYSTATS,
     # understat catalog
     "XG": PipelineMode.BATCH_UNDERSTAT,
     # transfermarkt catalog
@@ -442,7 +445,13 @@ from instruments_service.engine.orchestrator.footystats import (
     _fetch_footystats_matches as _fetch_footystats_matches,
 )
 from instruments_service.engine.orchestrator.footystats import (
+    _fetch_footystats_odds as _fetch_footystats_odds,
+)
+from instruments_service.engine.orchestrator.footystats import (
     _fetch_footystats_predictions as _fetch_footystats_predictions,
+)
+from instruments_service.engine.orchestrator.footystats import (
+    _load_scheduled_footystats_fixture_map as _load_scheduled_footystats_fixture_map,
 )
 from instruments_service.engine.orchestrator.footystats import (
     _validate_predictions_null_rates as _validate_predictions_null_rates,
