@@ -618,6 +618,9 @@ from instruments_service.engine.orchestrator.venue_core import (
 from instruments_service.engine.orchestrator.venue_core import (
     is_venue_available as is_venue_available,
 )
+from instruments_service.engine.orchestrator.venue_core import (
+    reject_junk_instruments as reject_junk_instruments,
+)
 from instruments_service.engine.orchestrator.weather import (
     _extract_fixture_venue_ids as _extract_fixture_venue_ids,
 )
