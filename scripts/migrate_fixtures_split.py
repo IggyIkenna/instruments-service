@@ -74,16 +74,22 @@ import argparse
 import io
 import logging
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from google.api_core.exceptions import PreconditionFailed
 from google.cloud import storage
 from requests.adapters import HTTPAdapter
+from unified_api_contracts.canonical.crosscutting.availability_semantics import (
+    FIXTURE_ANNOUNCEMENT_FLOOR_DAYS_DEFAULT,
+    get_fixture_announcement_floor_days,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -123,6 +129,183 @@ _OUTCOME_COLS: frozenset[str] = frozenset(
 
 # Shared columns that appear in BOTH shards (identity + availability marker).
 _SHARED_COLS: frozenset[str] = frozenset({"fixture_id", "available_at"})
+
+# ---------------------------------------------------------------------------
+# Cross-source backfill helpers
+# ---------------------------------------------------------------------------
+
+# Thread-safe per-(date, league) cache for footystats announced-at maps so
+# parallel workers for the same date never re-read the same GCS blobs.
+_FT_CACHE: dict[str, dict[str, datetime]] = {}
+_FT_CACHE_LOCK = threading.Lock()
+
+
+def _parse_date_league_from_path(blob_name: str) -> tuple[str, str]:
+    """Extract ``(date, league)`` from a fixtures blob path.
+
+    Example::
+
+        'sports_reference/by_date/day=2025-09-14/entity=fixtures/league=EPL/fixtures.parquet'
+        → ('2025-09-14', 'EPL')
+
+    Returns ``('', '')`` when either component is absent (legacy bare path).
+    """
+    date_part = ""
+    league_part = ""
+    for segment in blob_name.split("/"):
+        if segment.startswith("day="):
+            date_part = segment[4:]
+        elif segment.startswith("league="):
+            league_part = segment[7:]
+    return date_part, league_part
+
+
+def _load_footystats_map(
+    bucket: storage.Bucket,
+    date: str,
+    league: str,
+) -> dict[str, datetime]:
+    """Return a ``{canonical_fixture_id: min(available_at)}`` map for ``date``/``league``.
+
+    Reads all ``fetched_at_hour=*`` footystats_predictions partitions for the
+    date/league pair and returns the EARLIEST ``available_at`` per fixture
+    (≈ kickoff − 72 h for live-period data).  Returns an empty dict when no
+    footystats data exists for the cell.
+
+    Thread-safe: results are cached per ``"date:league"`` key.
+    """
+    cache_key = f"{date}:{league}"
+    with _FT_CACHE_LOCK:
+        if cache_key in _FT_CACHE:
+            return _FT_CACHE[cache_key]
+
+    prefix = f"sports_reference/by_date/day={date}/entity=footystats_predictions/"
+    target_suffix = f"league={league}/footystats_predictions.parquet"
+    result: dict[str, datetime] = {}
+    try:
+        for blob in bucket.list_blobs(prefix=prefix):
+            if not blob.name.endswith(target_suffix):
+                continue
+            try:
+                raw = blob.download_as_bytes()
+                ft_table = pq.read_table(io.BytesIO(raw))
+                if "canonical_fixture_id" not in ft_table.column_names:
+                    continue
+                if "available_at" not in ft_table.column_names:
+                    continue
+                for row in ft_table.to_pylist():
+                    fid: str | None = row.get("canonical_fixture_id")
+                    avail: datetime | None = row.get("available_at")
+                    if not fid or avail is None:
+                        continue
+                    if hasattr(avail, "tzinfo") and avail.tzinfo is None:
+                        avail = avail.replace(tzinfo=UTC)
+                    existing = result.get(fid)
+                    if existing is None or avail < existing:
+                        result[fid] = avail
+            except Exception:
+                pass  # per-blob isolation: skip unreadable footystats blobs
+    except Exception:
+        pass  # list failure: return empty map; migration continues with UAC floor
+
+    with _FT_CACHE_LOCK:
+        _FT_CACHE[cache_key] = result
+    return result
+
+
+def _fill_null_announced_at(
+    table: pa.Table,
+    footystats_map: dict[str, datetime] | None,
+) -> pa.Table:
+    """Back-fill null ``announced_at`` cells using a two-source priority stack.
+
+    For each row where ``announced_at`` is null the function applies (in order):
+
+    1. **footystats cross-source**: look up ``fixture_id`` in ``footystats_map``
+       (``available_at`` ≈ kickoff − 72 h for live-period data).
+    2. **UAC per-league floor**: ``kickoff_utc − floor_days`` using
+       :func:`get_fixture_announcement_floor_days` keyed by ``af_league_id``
+       (21–28 d for Tier-1 EU leagues, 14 d default for unobserved leagues).
+
+    When both sources are available the function takes ``min()`` so the
+    EARLIEST observed time is stamped (tightest known PIT bound).
+
+    SFI progressive-stats are post-match data with no fixture-schedule
+    publication-time semantics; SFI is intentionally excluded here.
+
+    Rows whose ``timestamp`` (kickoff UTC) is absent/null are left unchanged
+    — a junk stamp is worse than null.
+    """
+    if "announced_at" not in table.column_names:
+        return table
+
+    announced_col = table.column("announced_at")
+    if not pc.any(pc.is_null(announced_col)).as_py():
+        return table  # nothing to fill
+
+    col_names = set(table.column_names)
+    has_fixture_id = "fixture_id" in col_names
+    has_timestamp = "timestamp" in col_names
+    has_af_league_id = "af_league_id" in col_names
+
+    if not has_timestamp:
+        return table  # can't compute fallback without kickoff
+
+    announced_list: list[datetime | None] = announced_col.to_pylist()
+    timestamp_list: list[str | datetime | None] = table.column("timestamp").to_pylist()
+    fixture_ids: list[str | None] = (
+        table.column("fixture_id").to_pylist() if has_fixture_id else [None] * len(table)
+    )
+    af_league_ids: list[int | float | None] = (
+        table.column("af_league_id").to_pylist() if has_af_league_id else [None] * len(table)
+    )
+
+    for i, val in enumerate(announced_list):
+        if val is not None:
+            continue  # already populated — leave untouched
+
+        raw_kickoff = timestamp_list[i]
+        if raw_kickoff is None:
+            continue  # no kickoff — can't stamp
+
+        # Normalise to a timezone-aware UTC datetime.
+        if isinstance(raw_kickoff, str):
+            try:
+                kickoff = datetime.fromisoformat(raw_kickoff)
+                if kickoff.tzinfo is None:
+                    kickoff = kickoff.replace(tzinfo=UTC)
+            except ValueError:
+                continue
+        else:
+            kickoff = raw_kickoff
+            if hasattr(kickoff, "tzinfo") and kickoff.tzinfo is None:
+                kickoff = kickoff.replace(tzinfo=UTC)
+
+        # UAC per-league floor: primary anchor.
+        raw_lid = af_league_ids[i]
+        if raw_lid is not None:
+            try:
+                floor_days = get_fixture_announcement_floor_days(int(raw_lid))
+            except (TypeError, ValueError):
+                floor_days = FIXTURE_ANNOUNCEMENT_FLOOR_DAYS_DEFAULT
+        else:
+            floor_days = FIXTURE_ANNOUNCEMENT_FLOOR_DAYS_DEFAULT
+
+        uac_floor: datetime = kickoff - timedelta(days=floor_days)
+
+        # footystats cross-source: if found take min with UAC floor.
+        if footystats_map:
+            fid = fixture_ids[i]
+            if fid and fid in footystats_map:
+                ft_avail = footystats_map[fid]
+                announced_list[i] = min(uac_floor, ft_avail)
+                continue
+
+        announced_list[i] = uac_floor
+
+    new_announced = pa.array(announced_list, type=pa.timestamp("us", tz="UTC"))
+    col_idx = table.column_names.index("announced_at")
+    return table.set_column(col_idx, "announced_at", new_announced)
 
 
 @dataclass(frozen=True)
@@ -274,6 +457,7 @@ def _migrate_one(
     *,
     dry_run: bool,
     overwrite: bool,
+    cross_source: bool = False,
 ) -> MigrationResult:
     sched_name, out_name = _destination_paths(blob_name)
 
@@ -301,6 +485,13 @@ def _migrate_one(
             outcomes_rows=0,
             error=f"read: {exc}",
         )
+
+    # Phase-3 cross-source backfill: fill null announced_at using footystats
+    # data for this date/league + UAC per-league announcement floor.
+    if cross_source:
+        date, league = _parse_date_league_from_path(blob_name)
+        ft_map = _load_footystats_map(bucket, date, league) if date and league else {}
+        table = _fill_null_announced_at(table, ft_map)
 
     sched_table, out_table = _split_table(table)
 
@@ -349,6 +540,7 @@ def _run_migration(
     dry_run: bool,
     overwrite: bool,
     workers: int,
+    cross_source: bool = False,
 ) -> list[MigrationResult]:
     results: list[MigrationResult] = []
     completed = 0
@@ -357,7 +549,10 @@ def _run_migration(
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [
-            ex.submit(_migrate_one, bucket, n, dry_run=dry_run, overwrite=overwrite)
+            ex.submit(
+                _migrate_one, bucket, n,
+                dry_run=dry_run, overwrite=overwrite, cross_source=cross_source,
+            )
             for n in blob_names
         ]
         for fut in as_completed(futures):
@@ -406,6 +601,17 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         help="Process at most N blobs (0 = all). For spot-check / smoke run.",
     )
+    parser.add_argument(
+        "--cross-source-backfill",
+        action="store_true",
+        help=(
+            "Phase-3 optional: fill null announced_at using footystats GCS data for the "
+            "same date/league + UAC per-league announcement floor. Takes the earliest of "
+            "the two sources (tightest known PIT bound). No-op when announced_at is already "
+            "populated. Off by default — enable for historical parquets written before the "
+            "announced_at field was added."
+        ),
+    )
     args = parser.parse_args(argv)
 
     bucket_uri: str = args.bucket
@@ -413,12 +619,14 @@ def main(argv: list[str] | None = None) -> int:
 
     started = datetime.now(UTC)
     logger.info(
-        "fixtures-split migration start: bucket=%s prefix=%s workers=%d dry_run=%s overwrite=%s",
+        "fixtures-split migration start: bucket=%s prefix=%s workers=%d "
+        "dry_run=%s overwrite=%s cross_source=%s",
         bucket_name,
         args.prefix,
         args.workers,
         args.dry_run,
         args.overwrite,
+        args.cross_source_backfill,
     )
 
     client = _make_storage_client(args.project_id, args.workers)
@@ -439,6 +647,7 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         overwrite=args.overwrite,
         workers=args.workers,
+        cross_source=args.cross_source_backfill,
     )
 
     summary = _summarise(results)

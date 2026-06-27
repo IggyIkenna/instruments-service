@@ -1,3 +1,4 @@
+# SCHEMA_PROVENANCE_EXEMPT: CompletenessReport/FixtureDefect are internal report types, not cross-service schemas.
 """Fixture-completeness validator — depth_coverage Tier-B denominator for sports.
 
 Reads the captured fixtures catalogue for a (league_id, season_year) and
