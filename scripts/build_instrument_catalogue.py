@@ -58,7 +58,7 @@ from datetime import UTC, date, datetime
 from typing import TypeVar
 
 import pandas as pd
-from unified_api_contracts import build_pool_identity, is_in_mvp_capture_universe, is_mvp
+from unified_api_contracts import TRADFI_ROOTS, build_pool_identity, is_in_mvp_capture_universe, is_mvp
 from unified_trading_library import (
     StorageClient,
     get_config,
@@ -1572,6 +1572,29 @@ def promote_catalogue(
 
 
 # ---------------------------------------------------------------------------
+# TradFi option contract-code resolver
+# ---------------------------------------------------------------------------
+
+
+def _tradfi_contract_code_to_root(contract_code: str) -> str:
+    """Resolve a CME contract code to its TradFi root symbol for mvp tagging.
+
+    The IS ``underlying`` column for CME OPTION rows stores the specific futures
+    contract code (e.g., ``ESZ5`` = ES Dec-2025 future) rather than the root symbol
+    (``ES``) that ``is_mvp`` checks against. Find the longest prefix that is a known
+    TRADFI_ROOT; fall back to the original code so ``is_mvp`` correctly returns False
+    for genuinely non-MVP underliers (e.g., ``ECNQ`` event contracts stay False).
+    """
+    if contract_code in TRADFI_ROOTS:
+        return contract_code
+    for n in range(len(contract_code) - 1, 1, -1):
+        prefix = contract_code[:n]
+        if prefix in TRADFI_ROOTS:
+            return prefix
+    return contract_code
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -1663,6 +1686,12 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
         # base_ccy axis); ``underlying`` carries it for derivatives/options. "" → None
         # so a non-derivative row is not over-constrained.
         base = _cell(row, "base_asset") or _cell(row, "underlying") or None
+
+        # TradFi OPTION: the IS ``underlying`` column stores the specific futures
+        # contract code (e.g., ``ESZ5``) not the root symbol (``ES``) that
+        # ``is_mvp`` checks against. Resolve to root via TRADFI_ROOTS SSOT.
+        if asset_group == "tradfi" and base and _cell(row, "instrument_type").strip().upper() == "OPTION":
+            base = _tradfi_contract_code_to_root(base)
 
         if asset_group == "cefi":
             # Perp-gated CeFi capture predicate — the shared UAC SSOT. ``base`` ""
