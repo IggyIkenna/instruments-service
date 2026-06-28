@@ -308,6 +308,13 @@ steps:
       - "-c"
       - |
         set -e
+        # WS-L (2026-06-28): `python -m build` runs hatch-vcs (source = "vcs") in an ISOLATED env that
+        # cannot resolve the version from /workspace's git checkout (Cloud Build's clone + the cross-step
+        # /workspace volume don't give the wheel build a usable describe → "setuptools-scm was unable to
+        # detect version for /workspace"). Inject the git-tag-derived version (same one the docker build
+        # gets) so hatch-vcs uses the pretend version; build's isolated env inherits process env vars.
+        export SETUPTOOLS_SCM_PRETEND_VERSION=$(cat /workspace/VERSION 2>/dev/null || echo "0.0.0.dev0")
+        echo "publish-wheel: SETUPTOOLS_SCM_PRETEND_VERSION=$$SETUPTOOLS_SCM_PRETEND_VERSION"
         pip install uv
         python -m pip install --no-cache-dir build twine keyrings.google-artifactregistry-auth
         mkdir -p /root/.config/pip
