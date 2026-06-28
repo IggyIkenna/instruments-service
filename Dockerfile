@@ -45,6 +45,14 @@ COPY pip.conf /etc/pip.conf
 # Copy service source code and lockfile
 COPY . .
 
+# WS-L (2026-06-28): hatch-vcs (source = "vcs") can't read git tags inside the docker build context
+# (.git is .dockerignore'd + COPY . . excludes it), so the package's OWN version must be injected.
+# cloudbuild passes the git-tag-derived version as --build-arg SETUPTOOLS_SCM_PRETEND_VERSION; export it
+# for setuptools-scm/hatch-vcs BEFORE the editable install, else `uv pip install -e .` fails with
+# "setuptools-scm was unable to detect version for /workspace".
+ARG SETUPTOOLS_SCM_PRETEND_VERSION
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
+
 # Install service dependencies (base image already has UTL + UAC pre-installed)
 RUN uv pip install --system --no-sources -e .
 
