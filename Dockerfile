@@ -16,7 +16,7 @@ ARG PROJECT_ID
 # Digest-pinned UTL base image (QG STEP 5.79 -- reproducible builds + UTL/UAC provenance).
 # Refreshed by the dependency-update fan-out (update-dependency-version.yml) on base-image
 # republish; cloudbuild may override at build time: --build-arg BASE_IMAGE_DIGEST=sha256:...
-ARG BASE_IMAGE_DIGEST=sha256:75926d35b5960cfc88eb3dd95e9498461857a5d6b0e8070880a35c951bafd4a8
+ARG BASE_IMAGE_DIGEST=sha256:84a1baaa01ef17c62d7cd976b713f0679a48054d2d32c85b18627cc6914d9423
 ARG BASE_IMAGE=asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-library/unified-trading-library@${BASE_IMAGE_DIGEST}
 FROM --platform=linux/amd64 ${BASE_IMAGE}
 
@@ -44,6 +44,14 @@ COPY pip.conf /etc/pip.conf
 
 # Copy service source code and lockfile
 COPY . .
+
+# WS-L (2026-06-28): hatch-vcs (source = "vcs") can't read git tags inside the docker build context
+# (.git is .dockerignore'd + COPY . . excludes it), so the package's OWN version must be injected.
+# cloudbuild passes the git-tag-derived version as --build-arg SETUPTOOLS_SCM_PRETEND_VERSION; export it
+# for setuptools-scm/hatch-vcs BEFORE the editable install, else `uv pip install -e .` fails with
+# "setuptools-scm was unable to detect version for /workspace".
+ARG SETUPTOOLS_SCM_PRETEND_VERSION
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 
 # Install service dependencies (base image already has UTL + UAC pre-installed)
 RUN uv pip install --system --no-sources -e .
