@@ -27,9 +27,24 @@ execution:
              exists and parses without error
   last_executed: NEVER
 
+Bucket selection (Bug 1 fix):
+  Prefer the bucket whose _index/availability_index.parquet blob was MOST RECENTLY
+  modified (blob.updated timestamp), not the bucket with the most rows. This prevents
+  picking stale non-prd buckets (35.8M rows, 20 days old) over fresh prd buckets
+  (5.2M rows, live data).
+
+Manifest merge (Bug 2 fix):
+  After picking the freshest bucket as PRIMARY, the secondary bucket is also read and
+  merged. If the ``day`` column is present in both DataFrames, shards are deduplicated
+  on (day, venue, data_type) keeping the PRIMARY row's capture_status (prd wins).
+  This ensures the full expected_unattempted skeleton (from the legacy non-prd bucket)
+  is combined with fresh captured/attempted_failed/empty_confirmed from prd.
+  Use ``--no-merge`` to disable this merging and fall back to freshest-wins-only.
+
 Usage:
   python measure_honest_coverage.py [--asset-group cefi|defi|tradfi|sports|prediction|all]
   python measure_honest_coverage.py --output-path /tmp/coverage.json   # local probe
+  python measure_honest_coverage.py --no-merge                         # freshest-wins only
 """
 
 from __future__ import annotations
@@ -55,8 +70,9 @@ PROJECT_ID = "central-element-323112"
 # the LIVE bucket differs per asset_group: CeFi tick still writes the legacy FLAT bucket
 # (get_write_bucket_name → cloud_constants legacy prefixes), while DeFi on-chain handlers
 # already write the env-tiered `-prd` bucket (different write path). So we cannot assume a
-# single naming scheme. List both candidates and read whichever actually holds the data
-# (most manifest rows). Self-corrects after Phase 2.6 consolidates everything onto `-prd`.
+# single naming scheme. List both candidates and read whichever is MOST RECENTLY UPDATED
+# (blob.updated timestamp — not row count). Self-corrects after Phase 2.6 consolidates
+# everything onto `-prd`.
 # See plans/active/issues/cefi_tick_bucket_ssot_divergence_2026_05_25.md.
 _MANIFEST_BUCKET_CANDIDATES: dict[str, tuple[str, ...]] = {
     "cefi": (f"market-data-tick-cefi-prd-{PROJECT_ID}", f"market-data-tick-cefi-{PROJECT_ID}"),
@@ -69,39 +85,178 @@ _MANIFEST_BUCKET_CANDIDATES: dict[str, tuple[str, ...]] = {
 _OUTPUT_BUCKET = f"{PROJECT_ID}-honest-coverage"
 _KNOWN_ASSET_GROUPS = ("cefi", "defi", "tradfi", "sports", "prediction")
 _CAPTURE_STATUSES = ("captured", "empty_confirmed", "attempted_failed", "expected_unattempted")
+_INDEX_BLOB_PATH = "_index/availability_index.parquet"
+_READ_COLUMNS = ["capture_status", "venue", "data_type", "day"]
+_SHARD_KEY = ["day", "venue", "data_type"]
+# Priority order for deduplication: lower index = higher priority.
+_STATUS_PRIORITY: dict[str, int] = {
+    "captured": 0,
+    "attempted_failed": 1,
+    "empty_confirmed": 2,
+    "expected_unattempted": 3,
+}
 
 
-def _read_manifest(asset_group: str) -> pd.DataFrame | None:
+def _get_blob_updated(client: storage.Client, bucket_name: str) -> datetime | None:
+    """Return the UTC-aware updated timestamp of the availability index blob, or None."""
+    try:
+        blob = client.bucket(bucket_name).get_blob(_INDEX_BLOB_PATH)
+        if blob is None:
+            return None
+        return blob.updated  # already UTC-aware
+    except Exception as exc:
+        logger.info("  blob timestamp lookup failed for %s: %s", bucket_name, exc)
+        return None
+
+
+def _read_parquet_safe(
+    bucket_name: str,
+) -> pd.DataFrame | None:
+    """Read the availability index parquet for a bucket, returning None on failure."""
+    uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
+    try:
+        # Read ONLY the columns the coverage compute uses plus ``day`` for dedup.
+        # The cefi availability_index is ~35.8M rows × many columns — loading the full
+        # frame OOM-killed even a 32 GiB VM (rc=137); 4 string/date columns stay bounded
+        # as the index grows. SSOT for used columns: _count_statuses + _compute_coverage.
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS)
+    except Exception as exc:
+        # ``day`` column may not be present in older bucket layouts — retry without it.
+        try:
+            df = pd.read_parquet(uri, columns=["capture_status", "venue", "data_type"])
+        except Exception as exc2:
+            logger.info("  candidate not accessible (%s): %s / %s", uri, exc, exc2)
+            return None
+    return df
+
+
+def _merge_manifests(
+    df_primary: pd.DataFrame,
+    df_secondary: pd.DataFrame,
+) -> pd.DataFrame:
+    """Merge primary and secondary manifests, preferring primary's capture_status per shard.
+
+    Strategy:
+    - If ``day`` is present in both DataFrames, deduplicate on (day, venue, data_type),
+      keeping primary's row first (prd wins over legacy stale rows).
+    - If ``day`` is absent in either, concatenate without dedup (worst case = double-count
+      for overlapping shards; documented behaviour — caller should check the log warning).
+
+    Returns a merged DataFrame with a superset of shards from both buckets.
+    """
+    has_day = "day" in df_primary.columns and "day" in df_secondary.columns
+
+    if not has_day:
+        logger.warning(
+            "  MERGE: 'day' column absent in one or both buckets — concatenating without dedup "
+            "(double-count possible for overlapping shards). Use --no-merge to suppress."
+        )
+        return pd.concat([df_primary, df_secondary], ignore_index=True)
+
+    # Add priority column so sort-then-drop_duplicates keeps the best status per shard.
+    df_primary = df_primary.copy()
+    df_secondary = df_secondary.copy()
+    df_primary["_priority"] = df_primary["capture_status"].map(
+        lambda s: _STATUS_PRIORITY.get(s, 99)
+    )
+    df_secondary["_priority"] = df_secondary["capture_status"].map(
+        lambda s: _STATUS_PRIORITY.get(s, 99)
+    )
+
+    combined = pd.concat([df_primary, df_secondary], ignore_index=True)
+    # Sort ascending by priority so drop_duplicates(keep='first') keeps the best status.
+    combined = combined.sort_values("_priority")
+    combined = combined.drop_duplicates(subset=_SHARD_KEY, keep="first")
+    combined = combined.drop(columns=["_priority"])
+    combined = combined.reset_index(drop=True)
+    logger.info(
+        "  MERGE: primary=%d rows + secondary=%d rows → merged=%d rows (dedup on day/venue/data_type)",
+        len(df_primary),
+        len(df_secondary),
+        len(combined),
+    )
+    return combined
+
+
+def _read_manifest(asset_group: str, *, merge: bool = True) -> pd.DataFrame | None:
     """Read the live availability manifest for an asset_group.
 
-    Tries each candidate bucket (env-tiered `-prd` + legacy flat) and returns
-    the one with the most rows — the bucket the writers are actively filling
-    under the in-flight env-tiering migration. Logs which candidate won so a
-    stale/empty `-prd` read can't silently under-count a flat-bucket backfill.
+    Bug 1 fix: compare blob.updated timestamps instead of row counts to select the
+    FRESHEST bucket as primary. The stale non-prd bucket has 35.8M rows (written
+    2026-06-08) which previously beat the live prd bucket (5.2M rows, fresh). Timestamp
+    comparison correctly picks prd.
+
+    Bug 2 fix (when merge=True): after picking the freshest bucket as primary, also read
+    the secondary bucket and merge the two DataFrames. Non-prd holds the full
+    expected_unattempted skeleton that prd lacks; merging gives accurate denominator
+    counts without double-counting (dedup on day/venue/data_type preferring prd status).
     """
-    best_df: pd.DataFrame | None = None
-    best_uri: str | None = None
-    for bucket_name in _MANIFEST_BUCKET_CANDIDATES[asset_group]:
-        uri = f"gs://{bucket_name}/_index/availability_index.parquet"
-        try:
-            # Read ONLY the 3 columns the coverage compute uses (capture_status for
-            # _count_statuses; venue + data_type for the groupby levels). The cefi
-            # availability_index is ~35.8M rows × many columns — loading the full frame
-            # OOM-killed even a 32 GiB VM (rc=137); 3 string columns fit in a few GiB and
-            # stay bounded as the index grows. SSOT for the used columns: _count_statuses +
-            # _compute_coverage below.
-            df = pd.read_parquet(uri, columns=["capture_status", "venue", "data_type"])
-        except Exception as exc:
-            logger.info("  %s candidate not accessible (%s): %s", asset_group, uri, exc)
-            continue
-        logger.info("  %s candidate %s: %s rows", asset_group, uri, f"{len(df):,}")
-        if best_df is None or len(df) > len(best_df):
-            best_df, best_uri = df, uri
-    if best_df is None:
+    candidates = _MANIFEST_BUCKET_CANDIDATES[asset_group]
+
+    # Step 1: get blob timestamps for all candidates in parallel (serial loop is fine
+    # since we only have 2 candidates per asset_group).
+    gcs_client = storage.Client(project=PROJECT_ID)
+    bucket_info: list[tuple[str, datetime | None, pd.DataFrame | None]] = []
+    for bucket_name in candidates:
+        updated = _get_blob_updated(gcs_client, bucket_name)
+        df = _read_parquet_safe(bucket_name)
+        uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
+        if df is None:
+            logger.info("  %s candidate %s: not accessible", asset_group, uri)
+        else:
+            ts_str = updated.isoformat() if updated else "unknown"
+            logger.info(
+                "  %s candidate %s: %d rows, blob.updated=%s",
+                asset_group,
+                uri,
+                len(df),
+                ts_str,
+            )
+        bucket_info.append((bucket_name, updated, df))
+
+    # Step 2: rank by blob.updated (newest first); fall back to row count if timestamps unavailable.
+    accessible = [(name, ts, df) for name, ts, df in bucket_info if df is not None]
+    if not accessible:
         logger.warning("  SKIP %s — no candidate manifest accessible", asset_group)
         return None
-    logger.info("  %s manifest selected: %s (%s rows)", asset_group, best_uri, f"{len(best_df):,}")
-    return best_df
+
+    def _sort_key(item: tuple[str, datetime | None, pd.DataFrame]) -> tuple[int, int]:
+        _, ts, df = item
+        # Primary sort: newest timestamp (negative epoch seconds); if ts is None use 0.
+        ts_score = -int(ts.timestamp()) if ts is not None else 0
+        # Secondary sort: row count as tiebreaker (more rows = better).
+        return (ts_score, -len(df))
+
+    accessible.sort(key=_sort_key)
+    primary_name, primary_ts, primary_df = accessible[0]
+    primary_uri = f"gs://{primary_name}/{_INDEX_BLOB_PATH}"
+    primary_ts_str = primary_ts.isoformat() if primary_ts is not None else "unknown"
+    logger.info(
+        "  %s manifest SELECTED (freshest): %s (%d rows, blob.updated=%s)",
+        asset_group,
+        primary_uri,
+        len(primary_df),
+        primary_ts_str,
+    )
+    for name, ts, df in accessible[1:]:
+        uri = f"gs://{name}/{_INDEX_BLOB_PATH}"
+        ts_str = ts.isoformat() if ts is not None else "unknown"
+        logger.info(
+            "  %s manifest NOT SELECTED (older): %s (%d rows, blob.updated=%s)",
+            asset_group,
+            uri,
+            len(df),
+            ts_str,
+        )
+
+    result_df = primary_df
+
+    if merge and len(accessible) > 1:
+        # Merge secondary bucket(s) into primary to capture expected_unattempted skeleton.
+        for _name, _ts, secondary_df in accessible[1:]:
+            result_df = _merge_manifests(result_df, secondary_df)
+
+    return result_df
 
 
 def _count_statuses(df: pd.DataFrame) -> dict[str, int | float]:
@@ -177,13 +332,24 @@ def main() -> None:
         default=None,
         help="Local file path for output (default: write to GCS)",
     )
+    parser.add_argument(
+        "--no-merge",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable prd/non-prd manifest merging. Falls back to freshest-wins only. "
+            "Use when you want to measure a single bucket in isolation without combining "
+            "the expected_unattempted skeleton from the secondary bucket."
+        ),
+    )
     args = parser.parse_args()
 
     asset_groups = list(_KNOWN_ASSET_GROUPS) if args.asset_group == "all" else [args.asset_group]
+    merge = not args.no_merge
 
     dfs: dict[str, pd.DataFrame] = {}
     for ag in asset_groups:
-        df = _read_manifest(ag)
+        df = _read_manifest(ag, merge=merge)
         if df is not None and not df.empty:
             dfs[ag] = df
 

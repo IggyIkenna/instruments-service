@@ -75,10 +75,17 @@ steps:
   - name: "gcr.io/cloud-builders/git"
     id: "extract-version"
     entrypoint: "bash"
+    secretEnv: ["GH_PAT"]
     args:
       - "-c"
       - |
-        git fetch --tags --force --quiet 2>/dev/null || true
+        # AUTHENTICATED --unshallow so tagged commits are REACHABLE (Cloud Build's shallow + UNAUTH
+        # clone leaves git describe unable to see the v-tag → hatch-vcs `setuptools-scm was unable to
+        # detect version` inside the docker build). GH_PAT (Secret Manager) authenticates the fetch;
+        # fall back to a plain authenticated --tags fetch if the clone is already complete.
+        git fetch "https://$$GH_PAT@github.com/IggyIkenna/instruments-service.git" --unshallow --tags --force 2>/dev/null \
+          || git fetch "https://$$GH_PAT@github.com/IggyIkenna/instruments-service.git" --tags --force 2>/dev/null \
+          || true
         VERSION=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//')
         if [ -z "$$VERSION" ]; then
           VERSION=$(git tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | head -1 | sed 's/^v//')
@@ -87,7 +94,10 @@ steps:
           VERSION=$(grep '^version' pyproject.toml 2>/dev/null | head -1 | sed 's/version = "//;s/"//')
         fi
         if [ -z "$$VERSION" ]; then
-          VERSION="$SHORT_SHA"
+          # PEP440-VALID *and* docker-tag-safe fallback. VERSION is reused as a docker -t image tag in
+          # several steps, so a `+local` segment is INVALID (docker tag chars). 0.0.0.dev0 is both a
+          # valid PEP440 version (hatch-vcs accepts it) and a valid docker tag.
+          VERSION="0.0.0.dev0"
         fi
         echo "$$VERSION" > /workspace/VERSION
         echo "Building version $$VERSION"
@@ -159,6 +169,7 @@ steps:
         VERSION=$(cat /workspace/VERSION 2>/dev/null || echo "$SHORT_SHA")
         DOCKER_BUILDKIT=1 docker build -f Dockerfile \
           --build-arg PROJECT_ID=$PROJECT_ID \
+          --build-arg SETUPTOOLS_SCM_PRETEND_VERSION=$$VERSION \
           --build-arg BUILDKIT_INLINE_CACHE=1 \
           --cache-from asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:latest \
           -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:$SHORT_SHA \
@@ -297,6 +308,13 @@ steps:
       - "-c"
       - |
         set -e
+        # WS-L (2026-06-28): `python -m build` runs hatch-vcs (source = "vcs") in an ISOLATED env that
+        # cannot resolve the version from /workspace's git checkout (Cloud Build's clone + the cross-step
+        # /workspace volume don't give the wheel build a usable describe → "setuptools-scm was unable to
+        # detect version for /workspace"). Inject the git-tag-derived version (same one the docker build
+        # gets) so hatch-vcs uses the pretend version; build's isolated env inherits process env vars.
+        export SETUPTOOLS_SCM_PRETEND_VERSION=$(cat /workspace/VERSION 2>/dev/null || echo "0.0.0.dev0")
+        echo "publish-wheel: SETUPTOOLS_SCM_PRETEND_VERSION=$$SETUPTOOLS_SCM_PRETEND_VERSION"
         pip install uv
         python -m pip install --no-cache-dir build twine keyrings.google-artifactregistry-auth
         mkdir -p /root/.config/pip
@@ -312,6 +330,13 @@ steps:
 images:
   - "asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:$SHORT_SHA"
   - "asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:latest"
+
+# Secret Manager secrets exposed to steps that declare `secretEnv` (extract-version uses GH_PAT to
+# AUTHENTICATE the git fetch --unshallow --tags so hatch-vcs (source = "vcs") sees the real v-tag).
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/GH_PAT/versions/latest
+      env: GH_PAT
 
 options:
   logging: CLOUD_LOGGING_ONLY

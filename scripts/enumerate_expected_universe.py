@@ -1386,7 +1386,13 @@ def _enumerate_v2_tradfi(
             seed_instrument_id = ""
             seed_underlying = instr.underlying or instr.instrument_id
         else:
-            seed_instrument_id = instr.instrument_id
+            # Use raw_symbol.upper() when populated to match the MTDS TradFi catalog reader
+            # convention (_canonical_tradfi_id returns raw_symbol.upper() for EQUITY/ETF/INDEX
+            # types). The Massive adapter writes instrument_key="NASDAQ:EQUITY:AAPL" which
+            # becomes instr.instrument_id, while raw_symbol="AAPL" matches the MTDS writer's
+            # captured-shard atom. Misalignment causes EU rows to persist as expected_unattempted
+            # even after capture (different dedup keys — never collide in the consolidator).
+            seed_instrument_id = instr.raw_symbol.upper() if instr.raw_symbol else instr.instrument_id
             seed_underlying = ""
         # Databento rolling-history floor per data_type (Operator 2026-06-23): the
         # subscription only includes trailing-from-today history per billing level,
