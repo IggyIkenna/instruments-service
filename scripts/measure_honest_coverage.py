@@ -35,8 +35,8 @@ Bucket selection (Bug 1 fix):
 
 Manifest merge (Bug 2 fix):
   After picking the freshest bucket as PRIMARY, the secondary bucket is also read and
-  merged. If the ``day`` column is present in both DataFrames, shards are deduplicated
-  on (day, venue, data_type) keeping the PRIMARY row's capture_status (prd wins).
+  merged. If the ``date`` column is present in both DataFrames, shards are deduplicated
+  on (date, venue, data_type) keeping the PRIMARY row's capture_status (prd wins).
   This ensures the full expected_unattempted skeleton (from the legacy non-prd bucket)
   is combined with fresh captured/attempted_failed/empty_confirmed from prd.
   Use ``--no-merge`` to disable this merging and fall back to freshest-wins-only.
@@ -86,8 +86,8 @@ _OUTPUT_BUCKET = f"{PROJECT_ID}-honest-coverage"
 _KNOWN_ASSET_GROUPS = ("cefi", "defi", "tradfi", "sports", "prediction")
 _CAPTURE_STATUSES = ("captured", "empty_confirmed", "attempted_failed", "expected_unattempted")
 _INDEX_BLOB_PATH = "_index/availability_index.parquet"
-_READ_COLUMNS = ["capture_status", "venue", "data_type", "day"]
-_SHARD_KEY = ["day", "venue", "data_type"]
+_READ_COLUMNS = ["capture_status", "venue", "data_type", "date"]
+_SHARD_KEY = ["date", "venue", "data_type"]
 # Priority order for deduplication: lower index = higher priority.
 _STATUS_PRIORITY: dict[str, int] = {
     "captured": 0,
@@ -115,13 +115,13 @@ def _read_parquet_safe(
     """Read the availability index parquet for a bucket, returning None on failure."""
     uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
     try:
-        # Read ONLY the columns the coverage compute uses plus ``day`` for dedup.
+        # Read ONLY the columns the coverage compute uses plus ``date`` for dedup.
         # The cefi availability_index is ~35.8M rows × many columns — loading the full
         # frame OOM-killed even a 32 GiB VM (rc=137); 4 string/date columns stay bounded
         # as the index grows. SSOT for used columns: _count_statuses + _compute_coverage.
         df = pd.read_parquet(uri, columns=_READ_COLUMNS)
     except Exception as exc:
-        # ``day`` column may not be present in older bucket layouts — retry without it.
+        # ``date`` column may not be present in older bucket layouts — retry without it.
         try:
             df = pd.read_parquet(uri, columns=["capture_status", "venue", "data_type"])
         except Exception as exc2:
@@ -137,18 +137,18 @@ def _merge_manifests(
     """Merge primary and secondary manifests, preferring primary's capture_status per shard.
 
     Strategy:
-    - If ``day`` is present in both DataFrames, deduplicate on (day, venue, data_type),
+    - If ``date`` is present in both DataFrames, deduplicate on (date, venue, data_type),
       keeping primary's row first (prd wins over legacy stale rows).
-    - If ``day`` is absent in either, concatenate without dedup (worst case = double-count
+    - If ``date`` is absent in either, concatenate without dedup (worst case = double-count
       for overlapping shards; documented behaviour — caller should check the log warning).
 
     Returns a merged DataFrame with a superset of shards from both buckets.
     """
-    has_day = "day" in df_primary.columns and "day" in df_secondary.columns
+    has_day = "date" in df_primary.columns and "date" in df_secondary.columns
 
     if not has_day:
         logger.warning(
-            "  MERGE: 'day' column absent in one or both buckets — concatenating without dedup "
+            "  MERGE: 'date' column absent in one or both buckets — concatenating without dedup "
             "(double-count possible for overlapping shards). Use --no-merge to suppress."
         )
         return pd.concat([df_primary, df_secondary], ignore_index=True)
@@ -170,7 +170,7 @@ def _merge_manifests(
     combined = combined.drop(columns=["_priority"])
     combined = combined.reset_index(drop=True)
     logger.info(
-        "  MERGE: primary=%d rows + secondary=%d rows → merged=%d rows (dedup on day/venue/data_type)",
+        "  MERGE: primary=%d rows + secondary=%d rows → merged=%d rows (dedup on date/venue/data_type)",
         len(df_primary),
         len(df_secondary),
         len(combined),
