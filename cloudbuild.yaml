@@ -78,7 +78,9 @@ steps:
     args:
       - "-c"
       - |
-        git fetch --tags --force --quiet 2>/dev/null || true
+        # --unshallow so tagged commits are REACHABLE (a plain --tags fetch on Cloud Build's shallow
+        # clone leaves git describe unable to see the tag); fall back to a plain tags fetch if already complete.
+        git fetch --unshallow --tags --force 2>/dev/null || git fetch --tags --force 2>/dev/null || true
         VERSION=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//')
         if [ -z "$$VERSION" ]; then
           VERSION=$(git tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | head -1 | sed 's/^v//')
@@ -87,7 +89,9 @@ steps:
           VERSION=$(grep '^version' pyproject.toml 2>/dev/null | head -1 | sed 's/version = "//;s/"//')
         fi
         if [ -z "$$VERSION" ]; then
-          VERSION="$SHORT_SHA"
+          # PEP440-VALID fallback (bare $SHORT_SHA is NOT a valid version → hatch-vcs
+          # `InvalidVersion` inside the docker build). Local-version segment keeps it valid.
+          VERSION="0.0.0+g$SHORT_SHA"
         fi
         echo "$$VERSION" > /workspace/VERSION
         echo "Building version $$VERSION"
