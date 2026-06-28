@@ -152,6 +152,14 @@ def _build_fixtures_index(
     if league_filter:
         filt = filt[filt["league_id"].astype(str).str.upper() == league_filter.upper()]
 
+    # IS writes instrument_count; row_count is a legacy/unused field (always 0).
+    # Use instrument_count for fixture counting; keep row_count as fallback.
+    if "instrument_count" in filt.columns:
+        filt["instrument_count"] = pd.to_numeric(
+            filt["instrument_count"], errors="coerce"
+        ).fillna(0)
+    else:
+        filt["instrument_count"] = 0
     if "row_count" in filt.columns:
         filt["row_count"] = pd.to_numeric(filt["row_count"], errors="coerce").fillna(0).astype(int)
     else:
@@ -168,7 +176,7 @@ def _compute_season_summary(
     groups = filt.groupby(["league_id", "season_year"], sort=True)
     for (league_id, season_year), grp in groups:
         captured_count = int(
-            grp.loc[grp["capture_status"] == _CAP_CAPTURED, "row_count"].sum()
+            grp.loc[grp["capture_status"] == _CAP_CAPTURED, "instrument_count"].sum()
         )
         expected_count: int | None = get_expected_fixture_count(str(league_id), int(season_year))
         if expected_count is not None and expected_count > 0:
