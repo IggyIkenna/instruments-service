@@ -20,19 +20,21 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.registry.market_data_categories import VENUES_BY_ASSET_GROUP
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
     from instruments_service.engine.orchestrator._pkg_ref import orch_namespace as _orch
 
 __all__ = [
-    "_CEFI_VENUES",
     "_SPORTS_PROVIDER_VENUES",
-    "_TRADFI_VENUES",
+    "_TRADFI_NON_VENUE_KEYS",
     "_VENUE_ADAPTER_EPOCH",
     "_get_venue_epoch",
     "_should_skip_shard",
     "earliest_venue_date",
+    "expand_cefi_tardis_endpoints",
     "filter_instruments_by_date",
     "get_venues_for_asset_groups",
     "is_venue_available",
@@ -88,71 +90,75 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
 }
 
 
-_CEFI_VENUES: list[str] = [
-    "BINANCE-SPOT",
-    "BINANCE-FUTURES",
-    # Binance COIN-M (inverse/delivery) perps + dated futures.
-    # Distinct Tardis endpoint ``binance-delivery`` from USDT-M (BINANCE-FUTURES).
-    # cefi_universe_capture_rule 2026-06-24.
-    "BINANCE-DELIVERY",
-    "BYBIT",
-    # OKX: 3 separate Tardis exchanges — okex (spot), okex-swap (perps), okex-futures (fixed-expiry)
-    # Do NOT add bare "OKX" — it maps to same Tardis exchange as OKX-SPOT (duplicate data).
-    "OKX-SPOT",
-    "OKX-SWAP",
-    "OKX-FUTURES",
-    "DERIBIT",
-    # DERIBIT-COMBO: live multi-leg options strategies (straddles, strangles, spreads, condors).
-    # Historical combos are covered by DERIBIT → Tardis. This venue fetches LIVE active combos
-    # from the Deribit public REST API (kind=combo, expired=false).
-    "DERIBIT-COMBO",
-    "COINBASE-SPOT",
-    # Coinbase Derivatives (perps) via Tardis ``coinbase-international`` — distinct
-    # canonical venue so the perp-gate pairs it with COINBASE-SPOT (2026-06-23).
-    "COINBASE-FUTURES",
-    # Bybit spot via Tardis ``bybit-spot`` — distinct from the BYBIT perp/future
-    # endpoint; pairs with BYBIT perps on the shared entity prefix (2026-06-23).
-    "BYBIT-SPOT",
-    "HYPERLIQUID",
-    "UPBIT",
-    "ASTER",
-    # On-chain perp CLOBs classified as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, like
-    # HYPERLIQUID/ASTER). Reclassified here from the defi enumeration 2026-06-25
-    # (instruments_foundation_completeness_2026_06_24.md) — they were wrongly
-    # captured into the defi instrument-catalog; adapters relocated to
-    # adapters/cefi/. They ride the standard cefi backfill.
-    "EXTENDED-STARKNET",
-    "PACIFICA-SOLANA",
-    "LIGHTER-ZKSYNC",
-    # Tier-3 CeFi (Tardis archive — factory entries exist, added to orchestrator 2026-05-12)
-    "KRAKEN-FUTURES",
-    # KRAKEN-SPOT: Tardis ``kraken`` exchange (BASE/QUOTE spot pairs). Added 2026-06-17
-    # (mvp_instrument_universe_gap_audit): the factory adapter mapping + UAC venue_mapping
-    # (genesis 2020-01-01) + 76k captured market-data rows all existed, but the venue was
-    # never in this enumeration list → reference-data invisible while market data captured.
-    # Pairs with the Kraken ``/``-separator + ``XBT``→``BTC`` parse fix in tardis/parsing.py.
-    "KRAKEN-SPOT",
-    "BITFINEX-FUTURES",
-    # Tier-3 CeFi (Tardis archive — added 2026-05-22: factory entries existed, missing from batch)
-    "BITGET-SPOT",
-    "BITGET-FUTURES",
-    "BITFINEX-SPOT",
-]
+# ---------------------------------------------------------------------------
+# CeFi Tardis grain-adapter
+# ---------------------------------------------------------------------------
+# UAC's VENUES_BY_ASSET_GROUP["cefi"] carries the bare execution-context canonical
+# venue names (e.g. "OKX", "COINBASE"). IS fetches instruments via the Tardis
+# endpoint API, which exposes SEPARATE endpoints per OKX market type:
+#   OKX → okex (spot), okex-swap (perps/funding), okex-futures (fixed-expiry)
+# Mapping bare OKX to all three ensures IS captures the full OKX universe.
+# Similarly, bare COINBASE (UAC execution alias) maps to COINBASE-SPOT for
+# instrument fetch; COINBASE-FUTURES is already a separate UAC cefi entry
+# and passes through unchanged.
+#
+# Existing comment in the former _CEFI_VENUES:
+#   "OKX: 3 separate Tardis exchanges — okex (spot), okex-swap (perps), okex-futures
+#   (fixed-expiry). Do NOT add bare OKX — duplicate data."
+# This function encodes that rule explicitly so IS never needs a parallel list.
 
 
-_TRADFI_VENUES: list[str] = [
-    "CME",
-    "NASDAQ",
-    "NYSE",
-    "CBOE",
-    "ICE",
-    "FX",
-    # KRX (Korea Exchange) single stocks — Yahoo-sourced (.KS), added 2026-06-24
-    # (KRX venue close-out). Mirrors NASDAQ/NYSE as a tradfi equities venue; the
-    # 3 underliers (HYUNDAI 005380 / SAMSUNG 005930 / SKHYNIX 000660) are in UAC
-    # KRX_EQUITIES. source=yahoo (data source, not a venue).
-    "KRX",
-]
+def expand_cefi_tardis_endpoints(canonical_venues: list[str]) -> list[str]:
+    """Map UAC canonical CeFi venues to the Tardis-endpoint venues IS fetches.
+
+    UAC's ``VENUES_BY_ASSET_GROUP["cefi"]`` carries the bare execution-context
+    canonical venue names (e.g. ``"OKX"``, ``"COINBASE"``).  IS fetches instruments
+    via the Tardis per-endpoint API, which requires the split forms for multi-endpoint
+    venues.  This function encodes the grain mapping so IS no longer maintains a
+    parallel hand-edited venue list.
+
+    Mapping rules:
+    - ``"OKX"`` → ``["OKX-SPOT", "OKX-SWAP", "OKX-FUTURES"]``
+      OKX: 3 separate Tardis exchanges (okex/okex-swap/okex-futures).
+      Do NOT add bare "OKX" — it maps to the same Tardis exchange as OKX-SPOT
+      (duplicate data).
+    - ``"COINBASE"`` → ``["COINBASE-SPOT"]``
+      UAC keeps the bare ``COINBASE`` as an execution-context alias.  IS fetches
+      via the COINBASE-SPOT Tardis endpoint.  ``COINBASE-FUTURES`` is already a
+      separate UAC cefi entry and passes through unchanged.
+    - Every other UAC cefi venue → passthrough (already the correct Tardis endpoint
+      name, e.g. ``BINANCE-SPOT``, ``KALSHI-PERP``, ``POLYMARKET-PERP``).
+
+    Args:
+        canonical_venues: A list of UAC canonical cefi venue names
+            (e.g. ``VENUES_BY_ASSET_GROUP["cefi"]``).
+
+    Returns:
+        The expanded list of Tardis-endpoint venue names IS uses for enumeration.
+        Includes ``KALSHI-PERP`` and ``POLYMARKET-PERP`` automatically because they
+        appear in the UAC cefi list (fixing the former ``_CEFI_VENUES`` omission).
+    """
+    result: list[str] = []
+    for venue in canonical_venues:
+        if venue == "OKX":
+            result.extend(["OKX-SPOT", "OKX-SWAP", "OKX-FUTURES"])
+        elif venue == "COINBASE":
+            result.append("COINBASE-SPOT")
+        else:
+            result.append(venue)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# TradFi non-venue filter
+# ---------------------------------------------------------------------------
+# UAC keeps YAHOO_FINANCE in VENUES_BY_ASSET_GROUP["tradfi"] as a legacy
+# source-as-venue artifact (see UAC market_data_categories.py ~line 293:
+# "legacy source-as-venue (rolling VIX 15m / KRW-USD daily)").  It is NOT a
+# real fetchable venue — instruments are NOT discoverable via a Yahoo Finance
+# venue endpoint; the data comes as a Yahoo Finance sourced field on ICE/FX
+# instruments.  IS excludes it from the enumeration list.
+_TRADFI_NON_VENUE_KEYS: frozenset[str] = frozenset({"YAHOO_FINANCE"})
 
 
 _SPORTS_PROVIDER_VENUES: dict[str, list[str]] = {
@@ -305,22 +311,48 @@ def reject_junk_instruments(records: list) -> list:
 
 
 def get_venues_for_asset_groups(asset_groups: list[str]) -> list[str]:
-    """Return UAC canonical venue names for the requested asset groups (CEFI, DEFI, …)."""
+    """Return the IS instrument-fetch venue list for the requested asset groups (CEFI, DEFI, …).
+
+    CEFI: applies ``expand_cefi_tardis_endpoints`` to ``VENUES_BY_ASSET_GROUP["cefi"]`` so
+        bare UAC canonical aliases (``OKX``, ``COINBASE``) are expanded to the Tardis
+        per-endpoint forms IS actually fetches from.  ``KALSHI-PERP`` and
+        ``POLYMARKET-PERP`` are included automatically (they are UAC cefi venues).
+
+    TRADFI: reads ``VENUES_BY_ASSET_GROUP["tradfi"]`` minus ``_TRADFI_NON_VENUE_KEYS``
+        (currently ``YAHOO_FINANCE`` — a legacy source-as-venue artifact, NOT a real
+        fetchable venue; see UAC market_data_categories.py ~line 293).
+
+    DEFI: uses the assembled ``_DEFI_VENUES`` list built from ``_build_defi_venues()``
+        (subgraph-derived union static union Solana). Decision D (operator 2026-06-29): IS
+        keeps its own assembled subset; not a direct UAC read for defi.
+
+    SPORTS: IS owns reference-data providers (API_FOOTBALL/FOOTYSTATS/UNDERSTAT/
+        TRANSFERMARKT/SOCCER_FOOTBALL_INFO/OPEN_METEO).  These are DISJOINT from the
+        UAC sports venues (ODDS_API/PINNACLE/BETFAIR*/DRAFTKINGS/FANDUEL), which are
+        odds/market-data venues that live in MTDS, not IS.  Decision C (operator
+        2026-06-29): two separate registries; this list is IS-owned and EXEMPT from the
+        set-equality invariant with UAC.
+
+    PREDICTION: reads ``VENUES_BY_ASSET_GROUP["prediction"]`` directly (UAC SSOT).
+        Previously a local literal ``["POLYMARKET", "KALSHI"]``; now UAC-sourced so any
+        new prediction venues added to UAC are auto-included.
+    """
     venues: list[str] = []
     for cat in asset_groups:
         cat_upper = cat.upper()
         if cat_upper in ("CEFI", "ALL"):
-            venues.extend(_orch._CEFI_VENUES)
+            venues.extend(expand_cefi_tardis_endpoints(VENUES_BY_ASSET_GROUP["cefi"]))
         if cat_upper in ("TRADFI", "ALL"):
-            venues.extend(_orch._TRADFI_VENUES)
+            venues.extend(v for v in VENUES_BY_ASSET_GROUP["tradfi"] if v not in _TRADFI_NON_VENUE_KEYS)
         if cat_upper in ("DEFI", "ALL"):
             venues.extend(_orch._DEFI_VENUES)
         if cat_upper in ("SPORTS", "ALL"):
-            # instruments-service owns fixtures + slow-moving reference data
-            # (teams, leagues, players, referees, venues) via API-Football.
+            # IS owns fixtures + slow-moving reference data (teams, leagues, players,
+            # referees, venues) via API-Football and enrichment providers.
             # Betting market instruments (the actual tradeable positions) come from
             # market-tick-data-service via Odds API — documented exception because
-            # markets are only discoverable alongside odds data.
+            # markets are only discoverable alongside odds data.  The UAC sports venues
+            # (ODDS_API/PINNACLE/BETFAIR*/DRAFTKINGS/FANDUEL) are MTDS-owned, not IS.
             # Enrichment providers (no instruments — reference data for features):
             # FootyStats (match stats), Understat (xG), Transfermarkt (player values),
             # SoccerFootball.info (standings), Open-Meteo (weather).
@@ -335,9 +367,11 @@ def get_venues_for_asset_groups(asset_groups: list[str]) -> list[str]:
                 ]
             )
         if cat_upper in ("PREDICTION", "ALL"):
-            # POLYMARKET + KALSHI: prediction market instruments (crypto up/down, soccer, macro).
+            # Prediction markets (binary / multi-outcome): POLYMARKET + KALSHI.
+            # Sourced from UAC VENUES_BY_ASSET_GROUP["prediction"] (was a local literal
+            # — wired to UAC per instrument_universe_registry_consolidation_2026_06_29).
             # No auth required — Gamma API (Polymarket) and public API (Kalshi) are keyless.
-            venues.extend(["POLYMARKET", "KALSHI"])
+            venues.extend(VENUES_BY_ASSET_GROUP["prediction"])
     return list(dict.fromkeys(venues))
 
 

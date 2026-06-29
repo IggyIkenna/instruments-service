@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -53,13 +55,16 @@ def _canonical_manifest_venue_chain(venue_str: str) -> tuple[str, str]:
         return venue_str, ""
     # On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET)
     # are GLUED ``VENUE-CHAIN`` strings whose suffix IS a KNOWN_CHAIN, but they are
-    # CeFi venues (in ``_CEFI_VENUES``, like HYPERLIQUID/ASTER) — NOT defi pools. The
-    # split below is the DeFi PROTOCOL-CHAIN→venue+chain rule; applying it to these
+    # CeFi venues (VENUE_TO_ASSET_GROUP == "cefi", like HYPERLIQUID/ASTER) — NOT defi pools.
+    # The split below is the DeFi PROTOCOL-CHAIN→venue+chain rule; applying it to these
     # mis-stamped the manifest ``asset_group=defi`` + ``chain=<L2>`` (the G1.3 320-row
     # contamination). Keep them as the full cefi venue with ``chain=""`` so the
     # manifest row matches the by_date PATH (``venue=LIGHTER-ZKSYNC``) and the cefi
     # asset_group resolution at the call site (_cat = "cefi" when chain is "").
-    if venue_str in _orch._CEFI_VENUES:
+    # Use UAC reverse-lookup: cefi venues (incl. on-chain perp CLOBs like
+    # LIGHTER-ZKSYNC/PACIFICA-SOLANA/EXTENDED-STARKNET) must NOT be DeFi-split.
+    # VENUE_TO_ASSET_GROUP resolves from VENUES_BY_ASSET_GROUP (the canonical registry).
+    if VENUE_TO_ASSET_GROUP.get(venue_str) == "cefi":
         return venue_str, ""
     from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: imports-inside-functions
         KNOWN_CHAINS,
@@ -211,7 +216,7 @@ def _write_venue(
                         service_emission_state=None,
                     )
                 else:
-                    _cat = "defi" if manifest_chain else ("tradfi" if venue_str in _orch._TRADFI_VENUES else "cefi")
+                    _cat = "defi" if manifest_chain else (VENUE_TO_ASSET_GROUP.get(venue_str, "cefi"))
                     _rk: dict[str, str] = {"date": date, "venue": manifest_venue}
                     if manifest_chain:
                         _rk["chain"] = manifest_chain

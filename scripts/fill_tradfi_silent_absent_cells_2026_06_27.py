@@ -94,7 +94,7 @@ PROJECT_ID = "central-element-323112"
 MANIFEST_BLOB = "_index/availability_index.parquet"
 SNAPSHOT_BLOB = "_index/snapshots/pre_silent_absent_fill_2026_06_27.parquet"
 
-# All tradfi venues (mirrors _TRADFI_VENUES in venue_core.py).
+# All tradfi venues (mirrors get_venues_for_asset_groups(["TRADFI"]) from venue_core.py).
 # FX is 24/7 — is_non_trading_day always returns False for FX.
 # YAHOO_FINANCE is a legacy source-as-venue, NOT a canonical venue — not in scope.
 _ALL_TRADFI_VENUES: frozenset[str] = frozenset({
