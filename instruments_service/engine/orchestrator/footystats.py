@@ -690,6 +690,18 @@ def _load_scheduled_footystats_fixture_map(bucket: str, date: str) -> dict[str, 
     return result
 
 
+def _kickoff_iso_or_none(ko: _orch.pd.Timestamp | None) -> str | None:
+    """Serialize a scheduled-fixture kickoff Timestamp to an ISO-8601 string.
+
+    The ``footystats_odds`` table types ``kickoff_utc`` as a string (matching the
+    API odds path). pyarrow rejects ``pd.Timestamp`` objects in a string column
+    (``"Expected bytes, got a 'Timestamp' object"``), so the NaN-fill rows — whose
+    kickoff values come from ``_load_scheduled_footystats_fixture_map`` as
+    ``pd.Timestamp`` — must be serialized to ISO strings before the parquet write.
+    """
+    return ko.isoformat() if ko is not None else None
+
+
 async def _fetch_footystats_odds(
     date: str,
     api_key: str,
@@ -756,7 +768,9 @@ async def _fetch_footystats_odds(
         )
         if not odds_rows and _scheduled_fixture_map:
             odds_rows = [
-                {"canonical_fixture_id": fid, "kickoff_utc": ko} for fid, ko in _scheduled_fixture_map.items() if fid
+                {"canonical_fixture_id": fid, "kickoff_utc": _kickoff_iso_or_none(ko)}
+                for fid, ko in _scheduled_fixture_map.items()
+                if fid
             ]
             _orch.logger.info(
                 "FootyStats odds: no API data for date=%s — NaN-filling %d scheduled fixtures",
@@ -799,7 +813,10 @@ async def _fetch_footystats_odds(
                 )
                 _missing = {fid: ko for fid, ko in _scheduled_fixture_map.items() if fid and fid not in _returned_ids}
                 if _missing:
-                    _nan_rows = [{"canonical_fixture_id": fid, "kickoff_utc": ko} for fid, ko in _missing.items()]
+                    _nan_rows = [
+                        {"canonical_fixture_id": fid, "kickoff_utc": _kickoff_iso_or_none(ko)}
+                        for fid, ko in _missing.items()
+                    ]
                     _nan_df = _orch.pd.DataFrame(_nan_rows)
                     df = _orch.pd.concat([df, _nan_df], ignore_index=True)
                     _orch.logger.info(
