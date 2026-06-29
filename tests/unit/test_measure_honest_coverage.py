@@ -172,17 +172,17 @@ class TestManifestMerge:
     def test_merge_with_date_column_deduplicates_on_shard_key(self, mod: ModuleType) -> None:
         """Primary (prd) captured rows override secondary expected_unattempted for same shard."""
         primary_df = _make_df_with_day([
-            # prd has live captured data for day 2026-06-28
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
-            {"capture_status": "captured", "venue": "KRAKEN", "data_type": "tick", "date": "2026-06-28"},
+            # prd has live captured data for day 2026-06-28 (instrument_id enables per-shard dedup)
+            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "BTCUSDT"},
+            {"capture_status": "captured", "venue": "KRAKEN", "data_type": "tick", "date": "2026-06-28", "instrument_id": "ETHUSDT"},
         ])
         secondary_df = _make_df_with_day([
-            # non-prd has stale expected_unattempted for same shards PLUS unique skeleton rows
-            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
-            {"capture_status": "expected_unattempted", "venue": "KRAKEN", "data_type": "tick", "date": "2026-06-28"},
+            # non-prd has stale expected_unattempted for the same instruments — should be overridden
+            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "BTCUSDT"},
+            {"capture_status": "expected_unattempted", "venue": "KRAKEN", "data_type": "tick", "date": "2026-06-28", "instrument_id": "ETHUSDT"},
             # unique skeleton rows from non-prd (older days without prd coverage)
-            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-01-01"},
-            {"capture_status": "expected_unattempted", "venue": "KRAKEN", "data_type": "tick", "date": "2026-01-01"},
+            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-01-01", "instrument_id": "BTCUSDT"},
+            {"capture_status": "expected_unattempted", "venue": "KRAKEN", "data_type": "tick", "date": "2026-01-01", "instrument_id": "ETHUSDT"},
         ])
 
         result = mod._merge_manifests(primary_df, secondary_df)
@@ -200,16 +200,46 @@ class TestManifestMerge:
         assert len(jan01_rows) == 2
         assert (jan01_rows["capture_status"] == "expected_unattempted").all()
 
+    def test_merge_instrument_id_prevents_cross_instrument_collapse(self, mod: ModuleType) -> None:
+        """With instrument_id in both DFs, different instruments on the same (date,venue,data_type)
+        are kept separately — not collapsed by the 3-column fallback key."""
+        primary_df = _make_df_with_day([
+            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "BTCUSDT"},
+            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "ETHUSDT"},
+        ])
+        # Secondary (oracle eu_only): SOLUSDT is new (not in prd); BTCUSDT overlaps (prd wins)
+        secondary_df = _make_df_with_day([
+            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "SOLUSDT"},
+            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "BTCUSDT"},
+        ])
+
+        result = mod._merge_manifests(primary_df, secondary_df)
+
+        # 3 rows: BTC+ETH captured from prd + SOL eu from oracle (BTC eu dropped as prd has it)
+        assert len(result) == 3
+
+        btc = result[result["instrument_id"] == "BTCUSDT"]
+        assert len(btc) == 1
+        assert btc.iloc[0]["capture_status"] == "captured"  # prd wins
+
+        eth = result[result["instrument_id"] == "ETHUSDT"]
+        assert len(eth) == 1
+        assert eth.iloc[0]["capture_status"] == "captured"
+
+        sol = result[result["instrument_id"] == "SOLUSDT"]
+        assert len(sol) == 1
+        assert sol.iloc[0]["capture_status"] == "expected_unattempted"  # only in oracle
+
     def test_merge_status_priority_captured_beats_expected_unattempted(self, mod: ModuleType) -> None:
         """captured > attempted_failed > empty_confirmed > expected_unattempted."""
         primary_df = _make_df_with_day([
-            {"capture_status": "captured", "venue": "A", "data_type": "t", "date": "2026-06-28"},
-            {"capture_status": "attempted_failed", "venue": "B", "data_type": "t", "date": "2026-06-28"},
+            {"capture_status": "captured", "venue": "A", "data_type": "t", "date": "2026-06-28", "instrument_id": "X"},
+            {"capture_status": "attempted_failed", "venue": "B", "data_type": "t", "date": "2026-06-28", "instrument_id": "Y"},
         ])
         secondary_df = _make_df_with_day([
-            # These overlap with primary — secondary's status should be dropped
-            {"capture_status": "expected_unattempted", "venue": "A", "data_type": "t", "date": "2026-06-28"},
-            {"capture_status": "expected_unattempted", "venue": "B", "data_type": "t", "date": "2026-06-28"},
+            # Same instruments overlap with primary — secondary's status should be dropped
+            {"capture_status": "expected_unattempted", "venue": "A", "data_type": "t", "date": "2026-06-28", "instrument_id": "X"},
+            {"capture_status": "expected_unattempted", "venue": "B", "data_type": "t", "date": "2026-06-28", "instrument_id": "Y"},
         ])
 
         result = mod._merge_manifests(primary_df, secondary_df)
@@ -303,6 +333,10 @@ class TestManifestMerge:
         def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
             return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
 
+        # _read_parquet_eu_only is called for the secondary merge read — mock it too.
+        def fake_read_parquet_eu_only(bucket_name: str) -> pd.DataFrame | None:
+            return legacy_df.copy() if "prd" not in bucket_name else None
+
         merge_calls: list[str] = []
         original_merge = mod._merge_manifests
 
@@ -315,6 +349,7 @@ class TestManifestMerge:
         with (
             patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
             patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch.object(mod, "_read_parquet_eu_only", side_effect=fake_read_parquet_eu_only),
             patch.object(mod, "_merge_manifests", side_effect=tracking_merge),
             patch("google.cloud.storage.Client"),
         ):
