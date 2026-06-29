@@ -428,7 +428,9 @@ def _compute_coverage_with_stub(
 
     class _FakeChecker:
         @staticmethod
-        def check_enumeration_completeness(ag: str, df_arg: object) -> object:
+        def check_enumeration_completeness(
+            ag: str, df_arg: object, *, diagnose: bool = False
+        ) -> object:
             return stub_result
 
     with patch.object(mod, "_get_completeness_module", return_value=_FakeChecker()):
