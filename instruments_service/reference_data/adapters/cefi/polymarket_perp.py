@@ -80,7 +80,7 @@ class PolymarketPerpReferenceDataAdapter(BaseReferenceDataAdapter):
 
     Field mapping (beta — confirm against live endpoint):
       instrument_key  = market_id (e.g. "BTC-USD")
-      venue           = "polymarket-perp"
+      venue           = "POLYMARKET-PERP"  (canonical UAC venue; matches VENUES_BY_ASSET_GROUP["cefi"])
       instrument_type = InstrumentType.PERPETUAL
       raw_symbol      = market_id
       base_asset      = underlying crypto symbol (e.g. "BTC")
@@ -95,8 +95,8 @@ class PolymarketPerpReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
-        """Return the venue identifier."""
-        return "polymarket-perp"
+        """Return the venue identifier (canonical UAC casing)."""
+        return "POLYMARKET-PERP"
 
     async def get_instruments(
         self,

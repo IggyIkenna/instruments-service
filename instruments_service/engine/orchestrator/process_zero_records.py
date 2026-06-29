@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -493,7 +495,7 @@ def _zero_records_non_sports(
     # Write 0-count manifest entries per venue so the manifest marks the day as
     # processed and won't re-fetch without --force. This prevents permanent gaps
     # in instrument data for every weekend and exchange holiday.
-    tradfi_active = [v for v in active_venues if v in _orch._TRADFI_VENUES]
+    tradfi_active = [v for v in active_venues if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"]
     if tradfi_active:
         target_dt = _orch.date_type.fromisoformat(date)
         non_trading_venues = [v for v in tradfi_active if _orch.is_non_trading_day(v, target_dt)]

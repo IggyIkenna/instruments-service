@@ -129,8 +129,8 @@ class TestCanonicalManifestVenueChainCefiOnChain:
 
         Regression for the G1.3 320-row contamination: the manifest writer split
         these glued cefi venues on their KNOWN_CHAIN suffix → manifest
-        asset_group=defi + chain=<L2>. They are cefi venues (in _CEFI_VENUES, like
-        HYPERLIQUID/ASTER) and MUST carry chain="" so _cat resolves to cefi.
+        asset_group=defi + chain=<L2>. They are cefi venues (VENUE_TO_ASSET_GROUP=="cefi",
+        like HYPERLIQUID/ASTER) and MUST carry chain="" so _cat resolves to cefi.
         """
         from instruments_service.engine.orchestrator import _canonical_manifest_venue_chain
 
@@ -205,6 +205,125 @@ class TestGetVenuesForCategories:
         venues_upper = get_venues_for_asset_groups(["CEFI"])
         venues_lower = get_venues_for_asset_groups(["cefi"])
         assert venues_upper == venues_lower
+
+
+# ---------------------------------------------------------------------------
+# UAC invariant tests — venue_core refactor (instrument_universe_registry_consolidation)
+# ---------------------------------------------------------------------------
+
+
+class TestVenueProducerUACInvariant:
+    """Invariant tests asserting each AG's IS venue producer == the expected UAC-derived set.
+
+    For CEFI: IS uses expand_cefi_tardis_endpoints(UAC["cefi"]) — the invariant
+    asserts the round-trip.
+    For TRADFI: IS uses UAC["tradfi"] minus YAHOO_FINANCE (named filter).
+    For PREDICTION: IS uses UAC["prediction"] directly.
+    For DEFI: EXEMPT — IS produces a hardcoded subset of UAC (Decision D, operator
+      2026-06-29); set-equality is intentionally NOT asserted.  Asserting the
+      exempt relationship instead (IS defi is a subset of UAC defi, not equal).
+    For SPORTS: EXEMPT — IS owns reference-data providers (API_FOOTBALL/FOOTYSTATS/
+      etc.); UAC sports = market-data/odds venues (ODDS_API/PINNACLE/…) owned by
+      MTDS.  Two orthogonal registries (Decision C, operator 2026-06-29); set-equality
+      is intentionally NOT asserted.
+    """
+
+    def test_cefi_set_equals_expand_uac_cefi(self) -> None:
+        """IS cefi venues == expand_cefi_tardis_endpoints(UAC cefi) — no drift."""
+        from unified_api_contracts.registry.market_data_categories import VENUES_BY_ASSET_GROUP
+
+        from instruments_service.engine.orchestrator import expand_cefi_tardis_endpoints
+
+        expected = set(expand_cefi_tardis_endpoints(VENUES_BY_ASSET_GROUP["cefi"]))
+        actual = set(get_venues_for_asset_groups(["CEFI"]))
+        assert actual == expected, (
+            f"CeFi venue producer diverges from UAC.\n"
+            f"  Extra in IS (not in expand(UAC)): {actual - expected}\n"
+            f"  Missing in IS (in expand(UAC)): {expected - actual}"
+        )
+
+    def test_cefi_includes_kalshi_perp_and_polymarket_perp(self) -> None:
+        """KALSHI-PERP and POLYMARKET-PERP must be in the CeFi IS list (UAC cefi venues).
+
+        These were previously omitted from _CEFI_VENUES (the bug fixed by this refactor).
+        The expand function auto-includes them as passthrough because they appear in the
+        UAC cefi list.
+        """
+        venues = set(get_venues_for_asset_groups(["CEFI"]))
+        assert "KALSHI-PERP" in venues, "KALSHI-PERP must be in IS cefi (was silently omitted before)"
+        assert "POLYMARKET-PERP" in venues, "POLYMARKET-PERP must be in IS cefi (was silently omitted before)"
+
+    def test_tradfi_set_equals_uac_tradfi_minus_yahoo_finance(self) -> None:
+        """IS tradfi venues == UAC tradfi minus YAHOO_FINANCE (named non-venue filter)."""
+        from unified_api_contracts.registry.market_data_categories import VENUES_BY_ASSET_GROUP
+
+        expected = set(VENUES_BY_ASSET_GROUP["tradfi"]) - {"YAHOO_FINANCE"}
+        actual = set(get_venues_for_asset_groups(["TRADFI"]))
+        assert actual == expected, (
+            f"TradFi venue producer diverges from UAC minus YAHOO_FINANCE.\n"
+            f"  Extra in IS: {actual - expected}\n"
+            f"  Missing in IS: {expected - actual}"
+        )
+
+    def test_tradfi_excludes_yahoo_finance(self) -> None:
+        """YAHOO_FINANCE must NOT appear in the IS tradfi enumeration list.
+
+        It is a legacy source-as-venue artifact in UAC (not a real fetchable venue).
+        The _TRADFI_NON_VENUE_KEYS filter excludes it explicitly.
+        """
+        venues = set(get_venues_for_asset_groups(["TRADFI"]))
+        assert "YAHOO_FINANCE" not in venues, "YAHOO_FINANCE must be excluded (not a real venue)"
+
+    def test_prediction_set_equals_uac_prediction(self) -> None:
+        """IS prediction venues == UAC VENUES_BY_ASSET_GROUP["prediction"] exactly."""
+        from unified_api_contracts.registry.market_data_categories import VENUES_BY_ASSET_GROUP
+
+        expected = set(VENUES_BY_ASSET_GROUP["prediction"])
+        actual = set(get_venues_for_asset_groups(["PREDICTION"]))
+        assert actual == expected, (
+            f"Prediction venue producer diverges from UAC.\n"
+            f"  Extra in IS: {actual - expected}\n"
+            f"  Missing in IS: {expected - actual}"
+        )
+
+    def test_defi_exempt_is_subset_of_uac(self) -> None:
+        """DEFI is EXEMPT from set-equality (Decision D, operator 2026-06-29).
+
+        IS builds its DeFi venue list from _build_defi_venues() (subgraph-derived union
+        static union Solana), which is a SUBSET of UAC _ALL_DEFI_VENUES.  The ~70 UAC-only
+        defi venues that IS does not produce are excluded from the IS set; the
+        honest-coverage denominator is scoped by the IS-producible set.
+        We assert the subset relationship (not equality) to protect against IS
+        accidentally adding a venue that is NOT in UAC at all.
+        """
+        from unified_api_contracts.registry.market_data_categories import VENUES_BY_ASSET_GROUP
+
+        is_defi = set(get_venues_for_asset_groups(["DEFI"]))
+        uac_defi = set(VENUES_BY_ASSET_GROUP["defi"])
+        # IS defi is a strict/non-strict subset of UAC defi
+        extra = is_defi - uac_defi
+        assert not extra, (
+            f"IS defi producer contains venues NOT in UAC defi (DEFI is EXEMPT from "
+            f"set-equality but must not ADD venues outside UAC): {extra}"
+        )
+
+    def test_sports_exempt_is_disjoint_from_uac_sports(self) -> None:
+        """SPORTS is EXEMPT from set-equality (Decision C, operator 2026-06-29).
+
+        IS sports = reference-data providers (API_FOOTBALL/FOOTYSTATS/UNDERSTAT/
+        TRANSFERMARKT/SOCCER_FOOTBALL_INFO/OPEN_METEO).
+        UAC sports = market-data/odds venues (ODDS_API/PINNACLE/BETFAIR*/DRAFTKINGS/
+        FANDUEL) owned by MTDS.
+        They are completely orthogonal sets (no overlap).
+        """
+        from unified_api_contracts.registry.market_data_categories import VENUES_BY_ASSET_GROUP
+
+        is_sports = set(get_venues_for_asset_groups(["SPORTS"]))
+        uac_sports = set(VENUES_BY_ASSET_GROUP["sports"])
+        overlap = is_sports & uac_sports
+        assert not overlap, (
+            f"IS sports and UAC sports must be disjoint (two-registry model): overlap={overlap}"
+        )
 
 
 # ---------------------------------------------------------------------------

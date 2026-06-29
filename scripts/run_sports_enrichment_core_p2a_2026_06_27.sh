@@ -42,13 +42,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 # entity|provider|coverage_start
+# Order: smallest/fastest first so partial progress is visible sooner.
+# INJURIES/STANDINGS/TEAMS run before per-fixture entities (per-fixture rate-limited at 54s/call).
+# TEAMS (2018-01-01) was omitted from the original v1 script — added here (Todo 9 gate requires it).
 ENTITIES=(
+  "INJURIES|API_FOOTBALL|2021-01-01"
+  "STANDINGS|API_FOOTBALL|2018-01-01"
+  "TEAMS|API_FOOTBALL|2018-01-01"
   "FIXTURE_EVENTS|API_FOOTBALL|2020-06-06"
   "FIXTURE_LINEUPS|API_FOOTBALL|2020-06-06"
   "FIXTURE_STATS|API_FOOTBALL|2020-06-06"
   "PLAYER_STATS|API_FOOTBALL|2020-06-06"
-  "INJURIES|API_FOOTBALL|2021-01-01"
-  "STANDINGS|API_FOOTBALL|2018-01-01"
 )
 
 echo "=== Sports P2a enrichment+core backfill ==="

@@ -331,7 +331,6 @@ class TestTradfiNonTradingDayInMissingShards:
             patch("instruments_service.engine.orchestrator.log_event"),
             patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=True),
             patch("instruments_service.engine.orchestrator.non_trading_day_reason", return_value="EXPECTED_WEEKEND"),
-            patch("instruments_service.engine.orchestrator._TRADFI_VENUES", ["NYSE", "NASDAQ"]),
         ):
             # Use 2 expected venues and 1 written to stay above the 50% catastrophic threshold.
             # NYSE is missing; NASDAQ is already written (in counts).
@@ -392,8 +391,8 @@ class TestTradfiNonTradingDayInMissingShards:
                 ),
             ),
             patch("instruments_service.engine.orchestrator.log_event"),
-            # BYBIT is NOT in _TRADFI_VENUES (it's CeFi)
-            patch("instruments_service.engine.orchestrator._TRADFI_VENUES", []),
+            # BYBIT is NOT a TradFi venue (it's CeFi) — VENUE_TO_ASSET_GROUP confirms this
+            # without any patching needed (BYBIT maps to "cefi" in UAC).
         ):
             # Use 2 expected venues and 1 written to stay above the 50% catastrophic threshold.
             _finalize_completeness(
@@ -450,12 +449,10 @@ class TestTradfiNonTradingDayWriteStage:
                 _expected_empty_calls.append({"row_key": dict(row_key), "reason": reason})
 
         # Saturday 2026-06-21 — NASDAQ/NYSE are non-trading; FX is 24/7
+        # VENUE_TO_ASSET_GROUP membership is used for tradfi detection (no patching needed —
+        # NASDAQ/NYSE/FX are tradfi in UAC; is_non_trading_day is stubbed to simulate Saturday).
         saturday = "2026-06-21"
         with (
-            patch(
-                "instruments_service.engine.orchestrator._TRADFI_VENUES",
-                ["NASDAQ", "NYSE", "FX"],
-            ),
             patch(
                 "instruments_service.engine.orchestrator.is_non_trading_day",
                 side_effect=lambda v, _d: v in {"NASDAQ", "NYSE"},
@@ -497,12 +494,10 @@ class TestTradfiNonTradingDayWriteStage:
             def record_expected_empty(self, **_: object) -> None:
                 raise AssertionError("record_expected_empty must not be called on trading day")
 
+        # Wednesday — NASDAQ/NYSE are in UAC tradfi (VENUE_TO_ASSET_GROUP); is_non_trading_day
+        # is stubbed to return False so neither is stamped (trading day).
         wednesday = "2026-06-24"  # Wednesday — trading day
         with (
-            patch(
-                "instruments_service.engine.orchestrator._TRADFI_VENUES",
-                ["NASDAQ", "NYSE"],
-            ),
             patch(
                 "instruments_service.engine.orchestrator.is_non_trading_day",
                 return_value=False,  # All venues are trading on Wednesday
@@ -556,11 +551,9 @@ class TestZeroRecordsNonSportsFixedForFX:
         # New code stamps CME and NASDAQ individually; FX (24/7 trading but
         # returned 0) causes the subsequent active-day-zero branch to raise.
         # We suppress that RuntimeError here — the stamps happen before the raise.
+        # CME/NASDAQ/FX are in UAC tradfi (VENUE_TO_ASSET_GROUP). is_non_trading_day is stubbed
+        # to simulate a Saturday where CME+NASDAQ are non-trading but FX is 24/7.
         with (
-            patch(
-                "instruments_service.engine.orchestrator._TRADFI_VENUES",
-                ["CME", "NASDAQ", "FX"],
-            ),
             patch(
                 "instruments_service.engine.orchestrator.is_non_trading_day",
                 side_effect=lambda v, _d: v in {"CME", "NASDAQ"},
@@ -616,11 +609,8 @@ class TestZeroRecordsNonSportsFixedForFX:
             def write(self) -> None:
                 pass
 
+        # CME/NASDAQ are UAC tradfi (VENUE_TO_ASSET_GROUP). Both are stamped as non-trading.
         with (
-            patch(
-                "instruments_service.engine.orchestrator._TRADFI_VENUES",
-                ["CME", "NASDAQ"],
-            ),
             patch(
                 "instruments_service.engine.orchestrator.is_non_trading_day",
                 return_value=True,
@@ -654,11 +644,9 @@ class TestZeroRecordsNonSportsFixedForFX:
         """CeFi/DeFi venues are never touched by the tradfi non-trading logic."""
         from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
 
+        # BYBIT/DERIBIT are CeFi (VENUE_TO_ASSET_GROUP == "cefi") — not tradfi.
+        # No patching needed; the membership check uses UAC directly.
         with (
-            patch(
-                "instruments_service.engine.orchestrator._TRADFI_VENUES",
-                [],  # No tradfi venues
-            ),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
             # Active venues are CeFi — should raise RuntimeError (shard failure)

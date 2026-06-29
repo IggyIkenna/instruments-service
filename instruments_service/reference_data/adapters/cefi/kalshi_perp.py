@@ -73,7 +73,7 @@ class KalshiPerpReferenceDataAdapter(BaseReferenceDataAdapter):
 
     Field mapping:
       instrument_key  = market ticker (e.g. "KXBTCUSD-PERP")
-      venue           = "kalshi-perp"
+      venue           = "KALSHI-PERP"  (canonical UAC venue; matches VENUES_BY_ASSET_GROUP["cefi"])
       instrument_type = InstrumentType.PERPETUAL
       raw_symbol      = market ticker
       base_asset      = underlying crypto symbol (e.g. "BTC")
@@ -86,8 +86,8 @@ class KalshiPerpReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
-        """Return the venue identifier."""
-        return "kalshi-perp"
+        """Return the venue identifier (canonical UAC casing)."""
+        return "KALSHI-PERP"
 
     async def get_instruments(
         self,
