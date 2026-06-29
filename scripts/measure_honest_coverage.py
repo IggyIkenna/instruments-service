@@ -113,13 +113,17 @@ def _load_completeness_module() -> _CompletenessModuleProto:
     """Load check_enumeration_completeness.py from the scripts/ sibling directory."""
     script_dir = Path(__file__).resolve().parent
     checker_path = script_dir / "check_enumeration_completeness.py"
-    spec = importlib.util.spec_from_file_location("_check_enumeration_completeness", checker_path)
+    module_name = "_check_enumeration_completeness"
+    spec = importlib.util.spec_from_file_location(module_name, checker_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load {checker_path}")
     module = importlib.util.module_from_spec(spec)
     loader = spec.loader
     if not hasattr(loader, "exec_module"):
         raise ImportError(f"Loader for {checker_path} does not support exec_module")
+    # Register in sys.modules BEFORE exec_module so that @dataclass can resolve
+    # the module's __dict__ (Python 3.13 dataclasses lookup uses sys.modules).
+    sys.modules[module_name] = module
     loader.exec_module(module)
     return cast(_CompletenessModuleProto, module)
 
