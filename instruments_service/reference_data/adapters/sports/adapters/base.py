@@ -328,16 +328,31 @@ class BaseSportsReferenceAdapter(ABC):
 
         Subclasses may override for venue-specific classification.
         """
+        # Prioritise the HTTP status code over substring matching: the exception
+        # message includes the full URL (e.g. /getMatch/5401), so match IDs whose
+        # digits overlap with other HTTP codes ("401", "403", "429") would be
+        # misclassified (INVALID_API_KEY/FORBIDDEN/RATE_LIMIT_EXCEEDED) before
+        # reaching the HTTP_NOT_FOUND branch — causing record_failed instead of
+        # record_empty for legitimate 404 responses.
+        if status is not None:
+            if status == 401:
+                return "INVALID_API_KEY"
+            if status == 429:
+                return "RATE_LIMIT_EXCEEDED"
+            if status == 403:
+                return "FORBIDDEN"
+            if status == 404:
+                return "HTTP_NOT_FOUND"
         msg = str(exc).lower()
-        if status == 401 or "401" in msg or "authentication" in msg:
+        if "401" in msg or "authentication" in msg:
             return "INVALID_API_KEY"
-        if status == 429 or "429" in msg or "rate" in msg:
+        if "429" in msg or "rate" in msg:
             return "RATE_LIMIT_EXCEEDED"
         if "timeout" in msg:
             return "TIMEOUT_ERROR"
-        if status == 403 or "403" in msg or "forbidden" in msg:
+        if "403" in msg or "forbidden" in msg:
             return "FORBIDDEN"
-        if status == 404 or "404" in msg:
+        if "404" in msg:
             return "HTTP_NOT_FOUND"
         return "UNKNOWN"
 
