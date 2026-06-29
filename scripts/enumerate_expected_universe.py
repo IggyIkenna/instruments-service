@@ -1410,6 +1410,14 @@ def _enumerate_v2_tradfi(
                 reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
+            elif instr.venue.upper() == "NYSE" and instr.instrument_type.upper() == "ETF":
+                # ARCX-primary ETFs: Databento XNYS.PILLAR (NYSE Primary) has no ETF
+                # data — ETFs are listed on NYSE Arca (ARCX), not NYSE Primary. Pre-seed
+                # empty_confirmed for alive-date cells so the denominator is not inflated
+                # by cells that can never be captured from XNYS.PILLAR. Mirrors the
+                # writer-side fix that writes EXPECTED_SOURCE_DELIVERY_LAG when
+                # XNYS.PILLAR returns 0 rows (market-tick-data-service@307ffa05).
+                reason = "EXPECTED_SOURCE_DELIVERY_LAG"
             else:
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
@@ -1445,6 +1453,8 @@ def _enumerate_v2_tradfi(
                             underlying=seed_underlying,
                         )
                 continue
+            # Shared empty_confirmed emitter: reason was set by one of the
+            # pre-listing / post-delisting / ARCX-ETF branches above.
             for dt in row_dts:
                 yield ExpectedRow(
                     asset_group="tradfi",
