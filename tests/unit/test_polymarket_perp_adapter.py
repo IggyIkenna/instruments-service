@@ -68,7 +68,7 @@ _SAMPLE_MARKET_2 = {
 class TestVenueProperty:
     def test_venue_returns_polymarket_perp(self) -> None:
         adapter = PolymarketPerpReferenceDataAdapter()
-        assert adapter.venue == "polymarket-perp"
+        assert adapter.venue == "POLYMARKET-PERP"
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ class TestGetInstruments:
             results = await adapter.get_instruments()
 
         assert len(results) == 1
-        assert results[0].venue == "polymarket-perp"
+        assert results[0].venue == "POLYMARKET-PERP"
 
     @pytest.mark.asyncio
     async def test_base_and_quote_assets_extracted_from_fields(self) -> None:
@@ -382,4 +382,4 @@ async def test_get_instruments_live() -> None:
     # Just verify shape when we get records back.
     for record in results:
         assert record.instrument_type == InstrumentType.PERPETUAL
-        assert record.venue == "polymarket-perp"
+        assert record.venue == "POLYMARKET-PERP"

@@ -312,7 +312,7 @@ def _flip_attempted_failed_to_empty_confirmed(
 
 async def _run(args: argparse.Namespace) -> int:
     project_id = args.project_id
-    bucket = _bucket_for_project(project_id)
+    bucket = args.bucket if args.bucket else _bucket_for_project(project_id)
     run_ts = args.truthset_run_ts
     new_run_ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     storage = get_storage_client(project_id=project_id)
@@ -475,6 +475,11 @@ async def _run(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-id", default=_DEFAULT_PROJECT_ID)
+    parser.add_argument(
+        "--bucket",
+        default=None,
+        help="Override the GCS bucket (default: instruments-store-sports-{project-id}).",
+    )
     parser.add_argument(
         "--truthset-run-ts",
         required=True,

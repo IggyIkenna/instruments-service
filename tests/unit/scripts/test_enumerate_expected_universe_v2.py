@@ -2234,3 +2234,79 @@ def test_cefi_v2_mvp_gate_computes_predicate_when_column_absent() -> None:
     )
     spot_rows = [r for r in rows_keep if r.instrument_id == "BTC-USDT"]
     assert spot_rows  # spot now rides the perp-gate
+
+
+# ---------------------------------------------------------------------------
+# ARCX-primary ETF enumerator fix (nasdaq_nyse_eu_silent_skip plan P2)
+# ---------------------------------------------------------------------------
+
+
+def test_tradfi_v2_nyse_etf_alive_yields_empty_confirmed_delivery_lag() -> None:
+    """NYSE ETFs in-window seed empty_confirmed(EXPECTED_SOURCE_DELIVERY_LAG).
+
+    Databento XNYS.PILLAR (NYSE Primary) carries no ETF data — ETFs list on
+    NYSE Arca (ARCX). The enumerator must pre-seed empty_confirmed so the
+    denominator is not inflated by cells that can never be captured from
+    XNYS.PILLAR. Mirrors the writer-side fix in MTDS (307ffa05).
+    """
+    catalog = [_make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2020-01-01")]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            catalog,
+            _date_axis("2026-01-02", "2026-01-05", "2026-01-06"),
+            ["ohlcv_1m"],
+            present_set=set(),
+        )
+    )
+    assert len(rows) == 3, f"expected 3 alive-date rows (one per date), got {len(rows)}"
+    for row in rows:
+        assert row.capture_status == "empty_confirmed", f"expected empty_confirmed but got {row.capture_status}"
+        assert row.reason == "EXPECTED_SOURCE_DELIVERY_LAG", f"wrong reason: {row.reason}"
+
+
+def test_tradfi_v2_nasdaq_etf_alive_yields_expected_unattempted() -> None:
+    """NASDAQ ETFs in-window seed expected_unattempted (no ARCX filter applies)."""
+    catalog = [_make_tradfi_entry(instrument_id="QQQ", instrument_type="ETF", venue="NASDAQ", available_from="2020-01-01")]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            catalog,
+            _date_axis("2026-01-02"),
+            ["ohlcv_1m"],
+            present_set=set(),
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].reason == ""
+
+
+def test_tradfi_v2_nyse_equity_alive_yields_expected_unattempted() -> None:
+    """NYSE equities (non-ETF) in-window still seed expected_unattempted."""
+    catalog = [_make_tradfi_entry(instrument_id="JPM", instrument_type="EQUITY", venue="NYSE", available_from="2020-01-01")]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            catalog,
+            _date_axis("2026-01-02"),
+            ["ohlcv_1m"],
+            present_set=set(),
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].reason == ""
+
+
+def test_tradfi_v2_nyse_etf_pre_listing_still_yields_not_listed() -> None:
+    """NYSE ETF pre-listing dates keep EXPECTED_INSTRUMENT_NOT_LISTED (beats ARCX check)."""
+    catalog = [_make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2026-06-01")]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            catalog,
+            _date_axis("2026-01-02", "2026-06-30"),
+            ["ohlcv_1m"],
+        )
+    )
+    pre_listing = [r for r in rows if r.date < "2026-06-01"]
+    in_window = [r for r in rows if r.date >= "2026-06-01"]
+    assert all(r.reason == "EXPECTED_INSTRUMENT_NOT_LISTED" for r in pre_listing)
+    assert all(r.reason == "EXPECTED_SOURCE_DELIVERY_LAG" for r in in_window)

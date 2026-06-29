@@ -94,7 +94,7 @@ _SOLANA_DEFI_VENUES: list[str] = [
 # NOTE: PACIFICA-SOLANA / LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp
 # CLOBs classified as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, same as HYPERLIQUID/
 # ASTER). They were wrongly enumerated here → captured into the defi
-# instrument-catalog. Reclassified to `_CEFI_VENUES` (venue_core.py) 2026-06-25
+# instrument-catalog. Reclassified to the UAC cefi registry 2026-06-25
 # (instruments_foundation_completeness_2026_06_24.md): they ride the cefi
 # backfill like HYPERLIQUID/ASTER, not the defi path.
 

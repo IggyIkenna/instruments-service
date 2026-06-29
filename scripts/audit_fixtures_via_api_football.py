@@ -341,7 +341,7 @@ def _checkpoint_truth_set(
 
 async def _run(args: argparse.Namespace) -> int:
     project_id = args.project_id
-    bucket = _bucket_for_project(project_id)
+    bucket = args.bucket if args.bucket else _bucket_for_project(project_id)
     run_ts = args.resume or datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     season_start, season_end = args.season_start, args.season_end
     seasons = list(range(season_start, season_end + 1))
@@ -591,6 +591,11 @@ async def _run(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-id", default=_DEFAULT_PROJECT_ID)
+    parser.add_argument(
+        "--bucket",
+        default=None,
+        help="Override the GCS bucket (default: instruments-store-sports-{project-id}).",
+    )
     parser.add_argument(
         "--season-start",
         type=int,
