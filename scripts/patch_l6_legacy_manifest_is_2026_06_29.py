@@ -156,7 +156,9 @@ def _build_new_rows(
     for col in canonical_cols:
         if col not in rows.columns:
             rows[col] = None
-    return rows[canonical_cols].reset_index(drop=True)
+
+    rows = rows[canonical_cols].reset_index(drop=True)
+    return rows
 
 
 def main() -> int:
@@ -199,6 +201,32 @@ def main() -> int:
             len(leg_only),
         )
         return 0
+
+    # Canonical IS manifest stores ALL values as strings (object dtype with str values).
+    # Convert new_rows columns to match canonical string format, preserving None for nulls.
+    _str_cols = {
+        col for col in canonical_df.columns
+        if canonical_df[col].dtype == object
+        and len(canonical_df[col].dropna()) > 0
+        and isinstance(canonical_df[col].dropna().iloc[0], str)
+    }
+    def _to_str(v: object) -> str | None:
+        if v is None:
+            return None
+        if isinstance(v, float) and pd.isna(v):
+            return None
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        return str(v)
+
+    for col in _str_cols:
+        if col not in new_rows.columns:
+            continue
+        src = new_rows[col]
+        # Object dtype may contain bool/float/str — normalise all to str
+        non_null = src.dropna()
+        if (len(non_null) > 0 and not isinstance(non_null.iloc[0], str)) or src.dtype != object:
+            new_rows[col] = src.apply(_to_str)
 
     captured_before = int((canonical_df["capture_status"] == "captured").sum())
     combined = pd.concat([canonical_df, new_rows], ignore_index=True)
