@@ -90,7 +90,8 @@ class _AgLayer1ResultProto(Protocol):
     """Structural interface matching AgLayer1Result in check_enumeration_completeness."""
 
     denominator_complete: bool
-    completeness_pct: float
+    denominator_status: str  # "COMPLETE" | "INCOMPLETE" | "UNDEFINED"
+    completeness_pct: float | None  # None when denominator_status == "UNDEFINED"
     missing_tuples: list[object]
 
     def as_dict(self) -> dict[str, object]: ...
@@ -514,12 +515,21 @@ def _compute_coverage(
         try:
             l1_result = check_fn(ag, df)
             layer_1_by_ag[ag] = l1_result.as_dict()
-            # Add additive fields onto the existing AG counts cell
+            # Add additive fields onto the existing AG counts cell.
+            # When denominator_status == "UNDEFINED" (EXPECTED==0), completeness_pct
+            # is None and instrument_gates_download is True (fail closed).
             ag_cell = cast(dict[str, object], by_asset_group[ag])
-            ag_cell["instrument_gates_download"] = not l1_result.denominator_complete
             ag_cell["denominator_complete"] = l1_result.denominator_complete
+            ag_cell["denominator_status"] = l1_result.denominator_status
             ag_cell["layer1_completeness_pct"] = l1_result.completeness_pct
-            if not l1_result.denominator_complete:
+            ag_cell["instrument_gates_download"] = not l1_result.denominator_complete
+            if l1_result.denominator_status == "UNDEFINED":
+                logger.error(
+                    "  [%s] Layer-1 UNDEFINED (EXPECTED==0) — denominator not wired. "
+                    "CK3 cannot certify this AG.",
+                    ag,
+                )
+            elif not l1_result.denominator_complete:
                 logger.warning(
                     "  [%s] Layer-1 INCOMPLETE (%.1f%%) — Layer-2 coverage is a LOWER BOUND. "
                     "Missing tuples: %d",
@@ -532,7 +542,8 @@ def _compute_coverage(
             ag_cell = cast(dict[str, object], by_asset_group[ag])
             ag_cell["instrument_gates_download"] = True
             ag_cell["denominator_complete"] = False
-            ag_cell["layer1_completeness_pct"] = 0.0
+            ag_cell["denominator_status"] = "UNDEFINED"
+            ag_cell["layer1_completeness_pct"] = None
             layer_1_by_ag[ag] = {"error": str(exc)}
 
     return {
