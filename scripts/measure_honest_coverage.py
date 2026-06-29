@@ -101,7 +101,7 @@ class _CompletenessModuleProto(Protocol):
     """Structural interface for the dynamically-loaded completeness module."""
 
     def check_enumeration_completeness(
-        self, asset_group: str, df: pd.DataFrame
+        self, asset_group: str, df: pd.DataFrame, *, diagnose: bool = ...
     ) -> _AgLayer1ResultProto: ...
 
 
@@ -434,6 +434,8 @@ def _count_statuses(df: pd.DataFrame) -> dict[str, int | float]:
 
 def _compute_coverage(
     dfs: dict[str, pd.DataFrame],
+    *,
+    diagnose: bool = False,
 ) -> dict[str, object]:
     """Compute all Layer-2 coverage projections + Layer-1 enumeration-completeness.
 
@@ -450,6 +452,11 @@ def _compute_coverage(
 
     New v2 additive fields on by_asset_group[ag] cells:
       instrument_gates_download, denominator_complete, layer1_completeness_pct
+
+    Args:
+        diagnose: when True, the Layer-1 check populates per-AG diagnostic
+            samples (EXPECTED-only / ENUMERATED-only / matched canonical keys)
+            into layer_1.by_asset_group[ag].diagnostics.
     """
     by_asset_group: dict[str, object] = {}
     by_venue: dict[str, dict[str, object]] = {}
@@ -513,7 +520,7 @@ def _compute_coverage(
         # Layer-1 enumeration completeness check
         logger.info("  Running Layer-1 completeness check for %s …", ag)
         try:
-            l1_result = check_fn(ag, df)
+            l1_result = check_fn(ag, df, diagnose=diagnose)
             layer_1_by_ag[ag] = l1_result.as_dict()
             # Add additive fields onto the existing AG counts cell.
             # When denominator_status == "UNDEFINED" (EXPECTED==0), completeness_pct
@@ -597,6 +604,17 @@ def main() -> None:
             "the expected_unattempted skeleton from the secondary bucket."
         ),
     )
+    parser.add_argument(
+        "--diagnose-layer1",
+        action="store_true",
+        default=False,
+        help=(
+            "Populate per-AG Layer-1 diagnostic samples (EXPECTED-only / "
+            "ENUMERATED-only / matched canonical keys) into "
+            "layer_1.by_asset_group[ag].diagnostics so residual holes can be "
+            "verified REAL vs vocabulary/grain artifacts."
+        ),
+    )
     args = parser.parse_args()
 
     asset_groups = list(_KNOWN_ASSET_GROUPS) if args.asset_group == "all" else [args.asset_group]
@@ -612,7 +630,7 @@ def main() -> None:
         logger.error("No manifests loaded — nothing to measure")
         sys.exit(1)
 
-    coverage = _compute_coverage(dfs)
+    coverage = _compute_coverage(dfs, diagnose=args.diagnose_layer1)
 
     now_utc = datetime.now(UTC)
     payload: dict[str, object] = {

@@ -510,3 +510,173 @@ class TestDefiExpectedNotEmpty:
         assert result.expected_tuples > 0, (
             f"defi EXPECTED must be > 0, got {result.expected_tuples}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test: VOCABULARY/GRAIN ALIGNMENT (Bug 3) — both sides normalised before
+# intersect; casing/format/vocab differences are NOT holes; only REAL holes.
+# ---------------------------------------------------------------------------
+
+class TestCanonNormalisers:
+    def test_case_fold_instrument_type(self, mod: ModuleType) -> None:
+        """UPPERCASE and lowercase instrument_type canonicalise to the same key."""
+        assert mod._canon_instrument_type("cefi", "BINANCE-SPOT", "SPOT_PAIR") == \
+            mod._canon_instrument_type("cefi", "BINANCE-SPOT", "spot_pair")
+
+    def test_alias_spot_to_spot_pair(self, mod: ModuleType) -> None:
+        """Writer-grain `spot` aliases to UAC `spot_pair`."""
+        assert mod._canon_instrument_type("cefi", "BINANCE-SPOT", "spot") == "spot_pair"
+
+    def test_defi_venue_chain_strip_and_spelling(self, mod: ModuleType) -> None:
+        """defi AAVEV3-ETHEREUM / AAVE_V3-ETHEREUM / AAVE_V3 all canonicalise to AAVE_V3."""
+        a = mod._canon_venue("defi", "AAVEV3-ETHEREUM")
+        b = mod._canon_venue("defi", "AAVE_V3-ETHEREUM")
+        d = mod._canon_venue("defi", "AAVE_V3")
+        assert a == b == d == "AAVE_V3", f"got {a!r} {b!r} {d!r}"
+
+    def test_data_type_case_fold(self, mod: ModuleType) -> None:
+        """ODDS and odds canonicalise to the same data_type."""
+        assert mod._canon_data_type("ODDS") == mod._canon_data_type("odds") == "odds"
+
+    def test_prediction_token_folds_to_prediction_market(self, mod: ModuleType) -> None:
+        """Kalshi `prediction` itype folds to the canonical `prediction_market` grain."""
+        assert mod._canon_instrument_type("prediction", "KALSHI", "prediction") == "prediction_market"
+        assert mod._canon_instrument_type("prediction", "KALSHI", "PREDICTION_MARKET") == "prediction_market"
+
+
+class TestAlignmentNotArtifact:
+    """A casing/format/vocab difference must NOT be a hole after alignment."""
+
+    def test_uppercase_manifest_matches_lowercase_expected(self, mod: ModuleType) -> None:
+        """UPPERCASE manifest instrument_type matches the lowercase EXPECTED grain.
+
+        Pre-alignment this collapsed to 0% (the Bug-3 artifact). Build a manifest
+        whose itype is UPPERCASE for a known-expected cefi tuple and assert it is
+        MATCHED (not a hole).
+        """
+        expected = mod._build_expected_tuples("cefi")
+        # Pick an expected (venue, itype, dt) and present it UPPERCASE in manifest.
+        target = next(
+            (t for t in sorted(expected) if t[1] in {"perpetual", "spot_pair", "future"}),
+            None,
+        )
+        if target is None:
+            pytest.skip("No suitable cefi expected tuple")
+        v, it, dt = target
+        df = _make_manifest([
+            {"capture_status": "captured", "venue": v, "instrument_type": it.upper(), "data_type": dt.upper()},
+        ])
+        result = mod.check_enumeration_completeness("cefi", df)
+        missing_keys = {(m.venue, m.instrument_type, m.data_type) for m in result.missing_tuples}
+        assert (v, it, dt) not in missing_keys, (
+            f"UPPERCASE manifest row {(v, it.upper(), dt.upper())} must MATCH lowercase "
+            f"EXPECTED {(v, it, dt)} after alignment — not be a hole"
+        )
+
+    def test_defi_uppercase_lending_matches(self, mod: ModuleType) -> None:
+        """defi LENDING (uppercase) + chain-stripped venue matches lowercase EXPECTED."""
+        expected = mod._build_expected_tuples("defi")
+        target = next((t for t in sorted(expected) if t[1] == "lending"), None)
+        if target is None:
+            pytest.skip("No defi lending tuple in EXPECTED")
+        v, it, dt = target  # v is PROTOCOL grain e.g. AAVE_V3
+        df = _make_manifest([
+            {"capture_status": "captured", "venue": v, "instrument_type": "LENDING", "data_type": dt},
+        ])
+        result = mod.check_enumeration_completeness("defi", df)
+        missing_keys = {(m.venue, m.instrument_type, m.data_type) for m in result.missing_tuples}
+        assert (v, it, dt) not in missing_keys, (
+            f"defi LENDING uppercase must match lowercase EXPECTED {(v, it, dt)} — not a hole"
+        )
+
+
+class TestPerAgAlignmentRegression:
+    """Coordinator requirement #4: after normalisation, an AG with real captured
+    data MUST NOT show 0% / 0 matched purely from dialect mismatch."""
+
+    def _ag_df(self, mod: ModuleType, ag: str, rows: list[dict[str, str]]) -> pd.DataFrame:
+        return _make_manifest(rows)
+
+    def test_defi_not_zero_when_present(self, mod: ModuleType) -> None:
+        """defi: a manifest carrying an expected (chain-stripped, lowercase) tuple
+        yields matched > 0 (not the pre-fix 0%)."""
+        expected = mod._build_expected_tuples("defi")
+        sample = sorted(expected)[:5]
+        if not sample:
+            pytest.skip("defi EXPECTED empty")
+        rows = [
+            {"capture_status": "captured", "venue": v, "instrument_type": it, "data_type": dt}
+            for (v, it, dt) in sample
+        ]
+        result = mod.check_enumeration_completeness("defi", df := _make_manifest(rows), diagnose=True)
+        assert result.present_tuples > 0, "defi matched must be > 0 with present expected tuples"
+        assert result.completeness_pct is not None and result.completeness_pct > 0.0
+
+    def test_sports_not_zero_when_odds_trades_present(self, mod: ModuleType) -> None:
+        """sports: odds-grain (venue, odds, trades) present → matched > 0 (was 0% pre-fix)."""
+        from unified_api_contracts import VENUES_BY_ASSET_GROUP
+        venues = list(VENUES_BY_ASSET_GROUP.get("sports", []))
+        if not venues:
+            pytest.skip("No sports venues")
+        rows = [
+            {"capture_status": "captured", "venue": v, "instrument_type": "odds", "data_type": "trades"}
+            for v in venues
+        ]
+        result = mod.check_enumeration_completeness("sports", _make_manifest(rows), diagnose=True)
+        assert result.present_tuples > 0, (
+            "sports (venue, odds, trades) must MATCH the odds-grain EXPECTED — "
+            "the pre-fix exchange_odds/fixed_odds grain gave 0 matched"
+        )
+
+    def test_diagnostics_populated_when_requested(self, mod: ModuleType) -> None:
+        """diagnose=True populates DiagnosticSamples with the three buckets + counts."""
+        expected = mod._build_expected_tuples("cefi")
+        rows = [
+            {"capture_status": "captured", "venue": v, "instrument_type": it, "data_type": dt}
+            for (v, it, dt) in sorted(expected)[:3]
+        ]
+        result = mod.check_enumeration_completeness("cefi", _make_manifest(rows), diagnose=True)
+        assert result.diagnostics is not None
+        d = result.diagnostics
+        assert d.matched_count >= 0
+        assert isinstance(d.expected_only, list)
+        assert isinstance(d.enumerated_only, list)
+        assert isinstance(d.matched, list)
+        # as_dict carries the diagnostics block
+        assert "diagnostics" in result.as_dict()
+
+    def test_no_diagnostics_by_default(self, mod: ModuleType) -> None:
+        """Without diagnose, diagnostics is None and absent from as_dict."""
+        df = _make_manifest([
+            {"capture_status": "captured", "venue": "BINANCE-SPOT", "instrument_type": "spot_pair", "data_type": "trades"},
+        ])
+        result = mod.check_enumeration_completeness("cefi", df)
+        assert result.diagnostics is None
+        assert "diagnostics" not in result.as_dict()
+
+
+class TestVenueItypeGate:
+    """The (venue, itype) validity gate prevents cross-product over-generation."""
+
+    def test_cefi_futures_venue_no_spot_pair(self, mod: ModuleType) -> None:
+        """BINANCE-FUTURES must NOT expect spot_pair (futures-only venue)."""
+        expected = mod._build_expected_tuples("cefi")
+        bad = {(v, it, dt) for (v, it, dt) in expected if v == "BINANCE-FUTURES" and it == "spot_pair"}
+        assert not bad, f"BINANCE-FUTURES should not expect spot_pair: {bad}"
+
+    def test_defi_lending_protocol_no_pool(self, mod: ModuleType) -> None:
+        """A lending protocol (AAVE_V3) must NOT expect pool itype."""
+        expected = mod._build_expected_tuples("defi")
+        aave_itypes = {it for (v, it, dt) in expected if v == "AAVE_V3"}
+        # AAVE_V3 is a lending protocol — pool should be absent
+        assert "pool" not in aave_itypes, (
+            f"AAVE_V3 (lending) should not expect pool itype; got itypes={aave_itypes}"
+        )
+
+    def test_tradfi_cme_no_equity(self, mod: ModuleType) -> None:
+        """CME (futures venue) must NOT expect equity itype."""
+        expected = mod._build_expected_tuples("tradfi")
+        cme_itypes = {it for (v, it, dt) in expected if v == "CME"}
+        assert "equity" not in cme_itypes, (
+            f"CME should not expect equity; got itypes={cme_itypes}"
+        )
