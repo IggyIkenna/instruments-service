@@ -1,13 +1,21 @@
 # Epic: instruments_master
 # Lifecycle: permanent
 # Delete-when: NA
-"""Cross-asset-group honest coverage measurement.
+"""Cross-asset-group honest coverage measurement — schema_version 2.
 
 Reads the availability manifest for every asset_group, computes honest
-coverage at three aggregation levels:
+coverage at multiple aggregation levels:
   - per asset_group (workspace-wide rollup)
   - per (asset_group, venue)
   - per (asset_group, venue, data_type)
+  - per (asset_group, venue, instrument_type)                 [NEW v2]
+  - per (asset_group, venue, instrument_type, data_type)      [NEW v2]
+  - per (asset_group, date)                                   [NEW v2]
+
+Also computes Layer-1 enumeration-completeness (instrument denominator audit)
+via check_enumeration_completeness.py and adds a top-level ``layer_1`` block
+plus ``instrument_gates_download``, ``denominator_complete``, and
+``layer1_completeness_pct`` additive fields on each ``by_asset_group`` cell.
 
 Coverage formula:  captured / (captured + attempted_failed + expected_unattempted)
 
@@ -17,8 +25,8 @@ gaps) are excluded from the denominator — they represent legitimate absence, n
 pipeline failures.  The old all-shards formula is preserved as
 ``all_shards_coverage_pct`` for reference.
 
+SSOT: codex/02-data/honest-coverage-model.md (Two layers, two views, schema v2).
 Output: gs://central-element-323112-honest-coverage/{YYYY-MM-DD}/coverage.json
-SSOT: codex/03-deployment/data-status-ui-surface.md (Phase 2E/2F target).
 
 execution:
   owner: Cron VM via deployment-service/scripts/vm/launch-measure-honest-coverage-vm.sh
@@ -41,6 +49,12 @@ Manifest merge (Bug 2 fix):
   is combined with fresh captured/attempted_failed/empty_confirmed from prd.
   Use ``--no-merge`` to disable this merging and fall back to freshest-wins-only.
 
+Instrument-type column (v2):
+  Reads ``instrument_type`` as a 5th bounded column. Legacy buckets may not have this
+  column; if absent, instrument_type projections degrade gracefully (empty sets),
+  and a warning is logged. Bounded-column reads remain mandatory (cefi index is
+  tens-of-millions of rows; loading the full frame OOM-kills the VM).
+
 Usage:
   python measure_honest_coverage.py [--asset-group cefi|defi|tradfi|sports|prediction|all]
   python measure_honest_coverage.py --output-path /tmp/coverage.json   # local probe
@@ -50,18 +64,74 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
 import sys
 from collections import defaultdict
 from datetime import UTC, date, datetime
-from typing import cast
+from pathlib import Path
+from typing import Protocol, cast
 
 import pandas as pd
 from google.cloud import storage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Protocols for the dynamically-loaded check_enumeration_completeness module.
+# These mirror the AgLayer1Result dataclass fields and as_dict method without
+# importing the sibling script at parse time (it has heavy UAC deps).
+# ---------------------------------------------------------------------------
+
+
+class _AgLayer1ResultProto(Protocol):
+    """Structural interface matching AgLayer1Result in check_enumeration_completeness."""
+
+    denominator_complete: bool
+    completeness_pct: float
+    missing_tuples: list[object]
+
+    def as_dict(self) -> dict[str, object]: ...
+
+
+class _CompletenessModuleProto(Protocol):
+    """Structural interface for the dynamically-loaded completeness module."""
+
+    def check_enumeration_completeness(
+        self, asset_group: str, df: pd.DataFrame
+    ) -> _AgLayer1ResultProto: ...
+
+
+# ---------------------------------------------------------------------------
+# Lazy-load check_enumeration_completeness (sibling script, not a package module)
+# ---------------------------------------------------------------------------
+
+
+def _load_completeness_module() -> _CompletenessModuleProto:
+    """Load check_enumeration_completeness.py from the scripts/ sibling directory."""
+    script_dir = Path(__file__).resolve().parent
+    checker_path = script_dir / "check_enumeration_completeness.py"
+    spec = importlib.util.spec_from_file_location("_check_enumeration_completeness", checker_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load {checker_path}")
+    module = importlib.util.module_from_spec(spec)
+    loader = spec.loader
+    if not hasattr(loader, "exec_module"):
+        raise ImportError(f"Loader for {checker_path} does not support exec_module")
+    loader.exec_module(module)
+    return cast(_CompletenessModuleProto, module)
+
+
+_completeness_module: _CompletenessModuleProto | None = None
+
+
+def _get_completeness_module() -> _CompletenessModuleProto:
+    global _completeness_module
+    if _completeness_module is None:
+        _completeness_module = _load_completeness_module()
+    return _completeness_module
 
 PROJECT_ID = "central-element-323112"
 
@@ -86,8 +156,13 @@ _OUTPUT_BUCKET = f"{PROJECT_ID}-honest-coverage"
 _KNOWN_ASSET_GROUPS = ("cefi", "defi", "tradfi", "sports", "prediction")
 _CAPTURE_STATUSES = ("captured", "empty_confirmed", "attempted_failed", "expected_unattempted")
 _INDEX_BLOB_PATH = "_index/availability_index.parquet"
-_READ_COLUMNS = ["capture_status", "venue", "data_type", "date", "instrument_id"]
+# v2: added "instrument_type" for the new projections; "instrument_id" for dedup shard key.
+# Legacy buckets that lack either column degrade gracefully (see _read_parquet_safe).
+_READ_COLUMNS = ["capture_status", "venue", "data_type", "date", "instrument_id", "instrument_type"]
 # Preferred shard key (instrument-level dedup); fallback used when instrument_id absent.
+_READ_COLUMNS_FALLBACK = ["capture_status", "venue", "data_type", "date", "instrument_type"]
+_READ_COLUMNS_LEGACY = ["capture_status", "venue", "data_type", "date"]
+_READ_COLUMNS_MIN = ["capture_status", "venue", "data_type"]
 _SHARD_KEY = ["date", "venue", "data_type"]
 _SHARD_KEY_WITH_IID = ["date", "venue", "instrument_id", "data_type"]
 # Priority order for deduplication: lower index = higher priority.
@@ -114,22 +189,60 @@ def _get_blob_updated(client: storage.Client, bucket_name: str) -> datetime | No
 def _read_parquet_safe(
     bucket_name: str,
 ) -> pd.DataFrame | None:
-    """Read the availability index parquet for a bucket, returning None on failure."""
+    """Read the availability index parquet for a bucket, returning None on failure.
+
+    v2: attempts to read all 6 columns (capture_status, venue, data_type, date,
+    instrument_id, instrument_type). Falls back progressively:
+      1. All 6 columns (preferred — v2 full)
+      2. 5 columns without instrument_id (older pre-iid buckets)
+      3. 4 columns without instrument_type (legacy pre-v2 buckets)
+      4. 3 columns minimal (oldest buckets — no date/iid/itype)
+    A warning is logged for each degraded mode.
+    """
     uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
     try:
-        # Read ONLY the columns the coverage compute uses plus ``date`` for dedup.
-        # The cefi availability_index is ~35.8M rows × many columns — loading the full
-        # frame OOM-killed even a 32 GiB VM (rc=137); 4 string/date columns stay bounded
-        # as the index grows. SSOT for used columns: _count_statuses + _compute_coverage.
+        # Preferred: all 6 columns incl. instrument_id + instrument_type (v2).
         df = pd.read_parquet(uri, columns=_READ_COLUMNS)
+        return df
+    except Exception:
+        pass  # fall through
+
+    # Fallback 1: 5 columns (no instrument_id — bucket lacks iid column).
+    try:
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS_FALLBACK)
+        logger.warning(
+            "  [%s] 'instrument_id' column absent in parquet — "
+            "merge dedup will fall back to (date, venue, data_type) key.",
+            bucket_name,
+        )
+        return df
+    except Exception:
+        pass  # fall through
+
+    # Fallback 2: 4 columns (no instrument_id, no instrument_type — legacy bucket).
+    try:
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS_LEGACY)
+        logger.warning(
+            "  [%s] 'instrument_type' column absent in parquet — "
+            "Layer-1 ENUMERATED set and instrument_type projections will be empty. "
+            "Re-run after writer backfill stamps instrument_type.",
+            bucket_name,
+        )
+        return df
+    except Exception:
+        pass  # fall through
+
+    # Fallback 3: 3 columns minimal (oldest buckets — no date/iid/itype).
+    try:
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS_MIN)
+        logger.warning(
+            "  [%s] Only 3 columns available — merge dedup, by_day and v2 projections unavailable.",
+            bucket_name,
+        )
+        return df
     except Exception as exc:
-        # ``date`` column may not be present in older bucket layouts — retry without it.
-        try:
-            df = pd.read_parquet(uri, columns=["capture_status", "venue", "data_type"])
-        except Exception as exc2:
-            logger.info("  candidate not accessible (%s): %s / %s", uri, exc, exc2)
-            return None
-    return df
+        logger.info("  candidate not accessible (%s): %s", uri, exc)
+        return None
 
 
 def _read_parquet_eu_only(bucket_name: str) -> pd.DataFrame | None:
@@ -140,18 +253,13 @@ def _read_parquet_eu_only(bucket_name: str) -> pd.DataFrame | None:
     """
     uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
     eu_filter = [("capture_status", "==", "expected_unattempted")]
-    try:
-        return pd.read_parquet(uri, columns=_READ_COLUMNS, filters=eu_filter)
-    except Exception as exc:
+    for cols in (_READ_COLUMNS, _READ_COLUMNS_FALLBACK, _READ_COLUMNS_LEGACY, _READ_COLUMNS_MIN):
         try:
-            return pd.read_parquet(
-                uri,
-                columns=["capture_status", "venue", "data_type", "date"],
-                filters=eu_filter,
-            )
-        except Exception as exc2:
-            logger.info("  eu-only read failed for %s: %s / %s", uri, exc, exc2)
-            return None
+            return pd.read_parquet(uri, columns=list(cols), filters=eu_filter)
+        except Exception:
+            pass
+    logger.info("  eu-only read failed for all column variants: %s", uri)
+    return None
 
 
 def _merge_manifests(
@@ -322,13 +430,38 @@ def _count_statuses(df: pd.DataFrame) -> dict[str, int | float]:
 def _compute_coverage(
     dfs: dict[str, pd.DataFrame],
 ) -> dict[str, object]:
+    """Compute all Layer-2 coverage projections + Layer-1 enumeration-completeness.
+
+    Existing projections (preserved byte-for-byte compatible):
+      by_asset_group, by_venue, by_venue_data_type
+
+    New v2 projections:
+      by_venue_instrument_type       — ag → venue → itype → counts
+      by_venue_instrument_type_data_type — ag → venue → itype → dt → counts
+      by_day                         — ag → date → counts
+
+    New v2 top-level block:
+      layer_1                        — AgLayer1Result per AG
+
+    New v2 additive fields on by_asset_group[ag] cells:
+      instrument_gates_download, denominator_complete, layer1_completeness_pct
+    """
     by_asset_group: dict[str, object] = {}
     by_venue: dict[str, dict[str, object]] = {}
     by_venue_data_type: dict[str, dict[str, dict[str, object]]] = {}
+    by_venue_instrument_type: dict[str, dict[str, dict[str, object]]] = {}
+    by_venue_instrument_type_data_type: dict[str, dict[str, dict[str, dict[str, object]]]] = {}
+    by_day: dict[str, dict[str, object]] = {}
+
+    # Layer-1 check (enumeration completeness)
+    layer_1_by_ag: dict[str, object] = {}
+    checker = _get_completeness_module()
+    check_fn = checker.check_enumeration_completeness
 
     for ag, df in dfs.items():
         # level 1 — per asset_group
-        by_asset_group[ag] = _count_statuses(df)
+        ag_counts = _count_statuses(df)
+        by_asset_group[ag] = ag_counts
 
         # level 2 — per (ag, venue)
         venue_group: dict[str, object] = {}
@@ -342,10 +475,70 @@ def _compute_coverage(
             vdt_group[str(venue)][str(data_type)] = _count_statuses(vtdf)
         by_venue_data_type[ag] = dict(vdt_group)
 
+        # level 4 — per (ag, venue, instrument_type) [v2]
+        vit_group: dict[str, dict[str, object]] = defaultdict(dict)
+        if "instrument_type" in df.columns:
+            for (venue, itype), vitdf in df.groupby(["venue", "instrument_type"]):
+                vit_group[str(venue)][str(itype)] = _count_statuses(vitdf)
+        else:
+            logger.warning(
+                "  [%s] instrument_type column absent — by_venue_instrument_type will be empty",
+                ag,
+            )
+        by_venue_instrument_type[ag] = dict(vit_group)
+
+        # level 5 — per (ag, venue, instrument_type, data_type) [v2]
+        vitdt_group: dict[str, dict[str, dict[str, object]]] = defaultdict(lambda: defaultdict(dict))
+        if "instrument_type" in df.columns:
+            for (venue, itype, dt), vitdtdf in df.groupby(["venue", "instrument_type", "data_type"]):
+                vitdt_group[str(venue)][str(itype)][str(dt)] = _count_statuses(vitdtdf)
+        by_venue_instrument_type_data_type[ag] = {
+            v: dict(it_map) for v, it_map in vitdt_group.items()
+        }
+
+        # level 6 — per (ag, date) [v2]
+        day_group: dict[str, object] = {}
+        if "date" in df.columns:
+            for day_val, daydf in df.groupby("date"):
+                day_group[str(day_val)] = _count_statuses(daydf)
+        else:
+            logger.warning("  [%s] date column absent — by_day will be empty", ag)
+        by_day[ag] = day_group
+
+        # Layer-1 enumeration completeness check
+        logger.info("  Running Layer-1 completeness check for %s …", ag)
+        try:
+            l1_result = check_fn(ag, df)
+            layer_1_by_ag[ag] = l1_result.as_dict()
+            # Add additive fields onto the existing AG counts cell
+            ag_cell = cast(dict[str, object], by_asset_group[ag])
+            ag_cell["instrument_gates_download"] = not l1_result.denominator_complete
+            ag_cell["denominator_complete"] = l1_result.denominator_complete
+            ag_cell["layer1_completeness_pct"] = l1_result.completeness_pct
+            if not l1_result.denominator_complete:
+                logger.warning(
+                    "  [%s] Layer-1 INCOMPLETE (%.1f%%) — Layer-2 coverage is a LOWER BOUND. "
+                    "Missing tuples: %d",
+                    ag,
+                    l1_result.completeness_pct,
+                    len(l1_result.missing_tuples),
+                )
+        except Exception as exc:
+            logger.warning("  [%s] Layer-1 check failed: %s — skipping", ag, exc)
+            ag_cell = cast(dict[str, object], by_asset_group[ag])
+            ag_cell["instrument_gates_download"] = True
+            ag_cell["denominator_complete"] = False
+            ag_cell["layer1_completeness_pct"] = 0.0
+            layer_1_by_ag[ag] = {"error": str(exc)}
+
     return {
         "by_asset_group": by_asset_group,
         "by_venue": by_venue,
         "by_venue_data_type": by_venue_data_type,
+        "by_venue_instrument_type": by_venue_instrument_type,
+        "by_venue_instrument_type_data_type": by_venue_instrument_type_data_type,
+        "by_day": by_day,
+        "layer_1": {"by_asset_group": layer_1_by_ag},
     }
 
 
@@ -410,6 +603,7 @@ def main() -> None:
     payload: dict[str, object] = {
         "generated_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "date": date.today().isoformat(),
+        "schema_version": 2,
         "asset_groups_measured": list(dfs.keys()),
         **coverage,
     }
