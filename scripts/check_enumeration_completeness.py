@@ -13,26 +13,44 @@ This is the CK2 implementation per the SSOT:
   codex/02-data/honest-coverage-model.md § Layer-1 enumeration-completeness matrix
 
 Authorities used (exact UAC symbols):
-  - VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE[(ag, instrument_type)] — per-(ag,itype) expected dtypes
-  - VENUE_DATA_TYPE_CAPABILITIES[venue][data_type] — venue capability gate
+  - valid_data_types_for_venue_instrument_type(ag, venue, itype) — DeFi protocol-grain (narrowed)
+  - valid_data_types_for_instrument_type(ag, itype) — cefi/tradfi/sports/prediction + defi union
+  - VENUE_DATA_TYPE_CAPABILITIES[venue][data_type] — venue capability gate (cefi/tradfi only)
   - get_mvp_data_types_for_cefi_venue(venue) — cefi per-venue MVP override (data_type set)
   - FUTURE_BUNDLE_VENUES — bundle grain for options_chain/futures_chain
   - bundle_instrument_type_for_leaf(ag, itype, venue) — leaf→bundle roll-up
   - VENUES_BY_ASSET_GROUP[ag] — the set of venues tracked for each AG (implicit MVP gate)
 
+CRITICAL: expected data_types come from the UAC FUNCTIONS, NOT the raw
+VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE dict.  That dict has ZERO defi keys
+(defi validity is built dynamically from PROTOCOL_CAPABILITIES).  Indexing the
+dict directly returns frozenset() for every defi tuple → EXPECTED=0 → false
+"100% complete" (the empty-denominator failure mode — see Bug 1, 2026-06-29).
+
+VENUE_CAPABILITY_AGS restricts the VENUE_DATA_TYPE_CAPABILITIES skip-filter to
+cefi/tradfi only.  DeFi/sports/prediction capability is already encoded in their
+protocol/league validity functions; that table is keyed by cefi/tradfi venues.
+
 Note on MVP gate:
-  is_mvp() requires a base_ccy to return True for CeFi/TradFi (it is an instrument-grain
-  helper, not a schema-grain helper).  For the schema-level EXPECTED matrix we instead use:
+  is_mvp() requires a base_ccy to return True for CeFi/TradFi (it is an
+  instrument-grain helper, not a schema-grain helper).  For the schema-level
+  EXPECTED matrix we instead use:
     - CeFi: get_mvp_data_types_for_cefi_venue(venue) — per-venue data_type set
     - TradFi: VENUES_BY_ASSET_GROUP contains only MVP tradfi venues (e.g. CME)
-    - DeFi/Sports/Prediction: VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE has no entries
+    - DeFi/Sports/Prediction: validity functions handle scope already
 
 Carve-outs (sourced from UAC, NOT hardcoded):
   1. Venue cannot produce data_type → absent from VENUE_DATA_TYPE_CAPABILITIES[venue]
+     (cefi/tradfi only; not applied to defi/sports/prediction)
   2. Out of CeFi-MVP scope → get_mvp_data_types_for_cefi_venue(venue) does not include dt
   3. Bundle roll-up grain → leaf OPTION/FUTURE for FUTURE_BUNDLE_VENUES venues
      yields options_chain/futures_chain bundles, not per-leg rows
-  4. frozenset() in VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE → no per-leaf rows
+  4. frozenset() from validity functions → no rows for this (ag, itype) combination
+
+EMPTY-DENOMINATOR GUARD (HARD RULE, 2026-06-29):
+  When EXPECTED == 0 for an AG, denominator_status = "UNDEFINED",
+  denominator_complete = False, completeness_pct = None.  Reporting 100% over an
+  empty set reproduces the v1 dishonesty v2 exists to kill.
 
 Returns:
   Layer1Result with per-AG + per-venue breakdown.
@@ -52,35 +70,64 @@ from unified_api_contracts import (
 from unified_api_contracts.registry.market_data_categories import (
     VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE,
     VENUE_DATA_TYPE_CAPABILITIES,
+    valid_data_types_for_instrument_type,
+    valid_data_types_for_venue_instrument_type,
 )
 
 logger = logging.getLogger(__name__)
 
-# Instrument types that exist in the manifest at a coarser / bundle grain.
-# For FUTURE_BUNDLE_VENUES this is resolved via bundle_instrument_type_for_leaf;
-# for leaf types with frozenset() valid_data_types they are skipped entirely.
+# AGs for which VENUE_DATA_TYPE_CAPABILITIES applies as a skip-filter.
+# DeFi/sports/prediction capability is encoded in their validity functions;
+# the VENUE_DATA_TYPE_CAPABILITIES dict is keyed by cefi/tradfi venues only.
+VENUE_CAPABILITY_AGS: frozenset[str] = frozenset({"cefi", "tradfi"})
 
 # The full set of lowercase canonical instrument_types we consider for each AG.
-# We derive this by iterating VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE keys for
-# the AG PLUS the bundle types (options_chain, futures_chain, combo) that are
-# real instrument_types in the manifest.
+# For cefi/tradfi/sports/prediction: derived from VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE keys.
+# For defi: derived dynamically from PROTOCOL_CAPABILITIES via valid_data_types_for_instrument_type.
 _AG_INSTRUMENT_TYPES: dict[str, frozenset[str]] = {}
+
+# Known defi instrument types (from PROTOCOL_CAPABILITIES — populated lazily).
+_DEFI_INSTRUMENT_TYPES: frozenset[str] | None = None
+
+
+def _get_defi_instrument_types() -> frozenset[str]:
+    """Return all canonical instrument_types present in any DeFi protocol.
+
+    Lazily built from PROTOCOL_CAPABILITIES via the valid_data_types_for_instrument_type
+    function which also caches the defi mapping internally.
+    """
+    global _DEFI_INSTRUMENT_TYPES
+    if _DEFI_INSTRUMENT_TYPES is None:
+        from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: TID251
+            PROTOCOL_CAPABILITIES,
+        )
+
+        itypes: set[str] = set()
+        for cap in PROTOCOL_CAPABILITIES.values():
+            for it in cap.instrument_types:
+                itypes.add(it.strip().lower())
+        _DEFI_INSTRUMENT_TYPES = frozenset(itypes)
+    return _DEFI_INSTRUMENT_TYPES
 
 
 def _get_ag_instrument_types(asset_group: str) -> frozenset[str]:
     """Return all canonical (lowercase) instrument_types for an asset_group.
 
-    Derived from the VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE keys — these
-    are the post-bundle-roll-up types that actually appear in the manifest.
-    Leaf types with frozenset() are included (they are filtered out when their
-    valid_data_types set is empty).
+    For defi: dynamically from PROTOCOL_CAPABILITIES (the static dict has no defi keys).
+    For others: from VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE keys (post-bundle-roll-up
+    types that actually appear in the manifest).
+    Leaf types with empty valid_data_types are included and filtered out during the
+    tuple-building loop.
     """
     if asset_group not in _AG_INSTRUMENT_TYPES:
-        itypes: set[str] = set()
-        for (ag, itype) in VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE:
-            if ag == asset_group:
-                itypes.add(itype)
-        _AG_INSTRUMENT_TYPES[asset_group] = frozenset(itypes)
+        if asset_group == "defi":
+            _AG_INSTRUMENT_TYPES[asset_group] = _get_defi_instrument_types()
+        else:
+            itypes: set[str] = set()
+            for (ag, itype) in VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE:
+                if ag == asset_group:
+                    itypes.add(itype)
+            _AG_INSTRUMENT_TYPES[asset_group] = frozenset(itypes)
     return _AG_INSTRUMENT_TYPES[asset_group]
 
 
@@ -133,7 +180,8 @@ class VenueCompleteness:
 class AgLayer1Result:
     asset_group: str
     denominator_complete: bool
-    completeness_pct: float
+    denominator_status: str  # "COMPLETE" | "INCOMPLETE" | "UNDEFINED"
+    completeness_pct: float | None  # None when EXPECTED==0 (UNDEFINED)
     expected_tuples: int
     present_tuples: int
     missing_tuples: list[MissingTuple]
@@ -143,6 +191,7 @@ class AgLayer1Result:
     def as_dict(self) -> dict[str, object]:
         return {
             "denominator_complete": self.denominator_complete,
+            "denominator_status": self.denominator_status,
             "completeness_pct": self.completeness_pct,
             "expected_tuples": self.expected_tuples,
             "present_tuples": self.present_tuples,
@@ -165,69 +214,82 @@ class Layer1Result:
 def _build_expected_tuples(asset_group: str) -> set[tuple[str, str, str]]:
     """Build the EXPECTED set of (venue, instrument_type, data_type) from UAC.
 
-    This is the CK2 pseudocode from codex/02-data/honest-coverage-model.md:
+    Per the CK2 pseudocode from codex/02-data/honest-coverage-model.md:
+
       for venue in venues_in_ag(ag):
         for instrument_type in itypes_present(ag, venue):
-          expected_dts = VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE[(ag, instrument_type)]
+          # AUTHORITY = UAC FUNCTIONS, never the raw dict (dict has no defi keys)
+          expected_dts = (
+              valid_data_types_for_venue_instrument_type(ag, venue, itype)
+              or valid_data_types_for_instrument_type(ag, itype)
+              or frozenset()
+          )
           for dt in expected_dts:
-            if dt not in VENUE_DATA_TYPE_CAPABILITIES.get(venue, {}): skip
-            if not is_mvp(ag, venue, instrument_type, dt): skip
-            EXPECTED.add((venue, instrument_type, dt))
+            if ag in VENUE_CAPABILITY_AGS and dt not in VENUE_DATA_TYPE_CAPABILITIES[venue]:
+                continue  # venue cannot produce dt → carve-out (cefi/tradfi only)
+            if not is_mvp(ag, venue, itype, dt): continue
+            EXPECTED.add((venue, itype, dt))
+
+    VENUE_DATA_TYPE_CAPABILITIES is only applied as a skip-filter for
+    VENUE_CAPABILITY_AGS = {"cefi", "tradfi"} — DeFi/sports/prediction capability
+    is already encoded in valid_data_types_for_venue_instrument_type /
+    valid_data_types_for_instrument_type.  Applying it to defi would wrongly
+    exclude all defi tuples (the dict has no defi venue keys).
 
     Bundle grain: leaf OPTION/FUTURE for FUTURE_BUNDLE_VENUES venues are rolled
-    up to options_chain/futures_chain bundles via bundle_instrument_type_for_leaf.
-    The VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE already carries the bundle
-    instrument_types (options_chain/futures_chain) as first-class keys, so we
-    iterate those directly. Leaf types with frozenset() are skipped (no rows).
+    up to options_chain/futures_chain bundles.  The UAC functions / static dict
+    already carry the bundle instrument_types as first-class keys; leaf types
+    that resolve to frozenset() are skipped.
     """
     ag = asset_group.lower()
     venues = VENUES_BY_ASSET_GROUP.get(ag, [])
     instrument_types = _get_ag_instrument_types(ag)
     expected: set[tuple[str, str, str]] = set()
+    in_capability_ag = ag in VENUE_CAPABILITY_AGS
 
     for venue in venues:
-        venue_caps = VENUE_DATA_TYPE_CAPABILITIES.get(venue, {})
+        venue_caps = VENUE_DATA_TYPE_CAPABILITIES.get(venue, {}) if in_capability_ag else {}
         # For cefi: pre-compute MVP data_types override for this venue.
         cefi_mvp_dts: frozenset[str] | None = None
         if ag == "cefi":
             cefi_mvp_dts = get_mvp_data_types_for_cefi_venue(venue)
 
         for itype in instrument_types:
-            valid_dts = VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE.get((ag, itype))
-            if valid_dts is None:
-                # unmapped instrument_type — skip (conservative; no over-fanning)
-                continue
+            # AUTHORITY: UAC functions, not the raw dict (bug fix 2026-06-29).
+            # valid_data_types_for_venue_instrument_type narrows DeFi to the
+            # specific protocol named by the PROTOCOL segment of venue id.
+            # Falls back to valid_data_types_for_instrument_type when the
+            # venue-specific narrowing is not applicable (non-defi or unmapped).
+            valid_dts = valid_data_types_for_venue_instrument_type(
+                ag, venue, itype
+            ) or valid_data_types_for_instrument_type(ag, itype) or frozenset()
+
             if len(valid_dts) == 0:
-                # frozenset() → this is a leaf type that rolls up to a bundle.
-                # The bundle is already keyed under options_chain/futures_chain/combo
-                # — iterating those directly handles it.  Do NOT emit any tuple here.
+                # frozenset() → no expected rows for this (ag, venue, itype).
+                # For cefi this means the leaf type (OPTION) rolls up to a bundle
+                # (options_chain) which is iterated as its own first-class itype.
                 continue
 
             # Check if the bundle_instrument_type_for_leaf maps this itype to a
-            # bundle at this venue.  If so, we should only emit the bundle type,
-            # not the leaf.  For cefi OPTION the valid_dts is already frozenset()
-            # so we hit the continue above.  For cefi FUTURE at DERIBIT/OKX we
-            # need the venue-specific check.
+            # bundle at this venue.  If so, skip the leaf — the bundle type is
+            # iterated separately.
             bundle_it = bundle_instrument_type_for_leaf(ag, itype, venue)
             if bundle_it is not None and bundle_it != itype:
-                # This leaf rolls up to a different bundle type — skip the leaf.
-                # The bundle type (options_chain, futures_chain, combo) is iterated
-                # separately under its own itype key.
                 continue
 
             for dt in valid_dts:
-                # Carve-out 1: venue cannot produce this data_type
-                if dt not in venue_caps:
+                # Carve-out 1: venue cannot produce this data_type.
+                # Only apply for cefi/tradfi (VENUE_CAPABILITY_AGS); defi/sports/
+                # prediction capability is already in the validity functions.
+                if in_capability_ag and dt not in venue_caps:
                     continue
 
-                # Carve-out 2: cefi per-venue MVP override via get_mvp_data_types_for_cefi_venue.
-                # NOTE: is_mvp() is NOT used here because it requires a base_ccy (instrument
-                # grain) to return True for CeFi/TradFi.  The schema-level MVP gate is:
-                #   - CeFi: get_mvp_data_types_for_cefi_venue(venue) → per-venue data_type set
-                #   - TradFi: VENUES_BY_ASSET_GROUP already contains only MVP tradfi venues
-                #             (CME); non-MVP venues are absent from the AG's venue set
-                #   - DeFi/Sports/Prediction: VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE has
-                #             no entries for these AGs → instrument_types is empty → no tuples
+                # Carve-out 2: cefi per-venue MVP override.
+                # NOTE: is_mvp() is NOT used here because it requires a base_ccy
+                # (instrument grain) to return True for CeFi/TradFi.  The schema-
+                # level MVP gate for CeFi is get_mvp_data_types_for_cefi_venue.
+                # TradFi: VENUES_BY_ASSET_GROUP already contains only MVP tradfi
+                # venues (CME); non-MVP venues are absent from the AG's venue set.
                 if ag == "cefi" and cefi_mvp_dts is not None and dt not in cefi_mvp_dts:
                     continue
 
@@ -305,8 +367,23 @@ def check_enumeration_completeness(
 
     n_expected = len(expected)
     n_present = len(present)
-    completeness_pct = round(n_present / n_expected * 100, 2) if n_expected else 100.0
-    denominator_complete = len(missing_set) == 0
+
+    # EMPTY-DENOMINATOR GUARD (HARD RULE, 2026-06-29).
+    # EXPECTED == 0 is NOT 100% complete — it means the AG's validity authority
+    # is not wired or no venues/instruments were enumerated.  Fail CLOSED.
+    if n_expected == 0:
+        logger.error(
+            "  Layer-1 [%s]: EXPECTED == 0 — denominator UNDEFINED (not wired or no venues). "
+            "This is certification-blocking. Check UAC function imports and VENUES_BY_ASSET_GROUP.",
+            ag,
+        )
+        completeness_pct: float | None = None
+        denominator_complete = False
+        denominator_status = "UNDEFINED"
+    else:
+        completeness_pct = round(n_present / n_expected * 100, 2)
+        denominator_complete = len(missing_set) == 0
+        denominator_status = "COMPLETE" if denominator_complete else "INCOMPLETE"
 
     missing_tuples = [
         MissingTuple(venue=v, instrument_type=it, data_type=dt)
@@ -325,7 +402,9 @@ def check_enumeration_completeness(
             [(s.venue, s.instrument_type, s.data_type) for s in stray_tuples[:5]],
         )
 
-    if missing_tuples:
+    if denominator_status == "UNDEFINED":
+        pass  # already logged as ERROR above
+    elif missing_tuples:
         logger.warning(
             "  Layer-1 [%s]: %d MISSING tuples (Layer-1 holes): first 5: %s",
             ag,
@@ -354,7 +433,8 @@ def check_enumeration_completeness(
         v_missing = v_exp - v_enum
         n_v_exp = len(v_exp)
         n_v_present = len(v_present)
-        v_pct = round(n_v_present / n_v_exp * 100, 2) if n_v_exp else 100.0
+        # Per-venue empty-denominator: return 0.0 (conservative) rather than 100.0
+        v_pct = round(n_v_present / n_v_exp * 100, 2) if n_v_exp else 0.0
         by_venue[venue] = VenueCompleteness(
             venue=venue,
             expected_tuples=n_v_exp,
@@ -366,6 +446,7 @@ def check_enumeration_completeness(
     return AgLayer1Result(
         asset_group=ag,
         denominator_complete=denominator_complete,
+        denominator_status=denominator_status,
         completeness_pct=completeness_pct,
         expected_tuples=n_expected,
         present_tuples=n_present,

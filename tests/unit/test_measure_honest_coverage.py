@@ -381,12 +381,17 @@ def _make_df_v2(rows: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _make_stub_layer1_result(denominator_complete: bool = True, completeness_pct: float = 100.0) -> object:
+def _make_stub_layer1_result(
+    denominator_complete: bool = True,
+    completeness_pct: float | None = 100.0,
+    denominator_status: str = "COMPLETE",
+) -> object:
     """Return a minimal stub object that mimics AgLayer1Result."""
 
     class _StubResult:
         def __init__(self) -> None:
             self.denominator_complete = denominator_complete
+            self.denominator_status = denominator_status
             self.completeness_pct = completeness_pct
             self.missing_tuples: list[object] = []
             self.stray_tuples: list[object] = []
@@ -394,8 +399,9 @@ def _make_stub_layer1_result(denominator_complete: bool = True, completeness_pct
         def as_dict(self) -> dict[str, object]:
             return {
                 "denominator_complete": self.denominator_complete,
+                "denominator_status": self.denominator_status,
                 "completeness_pct": self.completeness_pct,
-                "expected_tuples": 10,
+                "expected_tuples": 10 if self.denominator_status != "UNDEFINED" else 0,
                 "present_tuples": 10 if self.denominator_complete else 9,
                 "missing_tuples": [],
                 "stray_tuples": [],
@@ -409,7 +415,8 @@ def _compute_coverage_with_stub(
     mod: ModuleType,
     dfs: dict[str, pd.DataFrame],
     denominator_complete: bool = True,
-    completeness_pct: float = 100.0,
+    completeness_pct: float | None = 100.0,
+    denominator_status: str = "COMPLETE",
 ) -> dict[str, object]:
     """Call mod._compute_coverage with a stubbed Layer-1 checker.
 
@@ -417,7 +424,7 @@ def _compute_coverage_with_stub(
     a deterministic stub AgLayer1Result, isolating the Layer-2 projection
     tests from the real UAC-dependent Layer-1 check.
     """
-    stub_result = _make_stub_layer1_result(denominator_complete, completeness_pct)
+    stub_result = _make_stub_layer1_result(denominator_complete, completeness_pct, denominator_status)
 
     class _FakeChecker:
         @staticmethod
@@ -571,12 +578,15 @@ class TestV2Layer1Integration:
             {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
              "date": "2026-06-28", "instrument_type": "spot_pair"},
         ])
-        coverage = _compute_coverage_with_stub(mod, {"cefi": df},
-                                               denominator_complete=False, completeness_pct=90.0)
+        coverage = _compute_coverage_with_stub(
+            mod, {"cefi": df},
+            denominator_complete=False, completeness_pct=90.0, denominator_status="INCOMPLETE",
+        )
 
         ag_cell = coverage["by_asset_group"]["cefi"]
         assert ag_cell["instrument_gates_download"] is True
         assert ag_cell["denominator_complete"] is False
+        assert ag_cell["denominator_status"] == "INCOMPLETE"
         assert ag_cell["layer1_completeness_pct"] == 90.0
 
     def test_instrument_gates_download_false_when_complete(self, mod: ModuleType) -> None:
@@ -585,13 +595,33 @@ class TestV2Layer1Integration:
             {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
              "date": "2026-06-28", "instrument_type": "spot_pair"},
         ])
-        coverage = _compute_coverage_with_stub(mod, {"cefi": df},
-                                               denominator_complete=True, completeness_pct=100.0)
+        coverage = _compute_coverage_with_stub(
+            mod, {"cefi": df},
+            denominator_complete=True, completeness_pct=100.0, denominator_status="COMPLETE",
+        )
 
         ag_cell = coverage["by_asset_group"]["cefi"]
         assert ag_cell["instrument_gates_download"] is False
         assert ag_cell["denominator_complete"] is True
+        assert ag_cell["denominator_status"] == "COMPLETE"
         assert ag_cell["layer1_completeness_pct"] == 100.0
+
+    def test_instrument_gates_download_true_when_undefined(self, mod: ModuleType) -> None:
+        """instrument_gates_download=True and completeness_pct=None when UNDEFINED."""
+        df = _make_df_v2([
+            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
+             "date": "2026-06-28", "instrument_type": "spot_pair"},
+        ])
+        coverage = _compute_coverage_with_stub(
+            mod, {"cefi": df},
+            denominator_complete=False, completeness_pct=None, denominator_status="UNDEFINED",
+        )
+
+        ag_cell = coverage["by_asset_group"]["cefi"]
+        assert ag_cell["instrument_gates_download"] is True
+        assert ag_cell["denominator_complete"] is False
+        assert ag_cell["denominator_status"] == "UNDEFINED"
+        assert ag_cell["layer1_completeness_pct"] is None
 
     def test_existing_keys_preserved(self, mod: ModuleType) -> None:
         """All v1 keys must still be present in the output (byte-compatible)."""

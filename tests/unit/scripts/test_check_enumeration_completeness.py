@@ -8,6 +8,8 @@ Tests cover:
   - UPBIT derivative_ticker absent (capability carve-out) is NOT a hole
   - completeness_pct and denominator_complete behaviour
   - stray_tuples logged as warnings (not holes)
+  - Empty-denominator guard: EXPECTED==0 → denominator_status UNDEFINED, completeness_pct None
+  - DeFi regression: EXPECTED > 0 after switching from raw dict to UAC functions
 
 Plan: honest_coverage_v2_instrument_denominator_2026_06_28.md Phase 1 IMPL
 SSOT: codex/02-data/honest-coverage-model.md § Carve-outs
@@ -409,4 +411,102 @@ class TestVenueBreakdown:
         venue_total = sum(vc.expected_tuples for vc in result.by_venue.values())
         assert venue_total == result.expected_tuples, (
             f"Venue expected_tuples sum {venue_total} != AG expected_tuples {result.expected_tuples}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: empty-denominator guard — EXPECTED==0 → UNDEFINED, not 100% (Bug 2)
+# ---------------------------------------------------------------------------
+
+class TestEmptyDenominatorGuard:
+    def test_undefined_status_when_expected_is_empty(self, mod: ModuleType) -> None:
+        """When _build_expected_tuples returns empty, check_enumeration_completeness
+        must set denominator_status='UNDEFINED', denominator_complete=False, and
+        completeness_pct=None.  A fictitious AG name guarantees EXPECTED==0.
+        """
+        # Use a non-existent AG so both VENUES_BY_ASSET_GROUP and
+        # VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE return nothing → EXPECTED=0.
+        df = _make_manifest([
+            {"capture_status": "captured", "venue": "MOCK", "instrument_type": "spot", "data_type": "trades"},
+        ])
+        result = mod.check_enumeration_completeness("_nonexistent_ag_for_test_", df)
+        assert result.expected_tuples == 0, "Expected 0 tuples for nonexistent AG"
+        assert result.denominator_status == "UNDEFINED", (
+            f"denominator_status must be UNDEFINED when EXPECTED==0, got {result.denominator_status!r}"
+        )
+        assert result.denominator_complete is False, (
+            "denominator_complete must be False for UNDEFINED denominator"
+        )
+        assert result.completeness_pct is None, (
+            f"completeness_pct must be None (not 100.0) for UNDEFINED denominator, "
+            f"got {result.completeness_pct}"
+        )
+
+    def test_complete_status_when_all_present(self, mod: ModuleType) -> None:
+        """denominator_status='COMPLETE' when all expected tuples present."""
+        expected = mod._build_expected_tuples("cefi")
+        if not expected:
+            pytest.skip("cefi EXPECTED is empty — UAC not loaded")
+        rows = [
+            {"capture_status": "captured", "venue": v, "instrument_type": it, "data_type": dt}
+            for (v, it, dt) in expected
+        ]
+        df = _make_manifest(rows)
+        result = mod.check_enumeration_completeness("cefi", df)
+        assert result.denominator_status == "COMPLETE", (
+            f"expected 'COMPLETE' got {result.denominator_status!r}"
+        )
+        assert result.completeness_pct == 100.0
+        assert result.denominator_complete is True
+
+    def test_incomplete_status_when_tuples_missing(self, mod: ModuleType) -> None:
+        """denominator_status='INCOMPLETE' when expected tuples are missing."""
+        expected = mod._build_expected_tuples("cefi")
+        if not expected:
+            pytest.skip("cefi EXPECTED is empty — UAC not loaded")
+        df = _make_manifest([])  # Empty manifest → all expected missing
+        result = mod.check_enumeration_completeness("cefi", df)
+        assert result.denominator_status == "INCOMPLETE", (
+            f"expected 'INCOMPLETE' got {result.denominator_status!r}"
+        )
+        assert result.denominator_complete is False
+        assert result.completeness_pct is not None
+        assert result.completeness_pct == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test: DeFi regression — EXPECTED > 0 after UAC function switch (Bug 1)
+# ---------------------------------------------------------------------------
+
+class TestDefiExpectedNotEmpty:
+    def test_defi_expected_tuples_gt_zero(self, mod: ModuleType) -> None:
+        """Regression: _build_expected_tuples('defi') must return a non-empty set.
+
+        The old implementation indexed VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE
+        (no defi keys → EXPECTED=0 → false 100% complete).  The fix uses the UAC
+        valid_data_types_for_venue_instrument_type / valid_data_types_for_instrument_type
+        functions which build defi validity from PROTOCOL_CAPABILITIES dynamically.
+        """
+        expected = mod._build_expected_tuples("defi")
+        assert len(expected) > 0, (
+            f"BUG 1 REGRESSION: defi EXPECTED is empty (got {len(expected)}). "
+            "Check that valid_data_types_for_venue_instrument_type / "
+            "valid_data_types_for_instrument_type are used (not the raw dict)."
+        )
+
+    def test_defi_check_completeness_not_undefined(self, mod: ModuleType) -> None:
+        """When defi EXPECTED > 0, check_enumeration_completeness must not set UNDEFINED."""
+        from unified_api_contracts import VENUES_BY_ASSET_GROUP
+        defi_venues = list(VENUES_BY_ASSET_GROUP.get("defi", []))
+        if not defi_venues:
+            pytest.skip("No defi venues in UAC — cannot build manifest rows")
+        # Provide an empty manifest — should be INCOMPLETE (missing tuples), not UNDEFINED
+        df = _make_manifest([])
+        result = mod.check_enumeration_completeness("defi", df)
+        assert result.denominator_status != "UNDEFINED", (
+            f"defi should never be UNDEFINED (EXPECTED={result.expected_tuples}), "
+            f"got denominator_status={result.denominator_status!r}"
+        )
+        assert result.expected_tuples > 0, (
+            f"defi EXPECTED must be > 0, got {result.expected_tuples}"
         )
