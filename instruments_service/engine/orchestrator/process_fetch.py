@@ -22,6 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -283,9 +285,8 @@ def _filter_and_enrich_records(
 
     # 3b. Enrich CeFi/DeFi instruments with timezone=UTC (24/7 markets).
     # TradFi instruments get timezone from the databento adapter's session metadata.
-    _tradfi_set = frozenset(_orch._TRADFI_VENUES)
     for r in records:
-        if r.timezone is None and r.venue not in _tradfi_set:
+        if r.timezone is None and VENUE_TO_ASSET_GROUP.get(r.venue) != "tradfi":
             r.timezone = "UTC"
 
     # Per-venue breakdown after date filter
