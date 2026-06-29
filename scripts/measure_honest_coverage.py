@@ -86,8 +86,10 @@ _OUTPUT_BUCKET = f"{PROJECT_ID}-honest-coverage"
 _KNOWN_ASSET_GROUPS = ("cefi", "defi", "tradfi", "sports", "prediction")
 _CAPTURE_STATUSES = ("captured", "empty_confirmed", "attempted_failed", "expected_unattempted")
 _INDEX_BLOB_PATH = "_index/availability_index.parquet"
-_READ_COLUMNS = ["capture_status", "venue", "data_type", "date"]
+_READ_COLUMNS = ["capture_status", "venue", "data_type", "date", "instrument_id"]
+# Preferred shard key (instrument-level dedup); fallback used when instrument_id absent.
 _SHARD_KEY = ["date", "venue", "data_type"]
+_SHARD_KEY_WITH_IID = ["date", "venue", "instrument_id", "data_type"]
 # Priority order for deduplication: lower index = higher priority.
 _STATUS_PRIORITY: dict[str, int] = {
     "captured": 0,
@@ -130,6 +132,28 @@ def _read_parquet_safe(
     return df
 
 
+def _read_parquet_eu_only(bucket_name: str) -> pd.DataFrame | None:
+    """Read only expected_unattempted rows for memory-bounded prd+oracle merge.
+
+    Uses pyarrow push-down filter so the cefi oracle (~35.8M rows) is never fully
+    materialised — only the ~4.1M eu skeleton rows are loaded.
+    """
+    uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
+    eu_filter = [("capture_status", "==", "expected_unattempted")]
+    try:
+        return pd.read_parquet(uri, columns=_READ_COLUMNS, filters=eu_filter)
+    except Exception as exc:
+        try:
+            return pd.read_parquet(
+                uri,
+                columns=["capture_status", "venue", "data_type", "date"],
+                filters=eu_filter,
+            )
+        except Exception as exc2:
+            logger.info("  eu-only read failed for %s: %s / %s", uri, exc, exc2)
+            return None
+
+
 def _merge_manifests(
     df_primary: pd.DataFrame,
     df_secondary: pd.DataFrame,
@@ -137,21 +161,33 @@ def _merge_manifests(
     """Merge primary and secondary manifests, preferring primary's capture_status per shard.
 
     Strategy:
-    - If ``date`` is present in both DataFrames, deduplicate on (date, venue, data_type),
-      keeping primary's row first (prd wins over legacy stale rows).
+    - If ``date`` is present in both DataFrames, deduplicate on the shard key keeping
+      primary's row first (prd wins over legacy stale rows).  When ``instrument_id`` is
+      present in both frames the full shard key ``(date, venue, instrument_id, data_type)``
+      is used so different instruments on the same date/venue/data_type are not collapsed.
+      Falls back to ``(date, venue, data_type)`` with a warning when instrument_id is absent.
     - If ``date`` is absent in either, concatenate without dedup (worst case = double-count
       for overlapping shards; documented behaviour — caller should check the log warning).
 
     Returns a merged DataFrame with a superset of shards from both buckets.
     """
-    has_day = "date" in df_primary.columns and "date" in df_secondary.columns
+    has_date = "date" in df_primary.columns and "date" in df_secondary.columns
 
-    if not has_day:
+    if not has_date:
         logger.warning(
             "  MERGE: 'date' column absent in one or both buckets — concatenating without dedup "
             "(double-count possible for overlapping shards). Use --no-merge to suppress."
         )
         return pd.concat([df_primary, df_secondary], ignore_index=True)
+
+    has_iid = "instrument_id" in df_primary.columns and "instrument_id" in df_secondary.columns
+    shard_key = _SHARD_KEY_WITH_IID if has_iid else _SHARD_KEY
+    if not has_iid:
+        logger.warning(
+            "  MERGE: 'instrument_id' absent in one or both buckets — deduplicating on %s only "
+            "(instruments sharing a date/venue/data_type are collapsed into one row).",
+            _SHARD_KEY,
+        )
 
     # Add priority column so sort-then-drop_duplicates keeps the best status per shard.
     df_primary = df_primary.copy()
@@ -166,14 +202,15 @@ def _merge_manifests(
     combined = pd.concat([df_primary, df_secondary], ignore_index=True)
     # Sort ascending by priority so drop_duplicates(keep='first') keeps the best status.
     combined = combined.sort_values("_priority")
-    combined = combined.drop_duplicates(subset=_SHARD_KEY, keep="first")
+    combined = combined.drop_duplicates(subset=shard_key, keep="first")
     combined = combined.drop(columns=["_priority"])
     combined = combined.reset_index(drop=True)
     logger.info(
-        "  MERGE: primary=%d rows + secondary=%d rows → merged=%d rows (dedup on date/venue/data_type)",
+        "  MERGE: primary=%d rows + secondary=%d rows → merged=%d rows (dedup on %s)",
         len(df_primary),
         len(df_secondary),
         len(combined),
+        shard_key,
     )
     return combined
 
@@ -252,9 +289,19 @@ def _read_manifest(asset_group: str, *, merge: bool = True) -> pd.DataFrame | No
     result_df = primary_df
 
     if merge and len(accessible) > 1:
-        # Merge secondary bucket(s) into primary to capture expected_unattempted skeleton.
-        for _name, _ts, secondary_df in accessible[1:]:
-            result_df = _merge_manifests(result_df, secondary_df)
+        # Re-read secondary as eu_only (pyarrow push-down filter) before merging.
+        # The non-prd oracle can be 35.8M rows; only ~4.1M are expected_unattempted.
+        # Reading eu_only keeps peak memory bounded while providing the full skeleton.
+        for secondary_name, _ts, _secondary_full in accessible[1:]:
+            secondary_eu = _read_parquet_eu_only(secondary_name)
+            if secondary_eu is not None:
+                result_df = _merge_manifests(result_df, secondary_eu)
+            else:
+                logger.warning(
+                    "  %s eu-only read failed for secondary %s — skipping merge",
+                    asset_group,
+                    secondary_name,
+                )
 
     return result_df
 
