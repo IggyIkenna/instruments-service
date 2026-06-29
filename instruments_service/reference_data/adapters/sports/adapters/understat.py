@@ -250,12 +250,19 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
     async def get_match_shots(self, match_id: str | int) -> list[UnderstatShot]:
         """Fetch per-shot xG data for a completed match.
 
-        Calls ``GET /getMatch/{match_id}`` which returns JSON
-        ``{"h": [...shots], "a": [...shots]}`` where each shot has id,
-        minute, result, X, Y, xG, player, situation, h_a, player_id,
-        lastAction, type, period.
+        Calls ``GET /getMatchData/{match_id}`` (the AJAX endpoint the
+        ``/match/{id}`` page loads) which returns JSON
+        ``{"rosters": {...}, "shots": {"h": [...], "a": [...]}, "tmpl": ...}``.
+        Each shot has id, minute, result, X, Y, xG, player, situation, h_a,
+        player_id, lastAction, shotType, season, match_id.
+
+        2026-06-29: upstream removed BOTH the old ``/getMatch/{id}`` JSON endpoint
+        (now 404s for every id) and the embedded ``shotsData`` JS var on
+        ``/match/{id}``. The dead ``/getMatch`` 404 was silently absorbed as
+        "no shot data" → XG_SHOTS captured=0 across all history (hollow data).
+        Shots now live under the ``shots`` key of ``/getMatchData/{id}``.
         """
-        url = f"{_BASE_URL}/getMatch/{match_id}"
+        url = f"{_BASE_URL}/getMatchData/{match_id}"
         headers = {**self._headers(), "Referer": f"{_BASE_URL}/match/{match_id}"}
         try:
             async with self._make_session() as session:
@@ -263,9 +270,9 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         except Exception as exc:
             error_code = self._classify_error(exc, status=getattr(exc, "status", None))
             if error_code == "HTTP_NOT_FOUND":
-                # 404 from /getMatch/{id} means Understat has no shot data for this match (expected
-                # for early-season or low-coverage matches). Do NOT count as a fetch error —
-                # callers use _fetch_error_count>0 to decide record_failed vs
+                # 404 from /getMatchData/{id} means Understat has no shot data for this match
+                # (expected for early-season or low-coverage matches). Do NOT count as a fetch
+                # error — callers use _fetch_error_count>0 to decide record_failed vs
                 # record_empty(EXPECTED_NO_FIXTURE); a 404 here should resolve to record_empty.
                 logger.debug("get_match_shots: no shot data for match_id=%s (HTTP 404, expected)", match_id)
                 return []
@@ -276,10 +283,14 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         if not isinstance(raw, dict):
             logger.warning("get_match_shots: unexpected response type for match_id=%s", match_id)
             return []
+        shots_obj = raw.get("shots")
+        if not isinstance(shots_obj, dict):
+            logger.warning("get_match_shots: no 'shots' object for match_id=%s", match_id)
+            return []
 
         shots: list[UnderstatShot] = []
         for side in ("h", "a"):
-            side_data = raw.get(side)
+            side_data = shots_obj.get(side)
             if not isinstance(side_data, list):
                 continue
             for item in side_data:
@@ -397,11 +408,15 @@ def _safe_float(val: object) -> float | None:
 
 
 def _parse_shot_from_raw(item: dict[str, object], match_id: str, h_a: str) -> UnderstatShot | None:
-    """Parse a raw shot dict from /getMatch endpoint into UnderstatShot.
+    """Parse a raw shot dict from /getMatchData into UnderstatShot.
 
     API uses uppercase X/Y coords and camelCase lastAction/shotType — map these
-    to the snake_case UnderstatShot model fields.
+    to the snake_case UnderstatShot model fields. The shot type is keyed
+    ``shotType`` (the legacy ``type`` key is accepted as a fallback).
     """
+    _shot_type = item.get("shotType")
+    if _shot_type is None:
+        _shot_type = item.get("type")
     try:
         return UnderstatShot(
             id=item.get("id"),
@@ -417,7 +432,7 @@ def _parse_shot_from_raw(item: dict[str, object], match_id: str, h_a: str) -> Un
             player_id=item.get("player_id"),
             last_action=str(item["lastAction"]) if item.get("lastAction") is not None else None,
             period=_safe_int(item.get("period")),
-            shot_type=str(item["type"]) if item.get("type") is not None else None,
+            shot_type=str(_shot_type) if _shot_type is not None else None,
         )
     except Exception as exc:
         logger.warning("Failed to parse shot item: %s", exc)

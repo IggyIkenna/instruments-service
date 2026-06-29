@@ -373,49 +373,65 @@ class TestUnderstatGetMatchIds:
 class TestUnderstatGetMatchShots:
     @pytest.mark.asyncio
     async def test_get_match_shots_success(self) -> None:
-        """Returns parsed shots for a valid match response."""
+        """Returns parsed shots from the /getMatchData ``shots`` object.
+
+        Mirrors the live response shape (2026-06-29): shots live under the
+        ``shots`` key and the per-shot type is keyed ``shotType``.
+        """
         raw = {
-            "h": [
-                {
-                    "id": "1",
-                    "minute": "23",
-                    "result": "SavedShot",
-                    "X": "0.85",
-                    "Y": "0.45",
-                    "xG": "0.12",
-                    "player": "Player One",
-                    "situation": "OpenPlay",
-                    "player_id": "101",
-                    "lastAction": "Pass",
-                    "period": "1",
-                    "type": "RightFoot",
-                }
-            ],
-            "a": [
-                {
-                    "id": "2",
-                    "minute": "55",
-                    "result": "Goal",
-                    "X": "0.90",
-                    "Y": "0.50",
-                    "xG": "0.75",
-                    "player": "Player Two",
-                    "situation": "FromCorner",
-                    "player_id": "202",
-                    "lastAction": "Cross",
-                    "period": "2",
-                    "type": "Head",
-                }
-            ],
+            "rosters": {},
+            "tmpl": "",
+            "shots": {
+                "h": [
+                    {
+                        "id": "1",
+                        "minute": "23",
+                        "result": "SavedShot",
+                        "X": "0.85",
+                        "Y": "0.45",
+                        "xG": "0.12",
+                        "player": "Player One",
+                        "situation": "OpenPlay",
+                        "player_id": "101",
+                        "lastAction": "Pass",
+                        "shotType": "RightFoot",
+                    }
+                ],
+                "a": [
+                    {
+                        "id": "2",
+                        "minute": "55",
+                        "result": "Goal",
+                        "X": "0.90",
+                        "Y": "0.50",
+                        "xG": "0.75",
+                        "player": "Player Two",
+                        "situation": "FromCorner",
+                        "player_id": "202",
+                        "lastAction": "Cross",
+                        "shotType": "Head",
+                    }
+                ],
+            },
         }
         adapter = UnderstatAdapter()
+        captured_url: dict[str, str] = {}
+
+        async def _capture(_session: object, url: str, **_kw: object) -> dict[str, object]:
+            captured_url["url"] = url
+            return raw
+
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
-            patch.object(adapter, "_get_with_retry", AsyncMock(return_value=raw)),
+            patch.object(adapter, "_get_with_retry", AsyncMock(side_effect=_capture)),
         ):
             shots = await adapter.get_match_shots("12345")
+        # Contract guard: must hit /getMatchData (not the dead /getMatch).
+        assert "/getMatchData/12345" in captured_url["url"]
         assert len(shots) == 2
         assert shots[0].result == "SavedShot"
+        assert shots[0].shot_type == "RightFoot"
+        assert shots[0].xg == 0.12
         assert shots[1].result == "Goal"
 
     @pytest.mark.asyncio
@@ -447,9 +463,20 @@ class TestUnderstatGetMatchShots:
         assert shots == []
 
     @pytest.mark.asyncio
+    async def test_get_match_shots_missing_shots_key_returns_empty(self) -> None:
+        """A dict response without a ``shots`` object returns [] (no crash)."""
+        adapter = UnderstatAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(adapter, "_get_with_retry", AsyncMock(return_value={"rosters": {}, "tmpl": ""})),
+        ):
+            shots = await adapter.get_match_shots("99")
+        assert shots == []
+
+    @pytest.mark.asyncio
     async def test_get_match_shots_side_not_list_skipped(self) -> None:
         """Non-list side data is skipped gracefully."""
-        raw = {"h": "not-a-list", "a": None}
+        raw = {"shots": {"h": "not-a-list", "a": None}}
         adapter = UnderstatAdapter()
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
@@ -461,7 +488,7 @@ class TestUnderstatGetMatchShots:
     @pytest.mark.asyncio
     async def test_get_match_shots_skips_non_dict_shot_items(self) -> None:
         """Non-dict items in shot list are skipped."""
-        raw = {"h": ["not-dict", {"id": "1", "result": "Goal", "minute": "5"}], "a": []}
+        raw = {"shots": {"h": ["not-dict", {"id": "1", "result": "Goal", "minute": "5"}], "a": []}}
         adapter = UnderstatAdapter()
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
