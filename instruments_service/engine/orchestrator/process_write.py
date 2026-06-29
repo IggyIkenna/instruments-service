@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from unified_api_contracts import source_string_for
+from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
@@ -89,11 +90,12 @@ def _asset_group_for_venue(venue_str: str) -> str:
         "OPEN_METEO",
     ):
         return "sports"
-    cefi_set = frozenset(_orch._CEFI_VENUES)
-    if venue_str in cefi_set:
+    # Use UAC reverse-lookup for cefi/tradfi membership (VENUE_TO_ASSET_GROUP covers the
+    # full canonical universe including KALSHI-PERP/POLYMARKET-PERP and YAHOO_FINANCE).
+    ag = VENUE_TO_ASSET_GROUP.get(venue_str)
+    if ag == "cefi":
         return "cefi"
-    tradfi_set = frozenset(_orch._TRADFI_VENUES)
-    if venue_str in tradfi_set:
+    if ag == "tradfi":
         return "tradfi"
     # DeFi venues use PROTOCOL-CHAIN format; the "-" is the discriminator.
     if "-" in venue_str:
@@ -422,8 +424,9 @@ def _write_tradfi_non_trading_day_entries(
     suppress regular parquet writes for them (see the per-venue loop in
     ``_write_all_venues``).
     """
-    _tradfi_set = frozenset(_orch._TRADFI_VENUES)
-    tradfi_empty = {v for v in (non_error_venues - set(counts.keys())) if v in _tradfi_set}
+    tradfi_empty = {
+        v for v in (non_error_venues - set(counts.keys())) if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"
+    }
     if not tradfi_empty:
         return set()
     target_dt = _orch.date_type.fromisoformat(date)
@@ -470,8 +473,10 @@ def _pre_stamp_non_trading_tradfi(
     Returns the set of non-trading tradfi venues that were stamped (callers suppress
     parquet writes for these venues to avoid writing look-back artefacts as captured).
     """
-    _tradfi_set = frozenset(_orch._TRADFI_VENUES)
-    _attempted = _tradfi_set & (non_error_venues | {r.venue for r in records})
+    _attempted = {
+        v for v in (non_error_venues | {r.venue for r in records})
+        if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"
+    }
     target_dt = _orch.date_type.fromisoformat(date)
     non_trading: set[str] = {v for v in _attempted if _orch.is_non_trading_day(v, target_dt)}
     if not non_trading:
@@ -561,7 +566,6 @@ def _write_all_venues(
     # non_error_venues and record venues) so a CEFI-only run never stamps CME/NASDAQ.
     # FX is 24/7 and is never in the returned set.  The write loop skips parquet
     # writes for these venues (look-back artefact suppression — see helper docstring).
-    _tradfi_set_w = frozenset(_orch._TRADFI_VENUES)
     _non_trading_tradfi = _pre_stamp_non_trading_tradfi(
         date=date,
         records=records,
@@ -624,7 +628,7 @@ def _write_all_venues(
                 # from InstrumentRecord.expiry using physical/cash-settled conventions.
                 # Shard-level isolation: a write failure here does NOT abort the instruments
                 # write — the futures_contracts.parquet is best-effort on the same date.
-                if venue_str in _tradfi_set_w:
+                if VENUE_TO_ASSET_GROUP.get(venue_str) == "tradfi":
                     _venue_instrument_records = [r for r in records if r.venue == venue_str]
                     _orch._write_futures_contracts(
                         venue_str=venue_str,

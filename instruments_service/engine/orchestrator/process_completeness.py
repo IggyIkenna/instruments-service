@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
 from unified_api_contracts.sports import get_league
 
 if TYPE_CHECKING:
@@ -473,12 +474,13 @@ def _finalize_completeness(
     if missing_shards:
         _failed_attempt_ts = _orch.datetime.now(_orch.UTC)
         _failed_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-        _tradfi_set = frozenset(_orch._TRADFI_VENUES)
         _missing_date_dt = _orch.date_type.fromisoformat(date)
         _nt_stamped: list[str] = []
         _failed_stamped: list[str] = []
         for _failed_venue in sorted(missing_shards):
-            if _failed_venue in _tradfi_set and _orch.is_non_trading_day(_failed_venue, _missing_date_dt):
+            if VENUE_TO_ASSET_GROUP.get(_failed_venue) == "tradfi" and _orch.is_non_trading_day(
+                _failed_venue, _missing_date_dt
+            ):
                 # Non-trading day — honest absence, not a fetch failure.
                 _nt_reason = _orch.non_trading_day_reason(_failed_venue, _missing_date_dt) or "EXPECTED_WEEKEND"
                 _failed_manifest.record_expected_empty(
