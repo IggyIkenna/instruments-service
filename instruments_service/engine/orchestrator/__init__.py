@@ -598,13 +598,10 @@ from instruments_service.engine.orchestrator.understat import (
     _run_understat_shots_date as _run_understat_shots_date,
 )
 from instruments_service.engine.orchestrator.venue_core import (
-    _CEFI_VENUES as _CEFI_VENUES,
-)
-from instruments_service.engine.orchestrator.venue_core import (
     _SPORTS_PROVIDER_VENUES as _SPORTS_PROVIDER_VENUES,
 )
 from instruments_service.engine.orchestrator.venue_core import (
-    _TRADFI_VENUES as _TRADFI_VENUES,
+    _TRADFI_NON_VENUE_KEYS as _TRADFI_NON_VENUE_KEYS,
 )
 from instruments_service.engine.orchestrator.venue_core import (
     _VENUE_ADAPTER_EPOCH as _VENUE_ADAPTER_EPOCH,
@@ -617,6 +614,9 @@ from instruments_service.engine.orchestrator.venue_core import (
 )
 from instruments_service.engine.orchestrator.venue_core import (
     earliest_venue_date as earliest_venue_date,
+)
+from instruments_service.engine.orchestrator.venue_core import (
+    expand_cefi_tardis_endpoints as expand_cefi_tardis_endpoints,
 )
 from instruments_service.engine.orchestrator.venue_core import (
     filter_instruments_by_date as filter_instruments_by_date,
@@ -679,7 +679,6 @@ __all__ = [
     "SOCCER_FOOTBALL_INFO_IDS",
     "UTC",
     "_AF_LOGO_RE",
-    "_CEFI_VENUES",
     "_DEFI_VENUES",
     "_ENTITY_NAME_TO_PIPELINE_MODE",
     "_Q5_SCHEDULE_COLUMNS",
@@ -691,7 +690,7 @@ __all__ = [
     "_SPORTS_PROVIDER_VENUES",
     "_STATIC_DEFI_VENUES",
     "_SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX",
-    "_TRADFI_VENUES",
+    "_TRADFI_NON_VENUE_KEYS",
     "_TRANSFERMARKT_CACHE_STALENESS_DAYS",
     "_VENUE_ADAPTER_EPOCH",
     "_VENUE_MAPPING",
@@ -820,6 +819,7 @@ __all__ = [
     "defi",
     "earliest_venue_date",
     "emit_preflight_skip",
+    "expand_cefi_tardis_endpoints",
     "extract_match_lifecycle",
     "failure",
     "fetch_instruments_for_all_venues",

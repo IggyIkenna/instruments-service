@@ -68,7 +68,7 @@ _SAMPLE_MARKET_2 = {
 class TestVenueProperty:
     def test_venue_returns_kalshi_perp(self) -> None:
         adapter = KalshiPerpReferenceDataAdapter()
-        assert adapter.venue == "kalshi-perp"
+        assert adapter.venue == "KALSHI-PERP"
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ class TestGetInstruments:
             results = await adapter.get_instruments()
 
         assert len(results) == 1
-        assert results[0].venue == "kalshi-perp"
+        assert results[0].venue == "KALSHI-PERP"
 
     @pytest.mark.asyncio
     async def test_quote_asset_is_usd(self) -> None:
@@ -313,4 +313,4 @@ async def test_get_instruments_live() -> None:
     assert len(results) > 0, "Expected at least one KALSHI-PERP contract"
     for record in results:
         assert record.instrument_type == InstrumentType.PERPETUAL
-        assert record.venue == "kalshi-perp"
+        assert record.venue == "KALSHI-PERP"
