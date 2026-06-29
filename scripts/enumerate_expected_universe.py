@@ -2071,11 +2071,20 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
 
 
 def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame, str]:
-    """Bulk-download the canonical manifest. Returns (df, local_path).
+    """Bulk-download the canonical manifest + unconsolidated per-VM shards. Returns (df, local_path).
+
+    Reads BOTH the consolidated availability_index.parquet AND any per-VM shards under
+    _index/per_vm/ that have not yet been merged by the consolidator.  Prevents the
+    race condition where typing scripts write empty_confirmed rows to per-VM shards and
+    the consolidator has not yet merged them when the enumerator runs: without the
+    per-VM augmentation the enumerator's present_set would miss those typed rows, write
+    expected_unattempted for the same keys, and the newer eu written_at would overwrite
+    the typed rows after consolidation.
 
     If a pre-cached copy exists at /tmp/{asset_group}_manifest_cache.parquet
     (written by a preceding gsutil cp to avoid GCS SDK stream timeouts on
-    large manifests), use it directly instead of re-downloading.
+    large manifests), use it directly instead of re-downloading (the cache
+    skips per-VM augmentation; this is acceptable for the manual cache path).
     """
     # Support both /tmp and home-dir caches (macOS sandbox writes home-dir on some calls)
     _home_cache = os.path.expanduser(f"~/tmp_manifest_cache/{asset_group}_manifest_cache.parquet")
@@ -2100,6 +2109,55 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     blob.download_to_filename(local_path, timeout=600)
     df = pd.read_parquet(local_path)
     logger.info("Manifest rows: %d", len(df))
+
+    # Augment with per-VM shards to close the pre-consolidation race window.
+    # Best-effort: a failure here falls back to the consolidated-only index
+    # (present_set may miss some recently-typed rows, but that is the old
+    # behaviour — never worse than before this fix).
+    try:
+        shard_blobs = [
+            b
+            for b in client.list_blobs(bucket_name, prefix="_index/per_vm/")
+            if b.name.endswith(".parquet")
+        ]
+        if shard_blobs:
+            logger.info(
+                "Augmenting present-set with %d per-VM shard(s) to close pre-consolidation race",
+                len(shard_blobs),
+            )
+            extra_frames: list[pd.DataFrame] = []
+            for shard_blob in shard_blobs:
+                shard_local: str | None = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        prefix="enum-shard-",
+                        suffix=".parquet",
+                        delete=False,
+                    ) as stf:
+                        shard_local = stf.name
+                    shard_blob.download_to_filename(shard_local, timeout=120)
+                    shard_df = pd.read_parquet(shard_local)
+                    extra_frames.append(shard_df)
+                    logger.info("Loaded per-VM shard %s: %d rows", shard_blob.name, len(shard_df))
+                except Exception as shard_exc:
+                    logger.warning(
+                        "Skipping per-VM shard %s (best-effort): %s",
+                        shard_blob.name,
+                        shard_exc,
+                    )
+                finally:
+                    if shard_local is not None:
+                        with contextlib.suppress(OSError):
+                            os.unlink(shard_local)
+            if extra_frames:
+                df = pd.concat([df, *extra_frames], ignore_index=True, sort=False)
+                logger.info("Augmented manifest: %d total rows (main + per-VM shards)", len(df))
+    except Exception as augment_exc:
+        logger.warning(
+            "Per-VM shard augmentation failed (best-effort, using consolidated index only): %s",
+            augment_exc,
+        )
+
     return df, local_path
 
 
