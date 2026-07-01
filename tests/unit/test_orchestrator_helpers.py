@@ -219,9 +219,10 @@ class TestVenueProducerUACInvariant:
     asserts the round-trip.
     For TRADFI: IS uses UAC["tradfi"] minus YAHOO_FINANCE (named filter).
     For PREDICTION: IS uses UAC["prediction"] directly.
-    For DEFI: EXEMPT — IS produces a hardcoded subset of UAC (Decision D, operator
-      2026-06-29); set-equality is intentionally NOT asserted.  Asserting the
-      exempt relationship instead (IS defi is a subset of UAC defi, not equal).
+    For DEFI: NOW EQUAL — UAC VENUES_BY_ASSET_GROUP["defi"] was narrowed to the
+      IS-producible set P (== _build_defi_venues(); @6bcff215, operator-approved defi
+      MVP exclusion).  The drift-guard below asserts full set-equality (both directions),
+      superseding the earlier subset-only guard.
     For SPORTS: EXEMPT — IS owns reference-data providers (API_FOOTBALL/FOOTYSTATS/
       etc.); UAC sports = market-data/odds venues (ODDS_API/PINNACLE/…) owned by
       MTDS.  Two orthogonal registries (Decision C, operator 2026-06-29); set-equality
@@ -286,25 +287,30 @@ class TestVenueProducerUACInvariant:
             f"  Missing in IS: {expected - actual}"
         )
 
-    def test_defi_exempt_is_subset_of_uac(self) -> None:
-        """DEFI is EXEMPT from set-equality (Decision D, operator 2026-06-29).
+    def test_defi_set_equals_uac_denominator_drift_guard(self) -> None:
+        """DeFi denominator drift-guard: IS defi producer == UAC VENUES_BY_ASSET_GROUP["defi"].
 
-        IS builds its DeFi venue list from _build_defi_venues() (subgraph-derived union
-        static union Solana), which is a SUBSET of UAC _ALL_DEFI_VENUES.  The ~70 UAC-only
-        defi venues that IS does not produce are excluded from the IS set; the
-        honest-coverage denominator is scoped by the IS-producible set.
-        We assert the subset relationship (not equality) to protect against IS
-        accidentally adding a venue that is NOT in UAC at all.
+        Post-@6bcff215 (operator-approved defi MVP exclusion) UAC
+        VENUES_BY_ASSET_GROUP["defi"] was narrowed to the IS-producible set P
+        (== _build_defi_venues(): 55 venues, no UAC-only tail). This upgrades the earlier
+        subset-only guard to full set-equality, so a future change to EITHER side — IS
+        adds/drops a producer, or UAC re-widens the defi denominator — that re-introduces
+        denominator/producible drift fails CI.
         """
         from unified_api_contracts.registry.market_data_categories import VENUES_BY_ASSET_GROUP
 
         is_defi = set(get_venues_for_asset_groups(["DEFI"]))
         uac_defi = set(VENUES_BY_ASSET_GROUP["defi"])
-        # IS defi is a strict/non-strict subset of UAC defi
-        extra = is_defi - uac_defi
-        assert not extra, (
-            f"IS defi producer contains venues NOT in UAC defi (DEFI is EXEMPT from "
-            f"set-equality but must not ADD venues outside UAC): {extra}"
+        assert is_defi == uac_defi, (
+            f"DeFi venue producer diverges from the UAC defi denominator (must stay == the "
+            f"IS-producible set P after @6bcff215).\n"
+            f"  Extra in IS (not in UAC): {is_defi - uac_defi}\n"
+            f"  UAC-only (denominator re-widened): {uac_defi - is_defi}"
+        )
+        # single-producer invariant: the AG helper resolves to _build_defi_venues()
+        assert is_defi == set(_build_defi_venues()), (
+            "get_venues_for_asset_groups(['DEFI']) must == _build_defi_venues() "
+            "(one producer; no second defi venue source)"
         )
 
     def test_sports_exempt_is_disjoint_from_uac_sports(self) -> None:
