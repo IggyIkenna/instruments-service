@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import pytest
+from unified_api_contracts.registry import VENUE_TO_ADAPTER_KEY
 
 from instruments_service.reference_data import create_reference_data_adapter
 from instruments_service.reference_data.adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 from instruments_service.reference_data.adapters.tradfi.ibkr import IBKRReferenceDataAdapter
 from instruments_service.reference_data.factory import (
     ADAPTER_DATA_SOURCES,
-    CANONICAL_VENUE_TO_ADAPTER,
     _run_refdata_preflight,
     clear_adapter_pool,
     get_adapter_for_canonical_venue,
@@ -108,29 +108,29 @@ class TestAdapterDataSources:
 
 class TestCanonicalVenueToAdapter:
     def test_cefi_venues_present(self) -> None:
-        assert "BINANCE-SPOT" in CANONICAL_VENUE_TO_ADAPTER
-        assert "BINANCE-FUTURES" in CANONICAL_VENUE_TO_ADAPTER
-        assert "DERIBIT" in CANONICAL_VENUE_TO_ADAPTER
-        assert "HYPERLIQUID" in CANONICAL_VENUE_TO_ADAPTER
+        assert "BINANCE-SPOT" in VENUE_TO_ADAPTER_KEY
+        assert "BINANCE-FUTURES" in VENUE_TO_ADAPTER_KEY
+        assert "DERIBIT" in VENUE_TO_ADAPTER_KEY
+        assert "HYPERLIQUID" in VENUE_TO_ADAPTER_KEY
         # Binance COIN-M (inverse/delivery) — cefi_universe_capture_rule 2026-06-24
-        assert "BINANCE-DELIVERY" in CANONICAL_VENUE_TO_ADAPTER
-        assert CANONICAL_VENUE_TO_ADAPTER["BINANCE-DELIVERY"] == "tardis"
+        assert "BINANCE-DELIVERY" in VENUE_TO_ADAPTER_KEY
+        assert VENUE_TO_ADAPTER_KEY["BINANCE-DELIVERY"] == "tardis"
 
     def test_defi_venues_present(self) -> None:
-        assert any("AAVE_V3" in k for k in CANONICAL_VENUE_TO_ADAPTER)
-        assert any("UNISWAP_V3" in k for k in CANONICAL_VENUE_TO_ADAPTER)
+        assert any("AAVE_V3" in k for k in VENUE_TO_ADAPTER_KEY)
+        assert any("UNISWAP_V3" in k for k in VENUE_TO_ADAPTER_KEY)
 
     def test_prediction_venues_present(self) -> None:
-        assert "POLYMARKET" in CANONICAL_VENUE_TO_ADAPTER
-        assert "KALSHI" in CANONICAL_VENUE_TO_ADAPTER
+        assert "POLYMARKET" in VENUE_TO_ADAPTER_KEY
+        assert "KALSHI" in VENUE_TO_ADAPTER_KEY
 
     def test_sports_venues_present(self) -> None:
-        assert "BETFAIR" in CANONICAL_VENUE_TO_ADAPTER
-        assert "API_FOOTBALL" in CANONICAL_VENUE_TO_ADAPTER
+        assert "BETFAIR" in VENUE_TO_ADAPTER_KEY
+        assert "API_FOOTBALL" in VENUE_TO_ADAPTER_KEY
 
     def test_solana_defi_venues(self) -> None:
-        assert "DRIFT-SOLANA" in CANONICAL_VENUE_TO_ADAPTER
-        assert "KAMINO-SOLANA" in CANONICAL_VENUE_TO_ADAPTER
+        assert "DRIFT-SOLANA" in VENUE_TO_ADAPTER_KEY
+        assert "KAMINO-SOLANA" in VENUE_TO_ADAPTER_KEY
 
 
 class TestRunRefdataPreflight:
@@ -183,18 +183,16 @@ class TestCreateReferenceDataAdapterExtended:
 
 
 class TestKRXRouting:
-    """Bug-1 regression: KRX was missing from CANONICAL_VENUE_TO_ADAPTER (2026-06-24).
+    """Bug-1 regression: KRX was missing from VENUE_TO_ADAPTER_KEY (2026-06-24).
 
     Symptoms: 'No URDI adapter for ['KRX']' + 'URDI fetch: (KRX, UNSUPPORTED)'
     causing shard catastrophic failure (3/7 venues written, CME/KRX/NASDAQ/NYSE missing).
     """
 
     def test_krx_in_canonical_venue_to_adapter(self) -> None:
-        """CANONICAL_VENUE_TO_ADAPTER must map KRX to the databento adapter."""
-        assert "KRX" in CANONICAL_VENUE_TO_ADAPTER, (
-            "KRX missing from CANONICAL_VENUE_TO_ADAPTER — add 'KRX': 'databento'"
-        )
-        assert CANONICAL_VENUE_TO_ADAPTER["KRX"] == "databento"
+        """VENUE_TO_ADAPTER_KEY must map KRX to the databento adapter."""
+        assert "KRX" in VENUE_TO_ADAPTER_KEY, "KRX missing from VENUE_TO_ADAPTER_KEY — add 'KRX': 'databento'"
+        assert VENUE_TO_ADAPTER_KEY["KRX"] == "databento"
 
     def test_krx_get_adapter_resolves(self) -> None:
         """get_adapter_for_canonical_venue('KRX') must not raise ValueError."""
@@ -205,5 +203,5 @@ class TestKRXRouting:
     def test_tradfi_venues_all_in_adapter_map(self) -> None:
         """All TradFi canonical venues (CME/NASDAQ/NYSE/CBOE/ICE/FX/KRX) must be mapped."""
         expected_tradfi = {"CME", "NASDAQ", "NYSE", "CBOE", "ICE", "FX", "KRX"}
-        missing = expected_tradfi - set(CANONICAL_VENUE_TO_ADAPTER)
-        assert not missing, f"TradFi venues missing from CANONICAL_VENUE_TO_ADAPTER: {missing}"
+        missing = expected_tradfi - set(VENUE_TO_ADAPTER_KEY)
+        assert not missing, f"TradFi venues missing from VENUE_TO_ADAPTER_KEY: {missing}"

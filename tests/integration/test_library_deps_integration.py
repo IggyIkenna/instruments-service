@@ -349,39 +349,41 @@ def test_uei_log_event_callable() -> None:
 
 # ---------------------------------------------------------------------------
 # unified-reference-data-interface (URDI)
-# Production imports: ADAPTER_DATA_SOURCES, CANONICAL_VENUE_TO_ADAPTER,
+# Production imports: ADAPTER_DATA_SOURCES, VENUE_TO_ADAPTER_KEY,
 #   get_adapter_for_canonical_venue (all in adapters/urdi_reference_provider.py)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
 def test_urdi_adapter_registry_populated() -> None:
-    """CANONICAL_VENUE_TO_ADAPTER maps canonical venue names to URDI adapter keys.
+    """VENUE_TO_ADAPTER_KEY maps canonical venue names to URDI adapter keys.
     If URDI removes a venue (e.g. UNISWAP_V3-ETHEREUM), instrument fetching silently
     returns zero records for that venue.
     """
-    from instruments_service.reference_data import CANONICAL_VENUE_TO_ADAPTER
+    from unified_api_contracts.registry import VENUE_TO_ADAPTER_KEY
 
-    assert isinstance(CANONICAL_VENUE_TO_ADAPTER, dict)
-    assert len(CANONICAL_VENUE_TO_ADAPTER) >= 15, "must cover at least 15 canonical venues"
+    assert isinstance(VENUE_TO_ADAPTER_KEY, dict)
+    assert len(VENUE_TO_ADAPTER_KEY) >= 15, "must cover at least 15 canonical venues"
     # Key venues the service processes must be present
-    assert "UNISWAP_V3-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER, "Uniswap V3 must be registered"
-    assert "AAVE_V3-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER, "Aave V3 must be registered"
-    assert "MORPHO-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER, "Morpho must be registered"
+    assert "UNISWAP_V3-ETHEREUM" in VENUE_TO_ADAPTER_KEY, "Uniswap V3 must be registered"
+    assert "AAVE_V3-ETHEREUM" in VENUE_TO_ADAPTER_KEY, "Aave V3 must be registered"
+    assert "MORPHO-ETHEREUM" in VENUE_TO_ADAPTER_KEY, "Morpho must be registered"
 
 
 @pytest.mark.integration
 def test_urdi_adapter_data_sources_aligned() -> None:
     """ADAPTER_DATA_SOURCES maps URDI adapter keys to data source IDs used for
-    API key lookup. Every adapter key in CANONICAL_VENUE_TO_ADAPTER must have a
+    API key lookup. Every adapter key in VENUE_TO_ADAPTER_KEY must have a
     corresponding data source entry (even if empty string = no key required).
     """
-    from instruments_service.reference_data import ADAPTER_DATA_SOURCES, CANONICAL_VENUE_TO_ADAPTER
+    from unified_api_contracts.registry import NO_ADAPTER_YET, VENUE_TO_ADAPTER_KEY
 
-    adapter_keys = set(CANONICAL_VENUE_TO_ADAPTER.values())
+    from instruments_service.reference_data import ADAPTER_DATA_SOURCES
+
+    adapter_keys = set(VENUE_TO_ADAPTER_KEY.values()) - {NO_ADAPTER_YET}
     for key in adapter_keys:
         assert key in ADAPTER_DATA_SOURCES, (
-            f"adapter key '{key}' in CANONICAL_VENUE_TO_ADAPTER has no ADAPTER_DATA_SOURCES entry"
+            f"adapter key '{key}' in VENUE_TO_ADAPTER_KEY has no ADAPTER_DATA_SOURCES entry"
         )
 
 

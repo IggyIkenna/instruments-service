@@ -99,21 +99,18 @@ _DEFAULT_PREFIX = "instrument_availability/by_date"
 def _venues_with_subgraph_support() -> list[tuple[str, str, str]]:
     """Enumerate every (venue_prefix, chain, protocol_slug) triple from UAC SUBGRAPH_IDS.
 
-    Mirrors the `_SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL` mapping in
-    `instruments_service.reference_data.factory` (SSOT — re-imported below).
+    Mirrors the `VENUE_PREFIX_TO_PROTOCOL` mapping in
+    `unified_api_contracts.registry` (SSOT — re-imported below).
 
     Returns a list of ``(venue_tag, chain, protocol_slug)`` tuples where
     ``venue_tag = f"{venue_prefix}-{chain}"`` is the canonical UAC venue name
     used in GCS paths and the URDI factory.
     """
-    # config-bootstrap: deferred import — factory's module-level bootstrap
-    # touches UAC capability registry and is only needed for migrations.
-    from instruments_service.reference_data.factory import (
-        _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL,
-    )
+    # Deferred import — only needed once the migration actually runs.
+    from unified_api_contracts.registry import VENUE_PREFIX_TO_PROTOCOL
 
     triples: list[tuple[str, str, str]] = []
-    for prefix, protocol_slug in _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.items():
+    for prefix, protocol_slug in VENUE_PREFIX_TO_PROTOCOL.items():
         # SUBGRAPH_IDS access via get_subgraph_id() per UAC import-surface rule.
         from unified_api_contracts.registry import SUBGRAPH_IDS
 

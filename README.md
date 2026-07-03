@@ -104,8 +104,10 @@ primary scaling mechanism — no intra-shard thread pool.
 
 ## Extending coverage
 
-Add a venue: edit `adapters/urdi_reference_provider.py` → `URDI_SUPPORTED_VENUES`.
-URDI must have an adapter for the venue first — add it there, not here.
+Add a venue: register its adapter KEY in UAC
+(`unified_api_contracts/registry/venue_adapter_keys.py` → `VENUE_TO_ADAPTER_KEY`) and its
+adapter CLASS here (`reference_data/factory.py` → `_ADAPTERS`). `URDI_SUPPORTED_VENUES` is
+UAC-derived — never edit a venue list in this repo.
 
 ## Where the real logic lives
 
