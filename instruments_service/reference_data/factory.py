@@ -5,13 +5,13 @@ import logging
 from datetime import date as date_type
 
 from unified_api_contracts.registry import (
+    NO_ADAPTER_YET,
+    VENUE_PREFIX_TO_PROTOCOL,
+    VENUE_TO_ADAPTER_KEY,
     CapabilityResolutionError,
     UnsupportedOperationError,
     bootstrap_capabilities,
     validate_operation,
-)
-from unified_api_contracts.registry.capability_declarations._defi import (
-    get_supported_chains_for_protocol,
 )
 
 from .adapters.cefi.aster import AsterReferenceDataAdapter
@@ -84,184 +84,10 @@ _logger = logging.getLogger(__name__)
 with contextlib.suppress(Exception):
     bootstrap_capabilities()
 
-# Maps UAC canonical venue names → URDI adapter factory keys.
-# Instruments-service (and any other service) calls get_adapter_for_canonical_venue()
-# instead of maintaining their own translation dict.
-# Key: UAC canonical venue name (uppercase, hyphenated).
-# Value: key into _ADAPTERS below.
-CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
-    # CeFi — Tardis for batch (historical instrument universe),
-    # CCXT for live (real-time active markets via public endpoints).
-    # Mode-aware routing in get_adapter_for_canonical_venue() selects the adapter.
-    "BINANCE-SPOT": "tardis",
-    "BINANCE-FUTURES": "tardis",
-    # Binance COIN-M (inverse/delivery) perps + dated futures. Distinct Tardis
-    # endpoint ``binance-delivery`` from the USDT-M ``binance-futures`` endpoint.
-    # Captured via the Tardis adapter (free /v1/exchanges path, no auth needed).
-    "BINANCE-DELIVERY": "tardis",
-    "BYBIT": "tardis",
-    "BYBIT-SPOT": "tardis",
-    "BYBIT-FUTURES": "tardis",
-    "OKX": "tardis",
-    "OKX-SPOT": "tardis",
-    "OKX-SWAP": "tardis",
-    "OKX-FUTURES": "tardis",
-    "DERIBIT": "tardis",
-    # DERIBIT-COMBO: live multi-leg options strategy fetch via Deribit public REST API.
-    # Batch (historical) combo instruments come via the Tardis adapter (DERIBIT → tardis).
-    "DERIBIT-COMBO": "deribit_combo",
-    # DERIBIT-OPTIONS: live option-chain enumeration + mark IV via Deribit public REST.
-    # Historical option data comes via the Tardis adapter (DERIBIT → tardis).
-    "DERIBIT-OPTIONS": "deribit_options",
-    "COINBASE-SPOT": "tardis",
-    # Coinbase Derivatives (perps) via Tardis ``coinbase-international`` — distinct
-    # canonical venue so the perp-gate pairs it with COINBASE-SPOT (2026-06-23).
-    "COINBASE-FUTURES": "tardis",
-    "UPBIT": "tardis",
-    # Tier-3 CeFi (added 2026-05-01) — Tardis archives spot + perp/dated futures.
-    "BITFINEX-SPOT": "tardis",
-    "BITFINEX-FUTURES": "tardis",
-    "BITGET-SPOT": "tardis",
-    "BITGET-FUTURES": "tardis",
-    "KRAKEN-SPOT": "tardis",
-    "KRAKEN-FUTURES": "tardis",
-    # Non-Tardis CeFi
-    "HYPERLIQUID": "hyperliquid",
-    "ASTER": "aster",
-    # TradFi
-    "CME": "databento",
-    "NASDAQ": "databento",
-    "NYSE": "databento",
-    "CBOE": "databento",
-    "ICE": "databento",
-    "FX": "databento",
-    "KRX": "databento",
-    # Prediction markets
-    "POLYMARKET": "polymarket",
-    "KALSHI": "kalshi",
-    # Prediction-platform crypto-perp CLOBs (CFTC-regulated perpetual futures,
-    # NOT prediction YES/NO markets). Treated as cefi asset_group.
-    # KALSHI-PERP: beta launch 2026-05-29. POLYMARKET-PERP: beta launch 2026-04-21.
-    "KALSHI-PERP": "kalshi_perp",
-    "POLYMARKET-PERP": "polymarket_perp",
-    # DeFi — LST/Yield protocols (Ethereum-only, no subgraph multi-chain)
-    "LIDO-ETHEREUM": "lido",
-    "ETHERFI-ETHEREUM": "etherfi",
-    "ETHENA-ETHEREUM": "ethena",
-    "ROCKETPOOL-ETHEREUM": "rocket_pool",
-    "RENZO-ETHEREUM": "renzo",
-    "RENZO-ARBITRUM": "renzo",
-    "KELPDAO-ETHEREUM": "kelpdao",
-    "PUFFER-ETHEREUM": "puffer",
-    "SYMBIOTIC-ETHEREUM": "symbiotic",
-    "KARAK-ETHEREUM": "karak",
-    "KARAK-ARBITRUM": "karak",
-    # DeFi — Vault/yield-aggregator protocols (Ethereum + L2, static curated registry)
-    "CONVEX-ETHEREUM": "convex",
-    "IDLE-ETHEREUM": "idle",
-    "IDLE-ARBITRUM": "idle",
-    "YEARN-ETHEREUM": "yearn",
-    "YEARN-ARBITRUM": "yearn",
-    # Beefy multi-chain yield aggregator (curated TOP-vault snapshot per chain).
-    # Polygon intentionally excluded 2026-05-12 — Beefy public API returned every
-    # Polygon vault as status=eol (no active vaults on the curated snapshot date).
-    "BEEFY-ETHEREUM": "beefy",
-    "BEEFY-ARBITRUM": "beefy",
-    "BEEFY-BASE": "beefy",
-    "BEEFY-BSC": "beefy",
-    "BEEFY-AVALANCHE": "beefy",
-    # Pendle yield-tokenization (PT/YT/SY tokens — curated active-markets snapshot).
-    "PENDLE-ETHEREUM": "pendle",
-    "PENDLE-ARBITRUM": "pendle",
-    # Jito Restaking — distinct from JITO-SOLANA (LST). Solana NCN-vault primitive
-    # launched 2024-08-01.
-    "JITORESTAKING-SOLANA": "jito_restaking",
-    # DeFi — Governance tokens (on-chain, Ethereum)
-    "EIGENLAYER-ETHEREUM": "eigenlayer",
-    "ETHERFI-GOV-ETHEREUM": "ethfi_governance",
-    # Sports
-    "BETFAIR": "betfair",
-    "API_FOOTBALL": "api_football",
-    # Solana DeFi (REST API, no subgraph)
-    "DRIFT-SOLANA": "drift",
-    "KAMINO-SOLANA": "kamino",
-    "RAYDIUM-SOLANA": "raydium",
-    "ORCA-SOLANA": "orca",
-    "MARINADE-SOLANA": "marinade",
-    "JITO-SOLANA": "jito",
-    "SANCTUM-SOLANA": "sanctum",
-    "SOLBLAZE-SOLANA": "solblaze",
-    "SOLANA-NATIVE-SOLANA": "solana_native",
-    # Jupiter is execution-only (swap aggregator), not instrument discovery.
-    # DEX perp venues (L2 + StarkNet + Solana clone)
-    "LIGHTER-ZKSYNC": "lighter",
-    "EXTENDED-STARKNET": "extended",
-    "PACIFICA-SOLANA": "pacifica",
-    # Solana perp DEX venues (Plan B 2026-05-13)
-    "MANGO-SOLANA": "mango",
-    "ZETA-SOLANA": "zeta",
-    "FLASH-SOLANA": "flash_trade",
-    # SOLAYER/PICASSO/CAMBRIAN-SOLANA removed 2026-06-02 (operator decision; no usable/decodable
-    # DeFi data source). SSOT: plans/active/issues/issue_docs_remediation_sweep_2026_06_02.md.
-}
-
-# Dynamically add multi-chain DeFi venues from SUBGRAPH_IDS (SSOT in UAC).
-# This auto-generates entries like AAVE_V3-ARBITRUM → aave_v3, MORPHO-BASE → morpho, etc.
-# Maps UAC venue prefix → protocol slug (for subgraph ID lookup).
-# Protocols that reuse another adapter's class are resolved via _PROTOCOL_TO_ADAPTER_KEY.
-_SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL: dict[str, str] = {
-    "AAVE_V3": "aave_v3",
-    "COMPOUND_V3": "compound_v3",
-    "MORPHO": "morpho",
-    "FLUID": "fluid",
-    "UNISWAP_V2": "uniswap_v2",
-    "UNISWAP_V3": "uniswap_v3",
-    "UNISWAP_V4": "uniswap_v4",
-    "BALANCER": "balancer",
-    "CURVE": "curve",
-    # DEX forks — each has own subgraph IDs, reuse UniV3 adapter (with Messari fallback)
-    "PANCAKESWAP_V3": "pancakeswap_v3",
-    "SUSHISWAP_V3": "sushiswap_v3",
-    "AERODROME_V3": "aerodrome_v3",
-    "CAMELOT_V3": "camelot_v3",
-    # Messari-schema DEXes — use UniV3 adapter (Messari fallback query).
-    # Canonical underscore form (2026-06-01) + legacy glued forms (back-compat
-    # during the venue-canonicalisation migration window).
-    "VELODROME_V2": "velodrome_v2",
-    "VELODROMEV2": "velodrome_v2",
-    "TRADER_JOE_V2": "trader_joe_v2",
-    "TRADER_JOEV2": "trader_joe_v2",
-    "GMX": "gmx",
-    # Messari lending (Spark = Aave V3 fork, same schema)
-    "SPARK": "spark",
-    # SushiSwap V2 / Messari — use UniV3 adapter (Messari fallback query)
-    "SUSHISWAP": "sushiswap",
-    # DeFi pipeline extension Phase 4 — 4 new lending protocols.
-    "EULER_V2": "euler_v2",
-    "RADIANT": "radiant",
-    "VENUS": "venus",
-    "BENQI": "benqi",
-}
-
-# Protocols that reuse another adapter class. If not listed, adapter_key == protocol_slug.
-_PROTOCOL_TO_ADAPTER_KEY: dict[str, str] = {
-    "pancakeswap_v3": "uniswap_v3",
-    "sushiswap_v3": "uniswap_v3",
-    "aerodrome_v3": "uniswap_v3",
-    "camelot_v3": "uniswap_v3",
-    "velodrome_v2": "uniswap_v3",
-    "trader_joe_v2": "uniswap_v3",
-    "gmx": "uniswap_v3",
-    "sushiswap": "uniswap_v3",
-}
-
-for _prefix, _protocol_slug in _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.items():
-    _adapter_key = _PROTOCOL_TO_ADAPTER_KEY.get(_protocol_slug, _protocol_slug)
-    for _chain in get_supported_chains_for_protocol(_protocol_slug):
-        _venue = f"{_prefix}-{_chain}"
-        if _venue not in CANONICAL_VENUE_TO_ADAPTER:
-            CANONICAL_VENUE_TO_ADAPTER[_venue] = _adapter_key
-
+# Venue → adapter-KEY routing is UAC-owned data (registry venue_adapter_keys —
+# codex/04-architecture/instrument-universe-registry-consolidation.md). This
+# module keeps only the key → adapter-CLASS table (_ADAPTERS below) plus
+# instantiation logic; it declares NO venue truth of its own.
 
 # Maps canonical CeFi venues → CCXT exchange IDs for live mode.
 # In live mode, these venues use CCXT (real-time public endpoints) instead of Tardis
@@ -463,6 +289,25 @@ def clear_adapter_pool() -> None:
 _DATE_AWARE_TRADFI_ADAPTER_KEYS: frozenset[str] = frozenset({"databento", "massive"})
 
 
+def _resolve_uac_adapter_key(canonical_venue: str) -> str:
+    """UAC venue → adapter key. Raises loudly for unknown or sentinel venues."""
+    adapter_key = VENUE_TO_ADAPTER_KEY.get(canonical_venue)
+    if adapter_key is None:
+        supported = sorted(v for v, k in VENUE_TO_ADAPTER_KEY.items() if k != NO_ADAPTER_YET)
+        raise ValueError(
+            f"No URDI adapter for canonical venue {canonical_venue!r} — venue is UNKNOWN to UAC. "
+            f"Register it in unified_api_contracts/registry/venue_adapter_keys.py "
+            f"(real key or NO_ADAPTER_YET sentinel). Supported: {supported}"
+        )
+    if adapter_key == NO_ADAPTER_YET:
+        raise ValueError(
+            f"No URDI adapter for canonical venue {canonical_venue!r} — UAC declares it "
+            f"adapterless (NO_ADAPTER_YET sentinel: MTDS-owned venue, source-as-venue artifact, "
+            f"or expand-only bare form). See unified_api_contracts/registry/venue_adapter_keys.py."
+        )
+    return adapter_key
+
+
 def _resolve_source_aware_adapter_key(adapter_key: str, source: str | None) -> str:
     """Source-aware routing: ``source="massive"`` re-points a TradFi venue that
     defaults to Databento → the Massive adapter (Databento re-runs billing-blocked
@@ -511,7 +356,8 @@ def get_adapter_for_canonical_venue(
 
     This is the preferred entry point for services that work with UAC canonical
     venue names (e.g. "UNISWAP_V3-ETHEREUM", "BINANCE-SPOT"). Translates via
-    CANONICAL_VENUE_TO_ADAPTER and delegates to create_reference_data_adapter().
+    UAC ``VENUE_TO_ADAPTER_KEY`` (venue→key is UAC-owned data; this factory owns
+    only key→class) and delegates to create_reference_data_adapter().
 
     For CeFi venues in live mode, routes to CCXT (real-time public endpoints)
     instead of Tardis (historical-only). Batch mode always uses Tardis for
@@ -526,16 +372,10 @@ def get_adapter_for_canonical_venue(
         mode: "batch" (default) or "live". Live mode uses CCXT for CeFi venues.
 
     Raises:
-        ValueError: If no adapter exists for this canonical venue name.
+        ValueError: If no adapter exists for this canonical venue name (venue
+            unknown to UAC, or declared adapterless via NO_ADAPTER_YET).
     """
-    adapter_key = CANONICAL_VENUE_TO_ADAPTER.get(canonical_venue)
-    if adapter_key is None:
-        supported = sorted(CANONICAL_VENUE_TO_ADAPTER.keys())
-        raise ValueError(
-            f"No URDI adapter for canonical venue {canonical_venue!r}. "
-            f"Add an entry to CANONICAL_VENUE_TO_ADAPTER. Supported: {supported}"
-        )
-
+    adapter_key = _resolve_uac_adapter_key(canonical_venue)
     adapter_key = _resolve_source_aware_adapter_key(adapter_key, source)
 
     # Live mode: route CeFi Tardis venues to CCXT (real-time public endpoints).
@@ -639,7 +479,7 @@ def get_adapter_for_canonical_venue(
         # Resolve the actual protocol slug from the venue prefix (e.g., PANCAKESWAP_V3 → pancakeswap_v3)
         # This allows adapter reuse: UniV3 adapter can serve PancakeSwap, SushiSwap, etc.
         venue_prefix = parts[0] if len(parts) >= 1 else canonical_venue
-        resolved_protocol = _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.get(venue_prefix, adapter_key)
+        resolved_protocol = VENUE_PREFIX_TO_PROTOCOL.get(venue_prefix, adapter_key)
         # Only some adapters accept date (aave_v3, uniswap_v2/v3/v4)
         accepts_date = {"uniswap_v2", "uniswap_v3", "uniswap_v4", "aave_v3", "compound_v3", "spark"}
         # Pass protocol_slug for adapters that support it (UniV3, AaveV3)

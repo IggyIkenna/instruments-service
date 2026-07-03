@@ -94,14 +94,10 @@ def _list_dates_for_venue(
 
 def _venues_to_check() -> list[str]:
     """All canonical DeFi venue tags with subgraph backing."""
-    from unified_api_contracts.registry import SUBGRAPH_IDS, get_subgraph_id
-
-    from instruments_service.reference_data.factory import (
-        _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL,
-    )
+    from unified_api_contracts.registry import SUBGRAPH_IDS, VENUE_PREFIX_TO_PROTOCOL, get_subgraph_id
 
     venues: list[str] = []
-    for prefix, protocol_slug in _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.items():
+    for prefix, protocol_slug in VENUE_PREFIX_TO_PROTOCOL.items():
         for chain in SUBGRAPH_IDS.get(protocol_slug, {}):
             if get_subgraph_id(protocol_slug, chain) is None:
                 continue
