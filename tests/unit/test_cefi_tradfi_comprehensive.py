@@ -2907,11 +2907,10 @@ class TestDeribitComboAdapter:
 
     def test_factory_contains_deribit_combo(self) -> None:
         """DERIBIT-COMBO is registered in the factory adapter map."""
-        from instruments_service.reference_data.factory import (
-            _ADAPTERS,
-            CANONICAL_VENUE_TO_ADAPTER,
-        )
+        from unified_api_contracts.registry import VENUE_TO_ADAPTER_KEY
 
-        assert "DERIBIT-COMBO" in CANONICAL_VENUE_TO_ADAPTER
-        assert CANONICAL_VENUE_TO_ADAPTER["DERIBIT-COMBO"] == "deribit_combo"
+        from instruments_service.reference_data.factory import _ADAPTERS
+
+        assert "DERIBIT-COMBO" in VENUE_TO_ADAPTER_KEY
+        assert VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"] == "deribit_combo"
         assert "deribit_combo" in _ADAPTERS

@@ -1210,7 +1210,7 @@ class TestKRXStaticRecords:
         and instrument_type=EQUITY (the static Korean single-stock entries).
 
         This is the routing regression guard: if KRX is missing from
-        CANONICAL_VENUE_TO_ADAPTER, the factory raises ValueError("No URDI adapter for
+        VENUE_TO_ADAPTER_KEY, the factory raises ValueError("No URDI adapter for
         ['KRX']") and these records are never emitted — the shard silently loses KRX.
         """
         from instruments_service.reference_data.adapters.tradfi.databento.adapter import (
