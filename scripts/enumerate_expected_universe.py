@@ -91,6 +91,7 @@ from unified_api_contracts import (
     pipeline_mode_for_source,
     valid_data_types_for_venue_instrument_type,
 )
+from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
 from unified_api_contracts.registry.chain_env import (
     CHAIN_GENESIS_DATES,
     GAS_FEE_CHAIN_START_DATES,
@@ -843,7 +844,30 @@ def _row_data_types(
     # test/non-standard data_types (not in ANY valid set → pass through).
     known_ag_dts = frozenset(DATA_TYPES_BY_ASSET_GROUP.get(asset_group.lower(), []))
 
-    return [dt for dt in data_types if dt in valid or dt not in known_ag_dts]
+    row_dts = [dt for dt in data_types if dt in valid or dt not in known_ag_dts]
+
+    # Venue-capability carve-out (CEFI ONLY) — the same gate the Layer-1
+    # EXPECTED matrix applies (honest_coverage_uac_writer_matrix_reconciliation
+    # 2026-06-29, ASTER contradiction: UAC is CORRECT, the enumerator
+    # over-seeded (ASTER, perpetual, book_snapshot_5|liquidations) as
+    # expected_unattempted although ASTER has no orderbook-snapshot or
+    # liquidation feed). A known cefi data_type absent from
+    # VENUE_DATA_TYPE_CAPABILITIES[venue] means the venue CANNOT produce it —
+    # never seed it. Only venues WITH a capability entry are gated (a venue
+    # wholly absent from the table carries no carve-out information here);
+    # the non-standard-data_type pass-through above is likewise not gated.
+    # TRADFI IS DELIBERATELY NOT GATED: its VENUE_DATA_TYPE_CAPABILITIES
+    # entries are the OHLCV-window MVP declaration, not a full capability
+    # table — gating would mark real captured cells (chain trades,
+    # earnings_result) impossible, against the operator-ratified tradfi
+    # validity matrix (T-OLD-2b pins; reconciliation Decision 1: the CME
+    # tbbo/mbp_10 strays are deliberate billing cutoffs, no change).
+    if asset_group.lower() == "cefi":
+        venue_caps = VENUE_DATA_TYPE_CAPABILITIES.get(instr.venue)
+        if venue_caps:
+            row_dts = [dt for dt in row_dts if dt in venue_caps or dt not in known_ag_dts]
+
+    return row_dts
 
 
 # ---------------------------------------------------------------------------
@@ -2126,9 +2150,7 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     # behaviour — never worse than before this fix).
     try:
         shard_blobs = [
-            b
-            for b in client.list_blobs(bucket_name, prefix="_index/per_vm/")
-            if b.name.endswith(".parquet")
+            b for b in client.list_blobs(bucket_name, prefix="_index/per_vm/") if b.name.endswith(".parquet")
         ]
         if shard_blobs:
             logger.info(

@@ -412,3 +412,50 @@ def test_supported_asset_groups_has_all_5() -> None:
         "sports",
         "prediction",
     }
+
+
+# --- Venue-capability carve-out at seeding (uac_writer_matrix_reconciliation) --
+
+
+def _entry(venue: str, instrument_type: str) -> object:
+    """Minimal catalogue entry for _row_data_types tests."""
+    return enumerator_module.InstrumentCatalogEntry(
+        instrument_id=f"{venue}:{instrument_type}:TEST",
+        instrument_type=instrument_type,
+        venue=venue,
+        chain="",
+        league_id="",
+        available_from=None,
+        available_to=None,
+        market_created_at=None,
+        settlement_time=None,
+    )
+
+
+def test_row_data_types_aster_capability_carveout() -> None:
+    """ASTER cannot produce book_snapshot_5/liquidations (absent from
+    VENUE_DATA_TYPE_CAPABILITIES["ASTER"]) — the enumerator must NEVER seed
+    them (the 2026-06-29 over-seed contradiction: UAC is correct, the
+    enumerator over-seeded 3,477 expected_unattempted rows each)."""
+    from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
+
+    cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations", "perp_funding"]
+    row_dts = enumerator_module._row_data_types("cefi", _entry("ASTER", "PERPETUAL"), cefi_dts)
+    assert "book_snapshot_5" not in row_dts, "ASTER book_snapshot_5 must be carved out"
+    assert "liquidations" not in row_dts, "ASTER liquidations must be carved out"
+    # What survives is exactly the venue's declared capability ∩ validity.
+    assert set(row_dts) <= set(VENUE_DATA_TYPE_CAPABILITIES["ASTER"]), row_dts
+    assert "trades" in row_dts, "ASTER trades is a declared capability and must survive"
+
+
+def test_row_data_types_capability_absent_venue_not_gated() -> None:
+    """A cefi venue wholly absent from VENUE_DATA_TYPE_CAPABILITIES (e.g.
+    BINANCE-DELIVERY) carries no carve-out information — it must NOT be
+    blanket-blocked by the capability gate (denominator semantics for
+    capability-absent venues are a separate open finding)."""
+    from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
+
+    assert "BINANCE-DELIVERY" not in VENUE_DATA_TYPE_CAPABILITIES
+    cefi_dts = ["trades", "book_snapshot_5"]
+    row_dts = enumerator_module._row_data_types("cefi", _entry("BINANCE-DELIVERY", "PERPETUAL"), cefi_dts)
+    assert "trades" in row_dts
