@@ -11,10 +11,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from unified_api_contracts.registry import NO_ADAPTER_YET, VENUE_TO_ADAPTER_KEY
 
 from instruments_service.reference_data.factory import (
     ADAPTER_DATA_SOURCES,
-    CANONICAL_VENUE_TO_ADAPTER,
     _adapter_pool,
     _run_refdata_preflight,
     clear_adapter_pool,
@@ -113,7 +113,7 @@ class TestFactoryDefiChainParsing:
     def test_defi_fork_protocol_slug(self) -> None:
         """DEX forks (PancakeSwap, SushiSwap) use UniV3 adapter with resolved protocol_slug."""
         clear_adapter_pool()
-        if "PANCAKESWAP_V3-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER:
+        if "PANCAKESWAP_V3-ETHEREUM" in VENUE_TO_ADAPTER_KEY:
             adapter = get_adapter_for_canonical_venue("PANCAKESWAP_V3-ETHEREUM")
             assert adapter is not None
 
@@ -143,7 +143,7 @@ class TestFactoryTardisRouting:
         assert adapter.venue == "tardis"
 
     def test_tardis_no_mapping_raises(self) -> None:
-        """Venue in CANONICAL_VENUE_TO_ADAPTER as tardis but no Tardis exchange mapping raises ValueError."""
+        """Venue in VENUE_TO_ADAPTER_KEY as tardis but no Tardis exchange mapping raises ValueError."""
         clear_adapter_pool()
         mock_vm = MagicMock()
         mock_vm.get_tardis_exchange_for_venue.return_value = None
@@ -158,7 +158,7 @@ class TestFactoryTardisRouting:
                 "unified_api_contracts.VenueMapping",
                 mock_vm_cls,
             ),
-            patch.dict(CANONICAL_VENUE_TO_ADAPTER, {"FAKE-TARDIS-VENUE": "tardis"}, clear=False),
+            patch.dict(VENUE_TO_ADAPTER_KEY, {"FAKE-TARDIS-VENUE": "tardis"}, clear=False),
             pytest.raises(ValueError, match="No Tardis exchange mapping"),
         ):
             get_adapter_for_canonical_venue("FAKE-TARDIS-VENUE", mode="batch")
@@ -212,7 +212,7 @@ class TestRunRefdataPreflight:
 
 
 # ---------------------------------------------------------------------------
-# Factory: CANONICAL_VENUE_TO_ADAPTER completeness
+# Factory: VENUE_TO_ADAPTER_KEY completeness
 # ---------------------------------------------------------------------------
 
 
@@ -220,29 +220,29 @@ class TestCanonicalVenueMapping:
     def test_all_cefi_venues_mapped(self) -> None:
         cefi = ["BINANCE-SPOT", "BINANCE-FUTURES", "BYBIT", "OKX-SPOT", "DERIBIT", "HYPERLIQUID"]
         for v in cefi:
-            assert v in CANONICAL_VENUE_TO_ADAPTER, f"{v} missing"
+            assert v in VENUE_TO_ADAPTER_KEY, f"{v} missing"
 
     def test_all_tradfi_venues_mapped(self) -> None:
         tradfi = ["CME", "NASDAQ", "NYSE", "CBOE", "ICE", "FX"]
         for v in tradfi:
-            assert v in CANONICAL_VENUE_TO_ADAPTER, f"{v} missing"
+            assert v in VENUE_TO_ADAPTER_KEY, f"{v} missing"
 
     def test_all_solana_venues_mapped(self) -> None:
         solana = ["DRIFT-SOLANA", "KAMINO-SOLANA", "RAYDIUM-SOLANA", "ORCA-SOLANA"]
         for v in solana:
-            assert v in CANONICAL_VENUE_TO_ADAPTER, f"{v} missing"
+            assert v in VENUE_TO_ADAPTER_KEY, f"{v} missing"
 
     def test_adapter_data_sources_covers_all_adapters(self) -> None:
-        """Every adapter key used in CANONICAL_VENUE_TO_ADAPTER should have a data source.
+        """Every adapter key used in VENUE_TO_ADAPTER_KEY should have a data source.
 
-        Known gaps (adapter keys in CANONICAL_VENUE_TO_ADAPTER but not yet in ADAPTER_DATA_SOURCES)
+        Known gaps (adapter keys in VENUE_TO_ADAPTER_KEY but not yet in ADAPTER_DATA_SOURCES)
         are tracked here so the test remains green while documenting the discrepancy.
         """
-        # Adapter keys that are mapped in CANONICAL_VENUE_TO_ADAPTER but not yet wired
+        # Adapter keys that are mapped in VENUE_TO_ADAPTER_KEY but not yet wired
         # into ADAPTER_DATA_SOURCES — track here until the gap is closed in production code.
         known_gaps: set[str] = {"eigenlayer", "ethfi_governance"}
 
-        adapter_keys = set(CANONICAL_VENUE_TO_ADAPTER.values())
+        adapter_keys = set(VENUE_TO_ADAPTER_KEY.values()) - {NO_ADAPTER_YET}
         unexpected_missing: list[str] = []
         for key in adapter_keys:
             if key in known_gaps:

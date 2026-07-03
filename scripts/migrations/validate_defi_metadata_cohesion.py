@@ -115,14 +115,11 @@ def _venues_with_subgraph_support() -> list[tuple[str, str, str]]:
     Mirrors the helper in ``backfill_defi_metadata_2026_04_29.py`` — kept as a
     private copy to avoid cross-script import (scripts/ is not a package).
     """
-    # Deferred import — factory module-level bootstrap touches UAC capability
-    # registry; only needed once we actually run.
-    from instruments_service.reference_data.factory import (
-        _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL,
-    )
+    # Deferred import — only needed once we actually run.
+    from unified_api_contracts.registry import VENUE_PREFIX_TO_PROTOCOL
 
     triples: list[tuple[str, str, str]] = []
-    for prefix, protocol_slug in _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.items():
+    for prefix, protocol_slug in VENUE_PREFIX_TO_PROTOCOL.items():
         # SUBGRAPH_IDS access via UAC registry per import-surface rule.
         from unified_api_contracts.registry import SUBGRAPH_IDS
 

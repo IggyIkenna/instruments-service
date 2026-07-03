@@ -1,10 +1,9 @@
 """URDI reference data provider — the ONLY external API path for instruments-service.
 
-All naming translation (canonical venue → URDI adapter) and credential routing
-(URDI adapter → data source → API key) is owned by URDI itself:
-  - CANONICAL_VENUE_TO_ADAPTER in instruments_service.reference_data.factory
-  - ADAPTER_DATA_SOURCES in instruments_service.reference_data.factory
-  - get_adapter_for_canonical_venue() in instruments_service.reference_data
+Naming translation and credential routing are owned upstream:
+  - VENUE_TO_ADAPTER_KEY in unified_api_contracts.registry (venue → adapter key, UAC data)
+  - ADAPTER_DATA_SOURCES in instruments_service.reference_data.factory (key → credential)
+  - get_adapter_for_canonical_venue() in instruments_service.reference_data (key → class)
 
 instruments-service maintains no local translation tables. This file contains
 only orchestration logic: which venues to fetch, how to gather results, error policy.
@@ -30,17 +29,18 @@ import logging
 
 from unified_api_contracts import ErrorAction, VenueErrorClassification
 from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.registry import NO_ADAPTER_YET, VENUE_TO_ADAPTER_KEY, VENUES_WITH_REFERENCE_ADAPTER
 
 from instruments_service.reference_data.factory import (
     ADAPTER_DATA_SOURCES,
-    CANONICAL_VENUE_TO_ADAPTER,
     get_adapter_for_canonical_venue,
 )
 
 logger = logging.getLogger(__name__)
 
-# Covered canonical venues — services check membership without importing the full dict.
-URDI_SUPPORTED_VENUES: frozenset[str] = frozenset(CANONICAL_VENUE_TO_ADAPTER.keys())
+# Covered canonical venues — UAC-derived (venues with a real adapter key), not a
+# frozen IS-side set. Kept as the IS-facing membership name.
+URDI_SUPPORTED_VENUES: frozenset[str] = VENUES_WITH_REFERENCE_ADAPTER
 
 
 class VenueFetchResult:
@@ -100,8 +100,8 @@ async def fetch_instruments_for_all_venues(
     unsupported: list[str] = []
 
     for canonical in venues:
-        adapter_key = CANONICAL_VENUE_TO_ADAPTER.get(canonical)
-        if adapter_key is None:
+        adapter_key = VENUE_TO_ADAPTER_KEY.get(canonical)
+        if adapter_key is None or adapter_key == NO_ADAPTER_YET:
             unsupported.append(canonical)
         elif canonical not in seen:
             seen.add(canonical)
@@ -110,8 +110,8 @@ async def fetch_instruments_for_all_venues(
     failed: list[VenueErrorClassification] = []
     if unsupported:
         logger.warning(
-            "No URDI adapter for %d venue(s) — add entry to CANONICAL_VENUE_TO_ADAPTER "
-            "in unified-reference-data-interface/factory.py: %s",
+            "No URDI adapter for %d venue(s) — register a key (or NO_ADAPTER_YET sentinel) in "
+            "unified_api_contracts/registry/venue_adapter_keys.py: %s",
             len(unsupported),
             unsupported,
         )
