@@ -1957,3 +1957,41 @@ def test_incremental_matches_full_rebuild_prediction(rollup: ModuleType) -> None
     incremental = rollup._merge_incremental(prev_df, window_df, window_start=window_start)
     full = rollup.build_prediction_catalogue_dataframe(snapshots)
     _assert_frames_match(full, incremental)
+
+
+def test_coverage_horizon_warns_on_stale_latest_day(rollup: ModuleType) -> None:
+    """CATALOGUE_STALE_BY_DATE fires when the newest by_date day is too old."""
+    events: list[tuple[str, dict[str, object]]] = []
+    orig = rollup._emit_event
+    rollup._emit_event = lambda event, **kw: events.append((event, kw))
+    try:
+        today = date(2026, 7, 3)
+        stale_counts = {date(2026, 6, 25): 100, date(2026, 6, 26): 100}  # newest 7d old
+        rollup._warn_coverage_horizon(stale_counts, today, "tradfi")
+        assert any(e == "CATALOGUE_STALE_BY_DATE" and kw.get("reason") == "latest_day_too_old" for e, kw in events)
+        events.clear()
+        fresh_counts = {date(2026, 7, 1): 100, date(2026, 7, 2): 100}
+        rollup._warn_coverage_horizon(fresh_counts, today, "tradfi")
+        assert not events  # healthy feed → silent
+    finally:
+        rollup._emit_event = orig
+
+
+def test_coverage_horizon_warns_on_sharp_count_drop(rollup: ModuleType) -> None:
+    """CATALOGUE_STALE_BY_DATE fires when the newest day's count collapses vs the median."""
+    events: list[tuple[str, dict[str, object]]] = []
+    orig = rollup._emit_event
+    rollup._emit_event = lambda event, **kw: events.append((event, kw))
+    try:
+        today = date(2026, 7, 3)
+        counts = {date(2026, 7, d): 100 for d in range(1, 3)}
+        counts[date(2026, 7, 3)] = 10  # 10% of median → partial capture
+        rollup._warn_coverage_horizon(counts, today, "cefi")
+        assert any(
+            e == "CATALOGUE_STALE_BY_DATE" and kw.get("reason") == "latest_day_sharp_count_drop" for e, kw in events
+        )
+        events.clear()
+        rollup._warn_coverage_horizon({}, today, "cefi")  # empty window also warns
+        assert any(e == "CATALOGUE_STALE_BY_DATE" and kw.get("reason") == "no_window_data" for e, kw in events)
+    finally:
+        rollup._emit_event = orig
