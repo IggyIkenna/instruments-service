@@ -1527,3 +1527,433 @@ def test_rollup_ghost_venue_liveness_merges_into_canonical_window(rollup: Module
         f"Active pool (still captured today) should be active (available_to=None), "
         f"but got {by_addr[addr_active]['available_to']!r}."
     )
+
+
+# ---------------------------------------------------------------------------
+# Incremental (trailing-window + frozen-tail) engine —
+# plans/active/instruments_catalogue_incremental_rollup_2026_06_29.md
+# Phase 1 (mode selection / windowed walk / merge branches / cold start) +
+# Phase 2 (incremental == full-rebuild parity, newly-delisted edge case).
+# ---------------------------------------------------------------------------
+
+from datetime import UTC as _UTC
+from datetime import datetime as _datetime
+from datetime import timedelta as _timedelta
+
+
+class _RecordingStorage(_FakeStorage):
+    """_FakeStorage + write ops, recording every list_blobs prefix (window assertions)."""
+
+    def __init__(self, blobs: dict[str, bytes]) -> None:
+        super().__init__(blobs)
+        self.listed_prefixes: list[str] = []
+
+    def list_blobs(self, bucket: str, prefix: str = "", **kw: object) -> list[_Blob]:
+        self.listed_prefixes.append(prefix)
+        return super().list_blobs(bucket, prefix, **kw)
+
+    def upload_bytes(self, bucket: str, blob_path: str, payload: bytes, **kw: object) -> None:
+        self._blobs[blob_path] = payload
+
+    def copy_blob(self, src_bucket: str, src_path: str, dst_bucket: str, dst_path: str) -> None:
+        self._blobs[dst_path] = self._blobs[src_path]
+
+    def delete_blob(self, bucket: str, blob_path: str) -> None:
+        del self._blobs[blob_path]
+
+
+def _cat_row(**overrides: object) -> dict[str, object]:
+    """A prev-catalogue row with every CATALOG column defaulted (mvp included)."""
+    row: dict[str, object] = {
+        "instrument_id": "X",
+        "instrument_type": "SPOT_PAIR",
+        "venue": "V",
+        "chain": "",
+        "league_id": "",
+        "available_from": "2024-01-01",
+        "available_to": None,
+        "market_created_at": None,
+        "settlement_time": None,
+        "data_type": None,
+        "underlying": "",
+        "raw_symbol": "",
+        "base_asset": "",
+        "mvp": False,
+        "margin_type": "",
+        "glued_pair_id": "",
+        "pool_address": "",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_parse_args_mode_defaults_incremental(rollup: ModuleType) -> None:
+    args = rollup._parse_args(["--asset-group", "tradfi"])
+    assert args.mode == "incremental"
+    args = rollup._parse_args(["--asset-group", "tradfi", "--mode", "full"])
+    assert args.mode == "full"
+
+
+def test_compute_window_start_fresh_and_stale(rollup: ModuleType) -> None:
+    """Fresh catalogue → 21-day window; stale catalogue → SELF-WIDENING covers the gap."""
+    today = date(2026, 7, 3)
+    fresh = _datetime(2026, 7, 2, 1, 0, tzinfo=_UTC)
+    assert rollup.compute_window_start(today, fresh) == today - _timedelta(days=21)
+    # 35 days stale → window = 35 + 7 margin = 42 days (covers the whole gap).
+    stale = _datetime(2026, 5, 29, 1, 0, tzinfo=_UTC)
+    assert rollup.compute_window_start(today, stale) == today - _timedelta(days=42)
+    # Unknown mtime degrades to the minimum window.
+    assert rollup.compute_window_start(today, None) == today - _timedelta(days=21)
+
+
+def test_iter_by_date_since_lists_only_window_days(rollup: ModuleType) -> None:
+    """since= must produce per-day prefix listings (date-floored), never a corpus walk."""
+    today = _datetime.now(tz=_UTC).date()
+    old_day = (today - _timedelta(days=40)).isoformat()
+    in_day = (today - _timedelta(days=2)).isoformat()
+    blobs = {
+        f"instrument_availability/by_date/day={old_day}/venue=V/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": "OLD", "venue": "V"}]
+        ),
+        f"instrument_availability/by_date/day={in_day}/venue=V/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": "IN", "venue": "V"}]
+        ),
+    }
+    storage = _RecordingStorage(blobs)
+    out = list(
+        rollup._iter_by_date_snapshots(
+            storage,
+            "bkt",
+            "instrument_availability/by_date",
+            since=today - _timedelta(days=5),
+        )
+    )
+    # Only the in-window frame is read.
+    assert [str(d) for d, _ in out] == [in_day]
+    # Every listing is a day= prefix at/after the cutoff — no whole-prefix walk.
+    assert storage.listed_prefixes, "expected per-day prefix listings"
+    for prefix in storage.listed_prefixes:
+        assert "/day=" in prefix, f"whole-corpus walk detected: {prefix!r}"
+        day_part = prefix.rsplit("day=", 1)[1].rstrip("/")
+        assert day_part >= (today - _timedelta(days=5)).isoformat()
+
+
+def test_merge_updated_row_carries_available_from_and_refreshes(rollup: ModuleType) -> None:
+    """Branch 1: window recompute wins, but available_from is immutable (min of both)."""
+    prev = pd.DataFrame([_cat_row(instrument_id="A", available_from="2024-01-01", available_to=None, raw_symbol="old")])
+    window = pd.DataFrame([_cat_row(instrument_id="A", available_from="2026-06-20", available_to=None, raw_symbol="new")])
+    window = window.drop(columns=["mvp"])
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    assert len(merged) == 1
+    row = merged.to_dict("records")[0]
+    assert row["available_from"] == "2024-01-01"  # carried from prev (true listing day)
+    assert row["raw_symbol"] == "new"  # metadata follows the window recompute
+
+
+def test_merge_new_listing_appended(rollup: ModuleType) -> None:
+    """Branch 2: a window-only instrument appends with its own (correct) available_from."""
+    prev = pd.DataFrame([_cat_row(instrument_id="A")])
+    window = pd.DataFrame(
+        [
+            _cat_row(instrument_id="A"),
+            _cat_row(instrument_id="B", available_from="2026-06-25"),
+        ]
+    ).drop(columns=["mvp"])
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    by_id = {r["instrument_id"]: r for r in merged.to_dict("records")}
+    assert set(by_id) == {"A", "B"}
+    assert by_id["B"]["available_from"] == "2026-06-25"
+
+
+def test_merge_newly_delisted_closed_at_window_start_minus_one(rollup: ModuleType) -> None:
+    """Branch 3: active-in-prev, absent all window, venue still capturing → closed."""
+    prev = pd.DataFrame(
+        [
+            _cat_row(instrument_id="GONE", venue="V", available_to=None),
+            _cat_row(instrument_id="STAYS", venue="V", available_to=None),
+        ]
+    )
+    window = pd.DataFrame([_cat_row(instrument_id="STAYS", venue="V", available_to=None)]).drop(columns=["mvp"])
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    by_id = {r["instrument_id"]: r for r in merged.to_dict("records")}
+    assert by_id["GONE"]["available_to"] == "2026-06-11"  # window_start - 1
+    assert by_id["STAYS"]["available_to"] is None
+
+
+def test_merge_venue_absent_from_window_preserves_active(rollup: ModuleType) -> None:
+    """Branch 4 (§7.3 venue-truth): a venue with NO window presence is a capture
+    outage, not a mass delisting — its active instruments stay active, exactly like
+    the full rebuild (per-venue last-full-day keeps a stopped venue's frontier)."""
+    prev = pd.DataFrame(
+        [
+            _cat_row(instrument_id="OUTAGE-1", venue="DEAD-VENUE", available_to=None),
+            _cat_row(instrument_id="DELISTED-OLD", venue="DEAD-VENUE", available_to="2025-01-01"),
+        ]
+    )
+    window = pd.DataFrame([_cat_row(instrument_id="OTHER", venue="LIVE-VENUE")]).drop(columns=["mvp"])
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    by_id = {r["instrument_id"]: r for r in merged.to_dict("records")}
+    assert by_id["OUTAGE-1"]["available_to"] is None  # NOT closed
+    assert by_id["DELISTED-OLD"]["available_to"] == "2025-01-01"  # frozen tail untouched
+
+
+def test_merge_defi_pool_keys_on_dual_form_identity(rollup: ModuleType) -> None:
+    """Pool rows merge on pool::<CHAIN>::<addr> — same address on two chains stays two rows."""
+    addr = "0xabcdef0000000000000000000000000000000001"
+    prev = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id=addr,
+                instrument_type="POOL",
+                venue="UNISWAP_V3",
+                chain="POLYGON",
+                pool_address=addr,
+                available_from="2024-03-01",
+                available_to=None,
+            ),
+            _cat_row(
+                instrument_id=addr,
+                instrument_type="POOL",
+                venue="UNISWAP_V3",
+                chain="ARBITRUM",
+                pool_address=addr,
+                available_from="2024-04-01",
+                available_to=None,
+            ),
+        ]
+    )
+    # Window sees only the POLYGON pool.
+    window = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id=addr,
+                instrument_type="POOL",
+                venue="UNISWAP_V3",
+                chain="POLYGON",
+                pool_address=addr,
+                available_from="2026-06-15",
+                available_to=None,
+            )
+        ]
+    ).drop(columns=["mvp"])
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    assert len(merged) == 2
+    by_chain = {r["chain"]: r for r in merged.to_dict("records")}
+    assert by_chain["POLYGON"]["available_from"] == "2024-03-01"  # updated, af carried
+    # ARBITRUM pool absent from window but venue present → closed (genuine per-pool absence).
+    assert by_chain["ARBITRUM"]["available_to"] == "2026-06-11"
+
+
+def test_merge_empty_window_preserves_catalogue(rollup: ModuleType) -> None:
+    """A 0-row window (download outage) must pass the prev catalogue through unchanged."""
+    prev = pd.DataFrame([_cat_row(instrument_id="A"), _cat_row(instrument_id="B", available_to="2025-05-05")])
+    window = pd.DataFrame(columns=[c for c in rollup.CATALOG_COLUMNS if c != "mvp"])
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    assert len(merged) == 2
+    by_id = {r["instrument_id"]: r for r in merged.to_dict("records")}
+    assert by_id["A"]["available_to"] is None
+    assert by_id["B"]["available_to"] == "2025-05-05"
+
+
+def test_incremental_cold_start_falls_back_to_full(rollup: ModuleType) -> None:
+    """No previous catalogue → --mode incremental runs the full rebuild and promotes."""
+    today = _datetime.now(tz=_UTC).date().isoformat()
+    blobs = {
+        f"instrument_availability/by_date/day={today}/venue=V/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": "A", "venue": "V"}]
+        ),
+    }
+    storage = _RecordingStorage(blobs)
+    code = rollup.run_rollup(
+        "cefi",
+        allow_shrink=False,
+        dry_run=False,
+        mode="incremental",
+        storage=storage,
+    )
+    assert code == 0
+    # Full walk (whole-prefix listing) was used — cold start, not a window read...
+    assert any("day=" not in p for p in storage.listed_prefixes)
+    # ...and the catalogue was written.
+    assert any(name.endswith("catalog.parquet") and "_catalogue_staging" not in name for name in storage._blobs)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — the correctness ship-gate: incremental(prev, window) == full(all),
+# row-for-row, per asset group.
+# ---------------------------------------------------------------------------
+
+
+def _parity_frames(rollup: ModuleType, all_snapshots: list, prev_age_days: int = 3) -> tuple:
+    """Return (full_df, incremental_df) for a snapshot corpus.
+
+    prev = full rebuild over every day up to (today - prev_age_days), mtime that
+    day; window = self-widening trailing read; incremental = merge.
+    """
+    today = _datetime.now(tz=_UTC).date()
+    prev_cutoff = today - _timedelta(days=prev_age_days)
+    prev_df = rollup.build_catalogue_dataframe([(d, f) for d, f in all_snapshots if d <= prev_cutoff])
+    prev_mtime = _datetime(prev_cutoff.year, prev_cutoff.month, prev_cutoff.day, 1, 0, tzinfo=_UTC)
+    window_start = rollup.compute_window_start(today, prev_mtime)
+    window_df = rollup.build_catalogue_dataframe([(d, f) for d, f in all_snapshots if d >= window_start])
+    incremental = rollup._merge_incremental(prev_df, window_df, window_start=window_start)
+    full = rollup.build_catalogue_dataframe(all_snapshots)
+    return full, incremental
+
+
+def _assert_frames_match(full: pd.DataFrame, incremental: pd.DataFrame) -> None:
+    cols = [c for c in full.columns if c != "mvp"]
+    f = full[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True)
+    i = incremental[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True)
+    pd.testing.assert_frame_equal(f, i)
+
+
+def _cefi_corpus() -> list:
+    """40 days of cefi spot/perp history: long-active, old-delisted, mid-window
+    delist, new listing — ≥4 instruments/day so no day is a thin-day outlier."""
+    today = _datetime.now(tz=_UTC).date()
+    days = [today - _timedelta(days=n) for n in range(39, -1, -1)]
+    snapshots = []
+    for d in days:
+        age = (today - d).days
+        rows = [
+            {"instrument_key": "BTC-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "BTC"},
+            {"instrument_key": "ETH-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "ETH"},
+            {"instrument_key": "BTC-USDT", "venue": "BINANCE-SPOT", "instrument_type": "SPOT_PAIR", "base_asset": "BTC"},
+            {"instrument_key": "ETH-USDT", "venue": "BINANCE-SPOT", "instrument_type": "SPOT_PAIR", "base_asset": "ETH"},
+        ]
+        if age >= 30:  # delisted long before the window (frozen tail)
+            rows.append({"instrument_key": "OLD-USDT", "venue": "BINANCE-SPOT", "instrument_type": "SPOT_PAIR", "base_asset": "OLD"})
+        if age >= 8:  # delists mid-window
+            rows.append({"instrument_key": "MID-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "MID"})
+        if age <= 5:  # brand-new listing inside the window
+            rows.append({"instrument_key": "NEW-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "NEW"})
+        snapshots.append((d, _snapshot(rows)))
+    return snapshots
+
+
+def test_incremental_matches_full_rebuild_cefi(rollup: ModuleType) -> None:
+    full, incremental = _parity_frames(rollup, _cefi_corpus())
+    _assert_frames_match(full, incremental)
+    # And the MVP tag is identical on both (perp-gate computed over the full frame).
+    full_mvp = rollup._add_mvp_column(full, "cefi")
+    inc_mvp = rollup._add_mvp_column(incremental, "cefi")
+    cols = list(full_mvp.columns)
+    pd.testing.assert_frame_equal(
+        full_mvp[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
+        inc_mvp[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
+    )
+
+
+def test_incremental_matches_full_rebuild_tradfi(rollup: ModuleType) -> None:
+    """Dated FUTURE/OPTION rows: available_to = venue-truth expiry on both paths."""
+    today = _datetime.now(tz=_UTC).date()
+    days = [today - _timedelta(days=n) for n in range(39, -1, -1)]
+    far_expiry = (today + _timedelta(days=90)).isoformat()
+    past_expiry = (today - _timedelta(days=30)).isoformat()
+    snapshots = []
+    for d in days:
+        age = (today - d).days
+        rows = [
+            {"instrument_key": "ESZ6", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "ES"},
+            {"instrument_key": "NQZ6", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "NQ"},
+            {"instrument_key": "SPY", "venue": "ARCA", "instrument_type": "SPOT_PAIR", "base_asset": "SPY"},
+            {"instrument_key": "QQQ", "venue": "ARCA", "instrument_type": "SPOT_PAIR", "base_asset": "QQQ"},
+        ]
+        if age >= 25:  # expired contract that stopped appearing pre-window
+            rows.append({"instrument_key": "ESU6", "venue": "CME", "instrument_type": "FUTURE", "expiry": past_expiry, "underlying": "ES"})
+        if age <= 4:  # new contract series after the roll
+            rows.append({"instrument_key": "ESH7", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "ES"})
+        snapshots.append((d, _snapshot(rows)))
+    full, incremental = _parity_frames(rollup, snapshots)
+    _assert_frames_match(full, incremental)
+
+
+def test_incremental_matches_full_rebuild_defi(rollup: ModuleType) -> None:
+    """DeFi dual-form pool rows: parity incl. canonical pool identity + chain split."""
+    today = _datetime.now(tz=_UTC).date()
+    days = [today - _timedelta(days=n) for n in range(39, -1, -1)]
+
+    def _pool(i: int) -> dict[str, object]:
+        addr = f"0x{i:040x}"
+        return {
+            "instrument_key": f"UNISWAP_V3-POLYGON:POOL:TK{i}-WETH:500",
+            "venue": "UNISWAP_V3-POLYGON",
+            "instrument_type": "POOL",
+            "raw_symbol": addr,
+            "pool_address": addr,
+            "base_asset": f"TK{i}",
+            "quote_asset": "WETH",
+            "pool_fee_tier": 5.0,
+        }
+
+    snapshots = []
+    for d in days:
+        age = (today - d).days
+        rows = [_pool(1), _pool(2), _pool(3), _pool(4)]
+        if age >= 10:  # pool drained/retired mid-window
+            rows.append(_pool(5))
+        if age <= 6:  # new pool deployed inside the window
+            rows.append(_pool(6))
+        snapshots.append((d, _snapshot(rows)))
+    full, incremental = _parity_frames(rollup, snapshots)
+    _assert_frames_match(full, incremental)
+
+
+def test_incremental_newly_delisted_mid_window_closes_to_true_boundary(rollup: ModuleType) -> None:
+    """Phase 2 edge case: an active perp that stops appearing MID-window closes at
+    its true last-seen day via the §7.3 window recompute (not a thin-day blip, not
+    window_start-1)."""
+    today = _datetime.now(tz=_UTC).date()
+    stop_age = 8
+    corpus = _cefi_corpus()
+    full, incremental = _parity_frames(rollup, corpus)
+    by_id = {r["instrument_id"]: r for r in incremental.to_dict("records")}
+    expected_last = (today - _timedelta(days=stop_age)).isoformat()
+    assert by_id["MID-PERP"]["available_to"] == expected_last
+    # Identical to the full rebuild's verdict.
+    full_by_id = {r["instrument_id"]: r for r in full.to_dict("records")}
+    assert full_by_id["MID-PERP"]["available_to"] == expected_last
+
+
+def test_incremental_matches_full_rebuild_prediction(rollup: ModuleType) -> None:
+    """Phase 3: the prediction multi-grain rollup gets the same window+merge —
+    parity vs full rebuild (settlement-date convention + per-conditionId grain)."""
+    today = _datetime.now(tz=_UTC).date()
+    days = [today - _timedelta(days=n) for n in range(39, -1, -1)]
+    future_settle = (today + _timedelta(days=30)).isoformat()
+
+    def _mkt(cid: str, settle: str | None = None) -> dict[str, object]:
+        row: dict[str, object] = {"instrument_key": cid, "instrument_type": "MARKET", "venue": "POLYMARKET"}
+        if settle:
+            row["end_date_iso"] = settle
+        return row
+
+    snapshots = []
+    for d in days:
+        age = (today - d).days
+        rows = [
+            _mkt("0xlong1", future_settle),
+            _mkt("0xlong2", future_settle),
+            _mkt("0xlong3"),
+        ]
+        if age >= 12:  # settled mid-window: last snapshot T-12, declared settle T-11
+            rows.append(_mkt("0xsettled", (today - _timedelta(days=11)).isoformat()))
+        if age >= 30:  # long-gone market (frozen tail)
+            rows.append(_mkt("0xold", (today - _timedelta(days=29)).isoformat()))
+        if age <= 4:  # new market inside the window
+            rows.append(_mkt("0xnew", future_settle))
+        snapshots.append((d, "POLYMARKET", "", _snapshot(rows)))
+
+    prev_cutoff = today - _timedelta(days=3)
+    prev_df = rollup.build_prediction_catalogue_dataframe(
+        [(d, v, c, f) for d, v, c, f in snapshots if d <= prev_cutoff]
+    )
+    prev_mtime = _datetime(prev_cutoff.year, prev_cutoff.month, prev_cutoff.day, 1, 0, tzinfo=_UTC)
+    window_start = rollup.compute_window_start(today, prev_mtime)
+    window_df = rollup.build_prediction_catalogue_dataframe(
+        [(d, v, c, f) for d, v, c, f in snapshots if d >= window_start]
+    )
+    incremental = rollup._merge_incremental(prev_df, window_df, window_start=window_start)
+    full = rollup.build_prediction_catalogue_dataframe(snapshots)
+    _assert_frames_match(full, incremental)
