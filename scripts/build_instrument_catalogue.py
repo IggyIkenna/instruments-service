@@ -1952,6 +1952,85 @@ def _merge_incremental(
     return merged
 
 
+#: Coverage-horizon warn threshold: the newest by_date day in the window older
+#: than this many days means the UPSTREAM download cron is broken — the
+#: catalogue can only be as fresh as the snapshots that feed it.
+_STALE_BY_DATE_MAX_AGE_DAYS = 3
+
+
+def _warn_coverage_horizon(day_counts: dict[date, int], today: date, asset_group: str) -> None:
+    """Emit ``CATALOGUE_STALE_BY_DATE`` when the by_date feed itself looks unhealthy.
+
+    Two signals (the originating plan's never-built NICE-TO-HAVE, shipped with
+    the incremental rollup since the window read makes both trivial):
+      * the newest window day is > ``_STALE_BY_DATE_MAX_AGE_DAYS`` old (download
+        cron down — catch-up self-heals via the widening window, but the
+        operator should fix the producer);
+      * the newest day's instrument count dropped sharply (<50% of the window
+        median — a partial capture; §7.3's thin-day guard already refuses to
+        delist off it, this makes the condition VISIBLE).
+    """
+    if not day_counts:
+        _emit_event("CATALOGUE_STALE_BY_DATE", asset_group=asset_group, reason="no_window_data")
+        logger.warning("CATALOGUE_STALE_BY_DATE: %s window contained no by_date data at all", asset_group)
+        return
+    latest = max(day_counts)
+    age_days = (today - latest).days
+    if age_days > _STALE_BY_DATE_MAX_AGE_DAYS:
+        _emit_event(
+            "CATALOGUE_STALE_BY_DATE",
+            asset_group=asset_group,
+            reason="latest_day_too_old",
+            latest_day=latest.isoformat(),
+            age_days=age_days,
+        )
+        logger.warning(
+            "CATALOGUE_STALE_BY_DATE: %s newest by_date day is %s (%dd old) — upstream download cron unhealthy",
+            asset_group,
+            latest.isoformat(),
+            age_days,
+        )
+    counts = sorted(day_counts.values())
+    mid = len(counts) // 2
+    median = counts[mid] if len(counts) % 2 else (counts[mid - 1] + counts[mid]) / 2
+    if median and day_counts[latest] < 0.5 * median:
+        _emit_event(
+            "CATALOGUE_STALE_BY_DATE",
+            asset_group=asset_group,
+            reason="latest_day_sharp_count_drop",
+            latest_day=latest.isoformat(),
+            latest_count=day_counts[latest],
+            window_median=median,
+        )
+        logger.warning(
+            "CATALOGUE_STALE_BY_DATE: %s newest day %s has %d rows vs window median %s — partial capture",
+            asset_group,
+            latest.isoformat(),
+            day_counts[latest],
+            median,
+        )
+
+
+def _tee_day_counts(
+    snapshots: Iterator[tuple[date, pd.DataFrame]],
+    day_counts: dict[date, int],
+) -> Iterator[tuple[date, pd.DataFrame]]:
+    """Pass ``(day, frame)`` through while accumulating per-day row counts."""
+    for day, frame in snapshots:
+        day_counts[day] = day_counts.get(day, 0) + len(frame)
+        yield day, frame
+
+
+def _tee_prediction_day_counts(
+    snapshots: Iterator[tuple[date, str, str, pd.DataFrame]],
+    day_counts: dict[date, int],
+) -> Iterator[tuple[date, str, str, pd.DataFrame]]:
+    """Prediction-shaped variant of :func:`_tee_day_counts` (4-tuple items)."""
+    for day, venue, cqg, frame in snapshots:
+        day_counts[day] = day_counts.get(day, 0) + len(frame)
+        yield day, venue, cqg, frame
+
+
 _MERGE_VENUE_CACHE: dict[str, str] = {}
 
 
@@ -2065,21 +2144,31 @@ def run_rollup(
             len(prev_df),
             prev_mtime.isoformat() if prev_mtime else "unknown",
         )
+        window_day_counts: dict[date, int] = {}
         if asset_group == "prediction":
             window_df = build_prediction_catalogue_dataframe(
-                _iter_prediction_by_date_snapshots(
-                    storage, bucket, by_date_prefix, since=window_start, max_blobs=max_blobs
+                _tee_prediction_day_counts(
+                    _iter_prediction_by_date_snapshots(
+                        storage, bucket, by_date_prefix, since=window_start, max_blobs=max_blobs
+                    ),
+                    window_day_counts,
                 )
             )
         else:
             window_df = build_catalogue_dataframe(
-                _iter_by_date_snapshots(storage, bucket, by_date_prefix, since=window_start, max_blobs=max_blobs)
+                _tee_day_counts(
+                    _iter_by_date_snapshots(storage, bucket, by_date_prefix, since=window_start, max_blobs=max_blobs),
+                    window_day_counts,
+                )
             )
         if window_df.empty:
             logger.warning(
                 "Incremental window produced 0 rows (no by_date data since %s) — catalogue preserved unchanged",
                 window_start.isoformat(),
             )
+        # Coverage-horizon health of the by_date FEED itself (stale latest day /
+        # sharp count drop) — visible even though the merge below stays safe.
+        _warn_coverage_horizon(window_day_counts, datetime.now(UTC).date(), asset_group)
         df = _merge_incremental(prev_df, window_df, window_start=window_start)
     elif asset_group == "prediction":
         # Multi-grain roll-up: the cqg bundle is per-canonical_question_group while
