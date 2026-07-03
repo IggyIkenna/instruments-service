@@ -1,7 +1,7 @@
 """Tests for urdi_reference_provider — URDI instrument wiring in instruments-service.
 
 The provider uses CANONICAL venue names (UAC uppercase, e.g. "BINANCE-SPOT")
-and translates them to URDI adapter keys via CANONICAL_VENUE_TO_ADAPTER from URDI.
+and translates them to URDI adapter keys via VENUE_TO_ADAPTER_KEY from URDI.
 """
 
 from __future__ import annotations

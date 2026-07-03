@@ -28,7 +28,6 @@ from .adapters.sports.factory import (
 from .base_adapter import BaseReferenceDataAdapter
 from .factory import (
     ADAPTER_DATA_SOURCES,
-    CANONICAL_VENUE_TO_ADAPTER,
     create_reference_data_adapter,
     get_adapter_for_canonical_venue,
 )
@@ -53,7 +52,6 @@ BaseReferenceAdapter = BaseReferenceDataAdapter
 
 __all__ = [
     "ADAPTER_DATA_SOURCES",
-    "CANONICAL_VENUE_TO_ADAPTER",
     "BaseReferenceAdapter",
     "BaseReferenceDataAdapter",
     "CanonicalCorporateAction",
