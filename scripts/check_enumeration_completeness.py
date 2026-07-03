@@ -67,6 +67,7 @@ from unified_api_contracts import (
     bundle_instrument_type_for_leaf,
     get_mvp_data_types_for_cefi_venue,
 )
+from unified_api_contracts.registry import TRADFI_VENUE_INSTRUMENT_TYPES
 from unified_api_contracts.registry.market_data_categories import (
     VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE,
     VENUE_DATA_TYPE_CAPABILITIES,
@@ -116,6 +117,14 @@ def _get_instrument_type_aliases() -> dict[str, str]:
     return _INSTRUMENT_TYPE_ALIASES
 
 
+# DeFi fine lending grains the writer emits at sub-instrument granularity; UAC
+# models lending at the coarser canonical `lending` instrument_type
+# (honest_coverage_uac_writer_matrix_reconciliation Decision 3/4, operator
+# 2026-06-29: "Roll a_token/debt_token → lending" — a GRAIN mismatch, not
+# missing data; the lending data_types are already declared in _LENDING_DATA).
+_DEFI_LENDING_FINE_GRAINS: frozenset[str] = frozenset({"a_token", "debt_token", "liquidation"})
+
+
 def _canon_instrument_type(asset_group: str, venue: str, instrument_type: str) -> str:
     """Canonicalise an instrument_type token to the comparison grain.
 
@@ -137,11 +146,42 @@ def _canon_instrument_type(asset_group: str, venue: str, instrument_type: str) -
     # (the matrix key) — both name the same could-exist grain.
     if asset_group == "prediction" and norm == "prediction":
         norm = "prediction_market"
+    # DeFi lending grain roll-up: writer-side fine grains (a_token/debt_token/
+    # liquidation) meet UAC's canonical `lending` grain — same could-exist cell.
+    if asset_group == "defi" and norm in _DEFI_LENDING_FINE_GRAINS:
+        norm = "lending"
     bundle = bundle_instrument_type_for_leaf(asset_group, norm, venue)
     if bundle is not None:
         norm = bundle.strip().lower()
         norm = aliases.get(norm, norm)
     return norm
+
+
+# CeFi venue-dialect fold (honest_coverage_uac_writer_matrix_reconciliation
+# Decision 6, implemented as the todo's "check folds suffixes" option): the
+# writer captures under Tardis-grain suffixed venues (OKX-SPOT/-SWAP/-FUTURES
+# from expand_cefi_tardis_endpoints; legacy raw Tardis exchange ids on older
+# rows) while UAC keys those venues at the bare canonical grain (OKX; COINBASE
+# for spot). Fold BOTH sides to the UAC-canonical venue so a suffix dialect can
+# never manufacture a false hole or a false stray. Venues that are themselves
+# UAC-canonical suffixed forms (BYBIT-SPOT, KRAKEN-FUTURES, BITFINEX-*, …) are
+# deliberately NOT folded.
+_CEFI_VENUE_FOLD: dict[str, str] = {
+    # Tardis-grain splits emitted by expand_cefi_tardis_endpoints()
+    "OKX-SPOT": "OKX",
+    "OKX-SWAP": "OKX",
+    "OKX-FUTURES": "OKX",
+    "COINBASE-SPOT": "COINBASE",
+    # Writer-side names for venues UAC keys differently
+    "BYBIT-FUTURES": "BYBIT",
+    "COINBASE-INTERNATIONAL": "COINBASE-FUTURES",
+    # Legacy raw Tardis exchange ids (pre-canonicalisation manifest rows)
+    "OKEX": "OKX",
+    "OKEX-SWAP": "OKX",
+    "OKEX-FUTURES": "OKX",
+    "CRYPTOFACILITIES": "KRAKEN-FUTURES",
+    "BITFINEX-DERIVATIVES": "BITFINEX-FUTURES",
+}
 
 
 def _canon_venue(asset_group: str, venue: str) -> str:
@@ -151,6 +191,8 @@ def _canon_venue(asset_group: str, venue: str) -> str:
       VenueMapping helper _enumerate_v2_defi uses, then strip the -CHAIN suffix
       so the EXPECTED PROTOCOL-CHAIN id (AAVE_V3-ETHEREUM) and the ENUMERATED
       PROTOCOL-only id (AAVE_V3) meet at the PROTOCOL grain.
+    - cefi: fold Tardis-suffix/legacy venue dialects to the UAC canonical venue
+      (see _CEFI_VENUE_FOLD).
     - all AGs: upper-case (venues are upper-case canonical; manifest carries
       stray lower-case e.g. kalshi).
     """
@@ -162,23 +204,32 @@ def _canon_venue(asset_group: str, venue: str) -> str:
         if "-" in v:
             v = v.rsplit("-", 1)[0]  # strip -CHAIN suffix → PROTOCOL grain
         return v
-    return v.upper()
+    v = v.upper()
+    if asset_group == "cefi":
+        return _CEFI_VENUE_FOLD.get(v, v)
+    return v
 
 
-def _canon_data_type(data_type: str) -> str:
-    """Canonicalise a data_type token (case-fold — manifest carries ODDS/odds)."""
-    return (data_type or "").strip().lower()
+def _canon_data_type(asset_group: str, data_type: str) -> str:
+    """Canonicalise a data_type token (case-fold — manifest carries ODDS/odds).
+
+    defi: `rate_indices` is the non-canonical writer name for `lending_indices`
+    (reconciliation Decision 3 evidence, 2026-06-29) — pure dialect, same cell.
+    """
+    dt = (data_type or "").strip().lower()
+    if asset_group == "defi" and dt == "rate_indices":
+        return "lending_indices"
+    return dt
 
 
-def _canon_key(
-    asset_group: str, venue: str, instrument_type: str, data_type: str
-) -> tuple[str, str, str]:
+def _canon_key(asset_group: str, venue: str, instrument_type: str, data_type: str) -> tuple[str, str, str]:
     """Build the canonical comparison key for a (venue, itype, data_type) tuple."""
     return (
         _canon_venue(asset_group, venue),
         _canon_instrument_type(asset_group, venue, instrument_type),
-        _canon_data_type(data_type),
+        _canon_data_type(asset_group, data_type),
     )
+
 
 # The full set of lowercase canonical instrument_types we consider for each AG.
 # For cefi/tradfi/sports/prediction: derived from VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE keys.
@@ -233,7 +284,7 @@ def _get_cefi_venue_itypes() -> dict[str, frozenset[str]]:
         aliases = _get_instrument_type_aliases()
         vm = VenueMapping()
         out: dict[str, set[str]] = {}
-        for (venue, itype) in vm.venue_instrument_type_to_tardis:
+        for venue, itype in vm.venue_instrument_type_to_tardis:
             norm = aliases.get(itype.strip().lower(), itype.strip().lower())
             # roll leaf option/future to bundle at bundle venues
             bundle = bundle_instrument_type_for_leaf("cefi", norm, venue)
@@ -247,21 +298,12 @@ def _get_cefi_venue_itypes() -> dict[str, frozenset[str]]:
     return _CEFI_VENUE_ITYPES
 
 
-# TradFi venue → the instrument_type the MTDS writer stamps.
-# SSOT: market-tick-data-service symbol_rules._VENUE_INSTRUMENT_TYPE (a different
-# repo — NO service↔service import allowed, so the small stable mapping is
-# replicated here with a citation). CME/ICE roll futures to per-underlying
-# futures_chain bundles (FUTURE_BUNDLE_VENUES["tradfi"]); NASDAQ/NYSE→equity;
-# CBOE→index (VIX/VX); FX→spot_pair. YAHOO_FINANCE/KRX stamp no itype (legacy
-# source-as-venue) → not gated here (fall through to data_type-capability only).
-_TRADFI_VENUE_ITYPES: dict[str, frozenset[str]] = {
-    "CME": frozenset({"futures_chain", "options_chain", "combo"}),
-    "ICE": frozenset({"futures_chain", "options_chain", "combo"}),
-    "NASDAQ": frozenset({"equity", "etf"}),
-    "NYSE": frozenset({"equity", "etf"}),
-    "CBOE": frozenset({"index", "futures_chain", "options_chain"}),
-    "FX": frozenset({"spot_pair"}),
-}
+# TradFi venue → writer-grain instrument_types: UAC TRADFI_VENUE_INSTRUMENT_TYPES
+# (promoted there 2026-07-03 from the replica that used to live here —
+# honest_coverage_uac_writer_matrix_reconciliation "SSOT-placement" finding; the
+# MTDS writer-side counterpart is symbol_rules._VENUE_INSTRUMENT_TYPE).
+# YAHOO_FINANCE/KRX stamp no itype (legacy source-as-venue) → absent from the
+# map → not gated here (fall through to data_type-capability only).
 
 _DEFI_PROTOCOL_ITYPES: dict[str, frozenset[str]] | None = None
 
@@ -282,10 +324,7 @@ def _get_defi_protocol_itypes() -> dict[str, frozenset[str]]:
         aliases = _get_instrument_type_aliases()
         out: dict[str, set[str]] = {}
         for protocol, cap in PROTOCOL_CAPABILITIES.items():
-            its = {
-                aliases.get(it.strip().lower(), it.strip().lower())
-                for it in cap.instrument_types
-            }
+            its = {aliases.get(it.strip().lower(), it.strip().lower()) for it in cap.instrument_types}
             out[protocol.strip().upper()] = its
         _DEFI_PROTOCOL_ITYPES = {p: frozenset(its) for p, its in out.items()}
     return _DEFI_PROTOCOL_ITYPES
@@ -310,7 +349,7 @@ def _venue_itype_is_valid(asset_group: str, venue: str, itype_canon: str) -> boo
         valid = _get_defi_protocol_itypes().get(proto)
         return valid is not None and itype_canon in valid
     if asset_group == "tradfi":
-        valid = _TRADFI_VENUE_ITYPES.get(venue.strip().upper())
+        valid = TRADFI_VENUE_INSTRUMENT_TYPES.get(venue.strip().upper())
         # Venues without a stamped itype (YAHOO_FINANCE/KRX) are not gated here.
         return valid is None or itype_canon in valid
     return True
@@ -330,7 +369,7 @@ def _get_ag_instrument_types(asset_group: str) -> frozenset[str]:
             _AG_INSTRUMENT_TYPES[asset_group] = _get_defi_instrument_types()
         else:
             itypes: set[str] = set()
-            for (ag, itype) in VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE:
+            for ag, itype in VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE:
                 if ag == asset_group:
                     itypes.add(itype)
             _AG_INSTRUMENT_TYPES[asset_group] = frozenset(itypes)
@@ -535,9 +574,7 @@ def _build_expected_tuples(asset_group: str) -> set[tuple[str, str, str]]:
             # over-generation (BINANCE-FUTURES × spot_pair, AAVE(lending) × pool).
             # AUTHORITY: cefi=venue_instrument_type_to_tardis keys;
             # defi=PROTOCOL_CAPABILITIES[protocol].instrument_types.
-            itype_canon = _get_instrument_type_aliases().get(
-                itype.strip().lower(), itype.strip().lower()
-            )
+            itype_canon = _get_instrument_type_aliases().get(itype.strip().lower(), itype.strip().lower())
             if not _venue_itype_is_valid(ag, venue, itype_canon):
                 continue
 
@@ -546,9 +583,11 @@ def _build_expected_tuples(asset_group: str) -> set[tuple[str, str, str]]:
             # specific protocol named by the PROTOCOL segment of venue id.
             # Falls back to valid_data_types_for_instrument_type when the
             # venue-specific narrowing is not applicable (non-defi or unmapped).
-            valid_dts = valid_data_types_for_venue_instrument_type(
-                ag, venue, itype
-            ) or valid_data_types_for_instrument_type(ag, itype) or frozenset()
+            valid_dts = (
+                valid_data_types_for_venue_instrument_type(ag, venue, itype)
+                or valid_data_types_for_instrument_type(ag, itype)
+                or frozenset()
+            )
 
             if len(valid_dts) == 0:
                 # frozenset() → no expected rows for this (ag, venue, itype).
@@ -584,9 +623,7 @@ def _build_expected_tuples(asset_group: str) -> set[tuple[str, str, str]]:
     return expected
 
 
-def _build_enumerated_tuples(
-    asset_group: str, df: pd.DataFrame
-) -> set[tuple[str, str, str]]:
+def _build_enumerated_tuples(asset_group: str, df: pd.DataFrame) -> set[tuple[str, str, str]]:
     """Build the ENUMERATED set from the manifest skeleton.
 
     Distinct (venue, instrument_type, data_type) tuples present in the manifest,
