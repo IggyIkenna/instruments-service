@@ -29,6 +29,7 @@ import pytest
 # Module loader (mirrors the enumerator test pattern)
 # ---------------------------------------------------------------------------
 
+
 def _load_module() -> ModuleType:
     repo_root = Path(__file__).resolve().parents[3]
     script_path = repo_root / "scripts" / "check_enumeration_completeness.py"
@@ -50,6 +51,7 @@ def mod() -> ModuleType:
 # Helper: make a minimal manifest DataFrame for ENUMERATED
 # ---------------------------------------------------------------------------
 
+
 def _make_manifest(rows: list[dict[str, str]]) -> pd.DataFrame:
     """Return a DataFrame with the columns the checker expects."""
     return pd.DataFrame(rows)
@@ -69,15 +71,13 @@ def _make_manifest(rows: list[dict[str, str]]) -> pd.DataFrame:
 #   It SHOULD contain (DERIBIT, options_chain, trades).
 # ---------------------------------------------------------------------------
 
+
 class TestDeribitOptionsChainCarveOut:
     def test_deribit_option_leaf_is_not_in_expected(self, mod: ModuleType) -> None:
         """OPTION leaf rows never appear in EXPECTED for DERIBIT — they roll up to options_chain."""
         expected = mod._build_expected_tuples("cefi")
         # No (DERIBIT, option, *) tuples should be in EXPECTED
-        deribit_option_tuples = {
-            (v, it, dt) for (v, it, dt) in expected
-            if v == "DERIBIT" and it == "option"
-        }
+        deribit_option_tuples = {(v, it, dt) for (v, it, dt) in expected if v == "DERIBIT" and it == "option"}
         assert len(deribit_option_tuples) == 0, (
             f"DERIBIT leaf option tuples should NOT be in EXPECTED (roll up to options_chain bundle): "
             f"{deribit_option_tuples}"
@@ -90,15 +90,25 @@ class TestDeribitOptionsChainCarveOut:
             "DERIBIT options_chain bundle (data_type=trades) must be in EXPECTED"
         )
 
-    def test_deribit_options_chain_is_a_hole_when_absent_from_enumerated(
-        self, mod: ModuleType
-    ) -> None:
+    def test_deribit_options_chain_is_a_hole_when_absent_from_enumerated(self, mod: ModuleType) -> None:
         """(DERIBIT, options_chain, trades) is a Layer-1 hole when absent from ENUMERATED."""
         # Manifest has NO options_chain rows for DERIBIT
-        df = _make_manifest([
-            {"capture_status": "captured", "venue": "DERIBIT", "instrument_type": "spot_pair", "data_type": "trades"},
-            {"capture_status": "captured", "venue": "BINANCE-FUTURES", "instrument_type": "perpetual", "data_type": "trades"},
-        ])
+        df = _make_manifest(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "DERIBIT",
+                    "instrument_type": "spot_pair",
+                    "data_type": "trades",
+                },
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE-FUTURES",
+                    "instrument_type": "perpetual",
+                    "data_type": "trades",
+                },
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         # options_chain for DERIBIT should be a missing tuple
         missing = {(m.venue, m.instrument_type, m.data_type) for m in result.missing_tuples}
@@ -108,19 +118,19 @@ class TestDeribitOptionsChainCarveOut:
         )
         assert not result.denominator_complete
 
-    def test_deribit_options_chain_not_a_hole_when_present_in_enumerated(
-        self, mod: ModuleType
-    ) -> None:
+    def test_deribit_options_chain_not_a_hole_when_present_in_enumerated(self, mod: ModuleType) -> None:
         """(DERIBIT, options_chain, trades) is NOT a hole when present in ENUMERATED."""
         # Manifest has options_chain row for DERIBIT
-        df = _make_manifest([
-            {
-                "capture_status": "captured",
-                "venue": "DERIBIT",
-                "instrument_type": "options_chain",
-                "data_type": "trades",
-            },
-        ])
+        df = _make_manifest(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "DERIBIT",
+                    "instrument_type": "options_chain",
+                    "data_type": "trades",
+                },
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         missing = {(m.venue, m.instrument_type, m.data_type) for m in result.missing_tuples}
         assert ("DERIBIT", "options_chain", "trades") not in missing, (
@@ -133,14 +143,12 @@ class TestDeribitOptionsChainCarveOut:
 #   Source: absent from VENUE_DATA_TYPE_CAPABILITIES["ASTER"]
 # ---------------------------------------------------------------------------
 
+
 class TestAsterCarveOut:
     def test_aster_book_snapshot_5_not_in_expected(self, mod: ModuleType) -> None:
         """book_snapshot_5 is NOT expected for ASTER (absent from VENUE_DATA_TYPE_CAPABILITIES)."""
         expected = mod._build_expected_tuples("cefi")
-        aster_bs5 = {
-            (v, it, dt) for (v, it, dt) in expected
-            if v == "ASTER" and dt == "book_snapshot_5"
-        }
+        aster_bs5 = {(v, it, dt) for (v, it, dt) in expected if v == "ASTER" and dt == "book_snapshot_5"}
         assert len(aster_bs5) == 0, (
             f"ASTER book_snapshot_5 should NOT be in EXPECTED (venue capability absent): {aster_bs5}"
         )
@@ -148,29 +156,23 @@ class TestAsterCarveOut:
     def test_aster_liquidations_not_in_expected(self, mod: ModuleType) -> None:
         """liquidations is NOT expected for ASTER (absent from VENUE_DATA_TYPE_CAPABILITIES)."""
         expected = mod._build_expected_tuples("cefi")
-        aster_liq = {
-            (v, it, dt) for (v, it, dt) in expected
-            if v == "ASTER" and dt == "liquidations"
-        }
+        aster_liq = {(v, it, dt) for (v, it, dt) in expected if v == "ASTER" and dt == "liquidations"}
         assert len(aster_liq) == 0, (
             f"ASTER liquidations should NOT be in EXPECTED (venue capability absent): {aster_liq}"
         )
 
-    def test_aster_book_snapshot_5_absent_from_manifest_is_not_a_hole(
-        self, mod: ModuleType
-    ) -> None:
+    def test_aster_book_snapshot_5_absent_from_manifest_is_not_a_hole(self, mod: ModuleType) -> None:
         """A manifest with no ASTER book_snapshot_5 rows has 0 missing for that tuple."""
-        df = _make_manifest([
-            {"capture_status": "captured", "venue": "ASTER", "instrument_type": "perpetual", "data_type": "trades"},
-        ])
+        df = _make_manifest(
+            [
+                {"capture_status": "captured", "venue": "ASTER", "instrument_type": "perpetual", "data_type": "trades"},
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         aster_bs5_missing = [
-            m for m in result.missing_tuples
-            if m.venue == "ASTER" and m.data_type == "book_snapshot_5"
+            m for m in result.missing_tuples if m.venue == "ASTER" and m.data_type == "book_snapshot_5"
         ]
-        assert len(aster_bs5_missing) == 0, (
-            "ASTER book_snapshot_5 should NOT be a Layer-1 hole (it is a carve-out)"
-        )
+        assert len(aster_bs5_missing) == 0, "ASTER book_snapshot_5 should NOT be a Layer-1 hole (it is a carve-out)"
 
 
 # ---------------------------------------------------------------------------
@@ -178,34 +180,31 @@ class TestAsterCarveOut:
 #   Source: absent from VENUE_DATA_TYPE_CAPABILITIES["HYPERLIQUID"]
 # ---------------------------------------------------------------------------
 
+
 class TestHyperliquidCarveOut:
     def test_hyperliquid_liquidations_not_in_expected(self, mod: ModuleType) -> None:
         """liquidations is NOT expected for HYPERLIQUID (absent from VENUE_DATA_TYPE_CAPABILITIES)."""
         expected = mod._build_expected_tuples("cefi")
-        hl_liq = {
-            (v, it, dt) for (v, it, dt) in expected
-            if v == "HYPERLIQUID" and dt == "liquidations"
-        }
+        hl_liq = {(v, it, dt) for (v, it, dt) in expected if v == "HYPERLIQUID" and dt == "liquidations"}
         assert len(hl_liq) == 0, (
             f"HYPERLIQUID liquidations should NOT be in EXPECTED (venue capability absent): {hl_liq}"
         )
 
-    def test_hyperliquid_liquidations_absent_from_manifest_is_not_a_hole(
-        self, mod: ModuleType
-    ) -> None:
+    def test_hyperliquid_liquidations_absent_from_manifest_is_not_a_hole(self, mod: ModuleType) -> None:
         """No Layer-1 hole for HYPERLIQUID liquidations even when absent from manifest."""
-        df = _make_manifest([
-            {
-                "capture_status": "captured",
-                "venue": "HYPERLIQUID",
-                "instrument_type": "perpetual",
-                "data_type": "trades",
-            },
-        ])
+        df = _make_manifest(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "HYPERLIQUID",
+                    "instrument_type": "perpetual",
+                    "data_type": "trades",
+                },
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         hl_liq_missing = [
-            m for m in result.missing_tuples
-            if m.venue == "HYPERLIQUID" and m.data_type == "liquidations"
+            m for m in result.missing_tuples if m.venue == "HYPERLIQUID" and m.data_type == "liquidations"
         ]
         assert len(hl_liq_missing) == 0, (
             "HYPERLIQUID liquidations must NOT be a Layer-1 hole (carve-out from VENUE_DATA_TYPE_CAPABILITIES)"
@@ -223,14 +222,12 @@ class TestHyperliquidCarveOut:
 #   Source: get_mvp_data_types_for_cefi_venue
 # ---------------------------------------------------------------------------
 
+
 class TestCoinbaseSpotCarveOut:
     def test_upbit_derivative_ticker_not_in_expected(self, mod: ModuleType) -> None:
         """derivative_ticker is NOT expected for UPBIT (absent from VENUE_DATA_TYPE_CAPABILITIES)."""
         expected = mod._build_expected_tuples("cefi")
-        upbit_dt = {
-            (v, it, dt) for (v, it, dt) in expected
-            if v == "UPBIT" and dt == "derivative_ticker"
-        }
+        upbit_dt = {(v, it, dt) for (v, it, dt) in expected if v == "UPBIT" and dt == "derivative_ticker"}
         assert len(upbit_dt) == 0, (
             f"UPBIT derivative_ticker should NOT be in EXPECTED (venue capability absent): {upbit_dt}"
         )
@@ -238,26 +235,24 @@ class TestCoinbaseSpotCarveOut:
     def test_upbit_trades_is_in_expected(self, mod: ModuleType) -> None:
         """trades IS expected for UPBIT (in both venue capabilities and MVP)."""
         expected = mod._build_expected_tuples("cefi")
-        upbit_trades = {
-            (v, it, dt) for (v, it, dt) in expected
-            if v == "UPBIT" and dt == "trades"
-        }
+        upbit_trades = {(v, it, dt) for (v, it, dt) in expected if v == "UPBIT" and dt == "trades"}
         assert len(upbit_trades) > 0, "UPBIT should have at least one (venue, itype, trades) tuple in EXPECTED"
 
     def test_upbit_derivative_ticker_absent_is_not_a_hole(self, mod: ModuleType) -> None:
         """A manifest without UPBIT derivative_ticker is NOT a Layer-1 hole."""
-        df = _make_manifest([
-            {
-                "capture_status": "captured",
-                "venue": "UPBIT",
-                "instrument_type": "spot_pair",
-                "data_type": "trades",
-            },
-        ])
+        df = _make_manifest(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "UPBIT",
+                    "instrument_type": "spot_pair",
+                    "data_type": "trades",
+                },
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         upbit_dt_missing = [
-            m for m in result.missing_tuples
-            if m.venue == "UPBIT" and m.data_type == "derivative_ticker"
+            m for m in result.missing_tuples if m.venue == "UPBIT" and m.data_type == "derivative_ticker"
         ]
         assert len(upbit_dt_missing) == 0, (
             "UPBIT derivative_ticker must NOT be a Layer-1 hole (venue capability carve-out)"
@@ -267,6 +262,7 @@ class TestCoinbaseSpotCarveOut:
 # ---------------------------------------------------------------------------
 # Test: denominator_complete and completeness_pct semantics
 # ---------------------------------------------------------------------------
+
 
 class TestCompletenessMetrics:
     def test_denominator_complete_when_all_expected_present(self, mod: ModuleType) -> None:
@@ -328,13 +324,13 @@ class TestCompletenessMetrics:
             f"completeness_pct {result.completeness_pct} != expected {expected_pct}"
         )
 
-    def test_missing_instrument_type_column_yields_empty_enumerated(
-        self, mod: ModuleType
-    ) -> None:
+    def test_missing_instrument_type_column_yields_empty_enumerated(self, mod: ModuleType) -> None:
         """If the 'instrument_type' column is absent, ENUMERATED = empty → all expected missing."""
-        df = pd.DataFrame([
-            {"capture_status": "captured", "venue": "DERIBIT", "data_type": "trades"},
-        ])
+        df = pd.DataFrame(
+            [
+                {"capture_status": "captured", "venue": "DERIBIT", "data_type": "trades"},
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         # Without instrument_type, ENUMERATED is empty → all expected are holes
         expected = mod._build_expected_tuples("cefi")
@@ -347,19 +343,22 @@ class TestCompletenessMetrics:
 # Test: stray tuples are logged as warnings, NOT counted as holes
 # ---------------------------------------------------------------------------
 
+
 class TestStrayTuples:
     def test_stray_tuple_not_counted_as_hole(self, mod: ModuleType) -> None:
         """A tuple in ENUMERATED but not in EXPECTED is a stray, NOT a missing_tuple."""
         # Fabricate a tuple that UAC cannot sanction (e.g. ASTER + liquidations)
-        df = _make_manifest([
-            # Stray: ASTER has no liquidations capability
-            {
-                "capture_status": "captured",
-                "venue": "ASTER",
-                "instrument_type": "perpetual",
-                "data_type": "liquidations",
-            },
-        ])
+        df = _make_manifest(
+            [
+                # Stray: ASTER has no liquidations capability
+                {
+                    "capture_status": "captured",
+                    "venue": "ASTER",
+                    "instrument_type": "perpetual",
+                    "data_type": "liquidations",
+                },
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         # The stray must NOT appear in missing_tuples
         missing_dtypes = {(m.venue, m.data_type) for m in result.missing_tuples}
@@ -379,9 +378,11 @@ class TestStrayTuples:
         if not expected:
             pytest.skip("EXPECTED is empty")
         v, it, dt = next(iter(expected))
-        df = _make_manifest([
-            {"capture_status": "captured", "venue": v, "instrument_type": it, "data_type": dt},
-        ])
+        df = _make_manifest(
+            [
+                {"capture_status": "captured", "venue": v, "instrument_type": it, "data_type": dt},
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         stray_keys = {(s.venue, s.instrument_type, s.data_type) for s in result.stray_tuples}
         assert (v, it, dt) not in stray_keys, f"Expected tuple ({v},{it},{dt}) must not be a stray"
@@ -390,6 +391,7 @@ class TestStrayTuples:
 # ---------------------------------------------------------------------------
 # Test: per-venue breakdown is consistent with top-level
 # ---------------------------------------------------------------------------
+
 
 class TestVenueBreakdown:
     def test_by_venue_sums_correctly(self, mod: ModuleType) -> None:
@@ -418,6 +420,7 @@ class TestVenueBreakdown:
 # Test: empty-denominator guard — EXPECTED==0 → UNDEFINED, not 100% (Bug 2)
 # ---------------------------------------------------------------------------
 
+
 class TestEmptyDenominatorGuard:
     def test_undefined_status_when_expected_is_empty(self, mod: ModuleType) -> None:
         """When _build_expected_tuples returns empty, check_enumeration_completeness
@@ -426,20 +429,19 @@ class TestEmptyDenominatorGuard:
         """
         # Use a non-existent AG so both VENUES_BY_ASSET_GROUP and
         # VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE return nothing → EXPECTED=0.
-        df = _make_manifest([
-            {"capture_status": "captured", "venue": "MOCK", "instrument_type": "spot", "data_type": "trades"},
-        ])
+        df = _make_manifest(
+            [
+                {"capture_status": "captured", "venue": "MOCK", "instrument_type": "spot", "data_type": "trades"},
+            ]
+        )
         result = mod.check_enumeration_completeness("_nonexistent_ag_for_test_", df)
         assert result.expected_tuples == 0, "Expected 0 tuples for nonexistent AG"
         assert result.denominator_status == "UNDEFINED", (
             f"denominator_status must be UNDEFINED when EXPECTED==0, got {result.denominator_status!r}"
         )
-        assert result.denominator_complete is False, (
-            "denominator_complete must be False for UNDEFINED denominator"
-        )
+        assert result.denominator_complete is False, "denominator_complete must be False for UNDEFINED denominator"
         assert result.completeness_pct is None, (
-            f"completeness_pct must be None (not 100.0) for UNDEFINED denominator, "
-            f"got {result.completeness_pct}"
+            f"completeness_pct must be None (not 100.0) for UNDEFINED denominator, got {result.completeness_pct}"
         )
 
     def test_complete_status_when_all_present(self, mod: ModuleType) -> None:
@@ -453,9 +455,7 @@ class TestEmptyDenominatorGuard:
         ]
         df = _make_manifest(rows)
         result = mod.check_enumeration_completeness("cefi", df)
-        assert result.denominator_status == "COMPLETE", (
-            f"expected 'COMPLETE' got {result.denominator_status!r}"
-        )
+        assert result.denominator_status == "COMPLETE", f"expected 'COMPLETE' got {result.denominator_status!r}"
         assert result.completeness_pct == 100.0
         assert result.denominator_complete is True
 
@@ -466,9 +466,7 @@ class TestEmptyDenominatorGuard:
             pytest.skip("cefi EXPECTED is empty — UAC not loaded")
         df = _make_manifest([])  # Empty manifest → all expected missing
         result = mod.check_enumeration_completeness("cefi", df)
-        assert result.denominator_status == "INCOMPLETE", (
-            f"expected 'INCOMPLETE' got {result.denominator_status!r}"
-        )
+        assert result.denominator_status == "INCOMPLETE", f"expected 'INCOMPLETE' got {result.denominator_status!r}"
         assert result.denominator_complete is False
         assert result.completeness_pct is not None
         assert result.completeness_pct == 0.0
@@ -477,6 +475,7 @@ class TestEmptyDenominatorGuard:
 # ---------------------------------------------------------------------------
 # Test: DeFi regression — EXPECTED > 0 after UAC function switch (Bug 1)
 # ---------------------------------------------------------------------------
+
 
 class TestDefiExpectedNotEmpty:
     def test_defi_expected_tuples_gt_zero(self, mod: ModuleType) -> None:
@@ -497,6 +496,7 @@ class TestDefiExpectedNotEmpty:
     def test_defi_check_completeness_not_undefined(self, mod: ModuleType) -> None:
         """When defi EXPECTED > 0, check_enumeration_completeness must not set UNDEFINED."""
         from unified_api_contracts import VENUES_BY_ASSET_GROUP
+
         defi_venues = list(VENUES_BY_ASSET_GROUP.get("defi", []))
         if not defi_venues:
             pytest.skip("No defi venues in UAC — cannot build manifest rows")
@@ -507,9 +507,7 @@ class TestDefiExpectedNotEmpty:
             f"defi should never be UNDEFINED (EXPECTED={result.expected_tuples}), "
             f"got denominator_status={result.denominator_status!r}"
         )
-        assert result.expected_tuples > 0, (
-            f"defi EXPECTED must be > 0, got {result.expected_tuples}"
-        )
+        assert result.expected_tuples > 0, f"defi EXPECTED must be > 0, got {result.expected_tuples}"
 
 
 # ---------------------------------------------------------------------------
@@ -517,11 +515,13 @@ class TestDefiExpectedNotEmpty:
 # intersect; casing/format/vocab differences are NOT holes; only REAL holes.
 # ---------------------------------------------------------------------------
 
+
 class TestCanonNormalisers:
     def test_case_fold_instrument_type(self, mod: ModuleType) -> None:
         """UPPERCASE and lowercase instrument_type canonicalise to the same key."""
-        assert mod._canon_instrument_type("cefi", "BINANCE-SPOT", "SPOT_PAIR") == \
-            mod._canon_instrument_type("cefi", "BINANCE-SPOT", "spot_pair")
+        assert mod._canon_instrument_type("cefi", "BINANCE-SPOT", "SPOT_PAIR") == mod._canon_instrument_type(
+            "cefi", "BINANCE-SPOT", "spot_pair"
+        )
 
     def test_alias_spot_to_spot_pair(self, mod: ModuleType) -> None:
         """Writer-grain `spot` aliases to UAC `spot_pair`."""
@@ -536,7 +536,32 @@ class TestCanonNormalisers:
 
     def test_data_type_case_fold(self, mod: ModuleType) -> None:
         """ODDS and odds canonicalise to the same data_type."""
-        assert mod._canon_data_type("ODDS") == mod._canon_data_type("odds") == "odds"
+        assert mod._canon_data_type("sports", "ODDS") == mod._canon_data_type("sports", "odds") == "odds"
+
+    def test_defi_rate_indices_folds_to_lending_indices(self, mod: ModuleType) -> None:
+        """defi `rate_indices` is the non-canonical writer name for `lending_indices`
+        (uac_writer_matrix_reconciliation Decision 3); other AGs are NOT folded."""
+        assert mod._canon_data_type("defi", "rate_indices") == "lending_indices"
+        assert mod._canon_data_type("cefi", "rate_indices") == "rate_indices"
+
+    def test_defi_lending_fine_grains_fold_to_lending(self, mod: ModuleType) -> None:
+        """a_token/debt_token/liquidation writer grains roll up to UAC `lending`
+        (Decision 3/4: grain mismatch, not missing data); other AGs unaffected."""
+        for fine in ("a_token", "DEBT_TOKEN", "liquidation"):
+            assert mod._canon_instrument_type("defi", "AAVE_V3-ETHEREUM", fine) == "lending"
+        assert mod._canon_instrument_type("cefi", "BYBIT", "a_token") == "a_token"
+
+    def test_cefi_venue_suffix_fold(self, mod: ModuleType) -> None:
+        """Tardis-suffix + legacy venue dialects fold to the UAC canonical venue
+        (Decision 6, check-folds-suffixes); UAC-canonical suffixed venues do NOT fold."""
+        assert mod._canon_venue("cefi", "OKX-SWAP") == "OKX"
+        assert mod._canon_venue("cefi", "OKX-SPOT") == "OKX"
+        assert mod._canon_venue("cefi", "okex-futures") == "OKX"
+        assert mod._canon_venue("cefi", "COINBASE-SPOT") == "COINBASE"
+        assert mod._canon_venue("cefi", "CRYPTOFACILITIES") == "KRAKEN-FUTURES"
+        assert mod._canon_venue("cefi", "BITFINEX-DERIVATIVES") == "BITFINEX-FUTURES"
+        assert mod._canon_venue("cefi", "BYBIT-SPOT") == "BYBIT-SPOT"
+        assert mod._canon_venue("cefi", "KRAKEN-FUTURES") == "KRAKEN-FUTURES"
 
     def test_prediction_token_folds_to_prediction_market(self, mod: ModuleType) -> None:
         """Kalshi `prediction` itype folds to the canonical `prediction_market` grain."""
@@ -563,9 +588,11 @@ class TestAlignmentNotArtifact:
         if target is None:
             pytest.skip("No suitable cefi expected tuple")
         v, it, dt = target
-        df = _make_manifest([
-            {"capture_status": "captured", "venue": v, "instrument_type": it.upper(), "data_type": dt.upper()},
-        ])
+        df = _make_manifest(
+            [
+                {"capture_status": "captured", "venue": v, "instrument_type": it.upper(), "data_type": dt.upper()},
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         missing_keys = {(m.venue, m.instrument_type, m.data_type) for m in result.missing_tuples}
         assert (v, it, dt) not in missing_keys, (
@@ -580,9 +607,11 @@ class TestAlignmentNotArtifact:
         if target is None:
             pytest.skip("No defi lending tuple in EXPECTED")
         v, it, dt = target  # v is PROTOCOL grain e.g. AAVE_V3
-        df = _make_manifest([
-            {"capture_status": "captured", "venue": v, "instrument_type": "LENDING", "data_type": dt},
-        ])
+        df = _make_manifest(
+            [
+                {"capture_status": "captured", "venue": v, "instrument_type": "LENDING", "data_type": dt},
+            ]
+        )
         result = mod.check_enumeration_completeness("defi", df)
         missing_keys = {(m.venue, m.instrument_type, m.data_type) for m in result.missing_tuples}
         assert (v, it, dt) not in missing_keys, (
@@ -605,8 +634,7 @@ class TestPerAgAlignmentRegression:
         if not sample:
             pytest.skip("defi EXPECTED empty")
         rows = [
-            {"capture_status": "captured", "venue": v, "instrument_type": it, "data_type": dt}
-            for (v, it, dt) in sample
+            {"capture_status": "captured", "venue": v, "instrument_type": it, "data_type": dt} for (v, it, dt) in sample
         ]
         result = mod.check_enumeration_completeness("defi", df := _make_manifest(rows), diagnose=True)
         assert result.present_tuples > 0, "defi matched must be > 0 with present expected tuples"
@@ -615,12 +643,12 @@ class TestPerAgAlignmentRegression:
     def test_sports_not_zero_when_odds_trades_present(self, mod: ModuleType) -> None:
         """sports: odds-grain (venue, odds, trades) present → matched > 0 (was 0% pre-fix)."""
         from unified_api_contracts import VENUES_BY_ASSET_GROUP
+
         venues = list(VENUES_BY_ASSET_GROUP.get("sports", []))
         if not venues:
             pytest.skip("No sports venues")
         rows = [
-            {"capture_status": "captured", "venue": v, "instrument_type": "odds", "data_type": "trades"}
-            for v in venues
+            {"capture_status": "captured", "venue": v, "instrument_type": "odds", "data_type": "trades"} for v in venues
         ]
         result = mod.check_enumeration_completeness("sports", _make_manifest(rows), diagnose=True)
         assert result.present_tuples > 0, (
@@ -647,9 +675,16 @@ class TestPerAgAlignmentRegression:
 
     def test_no_diagnostics_by_default(self, mod: ModuleType) -> None:
         """Without diagnose, diagnostics is None and absent from as_dict."""
-        df = _make_manifest([
-            {"capture_status": "captured", "venue": "BINANCE-SPOT", "instrument_type": "spot_pair", "data_type": "trades"},
-        ])
+        df = _make_manifest(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE-SPOT",
+                    "instrument_type": "spot_pair",
+                    "data_type": "trades",
+                },
+            ]
+        )
         result = mod.check_enumeration_completeness("cefi", df)
         assert result.diagnostics is None
         assert "diagnostics" not in result.as_dict()
@@ -669,14 +704,10 @@ class TestVenueItypeGate:
         expected = mod._build_expected_tuples("defi")
         aave_itypes = {it for (v, it, dt) in expected if v == "AAVE_V3"}
         # AAVE_V3 is a lending protocol — pool should be absent
-        assert "pool" not in aave_itypes, (
-            f"AAVE_V3 (lending) should not expect pool itype; got itypes={aave_itypes}"
-        )
+        assert "pool" not in aave_itypes, f"AAVE_V3 (lending) should not expect pool itype; got itypes={aave_itypes}"
 
     def test_tradfi_cme_no_equity(self, mod: ModuleType) -> None:
         """CME (futures venue) must NOT expect equity itype."""
         expected = mod._build_expected_tuples("tradfi")
         cme_itypes = {it for (v, it, dt) in expected if v == "CME"}
-        assert "equity" not in cme_itypes, (
-            f"CME should not expect equity; got itypes={cme_itypes}"
-        )
+        assert "equity" not in cme_itypes, f"CME should not expect equity; got itypes={cme_itypes}"
