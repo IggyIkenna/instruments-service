@@ -54,7 +54,7 @@ import sys
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
 
 import pandas as pd
@@ -132,6 +132,20 @@ SPORTS_LEAGUE_INSTRUMENT_TYPE = "league"
 
 #: The canonical catalogue filename the launcher + v2 enumerator read.
 CATALOG_FILENAME = "catalog.parquet"
+
+#: Minimum trailing-window size for the incremental rollup, in days. MUST stay
+#: >= ``_VENUE_RECENT_WINDOW`` (14) or the §7.3 per-venue thin-day median cannot
+#: be computed inside the window and live perps mass-false-delist; +7 margin.
+#: SSOT: plans/active/instruments_catalogue_incremental_rollup_2026_06_29.md.
+WINDOW_DAYS_MIN = 21
+
+#: Extra days added past the previous catalogue's age when SELF-WIDENING the
+#: window (operator decision 2026-07-03): ``window_days =
+#: max(WINDOW_DAYS_MIN, days_since_prev_catalogue + WINDOW_MARGIN_DAYS)`` — one
+#: wide catch-up run is equivalent to replaying the daily incremental once per
+#: missed day, so recovery after an outage stays EXACT (true available_from /
+#: available_to for everything that listed/delisted during the gap).
+WINDOW_MARGIN_DAYS = 7
 
 #: Columns the enumerator's ``_catalog_from_dataframe`` consumes. ``instrument_id``
 #: is written as the canonical column (the helper also accepts ``instrument_key``).
@@ -1321,6 +1335,7 @@ def _iter_by_date_snapshots(
     bucket: str,
     prefix: str,
     *,
+    since: date | None = None,
     max_blobs: int | None = None,
     max_workers: int = MAX_DOWNLOAD_WORKERS,
 ) -> Iterator[tuple[date, pd.DataFrame]]:
@@ -1332,15 +1347,32 @@ def _iter_by_date_snapshots(
     (the run fails loud rather than silently producing an under-counted catalogue
     the monotonic guard would then reject anyway).
 
+    ``since`` restricts the walk to a DATE-FLOORED PREFIX LIST: one ``day=<D>/``
+    listing per day from ``since`` through today (UTC) instead of the whole-corpus
+    walk — the incremental rollup's window read (single-walk discipline: bounded
+    per-day listings, never a second full-corpus walk). ``since=None`` keeps the
+    full-history walk (``--mode full`` / cold start).
+
     ``max_blobs`` truncates the walk to the first N parquets (path-sorted, for
     determinism) — DIAGNOSTIC ONLY: a truncated walk yields an INCOMPLETE catalogue
     with wrong ``available_from`` / ``available_to``, so the caller forces dry-run
     when it is set (never promotable).
     """
     walk_prefix = prefix.rstrip("/") + "/"
+
+    def _list_window_blobs() -> Iterator[object]:
+        """Per-day prefix listings for ``day=>=since`` (bounded, not a corpus walk)."""
+        assert since is not None
+        day = since
+        today = datetime.now(UTC).date()
+        while day <= today:
+            yield from storage.list_blobs(bucket, prefix=f"{walk_prefix}day={day.isoformat()}/")
+            day += timedelta(days=1)
+
+    blob_iter = storage.list_blobs(bucket, prefix=walk_prefix) if since is None else _list_window_blobs()
     targets: list[tuple[date, str]] = []
-    for blob in storage.list_blobs(bucket, prefix=walk_prefix):
-        name = blob.name
+    for blob in blob_iter:
+        name = str(getattr(blob, "name", ""))
         if not name.endswith(".parquet"):
             continue
         match = _DAY_RE.search(name)
@@ -1371,10 +1403,15 @@ def _iter_prediction_by_date_snapshots(
     bucket: str,
     prefix: str,
     *,
+    since: date | None = None,
     max_blobs: int | None = None,
     max_workers: int = MAX_DOWNLOAD_WORKERS,
 ) -> Iterator[tuple[date, str, str, pd.DataFrame]]:
     """Yield ``(day, venue, cqg, frame)`` for every prediction ``by_date`` blob.
+
+    ``since`` restricts the walk to per-day ``day=<D>/`` prefix listings from
+    ``since`` through today (the incremental window read — mirrors
+    :func:`_iter_by_date_snapshots`); ``since=None`` keeps the full-history walk.
 
     **249-a (2026-06-16): conditionId/market grain reads the ACTUAL writer
     layout.** The prediction writer partitions ``by_date/day=/venue=<V>/[market=<M>/]
@@ -1397,9 +1434,20 @@ def _iter_prediction_by_date_snapshots(
     promotable).
     """
     walk_prefix = prefix.rstrip("/") + "/"
+
+    def _list_window_blobs() -> Iterator[object]:
+        """Per-day prefix listings for ``day=>=since`` (bounded, not a corpus walk)."""
+        assert since is not None
+        day = since
+        today = datetime.now(UTC).date()
+        while day <= today:
+            yield from storage.list_blobs(bucket, prefix=f"{walk_prefix}day={day.isoformat()}/")
+            day += timedelta(days=1)
+
+    blob_iter = storage.list_blobs(bucket, prefix=walk_prefix) if since is None else _list_window_blobs()
     targets: list[tuple[date, str, str, str]] = []
-    for blob in storage.list_blobs(bucket, prefix=walk_prefix):
-        name = blob.name
+    for blob in blob_iter:
+        name = str(getattr(blob, "name", ""))
         # Only the instruments frames — never the prediction_market_metadata.parquet sibling.
         if not name.endswith("instruments.parquet"):
             continue
@@ -1721,11 +1769,296 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Incremental (trailing-window + frozen-tail) engine
+# ---------------------------------------------------------------------------
+# The daily full rebuild re-reads the ENTIRE multi-year by_date history every
+# run (O(all-history), 2h17m tradfi) and outgrew the Cloud Run 3600s budget —
+# 3 of 5 asset groups froze at the timeout (2026-06-29). The incremental path
+# loads the previous catalog.parquet (all-time available_from + frozen
+# available_to), re-reads ONLY a trailing window of by_date days through the
+# UNCHANGED build_catalogue_dataframe (§7.3 liveness verbatim), and upserts.
+# Plan: instruments_catalogue_incremental_rollup_2026_06_29.md.
+
+
+def compute_window_start(
+    today: date,
+    prev_catalogue_mtime: datetime | None,
+    *,
+    window_days_min: int = WINDOW_DAYS_MIN,
+) -> date:
+    """Return the first day of the SELF-WIDENING trailing window.
+
+    ``window_days = max(window_days_min, days_since_prev_catalogue + margin)`` —
+    the widening term reaches back past the previous catalogue's frontier, so one
+    catch-up run after an outage observes every day the dailies missed (equivalent
+    to replaying them one by one; operator decision 2026-07-03). An unknown mtime
+    (metadata unavailable) degrades to the minimum window — the weekly ``--mode
+    full`` self-heal corrects any residual drift.
+    """
+    window_days = window_days_min
+    if prev_catalogue_mtime is not None:
+        age_days = max(0, (today - prev_catalogue_mtime.date()).days)
+        window_days = max(window_days_min, age_days + WINDOW_MARGIN_DAYS)
+    return today - timedelta(days=window_days)
+
+
+def _load_previous_catalogue(
+    storage: StorageClient,
+    bucket: str,
+    canonical_blob: str,
+) -> tuple[pd.DataFrame, datetime | None] | None:
+    """Load the current canonical catalogue + its mtime, or None when absent (cold start)."""
+    if not storage.blob_exists(bucket, canonical_blob):
+        return None
+    payload = storage.download_bytes(bucket, canonical_blob)
+    df = pd.read_parquet(io.BytesIO(payload))
+    mtime: datetime | None = None
+    get_meta = getattr(storage, "get_blob_metadata", None)
+    if callable(get_meta):
+        meta = get_meta(bucket, canonical_blob)
+        raw_mtime = getattr(meta, "last_modified", None)
+        if raw_mtime:
+            try:
+                mtime = pd.Timestamp(raw_mtime).to_pydatetime()
+                if mtime.tzinfo is None:
+                    mtime = mtime.replace(tzinfo=UTC)
+            except (ValueError, TypeError):
+                mtime = None
+    return df, mtime
+
+
+def _incremental_merge_keys(df: pd.DataFrame) -> pd.Series[str]:
+    """Vectorised per-row merge identity, shared by prev-catalogue + window frames.
+
+    DeFi POOL rows key on the canonical dual-form pool identity
+    ``pool::<CHAIN>::<addr.lower()>`` (mirrors ``_aggregate_key`` /
+    ``_defi_pool_dual_form`` — NOT the raw ``instrument_id``, which is the bare
+    lowercased address and could in principle collide across chains). Every other
+    row keys on the venue/type/id/data_type/league tuple — the same axes the
+    row-builder emits one row per, so keys are unique on both frames.
+    """
+
+    def _col(name: str) -> pd.Series[str]:
+        if name in df.columns:
+            return df[name].fillna("").astype(str)
+        return pd.Series([""] * len(df), index=df.index, dtype=str)
+
+    pool_address = _col("pool_address").str.lower()
+    chain = _col("chain").str.upper()
+    is_pool = (pool_address != "") & (chain != "")
+    pool_key = "pool::" + chain + "::" + pool_address
+    flat_key = (
+        _col("venue")
+        + "::"
+        + _col("instrument_type")
+        + "::"
+        + _col("instrument_id")
+        + "::"
+        + _col("data_type")
+        + "::"
+        + _col("league_id")
+    )
+    return pool_key.where(is_pool, flat_key)
+
+
+def _merge_incremental(
+    prev_df: pd.DataFrame,
+    window_df: pd.DataFrame,
+    *,
+    window_start: date,
+) -> pd.DataFrame:
+    """Upsert the window recompute onto the previous catalogue (frozen tail kept).
+
+    Branches (plan §The fix, step 3):
+      1. window row known in prev  → take the window row (fresh §7.3
+         ``available_to`` + metadata) but ``available_from`` = min(prev, window)
+         (immutable-once-set; min also absorbs a newly-declared earlier listing
+         date exactly like the full rebuild's BUG#4 rule).
+      2. window-only row (new listing) → append as-is.
+      3. active-in-prev, absent from the ENTIRE window, venue STILL PRESENT in
+         the window → newly delisted; close ``available_to`` at
+         ``window_start - 1`` (tightest provable bound — near-dead code under the
+         self-widening window; healed exactly by the weekly full rebuild).
+      4. every other prev row (frozen tail — incl. every row of a venue with NO
+         window presence: a venue-level capture outage is NOT a delisting, §7.3
+         keeps a stopped venue's instruments active exactly like the full
+         rebuild) → copied through unchanged.
+
+    The output row set is prev ∪ window-new, so ``len(merged) >= len(prev)`` and
+    the monotonic guard passes by construction.
+    """
+    out_columns = [c for c in CATALOG_COLUMNS if c != "mvp"]
+    prev = prev_df.copy()
+    # The prev catalogue carries the mvp tag; drop it — _add_mvp_column re-tags
+    # the MERGED frame (full-rebuild parity: the cefi perp-gate is computed over
+    # the whole catalogue, not the window slice).
+    prev = prev.drop(columns=[c for c in prev.columns if c not in out_columns])
+    for col in out_columns:
+        if col not in prev.columns:
+            prev[col] = ""
+    window = window_df.copy()
+    for col in out_columns:
+        if col not in window.columns:
+            window[col] = ""
+
+    prev_keys = _incremental_merge_keys(prev)
+    window_keys = _incremental_merge_keys(window)
+    prev_key_set = set(prev_keys)
+    window_key_set = set(window_keys)
+
+    # Branch 1+2 — the window recompute, with available_from carried for known rows.
+    prev_af = pd.Series(prev["available_from"].astype(str).values, index=prev_keys)
+    prev_af = prev_af[~prev_af.index.duplicated(keep="first")]
+    known_mask = window_keys.isin(prev_key_set).to_numpy()
+    updated = window[known_mask].copy()
+    if not updated.empty:
+        carried = prev_af.reindex(_incremental_merge_keys(updated).to_numpy()).to_numpy()
+        own = updated["available_from"].astype(str).to_numpy()
+        # ISO dates compare lexicographically == chronologically; keep the earlier.
+        updated["available_from"] = [min(c, o) if isinstance(c, str) and c else o for c, o in zip(carried, own)]
+    fresh = window[~known_mask]
+
+    # Branch 3+4 — prev rows absent from the window.
+    tail = prev[~prev_keys.isin(window_key_set).to_numpy()].copy()
+    if not tail.empty:
+        # §7.3 venue-truth: only close an instrument when its venue DID capture
+        # in the window (instrument-level absence). Venue-level absence = capture
+        # outage / stopped venue → preserve prev state (full-rebuild parity).
+        window_venues = {_merge_canonical_venue(v) for v in window["venue"].fillna("").astype(str) if v}
+        tail_venues = tail["venue"].fillna("").astype(str).map(_merge_canonical_venue)
+        active = tail["available_to"].isna() | (tail["available_to"].astype(str).str.strip() == "")
+        newly_delisted = active & tail_venues.isin(window_venues)
+        n_delisted = int(newly_delisted.sum())
+        if n_delisted:
+            close_day = (window_start - timedelta(days=1)).isoformat()
+            tail.loc[newly_delisted, "available_to"] = close_day
+            logger.info(
+                "Incremental merge: %d active instrument(s) absent from the whole window "
+                "(venue still capturing) → closed available_to=%s",
+                n_delisted,
+                close_day,
+            )
+
+    merged = pd.concat([tail[out_columns], updated[out_columns], fresh[out_columns]], ignore_index=True)
+    logger.info(
+        "Incremental merge: %d prev rows → %d merged (%d updated in-window, %d new listings, %d frozen-tail)",
+        len(prev),
+        len(merged),
+        len(updated),
+        len(fresh),
+        len(tail),
+    )
+    return merged
+
+
+#: Coverage-horizon warn threshold: the newest by_date day in the window older
+#: than this many days means the UPSTREAM download cron is broken — the
+#: catalogue can only be as fresh as the snapshots that feed it.
+_STALE_BY_DATE_MAX_AGE_DAYS = 3
+
+
+def _warn_coverage_horizon(day_counts: dict[date, int], today: date, asset_group: str) -> None:
+    """Emit ``CATALOGUE_STALE_BY_DATE`` when the by_date feed itself looks unhealthy.
+
+    Two signals (the originating plan's never-built NICE-TO-HAVE, shipped with
+    the incremental rollup since the window read makes both trivial):
+      * the newest window day is > ``_STALE_BY_DATE_MAX_AGE_DAYS`` old (download
+        cron down — catch-up self-heals via the widening window, but the
+        operator should fix the producer);
+      * the newest day's instrument count dropped sharply (<50% of the window
+        median — a partial capture; §7.3's thin-day guard already refuses to
+        delist off it, this makes the condition VISIBLE).
+    """
+    if not day_counts:
+        _emit_event("CATALOGUE_STALE_BY_DATE", asset_group=asset_group, reason="no_window_data")
+        logger.warning("CATALOGUE_STALE_BY_DATE: %s window contained no by_date data at all", asset_group)
+        return
+    latest = max(day_counts)
+    age_days = (today - latest).days
+    if age_days > _STALE_BY_DATE_MAX_AGE_DAYS:
+        _emit_event(
+            "CATALOGUE_STALE_BY_DATE",
+            asset_group=asset_group,
+            reason="latest_day_too_old",
+            latest_day=latest.isoformat(),
+            age_days=age_days,
+        )
+        logger.warning(
+            "CATALOGUE_STALE_BY_DATE: %s newest by_date day is %s (%dd old) — upstream download cron unhealthy",
+            asset_group,
+            latest.isoformat(),
+            age_days,
+        )
+    counts = sorted(day_counts.values())
+    mid = len(counts) // 2
+    median = counts[mid] if len(counts) % 2 else (counts[mid - 1] + counts[mid]) / 2
+    if median and day_counts[latest] < 0.5 * median:
+        _emit_event(
+            "CATALOGUE_STALE_BY_DATE",
+            asset_group=asset_group,
+            reason="latest_day_sharp_count_drop",
+            latest_day=latest.isoformat(),
+            latest_count=day_counts[latest],
+            window_median=median,
+        )
+        logger.warning(
+            "CATALOGUE_STALE_BY_DATE: %s newest day %s has %d rows vs window median %s — partial capture",
+            asset_group,
+            latest.isoformat(),
+            day_counts[latest],
+            median,
+        )
+
+
+def _tee_day_counts(
+    snapshots: Iterator[tuple[date, pd.DataFrame]],
+    day_counts: dict[date, int],
+) -> Iterator[tuple[date, pd.DataFrame]]:
+    """Pass ``(day, frame)`` through while accumulating per-day row counts."""
+    for day, frame in snapshots:
+        day_counts[day] = day_counts.get(day, 0) + len(frame)
+        yield day, frame
+
+
+def _tee_prediction_day_counts(
+    snapshots: Iterator[tuple[date, str, str, pd.DataFrame]],
+    day_counts: dict[date, int],
+) -> Iterator[tuple[date, str, str, pd.DataFrame]]:
+    """Prediction-shaped variant of :func:`_tee_day_counts` (4-tuple items)."""
+    for day, venue, cqg, frame in snapshots:
+        day_counts[day] = day_counts.get(day, 0) + len(frame)
+        yield day, venue, cqg, frame
+
+
+_MERGE_VENUE_CACHE: dict[str, str] = {}
+
+
+def _merge_canonical_venue(raw: str) -> str:
+    """Ghost-normalised venue key for the merge's venue-presence set.
+
+    Mirrors ``build_catalogue_dataframe._canonical_venue_key`` (lazy UAC import,
+    cached) so an old ghost-spelled venue in the prev catalogue matches its
+    canonical form in the window frame.
+    """
+    if not raw:
+        return raw
+    cached = _MERGE_VENUE_CACHE.get(raw)
+    if cached is not None:
+        return cached
+    from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
+
+    canonical = canonicalize_defi_venue_combined(raw)
+    _MERGE_VENUE_CACHE[raw] = canonical
+    return canonical
+
+
 def run_rollup(
     asset_group: str,
     *,
     allow_shrink: bool,
     dry_run: bool,
+    mode: str = "incremental",
     by_date_prefix: str = DEFAULT_BY_DATE_PREFIX,
     max_blobs: int | None = None,
     storage: StorageClient | None = None,
@@ -1756,37 +2089,93 @@ def run_rollup(
         # A truncated walk yields an incomplete catalogue → never promotable.
         logger.warning("--max-blobs is diagnostic-only — forcing --dry-run (truncated walk is not promotable)")
         dry_run = True
+
+    # Mode resolution. Sports never walks by_date (the league catalogue is a
+    # single manifest _index read — nothing to make incremental).
+    if mode == "incremental" and asset_group == "sports":
+        logger.info("mode=incremental is a no-op for sports — running the manifest single-read path")
+        mode = "full"
+    prev_catalogue: tuple[pd.DataFrame, datetime | None] | None = None
+    canonical_blob, _ = _catalogue_object_paths(env)
+    if mode == "incremental":
+        prev_catalogue = _load_previous_catalogue(storage, bucket, canonical_blob)
+        if prev_catalogue is None:
+            # Cold start: no previous catalogue to merge onto → full rebuild.
+            logger.info("No previous catalogue at gs://%s/%s — cold start, falling back to --mode full", bucket, canonical_blob)
+            mode = "full"
+
     _emit_event(
         "CATALOGUE_ROLLUP_STARTED",
         run_id=run_id,
         asset_group=asset_group,
         bucket=bucket,
         env=env,
+        mode=mode,
         by_date_prefix=by_date_prefix,
     )
     logger.info(
-        "Rolling up %s catalogue from gs://%s/%s/ (env=%s)",
+        "Rolling up %s catalogue from gs://%s/%s/ (env=%s mode=%s)",
         asset_group,
         bucket,
         by_date_prefix.rstrip("/"),
         env,
+        mode,
     )
 
     # Phase C: by_date listing + download-pool
-    print(f"[BISECT-C] by_date listing / download-pool asset_group={asset_group} bucket={bucket}", flush=True)
-    if asset_group == "prediction":
-        # Multi-grain roll-up: the cqg bundle is per-canonical_question_group while
-        # trades/market_lifecycle are per-conditionId. Parse the cqg from the path.
-        df = build_prediction_catalogue_dataframe(
-            _iter_prediction_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs)
-        )
-    elif asset_group == "sports":
+    print(f"[BISECT-C] by_date listing / download-pool asset_group={asset_group} bucket={bucket} mode={mode}", flush=True)
+    if asset_group == "sports":
         # League-grain could-exist universe — derived from the canonical MANIFEST
         # (the namespace-correct superset), NOT the entity=leagues slice (whose RAW
         # NUMERIC api-football league_ids do not match the manifest's canonical
         # namespace → 131/606 coverage + numeric over-seed; slot-4 2026-06-07).
         # The captured manifest atom is per-(league_id, data_type, date).
         df = build_sports_catalogue_from_manifest(_read_sports_manifest_index(storage, bucket))
+    elif mode == "incremental" and prev_catalogue is not None:
+        # Trailing-window read (self-widening) + frozen-tail merge — the O(window)
+        # replacement for the O(all-history) walk. §7.3 liveness (generic) / the
+        # settlement-date convention (prediction) run verbatim on the window via
+        # the unchanged per-AG builders.
+        prev_df, prev_mtime = prev_catalogue
+        window_start = compute_window_start(datetime.now(UTC).date(), prev_mtime)
+        logger.info(
+            "Incremental window: day>=%s (prev catalogue rows=%d mtime=%s)",
+            window_start.isoformat(),
+            len(prev_df),
+            prev_mtime.isoformat() if prev_mtime else "unknown",
+        )
+        window_day_counts: dict[date, int] = {}
+        if asset_group == "prediction":
+            window_df = build_prediction_catalogue_dataframe(
+                _tee_prediction_day_counts(
+                    _iter_prediction_by_date_snapshots(
+                        storage, bucket, by_date_prefix, since=window_start, max_blobs=max_blobs
+                    ),
+                    window_day_counts,
+                )
+            )
+        else:
+            window_df = build_catalogue_dataframe(
+                _tee_day_counts(
+                    _iter_by_date_snapshots(storage, bucket, by_date_prefix, since=window_start, max_blobs=max_blobs),
+                    window_day_counts,
+                )
+            )
+        if window_df.empty:
+            logger.warning(
+                "Incremental window produced 0 rows (no by_date data since %s) — catalogue preserved unchanged",
+                window_start.isoformat(),
+            )
+        # Coverage-horizon health of the by_date FEED itself (stale latest day /
+        # sharp count drop) — visible even though the merge below stays safe.
+        _warn_coverage_horizon(window_day_counts, datetime.now(UTC).date(), asset_group)
+        df = _merge_incremental(prev_df, window_df, window_start=window_start)
+    elif asset_group == "prediction":
+        # Multi-grain roll-up: the cqg bundle is per-canonical_question_group while
+        # trades/market_lifecycle are per-conditionId. Parse the cqg from the path.
+        df = build_prediction_catalogue_dataframe(
+            _iter_prediction_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs)
+        )
     else:
         df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
 
@@ -1832,6 +2221,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Asset group to roll up (lowercase).",
     )
     parser.add_argument(
+        "--mode",
+        choices=["incremental", "full"],
+        default="incremental",
+        help=(
+            "incremental (default): load the previous catalog.parquet + re-read only the self-widening "
+            "trailing window of by_date days, then upsert (frozen tail untouched). "
+            "full: re-aggregate the entire by_date history (cold start / weekly self-heal / rollback)."
+        ),
+    )
+    parser.add_argument(
         "--by-date-prefix",
         default=DEFAULT_BY_DATE_PREFIX,
         help=(
@@ -1868,12 +2267,14 @@ def main(argv: list[str] | None = None) -> int:
     asset_group: str = args.asset_group
     allow_shrink: bool = args.allow_catalogue_shrink
     dry_run: bool = args.dry_run
+    mode: str = args.mode
     by_date_prefix: str = args.by_date_prefix
     max_blobs: int | None = args.max_blobs
     return run_rollup(
         asset_group,
         allow_shrink=allow_shrink,
         dry_run=dry_run,
+        mode=mode,
         by_date_prefix=by_date_prefix,
         max_blobs=max_blobs,
     )
