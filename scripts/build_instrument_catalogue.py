@@ -1828,15 +1828,29 @@ def _load_previous_catalogue(
     return df, mtime
 
 
-def _incremental_merge_keys(df: pd.DataFrame) -> pd.Series[str]:
+def _incremental_merge_keys(df: pd.DataFrame, *, asset_group: str) -> pd.Series[str]:
     """Vectorised per-row merge identity, shared by prev-catalogue + window frames.
 
-    DeFi POOL rows key on the canonical dual-form pool identity
-    ``pool::<CHAIN>::<addr.lower()>`` (mirrors ``_aggregate_key`` /
-    ``_defi_pool_dual_form`` — NOT the raw ``instrument_id``, which is the bare
-    lowercased address and could in principle collide across chains). Every other
-    row keys on the venue/type/id/data_type/league tuple — the same axes the
-    row-builder emits one row per, so keys are unique on both frames.
+    MUST mirror the full rebuild's PER-ASSET-GROUP aggregate identity EXACTLY
+    (full-rebuild parity is the merge's correctness contract):
+
+    * DeFi POOL rows → the canonical dual-form pool identity
+      ``pool::<CHAIN>::<addr.lower()>`` (mirrors ``_aggregate_key`` /
+      ``_defi_pool_dual_form`` — NOT the raw ``instrument_id``, which is the
+      bare lowercased address and could in principle collide across chains).
+    * prediction → ``venue::instrument_id::data_type``: the prediction rollup
+      dedups by ``(venue, conditionId)`` per grain, and cqg rows legitimately
+      exist on MULTIPLE venues under the SAME id (``BNB_PRICE_RANGE_DAILY`` on
+      both KALSHI and POLYMARKET — 31 real cross-venue pairs in prod), so venue
+      IS identity here.
+    * cefi / tradfi / defi non-pool → ``instrument_id`` alone, which IS
+      ``_aggregate_key`` for these rows (the id embeds the canonical venue
+      prefix). The ``venue`` FIELD must NOT be part of the key: it carries the
+      era-specific raw spelling (``DERIBIT-COMBO`` in old rows vs ``DERIBIT``
+      in the window for the SAME ``instrument_id``), so keying on it splits one
+      lifecycle into ghost duplicates the full rebuild unifies — the 122-dupe
+      cefi ``CATALOGUE_SHRINK_BLOCKED`` on the first weekly self-heal
+      (2026-07-04).
     """
 
     def _col(name: str) -> pd.Series[str]:
@@ -1844,22 +1858,13 @@ def _incremental_merge_keys(df: pd.DataFrame) -> pd.Series[str]:
             return df[name].fillna("").astype(str)
         return pd.Series([""] * len(df), index=df.index, dtype=str)
 
+    if asset_group == "prediction":
+        return _col("venue") + "::" + _col("instrument_id") + "::" + _col("data_type")
     pool_address = _col("pool_address").str.lower()
     chain = _col("chain").str.upper()
     is_pool = (pool_address != "") & (chain != "")
     pool_key = "pool::" + chain + "::" + pool_address
-    flat_key = (
-        _col("venue")
-        + "::"
-        + _col("instrument_type")
-        + "::"
-        + _col("instrument_id")
-        + "::"
-        + _col("data_type")
-        + "::"
-        + _col("league_id")
-    )
-    return pool_key.where(is_pool, flat_key)
+    return pool_key.where(is_pool, _col("instrument_id"))
 
 
 def _merge_incremental(
@@ -1867,6 +1872,7 @@ def _merge_incremental(
     window_df: pd.DataFrame,
     *,
     window_start: date,
+    asset_group: str,
 ) -> pd.DataFrame:
     """Upsert the window recompute onto the previous catalogue (frozen tail kept).
 
@@ -1902,8 +1908,8 @@ def _merge_incremental(
         if col not in window.columns:
             window[col] = ""
 
-    prev_keys = _incremental_merge_keys(prev)
-    window_keys = _incremental_merge_keys(window)
+    prev_keys = _incremental_merge_keys(prev, asset_group=asset_group)
+    window_keys = _incremental_merge_keys(window, asset_group=asset_group)
     prev_key_set = set(prev_keys)
     window_key_set = set(window_keys)
 
@@ -1913,7 +1919,7 @@ def _merge_incremental(
     known_mask = window_keys.isin(prev_key_set).to_numpy()
     updated = window[known_mask].copy()
     if not updated.empty:
-        carried = prev_af.reindex(_incremental_merge_keys(updated).to_numpy()).to_numpy()
+        carried = prev_af.reindex(_incremental_merge_keys(updated, asset_group=asset_group).to_numpy()).to_numpy()
         own = updated["available_from"].astype(str).to_numpy()
         # ISO dates compare lexicographically == chronologically; keep the earlier.
         updated["available_from"] = [min(c, o) if isinstance(c, str) and c else o for c, o in zip(carried, own)]
@@ -2169,7 +2175,7 @@ def run_rollup(
         # Coverage-horizon health of the by_date FEED itself (stale latest day /
         # sharp count drop) — visible even though the merge below stays safe.
         _warn_coverage_horizon(window_day_counts, datetime.now(UTC).date(), asset_group)
-        df = _merge_incremental(prev_df, window_df, window_start=window_start)
+        df = _merge_incremental(prev_df, window_df, window_start=window_start, asset_group=asset_group)
     elif asset_group == "prediction":
         # Multi-grain roll-up: the cqg bundle is per-canonical_question_group while
         # trades/market_lifecycle are per-conditionId. Parse the cqg from the path.
