@@ -1643,7 +1643,7 @@ def test_merge_updated_row_carries_available_from_and_refreshes(rollup: ModuleTy
     prev = pd.DataFrame([_cat_row(instrument_id="A", available_from="2024-01-01", available_to=None, raw_symbol="old")])
     window = pd.DataFrame([_cat_row(instrument_id="A", available_from="2026-06-20", available_to=None, raw_symbol="new")])
     window = window.drop(columns=["mvp"])
-    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12), asset_group="cefi")
     assert len(merged) == 1
     row = merged.to_dict("records")[0]
     assert row["available_from"] == "2024-01-01"  # carried from prev (true listing day)
@@ -1659,7 +1659,7 @@ def test_merge_new_listing_appended(rollup: ModuleType) -> None:
             _cat_row(instrument_id="B", available_from="2026-06-25"),
         ]
     ).drop(columns=["mvp"])
-    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12), asset_group="cefi")
     by_id = {r["instrument_id"]: r for r in merged.to_dict("records")}
     assert set(by_id) == {"A", "B"}
     assert by_id["B"]["available_from"] == "2026-06-25"
@@ -1674,7 +1674,7 @@ def test_merge_newly_delisted_closed_at_window_start_minus_one(rollup: ModuleTyp
         ]
     )
     window = pd.DataFrame([_cat_row(instrument_id="STAYS", venue="V", available_to=None)]).drop(columns=["mvp"])
-    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12), asset_group="cefi")
     by_id = {r["instrument_id"]: r for r in merged.to_dict("records")}
     assert by_id["GONE"]["available_to"] == "2026-06-11"  # window_start - 1
     assert by_id["STAYS"]["available_to"] is None
@@ -1691,10 +1691,46 @@ def test_merge_venue_absent_from_window_preserves_active(rollup: ModuleType) -> 
         ]
     )
     window = pd.DataFrame([_cat_row(instrument_id="OTHER", venue="LIVE-VENUE")]).drop(columns=["mvp"])
-    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12), asset_group="cefi")
     by_id = {r["instrument_id"]: r for r in merged.to_dict("records")}
     assert by_id["OUTAGE-1"]["available_to"] is None  # NOT closed
     assert by_id["DELISTED-OLD"]["available_to"] == "2025-01-01"  # frozen tail untouched
+
+
+def test_merge_ghost_venue_spelling_updates_not_duplicates(rollup: ModuleType) -> None:
+    """Regression (2026-07-04, first weekly self-heal): one instrument_id whose venue
+    FIELD spelling changed era-to-era (prev row ``DERIBIT-COMBO``, window row
+    ``DERIBIT``) must merge into ONE row — the full rebuild aggregates non-pool rows
+    on ``instrument_id`` alone, never on the venue field. The old venue-composite
+    merge key appended 122 such ghost duplicates to the cefi catalogue, so the weekly
+    full rebuild produced FEWER rows and the monotonic guard (correctly) blocked the
+    self-heal with ``CATALOGUE_SHRINK_BLOCKED``."""
+    prev = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id="DERIBIT:COMBO:BTC-X",
+                venue="DERIBIT-COMBO",
+                available_from="2024-01-01",
+                available_to="2026-06-11",
+            )
+        ]
+    )
+    window = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id="DERIBIT:COMBO:BTC-X",
+                venue="DERIBIT",
+                available_from="2026-06-28",
+                available_to=None,
+            )
+        ]
+    ).drop(columns=["mvp"])
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12), asset_group="cefi")
+    assert len(merged) == 1, "ghost venue spelling must UPDATE the known row, not append a duplicate"
+    row = merged.to_dict("records")[0]
+    assert row["venue"] == "DERIBIT"  # metadata follows the most-recent (window) spelling
+    assert row["available_from"] == "2024-01-01"  # lifecycle carried through the spelling change
+    assert row["available_to"] is None  # re-observed in the window → active
 
 
 def test_merge_defi_pool_keys_on_dual_form_identity(rollup: ModuleType) -> None:
@@ -1736,7 +1772,7 @@ def test_merge_defi_pool_keys_on_dual_form_identity(rollup: ModuleType) -> None:
             )
         ]
     ).drop(columns=["mvp"])
-    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12), asset_group="defi")
     assert len(merged) == 2
     by_chain = {r["chain"]: r for r in merged.to_dict("records")}
     assert by_chain["POLYGON"]["available_from"] == "2024-03-01"  # updated, af carried
@@ -1748,7 +1784,7 @@ def test_merge_empty_window_preserves_catalogue(rollup: ModuleType) -> None:
     """A 0-row window (download outage) must pass the prev catalogue through unchanged."""
     prev = pd.DataFrame([_cat_row(instrument_id="A"), _cat_row(instrument_id="B", available_to="2025-05-05")])
     window = pd.DataFrame(columns=[c for c in rollup.CATALOG_COLUMNS if c != "mvp"])
-    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12))
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12), asset_group="cefi")
     assert len(merged) == 2
     by_id = {r["instrument_id"]: r for r in merged.to_dict("records")}
     assert by_id["A"]["available_to"] is None
@@ -1784,7 +1820,7 @@ def test_incremental_cold_start_falls_back_to_full(rollup: ModuleType) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _parity_frames(rollup: ModuleType, all_snapshots: list, prev_age_days: int = 3) -> tuple:
+def _parity_frames(rollup: ModuleType, all_snapshots: list, prev_age_days: int = 3, asset_group: str = "cefi") -> tuple:
     """Return (full_df, incremental_df) for a snapshot corpus.
 
     prev = full rebuild over every day up to (today - prev_age_days), mtime that
@@ -1796,7 +1832,7 @@ def _parity_frames(rollup: ModuleType, all_snapshots: list, prev_age_days: int =
     prev_mtime = _datetime(prev_cutoff.year, prev_cutoff.month, prev_cutoff.day, 1, 0, tzinfo=_UTC)
     window_start = rollup.compute_window_start(today, prev_mtime)
     window_df = rollup.build_catalogue_dataframe([(d, f) for d, f in all_snapshots if d >= window_start])
-    incremental = rollup._merge_incremental(prev_df, window_df, window_start=window_start)
+    incremental = rollup._merge_incremental(prev_df, window_df, window_start=window_start, asset_group=asset_group)
     full = rollup.build_catalogue_dataframe(all_snapshots)
     return full, incremental
 
@@ -1865,7 +1901,7 @@ def test_incremental_matches_full_rebuild_tradfi(rollup: ModuleType) -> None:
         if age <= 4:  # new contract series after the roll
             rows.append({"instrument_key": "ESH7", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "ES"})
         snapshots.append((d, _snapshot(rows)))
-    full, incremental = _parity_frames(rollup, snapshots)
+    full, incremental = _parity_frames(rollup, snapshots, asset_group="tradfi")
     _assert_frames_match(full, incremental)
 
 
@@ -1896,7 +1932,7 @@ def test_incremental_matches_full_rebuild_defi(rollup: ModuleType) -> None:
         if age <= 6:  # new pool deployed inside the window
             rows.append(_pool(6))
         snapshots.append((d, _snapshot(rows)))
-    full, incremental = _parity_frames(rollup, snapshots)
+    full, incremental = _parity_frames(rollup, snapshots, asset_group="defi")
     _assert_frames_match(full, incremental)
 
 
@@ -1954,7 +1990,7 @@ def test_incremental_matches_full_rebuild_prediction(rollup: ModuleType) -> None
     window_df = rollup.build_prediction_catalogue_dataframe(
         [(d, v, c, f) for d, v, c, f in snapshots if d >= window_start]
     )
-    incremental = rollup._merge_incremental(prev_df, window_df, window_start=window_start)
+    incremental = rollup._merge_incremental(prev_df, window_df, window_start=window_start, asset_group="prediction")
     full = rollup.build_prediction_catalogue_dataframe(snapshots)
     _assert_frames_match(full, incremental)
 
