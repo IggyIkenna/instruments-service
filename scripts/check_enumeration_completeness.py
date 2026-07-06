@@ -63,6 +63,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 from unified_api_contracts import (
+    INSTRUMENT_TYPES_BY_VENUE,
     VENUES_BY_ASSET_GROUP,
     bundle_instrument_type_for_leaf,
     get_mvp_data_types_for_cefi_venue,
@@ -109,11 +110,11 @@ def _get_instrument_type_aliases() -> dict[str, str]:
     """Return the UAC SSOT instrument_type alias map (lowercase token → canonical)."""
     global _INSTRUMENT_TYPE_ALIASES
     if _INSTRUMENT_TYPE_ALIASES is None:
-        from unified_api_contracts.registry.market_data_categories import (  # noqa: TID251
-            _INSTRUMENT_TYPE_ALIASES as _aliases,
+        from unified_api_contracts.registry.market_data_categories import (
+            _INSTRUMENT_TYPE_ALIASES as _INSTRUMENT_TYPE_ALIASES_SRC,
         )
 
-        _INSTRUMENT_TYPE_ALIASES = dict(_aliases)
+        _INSTRUMENT_TYPE_ALIASES = dict(_INSTRUMENT_TYPE_ALIASES_SRC)
     return _INSTRUMENT_TYPE_ALIASES
 
 
@@ -248,7 +249,7 @@ def _get_defi_instrument_types() -> frozenset[str]:
     """
     global _DEFI_INSTRUMENT_TYPES
     if _DEFI_INSTRUMENT_TYPES is None:
-        from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: TID251
+        from unified_api_contracts.registry.capability_declarations._defi import (
             PROTOCOL_CAPABILITIES,
         )
 
@@ -261,36 +262,49 @@ def _get_defi_instrument_types() -> frozenset[str]:
 
 
 # Valid (venue, instrument_type) pairs per AG — the could-exist universe gate
-# that prevents the cross-product over-generation (BINANCE-FUTURES × spot_pair,
-# AAVE(lending) × pool, …). Lazily built from the AUTHORITATIVE UAC sources.
+# that prevents the cross-product over-generation (BINANCE-FUTURES x spot_pair,
+# AAVE(lending) x pool, …). Lazily built from the AUTHORITATIVE UAC sources.
 _CEFI_VENUE_ITYPES: dict[str, frozenset[str]] | None = None
 
 
 def _get_cefi_venue_itypes() -> dict[str, frozenset[str]]:
     """Return cefi venue → frozenset of valid (lowercase, alias-canonical) itypes.
 
-    AUTHORITY: VenueMapping.venue_instrument_type_to_tardis keys (the
-    (venue, INSTRUMENT_TYPE) pairs that resolve to a real tardis endpoint) PLUS
-    the FUTURE_BUNDLE_VENUES bundle types (options_chain/futures_chain) for the
+    AUTHORITY (D2a gate-authority fix, 2026-07-06): UAC's DECLARATIVE
+    INSTRUMENT_TYPES_BY_VENUE, restricted to the declared cefi venues
+    (VENUES_BY_ASSET_GROUP["cefi"]) — the SAME kind of authority defi uses via
+    PROTOCOL_CAPABILITIES.instrument_types (see _get_defi_protocol_itypes) and
+    tradfi uses via TRADFI_VENUE_INSTRUMENT_TYPES — PLUS the
+    FUTURE_BUNDLE_VENUES bundle types (options_chain/futures_chain) for the
     bundle venues (DERIBIT/OKX) — these are the per-underlying chain bundles the
     writer stamps, not leaf OPTION/FUTURE.
+
+    Previously sourced from VenueMapping.venue_instrument_type_to_tardis — a
+    tardis-fetch ROUTING table (which (venue, INSTRUMENT_TYPE) pairs resolve to
+    a real tardis endpoint), NOT an existence declaration. A declared cefi venue
+    with no tardis fetch route (e.g. the on-chain-CLOB DEX perps that fetch via
+    native REST APIs, not Tardis) was therefore SILENTLY ABSENT from the
+    EXPECTED set — sourcing != existence. honest_coverage_uac_writer_matrix_
+    reconciliation D2a switches the authority to the declarative dict so a
+    declared-but-unrouted venue still counts.
     """
     global _CEFI_VENUE_ITYPES
     if _CEFI_VENUE_ITYPES is None:
-        from unified_api_contracts.registry.market_data_categories import (  # noqa: TID251
+        from unified_api_contracts.registry.market_data_categories import (
             FUTURE_BUNDLE_VENUES,
         )
 
         aliases = _get_instrument_type_aliases()
-        vm = VenueMapping()
         out: dict[str, set[str]] = {}
-        for venue, itype in vm.venue_instrument_type_to_tardis:
-            norm = aliases.get(itype.strip().lower(), itype.strip().lower())
-            # roll leaf option/future to bundle at bundle venues
-            bundle = bundle_instrument_type_for_leaf("cefi", norm, venue)
-            if bundle is not None:
-                norm = aliases.get(bundle.strip().lower(), bundle.strip().lower())
-            out.setdefault(venue.strip().upper(), set()).add(norm)
+        for venue in VENUES_BY_ASSET_GROUP.get("cefi", []):
+            venue_key = venue.strip().upper()
+            for itype in INSTRUMENT_TYPES_BY_VENUE.get(venue_key, set()):
+                norm = aliases.get(itype.strip().lower(), itype.strip().lower())
+                # roll leaf option/future to bundle at bundle venues
+                bundle = bundle_instrument_type_for_leaf("cefi", norm, venue_key)
+                if bundle is not None:
+                    norm = aliases.get(bundle.strip().lower(), bundle.strip().lower())
+                out.setdefault(venue_key, set()).add(norm)
         # Ensure the bundle venues carry the bundle itypes explicitly.
         for bv in FUTURE_BUNDLE_VENUES.get("cefi", frozenset()):
             out.setdefault(bv, set()).update({"options_chain", "futures_chain"})
@@ -317,7 +331,7 @@ def _get_defi_protocol_itypes() -> dict[str, frozenset[str]]:
     """
     global _DEFI_PROTOCOL_ITYPES
     if _DEFI_PROTOCOL_ITYPES is None:
-        from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: TID251
+        from unified_api_contracts.registry.capability_declarations._defi import (
             PROTOCOL_CAPABILITIES,
         )
 
@@ -429,8 +443,8 @@ class DiagnosticSamples:
     matched/expected-only/enumerated-only buckets, an example original tuple.
     """
 
-    expected_only: list[tuple[str, str, str]]  # canonical keys in EXPECTED − ENUMERATED
-    enumerated_only: list[tuple[str, str, str]]  # canonical keys in ENUMERATED − EXPECTED
+    expected_only: list[tuple[str, str, str]]  # canonical keys in EXPECTED - ENUMERATED
+    enumerated_only: list[tuple[str, str, str]]  # canonical keys in ENUMERATED - EXPECTED
     matched: list[tuple[str, str, str]]  # canonical keys in EXPECTED ∩ ENUMERATED
     matched_count: int
     expected_only_count: int
@@ -571,8 +585,9 @@ def _build_expected_tuples(asset_group: str) -> set[tuple[str, str, str]]:
 
         for itype in instrument_types:
             # (venue, itype) validity GATE — prevents the cross-product
-            # over-generation (BINANCE-FUTURES × spot_pair, AAVE(lending) × pool).
-            # AUTHORITY: cefi=venue_instrument_type_to_tardis keys;
+            # over-generation (BINANCE-FUTURES x spot_pair, AAVE(lending) x pool).
+            # AUTHORITY: cefi=INSTRUMENT_TYPES_BY_VENUE keys (D2a, 2026-07-06 —
+            # was venue_instrument_type_to_tardis, a fetch-routing table);
             # defi=PROTOCOL_CAPABILITIES[protocol].instrument_types.
             itype_canon = _get_instrument_type_aliases().get(itype.strip().lower(), itype.strip().lower())
             if not _venue_itype_is_valid(ag, venue, itype_canon):
