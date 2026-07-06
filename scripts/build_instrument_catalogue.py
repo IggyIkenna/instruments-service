@@ -58,7 +58,13 @@ from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
 
 import pandas as pd
-from unified_api_contracts import TRADFI_ROOTS, build_pool_identity, is_in_mvp_capture_universe, is_mvp
+from unified_api_contracts import (
+    TRADFI_ROOTS,
+    VENUE_TO_ASSET_GROUP,
+    build_pool_identity,
+    is_in_mvp_capture_universe,
+    is_mvp,
+)
 from unified_trading_library import (
     StorageClient,
     get_config,
@@ -499,10 +505,19 @@ _CATALOGUE_KNOWN_CHAINS = frozenset(
 def _canonical_bare_venue_chain(venue: str, chain: str) -> tuple[str, str]:
     """Map any DeFi venue drift form ``(venue, chain)`` → canonical ``(bare_protocol, chain)``.
 
-    1. ghost-normalise the full venue (``AAVEV3-ARBITRUM`` → ``AAVE_V3-ARBITRUM``) via the
+    1. On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET)
+       are GLUED ``VENUE-CHAIN`` strings whose suffix IS a KNOWN_CHAIN, but they are
+       CeFi venues (``VENUE_TO_ASSET_GROUP == "cefi"``, like HYPERLIQUID/ASTER) — NOT
+       DeFi pools. Applying the DeFi split desynchronises them from the by_date PATH
+       (``venue=LIGHTER-ZKSYNC``), the IS manifest writer (``writers._canonical_manifest_venue_chain``
+       @ instruments-service@24c0dd5 keeps them glued) and the ``instrument_key``
+       prefix (``LIGHTER-ZKSYNC:PERP:...``). Detect via UAC ``VENUE_TO_ASSET_GROUP``
+       and return the full cefi venue with the incoming chain preserved. Ref:
+       ``plans/active/instruments_foundation_completeness_2026_06_24.md`` §G1.3 follow-up.
+    2. ghost-normalise the full venue (``AAVEV3-ARBITRUM`` → ``AAVE_V3-ARBITRUM``) via the
        UAC authority ``canonicalize_defi_venue_combined`` (no-op for bare/non-DeFi venues).
-    2. if the result is glued (ends ``-<KNOWN_CHAIN>``), split → bare protocol + that chain.
-    3. else keep the venue; preserve the existing chain column (upper).
+    3. if the result is glued (ends ``-<KNOWN_CHAIN>``), split → bare protocol + that chain.
+    4. else keep the venue; preserve the existing chain column (upper).
     Pure + idempotent. A non-DeFi or already-bare canonical venue passes through unchanged.
     """
     from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
@@ -510,6 +525,8 @@ def _canonical_bare_venue_chain(venue: str, chain: str) -> tuple[str, str]:
     v = str(venue).strip()
     c = str(chain).strip().upper()
     if not v:
+        return v, c
+    if VENUE_TO_ASSET_GROUP.get(v) == "cefi":
         return v, c
     normed = canonicalize_defi_venue_combined(v)
     if "-" in normed:

@@ -433,6 +433,19 @@ def _compute_coverage_with_stub(
         ) -> object:
             return stub_result
 
+        @staticmethod
+        def filter_manifest_to_expected(
+            ag: str,
+            df_arg: object,
+            *,
+            expected: object | None = None,
+        ) -> object:
+            # Passthrough — Layer-2 projection tests exercise the raw counts,
+            # not the MVP read-time gate.  The gate itself is exercised by
+            # test_filter_manifest_to_expected.py against the real EXPECTED
+            # matrix from build_expected.
+            return df_arg
+
     with patch.object(mod, "_get_completeness_module", return_value=_FakeChecker()):
         return mod._compute_coverage(dfs)
 
