@@ -22,12 +22,14 @@ window. This test verifies the property holds for:
   - cefi: pre-venue-launch dates (CEFI_VENUE_LAUNCH_DATES)
   - defi: pre-genesis-chain dates (CHAIN_GENESIS_DATES) + protocol pre-launch
   - prediction: pre-venue-launch dates (PREDICTION_VENUE_LAUNCH_DATES)
+  - tradfi: venue-grain non-trading days (weekends + holidays) — closed
+    2026-07-06 by ``_yield_v2_tradfi_non_trading_day_rows`` (venue-grain pass
+    within ``_enumerate_v2_tradfi``); no catalog required for the venue-grain
+    cells.
 
-tradfi v1 (non-trading days) is NOT a v2 grain match — v2 doesn't enumerate
-weekend/holiday cells (those are venue-grain by design, not instrument-grain).
-Sports v1 (per-source pre-coverage dates) is similar — v1 enumerates per-source
-not per-fixture; v2 enumerates per-fixture lifecycle. Both are documented
-asymmetries; we assert v2 ≥ v1 only on the grains where the property applies.
+Sports v1 (per-source pre-coverage dates) remains a documented asymmetry — v1
+enumerates per-source not per-fixture; v2 enumerates per-fixture lifecycle. We
+assert v2 ≥ v1 only on the grains where the property applies.
 
 Plan: expected_universe_v2_design_2026_05_08.md Phase 1 P1
 Status flip evidence: instruments-service@<commit-after-this-test>
@@ -247,6 +249,59 @@ def test_prediction_v2_covers_v1_pre_venue_launch_cells() -> None:
     missing = v1_cells - v2_cells
     assert not missing, (
         f"v2 prediction missing {len(missing)} pre-launch cells covered by v1 (sample: {sorted(missing)[:5]})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TradFi: venue-grain non-trading-day (weekend + holiday) superset
+# ---------------------------------------------------------------------------
+
+
+def test_tradfi_v2_covers_v1_non_trading_day_cells() -> None:
+    """v2 tradfi enumerator covers every v1 venue-grain non-trading-day cell.
+
+    v1 ``_enumerate_tradfi`` walks ``VENUES_BY_ASSET_GROUP["tradfi"]`` x
+    non-trading-days x ``DATA_TYPES_BY_ASSET_GROUP["tradfi"]`` and emits
+    venue-grain rows (``instrument_type=""`` ``instrument_id=""``) with
+    ``EXPECTED_WEEKEND`` / ``EXPECTED_HOLIDAY`` reasons. v2 must cover the same
+    ``(asset_group, venue, data_type, day)`` cells via the venue-grain pass
+    in ``_enumerate_v2_tradfi``. The catalog is IRRELEVANT for the venue-grain
+    cells (whole venue closed) — an empty catalog is a valid input.
+
+    Window includes a full week so both weekend (Sat/Sun) and one weekday US
+    market holiday (2024-07-04, Independence Day) are exercised.
+    """
+    # 2024-07-01 (Mon) through 2024-07-07 (Sun) — spans Independence Day (Thu)
+    # AND a Sat/Sun weekend, so the non-trading-day set is non-empty for every
+    # weekly-closed venue AND for US-holiday-observing venues.
+    start = "2024-07-01"
+    end = "2024-07-07"
+
+    v1_rows_all = list(enumerator_module._enumerate_tradfi(start, end))
+    # _enumerate_tradfi also delegates to _enumerate_tradfi_indices at the end
+    # (per-instrument Yahoo index pre-genesis rows). Those are per-instrument
+    # cells, not venue-grain non-trading-day cells, and v2 covers them via its
+    # own per-instrument pass (available_from lifecycle) — filter them out
+    # here so we only assert on the venue-grain non-trading-day slice.
+    v1_venue_grain = [r for r in v1_rows_all if r.instrument_id == "" and r.instrument_type == ""]
+    v1_cells = _venue_day_dt_cells(v1_venue_grain)
+    assert len(v1_cells) > 0, "v1 should yield ≥1 venue-grain non-trading-day cell for this window"
+
+    data_types_in_v1 = sorted({r.data_type for r in v1_venue_grain})
+    v2_rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="tradfi",
+            catalog=[],
+            date_axis=_date_axis(start, end),
+            data_types=data_types_in_v1,
+        )
+    )
+    v2_cells = _venue_day_dt_cells(v2_rows)
+
+    missing = v1_cells - v2_cells
+    assert not missing, (
+        f"v2 tradfi missing {len(missing)} venue-grain non-trading-day cells covered by v1 "
+        f"(sample: {sorted(missing)[:5]})"
     )
 
 
