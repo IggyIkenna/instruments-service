@@ -800,6 +800,65 @@ class TestWriteVenueCanonicalPartition:
         assert captured["partition"]["venue"] == "BINANCE"  # type: ignore[index]
 
 
+class TestWriteVenueDataTypeInstrumentsStamp:
+    """Regression: non-sports ``_write_venue`` MUST stamp ``data_type='instruments'``.
+
+    Historical bug (2026-06-29..2026-07-06): the writer emitted ``data_type=""`` for
+    every cefi/tradfi/defi captured row. Downstream consumers using the canonical
+    honest-coverage filter ``capture_status='captured' AND data_type='instruments'``
+    (matching ``REFERENCE_DATA_TYPE`` in ``scripts/migrate_instruments_store_v9.py``)
+    silently missed 260 cefi shards (26 venues x 10 days). This test guards the
+    stamp at emission time so a future regression can't reintroduce the drift.
+    Issue: ``plans/active/issues/is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06.md``.
+    """
+
+    def _run(self, venue_in: str) -> MagicMock:
+        import pandas as pd
+
+        sampler = MagicMock()
+        sampler.enable_sampling = False
+        df = pd.DataFrame([{"instrument_id": "x", "venue": venue_in, "instrument_type": "PERPETUAL"}])
+        manifest = MagicMock()
+        with (
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda d, when: d,
+            ),
+        ):
+            _write_venue(venue_in, df, "2026-07-06", "bkt", MagicMock(), {}, sampler, manifest=manifest)
+        return manifest
+
+    def test_cefi_captured_row_stamps_data_type_instruments(self) -> None:
+        """A fresh cefi captured shard lands with data_type='instruments' (not blank)."""
+        manifest = self._run("BINANCE-SPOT")
+        manifest.record_captured.assert_called_once()
+        kwargs = manifest.record_captured.call_args.kwargs
+        assert kwargs["data_type"] == "instruments", (
+            "Non-sports writer must stamp data_type='instruments' at emission time "
+            f"(matches REFERENCE_DATA_TYPE); got {kwargs['data_type']!r}"
+        )
+        assert kwargs["asset_group"] == "cefi"
+
+    def test_cefi_on_chain_venue_stamps_data_type_instruments(self) -> None:
+        """On-chain cefi venue (EXTENDED-STARKNET) lands with data_type='instruments', chain=''."""
+        manifest = self._run("EXTENDED-STARKNET")
+        manifest.record_captured.assert_called_once()
+        kwargs = manifest.record_captured.call_args.kwargs
+        assert kwargs["data_type"] == "instruments"
+        assert kwargs["asset_group"] == "cefi"
+        assert kwargs["chain"] == ""
+
+    def test_defi_captured_row_stamps_data_type_instruments(self) -> None:
+        """DeFi venue (AAVE_V3-ETHEREUM) also lands with data_type='instruments'."""
+        manifest = self._run("AAVE_V3-ETHEREUM")
+        manifest.record_captured.assert_called_once()
+        kwargs = manifest.record_captured.call_args.kwargs
+        assert kwargs["data_type"] == "instruments"
+        assert kwargs["asset_group"] == "defi"
+
+
 # ---------------------------------------------------------------------------
 # _validate_predictions_null_rates
 # ---------------------------------------------------------------------------

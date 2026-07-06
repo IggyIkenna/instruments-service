@@ -231,12 +231,18 @@ def _write_venue(
                     # v9 instrument_type column (Audit §K): stamp the REAL type when
                     # the venue x date shard is single-type, "" when mixed/absent. This
                     # enables per-instrument_type counts off the manifest.
+                    # data_type="instruments" is the canonical non-sports reference-data tag
+                    # (matches REFERENCE_DATA_TYPE in scripts/migrate_instruments_store_v9.py).
+                    # Stamping it at emission time closes the migration-lag correctness window
+                    # where downstream queries filtering by data_type='instruments' silently
+                    # miss un-migrated blank rows. Issue:
+                    # plans/active/issues/is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06.md.
                     manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key=_rk,
                         df=_stamped_venue_df,
                         asset_group=_cat,
                         instrument_type=_derive_instrument_type(_stamped_venue_df),
-                        data_type="",
+                        data_type="instruments",
                         venue=manifest_venue,
                         chain=manifest_chain,
                         pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
