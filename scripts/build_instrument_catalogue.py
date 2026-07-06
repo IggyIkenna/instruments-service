@@ -1976,10 +1976,18 @@ def _warn_coverage_horizon(day_counts: dict[date, int], today: date, asset_group
         median — a partial capture; §7.3's thin-day guard already refuses to
         delist off it, this makes the condition VISIBLE).
     """
-    if not day_counts:
+    # Clamp to days <= today: the prediction writer emits FUTURE-dated day=
+    # partitions (event/settlement-dated dirs out to 2028+), which would make
+    # ``max(day_counts)`` land in the future and BLIND both checks below — the
+    # exact blind spot that hid the 2026-07-01→06 prediction capture outage
+    # (is-daily-enum-prediction failing daily; catalogue stayed green on §7.3
+    # thin-day semantics while its feed starved).
+    past_counts = {d: c for d, c in day_counts.items() if d <= today}
+    if not past_counts:
         _emit_event("CATALOGUE_STALE_BY_DATE", asset_group=asset_group, reason="no_window_data")
         logger.warning("CATALOGUE_STALE_BY_DATE: %s window contained no by_date data at all", asset_group)
         return
+    day_counts = past_counts
     latest = max(day_counts)
     age_days = (today - latest).days
     if age_days > _STALE_BY_DATE_MAX_AGE_DAYS:
