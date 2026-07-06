@@ -1371,14 +1371,24 @@ def _enumerate_v2_tradfi(
     present_set: set[tuple[str, ...]] | None = None,
     present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
-    """Per-instrument tradfi v2 enumerator.
+    """Per-instrument tradfi v2 enumerator (+ venue-grain non-trading-day pass).
 
     Tradfi instruments respect available_from/available_to lifecycle bounds.
-    Weekend and holiday dates fall through to the pipeline (v1 handles them
-    at venue-grain; v2 only adds per-instrument rows for the non-trading-day
-    windows outside the instrument lifecycle).
 
-    The seeded ``instrument_type`` is the CANONICAL WRITER grain (lowercase
+    Non-trading days (weekends + holidays) are emitted at VENUE-grain
+    (``instrument_type=""`` / ``instrument_id=""``) BEFORE the per-instrument
+    walk, mirroring the v1 ``_enumerate_tradfi`` calendar pass. One
+    ``EXPECTED_WEEKEND`` / ``EXPECTED_HOLIDAY`` row per (venue, data_type,
+    day) where ``is_non_trading_day(venue, day)`` is true — the reason is
+    drawn from ``non_trading_day_reason`` (falls back to ``EXPECTED_HOLIDAY``
+    when the calendar can't discriminate). This closes the "v2 doesn't
+    enumerate weekend/holiday cells (venue-grain by design)" asymmetry
+    documented in ``test_enumerate_v2_superset_property.py`` so v1 dispatch
+    can be retired without silently dropping the venue-grain sentinel class
+    (v1_enumerator_dispatch_not_deletable_2026_07_06 P2 todo #1).
+
+    The seeded ``instrument_type`` on the PER-INSTRUMENT rows is the
+    CANONICAL WRITER grain (lowercase
     ``future``/``equity``/``etf``/``combo``/``futures_chain``), NOT the raw
     UPPERCASE catalogue leaf (``FUTURE``/``EQUITY``/…) — see
     :func:`_canonical_writer_instrument_type`. Without this, the seeded shard
@@ -1393,6 +1403,36 @@ def _enumerate_v2_tradfi(
     * alive AND no manifest row (present_set provided) → expected_unattempted
     * alive AND present_set not provided → skip (legacy mode)
     """
+    # Venue-grain non-trading-day pass — mirrors v1 ``_enumerate_tradfi`` so the
+    # venue-grain ``EXPECTED_WEEKEND`` / ``EXPECTED_HOLIDAY`` sentinel class does
+    # not disappear when the v1 dispatch is retired. Emitted at
+    # ``instrument_type=""`` / ``instrument_id=""`` (a market-wide fact, not a
+    # per-instrument one). Enumerated ahead of the per-instrument loop so the
+    # rows are grouped by grain in the output; the per-instrument alive branch
+    # below still emits ``expected_unattempted`` at instrument-grain — the two
+    # rows carry different (``instrument_type``, ``instrument_id``) shard atoms
+    # so they never collide.
+    venues = VENUES_BY_ASSET_GROUP.get("tradfi", [])
+    if venues and data_types:
+        for venue in venues:
+            venue_str = str(venue)
+            for d in date_axis:
+                iso = d.isoformat()
+                if not is_non_trading_day(venue_str, iso):
+                    continue
+                reason = non_trading_day_reason(venue_str, iso) or "EXPECTED_HOLIDAY"
+                for dt in data_types:
+                    yield ExpectedRow(
+                        asset_group="tradfi",
+                        venue=venue_str,
+                        chain="",
+                        data_type=str(dt),
+                        instrument_type="",
+                        instrument_id="",
+                        league_id="",
+                        date=iso,
+                        reason=reason,
+                    )
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
@@ -2018,8 +2058,11 @@ def enumerate_v2(
         - **defi**: CHAIN_GENESIS_DATES > available_from/to. Reasons:
           EXPECTED_PRE_GENESIS_CHAIN > EXPECTED_INSTRUMENT_NOT_LISTED >
           EXPECTED_INSTRUMENT_DELISTED.
-        - **tradfi**: available_from/to only. Non-trading-day (weekend/holiday)
-          rows are covered by the v1 venue-level enumerator.
+        - **tradfi**: available_from/to per instrument PLUS a venue-grain
+          non-trading-day pass. Reasons: EXPECTED_WEEKEND / EXPECTED_HOLIDAY
+          (venue-grain, instrument_type="" / instrument_id="") /
+          EXPECTED_INSTRUMENT_NOT_LISTED / EXPECTED_INSTRUMENT_DELISTED
+          (per-instrument).
         - **sports**: available_from/to applied per league/fixture.
         - **prediction**: market_created_at/settlement_time (falls back to
           available_from/to). Reasons: EXPECTED_INSTRUMENT_NOT_LISTED /

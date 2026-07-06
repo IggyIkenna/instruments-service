@@ -22,12 +22,14 @@ window. This test verifies the property holds for:
   - cefi: pre-venue-launch dates (CEFI_VENUE_LAUNCH_DATES)
   - defi: pre-genesis-chain dates (CHAIN_GENESIS_DATES) + protocol pre-launch
   - prediction: pre-venue-launch dates (PREDICTION_VENUE_LAUNCH_DATES)
+  - tradfi: non-trading days (weekends + holidays) — v2 now emits the
+    venue-grain sentinel class at (venue, data_type, day) with blank
+    instrument_type / instrument_id, mirroring v1 ``_enumerate_tradfi``
+    (v1_enumerator_dispatch_not_deletable_2026_07_06 P2 todo #1).
 
-tradfi v1 (non-trading days) is NOT a v2 grain match — v2 doesn't enumerate
-weekend/holiday cells (those are venue-grain by design, not instrument-grain).
-Sports v1 (per-source pre-coverage dates) is similar — v1 enumerates per-source
-not per-fixture; v2 enumerates per-fixture lifecycle. Both are documented
-asymmetries; we assert v2 ≥ v1 only on the grains where the property applies.
+Sports v1 (per-source pre-coverage dates) is a documented asymmetry — v1
+enumerates per-source, v2 enumerates per-fixture lifecycle; that gap is
+closed by a separate todo in the same issue doc.
 
 Plan: expected_universe_v2_design_2026_05_08.md Phase 1 P1
 Status flip evidence: instruments-service@<commit-after-this-test>
@@ -287,3 +289,102 @@ def test_v2_cefi_emits_at_least_one_row_per_catalog_instrument_in_pre_launch() -
     # 5 instruments x 1 day x 1 data_type = 5 rows (one per instrument).
     assert len(rows) == 5
     assert {r.instrument_id for r in rows} == {f"INSTR-{i}" for i in range(5)}
+
+
+# ---------------------------------------------------------------------------
+# TradFi: non-trading-day (weekend/holiday) venue-grain superset
+# ---------------------------------------------------------------------------
+
+
+def _venue_day_dt_grain_cells(rows: list) -> set[tuple[str, str, str, str, str, str]]:
+    """Collapse rows to the full venue-grain key including instrument_type/id.
+
+    Distinguishes a venue-grain non-trading-day row (``instrument_type=""`` /
+    ``instrument_id=""``) from a per-instrument row on the same
+    (venue, data_type, day) — the two are different shard atoms and only the
+    venue-grain form is a v1 superset match.
+    """
+    return {
+        (r.asset_group, r.venue, r.data_type, r.date, r.instrument_type, r.instrument_id)
+        for r in rows
+    }
+
+
+def test_tradfi_v2_covers_v1_venue_grain_non_trading_day_cells() -> None:
+    """v2 tradfi must emit the same venue-grain (venue, data_type, day) cells
+    as v1 ``_enumerate_tradfi`` for every weekend / holiday in the window.
+
+    Uses a 2-week window (2024-12-23 through 2025-01-05) that spans two
+    Sat/Sun weekends AND US market holidays (Christmas 2024-12-25 + New Year
+    2025-01-01). v2 is called with an empty catalog so ONLY the venue-grain
+    non-trading-day pass fires — this isolates the property under test from
+    the per-instrument lifecycle branches.
+
+    Closes the v1-dispatch-deletable prerequisite tracked in
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``
+    (todo #1): after this test passes, v1 ``_enumerate_tradfi`` no longer
+    owns a row class v2 does not emit.
+    """
+    start = "2024-12-23"
+    end = "2025-01-05"
+    v1_rows = list(enumerator_module._enumerate_tradfi(start, end))
+    # Restrict to the venue-grain sentinel class (skip the per-instrument
+    # ``_enumerate_tradfi_indices`` pass which v2 does NOT mirror at this
+    # grain — those are per-Yahoo-index rows, not weekend/holiday sentinels).
+    v1_ntd_rows = [
+        r for r in v1_rows if r.reason in ("EXPECTED_WEEKEND", "EXPECTED_HOLIDAY") and r.instrument_id == ""
+    ]
+    assert len(v1_ntd_rows) > 0, "v1 should emit venue-grain non-trading-day rows across the window"
+    v1_cells = _venue_day_dt_grain_cells(v1_ntd_rows)
+
+    v2_rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="tradfi",
+            catalog=[],  # empty catalog — only the venue-grain non-trading-day pass fires
+            date_axis=_date_axis(start, end),
+            data_types=sorted({r.data_type for r in v1_ntd_rows}),
+        )
+    )
+    v2_ntd_rows = [
+        r for r in v2_rows if r.reason in ("EXPECTED_WEEKEND", "EXPECTED_HOLIDAY") and r.instrument_id == ""
+    ]
+    v2_cells = _venue_day_dt_grain_cells(v2_ntd_rows)
+
+    missing = v1_cells - v2_cells
+    assert not missing, (
+        f"v2 tradfi missing {len(missing)} venue-grain non-trading-day cells covered by v1 "
+        f"(sample: {sorted(missing)[:5]})"
+    )
+
+
+def test_tradfi_v2_non_trading_day_reason_matches_v1() -> None:
+    """v2's reason for each (venue, day) must match v1's — EXPECTED_WEEKEND vs
+    EXPECTED_HOLIDAY discrimination flows from the same UAC
+    ``non_trading_day_reason`` SSOT, so the two enumerators must agree row-for-row.
+    """
+    start = "2024-12-23"
+    end = "2025-01-05"
+    v1_reason_by_cell: dict[tuple[str, str, str], str] = {}
+    for r in enumerator_module._enumerate_tradfi(start, end):
+        if r.reason not in ("EXPECTED_WEEKEND", "EXPECTED_HOLIDAY") or r.instrument_id != "":
+            continue
+        v1_reason_by_cell[(r.venue, r.data_type, r.date)] = r.reason
+    assert v1_reason_by_cell, "v1 should emit venue-grain non-trading-day rows"
+
+    v2_reason_by_cell: dict[tuple[str, str, str], str] = {}
+    for r in enumerator_module.enumerate_v2(
+        asset_group="tradfi",
+        catalog=[],
+        date_axis=_date_axis(start, end),
+        data_types=sorted({dt for (_, dt, _) in v1_reason_by_cell}),
+    ):
+        if r.reason not in ("EXPECTED_WEEKEND", "EXPECTED_HOLIDAY") or r.instrument_id != "":
+            continue
+        v2_reason_by_cell[(r.venue, r.data_type, r.date)] = r.reason
+
+    mismatched = {
+        cell: (v1_reason_by_cell[cell], v2_reason_by_cell.get(cell))
+        for cell in v1_reason_by_cell
+        if v2_reason_by_cell.get(cell) != v1_reason_by_cell[cell]
+    }
+    assert not mismatched, f"v2 reason differs from v1 on {len(mismatched)} cells (sample: {list(mismatched.items())[:3]})"

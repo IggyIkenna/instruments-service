@@ -448,10 +448,28 @@ def test_defi_v2_empty_catalog() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _per_instrument_rows(rows: list) -> list:
+    """Filter to per-instrument rows (drop the venue-grain non-trading-day pass).
+
+    ``_enumerate_v2_tradfi`` emits a venue-grain
+    ``EXPECTED_WEEKEND`` / ``EXPECTED_HOLIDAY`` sentinel row per (venue,
+    data_type, day) with blank instrument_type + instrument_id for every
+    non-trading day in the window (v1 parity, docketed in
+    v1_enumerator_dispatch_not_deletable_2026_07_06). Per-instrument rows —
+    including per-underlying BUNDLE rows (futures_chain / combo /
+    options_chain) which carry blank instrument_id + populated underlying
+    — always populate ``instrument_type`` with the canonical writer grain.
+    So filtering on ``instrument_type != ""`` cleanly separates the two.
+    """
+    return [r for r in rows if r.instrument_type != ""]
+
+
 def test_tradfi_v2_pre_listing_yields_not_listed() -> None:
     # Window includes an alive date so the overlap filter does not skip the instrument.
     catalog = [_make_tradfi_entry(available_from="2022-01-01")]
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-06-01"), ["ohlcv_1d"]))
+    rows = _per_instrument_rows(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-06-01"), ["ohlcv_1d"]))
+    )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
     assert rows[0].asset_group == "tradfi"
@@ -462,27 +480,61 @@ def test_tradfi_v2_delisted_instrument() -> None:
     # Window includes an alive date so the overlap filter does not skip the instrument.
     catalog = [_make_tradfi_entry(available_from="2020-01-01", available_to="2021-06-30")]
     # 2021-01-01 is alive → no row; 2022-01-01 → DELISTED
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-01-01"), ["ohlcv_1d"]))
+    rows = _per_instrument_rows(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-01-01"), ["ohlcv_1d"]))
+    )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
 def test_tradfi_v2_no_bounds_skips_all_dates() -> None:
-    """Instrument with no available_from/to → no rows (always alive)."""
+    """Instrument with no available_from/to → no per-instrument rows (always alive)."""
     catalog = [_make_tradfi_entry(available_from=None, available_to=None)]
-    rows = list(
-        enumerator_module._enumerate_v2_tradfi(
-            catalog,
-            _date_axis("2020-01-01", "2020-06-01", "2025-01-01"),
-            ["ohlcv_1d"],
+    rows = _per_instrument_rows(
+        list(
+            enumerator_module._enumerate_v2_tradfi(
+                catalog,
+                _date_axis("2020-01-01", "2020-06-01", "2025-01-01"),
+                ["ohlcv_1d"],
+            )
         )
     )
     assert rows == []
 
 
 def test_tradfi_v2_empty_catalog() -> None:
-    rows = list(enumerator_module._enumerate_v2_tradfi([], _date_axis("2024-01-01"), ["ohlcv_1d"]))
+    """Empty catalog + a plain trading day → zero rows (no per-instrument work, no venue-grain sentinel).
+
+    2024-01-02 (Tuesday) is a normal trading day across every tradfi venue,
+    so neither the per-instrument walk nor the venue-grain non-trading-day
+    pass emits anything.
+    """
+    rows = list(enumerator_module._enumerate_v2_tradfi([], _date_axis("2024-01-02"), ["ohlcv_1d"]))
     assert rows == []
+
+
+def test_tradfi_v2_venue_grain_non_trading_day_emits_regardless_of_catalog() -> None:
+    """Non-trading days (weekends + holidays) emit venue-grain sentinel rows
+    (instrument_type="" / instrument_id="") independent of the catalog —
+    mirroring the v1 ``_enumerate_tradfi`` calendar walk so retiring the v1
+    dispatch does not silently drop the sentinel class
+    (v1_enumerator_dispatch_not_deletable_2026_07_06 P2 todo #1).
+    """
+    # 2024-12-28 = Saturday (weekend), 2024-12-25 = Wednesday (Christmas holiday)
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(
+            [], _date_axis("2024-12-25", "2024-12-28"), ["ohlcv_1d"]
+        )
+    )
+    weekend_rows = [r for r in rows if r.reason == "EXPECTED_WEEKEND" and r.date == "2024-12-28"]
+    holiday_rows = [r for r in rows if r.reason == "EXPECTED_HOLIDAY" and r.date == "2024-12-25"]
+    assert len(weekend_rows) > 0, "Saturday 2024-12-28 must produce venue-grain EXPECTED_WEEKEND rows"
+    assert len(holiday_rows) > 0, "Christmas 2024-12-25 must produce venue-grain EXPECTED_HOLIDAY rows"
+    for r in weekend_rows + holiday_rows:
+        assert r.instrument_type == "", "non-trading-day sentinel is venue-grain — instrument_type must be blank"
+        assert r.instrument_id == "", "non-trading-day sentinel is venue-grain — instrument_id must be blank"
+        assert r.asset_group == "tradfi"
+        assert r.chain == ""
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +561,9 @@ def test_tradfi_v2_future_seeds_canonical_lowercase_instrument_type() -> None:
     ]
     # Window spans the listing date so the lifecycle-overlap filter keeps the
     # instrument: 2024-06-01 → NOT_LISTED, 2025-06-01 → alive (no row in legacy mode).
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
+    rows = _per_instrument_rows(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
+    )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
     assert rows[0].instrument_type == "futures_chain", "CME future seed must use the writer's futures_chain grain"
@@ -929,13 +983,18 @@ def test_enumerate_v2_invalid_asset_group_raises() -> None:
 
 
 def test_enumerate_v2_empty_catalog_returns_no_rows() -> None:
-    """Empty catalog → no rows regardless of asset_group."""
+    """Empty catalog + a plain trading day → no rows regardless of asset_group.
+
+    2024-01-02 (Tuesday) is a normal trading day for every tradfi venue, so
+    the tradfi venue-grain non-trading-day pass is silent — the pass mirrors
+    v1 ``_enumerate_tradfi`` and only fires on weekends / holidays.
+    """
     for ag in ("cefi", "defi", "tradfi", "sports", "prediction"):
         rows = list(
             enumerator_module.enumerate_v2(
                 asset_group=ag,
                 catalog=[],
-                date_axis=_date_axis("2024-01-01"),
+                date_axis=_date_axis("2024-01-02"),
                 data_types=["ohlcv_1d"],
             )
         )
@@ -1182,9 +1241,13 @@ def test_defi_v2_denominator_is_could_exist_universe_not_just_manifest() -> None
 
 
 def test_tradfi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
-    """TradFi alive instrument date absent from manifest → expected_unattempted."""
+    """TradFi alive instrument date absent from manifest → expected_unattempted.
+
+    Date 2024-06-03 (Monday, trading day) — isolates the per-instrument
+    alive-branch from the venue-grain non-trading-day pass.
+    """
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]
-    date_axis = _date_axis("2024-06-01")
+    date_axis = _date_axis("2024-06-03")
     rows = list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
     assert len(rows) == 1
     r = rows[0]
@@ -1196,7 +1259,7 @@ def test_tradfi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -
 
 def test_tradfi_v2_alive_date_in_present_set_skipped() -> None:
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]
-    date_axis = _date_axis("2024-06-01")
+    date_axis = _date_axis("2024-06-03")  # Monday trading day (see sibling test)
     # present_set carries the CANONICAL WRITER grain (lowercase ``etf``) — the
     # instrument_type the MTDS writer actually stamps for a captured cell. The seed
     # now also normalises to ``etf``, so the captured cell suppresses the seed.
@@ -1208,7 +1271,7 @@ def test_tradfi_v2_alive_date_in_present_set_skipped() -> None:
             "instrument_type": "etf",
             "instrument_id": "SPY",
             "league_id": "",
-            "date": "2024-06-01",
+            "date": "2024-06-03",
         }
     )
     rows = list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set={key}))
@@ -1218,7 +1281,7 @@ def test_tradfi_v2_alive_date_in_present_set_skipped() -> None:
 def test_tradfi_v2_legacy_mode_alive_date_skipped() -> None:
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]
     rows = list(
-        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01"), ["ohlcv_1m"], present_set=None)
+        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-03"), ["ohlcv_1m"], present_set=None)
     )
     assert rows == []
 
@@ -1231,10 +1294,14 @@ def test_tradfi_v2_denominator_is_could_exist_universe_not_just_manifest() -> No
     to) the manifest. Adding an IS-catalog instrument can only GROW the denominator (seed a new owed cell),
     never shrink it / drop a captured cell. This is the ⑦ regression that locks deployment-api's honest
     4-state denominator to the IS could-exist universe (active-but-uncaptured tradfi instruments are
-    counted, diluting completion %) — the tradfi mirror of the defi denominator regression."""
+    counted, diluting completion %) — the tradfi mirror of the defi denominator regression.
+
+    Date 2024-06-03 (Monday, trading day) — isolates the per-instrument
+    alive-branch from the venue-grain non-trading-day pass.
+    """
     captured = _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NASDAQ")
     uncaptured = _make_tradfi_entry(instrument_id="QQQ", instrument_type="ETF", venue="NASDAQ")
-    date_axis = _date_axis("2024-06-01")
+    date_axis = _date_axis("2024-06-03")
     # present_set keyed at the canonical lowercase writer grain (``etf``) — what the
     # writer records; the seed now normalises to the same grain so the captured cell
     # is suppressed (the raw uppercase ``ETF`` would never match a real capture).
@@ -1247,7 +1314,7 @@ def test_tradfi_v2_denominator_is_could_exist_universe_not_just_manifest() -> No
                 "instrument_type": "etf",
                 "instrument_id": "SPY",
                 "league_id": "",
-                "date": "2024-06-01",
+                "date": "2024-06-03",
             }
         )
     }
@@ -1358,13 +1425,17 @@ def test_enumerate_v2_forwards_present_set_to_enumerator() -> None:
 
 
 def test_enumerate_v2_with_present_set_none_skips_alive_dates() -> None:
-    """enumerate_v2() with present_set=None must skip alive dates (legacy mode)."""
+    """enumerate_v2() with present_set=None must skip alive dates (legacy mode).
+
+    Date 2024-06-03 (Monday, trading day) — isolates the per-instrument
+    alive-branch from the tradfi venue-grain non-trading-day pass.
+    """
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]
     rows = list(
         enumerator_module.enumerate_v2(
             asset_group="tradfi",
             catalog=catalog,
-            date_axis=_date_axis("2024-06-01"),
+            date_axis=_date_axis("2024-06-03"),
             data_types=["ohlcv_1m"],
             present_set=None,
         )
@@ -1553,10 +1624,13 @@ class TestG1EnumTradfiFilter:
 
     def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
         catalog = [_make_tradfi_entry(instrument_type=instrument_type)]
+        # 2024-01-16 (Tuesday) — trading day for every tradfi venue, so the
+        # venue-grain non-trading-day pass is silent and only per-instrument
+        # data_type filtering shows through in the emitted rows.
         return list(
             enumerator_module._enumerate_v2_tradfi(
                 catalog,
-                _date_axis("2024-01-15"),
+                _date_axis("2024-01-16"),
                 data_types or self._ALL_TRADFI_DTS,
                 present_set=set(),
             )
@@ -1769,7 +1843,10 @@ def test_enumerate_v2_tradfi_option_leaves_roll_up() -> None:
         _opt_entry("ES-OPT-1", "ES", instrument_type="OPTION", venue="CME"),
         _opt_entry("ES-OPT-2", "ES", instrument_type="OPTION", venue="CME"),
     ]
-    dates = _date_axis("2024-06-01", "2025-06-01")
+    # 2024-06-03 + 2025-06-02 are Mondays (trading days) — the tradfi
+    # venue-grain non-trading-day pass is silent, so only per-instrument
+    # bundle rows appear.
+    dates = _date_axis("2024-06-03", "2025-06-02")
     rows = list(enumerator_module.enumerate_v2(asset_group="tradfi", catalog=catalog, date_axis=dates))
     # Era-B: instrument_type=options_chain bundle; tradfi admits trades + ohlcv_1m
     # (the captured chain market-data data_types — UAC validity matrix T-OLD-2b).
