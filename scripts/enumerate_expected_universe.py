@@ -8,6 +8,17 @@ Enumerates the expected universe per asset_group, finds (shard_key, day) tuples
 with NO manifest row, writes ``record_expected_empty(reason=EXPECTED_*)`` rows
 via per-VM shard isolation.
 
+SSOT for the axis taxonomy (WHICH axes bound the could-exist denominator per AG,
+plus each axis's ``UniverseProvenance`` — HARDCODED_GENESIS vs DOWNLOAD_DERIVED)
+is ``unified_api_contracts.canonical.crosscutting.total_universe.TOTAL_UNIVERSE_AXES``
+(re-exported at :mod:`unified_api_contracts` top level).  This script is one of the
+SSOT's two named consumers — a module-level guard asserts SUPPORTED_ASSET_GROUPS ⊆
+TOTAL_UNIVERSE_AXES at import time; :func:`enumerate_v2` re-checks structurally
+via :func:`is_total_universe` at the runtime entry point.  MVP ⊆ TOTAL is preserved
+by construction: the cefi/tradfi MVP-capture-universe gates below narrow the
+denominator down to the MVP subset of the total-reasonable universe (SSOT hierarchy:
+NOT_IN_UNIVERSE ⊇ TOTAL_ONLY ⊇ MVP → :class:`UniverseTier`, :func:`universe_membership`).
+
 Closes the rollup-vs-drilldown denominator divergence per
 `unified-trading-pm/codex/02-data/availability-manifest-and-data-status.md`
 § "Rollup-vs-drilldown denominator divergence (codified 2026-05-07)" by
@@ -79,8 +90,10 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    TOTAL_UNIVERSE_AXES,
     VENUES_BY_ASSET_GROUP,
     Mode,
+    UniverseTier,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
@@ -88,7 +101,9 @@ from unified_api_contracts import (
     has_source_priority,
     is_in_mvp_capture_universe,
     is_mvp,
+    is_total_universe,
     pipeline_mode_for_source,
+    universe_membership,
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
@@ -216,6 +231,21 @@ def _sports_data_types() -> list[str]:
 # resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
 # deployment-service/configs/cloud-providers.yaml) — see ``_default_bucket_for``.
 SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
+
+# B2 wiring — read the total-reasonable (could-exist) universe SSOT: every AG this
+# enumerator supports MUST have a declared axis taxonomy in the UAC
+# ``TOTAL_UNIVERSE_AXES`` (SSOT for WHICH axes bound the could-exist denominator
+# per AG). Fail loudly at import time on drift — a new AG here without a matching
+# UAC entry (or vice-versa) is a review-blocking SSOT desync
+# (`instruments_mtds_subset_consistency_remediation` § B2).
+_MISSING_UNIVERSE_AXES = set(SUPPORTED_ASSET_GROUPS) - set(TOTAL_UNIVERSE_AXES)
+if _MISSING_UNIVERSE_AXES:
+    raise RuntimeError(
+        f"enumerate_expected_universe: SUPPORTED_ASSET_GROUPS ⊄ TOTAL_UNIVERSE_AXES — "
+        f"missing UAC axis taxonomy for {sorted(_MISSING_UNIVERSE_AXES)}. "
+        f"Update unified_api_contracts.canonical.crosscutting.total_universe.TOTAL_UNIVERSE_AXES."
+    )
+del _MISSING_UNIVERSE_AXES
 
 
 def _default_bucket_for(asset_group: str) -> str:
@@ -2001,6 +2031,17 @@ def enumerate_v2(
     if asset_group not in _V2_ENUMERATORS:
         raise ValueError(
             f"enumerate_v2: unsupported asset_group={asset_group!r}; must be one of {sorted(_V2_ENUMERATORS)}"
+        )
+    # B2 wiring — structural check against the UAC total-universe SSOT: refuse to
+    # emit a could-exist denominator for an AG that has no declared axis taxonomy.
+    # The module-import guard above already asserts this for SUPPORTED_ASSET_GROUPS,
+    # but repeating it at the runtime entry point makes the SSOT dependency
+    # explicit for any caller that hands us an ad-hoc asset_group string.
+    if not is_total_universe(asset_group, "", ""):
+        raise ValueError(
+            f"enumerate_v2: asset_group={asset_group!r} is not in the UAC "
+            f"total-universe axis taxonomy (TOTAL_UNIVERSE_AXES); refusing to "
+            f"emit a could-exist denominator."
         )
     # G1-ENUM bundle-grain roll-up (Era-B): collapse option/combo leaves → ONE
     # synthetic per-underlying options_chain instrument entry (data_type resolved
