@@ -79,8 +79,12 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    TOTAL_UNIVERSE_AXES,
+    TOTAL_UNIVERSE_CONFIG_HASH,
+    TOTAL_UNIVERSE_CONFIG_VERSION,
     VENUES_BY_ASSET_GROUP,
     Mode,
+    UniverseTier,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
@@ -88,7 +92,9 @@ from unified_api_contracts import (
     has_source_priority,
     is_in_mvp_capture_universe,
     is_mvp,
+    is_total_universe,
     pipeline_mode_for_source,
+    universe_membership,
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
@@ -296,6 +302,61 @@ def _emit_event(event: str, /, **details: object) -> None:
     """Best-effort structured event log (mirrors RECONCILER_* shape)."""
     payload = {"event": event, "ts": datetime.now(UTC).isoformat(), **details}
     logger.info("EVENT %s", payload)
+
+
+def _universe_axes_provenance(asset_group: str) -> dict[str, object]:
+    """Return the UAC total-universe descriptor for ``asset_group``.
+
+    The enumerator's could-exist denominator is a cross-join of the axes
+    codified in :data:`unified_api_contracts.TOTAL_UNIVERSE_AXES` (B2 SSOT).
+    Emitting the ``(version, hash, axis names)`` alongside every run makes a
+    coverage delta attributable to a universe-DEFINITION change (bump = new
+    axis / removed provenance) vs a DATA change (catalogue rows moved).
+    """
+    axes = TOTAL_UNIVERSE_AXES.get(asset_group, ())
+    return {
+        "version": TOTAL_UNIVERSE_CONFIG_VERSION,
+        "hash": TOTAL_UNIVERSE_CONFIG_HASH,
+        "axes": [a.name for a in axes],
+    }
+
+
+def _assert_asset_group_declared(asset_group: str) -> None:
+    """Structural gate — asset_group MUST have a total-universe axis taxonomy.
+
+    Enforces the B2 contract that ``enumerate_expected_universe`` reasons ONLY
+    over asset_groups codified in the UAC SSOT
+    (``unified_api_contracts.canonical.crosscutting.total_universe``). An
+    asset_group missing from ``TOTAL_UNIVERSE_AXES`` has no declared could-exist
+    axes and therefore no honest denominator — refuse rather than silently
+    enumerate against an undeclared universe.
+    """
+    if not is_total_universe(asset_group, "", ""):
+        raise ValueError(
+            f"asset_group={asset_group!r} has no total-universe axis taxonomy declared in "
+            "unified_api_contracts.TOTAL_UNIVERSE_AXES; refusing to enumerate an undeclared "
+            "could-exist universe."
+        )
+
+
+def _universe_tier_of_row(row: ExpectedRow) -> UniverseTier:
+    """Classify an emitted expected-row into the universe hierarchy.
+
+    Uses the UAC SSOT :func:`unified_api_contracts.universe_membership`. Every
+    row the enumerator emits (whether ``empty_confirmed`` or
+    ``expected_unattempted``) MUST classify as :attr:`UniverseTier.MVP` or
+    :attr:`UniverseTier.TOTAL_ONLY` — a :attr:`UniverseTier.NOT_IN_UNIVERSE`
+    result signals the enumerator generated a cell outside the codified
+    could-exist universe (a defect).
+    """
+    return universe_membership(
+        row.asset_group,
+        row.venue,
+        row.instrument_type,
+        row.data_type,
+        base_ccy=row.underlying or None,
+        league=row.league_id or None,
+    )
 
 
 def _derive_pm_source_transport(asset_group: str, data_type: str) -> tuple[str, str, str]:
@@ -1998,6 +2059,11 @@ def enumerate_v2(
     ``expected_universe_v2_design_2026_05_08.md`` Phase 1.A.
     Wave 3 (``expected_unattempted``): writegate plan Phase 3.D.5 item.
     """
+    # Structural universe gate (B2): asset_group must be codified in the UAC
+    # ``TOTAL_UNIVERSE_AXES`` SSOT — the enumerator only reasons over declared
+    # could-exist universes. Raised BEFORE the per-AG map lookup so a missing
+    # UAC axis taxonomy surfaces as the actionable error, not a lookup miss.
+    _assert_asset_group_declared(asset_group)
     if asset_group not in _V2_ENUMERATORS:
         raise ValueError(
             f"enumerate_v2: unsupported asset_group={asset_group!r}; must be one of {sorted(_V2_ENUMERATORS)}"
@@ -2812,6 +2878,12 @@ def main() -> int:
     )
     full_history: bool = bool(args.full_history)
 
+    # Structural universe gate (B2) — asset_group must be codified in UAC's
+    # ``TOTAL_UNIVERSE_AXES``. Raised for BOTH v1 and v2 paths so an undeclared
+    # AG fails-fast before manifest IO. enumerate_v2() re-asserts for library
+    # callers that bypass main().
+    _assert_asset_group_declared(asset_group)
+
     _emit_event(
         "ENUMERATOR_STARTED",
         enumerator="enumerate_expected_universe",
@@ -2824,6 +2896,7 @@ def main() -> int:
         max_writes_per_run=max_writes_per_run,
         data_types_override=data_types_override,
         full_history=full_history,
+        total_universe_config=_universe_axes_provenance(asset_group),
         run_id=run_id,
     )
 

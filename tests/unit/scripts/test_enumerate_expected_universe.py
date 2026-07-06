@@ -459,3 +459,140 @@ def test_row_data_types_capability_absent_venue_not_gated() -> None:
     cefi_dts = ["trades", "book_snapshot_5"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("BINANCE-DELIVERY", "PERPETUAL"), cefi_dts)
     assert "trades" in row_dts
+
+
+# --- B2 downstream: TOTAL_UNIVERSE_AXES wiring ------------------------------
+# The enumerator's could-exist denominator is a cross-join of the axes codified
+# in ``unified_api_contracts.TOTAL_UNIVERSE_AXES`` (universes SSOT). These tests
+# lock in the B2 wiring: every supported asset_group has a declared taxonomy,
+# an undeclared AG is refused at both the enumerate_v2 entry and main(), and the
+# universe-config descriptor emitted at run start carries the axis provenance so
+# a coverage delta can be attributed to a universe-DEFINITION change vs a DATA
+# change (mirrors the mvp_scope_config_descriptor pattern for the MVP subset).
+
+
+def test_supported_asset_groups_all_declared_in_total_universe_axes() -> None:
+    """Every SUPPORTED_ASSET_GROUP must be declared in UAC TOTAL_UNIVERSE_AXES.
+
+    Enforces the B2 contract that the enumerator only enumerates asset_groups
+    whose could-exist axes are codified in the UAC SSOT. Adding a new
+    asset_group to SUPPORTED_ASSET_GROUPS without a matching TOTAL_UNIVERSE_AXES
+    entry means the enumerator would run against an undeclared universe.
+    """
+    from unified_api_contracts import TOTAL_UNIVERSE_AXES, is_total_universe
+
+    for ag in enumerator_module.SUPPORTED_ASSET_GROUPS:
+        assert ag in TOTAL_UNIVERSE_AXES, f"asset_group={ag!r} missing from TOTAL_UNIVERSE_AXES"
+        assert is_total_universe(ag, "", ""), f"is_total_universe returned False for supported AG {ag!r}"
+        axes = TOTAL_UNIVERSE_AXES[ag]
+        assert len(axes) > 0, f"asset_group={ag!r} declared with an empty axis tuple"
+
+
+def test_assert_asset_group_declared_raises_for_undeclared_group() -> None:
+    """``_assert_asset_group_declared`` refuses an AG missing from the UAC SSOT.
+
+    Fails-fast when a caller passes an asset_group with no codified
+    could-exist axes — the enumerator has no honest denominator to build.
+    """
+    with pytest.raises(ValueError, match="TOTAL_UNIVERSE_AXES"):
+        enumerator_module._assert_asset_group_declared("not_an_asset_group")
+
+
+def test_universe_axes_provenance_carries_config_descriptor() -> None:
+    """``_universe_axes_provenance`` returns the UAC ``(version, hash, axes)``.
+
+    The dict is emitted in ``ENUMERATOR_STARTED`` so a downstream coverage
+    consumer can attribute a delta to a universe-definition change (hash /
+    version bump) vs a data-only change (identical hash + version).
+    """
+    from unified_api_contracts import TOTAL_UNIVERSE_AXES, TOTAL_UNIVERSE_CONFIG_HASH, TOTAL_UNIVERSE_CONFIG_VERSION
+
+    provenance = enumerator_module._universe_axes_provenance("cefi")
+    assert provenance["version"] == TOTAL_UNIVERSE_CONFIG_VERSION
+    assert provenance["hash"] == TOTAL_UNIVERSE_CONFIG_HASH
+    expected_axes = [a.name for a in TOTAL_UNIVERSE_AXES["cefi"]]
+    assert provenance["axes"] == expected_axes
+
+
+def test_mvp_subset_of_total_for_known_cefi_mvp_cell() -> None:
+    """MVP ⊆ TOTAL invariant — a known-MVP cefi cell classifies as MVP.
+
+    ``universe_membership`` returns ``UniverseTier.MVP`` when ``is_mvp`` matches,
+    never ``NOT_IN_UNIVERSE`` — B2 requires MVP to be a strict subset of TOTAL.
+    Cell is the ``is_mvp`` docstring canonical example
+    (``BINANCE-FUTURES`` / ``PERPETUAL`` / ``trades`` / ``base_ccy=BTC``).
+    """
+    from unified_api_contracts import UniverseTier, is_mvp, universe_membership
+
+    assert is_mvp("cefi", "BINANCE-FUTURES", "PERPETUAL", "trades", base_ccy="BTC"), (
+        "test premise: BINANCE-FUTURES/PERPETUAL/trades/BTC must be MVP per the is_mvp docstring canonical example"
+    )
+    tier = universe_membership(
+        "cefi",
+        venue="BINANCE-FUTURES",
+        instrument_type="PERPETUAL",
+        data_type="trades",
+        base_ccy="BTC",
+    )
+    assert tier is UniverseTier.MVP, f"expected MVP, got {tier}"
+
+
+def test_mvp_subset_of_total_across_all_supported_asset_groups() -> None:
+    """No supported AG returns ``NOT_IN_UNIVERSE`` from the structural predicate.
+
+    Structural (``is_total_universe``) membership is independent of instrument
+    identity — every declared AG must be in the universe, so the tier for a
+    structural probe is MVP or TOTAL_ONLY, never NOT_IN_UNIVERSE.
+    """
+    from unified_api_contracts import UniverseTier, universe_membership
+
+    for ag in enumerator_module.SUPPORTED_ASSET_GROUPS:
+        tier = universe_membership(ag, venue="__probe__", instrument_type="__probe__")
+        assert tier is not UniverseTier.NOT_IN_UNIVERSE, (
+            f"asset_group={ag!r} classified NOT_IN_UNIVERSE — the structural universe declaration is broken"
+        )
+
+
+def test_universe_tier_of_row_delegates_to_universe_membership() -> None:
+    """``_universe_tier_of_row`` forwards row axes into ``universe_membership``.
+
+    The helper is the single call-site the enumerator uses to classify an
+    emitted row into the universe hierarchy for downstream tagging + tests.
+    """
+    from unified_api_contracts import UniverseTier
+
+    row = enumerator_module.ExpectedRow(
+        asset_group="cefi",
+        venue="BINANCE-SPOT",
+        chain="",
+        data_type="trades",
+        instrument_type="SPOT",
+        instrument_id="BINANCE-SPOT:SPOT:BTC-USDT",
+        league_id="",
+        date="2025-01-01",
+        reason="",
+        capture_status="expected_unattempted",
+        underlying="BTC",
+    )
+    tier = enumerator_module._universe_tier_of_row(row)
+    assert tier in (UniverseTier.MVP, UniverseTier.TOTAL_ONLY)
+
+
+def test_enumerate_v2_refuses_undeclared_asset_group() -> None:
+    """``enumerate_v2`` raises on an AG missing from TOTAL_UNIVERSE_AXES.
+
+    The structural gate fires BEFORE the per-AG map lookup so the actionable
+    error is "no total-universe axis taxonomy declared" (a UAC omission) rather
+    than "unsupported asset_group" (a script-local map miss).
+    """
+    from datetime import date
+
+    with pytest.raises(ValueError, match="TOTAL_UNIVERSE_AXES"):
+        list(
+            enumerator_module.enumerate_v2(
+                asset_group="not_an_asset_group",
+                catalog=[],
+                date_axis=[date(2025, 1, 1)],
+                data_types=["trades"],
+            )
+        )

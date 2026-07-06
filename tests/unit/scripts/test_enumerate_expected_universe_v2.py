@@ -916,8 +916,15 @@ def test_enumerate_v2_dispatch_cefi() -> None:
 
 
 def test_enumerate_v2_invalid_asset_group_raises() -> None:
-    """enumerate_v2 with unsupported asset_group must raise ValueError."""
-    with pytest.raises(ValueError, match="unsupported asset_group"):
+    """enumerate_v2 with unsupported asset_group must raise ValueError.
+
+    The B2 structural gate (``_assert_asset_group_declared``) fires FIRST — an
+    AG missing from ``TOTAL_UNIVERSE_AXES`` raises "no total-universe axis
+    taxonomy declared" before the ``_V2_ENUMERATORS`` map lookup would surface
+    "unsupported asset_group". Either wording is a valid rejection; the regex
+    accepts both so the test survives the ordering.
+    """
+    with pytest.raises(ValueError, match=r"TOTAL_UNIVERSE_AXES|unsupported asset_group"):
         list(
             enumerator_module.enumerate_v2(
                 asset_group="crypto",  # invalid
