@@ -35,19 +35,26 @@ execution:
              exists and parses without error
   last_executed: NEVER
 
-Bucket selection (Bug 1 fix):
-  Prefer the bucket whose _index/availability_index.parquet blob was MOST RECENTLY
-  modified (blob.updated timestamp), not the bucket with the most rows. This prevents
-  picking stale non-prd buckets (35.8M rows, 20 days old) over fresh prd buckets
-  (5.2M rows, live data).
+Bucket selection (hardened 2026-07-06 vs. surgery-bumped mtimes):
+  PRIMARY is pinned by tuple order in ``_MANIFEST_BUCKET_CANDIDATES`` — the first
+  accessible candidate wins (which is the ``-prd`` bucket by construction, for every
+  asset_group). This replaces the earlier mtime-based selection which was fragile to
+  manifest surgery: rewriting the legacy bucket bumped its ``blob.updated`` past prd,
+  flipping roles → prd's captured-only tuples dropped from ENUMERATED and 3 artifact
+  "holes" appeared (2026-07-03 ASTER corrective pass on cefi legacy).
+  ``blob.updated`` is still logged (a secondary bucket with a newer mtime raises a
+  SURGERY-SIGNAL warning) but no longer drives selection. An operator override
+  ``--primary-bucket=<name>`` picks a specific bucket when surgery or debugging
+  requires it; if the override is not accessible, selection falls back to the
+  tuple-order pin.
 
 Manifest merge (Bug 2 fix):
-  After picking the freshest bucket as PRIMARY, the secondary bucket is also read and
+  After picking the pinned bucket as PRIMARY, the secondary bucket is also read and
   merged. If the ``date`` column is present in both DataFrames, shards are deduplicated
   on (date, venue, data_type) keeping the PRIMARY row's capture_status (prd wins).
   This ensures the full expected_unattempted skeleton (from the legacy non-prd bucket)
   is combined with fresh captured/attempted_failed/empty_confirmed from prd.
-  Use ``--no-merge`` to disable this merging and fall back to freshest-wins-only.
+  Use ``--no-merge`` to disable this merging and fall back to primary-only.
 
 Instrument-type column (v2):
   Reads ``instrument_type`` as a 5th bounded column. Legacy buckets may not have this
@@ -58,7 +65,8 @@ Instrument-type column (v2):
 Usage:
   python measure_honest_coverage.py [--asset-group cefi|defi|tradfi|sports|prediction|all]
   python measure_honest_coverage.py --output-path /tmp/coverage.json   # local probe
-  python measure_honest_coverage.py --no-merge                         # freshest-wins only
+  python measure_honest_coverage.py --no-merge                         # primary-only
+  python measure_honest_coverage.py --primary-bucket <name>            # force primary
 """
 
 from __future__ import annotations
@@ -351,23 +359,96 @@ def _merge_manifests(
     return combined
 
 
-def _read_manifest(asset_group: str, *, merge: bool = True) -> pd.DataFrame | None:
+def _select_primary_index(
+    accessible: list[tuple[str, datetime | None, pd.DataFrame]],
+    *,
+    override: str | None,
+    asset_group: str,
+) -> int:
+    """Return the index of the primary bucket in ``accessible``.
+
+    Selection rules (hardened 2026-07-06 vs. surgery-bumped mtimes):
+      1. ``override`` wins when it matches an accessible bucket by name.
+      2. Otherwise return index 0 — accessible preserves tuple order from
+         ``_MANIFEST_BUCKET_CANDIDATES[asset_group]``, whose first entry is the
+         ``-prd`` bucket by construction.
+      3. If ``override`` is set but no accessible bucket matches, log a warning
+         and fall back to rule 2 (do not silently ignore an operator directive).
+    """
+    if override is not None:
+        for i, (name, _ts, _df) in enumerate(accessible):
+            if name == override:
+                logger.info(
+                    "  %s primary override active: %s",
+                    asset_group,
+                    override,
+                )
+                return i
+        logger.warning(
+            "  %s --primary-bucket=%s not accessible; falling back to tuple-order pin",
+            asset_group,
+            override,
+        )
+    return 0
+
+
+def _warn_if_secondary_newer(
+    asset_group: str,
+    primary_name: str,
+    primary_ts: datetime | None,
+    secondaries: list[tuple[str, datetime | None, pd.DataFrame]],
+) -> None:
+    """Log a SURGERY-SIGNAL warning when a secondary bucket has a newer ``blob.updated``.
+
+    ``blob.updated`` is no longer a selection criterion (see ``_select_primary_index``),
+    but a secondary bucket with a newer mtime than the primary usually means the legacy
+    bucket was rewritten (e.g. an ASTER-style corrective pass). Loudly surface that so
+    reviewers can decide whether to switch primary via ``--primary-bucket`` for the run.
+    """
+    if primary_ts is None:
+        return
+    for name, ts, _df in secondaries:
+        if ts is not None and ts > primary_ts:
+            logger.warning(
+                "  %s SURGERY-SIGNAL: secondary %s blob.updated=%s is NEWER than "
+                "primary %s blob.updated=%s. Selection pinned to primary regardless; "
+                "pass --primary-bucket=%s to override if the newer bucket is authoritative.",
+                asset_group,
+                name,
+                ts.isoformat(),
+                primary_name,
+                primary_ts.isoformat(),
+                name,
+            )
+
+
+def _read_manifest(
+    asset_group: str,
+    *,
+    merge: bool = True,
+    primary_bucket_override: str | None = None,
+) -> pd.DataFrame | None:
     """Read the live availability manifest for an asset_group.
 
-    Bug 1 fix: compare blob.updated timestamps instead of row counts to select the
-    FRESHEST bucket as primary. The stale non-prd bucket has 35.8M rows (written
-    2026-06-08) which previously beat the live prd bucket (5.2M rows, fresh). Timestamp
-    comparison correctly picks prd.
+    Bucket selection (pinned-primary; hardened 2026-07-06):
+      PRIMARY is the first accessible candidate in
+      ``_MANIFEST_BUCKET_CANDIDATES[asset_group]`` tuple order. The tuple places
+      ``-prd`` first for every asset_group, so prd wins by default. This is
+      deterministic against surgery bumps on the legacy bucket's ``blob.updated``.
+      Pass ``primary_bucket_override`` (CLI ``--primary-bucket=<name>``) to force a
+      specific bucket when surgery or debugging demands it; if the override is not
+      accessible, selection falls back to the tuple-order pin. A secondary bucket with
+      a newer ``blob.updated`` than the primary triggers a SURGERY-SIGNAL log warning.
 
-    Bug 2 fix (when merge=True): after picking the freshest bucket as primary, also read
-    the secondary bucket and merge the two DataFrames. Non-prd holds the full
-    expected_unattempted skeleton that prd lacks; merging gives accurate denominator
-    counts without double-counting (dedup on day/venue/data_type preferring prd status).
+    Merge (when ``merge=True``): after primary is chosen, the secondary bucket is also
+    read and merged. Non-prd holds the full expected_unattempted skeleton that prd
+    lacks; merging gives accurate denominator counts without double-counting (dedup on
+    day/venue/data_type preferring prd status).
     """
     candidates = _MANIFEST_BUCKET_CANDIDATES[asset_group]
 
-    # Step 1: get blob timestamps for all candidates in parallel (serial loop is fine
-    # since we only have 2 candidates per asset_group).
+    # Step 1: get blob timestamps + read parquets for all candidates.
+    # bucket_info preserves tuple order — critical for the pinned-primary rule.
     gcs_client = storage.Client(project=PROJECT_ID)
     bucket_info: list[tuple[str, datetime | None, pd.DataFrame | None]] = []
     for bucket_name in candidates:
@@ -387,48 +468,50 @@ def _read_manifest(asset_group: str, *, merge: bool = True) -> pd.DataFrame | No
             )
         bucket_info.append((bucket_name, updated, df))
 
-    # Step 2: rank by blob.updated (newest first); fall back to row count if timestamps unavailable.
+    # Step 2: filter to accessible candidates, preserving tuple order.
     accessible = [(name, ts, df) for name, ts, df in bucket_info if df is not None]
     if not accessible:
         logger.warning("  SKIP %s — no candidate manifest accessible", asset_group)
         return None
 
-    def _sort_key(item: tuple[str, datetime | None, pd.DataFrame]) -> tuple[int, int]:
-        _, ts, df = item
-        # Primary sort: newest timestamp (negative epoch seconds); if ts is None use 0.
-        ts_score = -int(ts.timestamp()) if ts is not None else 0
-        # Secondary sort: row count as tiebreaker (more rows = better).
-        return (ts_score, -len(df))
+    # Step 3: pinned-primary selection (override wins, else tuple-order first).
+    primary_idx = _select_primary_index(
+        accessible,
+        override=primary_bucket_override,
+        asset_group=asset_group,
+    )
+    primary_name, primary_ts, primary_df = accessible[primary_idx]
+    secondaries = [entry for i, entry in enumerate(accessible) if i != primary_idx]
 
-    accessible.sort(key=_sort_key)
-    primary_name, primary_ts, primary_df = accessible[0]
     primary_uri = f"gs://{primary_name}/{_INDEX_BLOB_PATH}"
     primary_ts_str = primary_ts.isoformat() if primary_ts is not None else "unknown"
     logger.info(
-        "  %s manifest SELECTED (freshest): %s (%d rows, blob.updated=%s)",
+        "  %s manifest SELECTED (pinned primary): %s (%d rows, blob.updated=%s)",
         asset_group,
         primary_uri,
         len(primary_df),
         primary_ts_str,
     )
-    for name, ts, df in accessible[1:]:
+    for name, ts, df in secondaries:
         uri = f"gs://{name}/{_INDEX_BLOB_PATH}"
         ts_str = ts.isoformat() if ts is not None else "unknown"
         logger.info(
-            "  %s manifest NOT SELECTED (older): %s (%d rows, blob.updated=%s)",
+            "  %s manifest NOT SELECTED (secondary): %s (%d rows, blob.updated=%s)",
             asset_group,
             uri,
             len(df),
             ts_str,
         )
 
+    _warn_if_secondary_newer(asset_group, primary_name, primary_ts, secondaries)
+
     result_df = primary_df
 
-    if merge and len(accessible) > 1:
+    if merge and secondaries:
         # Re-read secondary as eu_only (pyarrow push-down filter) before merging.
         # The non-prd oracle can be 35.8M rows; only ~4.1M are expected_unattempted.
         # Reading eu_only keeps peak memory bounded while providing the full skeleton.
-        for secondary_name, _ts, _secondary_full in accessible[1:]:
+        for secondary_name, _ts, _secondary_full in secondaries:
             secondary_eu = _read_parquet_eu_only(secondary_name)
             if secondary_eu is not None:
                 result_df = _merge_manifests(result_df, secondary_eu)
@@ -637,9 +720,19 @@ def main() -> None:
         action="store_true",
         default=False,
         help=(
-            "Disable prd/non-prd manifest merging. Falls back to freshest-wins only. "
+            "Disable prd/non-prd manifest merging. Falls back to primary-only. "
             "Use when you want to measure a single bucket in isolation without combining "
             "the expected_unattempted skeleton from the secondary bucket."
+        ),
+    )
+    parser.add_argument(
+        "--primary-bucket",
+        default=None,
+        help=(
+            "Force PRIMARY selection to a specific bucket name (matched against "
+            "_MANIFEST_BUCKET_CANDIDATES for the run's asset_groups). Overrides the "
+            "default tuple-order pin. If not accessible for a given asset_group, that "
+            "AG falls back to the pinned primary. Use for surgery/debugging."
         ),
     )
     parser.add_argument(
@@ -657,10 +750,15 @@ def main() -> None:
 
     asset_groups = list(_KNOWN_ASSET_GROUPS) if args.asset_group == "all" else [args.asset_group]
     merge = not args.no_merge
+    primary_bucket_override = args.primary_bucket
 
     dfs: dict[str, pd.DataFrame] = {}
     for ag in asset_groups:
-        df = _read_manifest(ag, merge=merge)
+        df = _read_manifest(
+            ag,
+            merge=merge,
+            primary_bucket_override=primary_bucket_override,
+        )
         if df is not None and not df.empty:
             dfs[ag] = df
 
