@@ -1363,6 +1363,49 @@ def _blank_token(v: object) -> bool:
     return not str(v or "").strip()
 
 
+def _enumerate_v2_tradfi_non_trading_days(
+    date_axis: list[date],
+    data_types: list[str],
+) -> Iterator[ExpectedRow]:
+    """Venue-grain weekend/holiday sentinel rows for tradfi (mirrors v1
+    :func:`_enumerate_tradfi`).
+
+    For each ``(venue, non-trading day in date_axis, data_type)`` combination,
+    yield one row with blank ``instrument_type`` / ``instrument_id`` — matching
+    v1's grain so v2 covers the same calendar cells (weekend + holiday
+    sentinels). Reason column is the venue-specific ``EXPECTED_HOLIDAY`` /
+    ``EXPECTED_WEEKEND`` from the UAC trading-calendar registry
+    (:func:`non_trading_day_reason`).
+
+    Called from :func:`_enumerate_v2_tradfi` so a single v2 dispatch subsumes
+    v1's venue-grain non-trading-day emission (see
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``:
+    v1 cannot be deleted until v2 subsumes this venue-grain sentinel emission).
+    """
+    venues = VENUES_BY_ASSET_GROUP.get("tradfi", [])
+    if not venues or not data_types:
+        return
+    for venue in venues:
+        venue_str = str(venue)
+        for d in date_axis:
+            iso = d.isoformat()
+            if not is_non_trading_day(venue_str, iso):
+                continue
+            reason = non_trading_day_reason(venue_str, iso) or "EXPECTED_HOLIDAY"
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="tradfi",
+                    venue=venue_str,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=iso,
+                    reason=reason,
+                )
+
+
 def _enumerate_v2_tradfi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1373,10 +1416,13 @@ def _enumerate_v2_tradfi(
 ) -> Iterator[ExpectedRow]:
     """Per-instrument tradfi v2 enumerator.
 
-    Tradfi instruments respect available_from/available_to lifecycle bounds.
-    Weekend and holiday dates fall through to the pipeline (v1 handles them
-    at venue-grain; v2 only adds per-instrument rows for the non-trading-day
-    windows outside the instrument lifecycle).
+    Emits per-instrument lifecycle rows only. Venue-grain weekend/holiday
+    sentinels (the v1 subsumption) are emitted by the sibling
+    :func:`_enumerate_v2_tradfi_non_trading_days` helper and composed with this
+    function at the production dispatch layer (``_V2_ENUMERATORS["tradfi"]``
+    → :func:`_enumerate_v2_tradfi_composed`), so callers of the composed entry
+    get both grains in one iterator while direct callers of this function
+    (unit-test focus on lifecycle) see per-instrument rows only.
 
     The seeded ``instrument_type`` is the CANONICAL WRITER grain (lowercase
     ``future``/``equity``/``etf``/``combo``/``futures_chain``), NOT the raw
@@ -1523,6 +1569,38 @@ def _enumerate_v2_tradfi(
                     reason=reason,
                     underlying=seed_underlying,
                 )
+
+
+def _enumerate_v2_tradfi_composed(
+    catalog: list[InstrumentCatalogEntry],
+    date_axis: list[date],
+    data_types: list[str],
+    *,
+    present_set: set[tuple[str, ...]] | None = None,
+    present_cols: list[str] | None = None,
+) -> Iterator[ExpectedRow]:
+    """Composed tradfi v2 dispatch — venue-grain non-trading-day sentinels
+    chained with per-instrument lifecycle rows.
+
+    This is what ``_V2_ENUMERATORS["tradfi"]`` points at (i.e. what
+    :func:`enumerate_v2` and every production caller receives), subsuming what
+    v1 :func:`_enumerate_tradfi` used to emit at parity grain
+    (``instrument_type=""`` ``instrument_id=""``). See
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``
+    for why v2 must own this venue-grain emission before v1 can be retired.
+
+    Direct callers of :func:`_enumerate_v2_tradfi` (per-instrument unit tests)
+    keep their focused lifecycle scope; the composed entry adds the venue-grain
+    pass on top.
+    """
+    yield from _enumerate_v2_tradfi_non_trading_days(date_axis, data_types)
+    yield from _enumerate_v2_tradfi(
+        catalog,
+        date_axis,
+        data_types,
+        present_set=present_set,
+        present_cols=present_cols,
+    )
 
 
 def _enumerate_v2_sports(
@@ -1825,7 +1903,11 @@ _V2_ENUMERATORS: dict[
 ] = {
     "cefi": _enumerate_v2_cefi,
     "defi": _enumerate_v2_defi,
-    "tradfi": _enumerate_v2_tradfi,
+    # tradfi = COMPOSED dispatch (venue-grain non-trading-day sentinels +
+    # per-instrument lifecycle rows) so v2 subsumes what v1 _enumerate_tradfi
+    # emitted at parity grain. Direct callers of _enumerate_v2_tradfi
+    # (per-instrument unit tests) keep their focused scope.
+    "tradfi": _enumerate_v2_tradfi_composed,
     "sports": _enumerate_v2_sports,
     "prediction": _enumerate_v2_prediction,
 }
