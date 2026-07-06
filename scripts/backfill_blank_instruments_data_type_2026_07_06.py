@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
 # Epic: instruments_master
 # Lifecycle: oneoff
-# Delete-when: after cefi blank-data_type backfill verified complete (0 blank cefi captured rows on 2026-06-27..2026-07-06)
+# Delete-when: after blank-data_type backfill verified complete across all non-sports asset groups
+#   (0 blank captured venue-grain rows on 2026-06-27..2026-07-06 in cefi + defi + tradfi buckets)
 
-"""One-off patch — promote ``data_type=''`` → ``'instruments'`` on IS cefi captures 2026-06-27+.
+"""One-off patch — promote ``data_type=''`` → ``'instruments'`` on IS non-sports captures 2026-06-27+.
 
 ROOT CAUSE (issue ``is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06``):
-  Every IS cefi captured row emitted 2026-06-29..2026-07-06 (10 days, ~260 shards
-  across 26 cefi venues) landed with ``data_type=""`` (blank) in the availability
-  index. Item (a) of the recommended fix — stamp ``data_type="instruments"`` at
-  ``record_captured`` emission time (``writers.py:239``) — shipped as
-  ``instruments-service@46ba62b``, so NEW emissions stamp the canonical
-  ``REFERENCE_DATA_TYPE = "instruments"``. This script is item (b): the one-off
-  backfill that promotes the ~260 historical blank rows to the canonical value so
-  any downstream consumer using the canonical filter
-  (``capture_status=='captured' AND data_type=='instruments'``) stops silently
-  missing 10 days of cefi captures.
+  Every IS non-sports captured row (cefi / defi / tradfi) emitted 2026-06-29..2026-07-06
+  landed with ``data_type=""`` (blank) in the availability index. The regression was
+  first identified on cefi (~260 blank rows across 26 venues); the writer emits all
+  three asset groups through the same non-sports code path in
+  ``instruments_service/engine/orchestrator/writers.py`` (line 245 post-fix), so
+  defi + tradfi were vulnerable to the same regression window. Item (a) of the
+  recommended fix — stamp ``data_type="instruments"`` at ``record_captured`` emission
+  time (``writers.py:245``) — shipped as ``instruments-service@46ba62b`` and covers
+  the non-sports emit path for ALL three asset groups. This script is item (b): the
+  one-off backfill that promotes historical blank rows to the canonical value so any
+  downstream consumer using the canonical filter
+  (``capture_status=='captured' AND data_type=='instruments'``) stops silently missing
+  the pre-fix captures.
 
 Filter (per the plan-of-record):
     ``date >= 2026-06-27``
     ``AND capture_status == 'captured'``
     ``AND (data_type is null OR data_type == '')``
-    ``AND venue != ''``  (cefi venue-grain, per-venue captures — NOT AG-grain rows)
+    ``AND venue != ''``  (per-venue captures — NOT AG-grain rows)
 
 Fix:
     ``data_type = 'instruments'``  (matches ``REFERENCE_DATA_TYPE`` in
@@ -34,7 +38,7 @@ Dry-run by default. ``--apply --confirm`` mutates the live ``_index`` (the same
 guard the 2026-06-21 defi catalog data_type backfill script uses).
 
 Post-run verification: reads the fresh ``_index`` back and reports the count of
-blank cefi captured rows on ``date >= 2026-06-27``; the exit is loud-fail if the
+blank captured rows on ``date >= 2026-06-27``; the exit is loud-fail if the
 count is > 0 after ``--apply``.
 
 Safety gate: the ``captured`` row count MUST be unchanged after the fix (we only
@@ -42,15 +46,21 @@ rewrite an unset column; we never delete or reclassify rows).
 
 Usage::
 
-    # inspect what will change (dry-run)
+    # inspect what will change on cefi (dry-run)
     cd instruments-service
-    .venv/bin/python scripts/backfill_cefi_blank_instruments_data_type_2026_07_06.py
+    .venv/bin/python scripts/backfill_blank_instruments_data_type_2026_07_06.py --asset-group cefi
 
-    # mutate the live _index
-    .venv/bin/python scripts/backfill_cefi_blank_instruments_data_type_2026_07_06.py --apply --confirm
+    # dry-run defi + tradfi (task is_cefi_manifest_blank_data_type_since_2026_06_29-006)
+    .venv/bin/python scripts/backfill_blank_instruments_data_type_2026_07_06.py --asset-group defi
+    .venv/bin/python scripts/backfill_blank_instruments_data_type_2026_07_06.py --asset-group tradfi
+
+    # mutate the live _index for the given asset group
+    .venv/bin/python scripts/backfill_blank_instruments_data_type_2026_07_06.py \\
+        --asset-group defi --apply --confirm
 
 SSOT: ``plans/active/issues/is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06.md``
-todo ``[DATA] P1. One-off patch script under scripts/ ...``.
+todo ``[DATA] P2. Verify defi + tradfi are not affected. If the same regression
+exists there, extend the (a) fix ... run the patch on their buckets too ...``.
 """
 
 from __future__ import annotations
@@ -59,6 +69,7 @@ import argparse
 import io
 import logging
 import sys
+from typing import Literal, cast
 
 import pandas as pd
 from unified_trading_library import get_storage_client, resolve_bucket_name
@@ -69,11 +80,15 @@ logger = logging.getLogger(__name__)
 _INDEX_BLOB = "_index/availability_index.parquet"
 _REFERENCE_DATA_TYPE = "instruments"  # mirrors migrate_instruments_store_v9.py:126
 _CUTOFF_DATE = "2026-06-27"
+_SUPPORTED_ASSET_GROUPS = ("cefi", "defi", "tradfi")
 
 
-def _resolve_cefi_is_bucket() -> str:
+def _resolve_is_bucket(asset_group: str) -> str:
+    # asset_group is validated against _SUPPORTED_ASSET_GROUPS by argparse choices;
+    # narrow str → the bucket-naming Literal.
+    ag = cast(Literal["cefi", "defi", "tradfi"], asset_group)
     return resolve_bucket_name(
-        cloud="gcp", kind="instruments-store", asset_group="cefi", deployment_env="prod"
+        cloud="gcp", kind="instruments-store", asset_group=ag, deployment_env="prod"
     )
 
 
@@ -85,8 +100,8 @@ def _load_manifest(bucket: str) -> pd.DataFrame:
     return df
 
 
-def _identify_blank_rows(df: pd.DataFrame) -> pd.Index:
-    """Return index of cefi captured rows on ``date >= 2026-06-27`` with blank ``data_type``."""
+def _identify_blank_rows(df: pd.DataFrame, asset_group: str) -> pd.Index:
+    """Return index of captured rows on ``date >= 2026-06-27`` with blank ``data_type``."""
     missing = [c for c in ("date", "capture_status", "data_type", "venue") if c not in df.columns]
     if missing:
         logger.error("Manifest missing required columns: %s", missing)
@@ -105,7 +120,8 @@ def _identify_blank_rows(df: pd.DataFrame) -> pd.Index:
     idx = df[on_or_after & is_captured & is_blank_dt & has_venue].index
     total_captured_recent = int((on_or_after & is_captured & has_venue).sum())
     logger.info(
-        "Blank-data_type cefi captured rows on %s+: %d of %d total venue-grain captured (%.1f%%)",
+        "Blank-data_type %s captured rows on %s+: %d of %d total venue-grain captured (%.1f%%)",
+        asset_group,
         _CUTOFF_DATE,
         len(idx),
         total_captured_recent,
@@ -148,10 +164,10 @@ def _upload_manifest(bucket: str, df: pd.DataFrame) -> None:
     )
 
 
-def _verify_post_run(bucket: str) -> int:
-    """Re-read the _index and count blank cefi captured rows on ``date >= 2026-06-27``."""
+def _verify_post_run(bucket: str, asset_group: str) -> int:
+    """Re-read the _index and count blank captured rows on ``date >= 2026-06-27``."""
     df = _load_manifest(bucket)
-    residual = _identify_blank_rows(df)
+    residual = _identify_blank_rows(df, asset_group)
     return len(residual)
 
 
@@ -159,6 +175,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__.split("\n\n", 1)[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument(
+        "--asset-group",
+        required=True,
+        choices=_SUPPORTED_ASSET_GROUPS,
+        help="Which non-sports IS PRD availability-index to promote (cefi | defi | tradfi).",
     )
     ap.add_argument("--apply", action="store_true", help="Mutate the live _index (requires --confirm)")
     ap.add_argument("--confirm", action="store_true", help="Confirm a live --apply write")
@@ -168,15 +190,20 @@ def main() -> int:
         ap.error("--apply requires --confirm")
 
     apply = args.apply and args.confirm
+    asset_group = args.asset_group
 
-    bucket = _resolve_cefi_is_bucket()
-    logger.info("CeFi IS PRD availability-index bucket: gs://%s", bucket)
+    bucket = _resolve_is_bucket(asset_group)
+    logger.info("%s IS PRD availability-index bucket: gs://%s", asset_group, bucket)
 
     df = _load_manifest(bucket)
-    blank_idx = _identify_blank_rows(df)
+    blank_idx = _identify_blank_rows(df, asset_group)
 
     if len(blank_idx) == 0:
-        logger.info("Already clean — 0 blank cefi captured rows on %s+; nothing to do.", _CUTOFF_DATE)
+        logger.info(
+            "Already clean — 0 blank %s captured rows on %s+; nothing to do.",
+            asset_group,
+            _CUTOFF_DATE,
+        )
         return 0
 
     _report_distribution(df, blank_idx)
@@ -196,28 +223,31 @@ def main() -> int:
 
     if not apply:
         logger.info(
-            "DRY-RUN: %d blank cefi captured rows would be promoted to data_type='%s'. "
+            "DRY-RUN: %d blank %s captured rows would be promoted to data_type='%s'. "
             "Re-run with --apply --confirm to mutate.",
             len(blank_idx),
+            asset_group,
             _REFERENCE_DATA_TYPE,
         )
         return 0
 
     _upload_manifest(bucket, fixed)
 
-    residual = _verify_post_run(bucket)
+    residual = _verify_post_run(bucket, asset_group)
     if residual > 0:
         logger.error(
-            "Post-run verification FAILED: %d blank cefi captured rows remain on %s+ (expected 0)",
+            "Post-run verification FAILED: %d blank %s captured rows remain on %s+ (expected 0)",
             residual,
+            asset_group,
             _CUTOFF_DATE,
         )
         return 5
 
     logger.info(
-        "✅ Done — promoted %d rows to data_type='%s'. Post-run verify: 0 blank cefi captured rows on %s+.",
+        "✅ Done — promoted %d rows to data_type='%s'. Post-run verify: 0 blank %s captured rows on %s+.",
         len(blank_idx),
         _REFERENCE_DATA_TYPE,
+        asset_group,
         _CUTOFF_DATE,
     )
     return 0

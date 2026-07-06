@@ -301,3 +301,38 @@ class TestWriteVenue:
         assert call_kwargs["data_type"] == "instruments"
         assert call_kwargs["asset_group"] == "defi"
         assert call_kwargs["chain"] == "ETHEREUM"
+
+    def test_tradfi_manifest_stamps_data_type_instruments(self) -> None:
+        """TradFi manifest emission goes through the same non-sports code path
+        as cefi (no chain) and must also stamp data_type='instruments'. Verified
+        clean at runtime 2026-07-06 against instruments-store-tradfi-prd — this
+        test guards the writer branch that keeps it that way.
+        """
+        import pandas as pd
+
+        # NASDAQ resolves via VENUE_TO_ASSET_GROUP → "tradfi" (per
+        # unified_api_contracts.registry.market_data_categories.VENUES_BY_ASSET_GROUP).
+        df = pd.DataFrame({"instrument_key": ["A"], "venue": ["NASDAQ"]})
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        mock_manifest = MagicMock()
+        counts: dict[str, int] = {}
+
+        _write_venue(
+            "NASDAQ",
+            df,
+            "2026-07-06",
+            "test-bucket",
+            mock_sink,
+            counts,
+            mock_sampler,
+            manifest=mock_manifest,
+        )
+
+        mock_manifest.record_captured.assert_called_once()
+        call_kwargs = mock_manifest.record_captured.call_args.kwargs
+        assert call_kwargs["data_type"] == "instruments"
+        assert call_kwargs["asset_group"] == "tradfi"
+        assert call_kwargs["venue"] == "NASDAQ"
+        assert call_kwargs["chain"] == ""
