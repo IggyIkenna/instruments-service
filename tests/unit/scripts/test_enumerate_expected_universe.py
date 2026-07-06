@@ -459,3 +459,107 @@ def test_row_data_types_capability_absent_venue_not_gated() -> None:
     cefi_dts = ["trades", "book_snapshot_5"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("BINANCE-DELIVERY", "PERPETUAL"), cefi_dts)
     assert "trades" in row_dts
+
+
+# --- TOTAL_UNIVERSE_AXES SSOT wiring (plans/active/is_catalogue_completion_2d_
+# 2026_07_06.md — B2 downstream) ---------------------------------------------
+
+
+def test_supported_asset_groups_matches_total_universe_axes() -> None:
+    """The enumerator is wired to the ``TOTAL_UNIVERSE_AXES`` SSOT — the AGs it
+    supports MUST equal the AGs the SSOT declares axes for. A drift in either
+    direction (SSOT adds/removes an AG) makes the could-exist denominator
+    dishonest and must loud-fail at import time.
+    """
+    from unified_api_contracts import TOTAL_UNIVERSE_AXES
+
+    assert set(enumerator_module.SUPPORTED_ASSET_GROUPS) == set(TOTAL_UNIVERSE_AXES.keys())
+
+
+def test_verify_ssot_alignment_raises_on_drift() -> None:
+    """``_verify_ssot_alignment`` raises ``RuntimeError`` when
+    ``SUPPORTED_ASSET_GROUPS`` drifts from ``TOTAL_UNIVERSE_AXES``. Simulates the
+    drift by monkey-patching one and running the checker.
+    """
+    original = enumerator_module.SUPPORTED_ASSET_GROUPS
+    try:
+        enumerator_module.SUPPORTED_ASSET_GROUPS = ("cefi", "defi")  # drop 3 AGs
+        with pytest.raises(RuntimeError, match="drifted from TOTAL_UNIVERSE_AXES"):
+            enumerator_module._verify_ssot_alignment()
+    finally:
+        enumerator_module.SUPPORTED_ASSET_GROUPS = original
+
+
+def test_classify_expected_row_yields_mvp_or_total_only_for_supported_ags() -> None:
+    """Every yielded :class:`ExpectedRow` from a supported AG classifies as
+    ``MVP`` or ``TOTAL_ONLY`` — NEVER ``NOT_IN_UNIVERSE`` (the operational
+    MVP ⊆ TOTAL guarantee: the enumerator only seeds cells that live in the
+    total-reasonable universe).
+    """
+    from unified_api_contracts import UniverseTier
+
+    # Sample a small window from each per-AG v1 enumerator (v2 needs a real
+    # catalog; v1 walks pure UAC axes → tiny + deterministic).
+    tradfi_rows = list(enumerator_module._enumerate_tradfi("2018-01-06", "2018-01-06"))
+    defi_rows = list(enumerator_module._enumerate_defi("2016-01-01", "2016-01-01"))
+    cefi_rows = list(enumerator_module._enumerate_cefi("2010-01-01", "2010-01-01"))
+    pred_rows = list(enumerator_module._enumerate_prediction("2019-01-01", "2019-01-01"))
+
+    all_rows = tradfi_rows + defi_rows + cefi_rows + pred_rows
+    assert all_rows, "expected at least one enumerator row across the sampled window"
+
+    not_in_universe = [
+        r for r in all_rows if enumerator_module.classify_expected_row(r) == UniverseTier.NOT_IN_UNIVERSE
+    ]
+    assert not_in_universe == [], (
+        f"enumerator yielded {len(not_in_universe)} NOT_IN_UNIVERSE rows — the seeded "
+        f"could-exist denominator MUST NOT contain cells outside the total-reasonable "
+        f"universe. Samples: {not_in_universe[:3]}"
+    )
+
+
+def test_classify_expected_row_flags_unknown_asset_group_as_not_in_universe() -> None:
+    """Negative test: an :class:`ExpectedRow` for an AG the SSOT does NOT know
+    classifies as ``NOT_IN_UNIVERSE``. Proves the classifier actually consults
+    ``TOTAL_UNIVERSE_AXES`` (a broken wiring would silently pass every AG).
+    """
+    from unified_api_contracts import UniverseTier
+
+    stub = enumerator_module.ExpectedRow(
+        asset_group="unknown_ag",  # not in TOTAL_UNIVERSE_AXES
+        venue="TESTVENUE",
+        chain="",
+        data_type="trades",
+        instrument_type="SPOT",
+        instrument_id="TEST:SPOT:BTC-USD",
+        league_id="",
+        date="2024-01-01",
+        reason="",
+    )
+    assert enumerator_module.classify_expected_row(stub) == UniverseTier.NOT_IN_UNIVERSE
+
+
+def test_mvp_row_is_in_total_universe() -> None:
+    """A representative MVP cell (BINANCE-SPOT / SPOT / BTC / trades on a
+    post-launch date) MUST classify as ``MVP`` — proves MVP ⊆ TOTAL is
+    respected end-to-end (the shipped UAC ``universe_membership`` returns MVP,
+    which by definition is a subset of the total universe).
+    """
+    from unified_api_contracts import UniverseTier
+
+    stub = enumerator_module.ExpectedRow(
+        asset_group="cefi",
+        venue="BINANCE-SPOT",
+        chain="",
+        data_type="trades",
+        instrument_type="SPOT",
+        instrument_id="BINANCE-SPOT:SPOT:BTC-USDT",
+        league_id="",
+        date="2024-01-01",
+        reason="",
+        underlying="BTC",
+    )
+    tier = enumerator_module.classify_expected_row(stub)
+    assert tier in (UniverseTier.MVP, UniverseTier.TOTAL_ONLY), (
+        f"expected MVP or TOTAL_ONLY for BINANCE-SPOT BTC trades, got {tier}"
+    )

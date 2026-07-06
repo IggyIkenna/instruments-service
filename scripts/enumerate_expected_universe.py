@@ -79,8 +79,10 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    TOTAL_UNIVERSE_AXES,
     VENUES_BY_ASSET_GROUP,
     Mode,
+    UniverseTier,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
@@ -89,6 +91,7 @@ from unified_api_contracts import (
     is_in_mvp_capture_universe,
     is_mvp,
     pipeline_mode_for_source,
+    universe_membership,
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
@@ -218,6 +221,52 @@ def _sports_data_types() -> list[str]:
 SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
 
 
+# ---------------------------------------------------------------------------
+# TOTAL_UNIVERSE_AXES SSOT wiring (B2 downstream — plans/active/is_catalogue_
+# completion_2d_2026_07_06.md). The UAC ``TOTAL_UNIVERSE_AXES`` map is the SSOT for
+# WHICH axes bound the could-exist universe per AG and WHERE each axis's
+# membership + provenance (``HARDCODED_GENESIS`` vs ``DOWNLOAD_DERIVED``) live.
+# This enumerator IS the could-exist denominator producer the SSOT names as its
+# consumer — the per-AG enumerators above/below iterate exactly those axes.
+#
+# The check here is STRUCTURAL: the AGs the enumerator supports MUST equal the
+# AGs the SSOT declares axes for, so a UAC edit that adds/removes an AG is a
+# loud-fail here instead of a silent drift. The temporal/per-instrument
+# could-exist decision (is THIS instrument alive on THIS date) is the catalogue
+# ``available_from`` / ``available_to`` window ANDed with the genesis/launch
+# lower bound — that stays here (the enumerator reads the catalogue); UAC does
+# NOT depend on this service's runtime read.
+# ---------------------------------------------------------------------------
+
+
+def _verify_ssot_alignment() -> None:
+    """Assert the enumerator's ``SUPPORTED_ASSET_GROUPS`` matches ``TOTAL_UNIVERSE_AXES``.
+
+    Loud-fails at import time if UAC's SSOT drops or adds an AG — the enumerator
+    would otherwise silently produce a denominator that omits an AG the SSOT
+    declares (or seeds an AG the SSOT does not). MVP ⊆ TOTAL is guaranteed
+    structurally: every AG the enumerator seeds has an axis taxonomy in the SSOT,
+    so :func:`universe_membership` on a yielded cell classifies as ``MVP`` or
+    ``TOTAL_ONLY`` (never ``NOT_IN_UNIVERSE``).
+    """
+    ssot_ags = set(TOTAL_UNIVERSE_AXES.keys())
+    enum_ags = set(SUPPORTED_ASSET_GROUPS)
+    if ssot_ags != enum_ags:
+        raise RuntimeError(
+            "enumerate_expected_universe: SUPPORTED_ASSET_GROUPS drifted from "
+            f"TOTAL_UNIVERSE_AXES SSOT. SSOT={sorted(ssot_ags)} "
+            f"enumerator={sorted(enum_ags)} "
+            "(only-in-SSOT={} / only-in-enumerator={}). Edit BOTH the SSOT and "
+            "SUPPORTED_ASSET_GROUPS to keep the could-exist denominator honest.".format(
+                sorted(ssot_ags - enum_ags),
+                sorted(enum_ags - ssot_ags),
+            )
+        )
+
+
+_verify_ssot_alignment()
+
+
 def _default_bucket_for(asset_group: str) -> str:
     """Resolve the canonical manifest bucket for ``asset_group`` via the bucket-name SSOT.
 
@@ -290,6 +339,32 @@ class ExpectedRow:
     # the capture and the cell stays permanently ``expected_unattempted``. "" for
     # leaf / non-derivative rows.
     underlying: str = ""
+
+
+def classify_expected_row(row: ExpectedRow) -> UniverseTier:
+    """Classify an :class:`ExpectedRow` into the universe hierarchy.
+
+    Wraps :func:`universe_membership` (UAC ``TOTAL_UNIVERSE_AXES`` SSOT) so
+    callers can inspect the tier of a yielded row (``MVP`` / ``TOTAL_ONLY`` /
+    ``NOT_IN_UNIVERSE``). Used by tests that assert every enumerator-yielded
+    cell is MVP or TOTAL_ONLY — the seeded could-exist denominator MUST NOT
+    contain ``NOT_IN_UNIVERSE`` cells, which is the operational MVP ⊆ TOTAL
+    guarantee for this consumer (B2 downstream, plans/active/is_catalogue_
+    completion_2d_2026_07_06.md).
+
+    The MVP predicate wants ``base_ccy`` for cefi (spot/perp base assets) and
+    tradfi (underliers/tickers); derive it from the row's underlying /
+    instrument_id the same way the per-AG enumerators do.
+    """
+    base_ccy = (row.underlying or row.instrument_id or "").strip().upper() or None
+    return universe_membership(
+        row.asset_group,
+        row.venue,
+        row.instrument_type,
+        row.data_type,
+        base_ccy=base_ccy,
+        league=row.league_id or None,
+    )
 
 
 def _emit_event(event: str, /, **details: object) -> None:
