@@ -229,3 +229,75 @@ class TestWriteVenue:
             _write_venue("BINANCE-SPOT", df, "2026-03-22", "test-bucket", mock_sink, counts, mock_sampler)
 
         mock_sampler.generate_csv_sample.assert_called_once()
+
+    def test_cefi_manifest_stamps_data_type_instruments(self) -> None:
+        """Non-sports (cefi/tradfi/defi) manifest emission must stamp
+        data_type='instruments' — never blank.
+
+        Regression guard for the 2026-06-29..2026-07-06 blank-data_type leak
+        (issue: is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06).
+        The canonical honest-coverage filter is
+        capture_status=='captured' AND data_type=='instruments'; a blank stamp
+        makes 260 cefi shards read as absent. writer is SSOT for the atom —
+        migrate_instruments_store_v9.REFERENCE_DATA_TYPE promotes legacy blanks,
+        but new emissions must land canonical from the first write.
+        """
+        import pandas as pd
+
+        df = pd.DataFrame({"instrument_key": ["A"], "venue": ["BINANCE-SPOT"]})
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        mock_manifest = MagicMock()
+        counts: dict[str, int] = {}
+
+        _write_venue(
+            "BINANCE-SPOT",
+            df,
+            "2026-07-06",
+            "test-bucket",
+            mock_sink,
+            counts,
+            mock_sampler,
+            manifest=mock_manifest,
+        )
+
+        mock_manifest.record_captured.assert_called_once()
+        call_kwargs = mock_manifest.record_captured.call_args.kwargs
+        assert call_kwargs["data_type"] == "instruments", (
+            f"cefi manifest emission must stamp data_type='instruments', got "
+            f"{call_kwargs['data_type']!r}"
+        )
+        assert call_kwargs["asset_group"] == "cefi"
+        assert call_kwargs["venue"] == "BINANCE-SPOT"
+        assert call_kwargs["chain"] == ""
+
+    def test_defi_manifest_stamps_data_type_instruments(self) -> None:
+        """DeFi (chain-bearing) manifest emission must also stamp
+        data_type='instruments' — the same fix applies to the chain-split branch.
+        """
+        import pandas as pd
+
+        df = pd.DataFrame({"instrument_key": ["A"], "venue": ["AAVE_V3-ETHEREUM"]})
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        mock_manifest = MagicMock()
+        counts: dict[str, int] = {}
+
+        _write_venue(
+            "AAVE_V3-ETHEREUM",
+            df,
+            "2026-07-06",
+            "test-bucket",
+            mock_sink,
+            counts,
+            mock_sampler,
+            manifest=mock_manifest,
+        )
+
+        mock_manifest.record_captured.assert_called_once()
+        call_kwargs = mock_manifest.record_captured.call_args.kwargs
+        assert call_kwargs["data_type"] == "instruments"
+        assert call_kwargs["asset_group"] == "defi"
+        assert call_kwargs["chain"] == "ETHEREUM"
