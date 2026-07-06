@@ -21,7 +21,20 @@ from instruments_service.reference_data.adapters.sports.adapters.understat impor
     _parse_understat_match,
     _safe_float,
     _safe_int,
+    clear_understat_league_cache,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_understat_league_cache():
+    """The adapter memoises getLeagueData results in a MODULE-level cache (fetched
+    once per (league, season) so a full-history bulk backfill isn't re-fetching the
+    same season blob per calendar date). Clear it around each test so a prior
+    test's populated (league, season) entry can't make a later test skip the mocked
+    fetch (test pollution)."""
+    clear_understat_league_cache()
+    yield
+    clear_understat_league_cache()
 
 
 def _make_aiohttp_mock(

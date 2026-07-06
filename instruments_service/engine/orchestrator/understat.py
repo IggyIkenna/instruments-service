@@ -142,6 +142,20 @@ async def _fetch_understat_xg(
                             flat[f"{k}_{sub_k}"] = str(sub_v) if sub_v is not None else None
                     else:
                         flat[k] = str(v) if v is not None else None
+                # Reconstruct the flat 'league' key. ``_coerce_adapter_output``
+                # carries the CanonicalLeague as a NESTED dict under 'league', so
+                # the flatten loop above explodes it into league_league_id /
+                # league_name / ... and leaves NO flat 'league' key. Both the
+                # fixture_id build below and the per-league capture groupby key on
+                # 'league' — so without this the whole XG capture block is silently
+                # skipped and every league records empty_confirmed despite fixtures
+                # existing (regression: a 2026-05-07 bulk run recorded empty for
+                # ~all XG match-days while the xG parquets sit in GCS — manifest
+                # under-reports XG as 4,444 captured / 301,667 empty). The
+                # league_id the CanonicalLeague carries IS the understat league
+                # name (EPL / La_Liga / …), matching the shots path's league_name.
+                if "league" not in flat:
+                    flat["league"] = flat.get("league_league_id") or flat.get("league_name")
                 # Build canonical fixture_id from team names + date
                 home_name = flat.get("h_title") or ""
                 away_name = flat.get("a_title") or ""
@@ -176,7 +190,15 @@ async def _fetch_understat_xg(
                     _xg_canonical = _orch._canonical_league_id(_xg_lid_str)
                     if not _orch._is_in_canonical_write_universe(_xg_canonical):
                         continue
-                    _captured_leagues.add(_xg_lid_str)
+                    # Track the CANONICAL id (record_captured below keys on
+                    # _xg_canonical, and the honest-absence loop subtracts against
+                    # _expected_understat_leagues which is canonical). Tracking the
+                    # RAW _xg_lid_str here left every non-already-uppercase league
+                    # (Bundesliga/La_Liga/Serie_A/Ligue_1 — all but EPL) OUT of the
+                    # captured set, so the record_empty loop then overwrote the just
+                    # -captured row with empty_confirmed. Only EPL (raw==canonical)
+                    # survived. Pairs with the flat-'league' reconstruction above.
+                    _captured_leagues.add(_xg_canonical)
                     # C.6: available_at = kickoff + 24h already set on df at line ~5688 (understat
                     # data scraped the day after). Preserve it; fill NaT rows (missing kickoff_utc)
                     # with wall-clock as fallback. Do NOT override with stamp_available_at_explicit.
@@ -448,7 +470,29 @@ async def _run_understat_shots_date(
                 continue
             _captured_leagues.add(lid)
             df = _orch.pd.DataFrame(shot_rows)
-            df["available_at"] = _orch.pd.Timestamp(_orch.datetime.now(_orch.UTC))
+            # Conform the shots df to the SPORTS_XG_SHOTS contract before BOTH the
+            # sink-write (GCS parquet) and record_captured (schema validation).
+            # normalize_understat_shot is SOURCE-shaped (understat's raw shot has
+            # xG only — no per-shot xA, no at-time-of-shot score/period; raw
+            # h_goals/a_goals are the FINAL score, not per-shot), so:
+            #  * xa — contract column understat can't populate → nullable-null (other
+            #    shot sources may carry it); the normalizer omits it, the write path
+            #    fills the contract column.
+            #  * home_goals / away_goals / period — honestly null for understat, but
+            #    the contract dtype is int64, and a None-filled column infers to
+            #    object → RowSchemaValidationError. Cast to pandas nullable Int64
+            #    (the validator's dtype table accepts Int64 for int64).
+            #  * available_at — pd.Timestamp of a Python datetime is us-precision
+            #    under pandas 2.x; the contract (_DATA_AVAILABLE_AT) is datetime64[ns,UTC].
+            # Before the lookup_contract fix (UAC) this mismatch was masked because
+            # the schema lookup MISSED and validation was skipped; now it runs.
+            if "xa" not in df.columns:
+                df["xa"] = float("nan")
+            df["xa"] = _orch.pd.to_numeric(df["xa"], errors="coerce")  # float64 (not object)
+            for _icol in ("home_goals", "away_goals", "period"):
+                if _icol in df.columns:
+                    df[_icol] = df[_icol].astype("Int64")
+            df["available_at"] = _orch.pd.Timestamp(_orch.datetime.now(_orch.UTC)).as_unit("ns")
             _orch._gated_sink_write(
                 sink,
                 data=df,
