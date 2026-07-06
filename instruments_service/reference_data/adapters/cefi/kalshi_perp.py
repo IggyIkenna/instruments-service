@@ -1,20 +1,30 @@
-"""Kalshi crypto-perp reference data adapter — CFTC-regulated perpetual futures.
+"""Kalshi crypto-perp reference data adapter — CFTC-regulated perpetual futures (KALSHI-PERP).
 
 Distinct from the prediction-market KalshiReferenceDataAdapter in
-``adapters/prediction/kalshi.py``. Kalshi launched CFTC-approved crypto
-perpetual futures (KALSHI-PERP) on 2026-05-29. These are NOT prediction
-YES/NO markets — they are continuous perpetual contracts with funding rates.
+``adapters/prediction/kalshi.py``. KALSHI-PERP is a real, intended cefi venue —
+Kalshi launched CFTC-regulated crypto perpetual futures on 2026-05-29.
 
-API reference:
-  Base URL: https://api.elections.kalshi.com/trade-api/v2
-  Markets:  GET /markets?category=Crypto&status=open   (public, no auth)
-  Trades:   GET /markets/{ticker}/trades
-  Funding:  GET /markets/{ticker}/funding_rates
-  Orderbook: GET /markets/{ticker}/orderbook
+⚠️  ENUMERATION DISABLED PENDING REPOINT (``_REPOINT_PENDING = True``). SSOT:
+``plans/active/prediction_capture_incident_remediation_2026_07_06.md`` Workstream B
+(issue ``plans/active/issues/prediction_universe_capture_dead_since_07_01_2026_07_06.md``).
 
-Public read — no RSA-PSS signing required for contract enumeration.
-Rate limit: 100 req/s.
-First data: 2026-05-29.
+WHY: this adapter was pointed at the Kalshi *events* host
+``https://api.elections.kalshi.com/trade-api/v2/markets`` — which serves ONLY
+binary event contracts. A live probe of 3,000 crypto-series markets returned
+100% ``market_type=binary``, 0 perpetuals; every market carries ``category: null``.
+The ``category=Crypto`` request param is ignored by that endpoint and the
+client-side filter treated empty-category rows as a PASS, so the adapter emitted
+the entire binary event universe (``KXMVESPORTSMULTIGAMEEXTENDED`` /
+``KXMVECROSSCATEGORY`` …) as fake ``PERPETUAL`` rows — contaminating the cefi
+catalogue with 25,473 rows.
+
+Kalshi's real perpetual futures live on a SEPARATE, authenticated host +
+namespace: ``https://external-api.kalshi.com/trade-api/v2/margin/`` (demo
+``external-api.demo.kalshi.co``), tickers like ``BTC-PERPETUAL``, funding via
+``/margin/funding_rates/*`` — RSA-PSS auth required, rolling out member by member.
+Until this adapter is repointed there (plan Phase 2), enumeration returns an
+honest-empty result: the venue stays declared but carries no reference-data feed.
+Do NOT re-enable against the events host.
 """
 
 import logging
@@ -40,6 +50,13 @@ logger = logging.getLogger(__name__)
 _KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 _PAGE_LIMIT = 200
 _MAX_PAGES = 10  # cap at 2000 contracts per fetch
+
+# Enumeration is DISABLED until the adapter is repointed from the events host to
+# the auth'd margin/perps API (plan Workstream B, Phase 2). While True,
+# get_instruments()/get_instrument() return an honest-empty result BEFORE any
+# network call — the events host has 0 perpetuals, so emitting anything from it
+# is contamination. The venue declaration stays; only the feed is empty.
+_REPOINT_PENDING = True
 
 _STATUS_MAP: dict[int, str] = {429: "429", 401: "401", 403: "403", 400: "400"}
 _MSG_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
@@ -104,6 +121,20 @@ class KalshiPerpReferenceDataAdapter(BaseReferenceDataAdapter):
         Other values return an empty list (venue only has PERPETUAL).
         """
         if instrument_type is not None and instrument_type != InstrumentType.PERPETUAL:
+            return []
+
+        if _REPOINT_PENDING:
+            # DISABLED pending repoint to the margin/perps API (plan Phase 2).
+            # The events host serves 0 perpetuals; return honest-empty rather
+            # than emitting binary event contracts as fake PERPETUAL. No network
+            # call is made. See module docstring.
+            log_event(
+                "ADAPTER_DISABLED_PENDING_REPOINT",
+                details={
+                    "venue": self.venue,
+                    "reason": "events-host serves 0 perpetuals; awaiting margin-API repoint (Phase 2)",
+                },
+            )
             return []
 
         now = datetime.now(UTC)
@@ -218,6 +249,9 @@ class KalshiPerpReferenceDataAdapter(BaseReferenceDataAdapter):
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single Kalshi crypto-perp contract by ticker."""
+        if _REPOINT_PENDING:
+            # DISABLED pending margin-API repoint (plan Phase 2) — see get_instruments.
+            return None
         url = f"{_KALSHI_BASE_URL}/markets/{symbol}"
         headers = {"Accept": "application/json"}
         now = datetime.now(UTC)
@@ -274,11 +308,14 @@ class KalshiPerpReferenceDataAdapter(BaseReferenceDataAdapter):
         if not isinstance(ticker, str) or not ticker:
             return None
 
-        # Filter: only emit markets that look like perpetual contracts.
-        # Kalshi perps have no expiration_time (or far-future dates) and
-        # category=Crypto. Skip markets that appear to be binary YES/NO events.
+        # Reject anything not EXPLICITLY tagged as a crypto perp. The events host
+        # returns category: null → "" for every market; the earlier code treated
+        # "" as a PASS, which let the entire binary event universe through as fake
+        # PERPETUAL (the 25,473-row cefi contamination). Enumeration is disabled
+        # above (_REPOINT_PENDING); this keeps the parser honest if ever called
+        # directly and documents the real bug.
         category = raw.get("category") or raw.get("series_category") or ""
-        if isinstance(category, str) and category.lower() not in ("crypto", "cryptocurrency", ""):
+        if not isinstance(category, str) or category.lower() not in ("crypto", "cryptocurrency"):
             return None
 
         # Derive base_asset from the underlying field, series_ticker, or ticker.
