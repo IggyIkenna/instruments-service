@@ -79,6 +79,7 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    TOTAL_UNIVERSE_AXES,
     VENUES_BY_ASSET_GROUP,
     Mode,
     bundle_instrument_type_for_leaf,
@@ -88,6 +89,7 @@ from unified_api_contracts import (
     has_source_priority,
     is_in_mvp_capture_universe,
     is_mvp,
+    is_total_universe,
     pipeline_mode_for_source,
     valid_data_types_for_venue_instrument_type,
 )
@@ -1799,6 +1801,22 @@ _V2_ENUMERATORS: dict[
     "prediction": _enumerate_v2_prediction,
 }
 
+# Wire the enumerator to the UAC total-universe SSOT (
+# ``unified_api_contracts.canonical.crosscutting.total_universe``): the set of
+# asset_groups the enumerator produces the could-exist denominator for MUST equal
+# the set of asset_groups the SSOT declares an axis taxonomy for. A drift here
+# (a new AG added to UAC without an enumerator, or an enumerator for an AG the
+# SSOT doesn't declare) means the denominator + the SSOT disagree — flags via
+# a loud module-import failure, never a silent runtime miss.
+if set(_V2_ENUMERATORS) != set(TOTAL_UNIVERSE_AXES):
+    _missing = sorted(set(TOTAL_UNIVERSE_AXES) - set(_V2_ENUMERATORS))
+    _extra = sorted(set(_V2_ENUMERATORS) - set(TOTAL_UNIVERSE_AXES))
+    raise RuntimeError(
+        "enumerate_expected_universe: _V2_ENUMERATORS keys drift from UAC TOTAL_UNIVERSE_AXES "
+        f"(missing enumerator for {_missing}; extra enumerator for {_extra}). "
+        "The UAC total-universe SSOT is authoritative — align the enumerator or the SSOT."
+    )
+
 
 def _derive_underlying(instrument_id: str) -> str:
     """Fallback underlying derivation when the catalogue ``underlying`` column is
@@ -1998,9 +2016,14 @@ def enumerate_v2(
     ``expected_universe_v2_design_2026_05_08.md`` Phase 1.A.
     Wave 3 (``expected_unattempted``): writegate plan Phase 3.D.5 item.
     """
-    if asset_group not in _V2_ENUMERATORS:
+    # Gate on the UAC total-universe SSOT (TOTAL_UNIVERSE_AXES) — the authority
+    # for which asset_groups have a could-exist axis taxonomy. The module-level
+    # invariant above keeps ``_V2_ENUMERATORS`` in lock-step, so the SSOT check
+    # is sufficient (and names the SSOT contract in the error).
+    if not is_total_universe(asset_group, "", ""):
         raise ValueError(
-            f"enumerate_v2: unsupported asset_group={asset_group!r}; must be one of {sorted(_V2_ENUMERATORS)}"
+            f"enumerate_v2: asset_group={asset_group!r} is not in the UAC total-universe "
+            f"(TOTAL_UNIVERSE_AXES); declared asset_groups: {sorted(TOTAL_UNIVERSE_AXES)}"
         )
     # G1-ENUM bundle-grain roll-up (Era-B): collapse option/combo leaves → ONE
     # synthetic per-underlying options_chain instrument entry (data_type resolved

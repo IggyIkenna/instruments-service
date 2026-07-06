@@ -916,11 +916,15 @@ def test_enumerate_v2_dispatch_cefi() -> None:
 
 
 def test_enumerate_v2_invalid_asset_group_raises() -> None:
-    """enumerate_v2 with unsupported asset_group must raise ValueError."""
-    with pytest.raises(ValueError, match="unsupported asset_group"):
+    """enumerate_v2 rejects any asset_group not in the UAC TOTAL_UNIVERSE_AXES SSOT.
+
+    The gate names the UAC contract (not the local enumerator registry) so the
+    caller sees which SSOT they need to add the AG to.
+    """
+    with pytest.raises(ValueError, match="TOTAL_UNIVERSE_AXES"):
         list(
             enumerator_module.enumerate_v2(
-                asset_group="crypto",  # invalid
+                asset_group="crypto",  # invalid — not in UAC TOTAL_UNIVERSE_AXES
                 catalog=[],
                 date_axis=_date_axis("2024-01-01"),
                 data_types=["ohlcv_1d"],
@@ -940,6 +944,94 @@ def test_enumerate_v2_empty_catalog_returns_no_rows() -> None:
             )
         )
         assert rows == [], f"expected no rows for empty catalog, got {rows} for {ag}"
+
+
+# ---------------------------------------------------------------------------
+# TOTAL_UNIVERSE_AXES SSOT wiring tests (B2 downstream)
+#
+# The enumerator's could-exist denominator is defined against the UAC total-
+# universe SSOT (``unified_api_contracts.canonical.crosscutting.total_universe``).
+# These tests assert the wire is TIGHT — the enumerator's supported AGs equal
+# the SSOT's declared AGs, and the MVP ⊆ TOTAL hierarchy is respected on the
+# universe_membership() classifier.
+# ---------------------------------------------------------------------------
+
+
+def test_enumerator_dispatch_covers_every_ssot_asset_group() -> None:
+    """Every asset_group in UAC TOTAL_UNIVERSE_AXES has a live v2 enumerator.
+
+    Dynamic test — parametrises over the SSOT so a new AG landing in UAC that
+    forgets to add an enumerator here fails this test, not just the import-time
+    invariant. The import-time invariant is the loud-fail; this is the
+    downstream integration check.
+    """
+    from unified_api_contracts import TOTAL_UNIVERSE_AXES, is_total_universe
+
+    for ag in sorted(TOTAL_UNIVERSE_AXES):
+        # Every declared AG structurally lives in the total universe.
+        assert is_total_universe(ag, "", ""), f"AG {ag!r} in SSOT but is_total_universe False"
+        # enumerate_v2 accepts every SSOT AG on an empty catalog (dispatch works,
+        # per-AG enumerator function is present + callable).
+        rows = list(
+            enumerator_module.enumerate_v2(
+                asset_group=ag,
+                catalog=[],
+                date_axis=_date_axis("2024-01-01"),
+                data_types=["ohlcv_1d"],
+            )
+        )
+        assert rows == [], f"expected no rows for empty {ag} catalog, got {rows}"
+
+
+def test_enumerator_registry_locked_to_ssot_at_import() -> None:
+    """``_V2_ENUMERATORS`` keys equal ``TOTAL_UNIVERSE_AXES`` keys.
+
+    The module-level invariant (loud RuntimeError at import) already enforces
+    this — the test confirms the imported module respects it and pins the
+    contract for future changes.
+    """
+    from unified_api_contracts import TOTAL_UNIVERSE_AXES
+
+    assert set(enumerator_module._V2_ENUMERATORS) == set(TOTAL_UNIVERSE_AXES)
+
+
+def test_universe_membership_mvp_cell_classifies_as_mvp() -> None:
+    """A known MVP cell (BINANCE-FUTURES BTC PERP trades) tiers as MVP.
+
+    Pins the MVP ⊆ TOTAL hierarchy the enumerator's denominator relies on: a
+    catalogue row whose (venue, instrument_type, base) is MVP-scope MUST reach
+    ``UniverseTier.MVP`` via the shared SSOT classifier.
+    """
+    from unified_api_contracts import UniverseTier, universe_membership
+
+    tier = universe_membership(
+        "cefi",
+        "BINANCE-FUTURES",
+        "PERPETUAL",
+        "trades",
+        base_ccy="BTC",
+    )
+    assert tier == UniverseTier.MVP
+
+
+def test_universe_membership_non_mvp_cell_classifies_as_total_only() -> None:
+    """A real-AG non-MVP cell (UPBIT SPOT_PAIR trades) tiers as TOTAL_ONLY.
+
+    Confirms the enumerator's could-exist denominator would include this cell
+    (backfill for completeness) but the MVP readiness gate would not.
+    """
+    from unified_api_contracts import UniverseTier, universe_membership
+
+    tier = universe_membership("cefi", "UPBIT", "SPOT_PAIR", "trades")
+    assert tier == UniverseTier.TOTAL_ONLY
+
+
+def test_universe_membership_unknown_asset_group_classifies_as_not_in_universe() -> None:
+    """An unknown asset_group tiers as NOT_IN_UNIVERSE — matches the enumerate_v2 gate."""
+    from unified_api_contracts import UniverseTier, universe_membership
+
+    tier = universe_membership("equities_options", "NYSE", "STOCK", "trades")
+    assert tier == UniverseTier.NOT_IN_UNIVERSE
 
 
 # ---------------------------------------------------------------------------
