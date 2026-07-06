@@ -2013,6 +2013,35 @@ def test_coverage_horizon_warns_on_stale_latest_day(rollup: ModuleType) -> None:
         rollup._emit_event = orig
 
 
+def test_coverage_horizon_clamps_future_days(rollup: ModuleType) -> None:
+    """Regression (2026-07-06): the prediction writer emits FUTURE-dated day=
+    partitions (settlement-dated dirs out to 2028+), which made ``max(day_counts)``
+    land in the future and silence BOTH checks — hiding a 6-day capture outage
+    (is-daily-enum-prediction failing since 07-01). Future days must be ignored:
+    a window whose only recent PAST day is 7d old warns even when future-dated
+    partitions are present."""
+    events: list[tuple[str, dict[str, object]]] = []
+    orig = rollup._emit_event
+    rollup._emit_event = lambda event, **kw: events.append((event, kw))
+    try:
+        today = date(2026, 7, 6)
+        counts = {
+            date(2026, 6, 28): 2000,  # last real capture day, 8d old
+            date(2026, 7, 31): 400,  # future-dated settlement partitions
+            date(2028, 6, 30): 50,
+        }
+        rollup._warn_coverage_horizon(counts, today, "prediction")
+        assert any(e == "CATALOGUE_STALE_BY_DATE" and kw.get("reason") == "latest_day_too_old" for e, kw in events), (
+            "future-dated day= partitions must not mask a stale capture feed"
+        )
+        events.clear()
+        # Only-future window (degenerate) → no_window_data, not silence.
+        rollup._warn_coverage_horizon({date(2028, 6, 30): 50}, today, "prediction")
+        assert any(e == "CATALOGUE_STALE_BY_DATE" and kw.get("reason") == "no_window_data" for e, kw in events)
+    finally:
+        rollup._emit_event = orig
+
+
 def test_coverage_horizon_warns_on_sharp_count_drop(rollup: ModuleType) -> None:
     """CATALOGUE_STALE_BY_DATE fires when the newest day's count collapses vs the median."""
     events: list[tuple[str, dict[str, object]]] = []
