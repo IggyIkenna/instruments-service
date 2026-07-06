@@ -53,8 +53,8 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/reference_data/adapters/sports/adapters/base.py"
     # engine/orchestrator package: pre-existing lazy in-function imports moved
     # verbatim in the orchestrator.py split (pure code motion — hoisting them is
-    # behaviour change / cycle risk, e.g. catalogue.refresh_catalogue's import is
-    # cycle-breaking). Scoped to ONLY the carrying modules, not the package.
+    # behaviour change / cycle risk). Scoped to ONLY the carrying modules, not
+    # the package.
     # Plan: unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md
     "!**/engine/orchestrator/catalogue.py"
     "!**/engine/orchestrator/footystats.py"
@@ -141,7 +141,6 @@ DEEP_IMPORT_EXCLUDE_GLOBS=(
     "!**/reference_data/utils/*.py"
     "!**/reference_data/intent_resolver.py"
     "!**/reference_data/adapters/sports/adapters/*.py"
-    "!**/reference_data/catalogue/*.py"
     # engine/orchestrator package: module-level deep imports now live in the
     # package __init__.py (auto-exempt via the check's !**/__init__.py glob).
     # Only in-function lazy deep imports (capability_declarations._defi,
