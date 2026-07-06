@@ -31,9 +31,11 @@ Per-asset-group implementation status (2026-05-07):
   (``build_sports_catalogue_dataframe``). The captured atom is
   ``(league_id, data_type, date)``; the v2 enumerator iterates the captured
   sports data_types (``SPORTS_DATA_TYPE_TO_SOURCE``) per league, applying each
-  source's ``SOURCE_COVERAGE_START`` / ``DATA_TYPE_COVERAGE_START`` window
-  (pre-coverage dates stay owned by the v1 ``_enumerate_sports`` rows).
-  v1 still emits the per-source pre-coverage slice.
+  source's ``SOURCE_COVERAGE_START`` / ``DATA_TYPE_COVERAGE_START`` window.
+  v2 ALSO emits the per-source pre-coverage slice at (source, data_type, date)
+  grain via :func:`_yield_v2_sports_pre_source_coverage_rows` (2026-07-06;
+  subsumes v1 ``_enumerate_sports`` per
+  ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``).
 * CeFi:   FULL (v2) — per-instrument lifecycle from the
   ``build_instrument_catalogue.py`` roll-up (``available_from`` /
   ``available_to``); the G1-ENUM shape-aware producer (2026-06-07) filters
@@ -79,11 +81,14 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    MVP_SCOPE,
     VENUES_BY_ASSET_GROUP,
+    CeFiMvpRule,
     Mode,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
+    get_mvp_data_types_for_cefi_venue,
     grain_for_instrument_type,
     has_source_priority,
     is_in_mvp_capture_universe,
@@ -867,6 +872,34 @@ def _row_data_types(
         if venue_caps:
             row_dts = [dt for dt in row_dts if dt in venue_caps or dt not in known_ag_dts]
 
+        # MVP data_type gate (bundle-aware) — kills the MVP-cut over-seed class
+        # where a venue's MVP data_type set is strictly narrower than its raw
+        # capability set (e.g. COINBASE-SPOT ships trades+book_snapshot_5 but
+        # MVP scope keeps only {trades}; without this gate the enumerator
+        # seeds book_snapshot_5 rows for COINBASE-SPOT that VMs will never
+        # capture). Complements the VENUE_DATA_TYPE_CAPABILITIES carve-out
+        # above (that's the "can-produce" half; this is the "MVP-cut" half).
+        # BUNDLE-AWARE skip: for instrument_types that MVP_SCOPE narrows via
+        # a per-instrument_type override (OPTION → {options_chain}), the
+        # validity matrix has ALREADY narrowed row_dts to the correct bundle
+        # data_type upstream — applying the venue-only helper here (which
+        # returns MVP_SCOPE.cefi.data_types = the flat tick set for Deribit,
+        # since Deribit has no venue override) would empty the correctly-
+        # narrowed ["trades"] slice for the post-rollup options_chain entry.
+        # _mvp_capture_itype normalises OPTIONS_CHAIN/COMBO → OPTION so the
+        # post-rollup bundle entry matches the override key too. A venue
+        # absent from MVP scope entirely (e.g. BINANCE-DELIVERY, COIN-M
+        # dropped per operator decision #3) returns an empty MVP set from
+        # the helper → the `if mvp_dts:` guard leaves row_dts unchanged,
+        # so the MVP gate does not blanket-block non-MVP-scoped venues.
+        cefi_rule = MVP_SCOPE.get("cefi")
+        if isinstance(cefi_rule, CeFiMvpRule):
+            itype_norm = _mvp_capture_itype(instr.instrument_type)
+            if itype_norm not in cefi_rule.instrument_type_data_types:
+                mvp_dts = get_mvp_data_types_for_cefi_venue(instr.venue)
+                if mvp_dts:
+                    row_dts = [dt for dt in row_dts if dt in mvp_dts or dt not in known_ag_dts]
+
     return row_dts
 
 
@@ -1332,6 +1365,50 @@ def _blank_token(v: object) -> bool:
     return not str(v or "").strip()
 
 
+def _yield_v2_tradfi_non_trading_day_rows(
+    date_axis: list[date],
+    data_types: list[str],
+) -> Iterator[ExpectedRow]:
+    """Venue-grain non-trading-day pass for v2 tradfi (mirrors v1 ``_enumerate_tradfi``).
+
+    For each tradfi venue in ``VENUES_BY_ASSET_GROUP["tradfi"]``, walks the
+    ``date_axis`` and emits ONE row per ``(venue, day, data_type)`` when
+    ``is_non_trading_day(venue, day)`` is True. The reason is resolved via
+    ``non_trading_day_reason`` — ``EXPECTED_WEEKEND`` for Sat/Sun on
+    closed-on-weekends venues, ``EXPECTED_HOLIDAY`` for a weekday US-market
+    holiday. ``instrument_type`` / ``instrument_id`` are blank so the shard atom
+    matches v1's venue-grain output (the whole venue is closed on a non-trading
+    day; per-instrument disambiguation would over-fan the denominator).
+
+    Closes the v1→v2 asymmetry documented in
+    ``tests/integration/test_enumerate_v2_superset_property.py`` and unblocks
+    the eventual v1 dispatch retirement tracked in
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``.
+    """
+    venues = VENUES_BY_ASSET_GROUP.get("tradfi", [])
+    if not venues or not data_types:
+        return
+    for venue in venues:
+        venue_str = str(venue)
+        for d in date_axis:
+            iso = d.isoformat()
+            if not is_non_trading_day(venue_str, iso):
+                continue
+            reason = non_trading_day_reason(venue_str, iso) or "EXPECTED_HOLIDAY"
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="tradfi",
+                    venue=venue_str,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=iso,
+                    reason=reason,
+                )
+
+
 def _enumerate_v2_tradfi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1340,16 +1417,20 @@ def _enumerate_v2_tradfi(
     present_set: set[tuple[str, ...]] | None = None,
     present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
-    """Per-instrument tradfi v2 enumerator.
+    """Tradfi v2 enumerator — venue-grain non-trading days + per-instrument lifecycle.
 
-    Tradfi instruments respect available_from/available_to lifecycle bounds.
-    Weekend and holiday dates fall through to the pipeline (v1 handles them
-    at venue-grain; v2 only adds per-instrument rows for the non-trading-day
-    windows outside the instrument lifecycle).
+    Emits TWO row classes:
 
-    The seeded ``instrument_type`` is the CANONICAL WRITER grain (lowercase
-    ``future``/``equity``/``etf``/``combo``/``futures_chain``), NOT the raw
-    UPPERCASE catalogue leaf (``FUTURE``/``EQUITY``/…) — see
+    1. Venue-grain non-trading day rows (weekend/holiday) via
+       :func:`_yield_v2_tradfi_non_trading_day_rows` — mirrors v1
+       ``_enumerate_tradfi``'s weekend/holiday walk so v2 covers the same
+       calendar cells (superset property).
+    2. Per-instrument lifecycle rows: pre-listing / post-delisting empty_confirmed
+       plus alive-day ``expected_unattempted`` seeds against ``present_set``.
+
+    The seeded per-instrument ``instrument_type`` is the CANONICAL WRITER grain
+    (lowercase ``future``/``equity``/``etf``/``combo``/``futures_chain``), NOT
+    the raw UPPERCASE catalogue leaf (``FUTURE``/``EQUITY``/…) — see
     :func:`_canonical_writer_instrument_type`. Without this, the seeded shard
     atom (``FUTURE`` + uppercase) can NEVER be converted by the real capture
     (``future`` lowercase) → ~253k tradfi cells sit permanently
@@ -1362,6 +1443,7 @@ def _enumerate_v2_tradfi(
     * alive AND no manifest row (present_set provided) → expected_unattempted
     * alive AND present_set not provided → skip (legacy mode)
     """
+    yield from _yield_v2_tradfi_non_trading_day_rows(date_axis, data_types)
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
@@ -1494,6 +1576,59 @@ def _enumerate_v2_tradfi(
                 )
 
 
+def _yield_v2_sports_pre_source_coverage_rows(
+    date_axis: list[date],
+    data_types: list[str],
+) -> Iterator[ExpectedRow]:
+    """Per-source pre-coverage pass for v2 sports (subsumes v1 ``_enumerate_sports``).
+
+    For each ``data_type`` mapped to a source in ``SPORTS_DATA_TYPE_TO_SOURCE``,
+    resolves the (source, data_type) coverage start via
+    :func:`get_source_coverage_start` (which honours the per-(source, data_type)
+    ``DATA_TYPE_COVERAGE_START`` override before falling back to the source-wide
+    ``SOURCE_COVERAGE_START``), then emits ONE row per ``(source, data_type, day)``
+    for every day in ``date_axis`` strictly before that coverage start. Reason:
+    ``EXPECTED_PRE_SOURCE_COVERAGE_START``. ``instrument_type`` /
+    ``instrument_id`` / ``league_id`` are BLANK — the per-source sentinel covers
+    ALL leagues for that ``(source, data_type, day)`` because the source itself
+    had no data on that day (no per-league disambiguation possible).
+
+    The ``venue`` field carries the ``source_key`` (mirrors v1
+    ``_enumerate_sports`` convention where "in sports the venue axis is the
+    source key"). Data_types with no source mapping OR no coverage start are
+    skipped (nothing to clip). Closes the v1→v2 asymmetry documented in
+    ``tests/integration/test_enumerate_v2_superset_property.py`` and unblocks
+    the eventual v1 dispatch retirement tracked in
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``.
+    """
+    from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE, get_source_coverage_start
+
+    if not date_axis or not data_types:
+        return
+    for dt in data_types:
+        source = SPORTS_DATA_TYPE_TO_SOURCE.get(dt)
+        if source is None:
+            continue
+        coverage_start = get_source_coverage_start(source, dt)
+        if coverage_start is None:
+            continue
+        cov_ts = pd.Timestamp(coverage_start)
+        for d in date_axis:
+            if pd.Timestamp(d) >= cov_ts:
+                continue
+            yield ExpectedRow(
+                asset_group="sports",
+                venue=source,
+                chain="",
+                data_type=dt,
+                instrument_type="",
+                instrument_id="",
+                league_id="",
+                date=d.isoformat(),
+                reason="EXPECTED_PRE_SOURCE_COVERAGE_START",
+            )
+
+
 def _enumerate_v2_sports(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1503,6 +1638,16 @@ def _enumerate_v2_sports(
     present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-LEAGUE sports v2 enumerator (league-grain — NOT per-fixture).
+
+    Emits TWO row classes:
+
+    1. Per-source pre-coverage rows (venue=``source_key``, ``league_id=""``,
+       reason ``EXPECTED_PRE_SOURCE_COVERAGE_START``) via
+       :func:`_yield_v2_sports_pre_source_coverage_rows` — subsumes v1
+       ``_enumerate_sports`` so v2 can retire the v1 dispatch surface without
+       silently dropping the pre-coverage slice.
+    2. Per-league lifecycle rows: pre-listing / post-delisting empty_confirmed
+       plus alive-day ``expected_unattempted`` seeds against ``present_set``.
 
     The captured sports manifest atom is per-``(league_id, data_type, date)``
     (slot-4 finding 2026-06-07 on the canonical ``instruments-store-sports-prd``
@@ -1518,10 +1663,11 @@ def _enumerate_v2_sports(
     catalogue (``available_from`` = first day the league appears,
     ``available_to`` = last day / ``None`` if still active):
 
-    * date < the data_type's source coverage start → SKIP — those dates are
-      owned by the v1 ``_enumerate_sports`` pre-coverage rows
-      (``EXPECTED_PRE_SOURCE_COVERAGE_START``, league_id="" grain). v2 must NOT
-      re-emit them or the (data_type, date) cell is double-counted at two grains.
+    * date < the data_type's source coverage start → SKIP the per-league branch
+      — the per-source pre-coverage sentinel above already covers this
+      ``(data_type, date)`` cell at (source, league_id="") grain; a per-league
+      row here would double-count the cell at two grains AND fabricate
+      expected_unattempted for dates the source could never have covered.
     * date < available_from   → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
     * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
     * alive AND no manifest row (present_set provided) → expected_unattempted
@@ -1530,8 +1676,9 @@ def _enumerate_v2_sports(
     ``data_types`` is the captured sports data_types axis (``_sports_data_types()``
     = ``SPORTS_DATA_TYPE_TO_SOURCE`` keys) — passed in by ``enumerate_v2`` /
     ``main``. A data_type with no source mapping (e.g. a test stub) gets no
-    coverage filter.
+    coverage filter AND no pre-source-coverage sentinel.
     """
+    yield from _yield_v2_sports_pre_source_coverage_rows(date_axis, data_types)
     from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
     from unified_api_contracts.sports import (
         SPORTS_DATA_TYPE_TO_SOURCE,
@@ -1587,7 +1734,10 @@ def _enumerate_v2_sports(
                 for d in date_axis:
                     d_ts = pd.Timestamp(d)
                     if cov_ts is not None and d_ts < cov_ts:
-                        continue  # pre-coverage dates owned by v1 (league_id="" grain)
+                        # pre-coverage dates covered by _yield_v2_sports_pre_source_coverage_rows
+                        # at (source, data_type, day, league_id="") grain — skip here to avoid
+                        # double-counting the (data_type, date) cell at two grains.
+                        continue
                     yield ExpectedRow(
                         asset_group="sports",
                         venue="",
@@ -1603,7 +1753,12 @@ def _enumerate_v2_sports(
             for d in date_axis:
                 d_ts = pd.Timestamp(d)
                 iso = d.isoformat()
-                # Pre-source-coverage dates are owned by v1 (league_id="" grain).
+                # Pre-source-coverage dates are covered by
+                # _yield_v2_sports_pre_source_coverage_rows at (source, data_type,
+                # day, league_id="") grain. Skip the per-league branch to avoid
+                # double-counting the (data_type, date) cell at two grains AND
+                # to prevent fabricating expected_unattempted for alive leagues
+                # on dates the source could never have covered.
                 if cov_ts is not None and d_ts < cov_ts:
                     continue
                 if af_ts is not None and d_ts < af_ts:
