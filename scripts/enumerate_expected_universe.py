@@ -79,8 +79,10 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    TOTAL_UNIVERSE_AXES,
     VENUES_BY_ASSET_GROUP,
     Mode,
+    UniverseTier,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
@@ -88,7 +90,10 @@ from unified_api_contracts import (
     has_source_priority,
     is_in_mvp_capture_universe,
     is_mvp,
+    is_total_universe,
     pipeline_mode_for_source,
+    total_universe_config_descriptor,
+    universe_membership,
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
@@ -216,6 +221,75 @@ def _sports_data_types() -> list[str]:
 # resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
 # deployment-service/configs/cloud-providers.yaml) — see ``_default_bucket_for``.
 SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
+
+
+def _assert_asset_group_in_total_universe(asset_group: str) -> None:
+    """Structural gate — the enumerator's could-exist denominator is bound by the
+    UAC :data:`~unified_api_contracts.TOTAL_UNIVERSE_AXES` SSOT (per
+    ``instruments_mtds_subset_consistency_remediation`` § B2 downstream). If the
+    caller passes an ``asset_group`` that does not declare an axis taxonomy in
+    that SSOT, loud-fail — silently enumerating an axis-less AG would emit a
+    denominator with no honest membership rule (an over-count of the "true"
+    universe) and drift the two-layer honest-coverage model.
+
+    Kept in sync with :data:`SUPPORTED_ASSET_GROUPS` (enforced by the
+    ``test_supported_asset_groups_all_declared_in_total_universe_axes`` dynamic
+    test — if the two lists ever diverge, that test fails at QG time).
+    """
+    if not is_total_universe(asset_group, "", ""):
+        raise ValueError(
+            f"enumerate_expected_universe: asset_group={asset_group!r} is not declared "
+            f"in unified_api_contracts.TOTAL_UNIVERSE_AXES (declared: "
+            f"{sorted(TOTAL_UNIVERSE_AXES)}). The could-exist denominator is bound by "
+            f"the SSOT axis taxonomy; add an axis tuple there before enumerating."
+        )
+
+
+def _classify_row_tier(row: "ExpectedRow") -> UniverseTier:
+    """Classify an enumerated row into its :class:`UniverseTier`.
+
+    Uses the UAC :func:`~unified_api_contracts.universe_membership` SSOT so the
+    MVP ⊆ TOTAL invariant is enforced by the same predicate the data-status
+    denominator uses. A MVP-scoped row MUST classify as :attr:`UniverseTier.MVP`
+    (never :attr:`UniverseTier.TOTAL_ONLY` — that would break the invariant); a
+    row for an unregistered AG classifies as :attr:`UniverseTier.NOT_IN_UNIVERSE`
+    (should never happen because the structural gate rejects such AGs upstream,
+    but we log at ERROR level if it does — a defensive check for future rule
+    additions to ``is_total_universe``).
+
+    ``base_ccy`` axis carries the underlier for tradfi futures / equity ticker
+    (``base_asset`` or the underlier code); for cefi it is the base asset.
+    """
+    base_ccy: str | None = None
+    league: str | None = None
+    market_group: str | None = None
+    # cefi / tradfi carry the base axis via the instrument_id; the enumerator's
+    # seeded rows carry the instrument_id/underlying itself. For downstream
+    # classification we forward what we have — the MVP predicate handles the
+    # narrow-vs-broad axis distinction internally.
+    if row.asset_group == "sports":
+        league = row.league_id or None
+    return universe_membership(
+        row.asset_group,
+        row.venue,
+        row.instrument_type,
+        row.data_type or None,
+        base_ccy=base_ccy,
+        league=league,
+        market_group=market_group,
+    )
+
+
+def _tier_distribution(rows: Iterable["ExpectedRow"]) -> dict[str, int]:
+    """Count rows by :class:`UniverseTier` — the MVP-vs-TOTAL-only vs
+    NOT_IN_UNIVERSE distribution used for the ``ENUMERATOR_COMPLETED``
+    telemetry (a run's tier counts + the config descriptor let a coverage
+    delta attribute to a taxonomy-DEFINITION change vs a DATA change).
+    """
+    counts: dict[str, int] = {t.value: 0 for t in UniverseTier}
+    for r in rows:
+        counts[_classify_row_tier(r).value] += 1
+    return counts
 
 
 def _default_bucket_for(asset_group: str) -> str:
@@ -2626,6 +2700,24 @@ def _write_absent_rows(
     for reason, count in sorted(reason_counts.items(), key=lambda kv: -kv[1]):
         logger.info("  %s: %d", reason, count)
 
+    # Distribution by TOTAL_UNIVERSE_AXES tier (MVP / TOTAL_ONLY / NOT_IN_UNIVERSE).
+    # A NOT_IN_UNIVERSE count > 0 means the enumerator emitted a row whose UAC
+    # membership classification is "outside the total-reasonable universe" — should
+    # NEVER happen because the structural gate rejects unregistered AGs upstream,
+    # but log ERROR-visibly so a future rule addition to ``is_total_universe``
+    # (e.g. per-venue exclusions) that trips this is caught in run telemetry.
+    tier_counts = _tier_distribution(absent_rows)
+    logger.info("Distribution by TOTAL_UNIVERSE tier:")
+    for tier_name, count in sorted(tier_counts.items(), key=lambda kv: -kv[1]):
+        logger.info("  %s: %d", tier_name, count)
+    if tier_counts.get(UniverseTier.NOT_IN_UNIVERSE.value, 0) > 0:
+        logger.error(
+            "Enumerator emitted %d rows classified NOT_IN_UNIVERSE — an axis rule "
+            "in unified_api_contracts.TOTAL_UNIVERSE_AXES is out of sync with the "
+            "enumerator's per-AG rules; investigate before writing the shard.",
+            tier_counts[UniverseTier.NOT_IN_UNIVERSE.value],
+        )
+
     # CSV audit.
     with report_path.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(asdict(absent_rows[0]).keys()))
@@ -2673,6 +2765,7 @@ def _write_absent_rows(
             report_path=str(report_path),
             gcs_report_uri=gcs_report_uri,
             run_id=run_id,
+            tier_counts=tier_counts,
         )
         return 0
 
@@ -2776,6 +2869,7 @@ def _write_absent_rows(
         gcs_report_uri=gcs_report_uri,
         per_vm_blob=per_vm_blob,
         run_id=run_id,
+        tier_counts=tier_counts,
     )
     logger.info(
         "Wrote %d rows to per-VM shard gs://%s/%s for VM=%s in %.1fs. "
@@ -2792,6 +2886,12 @@ def _write_absent_rows(
 def main() -> int:
     args = _parse_args()
     asset_group: str = args.asset_group
+    # Structural gate — the could-exist denominator is bound by the UAC
+    # TOTAL_UNIVERSE_AXES SSOT (instruments_mtds_subset_consistency_remediation
+    # § B2 downstream). Loud-fail if the AG is not declared in the SSOT —
+    # silently enumerating an axis-less AG would produce a denominator with no
+    # honest membership rule.
+    _assert_asset_group_in_total_universe(asset_group)
     bucket_name: str = args.bucket or _default_bucket_for(asset_group)
     run_ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     run_id = f"enum-universe-{asset_group}-{run_ts}"
@@ -2812,6 +2912,10 @@ def main() -> int:
     )
     full_history: bool = bool(args.full_history)
 
+    # Emit the TOTAL_UNIVERSE_AXES config descriptor (version + content hash) so
+    # a coverage delta between two runs can attribute to a taxonomy-DEFINITION
+    # change vs a DATA change (mirrors the mvp_scope descriptor pattern).
+    _tu_descriptor = total_universe_config_descriptor()
     _emit_event(
         "ENUMERATOR_STARTED",
         enumerator="enumerate_expected_universe",
@@ -2825,6 +2929,8 @@ def main() -> int:
         data_types_override=data_types_override,
         full_history=full_history,
         run_id=run_id,
+        total_universe_config_version=_tu_descriptor.version,
+        total_universe_config_hash=_tu_descriptor.content_hash,
     )
 
     if full_history and enumerator_version != "v2":
