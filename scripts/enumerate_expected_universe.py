@@ -997,6 +997,54 @@ def _tradfi_entry_in_mvp_universe(instr: InstrumentCatalogEntry) -> bool:
     )
 
 
+def _yield_v2_cefi_pre_venue_launch_rows(
+    date_axis: list[date],
+    data_types: list[str],
+) -> Iterator[ExpectedRow]:
+    """Venue-grain pre-venue-launch pass for v2 cefi (mirrors v1 ``_enumerate_cefi``).
+
+    For each cefi venue in ``VENUES_BY_ASSET_GROUP["cefi"]`` with a launch date in
+    UAC ``CEFI_VENUE_LAUNCH_DATES``, walks ``date_axis`` and emits ONE row per
+    ``(venue, data_type, day)`` for days strictly before the venue's launch.
+    Reason: ``EXPECTED_PRE_VENUE_LAUNCH``. ``instrument_type`` / ``instrument_id``
+    are blank so the shard atom matches v1's venue-grain output — the whole
+    venue did not exist yet, so per-instrument disambiguation would only
+    fabricate rows for cataloged instruments and MISS the "empty catalog"
+    case entirely (v2's per-instrument-only emission emitted ZERO rows when
+    the catalog held no instruments in the pre-launch window; v1 emits a
+    full sentinel matrix regardless).
+
+    Closes the v1→v2 asymmetry documented in item 3 of
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``
+    and unblocks the eventual v1 dispatch retirement.
+    """
+    venues = VENUES_BY_ASSET_GROUP.get("cefi", [])
+    if not venues or not data_types:
+        return
+    for venue in venues:
+        venue_str = str(venue)
+        launch_str = CEFI_VENUE_LAUNCH_DATES.get(venue_str)
+        if launch_str is None:
+            continue  # venue with no launch date in UAC → no pre-launch window to seed
+        launch_ts = pd.Timestamp(launch_str)
+        for d in date_axis:
+            if pd.Timestamp(d) >= launch_ts:
+                continue
+            iso = d.isoformat()
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="cefi",
+                    venue=venue_str,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=iso,
+                    reason="EXPECTED_PRE_VENUE_LAUNCH",
+                )
+
+
 def _enumerate_v2_cefi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1007,15 +1055,28 @@ def _enumerate_v2_cefi(
 ) -> Iterator[ExpectedRow]:
     """Per-instrument cefi v2 enumerator.
 
+    Emits TWO row classes:
+
+    1. Venue-grain ``EXPECTED_PRE_VENUE_LAUNCH`` sentinel rows via
+       :func:`_yield_v2_cefi_pre_venue_launch_rows` — mirrors v1
+       ``_enumerate_cefi``'s per-``(venue, data_type, day)`` walk so v2 covers
+       the same pre-venue-launch cells regardless of catalog contents (an
+       empty catalog for a venue still gets its full pre-launch sentinel
+       matrix). The per-instrument branch below RETAINS the skip on
+       pre-launch dates (comment points at the helper) to prevent
+       double-counting the ``(venue, data_type, day)`` cell at two grains.
+    2. Per-instrument lifecycle rows: pre-listing / post-delisting
+       empty_confirmed plus alive-day ``expected_unattempted`` seeds against
+       ``present_set``.
+
     For each instrument in the catalog:
+      * date < venue_launch    → SKIP (covered by helper above)
       * date < available_from  → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
       * date > available_to    → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
       * alive AND no manifest row (present_set provided) → expected_unattempted
       * alive AND present_set not provided → skip (legacy mode)
-
-    Also respects venue launch dates (EXPECTED_PRE_VENUE_LAUNCH) for dates
-    before the venue launched — same logic as v1's _enumerate_cefi.
     """
+    yield from _yield_v2_cefi_pre_venue_launch_rows(date_axis, data_types)
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     # Pre-compute window bounds once for overlap filter below.
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
@@ -1052,10 +1113,16 @@ def _enumerate_v2_cefi(
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
-            # venue pre-launch beats instrument lifecycle
+            # Pre-venue-launch dates are covered by
+            # _yield_v2_cefi_pre_venue_launch_rows at (venue, data_type, day)
+            # grain (instrument_type="", instrument_id=""). Skip the
+            # per-instrument branch to avoid double-counting the
+            # (venue, data_type, day) cell at two grains AND to keep the
+            # empty-catalog case correct (the sentinel is a venue-level
+            # assertion — no per-instrument disambiguation possible).
             if venue_launch_ts is not None and d_ts < venue_launch_ts:
-                reason = "EXPECTED_PRE_VENUE_LAUNCH"
-            elif af_ts is not None and d_ts < af_ts:
+                continue
+            if af_ts is not None and d_ts < af_ts:
                 reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
@@ -1112,6 +1179,95 @@ _ADDRESS_KEYED_ITYPES: frozenset[str] = frozenset(
 )
 
 
+def _yield_v2_defi_pre_launch_rows(
+    date_axis: list[date],
+    data_types: list[str],
+) -> Iterator[ExpectedRow]:
+    """Venue-grain pre-genesis + pre-protocol-launch pass for v2 defi
+    (mirrors v1 ``_enumerate_defi`` + ``_enumerate_defi_gas_fees``).
+
+    Emits TWO shard-atom classes at venue-grain (blank instrument_type /
+    instrument_id):
+
+    1. **Gas-fees pre-chain-genesis** at ``venue=ALCHEMY`` ``chain=<CHAIN>``
+       ``data_type=gas_fees`` for each gas-covered chain in
+       :func:`_gas_fee_chain_names` — one row per day strictly before that
+       chain's mainnet genesis. Reason: ``EXPECTED_PRE_GENESIS_CHAIN``. Only
+       emitted when ``gas_fees`` is in ``data_types``.
+    2. **Protocol pre-effective-start** at ``venue=<PROTOCOL>`` ``chain=<CHAIN>``
+       for each ``(chain, protocol)`` in UAC ``PROTOCOL_LAUNCH_DATES`` — one
+       row per ``(protocol, chain, data_type, day)`` for days strictly before
+       ``effective_start = max(chain_genesis, protocol_launch)``. Reason:
+       ``EXPECTED_PRE_GENESIS_CHAIN`` for ``day < chain_genesis`` else
+       ``EXPECTED_INSTRUMENT_NOT_LISTED``. Chain-level data_types
+       (``_DEFI_CHAIN_LEVEL_DATA_TYPES`` — gas_fees / token_transfers /
+       mev_events) are EXCLUDED from the per-protocol loop — they are
+       captured once per chain at a synthetic venue, not per protocol
+       (enumerating per (chain, protocol) produced ~142k false
+       ``venue=<PROTOCOL>`` empties).
+
+    Venue-grain sentinels are correct here because during the pre-launch
+    window the chain / protocol did not exist yet — no instrument could
+    have been alive, so per-instrument disambiguation is meaningless AND
+    would emit ZERO rows for empty catalogs (v2's regression that v1
+    already handled by convention). Closes the v1→v2 asymmetry documented
+    in item 3 of
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``
+    and unblocks the eventual v1 dispatch retirement.
+    """
+    if not data_types:
+        return
+    # Pass 1 — gas_fees chain pre-genesis at venue=ALCHEMY.
+    if "gas_fees" in data_types:
+        for chain_upper, chain_genesis in _gas_fee_chain_names().items():
+            genesis_ts = pd.Timestamp(chain_genesis)
+            for d in date_axis:
+                if pd.Timestamp(d) >= genesis_ts:
+                    continue
+                yield ExpectedRow(
+                    asset_group="defi",
+                    venue=_GAS_FEE_VENUE,
+                    chain=chain_upper,
+                    data_type="gas_fees",
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=d.isoformat(),
+                    reason="EXPECTED_PRE_GENESIS_CHAIN",
+                )
+    # Pass 2 — protocol pre-effective-start at venue=PROTOCOL, chain=CHAIN.
+    per_protocol_dts = [dt for dt in data_types if dt not in _DEFI_CHAIN_LEVEL_DATA_TYPES]
+    if not per_protocol_dts:
+        return
+    for (chain, protocol), launch_date_str in PROTOCOL_LAUNCH_DATES.items():
+        chain_upper = chain.upper()
+        chain_genesis = CHAIN_GENESIS_DATES.get(chain_upper)
+        if chain_genesis is None:
+            continue  # no genesis in UAC → cannot clip; mirrors v1's skip+warn
+        effective_start = max(chain_genesis, launch_date_str)
+        eff_ts = pd.Timestamp(effective_start)
+        genesis_ts = pd.Timestamp(chain_genesis)
+        venue_label = protocol.upper()  # canonical: venue=PROTOCOL only; chain= carries chain separately
+        for d in date_axis:
+            d_ts = pd.Timestamp(d)
+            if d_ts >= eff_ts:
+                continue
+            reason = "EXPECTED_PRE_GENESIS_CHAIN" if d_ts < genesis_ts else "EXPECTED_INSTRUMENT_NOT_LISTED"
+            iso = d.isoformat()
+            for dt in per_protocol_dts:
+                yield ExpectedRow(
+                    asset_group="defi",
+                    venue=venue_label,
+                    chain=chain_upper,
+                    data_type=str(dt),
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=iso,
+                    reason=reason,
+                )
+
+
 def _enumerate_v2_defi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1122,16 +1278,28 @@ def _enumerate_v2_defi(
 ) -> Iterator[ExpectedRow]:
     """Per-instrument defi v2 enumerator.
 
-    Respects both chain genesis dates and protocol launch dates.
-    For instruments with available_from/available_to bounds also applies
-    per-instrument lifecycle rules.
+    Emits TWO row classes:
 
-    * date < chain_genesis     → EXPECTED_PRE_GENESIS_CHAIN (empty_confirmed)
-    * date < available_from    → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
-    * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
-    * alive AND no manifest row (present_set provided) → expected_unattempted
-    * alive AND present_set not provided → skip (legacy mode)
+    1. Venue-grain pre-genesis + pre-protocol-launch sentinel rows via
+       :func:`_yield_v2_defi_pre_launch_rows` — mirrors v1
+       ``_enumerate_defi`` + ``_enumerate_defi_gas_fees``. The per-instrument
+       branch below RETAINS the skip on pre-effective-start dates (comment
+       points at the helper) to prevent double-counting the
+       ``(venue, chain, data_type, day)`` cell at two grains.
+    2. Per-instrument lifecycle rows: pre-listing / post-delisting
+       empty_confirmed plus alive-day ``expected_unattempted`` seeds against
+       ``present_set``.
+
+    For each instrument in the catalog:
+      * date < effective_start of the (protocol, chain) → SKIP (helper covers it)
+      * date < chain_genesis (no PROTOCOL_LAUNCH_DATES entry, fallback) →
+        EXPECTED_PRE_GENESIS_CHAIN (empty_confirmed)
+      * date < available_from    → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
+      * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
+      * alive AND no manifest row (present_set provided) → expected_unattempted
+      * alive AND present_set not provided → skip (legacy mode)
     """
+    yield from _yield_v2_defi_pre_launch_rows(date_axis, data_types)
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
@@ -1186,6 +1354,19 @@ def _enumerate_v2_defi(
             canonical_instrument_id = instr.instrument_id
         chain_genesis_str = CHAIN_GENESIS_DATES.get(chain_upper)
         chain_genesis_ts = pd.Timestamp(chain_genesis_str) if chain_genesis_str else None
+        # Pre-effective-start clip: max(chain_genesis, protocol_launch) — the
+        # helper covers [start, effective_start - 1] at venue-grain; the
+        # per-instrument branch skips those dates to avoid double-counting the
+        # (venue, chain, data_type, day) cell at two grains. Falls back to
+        # chain_genesis alone when (chain, protocol) is not in the UAC launch
+        # registry (rare — an instrument on a non-registered protocol).
+        protocol_launch_str = PROTOCOL_LAUNCH_DATES.get((chain_upper, canonical_venue))
+        if protocol_launch_str is not None and chain_genesis_str is not None:
+            effective_start_ts = pd.Timestamp(max(chain_genesis_str, protocol_launch_str))
+        elif protocol_launch_str is not None:
+            effective_start_ts = pd.Timestamp(protocol_launch_str)
+        else:
+            effective_start_ts = chain_genesis_ts
         # G1-ENUM: filter data_types to those valid for this instrument's shape.
         # Pass a proxy entry with canonical venue so the validity matrix lookup works.
         _instr_canonical = instr._replace(venue=canonical_venue, chain=chain_upper)
@@ -1195,10 +1376,14 @@ def _enumerate_v2_defi(
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
-            # chain genesis takes priority
-            if chain_genesis_ts is not None and d_ts < chain_genesis_ts:
-                reason = "EXPECTED_PRE_GENESIS_CHAIN"
-            elif af_ts is not None and d_ts < af_ts:
+            # Pre-effective-start dates are covered by _yield_v2_defi_pre_launch_rows
+            # at (venue=PROTOCOL, chain=CHAIN, data_type, day, instrument_type="",
+            # instrument_id="") grain. Skip the per-instrument branch to avoid
+            # double-counting the (venue, chain, data_type, day) cell at two
+            # grains AND to keep the empty-catalog case correct.
+            if effective_start_ts is not None and d_ts < effective_start_ts:
+                continue
+            if af_ts is not None and d_ts < af_ts:
                 reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
@@ -1826,6 +2011,56 @@ def _enumerate_v2_sports(
                 )
 
 
+def _yield_v2_prediction_pre_venue_launch_rows(
+    date_axis: list[date],
+    data_types: list[str],
+) -> Iterator[ExpectedRow]:
+    """Venue-grain pre-venue-launch pass for v2 prediction (mirrors v1
+    ``_enumerate_prediction``).
+
+    For each prediction venue in ``VENUES_BY_ASSET_GROUP["prediction"]`` with a
+    launch date in UAC ``PREDICTION_VENUE_LAUNCH_DATES``, walks ``date_axis``
+    and emits ONE row per ``(venue, data_type, day)`` for days strictly before
+    the venue's launch. Reason: ``EXPECTED_PRE_VENUE_LAUNCH``.
+    ``instrument_type`` / ``instrument_id`` are blank so the shard atom matches
+    v1's venue-grain output — the whole venue did not exist yet, so
+    per-market disambiguation would only fabricate rows for cataloged markets
+    and MISS the "empty catalog" case entirely. v2's per-instrument enumerator
+    had NO pre-venue-launch check at all before this helper landed, so
+    prediction previously emitted ZERO pre-launch rows in v2 (a strict v1→v2
+    regression).
+
+    Closes the v1→v2 asymmetry documented in item 3 of
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``
+    and unblocks the eventual v1 dispatch retirement.
+    """
+    venues = VENUES_BY_ASSET_GROUP.get("prediction", [])
+    if not venues or not data_types:
+        return
+    for venue in venues:
+        venue_str = str(venue)
+        launch_str = PREDICTION_VENUE_LAUNCH_DATES.get(venue_str)
+        if launch_str is None:
+            continue  # venue with no launch date in UAC → no pre-launch window to seed
+        launch_ts = pd.Timestamp(launch_str)
+        for d in date_axis:
+            if pd.Timestamp(d) >= launch_ts:
+                continue
+            iso = d.isoformat()
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="prediction",
+                    venue=venue_str,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=iso,
+                    reason="EXPECTED_PRE_VENUE_LAUNCH",
+                )
+
+
 def _enumerate_v2_prediction(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1835,6 +2070,18 @@ def _enumerate_v2_prediction(
     present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-market prediction v2 enumerator.
+
+    Emits TWO row classes:
+
+    1. Venue-grain ``EXPECTED_PRE_VENUE_LAUNCH`` sentinel rows via
+       :func:`_yield_v2_prediction_pre_venue_launch_rows` — mirrors v1
+       ``_enumerate_prediction``'s per-``(venue, data_type, day)`` walk so
+       v2 covers the same pre-venue-launch cells regardless of catalog
+       contents. The per-market branch below is otherwise catalog-driven and
+       had no pre-launch check, so venue-grain sentinels ONLY come from the
+       helper (no double-count risk).
+    2. Per-market lifecycle rows: pre-listing / post-delisting empty_confirmed
+       plus alive-day ``expected_unattempted`` seeds against ``present_set``.
 
     Prediction instruments have ``market_created_at`` and ``settlement_time``
     lifecycle bounds. Dates before creation → EXPECTED_INSTRUMENT_NOT_LISTED;
