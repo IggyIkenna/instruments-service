@@ -268,6 +268,12 @@ if [[ -d "${QG_SCRIPTS_DIR}" ]]; then
         run_timeout 30 bash "${QG_SCRIPTS_DIR}/no_blank_empty_reason.sh" "${WORKSPACE_ROOT}" \
             || log_warn "Blank or string-literal record_empty reason — use EmptyConfirmedReason enum. SSOT: service-contract-audit-template.md § Pattern 4"
     fi
+    # STEP 5.86: IS writer data_type regression guard — non-sports record_captured must stamp data_type='instruments'
+    # (regression 2026-06-29..2026-07-06: data_type="" caused 260 cefi/defi/tradfi shards to appear absent)
+    if [[ -f "${QG_SCRIPTS_DIR}/no_blank_instruments_data_type.sh" ]]; then
+        run_timeout 30 bash "${QG_SCRIPTS_DIR}/no_blank_instruments_data_type.sh" "${WORKSPACE_ROOT}" \
+            || log_warn "IS writer blank data_type regression — see plans/active/issues/is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06.md"
+    fi
 else
     log_warn "IS-MTDS QG scripts dir not found at ${QG_SCRIPTS_DIR}"
 fi
