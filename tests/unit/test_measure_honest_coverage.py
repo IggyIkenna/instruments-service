@@ -1,16 +1,22 @@
-"""Unit tests for measure_honest_coverage.py — Bug 1 (freshest bucket) + Bug 2 (prd/non-prd merge)
-+ v2 new projections (by_venue_instrument_type, by_venue_instrument_type_data_type, by_day,
-layer_1, schema_version, instrument_gates_download).
+"""Unit tests for measure_honest_coverage.py — pinned-primary bucket selection + Bug 2
+(prd/non-prd merge) + v2 new projections (by_venue_instrument_type,
+by_venue_instrument_type_data_type, by_day, layer_1, schema_version,
+instrument_gates_download).
 
 Covers:
-1. Freshest-bucket selection: even when the non-prd bucket has MORE rows, the bucket with
-   the newer blob.updated timestamp is selected as primary (Bug 1 fix).
-2. Merge with date column: primary prd rows override secondary stale rows on (date, venue,
+1. Pinned-primary selection (hardened 2026-07-06): primary is pinned by tuple order
+   (``-prd`` first by construction), NOT by ``blob.updated`` mtime. Surgery on the
+   legacy bucket that bumps its mtime past prd no longer flips roles.
+2. ``--primary-bucket`` CLI override wins over the tuple-order pin when accessible;
+   silently falls back to the pin when the named bucket is inaccessible.
+3. Surgery-signal warning: a secondary bucket with newer ``blob.updated`` than primary
+   logs a WARNING (informational; does not affect selection).
+4. Merge with date column: primary prd rows override secondary stale rows on (date, venue,
    data_type) key; expected_unattempted rows from secondary that have no prd counterpart
    are retained (Bug 2 fix).
-3. Merge without date column: fallback to concat (no dedup, warning logged).
-4. --no-merge flag: skips the secondary-bucket read, uses freshest-wins only.
-5. v2: schema_version=2 in payload.
+5. Merge without date column: fallback to concat (no dedup, warning logged).
+6. --no-merge flag: skips the secondary-bucket read, uses primary-only.
+7. v2: schema_version=2 in payload.
 6. v2: by_venue_instrument_type aggregation present and correct.
 7. v2: by_venue_instrument_type_data_type aggregation present and correct.
 8. v2: by_day aggregation present and correct.
@@ -26,7 +32,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -52,12 +58,6 @@ def _utc(year: int, month: int, day: int) -> datetime:
     return datetime(year, month, day, tzinfo=UTC)
 
 
-def _make_blob_mock(updated: datetime | None) -> MagicMock:
-    blob = MagicMock()
-    blob.updated = updated
-    return blob
-
-
 def _make_df_with_day(rows: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
@@ -67,14 +67,16 @@ def _make_df_no_day(rows: list[dict[str, object]]) -> pd.DataFrame:
     return df.drop(columns=["date"], errors="ignore")
 
 
-class TestFreshestBucketSelection:
-    """Bug 1: prefer the bucket with the most recent blob.updated, not the most rows."""
+class TestPinnedPrimarySelection:
+    """Pinned-primary bucket selection (hardened 2026-07-06 vs. surgery-bumped mtimes).
 
-    def test_freshest_wins_over_most_rows(self, mod: ModuleType) -> None:
-        """prd bucket (5M rows, updated 2026-06-28) beats legacy (35M rows, updated 2026-06-08)."""
-        prd_bucket = f"market-data-tick-cefi-prd-{mod.PROJECT_ID}"
-        legacy_bucket = f"market-data-tick-cefi-{mod.PROJECT_ID}"
+    PRIMARY is the first accessible candidate in ``_MANIFEST_BUCKET_CANDIDATES`` tuple
+    order (which places ``-prd`` first for every asset_group). ``blob.updated`` mtime
+    is logged for visibility but no longer drives selection.
+    """
 
+    def test_prd_wins_over_legacy_by_tuple_order(self, mod: ModuleType) -> None:
+        """prd (5M rows, first in tuple) beats legacy (35M rows) — row count irrelevant."""
         prd_updated = _utc(2026, 6, 28)
         legacy_updated = _utc(2026, 6, 8)
 
@@ -84,14 +86,6 @@ class TestFreshestBucketSelection:
         legacy_df = _make_df_with_day([
             {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-01"},
         ] * 35_000_000)
-
-        prd_blob = _make_blob_mock(prd_updated)
-        legacy_blob = _make_blob_mock(legacy_updated)
-
-        def fake_get_blob(path: str) -> MagicMock:
-            # Called on gcs_client.bucket(name).get_blob(path)
-            # We intercept via side_effect on the bucket mock
-            raise AssertionError("Should not be called directly — mocked via _get_blob_updated")
 
         def fake_get_blob_updated(
             client: object, bucket_name: str
@@ -113,18 +107,57 @@ class TestFreshestBucketSelection:
             result = mod._read_manifest("cefi", merge=False)
 
         assert result is not None
-        # Primary should be the prd bucket (5M rows fresh), not legacy (35M stale)
         assert len(result) == 5_000_000
         assert (result["capture_status"] == "captured").all()
 
-    def test_row_count_tiebreaker_when_timestamps_equal(self, mod: ModuleType) -> None:
-        """When timestamps are identical, fall back to row count (more rows wins)."""
+    def test_pinned_primary_wins_when_secondary_mtime_is_newer(
+        self, mod: ModuleType, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Legacy surgery bumps its mtime past prd — pinned prd still wins (regression guard)."""
+        # This is the exact 2026-07-03 ASTER-corrective-pass scenario: rewriting the
+        # legacy cefi index bumped its blob.updated past prd's. Under the old mtime-based
+        # selection, roles flipped and prd's captured-only tuples dropped from ENUMERATED.
+        prd_updated = _utc(2026, 6, 28)
+        legacy_updated_after_surgery = _utc(2026, 7, 3)  # newer than prd
+
+        prd_df = _make_df_with_day([
+            {"capture_status": "captured", "venue": "BINANCE-FUTURES", "data_type": "future", "date": "2026-06-29"},
+        ])
+        legacy_df = _make_df_with_day([
+            {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "t", "date": "2026-06-01"},
+        ])
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return prd_updated if "prd" in bucket_name else legacy_updated_after_surgery
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+            caplog.at_level("WARNING"),
+        ):
+            result = mod._read_manifest("cefi", merge=False)
+
+        # PINNED primary wins even though legacy has newer mtime.
+        assert result is not None
+        assert len(result) == 1
+        assert result.iloc[0]["capture_status"] == "captured"
+        # Surgery-signal warning fired so operators can see the anomaly in logs.
+        assert any(
+            "SURGERY-SIGNAL" in r.message for r in caplog.records
+        ), "expected SURGERY-SIGNAL warning when secondary bucket has newer mtime"
+
+    def test_row_count_no_longer_a_tiebreaker(self, mod: ModuleType) -> None:
+        """Under pinned selection, prd wins regardless of row count when both accessible."""
         same_ts = _utc(2026, 6, 28)
 
-        small_df = _make_df_with_day([
+        small_prd = _make_df_with_day([
             {"capture_status": "captured", "venue": "A", "data_type": "t", "date": "2026-06-28"},
         ])
-        large_df = _make_df_with_day([
+        large_legacy = _make_df_with_day([
             {"capture_status": "expected_unattempted", "venue": "B", "data_type": "t", "date": "2026-06-28"},
             {"capture_status": "expected_unattempted", "venue": "C", "data_type": "t", "date": "2026-06-28"},
         ])
@@ -133,9 +166,7 @@ class TestFreshestBucketSelection:
             return same_ts
 
         def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
-            if "prd" in bucket_name:
-                return small_df.copy()
-            return large_df.copy()
+            return small_prd.copy() if "prd" in bucket_name else large_legacy.copy()
 
         with (
             patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
@@ -144,9 +175,10 @@ class TestFreshestBucketSelection:
         ):
             result = mod._read_manifest("cefi", merge=False)
 
-        # With same timestamp, more rows wins as tiebreaker
+        # prd (1 row) wins over legacy (2 rows) — pinned by tuple order, not row count.
         assert result is not None
-        assert len(result) == 2
+        assert len(result) == 1
+        assert result.iloc[0]["capture_status"] == "captured"
 
     def test_inaccessible_primary_falls_back_to_secondary(self, mod: ModuleType) -> None:
         """If prd bucket is not accessible, use legacy bucket."""
@@ -173,6 +205,83 @@ class TestFreshestBucketSelection:
 
         assert result is not None
         assert len(result) == 1
+
+
+class TestPrimaryBucketOverride:
+    """``--primary-bucket=<name>`` operator override for surgery/debugging."""
+
+    def test_override_wins_over_tuple_pin_when_accessible(self, mod: ModuleType) -> None:
+        """Override selects legacy as primary even though prd is first in tuple + accessible."""
+        prd_df = _make_df_with_day([
+            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
+        ])
+        legacy_df = _make_df_with_day([
+            {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "t", "date": "2026-01-01"},
+            {"capture_status": "expected_unattempted", "venue": "OLD2", "data_type": "t", "date": "2026-01-02"},
+        ])
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return _utc(2026, 6, 28) if "prd" in bucket_name else _utc(2026, 6, 8)
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        legacy_bucket = f"market-data-tick-cefi-{mod.PROJECT_ID}"
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+        ):
+            result = mod._read_manifest(
+                "cefi",
+                merge=False,
+                primary_bucket_override=legacy_bucket,
+            )
+
+        # Override wins → legacy's 2 rows are primary.
+        assert result is not None
+        assert len(result) == 2
+        assert (result["capture_status"] == "expected_unattempted").all()
+
+    def test_override_falls_back_to_pin_when_not_accessible(
+        self, mod: ModuleType, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Override to a name not in accessible candidates → tuple-order pin wins + warning."""
+        prd_df = _make_df_with_day([
+            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
+        ])
+        legacy_df = _make_df_with_day([
+            {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "t", "date": "2026-01-01"},
+        ])
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return _utc(2026, 6, 28) if "prd" in bucket_name else _utc(2026, 6, 8)
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+            caplog.at_level("WARNING"),
+        ):
+            result = mod._read_manifest(
+                "cefi",
+                merge=False,
+                primary_bucket_override="does-not-exist-in-candidates",
+            )
+
+        # Fell back to tuple-order pin → prd is primary.
+        assert result is not None
+        assert len(result) == 1
+        assert result.iloc[0]["capture_status"] == "captured"
+        # Fallback warning logged so operator notices the typo/miss.
+        assert any(
+            "not accessible" in r.message and "does-not-exist-in-candidates" in r.message
+            for r in caplog.records
+        )
 
 
 class TestManifestMerge:
@@ -282,7 +391,7 @@ class TestManifestMerge:
         assert any("double-count" in r.message for r in caplog.records)
 
     def test_no_merge_flag_skips_secondary(self, mod: ModuleType) -> None:
-        """With merge=False, only the freshest bucket is used — secondary is not merged."""
+        """With merge=False, only the primary (pinned) bucket is used — secondary is not merged."""
         prd_df = _make_df_with_day([
             {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
         ])

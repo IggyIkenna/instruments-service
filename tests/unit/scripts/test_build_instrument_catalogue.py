@@ -926,8 +926,19 @@ def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted
     assert by_date["2024-06-03"].capture_status == "expected_unattempted"
 
 
-def test_sports_enumerator_skips_pre_source_coverage_dates(rollup: ModuleType) -> None:
-    """Dates before the data_type's source coverage start are owned by v1 → v2 emits nothing."""
+def test_sports_enumerator_emits_per_source_pre_coverage_and_skips_per_league(rollup: ModuleType) -> None:
+    """Pre-coverage dates: v2 emits ONE per-source sentinel + zero per-league rows.
+
+    Prior behaviour (pre-2026-07-06) skipped pre-coverage dates entirely and
+    deferred to v1 ``_enumerate_sports``. After the
+    ``_yield_v2_sports_pre_source_coverage_rows`` helper landed
+    (``v1_enumerator_dispatch_not_deletable_2026_07_06.md`` task 2), v2 owns
+    the per-source pre-coverage slice at ``(source, data_type, day,
+    league_id="")`` grain. The per-league branch STILL skips those dates to
+    avoid double-counting the ``(data_type, date)`` cell at two grains AND to
+    prevent fabricating expected_unattempted for alive leagues on dates the
+    source could never have covered.
+    """
     enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_v2_sports_precov")
     # XG → understat, coverage starts 2014-01-01. Use a canonical understat league_id
     # ("EPL" — in UNDERSTAT_NAMES) and a date well before coverage start so the
@@ -947,7 +958,16 @@ def test_sports_enumerator_skips_pre_source_coverage_dates(rollup: ModuleType) -
             present_cols=["data_type", "league_id", "date"],
         )
     )
-    assert rows == []  # pre-coverage → skipped (no double-emit with v1)
+    # Exactly ONE per-source sentinel row: (venue="understat", data_type="XG",
+    # league_id="", reason="EXPECTED_PRE_SOURCE_COVERAGE_START"). No per-league
+    # rows for the pre-coverage date.
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.venue == "understat"
+    assert r.data_type == "XG"
+    assert r.league_id == ""
+    assert r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert r.date == d_pre.isoformat()
 
 
 def test_sports_could_exist_denominator_never_shrinks(rollup: ModuleType) -> None:

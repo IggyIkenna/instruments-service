@@ -231,12 +231,18 @@ def _write_venue(
                     # v9 instrument_type column (Audit §K): stamp the REAL type when
                     # the venue x date shard is single-type, "" when mixed/absent. This
                     # enables per-instrument_type counts off the manifest.
+                    # Stamp the canonical reference data_type at emission time so
+                    # the availability index atom is correct from the first write.
+                    # Matches REFERENCE_DATA_TYPE in scripts/migrate_instruments_store_v9.py
+                    # (SSOT for the reference-data-type stamp). The migration remains a
+                    # one-time backfill for pre-2026-07-06 legacy blank rows. Regression
+                    # SSOT: plans/active/issues/is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06.md
                     manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key=_rk,
                         df=_stamped_venue_df,
                         asset_group=_cat,
                         instrument_type=_derive_instrument_type(_stamped_venue_df),
-                        data_type="",
+                        data_type="instruments",
                         venue=manifest_venue,
                         chain=manifest_chain,
                         pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
