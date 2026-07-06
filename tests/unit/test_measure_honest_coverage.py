@@ -175,6 +175,214 @@ class TestFreshestBucketSelection:
         assert len(result) == 1
 
 
+class TestContentBasedFreshness:
+    """Bug 3 (2026-07-06): PRIMARY selection uses max(date) in the parquet, not blob.updated.
+
+    Regression scenario:  the 2026-07-03 ASTER corrective pass rewrote the legacy cefi
+    index, bumping its ``blob.updated`` past prd.  Under the old mtime-only ranking,
+    primary flipped to the stale legacy bucket, prd's captured-only rows dropped from
+    ENUMERATED, and 3 artifact "holes" appeared in the coverage report.  Content
+    freshness (max ``date`` in the parquet) is intrinsic to the manifest data and cannot
+    be inflated by index-rewrite surgery.
+    """
+
+    def test_content_freshness_beats_surgery_bumped_mtime(self, mod: ModuleType) -> None:
+        """The exact regression: legacy has newer blob.updated (mtime bumped by surgery)
+        but prd has fresher content (max(date))."""
+        prd_bucket = f"market-data-tick-cefi-prd-{mod.PROJECT_ID}"
+        legacy_bucket = f"market-data-tick-cefi-{mod.PROJECT_ID}"
+
+        # prd content: through 2026-07-05; mtime hasn't been touched recently.
+        prd_updated = _utc(2026, 6, 28)
+        prd_df = _make_df_with_day([
+            {"capture_status": "captured", "venue": "BINANCE-FUTURES", "data_type": "tick",
+             "date": "2026-07-05", "instrument_id": "BTCUSDT-PERP"},
+        ])
+
+        # legacy content: only through 2026-06-08, but mtime got bumped by an index rewrite.
+        legacy_updated = _utc(2026, 7, 4)  # NEWER mtime — the surgery bump
+        legacy_df = _make_df_with_day([
+            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick",
+             "date": "2026-06-08", "instrument_id": "ETHUSDT"},
+        ])
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return prd_updated if "prd" in bucket_name else legacy_updated
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+        ):
+            result = mod._read_manifest("cefi", merge=False)
+
+        assert result is not None
+        # prd wins — its captured 2026-07-05 row is the only one returned when merge=False.
+        assert len(result) == 1
+        assert result.iloc[0]["capture_status"] == "captured"
+        assert result.iloc[0]["venue"] == "BINANCE-FUTURES"
+        # Explicit invariant: the legacy row must NOT be the returned primary frame,
+        # since that's exactly the incident (BINANCE-FUTURES future rows would drop out).
+        assert prd_bucket != legacy_bucket  # sanity — different candidate names
+
+    def test_content_freshness_fallback_to_mtime_when_date_absent(self, mod: ModuleType) -> None:
+        """When a candidate lacks a date column (legacy 3-column bucket) it cannot supply
+        content-freshness — falls back to blob.updated for that candidate."""
+        prd_updated = _utc(2026, 6, 8)
+        legacy_updated = _utc(2026, 6, 28)  # newer mtime
+
+        # prd has a date column but old max(date); legacy has no date at all.
+        prd_df = _make_df_with_day([
+            {"capture_status": "captured", "venue": "A", "data_type": "t",
+             "date": "2026-01-01", "instrument_id": "X"},
+        ])
+        legacy_df = _make_df_no_day([
+            {"capture_status": "expected_unattempted", "venue": "B", "data_type": "t"},
+        ])
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return prd_updated if "prd" in bucket_name else legacy_updated
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+        ):
+            result = mod._read_manifest("cefi", merge=False)
+
+        # prd wins on content-freshness (real max(date)) even though legacy has newer mtime,
+        # because a candidate with a real max(date) beats one with no date column at all.
+        assert result is not None
+        assert len(result) == 1
+        assert result.iloc[0]["venue"] == "A"
+
+    def test_content_tie_falls_through_to_mtime(self, mod: ModuleType) -> None:
+        """When both candidates have the same max(date), the tie falls through to
+        blob.updated — preserving the original Bug 1 behaviour for content-tied buckets."""
+        same_max_date = "2026-06-28"
+        prd_updated = _utc(2026, 7, 5)
+        legacy_updated = _utc(2026, 6, 8)
+
+        prd_df = _make_df_with_day([
+            {"capture_status": "captured", "venue": "P", "data_type": "t",
+             "date": same_max_date, "instrument_id": "X"},
+        ])
+        legacy_df = _make_df_with_day([
+            {"capture_status": "expected_unattempted", "venue": "L", "data_type": "t",
+             "date": same_max_date, "instrument_id": "Y"},
+        ])
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return prd_updated if "prd" in bucket_name else legacy_updated
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+        ):
+            result = mod._read_manifest("cefi", merge=False)
+
+        # Content tie → mtime wins → prd (newer mtime) is primary.
+        assert result is not None
+        assert result.iloc[0]["venue"] == "P"
+
+    def test_get_content_freshness_returns_none_when_no_date_column(self, mod: ModuleType) -> None:
+        """Helper unit test: _get_content_freshness returns None for a df without a date column."""
+        df = pd.DataFrame([{"capture_status": "captured", "venue": "X", "data_type": "t"}])
+        assert mod._get_content_freshness(df) is None
+
+    def test_get_content_freshness_returns_max_date(self, mod: ModuleType) -> None:
+        """Helper unit test: _get_content_freshness picks the maximum date."""
+        df = pd.DataFrame([
+            {"date": "2026-06-01"},
+            {"date": "2026-07-05"},
+            {"date": "2026-04-15"},
+        ])
+        result = mod._get_content_freshness(df)
+        assert result is not None
+        assert result.date().isoformat() == "2026-07-05"
+
+
+class TestPinPrimaryOverride:
+    """Operator escape hatch: --pin-primary forces a specific bucket as PRIMARY regardless
+    of content-freshness ranking. Non-matching pins are ignored so a single flag can be
+    passed for --asset-group all."""
+
+    def test_pin_primary_forces_selection(self, mod: ModuleType) -> None:
+        """Pinning the legacy bucket makes it PRIMARY even when prd would win by content."""
+        legacy_bucket = f"market-data-tick-cefi-{mod.PROJECT_ID}"
+
+        # prd is objectively fresher, but the operator pins legacy.
+        prd_df = _make_df_with_day([
+            {"capture_status": "captured", "venue": "PRD", "data_type": "t",
+             "date": "2026-07-05", "instrument_id": "X"},
+        ])
+        legacy_df = _make_df_with_day([
+            {"capture_status": "expected_unattempted", "venue": "LEG", "data_type": "t",
+             "date": "2026-01-01", "instrument_id": "Y"},
+        ])
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return _utc(2026, 7, 5) if "prd" in bucket_name else _utc(2026, 6, 8)
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+        ):
+            result = mod._read_manifest("cefi", merge=False, pin_primary=legacy_bucket)
+
+        # Legacy is PRIMARY because it was pinned, even though prd has fresher content.
+        assert result is not None
+        assert result.iloc[0]["venue"] == "LEG"
+
+    def test_pin_primary_non_matching_falls_through_to_content(self, mod: ModuleType) -> None:
+        """A pin that doesn't match any candidate for this asset_group is ignored — the
+        content-freshness ranking still applies. This lets --pin-primary be passed once
+        for --asset-group all without needing per-AG matching."""
+        prd_df = _make_df_with_day([
+            {"capture_status": "captured", "venue": "PRD", "data_type": "t",
+             "date": "2026-07-05", "instrument_id": "X"},
+        ])
+        legacy_df = _make_df_with_day([
+            {"capture_status": "expected_unattempted", "venue": "LEG", "data_type": "t",
+             "date": "2026-01-01", "instrument_id": "Y"},
+        ])
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return _utc(2026, 6, 8) if "prd" in bucket_name else _utc(2026, 7, 5)
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+        ):
+            result = mod._read_manifest(
+                "cefi",
+                merge=False,
+                pin_primary="unrelated-defi-bucket-that-does-not-match",
+            )
+
+        # Pin is ignored (no match) — prd wins on content-freshness.
+        assert result is not None
+        assert result.iloc[0]["venue"] == "PRD"
+
+
 class TestManifestMerge:
     """Bug 2: prd/non-prd merge correctly combines rows, preferring prd's capture_status."""
 

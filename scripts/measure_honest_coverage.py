@@ -35,11 +35,25 @@ execution:
              exists and parses without error
   last_executed: NEVER
 
-Bucket selection (Bug 1 fix):
-  Prefer the bucket whose _index/availability_index.parquet blob was MOST RECENTLY
-  modified (blob.updated timestamp), not the bucket with the most rows. This prevents
-  picking stale non-prd buckets (35.8M rows, 20 days old) over fresh prd buckets
-  (5.2M rows, live data).
+Bucket selection (Bug 1 + Bug 3 fixes):
+  Rank candidates by CONTENT freshness — the max ``date`` value in the manifest parquet
+  itself — with blob.updated as a fallback when the date column is absent (legacy
+  3-column buckets) and row count as a final tiebreaker.  This anchors PRIMARY selection
+  to what the manifest actually knows about, not GCS metadata.
+
+  Bug 1 (fixed 2026-06-XX): previously the bucket with more rows won even when it was
+  stale; row count is the weakest signal because a large legacy oracle beats a fresh
+  small prd frame.
+  Bug 3 (fixed 2026-07-06): comparing ``blob.updated`` alone is fragile to index-rewrite
+  surgery — rewriting the legacy cefi index (the 2026-07-03 ASTER corrective pass)
+  bumped its mtime past prd → primary flipped → prd's captured-only rows dropped from
+  ENUMERATED (3 artifact holes).  Content-based freshness cannot be inflated by
+  metadata-only surgery.
+
+  Escape hatch: ``--pin-primary <bucket>`` forces a specific bucket as PRIMARY when the
+  content-freshness score is misleading (e.g., an operator wants to pin prd during a
+  known migration window).  Non-matching pins fall through to content-freshness with
+  a warning.
 
 Manifest merge (Bug 2 fix):
   After picking the freshest bucket as PRIMARY, the secondary bucket is also read and
@@ -59,6 +73,7 @@ Usage:
   python measure_honest_coverage.py [--asset-group cefi|defi|tradfi|sports|prediction|all]
   python measure_honest_coverage.py --output-path /tmp/coverage.json   # local probe
   python measure_honest_coverage.py --no-merge                         # freshest-wins only
+  python measure_honest_coverage.py --pin-primary <bucket>             # operator override
 """
 
 from __future__ import annotations
@@ -153,10 +168,12 @@ PROJECT_ID = "central-element-323112"
 # the LIVE bucket differs per asset_group: CeFi tick still writes the legacy FLAT bucket
 # (get_write_bucket_name → cloud_constants legacy prefixes), while DeFi on-chain handlers
 # already write the env-tiered `-prd` bucket (different write path). So we cannot assume a
-# single naming scheme. List both candidates and read whichever is MOST RECENTLY UPDATED
-# (blob.updated timestamp — not row count). Self-corrects after Phase 2.6 consolidates
-# everything onto `-prd`.
-# See plans/active/issues/cefi_tick_bucket_ssot_divergence_2026_05_25.md.
+# single naming scheme. List both candidates and read whichever has the FRESHEST CONTENT
+# (max ``date`` value in the parquet — Bug 3 fix, 2026-07-06), with blob.updated as a
+# fallback for legacy 3-column buckets. Row count is only the final tiebreaker.
+# Self-corrects after Phase 2.6 consolidates everything onto `-prd`.
+# See plans/active/issues/cefi_tick_bucket_ssot_divergence_2026_05_25.md and
+# plans/active/issues/cefi_layer1_denominator_gaps_2026_07_03.md § "Related fragility".
 _MANIFEST_BUCKET_CANDIDATES: dict[str, tuple[str, ...]] = {
     "cefi": (f"market-data-tick-cefi-prd-{PROJECT_ID}", f"market-data-tick-cefi-{PROJECT_ID}"),
     "defi": (f"market-data-tick-defi-prd-{PROJECT_ID}", f"market-data-tick-defi-{PROJECT_ID}"),
@@ -211,6 +228,30 @@ def _get_blob_updated(client: storage.Client, bucket_name: str) -> datetime | No
         return blob.updated  # already UTC-aware
     except Exception as exc:
         logger.info("  blob timestamp lookup failed for %s: %s", bucket_name, exc)
+        return None
+
+
+def _get_content_freshness(df: pd.DataFrame) -> pd.Timestamp | None:
+    """Return the max ``date`` value in the manifest parquet, or None if unavailable.
+
+    Content-based freshness anchors PRIMARY selection to the actual data recency in the
+    manifest rather than the GCS blob mtime, which can be inflated by index-rewrite
+    surgery on the older bucket (observed 2026-07-03: an ASTER corrective pass rewrote
+    the legacy cefi index, bumping its mtime past prd, which then flipped PRIMARY to the
+    stale bucket and dropped prd's captured-only rows from ENUMERATED).
+
+    Returns None when the parquet has no ``date`` column (legacy 3-column buckets) or
+    when every value coerces to NaT. Callers fall back to blob.updated in that case.
+    """
+    if "date" not in df.columns:
+        return None
+    try:
+        parsed = pd.to_datetime(df["date"], errors="coerce", utc=True)
+        if parsed.isna().all():
+            return None
+        return parsed.max()
+    except Exception as exc:
+        logger.info("  content-freshness computation failed: %s", exc)
         return None
 
 
@@ -351,74 +392,143 @@ def _merge_manifests(
     return combined
 
 
-def _read_manifest(asset_group: str, *, merge: bool = True) -> pd.DataFrame | None:
+def _read_manifest(
+    asset_group: str,
+    *,
+    merge: bool = True,
+    pin_primary: str | None = None,
+) -> pd.DataFrame | None:
     """Read the live availability manifest for an asset_group.
 
-    Bug 1 fix: compare blob.updated timestamps instead of row counts to select the
-    FRESHEST bucket as primary. The stale non-prd bucket has 35.8M rows (written
-    2026-06-08) which previously beat the live prd bucket (5.2M rows, fresh). Timestamp
-    comparison correctly picks prd.
+    Bug 1 fix: pick the FRESHEST bucket as primary instead of the largest — a stale
+    35.8M-row oracle used to beat a live 5.2M-row prd frame.
+
+    Bug 3 fix (2026-07-06): rank by CONTENT freshness (max ``date`` in the parquet) so
+    metadata-only surgery on the older bucket cannot invert PRIMARY selection.  The
+    ASTER corrective pass on 2026-07-03 rewrote the legacy cefi index, bumping its
+    ``blob.updated`` past prd → primary flipped → prd's captured-only rows dropped from
+    ENUMERATED (3 artifact holes).  Content freshness is intrinsic to the manifest data;
+    rewriting the index without adding newer dates cannot inflate the score.
+    ``blob.updated`` is retained as a fallback for legacy 3-column buckets that lack a
+    ``date`` column; row count is the final tiebreaker.
 
     Bug 2 fix (when merge=True): after picking the freshest bucket as primary, also read
     the secondary bucket and merge the two DataFrames. Non-prd holds the full
     expected_unattempted skeleton that prd lacks; merging gives accurate denominator
     counts without double-counting (dedup on day/venue/data_type preferring prd status).
+
+    Escape hatch: ``pin_primary`` (CLI ``--pin-primary``) forces a specific bucket name
+    as PRIMARY when the content-freshness score is misleading (e.g., during a known
+    migration window).  Pins that don't match any candidate for this asset_group are
+    logged and ignored (fall through to content-freshness ranking).
     """
     candidates = _MANIFEST_BUCKET_CANDIDATES[asset_group]
 
-    # Step 1: get blob timestamps for all candidates in parallel (serial loop is fine
-    # since we only have 2 candidates per asset_group).
+    # Step 1: read every candidate's parquet + its blob.updated + its content freshness.
+    # Serial loop is fine — only 2 candidates per asset_group.
     gcs_client = storage.Client(project=PROJECT_ID)
-    bucket_info: list[tuple[str, datetime | None, pd.DataFrame | None]] = []
+    bucket_info: list[
+        tuple[str, datetime | None, pd.Timestamp | None, pd.DataFrame | None]
+    ] = []
     for bucket_name in candidates:
         updated = _get_blob_updated(gcs_client, bucket_name)
         df = _read_parquet_safe(bucket_name)
         uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
         if df is None:
             logger.info("  %s candidate %s: not accessible", asset_group, uri)
+            content_max: pd.Timestamp | None = None
         else:
+            content_max = _get_content_freshness(df)
             ts_str = updated.isoformat() if updated else "unknown"
+            content_str = content_max.isoformat() if content_max is not None else "unknown"
             logger.info(
-                "  %s candidate %s: %d rows, blob.updated=%s",
+                "  %s candidate %s: %d rows, max(date)=%s, blob.updated=%s",
                 asset_group,
                 uri,
                 len(df),
+                content_str,
                 ts_str,
             )
-        bucket_info.append((bucket_name, updated, df))
+        bucket_info.append((bucket_name, updated, content_max, df))
 
-    # Step 2: rank by blob.updated (newest first); fall back to row count if timestamps unavailable.
-    accessible = [(name, ts, df) for name, ts, df in bucket_info if df is not None]
+    accessible: list[tuple[str, datetime | None, pd.Timestamp | None, pd.DataFrame]] = [
+        (name, ts, content_max, df)
+        for name, ts, content_max, df in bucket_info
+        if df is not None
+    ]
     if not accessible:
         logger.warning("  SKIP %s — no candidate manifest accessible", asset_group)
         return None
 
-    def _sort_key(item: tuple[str, datetime | None, pd.DataFrame]) -> tuple[int, int]:
-        _, ts, df = item
-        # Primary sort: newest timestamp (negative epoch seconds); if ts is None use 0.
-        ts_score = -int(ts.timestamp()) if ts is not None else 0
-        # Secondary sort: row count as tiebreaker (more rows = better).
-        return (ts_score, -len(df))
+    # Step 2a: operator escape hatch — pin a specific bucket as PRIMARY when it matches
+    # a candidate for this asset_group.  A non-matching pin is logged and ignored so
+    # a single --pin-primary flag can be passed for --asset-group all without failing
+    # on the other AGs.
+    pinned = False
+    if pin_primary:
+        matched = [item for item in accessible if item[0] == pin_primary]
+        if matched:
+            others = [item for item in accessible if item[0] != pin_primary]
+            accessible = [*matched, *others]
+            pinned = True
+            logger.info(
+                "  %s manifest PINNED PRIMARY (--pin-primary): gs://%s/%s",
+                asset_group,
+                pin_primary,
+                _INDEX_BLOB_PATH,
+            )
+        else:
+            logger.info(
+                "  %s pin-primary %s does not match any candidate — using content-freshness",
+                asset_group,
+                pin_primary,
+            )
 
-    accessible.sort(key=_sort_key)
-    primary_name, primary_ts, primary_df = accessible[0]
+    # Step 2b: content-freshness ranking when no pin took effect.
+    if not pinned:
+
+        def _sort_key(
+            item: tuple[str, datetime | None, pd.Timestamp | None, pd.DataFrame],
+        ) -> tuple[int, int, int]:
+            _, ts, content_max, df = item
+            # Primary: newest content date (max(date) in parquet). None → 0 so any
+            # real timestamp (large negative) wins over the "no date column" fallback.
+            content_score = (
+                -int(content_max.timestamp()) if content_max is not None else 0
+            )
+            # Secondary: blob.updated for candidates without a date column.
+            ts_score = -int(ts.timestamp()) if ts is not None else 0
+            # Tertiary: row count (more rows = better).
+            return (content_score, ts_score, -len(df))
+
+        accessible.sort(key=_sort_key)
+
+    primary_name, primary_ts, primary_content, primary_df = accessible[0]
     primary_uri = f"gs://{primary_name}/{_INDEX_BLOB_PATH}"
     primary_ts_str = primary_ts.isoformat() if primary_ts is not None else "unknown"
+    primary_content_str = (
+        primary_content.isoformat() if primary_content is not None else "unknown"
+    )
+    selection_reason = "pinned" if pinned else "freshest content"
     logger.info(
-        "  %s manifest SELECTED (freshest): %s (%d rows, blob.updated=%s)",
+        "  %s manifest SELECTED (%s): %s (%d rows, max(date)=%s, blob.updated=%s)",
         asset_group,
+        selection_reason,
         primary_uri,
         len(primary_df),
+        primary_content_str,
         primary_ts_str,
     )
-    for name, ts, df in accessible[1:]:
+    for name, ts, content_max, df in accessible[1:]:
         uri = f"gs://{name}/{_INDEX_BLOB_PATH}"
         ts_str = ts.isoformat() if ts is not None else "unknown"
+        content_str = content_max.isoformat() if content_max is not None else "unknown"
         logger.info(
-            "  %s manifest NOT SELECTED (older): %s (%d rows, blob.updated=%s)",
+            "  %s manifest NOT SELECTED (older content): %s (%d rows, max(date)=%s, blob.updated=%s)",
             asset_group,
             uri,
             len(df),
+            content_str,
             ts_str,
         )
 
@@ -428,7 +538,7 @@ def _read_manifest(asset_group: str, *, merge: bool = True) -> pd.DataFrame | No
         # Re-read secondary as eu_only (pyarrow push-down filter) before merging.
         # The non-prd oracle can be 35.8M rows; only ~4.1M are expected_unattempted.
         # Reading eu_only keeps peak memory bounded while providing the full skeleton.
-        for secondary_name, _ts, _secondary_full in accessible[1:]:
+        for secondary_name, _ts, _content, _secondary_full in accessible[1:]:
             secondary_eu = _read_parquet_eu_only(secondary_name)
             if secondary_eu is not None:
                 result_df = _merge_manifests(result_df, secondary_eu)
@@ -653,6 +763,16 @@ def main() -> None:
             "verified REAL vs vocabulary/grain artifacts."
         ),
     )
+    parser.add_argument(
+        "--pin-primary",
+        default=None,
+        help=(
+            "Force a specific bucket name as PRIMARY for whichever asset_group it "
+            "matches (operator escape hatch when the content-freshness ranking is "
+            "misleading — e.g. during a known migration window). Non-matching pins "
+            "are ignored so a single flag can be passed for --asset-group all."
+        ),
+    )
     args = parser.parse_args()
 
     asset_groups = list(_KNOWN_ASSET_GROUPS) if args.asset_group == "all" else [args.asset_group]
@@ -660,7 +780,7 @@ def main() -> None:
 
     dfs: dict[str, pd.DataFrame] = {}
     for ag in asset_groups:
-        df = _read_manifest(ag, merge=merge)
+        df = _read_manifest(ag, merge=merge, pin_primary=args.pin_primary)
         if df is not None and not df.empty:
             dfs[ag] = df
 
