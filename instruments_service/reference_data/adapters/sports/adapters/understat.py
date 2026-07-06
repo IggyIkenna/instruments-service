@@ -39,6 +39,24 @@ _BASE_URL: str = "https://understat.com"
 # Understat league identifiers
 _UNDERSTAT_LEAGUES: list[str] = ["EPL", "La_Liga", "Bundesliga", "Serie_A", "Ligue_1", "RFPL"]
 
+# Module-level cache of the EXTRACTED per-(league, season) match list (the small
+# ``dates`` array — NOT the full ``getLeagueData`` blob, whose players/teams
+# arrays are the OOM source the fetch paths deliberately free). ``getLeagueData``
+# returns a whole league-season in one call, so the date-by-date capture path
+# (``get_fixtures`` / ``get_match_ids_for_date``, each called per calendar date)
+# re-fetches the SAME season blob for every date in it — ~30k redundant fetches
+# for a full 6-league x 12-season backfill. Memoising the lightweight extracted
+# matches collapses that to one fetch per (league, season) (~72 total), which is
+# what makes a full-history bulk backfill run in minutes instead of hours. Bounded
+# and tiny (leagues x seasons x ~380 small dicts); the daily cron touches only the
+# current season (~6 entries). Cleared via :func:`clear_understat_league_cache`.
+_LEAGUE_MATCH_CACHE: dict[tuple[str, int], list[dict[str, object]]] = {}
+
+
+def clear_understat_league_cache() -> None:
+    """Drop the module-level getLeagueData match cache (test / long-run hygiene)."""
+    _LEAGUE_MATCH_CACHE.clear()
+
 
 class UnderstatAdapter(BaseSportsReferenceAdapter):
     """Understat sports reference data adapter.
@@ -136,21 +154,23 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         with ``{dates: [...], teams: {...}, players: [...]}`` where each
         entry in ``dates`` is a match with xG, goals, and team info.
         """
-        url = f"{_BASE_URL}/getLeagueData/{league}/{season}"
-        headers = {**self._headers(), "Referer": f"{_BASE_URL}/league/{league}/{season}"}
-
-        try:
-            async with self._make_session() as session:
-                raw_response = await self._get_with_retry(session, url, headers=headers)
-        except Exception as exc:
-            error_code = self._classify_error(exc, status=getattr(exc, "status", None))
-            self._emit_fetch_failed(error_code, exc)
-            self._fetch_error_count += 1
-            self._failed_league_names.add(league)
-            return []
-
-        matches = _extract_dates_from_json(raw_response)
-        raw_response = None  # free the season JSON blob (players/teams arrays are the OOM source)
+        _cache_key = (league, season)
+        matches = _LEAGUE_MATCH_CACHE.get(_cache_key)
+        if matches is None:
+            url = f"{_BASE_URL}/getLeagueData/{league}/{season}"
+            headers = {**self._headers(), "Referer": f"{_BASE_URL}/league/{league}/{season}"}
+            try:
+                async with self._make_session() as session:
+                    raw_response = await self._get_with_retry(session, url, headers=headers)
+            except Exception as exc:
+                error_code = self._classify_error(exc, status=getattr(exc, "status", None))
+                self._emit_fetch_failed(error_code, exc)
+                self._fetch_error_count += 1
+                self._failed_league_names.add(league)
+                return []
+            matches = _extract_dates_from_json(raw_response)
+            raw_response = None  # free the season JSON blob (players/teams arrays are the OOM source)
+            _LEAGUE_MATCH_CACHE[_cache_key] = matches  # cache only the lightweight extracted matches
         return _filter_and_normalize_matches(matches, target_date, league, season)
 
     async def get_leagues(self) -> list[CanonicalLeague]:
@@ -226,12 +246,16 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         result: list[tuple[str, str]] = []
         async with self._make_session() as session:
             for league in _UNDERSTAT_LEAGUES:
-                url = f"{_BASE_URL}/getLeagueData/{league}/{season}"
-                headers = {**self._headers(), "Referer": f"{_BASE_URL}/league/{league}/{season}"}
+                _cache_key = (league, season)
                 try:
-                    raw = await self._get_with_retry(session, url, headers=headers)
-                    matches = _extract_dates_from_json(raw)
-                    raw = None  # free the season JSON blob (players/teams arrays are the OOM source)
+                    matches = _LEAGUE_MATCH_CACHE.get(_cache_key)
+                    if matches is None:
+                        url = f"{_BASE_URL}/getLeagueData/{league}/{season}"
+                        headers = {**self._headers(), "Referer": f"{_BASE_URL}/league/{league}/{season}"}
+                        raw = await self._get_with_retry(session, url, headers=headers)
+                        matches = _extract_dates_from_json(raw)
+                        raw = None  # free the season JSON blob (players/teams arrays are the OOM source)
+                        _LEAGUE_MATCH_CACHE[_cache_key] = matches  # cache only lightweight extracted matches
                     for m in matches:
                         if not isinstance(m, dict):
                             continue
