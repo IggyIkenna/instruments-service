@@ -410,6 +410,54 @@ def test_rollup_supports_instrument_id_column(rollup: ModuleType) -> None:
     assert df.to_dict("records")[0]["instrument_id"] == "ZZZ"
 
 
+def test_rollup_on_chain_cefi_perp_venue_kept_glued(rollup: ModuleType) -> None:
+    """On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET)
+    stay GLUED in the catalogue — the DeFi PROTOCOL-CHAIN split does NOT apply, they
+    are cefi venues per UAC ``VENUE_TO_ASSET_GROUP`` and must match the by_date PATH
+    + the ``_index`` writer (writers._canonical_manifest_venue_chain @ 24c0dd5) + the
+    ``instrument_key`` prefix. Ref: instruments_foundation_completeness_2026_06_24.md
+    §G1.3 follow-up (2026-06-27) — 3 venues, one row each.
+    """
+    d1 = date(2024, 10, 19)
+    snapshots = [
+        {
+            "instrument_key": "LIGHTER-ZKSYNC:PERP:BTC-USDC",
+            "venue": "LIGHTER-ZKSYNC",
+            "instrument_type": "PERPETUAL",
+            "raw_symbol": "BTC-PERP",
+            "base_asset": "BTC",
+        },
+        {
+            "instrument_key": "PACIFICA-SOLANA:PERP:SOL-USDC",
+            "venue": "PACIFICA-SOLANA",
+            "instrument_type": "PERPETUAL",
+            "raw_symbol": "SOL-PERP",
+            "base_asset": "SOL",
+        },
+        {
+            "instrument_key": "EXTENDED-STARKNET:PERP:ETH-USD",
+            "venue": "EXTENDED-STARKNET",
+            "instrument_type": "PERPETUAL",
+            "raw_symbol": "ETH-PERP",
+            "base_asset": "ETH",
+        },
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(snapshots))])
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    for full_id in (
+        "LIGHTER-ZKSYNC:PERP:BTC-USDC",
+        "PACIFICA-SOLANA:PERP:SOL-USDC",
+        "EXTENDED-STARKNET:PERP:ETH-USD",
+    ):
+        assert full_id in by_id, f"catalogue dropped {full_id}"
+        row = by_id[full_id]
+        expected_venue = full_id.split(":", 1)[0]
+        assert row["venue"] == expected_venue, (
+            f"{full_id}: venue split to {row['venue']!r} (should stay glued {expected_venue!r})"
+        )
+        assert row["chain"] == "", f"{full_id}: chain leaked to {row['chain']!r} (cefi venue has no chain column)"
+
+
 def test_rollup_skips_blank_ids_and_empty_frames(rollup: ModuleType) -> None:
     """Rows with no usable id are skipped; an EMPTY latest frame does not false-delist.
 
