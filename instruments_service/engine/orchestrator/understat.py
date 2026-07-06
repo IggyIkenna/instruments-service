@@ -461,7 +461,15 @@ async def _run_understat_shots_date(
                 row_key={"date": date, "data_type": "XG_SHOTS", "league_id": lid},
                 df=df,
                 asset_group="sports",
-                instrument_type="shot",
+                # Manifest-row instrument_type for ALL sports reference types is "" (blank):
+                # every existing XG_SHOTS row + every XG row + all sports types use "".
+                # Shot-vs-match granularity is encoded by data_type (XG_SHOTS vs XG), not
+                # this column. Writing "shot" here made the captured atom diverge from the
+                # seeded expected_unattempted rows (dedup key includes instrument_type) →
+                # duplicate rows that never promote. Match the convention so captured
+                # supersedes the seed. ("shot" stays in the SPORTS_XG_SHOTS contract + the
+                # parquet columns.)
+                instrument_type="",
                 data_type="XG_SHOTS",
                 league_id=lid,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
