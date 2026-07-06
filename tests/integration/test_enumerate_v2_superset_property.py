@@ -26,10 +26,12 @@ window. This test verifies the property holds for:
     2026-07-06 by ``_yield_v2_tradfi_non_trading_day_rows`` (venue-grain pass
     within ``_enumerate_v2_tradfi``); no catalog required for the venue-grain
     cells.
+  - sports: per-source pre-source-coverage dates — closed 2026-07-06 by
+    ``_yield_v2_sports_pre_source_coverage_rows`` (per-source pass within
+    ``_enumerate_v2_sports``); no catalog required for the per-source cells.
 
-Sports v1 (per-source pre-coverage dates) remains a documented asymmetry — v1
-enumerates per-source not per-fixture; v2 enumerates per-fixture lifecycle. We
-assert v2 ≥ v1 only on the grains where the property applies.
+Per-fixture / per-league grain remains a v2-only enrichment on top of the
+per-source pre-coverage sentinel: v1 never enumerated below the source level.
 
 Plan: expected_universe_v2_design_2026_05_08.md Phase 1 P1
 Status flip evidence: instruments-service@<commit-after-this-test>
@@ -301,6 +303,86 @@ def test_tradfi_v2_covers_v1_non_trading_day_cells() -> None:
     missing = v1_cells - v2_cells
     assert not missing, (
         f"v2 tradfi missing {len(missing)} venue-grain non-trading-day cells covered by v1 "
+        f"(sample: {sorted(missing)[:5]})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sports: per-source pre-source-coverage-start superset
+# ---------------------------------------------------------------------------
+
+
+def test_sports_v2_covers_v1_pre_source_coverage_cells() -> None:
+    """v2 sports enumerator covers every v1 per-source pre-coverage cell.
+
+    v1 ``_enumerate_sports`` walks ``SOURCE_COVERAGE_START`` x pre-coverage-days
+    x ``DATA_TYPES_BY_ASSET_GROUP["sports"]`` and emits per-source rows
+    (``venue=source_key``, ``instrument_type=""`` ``instrument_id=""``
+    ``league_id=""``) with reason ``EXPECTED_PRE_SOURCE_COVERAGE_START``. v2
+    must cover the same ``(asset_group, venue=source, data_type, day)`` cells
+    via the per-source pass in ``_enumerate_v2_sports`` (delegates to
+    ``_yield_v2_sports_pre_source_coverage_rows``). The catalog is IRRELEVANT
+    for the per-source cells (whole source had no data pre-coverage) — an empty
+    catalog is a valid input.
+
+    Data_types axis: pass v1's data_types (``DATA_TYPES_BY_ASSET_GROUP["sports"]``)
+    into v2 so the two enumerators emit at the same axis. v2's helper skips
+    any data_type without a source mapping AND any (source, dt) without a
+    coverage start, so the comparison is restricted to the mapped intersection
+    (via ``SPORTS_DATA_TYPE_TO_SOURCE`` + ``get_source_coverage_start``).
+
+    Window: use a single day one day before the earliest source coverage_start
+    so every mapped source contributes at least one row.
+    """
+    from unified_api_contracts.sports import (
+        SOURCE_COVERAGE_START,
+        SPORTS_DATA_TYPE_TO_SOURCE,
+        get_source_coverage_start,
+    )
+
+    # Pick a day BEFORE the earliest SOURCE_COVERAGE_START so every mapped
+    # (source, dt) pair has that day in its pre-coverage window.
+    coverage_starts = [d for d in SOURCE_COVERAGE_START.values() if d is not None]
+    assert coverage_starts, "SOURCE_COVERAGE_START must have at least one mapped source"
+    earliest = min(coverage_starts)
+    pre_day = earliest - pd.Timedelta(days=1).to_pytimedelta()
+    pre_day_iso = pre_day.strftime("%Y-%m-%d") if hasattr(pre_day, "strftime") else str(pre_day)
+
+    v1_rows = list(enumerator_module._enumerate_sports(pre_day_iso, pre_day_iso))
+    v1_pre_coverage = [r for r in v1_rows if r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"]
+    assert v1_pre_coverage, "v1 should emit ≥1 per-source pre-coverage row for the day before earliest coverage"
+    v1_cells = _venue_day_dt_cells(v1_pre_coverage)
+
+    # Pass v1's data_types axis into v2 so the two enumerators emit apples-to-apples.
+    # v2's helper filters to (dt in SPORTS_DATA_TYPE_TO_SOURCE) + (get_source_coverage_start
+    # returns a value) — so only the mapped intersection appears in v2_cells. Assert v2
+    # covers every mapped (source, dt) cell v1 emits.
+    data_types_in_v1 = sorted({r.data_type for r in v1_pre_coverage})
+    v2_rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="sports",
+            catalog=[],
+            date_axis=_date_axis(pre_day_iso, pre_day_iso),
+            data_types=data_types_in_v1,
+        )
+    )
+    v2_cells = _venue_day_dt_cells(v2_rows)
+
+    # Restrict v1's expected cell set to the (source, dt) pairs v2 can produce
+    # (dt has a SPORTS_DATA_TYPE_TO_SOURCE mapping AND that (source, dt) has a
+    # coverage_start). v1's Cartesian iteration emits cells for un-mapped
+    # (source, dt) tuples too; v2 correctly omits those spurious cells, so we
+    # compare on the mapped intersection.
+    expected_v1_mapped = {
+        cell
+        for cell in v1_cells
+        if (mapped_source := SPORTS_DATA_TYPE_TO_SOURCE.get(cell[2])) is not None
+        and cell[1] == mapped_source
+        and get_source_coverage_start(mapped_source, cell[2]) is not None
+    }
+    missing = expected_v1_mapped - v2_cells
+    assert not missing, (
+        f"v2 sports missing {len(missing)} per-source pre-coverage cells covered by v1 "
         f"(sample: {sorted(missing)[:5]})"
     )
 

@@ -31,9 +31,11 @@ Per-asset-group implementation status (2026-05-07):
   (``build_sports_catalogue_dataframe``). The captured atom is
   ``(league_id, data_type, date)``; the v2 enumerator iterates the captured
   sports data_types (``SPORTS_DATA_TYPE_TO_SOURCE``) per league, applying each
-  source's ``SOURCE_COVERAGE_START`` / ``DATA_TYPE_COVERAGE_START`` window
-  (pre-coverage dates stay owned by the v1 ``_enumerate_sports`` rows).
-  v1 still emits the per-source pre-coverage slice.
+  source's ``SOURCE_COVERAGE_START`` / ``DATA_TYPE_COVERAGE_START`` window.
+  v2 ALSO emits the per-source pre-coverage slice at (source, data_type, date)
+  grain via :func:`_yield_v2_sports_pre_source_coverage_rows` (2026-07-06;
+  subsumes v1 ``_enumerate_sports`` per
+  ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``).
 * CeFi:   FULL (v2) — per-instrument lifecycle from the
   ``build_instrument_catalogue.py`` roll-up (``available_from`` /
   ``available_to``); the G1-ENUM shape-aware producer (2026-06-07) filters
@@ -1574,6 +1576,59 @@ def _enumerate_v2_tradfi(
                 )
 
 
+def _yield_v2_sports_pre_source_coverage_rows(
+    date_axis: list[date],
+    data_types: list[str],
+) -> Iterator[ExpectedRow]:
+    """Per-source pre-coverage pass for v2 sports (subsumes v1 ``_enumerate_sports``).
+
+    For each ``data_type`` mapped to a source in ``SPORTS_DATA_TYPE_TO_SOURCE``,
+    resolves the (source, data_type) coverage start via
+    :func:`get_source_coverage_start` (which honours the per-(source, data_type)
+    ``DATA_TYPE_COVERAGE_START`` override before falling back to the source-wide
+    ``SOURCE_COVERAGE_START``), then emits ONE row per ``(source, data_type, day)``
+    for every day in ``date_axis`` strictly before that coverage start. Reason:
+    ``EXPECTED_PRE_SOURCE_COVERAGE_START``. ``instrument_type`` /
+    ``instrument_id`` / ``league_id`` are BLANK — the per-source sentinel covers
+    ALL leagues for that ``(source, data_type, day)`` because the source itself
+    had no data on that day (no per-league disambiguation possible).
+
+    The ``venue`` field carries the ``source_key`` (mirrors v1
+    ``_enumerate_sports`` convention where "in sports the venue axis is the
+    source key"). Data_types with no source mapping OR no coverage start are
+    skipped (nothing to clip). Closes the v1→v2 asymmetry documented in
+    ``tests/integration/test_enumerate_v2_superset_property.py`` and unblocks
+    the eventual v1 dispatch retirement tracked in
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``.
+    """
+    from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE, get_source_coverage_start
+
+    if not date_axis or not data_types:
+        return
+    for dt in data_types:
+        source = SPORTS_DATA_TYPE_TO_SOURCE.get(dt)
+        if source is None:
+            continue
+        coverage_start = get_source_coverage_start(source, dt)
+        if coverage_start is None:
+            continue
+        cov_ts = pd.Timestamp(coverage_start)
+        for d in date_axis:
+            if pd.Timestamp(d) >= cov_ts:
+                continue
+            yield ExpectedRow(
+                asset_group="sports",
+                venue=source,
+                chain="",
+                data_type=dt,
+                instrument_type="",
+                instrument_id="",
+                league_id="",
+                date=d.isoformat(),
+                reason="EXPECTED_PRE_SOURCE_COVERAGE_START",
+            )
+
+
 def _enumerate_v2_sports(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1583,6 +1638,16 @@ def _enumerate_v2_sports(
     present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-LEAGUE sports v2 enumerator (league-grain — NOT per-fixture).
+
+    Emits TWO row classes:
+
+    1. Per-source pre-coverage rows (venue=``source_key``, ``league_id=""``,
+       reason ``EXPECTED_PRE_SOURCE_COVERAGE_START``) via
+       :func:`_yield_v2_sports_pre_source_coverage_rows` — subsumes v1
+       ``_enumerate_sports`` so v2 can retire the v1 dispatch surface without
+       silently dropping the pre-coverage slice.
+    2. Per-league lifecycle rows: pre-listing / post-delisting empty_confirmed
+       plus alive-day ``expected_unattempted`` seeds against ``present_set``.
 
     The captured sports manifest atom is per-``(league_id, data_type, date)``
     (slot-4 finding 2026-06-07 on the canonical ``instruments-store-sports-prd``
@@ -1598,10 +1663,11 @@ def _enumerate_v2_sports(
     catalogue (``available_from`` = first day the league appears,
     ``available_to`` = last day / ``None`` if still active):
 
-    * date < the data_type's source coverage start → SKIP — those dates are
-      owned by the v1 ``_enumerate_sports`` pre-coverage rows
-      (``EXPECTED_PRE_SOURCE_COVERAGE_START``, league_id="" grain). v2 must NOT
-      re-emit them or the (data_type, date) cell is double-counted at two grains.
+    * date < the data_type's source coverage start → SKIP the per-league branch
+      — the per-source pre-coverage sentinel above already covers this
+      ``(data_type, date)`` cell at (source, league_id="") grain; a per-league
+      row here would double-count the cell at two grains AND fabricate
+      expected_unattempted for dates the source could never have covered.
     * date < available_from   → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
     * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
     * alive AND no manifest row (present_set provided) → expected_unattempted
@@ -1610,8 +1676,9 @@ def _enumerate_v2_sports(
     ``data_types`` is the captured sports data_types axis (``_sports_data_types()``
     = ``SPORTS_DATA_TYPE_TO_SOURCE`` keys) — passed in by ``enumerate_v2`` /
     ``main``. A data_type with no source mapping (e.g. a test stub) gets no
-    coverage filter.
+    coverage filter AND no pre-source-coverage sentinel.
     """
+    yield from _yield_v2_sports_pre_source_coverage_rows(date_axis, data_types)
     from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
     from unified_api_contracts.sports import (
         SPORTS_DATA_TYPE_TO_SOURCE,
@@ -1667,7 +1734,10 @@ def _enumerate_v2_sports(
                 for d in date_axis:
                     d_ts = pd.Timestamp(d)
                     if cov_ts is not None and d_ts < cov_ts:
-                        continue  # pre-coverage dates owned by v1 (league_id="" grain)
+                        # pre-coverage dates covered by _yield_v2_sports_pre_source_coverage_rows
+                        # at (source, data_type, day, league_id="") grain — skip here to avoid
+                        # double-counting the (data_type, date) cell at two grains.
+                        continue
                     yield ExpectedRow(
                         asset_group="sports",
                         venue="",
@@ -1683,7 +1753,12 @@ def _enumerate_v2_sports(
             for d in date_axis:
                 d_ts = pd.Timestamp(d)
                 iso = d.isoformat()
-                # Pre-source-coverage dates are owned by v1 (league_id="" grain).
+                # Pre-source-coverage dates are covered by
+                # _yield_v2_sports_pre_source_coverage_rows at (source, data_type,
+                # day, league_id="") grain. Skip the per-league branch to avoid
+                # double-counting the (data_type, date) cell at two grains AND
+                # to prevent fabricating expected_unattempted for alive leagues
+                # on dates the source could never have covered.
                 if cov_ts is not None and d_ts < cov_ts:
                     continue
                 if af_ts is not None and d_ts < af_ts:
