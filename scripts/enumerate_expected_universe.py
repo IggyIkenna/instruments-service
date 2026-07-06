@@ -79,8 +79,10 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    TOTAL_UNIVERSE_AXES,
     VENUES_BY_ASSET_GROUP,
     Mode,
+    UniverseTier,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
@@ -88,7 +90,9 @@ from unified_api_contracts import (
     has_source_priority,
     is_in_mvp_capture_universe,
     is_mvp,
+    is_total_universe,
     pipeline_mode_for_source,
+    universe_membership,
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
@@ -216,6 +220,109 @@ def _sports_data_types() -> list[str]:
 # resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
 # deployment-service/configs/cloud-providers.yaml) — see ``_default_bucket_for``.
 SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
+
+
+# ---------------------------------------------------------------------------
+# TOTAL-REASONABLE UNIVERSE SSOT wiring (B2 — could-exist denominator)
+# ---------------------------------------------------------------------------
+# The could-exist denominator this enumerator emits is bounded by the axes
+# codified in :data:`~unified_api_contracts.TOTAL_UNIVERSE_AXES` — venue lists,
+# venue/chain launch dates, per-instrument catalogue lifecycle, and the
+# per-AG data_type registries. Each per-AG enumerator below reads from
+# EXACTLY the axes declared in ``TOTAL_UNIVERSE_AXES[asset_group]``:
+#
+#   * ``VENUES_BY_ASSET_GROUP`` / ``DATA_TYPES_BY_ASSET_GROUP`` — HARDCODED_GENESIS
+#     structural axes (v1 pre-launch enumerators + the v2 valid-cell filter).
+#   * ``CEFI_VENUE_LAUNCH_DATES`` / ``PREDICTION_VENUE_LAUNCH_DATES`` /
+#     ``PROTOCOL_LAUNCH_DATES`` / ``CHAIN_GENESIS_DATES`` /
+#     ``GAS_FEE_CHAIN_START_DATES`` — HARDCODED_GENESIS lower-bound axes
+#     (pre-launch / pre-genesis empty_confirmed seeds).
+#   * The instruments-service lifecycle catalogue
+#     (``available_from`` / ``available_to``) — DOWNLOAD_DERIVED per-instrument
+#     axis fed to the v2 enumerators.
+#   * The sports catalogue league × season roll-up — DOWNLOAD_DERIVED fixtures
+#     axis for the sports v2 enumerator.
+#
+# MVP ⊆ TOTAL is a structural invariant enforced by
+# :func:`unified_api_contracts.universe_membership`: every MVP-tagged cell is
+# also in the total-reasonable universe (``UniverseTier.MVP`` implies
+# ``is_total_universe`` — the two SSOTs are co-designed). The MVP capture-
+# universe gate the v2 cefi/tradfi enumerators apply (perp-gated MVP predicate
+# / ``TradfiMvpRule``) selects the STRICT-SUBSET MVP tier and is compatible
+# with the TOTAL denominator by construction — a caller wanting the TOTAL
+# denominator drops the MVP filter (``_cefi_entry_in_mvp_universe`` /
+# ``_tradfi_entry_in_mvp_universe``); the axis iteration is unchanged because
+# it already covers TOTAL.
+#
+# SSOT: ``unified_api_contracts.canonical.crosscutting.total_universe``
+# (``TOTAL_UNIVERSE_AXES``, ``UniverseTier``, ``UniverseProvenance``,
+# ``is_total_universe``, ``universe_membership``); see also
+# ``plans/active/is_catalogue_completion_2d_2026_07_06.md`` (B2 downstream).
+
+
+def _verify_total_universe_axes_declared() -> None:
+    """Assert every supported asset_group has a declared axis taxonomy in the SSOT.
+
+    Guards against a future taxonomy drift: if ``SUPPORTED_ASSET_GROUPS`` grows a
+    new AG without a corresponding entry in
+    :data:`~unified_api_contracts.TOTAL_UNIVERSE_AXES`, the enumerator would emit
+    cells against an undeclared could-exist axis set. Called at module import so
+    the failure is loud + immediate (not a silent runtime skip).
+    """
+    missing = [ag for ag in SUPPORTED_ASSET_GROUPS if ag not in TOTAL_UNIVERSE_AXES]
+    if missing:
+        raise RuntimeError(
+            f"enumerate_expected_universe: asset_groups {missing!r} are supported but not "
+            f"declared in unified_api_contracts.TOTAL_UNIVERSE_AXES "
+            f"(TOTAL-universe SSOT). Add an axis-taxonomy entry per B2 wiring."
+        )
+    # MVP ⊆ TOTAL structural invariant — every supported AG must be a total-universe
+    # AG (else the MVP filter would select cells outside the declared could-exist set).
+    for ag in SUPPORTED_ASSET_GROUPS:
+        if not is_total_universe(ag, venue="", instrument_type=""):
+            raise RuntimeError(
+                f"enumerate_expected_universe: asset_group {ag!r} is supported but "
+                f"is_total_universe({ag!r}) returned False — MVP ⊆ TOTAL invariant "
+                f"violated. Fix TOTAL_UNIVERSE_AXES / is_total_universe wiring."
+            )
+
+
+_verify_total_universe_axes_declared()
+
+
+def _denominator_tier_for(
+    asset_group: str,
+    venue: str,
+    instrument_type: str,
+    *,
+    data_type: str | None = None,
+    base_ccy: str | None = None,
+    league: str | None = None,
+    market_group: str | None = None,
+    source: str | None = None,
+) -> UniverseTier:
+    """Classify a cell into the universe hierarchy via the UAC SSOT.
+
+    Thin wrapper over :func:`unified_api_contracts.universe_membership` so the
+    enumerator has one call-site for the tier classification. Callers use the
+    tier to decide seed policy:
+
+    * :attr:`UniverseTier.MVP` — in the MVP subset (and the total universe).
+    * :attr:`UniverseTier.TOTAL_ONLY` — could-exist but not MVP (backfill for
+      completeness; not counted in the May-23 MVP gate).
+    * :attr:`UniverseTier.NOT_IN_UNIVERSE` — outside the total universe; never
+      seeded.
+    """
+    return universe_membership(
+        asset_group,
+        venue,
+        instrument_type,
+        data_type,
+        base_ccy=base_ccy,
+        league=league,
+        market_group=market_group,
+        source=source,
+    )
 
 
 def _default_bucket_for(asset_group: str) -> str:
