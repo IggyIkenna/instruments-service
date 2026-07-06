@@ -125,6 +125,70 @@ class TestFetchUnderstatXg:
         mock_mw.write.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_nested_league_dict_and_noncanonical_name_captures_not_empty(self) -> None:
+        """Regression (understat XG capture): the REAL adapter returns fixture
+        'league' as a NESTED CanonicalLeague dict, and _canonical_league_id
+        UPPER-cases (Bundesliga -> BUNDESLIGA). Two coupled bugs made XG record
+        empty despite fixtures existing:
+          (1) the flatten exploded the nested 'league' dict into league_* columns,
+              leaving NO flat 'league' key -> the whole capture block was skipped;
+          (2) the captured-set tracked the RAW league name while the honest-absence
+              loop subtracts the CANONICAL, so a non-already-uppercase league got
+              empty written OVER its capture (only EPL, raw==canonical, survived).
+        Asserts record_captured fires for the canonical league and record_empty
+        does NOT. The prior happy-path used a STRING league + identity canonical,
+        so it could not catch either bug.
+        Ref: plans/active/issues/understat_bulk_download_backfill_2026_06_29."""
+        fixtures = [
+            {
+                "h_title": "Bayern",
+                "a_title": "Dortmund",
+                # NESTED CanonicalLeague dict — the real _coerce_adapter_output shape.
+                "league": {"league_id": "Bundesliga", "name": "Bundesliga"},
+                "date": _DATE,
+                "kickoff_utc": f"{_DATE} 15:00:00",
+                "h": {"goals": 2},
+                "a": {"goals": 1},
+            }
+        ]
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(return_value=fixtures)
+        mock_adapter._fetch_error_count = 0
+        mock_mw = MagicMock()
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", MagicMock(return_value=mock_mw)),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("BUNDESLIGA")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            # REAL canonicalisation: UPPER-case so raw 'Bundesliga' != canonical 'BUNDESLIGA'.
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid).upper(),
+            ),
+            patch("instruments_service.engine.orchestrator._is_in_canonical_write_universe", return_value=True),
+            patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="understat"),
+            patch(
+                "unified_api_contracts.sports.build_fixture_id",
+                return_value="BUNDESLIGA:BAYERN_v_DORTMUND:2026-01-15",
+            ),
+            patch("unified_api_contracts.sports.resolve_understat_team", side_effect=lambda t: t.upper()),
+        ):
+            await _fetch_understat_xg(date=_DATE, bucket=_BUCKET, force=True)
+        captured_leagues = {c.kwargs.get("league_id") for c in mock_mw.record_captured.call_args_list}
+        assert "BUNDESLIGA" in captured_leagues, f"XG must CAPTURE the league; got captured={captured_leagues}"
+        empty_leagues = {c.kwargs["row_key"].get("league_id") for c in mock_mw.record_empty.call_args_list}
+        assert "BUNDESLIGA" not in empty_leagues, f"captured league must not ALSO be recorded empty; empty={empty_leagues}"
+
+    @pytest.mark.asyncio
     async def test_exception_records_failed_per_league(self) -> None:
         mock_adapter = MagicMock()
         mock_adapter.get_fixtures = AsyncMock(side_effect=RuntimeError("network error"))

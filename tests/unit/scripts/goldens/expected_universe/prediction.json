@@ -1,0 +1,15 @@
+{
+  "asset_group": "prediction",
+  "captured_at": "2026-07-06",
+  "tuple_count": 8,
+  "tuples": [
+    ["KALSHI", "prediction_market", "MARKET_LIFECYCLE"],
+    ["KALSHI", "prediction_market", "market_lifecycle"],
+    ["KALSHI", "prediction_market", "prediction_canonical_question_group"],
+    ["KALSHI", "prediction_market", "trades"],
+    ["POLYMARKET", "prediction_market", "MARKET_LIFECYCLE"],
+    ["POLYMARKET", "prediction_market", "market_lifecycle"],
+    ["POLYMARKET", "prediction_market", "prediction_canonical_question_group"],
+    ["POLYMARKET", "prediction_market", "trades"]
+  ]
+}
