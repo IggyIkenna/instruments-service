@@ -3,54 +3,27 @@
 # Delete-when: NA
 """Layer-1 enumeration-completeness check for Honest Coverage v2.
 
-For each asset_group, builds the EXPECTED matrix of (venue, instrument_type,
-data_type) tuples purely from UAC authorities, compares it to the ENUMERATED
-matrix (distinct tuples present in the manifest skeleton), and returns per-node
-completeness metrics including missing_tuples (Layer-1 holes) and stray_tuples
-(tuples in ENUMERATED but not EXPECTED — warnings, not holes).
+For each asset_group, builds the EXPECTED matrix via
+`expected_universe.build_expected(ag)` — the SINGLE public producer —
+compares it to the ENUMERATED matrix (distinct tuples present in the
+manifest skeleton), and returns per-node completeness metrics including
+missing_tuples (Layer-1 holes) and stray_tuples (tuples in ENUMERATED but
+not EXPECTED — warnings, not holes).
 
 This is the CK2 implementation per the SSOT:
   codex/02-data/honest-coverage-model.md § Layer-1 enumeration-completeness matrix
 
-Authorities used (exact UAC symbols):
-  - valid_data_types_for_venue_instrument_type(ag, venue, itype) — DeFi protocol-grain (narrowed)
-  - valid_data_types_for_instrument_type(ag, itype) — cefi/tradfi/sports/prediction + defi union
-  - VENUE_DATA_TYPE_CAPABILITIES[venue][data_type] — venue capability gate (cefi/tradfi only)
-  - get_mvp_data_types_for_cefi_venue(venue) — cefi per-venue MVP override (data_type set)
-  - FUTURE_BUNDLE_VENUES — bundle grain for options_chain/futures_chain
-  - bundle_instrument_type_for_leaf(ag, itype, venue) — leaf→bundle roll-up
-  - VENUES_BY_ASSET_GROUP[ag] — the set of venues tracked for each AG (implicit MVP gate)
-
-CRITICAL: expected data_types come from the UAC FUNCTIONS, NOT the raw
-VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE dict.  That dict has ZERO defi keys
-(defi validity is built dynamically from PROTOCOL_CAPABILITIES).  Indexing the
-dict directly returns frozenset() for every defi tuple → EXPECTED=0 → false
-"100% complete" (the empty-denominator failure mode — see Bug 1, 2026-06-29).
-
-VENUE_CAPABILITY_AGS restricts the VENUE_DATA_TYPE_CAPABILITIES skip-filter to
-cefi/tradfi only.  DeFi/sports/prediction capability is already encoded in their
-protocol/league validity functions; that table is keyed by cefi/tradfi venues.
-
-Note on MVP gate:
-  is_mvp() requires a base_ccy to return True for CeFi/TradFi (it is an
-  instrument-grain helper, not a schema-grain helper).  For the schema-level
-  EXPECTED matrix we instead use:
-    - CeFi: get_mvp_data_types_for_cefi_venue(venue) — per-venue data_type set
-    - TradFi: VENUES_BY_ASSET_GROUP contains only MVP tradfi venues (e.g. CME)
-    - DeFi/Sports/Prediction: validity functions handle scope already
-
-Carve-outs (sourced from UAC, NOT hardcoded):
-  1. Venue cannot produce data_type → absent from VENUE_DATA_TYPE_CAPABILITIES[venue]
-     (cefi/tradfi only; not applied to defi/sports/prediction)
-  2. Out of CeFi-MVP scope → get_mvp_data_types_for_cefi_venue(venue) does not include dt
-  3. Bundle roll-up grain → leaf OPTION/FUTURE for FUTURE_BUNDLE_VENUES venues
-     yields options_chain/futures_chain bundles, not per-leg rows
-  4. frozenset() from validity functions → no rows for this (ag, itype) combination
+EXPECTED-side authority + carve-outs live in `scripts/expected_universe.py`
+(the D2a declarative-gate authority, VENUE_CAPABILITY_AGS carve-out,
+per-venue MVP override, bundle-grain roll-up — all in that single module).
+This file focuses on: (a) the vocabulary/grain alignment normaliser
+(EXPECTED-side vs ENUMERATED-side canonicalisation), (b) the intersection +
+diagnostics, (c) the empty-denominator UNDEFINED guard.
 
 EMPTY-DENOMINATOR GUARD (HARD RULE, 2026-06-29):
   When EXPECTED == 0 for an AG, denominator_status = "UNDEFINED",
-  denominator_complete = False, completeness_pct = None.  Reporting 100% over an
-  empty set reproduces the v1 dishonesty v2 exists to kill.
+  denominator_complete = False, completeness_pct = None.  Reporting 100% over
+  an empty set reproduces the v1 dishonesty v2 exists to kill.
 
 Returns:
   Layer1Result with per-AG + per-venue breakdown.
@@ -58,31 +31,52 @@ Returns:
 
 from __future__ import annotations
 
+import importlib.util
 import logging
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
+from types import ModuleType
 
 import pandas as pd
-from unified_api_contracts import (
-    INSTRUMENT_TYPES_BY_VENUE,
-    VENUES_BY_ASSET_GROUP,
-    bundle_instrument_type_for_leaf,
-    get_mvp_data_types_for_cefi_venue,
-)
-from unified_api_contracts.registry import TRADFI_VENUE_INSTRUMENT_TYPES
-from unified_api_contracts.registry.market_data_categories import (
-    VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE,
-    VENUE_DATA_TYPE_CAPABILITIES,
-    valid_data_types_for_instrument_type,
-    valid_data_types_for_venue_instrument_type,
-)
+from unified_api_contracts import bundle_instrument_type_for_leaf
 from unified_api_contracts.registry.venue_mapping import VenueMapping
 
 logger = logging.getLogger(__name__)
 
-# AGs for which VENUE_DATA_TYPE_CAPABILITIES applies as a skip-filter.
-# DeFi/sports/prediction capability is encoded in their validity functions;
-# the VENUE_DATA_TYPE_CAPABILITIES dict is keyed by cefi/tradfi venues only.
-VENUE_CAPABILITY_AGS: frozenset[str] = frozenset({"cefi", "tradfi"})
+
+# ---------------------------------------------------------------------------
+# Sibling-load expected_universe.py — the SINGLE public producer of the
+# EXPECTED Layer-1 universe.  Every caller of `_build_expected_tuples` /
+# `build_expected` in this file routes through the sibling module, so there
+# is exactly ONE producer feeding the Layer-1 matrix (no drift).
+#
+# Mirrors measure_honest_coverage._load_completeness_module — the local
+# convention for cross-script imports (scripts/ is not a python package).
+# ---------------------------------------------------------------------------
+
+
+def _load_expected_universe() -> ModuleType:
+    """Load expected_universe.py from the sibling scripts/ directory."""
+    module_name = "_expected_universe"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    script_dir = Path(__file__).resolve().parent
+    path = script_dir / "expected_universe.py"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_EU = _load_expected_universe()
+
+# Public re-exports so callers can import from either module.
+build_expected = _EU.build_expected
+VENUE_CAPABILITY_AGS: frozenset[str] = _EU.VENUE_CAPABILITY_AGS
 
 # ---------------------------------------------------------------------------
 # VOCABULARY/GRAIN ALIGNMENT (HARD RULE, codex honest-coverage-model.md
@@ -102,20 +96,14 @@ VENUE_CAPABILITY_AGS: frozenset[str] = frozenset({"cefi", "tradfi"})
 #     (the same canonicalisation _enumerate_v2_defi applies)
 # ---------------------------------------------------------------------------
 
-# Lazily imported from UAC (the SSOT alias map the enumerator uses).
-_INSTRUMENT_TYPE_ALIASES: dict[str, str] | None = None
-
-
 def _get_instrument_type_aliases() -> dict[str, str]:
-    """Return the UAC SSOT instrument_type alias map (lowercase token → canonical)."""
-    global _INSTRUMENT_TYPE_ALIASES
-    if _INSTRUMENT_TYPE_ALIASES is None:
-        from unified_api_contracts.registry.market_data_categories import (
-            _INSTRUMENT_TYPE_ALIASES as _INSTRUMENT_TYPE_ALIASES_SRC,
-        )
+    """Return the UAC SSOT instrument_type alias map (lowercase token → canonical).
 
-        _INSTRUMENT_TYPE_ALIASES = dict(_INSTRUMENT_TYPE_ALIASES_SRC)
-    return _INSTRUMENT_TYPE_ALIASES
+    Delegator — see expected_universe._get_instrument_type_aliases.  The cache
+    lives on the sibling module so both sides of the intersection (EXPECTED
+    builder + ENUMERATED-side canonicalisation here) share one source.
+    """
+    return _EU._get_instrument_type_aliases()
 
 
 # DeFi fine lending grains the writer emits at sub-instrument granularity; UAC
@@ -232,162 +220,12 @@ def _canon_key(asset_group: str, venue: str, instrument_type: str, data_type: st
     )
 
 
-# The full set of lowercase canonical instrument_types we consider for each AG.
-# For cefi/tradfi/sports/prediction: derived from VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE keys.
-# For defi: derived dynamically from PROTOCOL_CAPABILITIES via valid_data_types_for_instrument_type.
-_AG_INSTRUMENT_TYPES: dict[str, frozenset[str]] = {}
-
-# Known defi instrument types (from PROTOCOL_CAPABILITIES — populated lazily).
-_DEFI_INSTRUMENT_TYPES: frozenset[str] | None = None
-
-
-def _get_defi_instrument_types() -> frozenset[str]:
-    """Return all canonical instrument_types present in any DeFi protocol.
-
-    Lazily built from PROTOCOL_CAPABILITIES via the valid_data_types_for_instrument_type
-    function which also caches the defi mapping internally.
-    """
-    global _DEFI_INSTRUMENT_TYPES
-    if _DEFI_INSTRUMENT_TYPES is None:
-        from unified_api_contracts.registry.capability_declarations._defi import (
-            PROTOCOL_CAPABILITIES,
-        )
-
-        itypes: set[str] = set()
-        for cap in PROTOCOL_CAPABILITIES.values():
-            for it in cap.instrument_types:
-                itypes.add(it.strip().lower())
-        _DEFI_INSTRUMENT_TYPES = frozenset(itypes)
-    return _DEFI_INSTRUMENT_TYPES
-
-
-# Valid (venue, instrument_type) pairs per AG — the could-exist universe gate
-# that prevents the cross-product over-generation (BINANCE-FUTURES x spot_pair,
-# AAVE(lending) x pool, …). Lazily built from the AUTHORITATIVE UAC sources.
-_CEFI_VENUE_ITYPES: dict[str, frozenset[str]] | None = None
-
-
-def _get_cefi_venue_itypes() -> dict[str, frozenset[str]]:
-    """Return cefi venue → frozenset of valid (lowercase, alias-canonical) itypes.
-
-    AUTHORITY (D2a gate-authority fix, 2026-07-06): UAC's DECLARATIVE
-    INSTRUMENT_TYPES_BY_VENUE, restricted to the declared cefi venues
-    (VENUES_BY_ASSET_GROUP["cefi"]) — the SAME kind of authority defi uses via
-    PROTOCOL_CAPABILITIES.instrument_types (see _get_defi_protocol_itypes) and
-    tradfi uses via TRADFI_VENUE_INSTRUMENT_TYPES — PLUS the
-    FUTURE_BUNDLE_VENUES bundle types (options_chain/futures_chain) for the
-    bundle venues (DERIBIT/OKX) — these are the per-underlying chain bundles the
-    writer stamps, not leaf OPTION/FUTURE.
-
-    Previously sourced from VenueMapping.venue_instrument_type_to_tardis — a
-    tardis-fetch ROUTING table (which (venue, INSTRUMENT_TYPE) pairs resolve to
-    a real tardis endpoint), NOT an existence declaration. A declared cefi venue
-    with no tardis fetch route (e.g. the on-chain-CLOB DEX perps that fetch via
-    native REST APIs, not Tardis) was therefore SILENTLY ABSENT from the
-    EXPECTED set — sourcing != existence. honest_coverage_uac_writer_matrix_
-    reconciliation D2a switches the authority to the declarative dict so a
-    declared-but-unrouted venue still counts.
-    """
-    global _CEFI_VENUE_ITYPES
-    if _CEFI_VENUE_ITYPES is None:
-        from unified_api_contracts.registry.market_data_categories import (
-            FUTURE_BUNDLE_VENUES,
-        )
-
-        aliases = _get_instrument_type_aliases()
-        out: dict[str, set[str]] = {}
-        for venue in VENUES_BY_ASSET_GROUP.get("cefi", []):
-            venue_key = venue.strip().upper()
-            for itype in INSTRUMENT_TYPES_BY_VENUE.get(venue_key, set()):
-                norm = aliases.get(itype.strip().lower(), itype.strip().lower())
-                # roll leaf option/future to bundle at bundle venues
-                bundle = bundle_instrument_type_for_leaf("cefi", norm, venue_key)
-                if bundle is not None:
-                    norm = aliases.get(bundle.strip().lower(), bundle.strip().lower())
-                out.setdefault(venue_key, set()).add(norm)
-        # Ensure the bundle venues carry the bundle itypes explicitly.
-        for bv in FUTURE_BUNDLE_VENUES.get("cefi", frozenset()):
-            out.setdefault(bv, set()).update({"options_chain", "futures_chain"})
-        _CEFI_VENUE_ITYPES = {v: frozenset(its) for v, its in out.items()}
-    return _CEFI_VENUE_ITYPES
-
-
-# TradFi venue → writer-grain instrument_types: UAC TRADFI_VENUE_INSTRUMENT_TYPES
-# (promoted there 2026-07-03 from the replica that used to live here —
-# honest_coverage_uac_writer_matrix_reconciliation "SSOT-placement" finding; the
-# MTDS writer-side counterpart is symbol_rules._VENUE_INSTRUMENT_TYPE).
-# YAHOO_FINANCE/KRX stamp no itype (legacy source-as-venue) → absent from the
-# map → not gated here (fall through to data_type-capability only).
-
-_DEFI_PROTOCOL_ITYPES: dict[str, frozenset[str]] | None = None
-
-
-def _get_defi_protocol_itypes() -> dict[str, frozenset[str]]:
-    """Return defi PROTOCOL (chain-stripped, upper) → valid (alias-canonical) itypes.
-
-    AUTHORITY: PROTOCOL_CAPABILITIES[protocol].instrument_types. This narrows the
-    defi cross-product to only the itypes each protocol actually declares (so a
-    lending-only protocol like AAVE never expects pool/perp tuples).
-    """
-    global _DEFI_PROTOCOL_ITYPES
-    if _DEFI_PROTOCOL_ITYPES is None:
-        from unified_api_contracts.registry.capability_declarations._defi import (
-            PROTOCOL_CAPABILITIES,
-        )
-
-        aliases = _get_instrument_type_aliases()
-        out: dict[str, set[str]] = {}
-        for protocol, cap in PROTOCOL_CAPABILITIES.items():
-            its = {aliases.get(it.strip().lower(), it.strip().lower()) for it in cap.instrument_types}
-            out[protocol.strip().upper()] = its
-        _DEFI_PROTOCOL_ITYPES = {p: frozenset(its) for p, its in out.items()}
-    return _DEFI_PROTOCOL_ITYPES
-
-
-def _venue_itype_is_valid(asset_group: str, venue: str, itype_canon: str) -> bool:
-    """Gate: does (venue, instrument_type) genuinely co-occur for this AG?
-
-    Prevents the cross-product over-generation. itype_canon is the lowercase
-    alias-canonical instrument_type. For AGs without a codified venue→itype
-    authority (tradfi/sports/prediction) returns True (no gate) — those are
-    handled by the data_type-level validity functions + venue capability table.
-    """
-    if asset_group == "cefi":
-        valid = _get_cefi_venue_itypes().get(venue.strip().upper())
-        return valid is not None and itype_canon in valid
-    if asset_group == "defi":
-        # venue here is the EXPECTED-side PROTOCOL-CHAIN id; strip to protocol.
-        proto = VenueMapping._canonicalise_defi_protocol_spelling(venue.strip().upper())
-        if "-" in proto:
-            proto = proto.rsplit("-", 1)[0]
-        valid = _get_defi_protocol_itypes().get(proto)
-        return valid is not None and itype_canon in valid
-    if asset_group == "tradfi":
-        valid = TRADFI_VENUE_INSTRUMENT_TYPES.get(venue.strip().upper())
-        # Venues without a stamped itype (YAHOO_FINANCE/KRX) are not gated here.
-        return valid is None or itype_canon in valid
-    return True
-
-
-def _get_ag_instrument_types(asset_group: str) -> frozenset[str]:
-    """Return all canonical (lowercase) instrument_types for an asset_group.
-
-    For defi: dynamically from PROTOCOL_CAPABILITIES (the static dict has no defi keys).
-    For others: from VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE keys (post-bundle-roll-up
-    types that actually appear in the manifest).
-    Leaf types with empty valid_data_types are included and filtered out during the
-    tuple-building loop.
-    """
-    if asset_group not in _AG_INSTRUMENT_TYPES:
-        if asset_group == "defi":
-            _AG_INSTRUMENT_TYPES[asset_group] = _get_defi_instrument_types()
-        else:
-            itypes: set[str] = set()
-            for ag, itype in VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE:
-                if ag == asset_group:
-                    itypes.add(itype)
-            _AG_INSTRUMENT_TYPES[asset_group] = frozenset(itypes)
-    return _AG_INSTRUMENT_TYPES[asset_group]
+# The producer-side helpers (_get_defi_instrument_types, _get_cefi_venue_itypes,
+# _get_defi_protocol_itypes, _venue_itype_is_valid, _get_ag_instrument_types)
+# moved to expected_universe.py as part of the single-producer consolidation
+# (A17 / cefi Layer-1 plan 2a).  Callers here go through `build_expected` (the
+# _EU re-export at the top of this file); nothing in the codebase referenced
+# those private helpers outside the EXPECTED-side path.
 
 
 @dataclass
@@ -501,141 +339,23 @@ class Layer1Result:
 
 
 def _build_expected_tuples_sports() -> set[tuple[str, str, str]]:
-    """Build sports EXPECTED at the WRITER grain (instrument_type=odds).
+    """Delegator — see expected_universe._expected_sports (via build_expected).
 
-    Sports has TWO surfaces (research 2026-06-29):
-      (1) IS reference-data: instrument_type="league", UPPERCASE data_types
-          (SPORTS_DATA_TYPE_TO_SOURCE: MATCHES/STANDINGS/FIXTURES/XG/…) — lives
-          in the instruments-store reference bucket, NOT the market-data-tick
-          sports bucket this harness reads. Its data_types do NOT appear in the
-          market-tick manifest (which carries only odds/trades/odds_* etc.), so
-          including the league surface here would manufacture false holes. It is
-          therefore OUT OF SCOPE for the market-tick Layer-1 (Layer-1 of the
-          reference store is a separate audit).
-      (2) MTDS odds market-tick: instrument_type="odds", real bookmaker venues,
-          data_types from VENUE_DATA_TYPE_CAPABILITIES[venue] (markets /
-          odds_snapshot / odds_movement / outcomes / settlements / odds /
-          arbitrage_opportunity / odds_horizon_bucket / trades).
-
-    The MTDS writer stamps instrument_type=odds (SSOT: MTDS venue_fetch.py /
-    sentinels.py) at data_type=trades for bookmaker ticks + the ODDS_API
-    snapshot data_types. EXPECTED is the odds grain per bookmaker venue (the
-    surface that actually lands in this bucket); `trades` is the canonical
-    bookmaker tick data_type so it is admitted for every venue.
-
-    AUTHORITY: VENUE_DATA_TYPE_CAPABILITIES (per-venue odds capabilities).
+    Kept for API compat; direct sports access folds into build_expected("sports").
     """
-    expected: set[tuple[str, str, str]] = set()
-    venues = VENUES_BY_ASSET_GROUP.get("sports", [])
-    for venue in venues:
-        caps = VENUE_DATA_TYPE_CAPABILITIES.get(venue, {})
-        for dt in caps:
-            expected.add((venue, "odds", dt))
-        # Every bookmaker venue produces the canonical `trades` odds tick
-        # (MTDS sentinels stamp data_type=trades) even when the capability table
-        # only lists the richer odds_* snapshot types.
-        expected.add((venue, "odds", "trades"))
-    return expected
+    return build_expected("sports")
 
 
 def _build_expected_tuples(asset_group: str) -> set[tuple[str, str, str]]:
-    """Build the EXPECTED set of (venue, instrument_type, data_type) from UAC.
+    """Delegator — see expected_universe.build_expected.
 
-    Per the CK2 pseudocode from codex/02-data/honest-coverage-model.md:
-
-      for venue in venues_in_ag(ag):
-        for instrument_type in itypes_present(ag, venue):
-          # AUTHORITY = UAC FUNCTIONS, never the raw dict (dict has no defi keys)
-          expected_dts = (
-              valid_data_types_for_venue_instrument_type(ag, venue, itype)
-              or valid_data_types_for_instrument_type(ag, itype)
-              or frozenset()
-          )
-          for dt in expected_dts:
-            if ag in VENUE_CAPABILITY_AGS and dt not in VENUE_DATA_TYPE_CAPABILITIES[venue]:
-                continue  # venue cannot produce dt → carve-out (cefi/tradfi only)
-            if not is_mvp(ag, venue, itype, dt): continue
-            EXPECTED.add((venue, itype, dt))
-
-    VENUE_DATA_TYPE_CAPABILITIES is only applied as a skip-filter for
-    VENUE_CAPABILITY_AGS = {"cefi", "tradfi"} — DeFi/sports/prediction capability
-    is already encoded in valid_data_types_for_venue_instrument_type /
-    valid_data_types_for_instrument_type.  Applying it to defi would wrongly
-    exclude all defi tuples (the dict has no defi venue keys).
-
-    Bundle grain: leaf OPTION/FUTURE for FUTURE_BUNDLE_VENUES venues are rolled
-    up to options_chain/futures_chain bundles.  The UAC functions / static dict
-    already carry the bundle instrument_types as first-class keys; leaf types
-    that resolve to frozenset() are skipped.
+    Kept for API compat with the existing test suite; new code should call
+    build_expected() directly.  The producer body moved to expected_universe.py
+    as part of the single-producer consolidation (A17 / cefi Layer-1 plan 2a) —
+    two producers = two chances at silent denominator drift, which is the
+    failure mode Honest Coverage v2 exists to kill.
     """
-    ag = asset_group.lower()
-    if ag == "sports":
-        return _build_expected_tuples_sports()
-    venues = VENUES_BY_ASSET_GROUP.get(ag, [])
-    instrument_types = _get_ag_instrument_types(ag)
-    expected: set[tuple[str, str, str]] = set()
-    in_capability_ag = ag in VENUE_CAPABILITY_AGS
-
-    for venue in venues:
-        venue_caps = VENUE_DATA_TYPE_CAPABILITIES.get(venue, {}) if in_capability_ag else {}
-        # For cefi: pre-compute MVP data_types override for this venue.
-        cefi_mvp_dts: frozenset[str] | None = None
-        if ag == "cefi":
-            cefi_mvp_dts = get_mvp_data_types_for_cefi_venue(venue)
-
-        for itype in instrument_types:
-            # (venue, itype) validity GATE — prevents the cross-product
-            # over-generation (BINANCE-FUTURES x spot_pair, AAVE(lending) x pool).
-            # AUTHORITY: cefi=INSTRUMENT_TYPES_BY_VENUE keys (D2a, 2026-07-06 —
-            # was venue_instrument_type_to_tardis, a fetch-routing table);
-            # defi=PROTOCOL_CAPABILITIES[protocol].instrument_types.
-            itype_canon = _get_instrument_type_aliases().get(itype.strip().lower(), itype.strip().lower())
-            if not _venue_itype_is_valid(ag, venue, itype_canon):
-                continue
-
-            # AUTHORITY: UAC functions, not the raw dict (bug fix 2026-06-29).
-            # valid_data_types_for_venue_instrument_type narrows DeFi to the
-            # specific protocol named by the PROTOCOL segment of venue id.
-            # Falls back to valid_data_types_for_instrument_type when the
-            # venue-specific narrowing is not applicable (non-defi or unmapped).
-            valid_dts = (
-                valid_data_types_for_venue_instrument_type(ag, venue, itype)
-                or valid_data_types_for_instrument_type(ag, itype)
-                or frozenset()
-            )
-
-            if len(valid_dts) == 0:
-                # frozenset() → no expected rows for this (ag, venue, itype).
-                # For cefi this means the leaf type (OPTION) rolls up to a bundle
-                # (options_chain) which is iterated as its own first-class itype.
-                continue
-
-            # Check if the bundle_instrument_type_for_leaf maps this itype to a
-            # bundle at this venue.  If so, skip the leaf — the bundle type is
-            # iterated separately.
-            bundle_it = bundle_instrument_type_for_leaf(ag, itype, venue)
-            if bundle_it is not None and bundle_it != itype:
-                continue
-
-            for dt in valid_dts:
-                # Carve-out 1: venue cannot produce this data_type.
-                # Only apply for cefi/tradfi (VENUE_CAPABILITY_AGS); defi/sports/
-                # prediction capability is already in the validity functions.
-                if in_capability_ag and dt not in venue_caps:
-                    continue
-
-                # Carve-out 2: cefi per-venue MVP override.
-                # NOTE: is_mvp() is NOT used here because it requires a base_ccy
-                # (instrument grain) to return True for CeFi/TradFi.  The schema-
-                # level MVP gate for CeFi is get_mvp_data_types_for_cefi_venue.
-                # TradFi: VENUES_BY_ASSET_GROUP already contains only MVP tradfi
-                # venues (CME); non-MVP venues are absent from the AG's venue set.
-                if ag == "cefi" and cefi_mvp_dts is not None and dt not in cefi_mvp_dts:
-                    continue
-
-                expected.add((venue, itype, dt))
-
-    return expected
+    return build_expected(asset_group)
 
 
 def _build_enumerated_tuples(asset_group: str, df: pd.DataFrame) -> set[tuple[str, str, str]]:
