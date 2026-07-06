@@ -64,6 +64,22 @@ def _drop_v2_tradfi_venue_grain(rows: list) -> list:
     return [r for r in rows if r.instrument_id != "" or r.instrument_type != ""]
 
 
+def _drop_v2_venue_grain(rows: list) -> list:
+    """Filter out the venue-grain pre-launch pass from v2 cefi/defi/prediction output.
+
+    ``_yield_v2_cefi_pre_venue_launch_rows`` / ``_yield_v2_defi_pre_launch_rows`` /
+    ``_yield_v2_prediction_pre_venue_launch_rows`` each emit one row per
+    (venue, day, data_type) at ``instrument_type=""`` / ``instrument_id=""``
+    to mirror v1's venue-grain output — closing the empty-catalogue asymmetry
+    tracked in ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``.
+    Per-instrument tests in this file assert per-instrument behavior against
+    catalogs and don't want the venue-grain pass to leak in (the venue-grain
+    ↔ v1 parity is asserted separately in
+    ``tests/integration/test_enumerate_v2_superset_property.py``).
+    """
+    return [r for r in rows if r.instrument_id != "" or r.instrument_type != ""]
+
+
 # ---------------------------------------------------------------------------
 # Fixtures: catalog helpers
 # ---------------------------------------------------------------------------
@@ -289,11 +305,12 @@ def test_cefi_v2_pre_listing_yields_not_listed() -> None:
     """Date before available_from → EXPECTED_INSTRUMENT_NOT_LISTED.
 
     Window includes an alive date so the overlap filter does not skip the instrument;
-    the pre-listing date still yields exactly one NOT_LISTED row.
+    the pre-listing date still yields exactly one NOT_LISTED row (after dropping
+    the venue-grain pre-launch pass — asserted separately).
     """
     catalog = [_make_cefi_entry(available_from="2021-01-01", available_to=None, venue="BINANCE")]
     dates = _date_axis("2020-06-01", "2021-06-01")  # 2021-06-01 is alive → no row; 2020-06-01 → NOT_LISTED
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"])))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
     assert rows[0].asset_group == "cefi"
@@ -305,21 +322,26 @@ def test_cefi_v2_post_delisting_yields_delisted() -> None:
     """Date after available_to → EXPECTED_INSTRUMENT_DELISTED.
 
     Window includes an alive date so the overlap filter does not skip the instrument;
-    only the post-delisting date yields a row.
+    only the post-delisting date yields a row (after dropping the venue-grain
+    pre-launch pass).
     """
     catalog = [_make_cefi_entry(available_from="2019-01-01", available_to="2022-12-31", venue="BINANCE")]
     dates = _date_axis("2022-06-01", "2023-06-01")  # 2022-06-01 alive → no row; 2023-06-01 → DELISTED
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"])))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
     assert rows[0].instrument_id == "BTC-USDT"
 
 
 def test_cefi_v2_live_instrument_skipped() -> None:
-    """Date within [available_from, available_to] → no row emitted."""
+    """Date within [available_from, available_to] → no per-instrument row emitted.
+
+    Filter out the venue-grain pre-launch pass first — 2023-06-01 is after every
+    cefi venue's launch date so the venue-grain pass emits nothing here anyway.
+    """
     catalog = [_make_cefi_entry(available_from="2019-01-01", available_to=None, venue="BINANCE")]
     dates = _date_axis("2023-06-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"])))
     assert rows == []
 
 
@@ -327,8 +349,9 @@ def test_cefi_v2_pre_venue_launch_beats_instrument_lifecycle() -> None:
     """EXPECTED_PRE_VENUE_LAUNCH must fire BEFORE per-instrument lifecycle rules.
 
     LIGHTER-ZKSYNC launched 2024-09-01. Even if an instrument has
-    available_from=2024-01-01, dates before venue launch must yield
-    EXPECTED_PRE_VENUE_LAUNCH — not EXPECTED_INSTRUMENT_NOT_LISTED.
+    available_from=2024-01-01, dates before venue launch must yield the
+    per-instrument EXPECTED_PRE_VENUE_LAUNCH — not EXPECTED_INSTRUMENT_NOT_LISTED
+    (the venue-grain pass is asserted separately).
     """
     catalog = [
         _make_cefi_entry(
@@ -340,26 +363,30 @@ def test_cefi_v2_pre_venue_launch_beats_instrument_lifecycle() -> None:
     ]
     # 2024-08-01 is before venue launch (2024-09-01) AND after available_from (2024-01-01)
     dates = _date_axis("2024-08-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"])))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_PRE_VENUE_LAUNCH", "venue-launch date must override instrument lifecycle"
 
 
 def test_cefi_v2_empty_catalog() -> None:
-    """Empty catalog → no rows."""
-    rows = list(enumerator_module._enumerate_v2_cefi([], _date_axis("2024-01-01"), ["ohlcv_1d"]))
+    """Empty catalog → no per-instrument rows (venue-grain rows filtered out;
+    they are asserted separately in ``test_enumerate_v2_superset_property.py``)."""
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi([], _date_axis("2024-01-01"), ["ohlcv_1d"]))
+    )
     assert rows == []
 
 
 def test_cefi_v2_multiple_data_types() -> None:
-    """One absent instrument x N data_types should produce N rows.
+    """One absent instrument x N data_types should produce N per-instrument rows
+    (after filtering out the venue-grain pre-launch pass).
 
     Window includes an alive date so the overlap filter does not skip the instrument.
     """
     catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
     dates = _date_axis("2020-01-01", "2025-06-01")  # 2025-06-01 alive → no row; 2020-01-01 → N NOT_LISTED rows
     data_types = ["ohlcv_1d", "ohlcv_1h", "book_snapshot_5"]
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, data_types))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, data_types)))
     assert len(rows) == len(data_types)
     assert {r.data_type for r in rows} == set(data_types)
 
@@ -370,52 +397,62 @@ def test_cefi_v2_multiple_data_types() -> None:
 
 
 def test_defi_v2_pre_chain_genesis_yields_pre_genesis() -> None:
-    """Date before chain genesis → EXPECTED_PRE_GENESIS_CHAIN.
+    """Date before chain genesis → EXPECTED_PRE_GENESIS_CHAIN (per-instrument row).
 
     ARBITRUM genesis is 2021-08-31; 2020-01-01 should fire pre-genesis.
     Window includes an alive date so the overlap filter does not skip the instrument.
+    Filter out the venue-grain pre-launch pass — the per-instrument atom is asserted here.
     """
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
     dates = _date_axis("2020-01-01", "2022-06-01")  # 2022-06-01 alive → no row; 2020-01-01 → PRE_GENESIS
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"])))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_PRE_GENESIS_CHAIN"
     assert rows[0].chain == "ARBITRUM"
 
 
 def test_defi_v2_chain_genesis_beats_available_from() -> None:
-    """Chain genesis takes priority over available_from.
+    """Chain genesis takes priority over available_from (per-instrument row).
 
     available_from=2022-01-01 but chain genesis=2021-08-31;
     a date between genesis and available_from (e.g. 2021-09-01) must emit
     EXPECTED_INSTRUMENT_NOT_LISTED — not EXPECTED_PRE_GENESIS_CHAIN.
     A date before genesis must emit EXPECTED_PRE_GENESIS_CHAIN.
 
-    Each window includes an alive date so the overlap filter passes.
+    Each window includes an alive date so the overlap filter passes. Filter
+    out the venue-grain pre-launch pass — the per-instrument atom is asserted here.
     """
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
     # Date before chain genesis → pre-genesis; 2022-06-01 is alive → no row
-    pre_genesis_rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2020-01-01", "2022-06-01"), ["lending_indices"])
+    pre_genesis_rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(catalog, _date_axis("2020-01-01", "2022-06-01"), ["lending_indices"])
+        )
     )
     assert pre_genesis_rows[0].reason == "EXPECTED_PRE_GENESIS_CHAIN"
 
     # Date after chain genesis but before available_from → not_listed; 2022-06-01 is alive → no row
-    not_listed_rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2021-09-01", "2022-06-01"), ["lending_indices"])
+    not_listed_rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(catalog, _date_axis("2021-09-01", "2022-06-01"), ["lending_indices"])
+        )
     )
     assert not_listed_rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
 
 
 def test_defi_v2_delisted_instrument() -> None:
-    """Date after available_to → EXPECTED_INSTRUMENT_DELISTED.
+    """Date after available_to → EXPECTED_INSTRUMENT_DELISTED (per-instrument row).
 
     Window includes an alive date so the overlap filter does not skip the instrument.
+    Filter out the venue-grain pre-launch pass — 2023-01-01/2024-01-01 are post-launch
+    for most protocols so the pass emits little anyway, but filter to be safe.
     """
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01", available_to="2023-06-30")]
     # 2023-01-01 is alive → no row; 2024-01-01 → DELISTED
-    rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2023-01-01", "2024-01-01"), ["lending_indices"])
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(catalog, _date_axis("2023-01-01", "2024-01-01"), ["lending_indices"])
+        )
     )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
@@ -440,8 +477,11 @@ def test_defi_v2_pool_seeds_canonical_pool_address_id_and_lowercase_type() -> No
         available_to="2023-06-30",
     )._replace(raw_symbol=pool_addr)
     # 2024-01-01 > available_to → a DELISTED seed row; assert its canonical atoms.
-    rows = list(
-        enumerator_module._enumerate_v2_defi([entry], _date_axis("2023-01-01", "2024-01-01"), ["dex_pool_state"])
+    # Filter out the venue-grain pre-launch pass so this test only sees the per-instrument row.
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi([entry], _date_axis("2023-01-01", "2024-01-01"), ["dex_pool_state"])
+        )
     )
     assert len(rows) == 1
     row = rows[0]
@@ -453,7 +493,11 @@ def test_defi_v2_pool_seeds_canonical_pool_address_id_and_lowercase_type() -> No
 
 
 def test_defi_v2_empty_catalog() -> None:
-    rows = list(enumerator_module._enumerate_v2_defi([], _date_axis("2024-01-01"), ["lending_indices"]))
+    """Empty catalog → no per-instrument rows (venue-grain rows filtered out;
+    they are asserted separately in ``test_enumerate_v2_superset_property.py``)."""
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi([], _date_axis("2024-01-01"), ["lending_indices"]))
+    )
     assert rows == []
 
 
@@ -840,12 +884,11 @@ def test_sports_v2_empty_catalog() -> None:
 
 
 def test_prediction_v2_market_created_at_prefers_over_available_from() -> None:
-    """market_created_at takes precedence over available_from.
+    """market_created_at takes precedence over available_from (per-instrument row).
 
     market_created_at=2024-03-01 means date 2024-02-15 is before creation
-    → EXPECTED_INSTRUMENT_NOT_LISTED.
-
-    Window includes an alive date (2024-03-15) so the overlap filter passes.
+    → EXPECTED_INSTRUMENT_NOT_LISTED. Window includes an alive date (2024-03-15)
+    so the overlap filter passes. Filter out the venue-grain pre-launch pass.
     """
     catalog = [
         _make_prediction_entry(
@@ -855,20 +898,23 @@ def test_prediction_v2_market_created_at_prefers_over_available_from() -> None:
         )
     ]
     # 2024-03-15 alive → no row; 2024-02-15 → NOT_LISTED
-    rows = list(
-        enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-02-15", "2024-03-15"), ["prediction_clob"])
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_prediction(
+                catalog, _date_axis("2024-02-15", "2024-03-15"), ["prediction_clob"]
+            )
+        )
     )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
 
 
 def test_prediction_v2_settlement_time_prefers_over_available_to() -> None:
-    """settlement_time takes precedence over available_to.
+    """settlement_time takes precedence over available_to (per-instrument row).
 
     settlement_time=2024-03-31 means date 2024-04-01 is after settlement
-    → EXPECTED_INSTRUMENT_DELISTED.
-
-    Window includes an alive date (2024-03-15) so the overlap filter passes.
+    → EXPECTED_INSTRUMENT_DELISTED. Window includes an alive date (2024-03-15)
+    so the overlap filter passes. Filter out the venue-grain pre-launch pass.
     """
     catalog = [
         _make_prediction_entry(
@@ -878,17 +924,22 @@ def test_prediction_v2_settlement_time_prefers_over_available_to() -> None:
         )
     ]
     # 2024-03-15 alive → no row; 2024-04-01 → DELISTED
-    rows = list(
-        enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-03-15", "2024-04-01"), ["prediction_clob"])
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_prediction(
+                catalog, _date_axis("2024-03-15", "2024-04-01"), ["prediction_clob"]
+            )
+        )
     )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
 def test_prediction_v2_falls_back_to_available_from_when_no_market_dates() -> None:
-    """When market_created_at is None, falls back to available_from.
+    """When market_created_at is None, falls back to available_from (per-instrument row).
 
-    Each window includes an alive date so the overlap filter passes.
+    Each window includes an alive date so the overlap filter passes. Filter out
+    the venue-grain pre-launch pass.
     """
     catalog = [
         _make_prediction_entry(
@@ -899,20 +950,32 @@ def test_prediction_v2_falls_back_to_available_from_when_no_market_dates() -> No
         )
     ]
     # Before available_from → not listed; 2024-07-01 alive → no row
-    pre_rows = list(
-        enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-01-01", "2024-07-01"), ["prediction_clob"])
+    pre_rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_prediction(
+                catalog, _date_axis("2024-01-01", "2024-07-01"), ["prediction_clob"]
+            )
+        )
     )
     assert pre_rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
 
     # After available_to → delisted; 2024-07-01 alive → no row
-    post_rows = list(
-        enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-07-01", "2024-10-01"), ["prediction_clob"])
+    post_rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_prediction(
+                catalog, _date_axis("2024-07-01", "2024-10-01"), ["prediction_clob"]
+            )
+        )
     )
     assert post_rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
 def test_prediction_v2_empty_catalog() -> None:
-    rows = list(enumerator_module._enumerate_v2_prediction([], _date_axis("2024-01-01"), ["prediction_clob"]))
+    """Empty catalog → no per-instrument rows (venue-grain rows filtered out;
+    they are asserted separately in ``test_enumerate_v2_superset_property.py``)."""
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_prediction([], _date_axis("2024-01-01"), ["prediction_clob"]))
+    )
     assert rows == []
 
 
@@ -924,15 +987,18 @@ def test_prediction_v2_empty_catalog() -> None:
 def test_enumerate_v2_dispatch_cefi() -> None:
     """enumerate_v2 routes cefi to _enumerate_v2_cefi.
 
-    Window includes an alive date so the overlap filter passes.
+    Window includes an alive date so the overlap filter passes. Filter out the
+    venue-grain pre-launch pass so we assert only on the per-instrument row.
     """
     catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
-    rows = list(
-        enumerator_module.enumerate_v2(
-            asset_group="cefi",
-            catalog=catalog,
-            date_axis=_date_axis("2020-01-01", "2025-06-01"),  # 2025-06-01 alive → no row; 2020-01-01 → NOT_LISTED
-            data_types=["ohlcv_1d"],
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module.enumerate_v2(
+                asset_group="cefi",
+                catalog=catalog,
+                date_axis=_date_axis("2020-01-01", "2025-06-01"),
+                data_types=["ohlcv_1d"],
+            )
         )
     )
     assert len(rows) == 1
@@ -956,10 +1022,11 @@ def test_enumerate_v2_empty_catalog_returns_no_rows() -> None:
     """Empty catalog → no per-instrument rows regardless of asset_group.
 
     tradfi additionally emits venue-grain non-trading-day rows (mirroring v1
-    ``_enumerate_tradfi``); those are filtered out here so the assertion
-    stays focused on the per-instrument denominator (the venue-grain <-> v1
-    parity is asserted separately in
-    ``tests/integration/test_enumerate_v2_superset_property.py``).
+    ``_enumerate_tradfi``); cefi/defi/prediction additionally emit venue-grain
+    pre-launch sentinel rows (mirroring v1's per-AG pre-launch enumerators).
+    All venue-grain rows are filtered out here so the assertion stays focused on
+    the per-instrument denominator (the venue-grain ↔ v1 parity is asserted
+    separately in ``tests/integration/test_enumerate_v2_superset_property.py``).
     """
     for ag in ("cefi", "defi", "tradfi", "sports", "prediction"):
         rows = list(
@@ -970,8 +1037,8 @@ def test_enumerate_v2_empty_catalog_returns_no_rows() -> None:
                 data_types=["ohlcv_1d"],
             )
         )
-        if ag == "tradfi":
-            rows = _drop_v2_tradfi_venue_grain(rows)
+        if ag in ("cefi", "defi", "tradfi", "prediction"):
+            rows = _drop_v2_venue_grain(rows)
         assert rows == [], f"expected no rows for empty catalog, got {rows} for {ag}"
 
 
@@ -1090,11 +1157,17 @@ def _row_key_from_dict(d: dict[str, str]) -> tuple[str, ...]:
 
 
 def test_cefi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
-    """Alive instrument date absent from manifest → expected_unattempted row."""
+    """Alive instrument date absent from manifest → expected_unattempted row.
+
+    Drop the venue-grain pre-launch pass (LIGHTER-ZKSYNC + other post-2023
+    cefi venues would emit venue-grain rows for 2023-06-01).
+    """
     catalog = [_make_cefi_entry(available_from="2019-01-01", available_to=None, venue="BINANCE")]
     date_axis = _date_axis("2023-06-01")
     present_set: set[tuple[str, ...]] = set()  # empty — no manifest rows
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=present_set))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=present_set))
+    )
     assert len(rows) == 1
     r = rows[0]
     assert r.capture_status == "expected_unattempted"
@@ -1105,7 +1178,8 @@ def test_cefi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> 
 
 
 def test_cefi_v2_alive_date_in_present_set_skipped() -> None:
-    """Alive instrument date already in manifest → no row emitted."""
+    """Alive instrument date already in manifest → no per-instrument row emitted
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
     date_axis = _date_axis("2023-06-01")
     key = _row_key_from_dict(
@@ -1120,23 +1194,31 @@ def test_cefi_v2_alive_date_in_present_set_skipped() -> None:
             "date": "2023-06-01",
         }
     )
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set={key}))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set={key}))
+    )
     assert rows == []
 
 
 def test_cefi_v2_legacy_mode_alive_date_skipped() -> None:
-    """present_set=None (legacy mode) → alive dates produce no rows."""
+    """present_set=None (legacy mode) → alive dates produce no per-instrument rows
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
     date_axis = _date_axis("2023-06-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=None))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=None))
+    )
     assert rows == []
 
 
 def test_defi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
-    """DeFi alive instrument date absent from manifest → expected_unattempted."""
+    """DeFi alive instrument date absent from manifest → expected_unattempted
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
     date_axis = _date_axis("2024-06-01")
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set=set()))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set=set()))
+    )
     assert len(rows) == 1
     r = rows[0]
     assert r.capture_status == "expected_unattempted"
@@ -1146,7 +1228,8 @@ def test_defi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> 
 
 
 def test_defi_v2_alive_date_in_present_set_skipped() -> None:
-    """DeFi alive date already in manifest → no row emitted."""
+    """DeFi alive date already in manifest → no per-instrument row emitted
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
     date_axis = _date_axis("2024-06-01")
     key = _row_key_from_dict(
@@ -1160,14 +1243,20 @@ def test_defi_v2_alive_date_in_present_set_skipped() -> None:
             "date": "2024-06-01",
         }
     )
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set={key}))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set={key}))
+    )
     assert rows == []
 
 
 def test_defi_v2_legacy_mode_alive_date_skipped() -> None:
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
-    rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2024-06-01"), ["lending_indices"], present_set=None)
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                catalog, _date_axis("2024-06-01"), ["lending_indices"], present_set=None
+            )
+        )
     )
     assert rows == []
 
@@ -1201,12 +1290,15 @@ def test_defi_v2_denominator_is_could_exist_universe_not_just_manifest() -> None
             }
         )
     }
-    rows = list(
-        enumerator_module._enumerate_v2_defi(
-            [captured, uncaptured], date_axis, ["lending_indices"], present_set=present_set
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [captured, uncaptured], date_axis, ["lending_indices"], present_set=present_set
+            )
         )
     )
     # exactly ONE owed cell — the un-captured instrument; the captured one is skipped (not dropped)
+    # (venue-grain pre-launch pass filtered out — the per-instrument denominator is asserted here)
     assert len(rows) == 1
     assert rows[0].capture_status == "expected_unattempted"
     assert rows[0].instrument_id == "WBTC-USDC"
@@ -1342,10 +1434,15 @@ def test_sports_v2_legacy_mode_alive_date_skipped() -> None:
 
 
 def test_prediction_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
-    """Prediction active market absent from manifest → expected_unattempted."""
+    """Prediction active market absent from manifest → expected_unattempted
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
     date_axis = _date_axis("2024-03-15")
-    rows = list(enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set=set()))
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set=set())
+        )
+    )
     assert len(rows) == 1
     r = rows[0]
     assert r.capture_status == "expected_unattempted"
@@ -1367,31 +1464,40 @@ def test_prediction_v2_alive_date_in_present_set_skipped() -> None:
             "date": "2024-03-15",
         }
     )
-    rows = list(enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set={key}))
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set={key})
+        )
+    )
     assert rows == []
 
 
 def test_prediction_v2_legacy_mode_alive_date_skipped() -> None:
     catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
-    rows = list(
-        enumerator_module._enumerate_v2_prediction(
-            catalog, _date_axis("2024-03-15"), ["prediction_clob"], present_set=None
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_prediction(
+                catalog, _date_axis("2024-03-15"), ["prediction_clob"], present_set=None
+            )
         )
     )
     assert rows == []
 
 
 def test_enumerate_v2_forwards_present_set_to_enumerator() -> None:
-    """enumerate_v2() must forward present_set to the per-asset-group enumerator."""
+    """enumerate_v2() must forward present_set to the per-asset-group enumerator
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
     present_set: set[tuple[str, ...]] = set()  # empty → expected_unattempted
-    rows = list(
-        enumerator_module.enumerate_v2(
-            asset_group="cefi",
-            catalog=catalog,
-            date_axis=_date_axis("2023-06-01"),
-            data_types=["ohlcv_1d"],
-            present_set=present_set,
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module.enumerate_v2(
+                asset_group="cefi",
+                catalog=catalog,
+                date_axis=_date_axis("2023-06-01"),
+                data_types=["ohlcv_1d"],
+                present_set=present_set,
+            )
         )
     )
     assert len(rows) == 1
@@ -1431,20 +1537,23 @@ def test_expected_unattempted_rows_have_empty_reason() -> None:
 
 
 def test_empty_confirmed_rows_still_have_typed_reason_when_present_set_given() -> None:
-    """Even when present_set is provided, lifecycle-boundary rows still emit typed reason.
+    """Even when present_set is provided, lifecycle-boundary rows still emit typed reason
+    (venue-grain pre-launch pass filtered out — asserted separately).
 
     Window includes an alive date so the overlap filter passes.
     """
     catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
-    rows = list(
-        enumerator_module.enumerate_v2(
-            asset_group="cefi",
-            catalog=catalog,
-            date_axis=_date_axis(
-                "2020-01-01", "2025-06-01"
-            ),  # 2025-06-01 alive → expected_unattempted; 2020-01-01 → NOT_LISTED
-            data_types=["ohlcv_1d"],
-            present_set=set(),  # providing present_set shouldn't affect lifecycle boundary rows
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module.enumerate_v2(
+                asset_group="cefi",
+                catalog=catalog,
+                date_axis=_date_axis(
+                    "2020-01-01", "2025-06-01"
+                ),  # 2025-06-01 alive → expected_unattempted; 2020-01-01 → NOT_LISTED
+                data_types=["ohlcv_1d"],
+                present_set=set(),  # providing present_set shouldn't affect lifecycle boundary rows
+            )
         )
     )
     not_listed = [r for r in rows if r.capture_status == "empty_confirmed"]
@@ -1472,12 +1581,18 @@ class TestG1EnumCefiFilter:
 
     def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
         catalog = [_make_cefi_entry(instrument_type=instrument_type)]
-        return list(
-            enumerator_module._enumerate_v2_cefi(
-                catalog,
-                _date_axis("2024-01-15"),
-                data_types or self._ALL_CEFI_DTS,
-                present_set=set(),
+        # G1 filter tests assert per-instrument validity-matrix behavior; drop the
+        # venue-grain pre-launch pass so its universal data_type fan doesn't leak
+        # into "data_types_emitted" (LIGHTER-ZKSYNC + newer CeFi venues launched
+        # after 2024-01-15 emit venue-grain rows across all data_types).
+        return _drop_v2_venue_grain(
+            list(
+                enumerator_module._enumerate_v2_cefi(
+                    catalog,
+                    _date_axis("2024-01-15"),
+                    data_types or self._ALL_CEFI_DTS,
+                    present_set=set(),
+                )
             )
         )
 
@@ -1541,12 +1656,18 @@ class TestG1EnumDefiFilter:
 
     def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
         catalog = [_make_defi_entry(instrument_type=instrument_type, chain="ETHEREUM")]
-        return list(
-            enumerator_module._enumerate_v2_defi(
-                catalog,
-                _date_axis("2024-01-15"),
-                data_types or self._ALL_DEFI_DTS,
-                present_set=set(),
+        # G1 filter tests assert per-instrument validity-matrix behavior; drop the
+        # venue-grain pre-launch pass so its universal data_type fan doesn't leak
+        # into "data_types_emitted" (protocols launched after 2024-01-15 emit
+        # venue-grain rows across the protocol_data_types filter).
+        return _drop_v2_venue_grain(
+            list(
+                enumerator_module._enumerate_v2_defi(
+                    catalog,
+                    _date_axis("2024-01-15"),
+                    data_types or self._ALL_DEFI_DTS,
+                    present_set=set(),
+                )
             )
         )
 
@@ -1646,7 +1767,12 @@ _CEFI_DATA_TYPES = ["trades", "book_snapshot_5", "ohlcv_1m", "options_chain"]
 def test_cefi_v2_option_leaf_yields_no_per_contract_candidate() -> None:
     """A leaf OPTION contract must produce NO per-contract expected_unattempted
     rows — it is captured at the options_chain bundle grain (frozenset() in the
-    validity matrix). This kills the 72K-OPTION x N-data_type over-fan."""
+    validity matrix). This kills the 72K-OPTION x N-data_type over-fan.
+
+    Drop the venue-grain pre-launch pass so the assertion stays focused on the
+    per-instrument fan-out (LIGHTER-ZKSYNC + other post-2024-06-01 venues emit
+    venue-grain rows in the window).
+    """
     catalog = [
         _make_cefi_entry(
             instrument_id="BTC-29MAR24-50000-C",
@@ -1656,7 +1782,7 @@ def test_cefi_v2_option_leaf_yields_no_per_contract_candidate() -> None:
         )
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")  # 2024-06-01 pre-listing, 2025-06-01 alive
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES)))
     assert rows == [], "leaf OPTION must not fan per-contract candidates"
 
 
@@ -1670,14 +1796,15 @@ def test_cefi_v2_combo_leaf_yields_no_per_contract_candidate() -> None:
         )
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES)))
     assert rows == [], "leaf COMBO must not fan per-contract candidates"
 
 
 def test_cefi_v2_options_chain_bundle_yields_exactly_one_per_underlying() -> None:
     """The per-underlying options_chain bundle catalogue entry produces exactly
     ONE candidate per date (the bundle grain) with data_type=trades (Era-B) —
-    not the full cefi data_type cross-product, not data_type=options_chain."""
+    not the full cefi data_type cross-product, not data_type=options_chain
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [
         _make_cefi_entry(
             instrument_id="BTC",
@@ -1689,22 +1816,27 @@ def test_cefi_v2_options_chain_bundle_yields_exactly_one_per_underlying() -> Non
     # Two-date window (alive date keeps the lifecycle-overlap filter from
     # skipping the instrument); only the pre-listing date yields a candidate.
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES)))
     assert len(rows) == 1, "bundle entry must yield exactly one candidate per underlying/date"
     assert rows[0].data_type == "trades"  # ERA-B: chain bundle's market data_type is trades
     assert rows[0].instrument_id == "BTC"
 
 
 def test_cefi_v2_bundle_grain_matches_uac_grain_axis() -> None:
-    """The enumerator's per-leaf-skip must agree with the UAC GRAIN SSOT."""
+    """The enumerator's per-leaf-skip must agree with the UAC GRAIN SSOT
+    (venue-grain pre-launch pass filtered out)."""
     from unified_api_contracts import GRAIN_BUNDLE_BY_UNDERLYING, grain_for_instrument_type
 
     assert grain_for_instrument_type("cefi", "OPTION") == GRAIN_BUNDLE_BY_UNDERLYING
     # SPOT is leaf → it DOES fan (one row per kept data_type) so the two agree
     # only for the bundle-grain types.
     spot_catalog = [_make_cefi_entry(instrument_type="SPOT", venue="BINANCE", available_from="2025-01-01")]
-    spot_rows = list(
-        enumerator_module._enumerate_v2_cefi(spot_catalog, _date_axis("2024-06-01", "2025-06-01"), _CEFI_DATA_TYPES)
+    spot_rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_cefi(
+                spot_catalog, _date_axis("2024-06-01", "2025-06-01"), _CEFI_DATA_TYPES
+            )
+        )
     )
     assert len(spot_rows) > 0, "leaf SPOT must still fan per-data_type"
 
@@ -1745,7 +1877,11 @@ def test_enumerate_v2_option_leaves_collapse_to_one_per_underlying() -> None:
         _opt_entry("ETH-29MAR24-3000-C", "ETH"),
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")  # pre-listing date + alive date
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    # Drop the venue-grain pre-launch pass so the assertion stays focused on the
+    # per-underlying bundle rows (the roll-up under test).
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     # Era-B: exactly one candidate per underlying, data_type=trades — NOT one per
     # contract, NOT data_type=options_chain.
     assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "trades"), ("ETH", "trades")}
@@ -1761,7 +1897,9 @@ def test_enumerate_v2_combo_leaves_roll_up_to_options_chain() -> None:
         _opt_entry("BTC-COMBO-2", "BTC", instrument_type="COMBO"),
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     # Era-B: instrument_type=options_chain bundle, data_type=trades.
     assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "options_chain", "trades")}
 
@@ -1769,7 +1907,9 @@ def test_enumerate_v2_combo_leaves_roll_up_to_options_chain() -> None:
 def test_enumerate_v2_underlying_derived_when_field_blank() -> None:
     catalog = [_opt_entry("BTC-29MAR24-50000-C")]  # underlying="" → derive "BTC"
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "trades")}
 
 
@@ -1779,7 +1919,9 @@ def test_enumerate_v2_futures_chain_bundle_entry_yields_one_per_underlying() -> 
     (Era-B; the chain name is the instrument_type, the market data_type is trades)."""
     catalog = [_opt_entry("BTC", "BTC", instrument_type="futures_chain")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
 
 
@@ -1788,7 +1930,9 @@ def test_enumerate_v2_perpetual_does_not_produce_options_chain() -> None:
     is per-contract and never rolls up to a chain bundle)."""
     catalog = [_opt_entry("BTC-USDT-PERP", "BTC", instrument_type="PERP", venue="BINANCE")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     assert not any(r.data_type == "options_chain" for r in rows)
     # PERP stays per-contract (its own valid data_types), instrument_id unchanged.
     assert all(r.instrument_id == "BTC-USDT-PERP" for r in rows)
@@ -1835,10 +1979,13 @@ def test_enumerate_v2_tradfi_option_leaves_roll_up() -> None:
 
 
 def test_enumerate_v2_non_bundle_instruments_unchanged() -> None:
-    """SPOT (leaf) is untouched by the rollup — still per-instrument."""
+    """SPOT (leaf) is untouched by the rollup — still per-instrument
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [_opt_entry("BTC-USDT", instrument_type="SPOT", venue="BINANCE", underlying="BTC")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     assert all(r.instrument_id == "BTC-USDT" for r in rows)
     assert not any(r.data_type == "options_chain" for r in rows)
 
@@ -1856,31 +2003,40 @@ def test_enumerate_v2_non_bundle_instruments_unchanged() -> None:
 
 def test_enumerate_v2_future_leaf_bundles_at_deribit() -> None:
     """A bare FUTURE leaf at DERIBIT rolls up to ONE per-underlying futures_chain
-    candidate (data_type=trades) — the same shape as its options_chain."""
+    candidate (data_type=trades) — the same shape as its options_chain
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [
         _opt_entry("BTC-27JUN25", "BTC", instrument_type="FUTURE", venue="DERIBIT"),
         _opt_entry("BTC-26SEP25", "BTC", instrument_type="FUTURE", venue="DERIBIT"),
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
     assert not any(r.instrument_type == "FUTURE" for r in rows)
 
 
 def test_enumerate_v2_future_leaf_bundles_at_okx() -> None:
-    """OKX (and OKX-FUTURES via the base-venue token) also bundles FUTURE."""
+    """OKX (and OKX-FUTURES via the base-venue token) also bundles FUTURE
+    (venue-grain pre-launch pass filtered out)."""
     catalog = [_opt_entry("BTC-27JUN25", "BTC", instrument_type="FUTURE", venue="OKX-FUTURES")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
 
 
 def test_enumerate_v2_future_leaf_stays_per_contract_at_bybit() -> None:
     """A FUTURE leaf at BYBIT is captured per-contract — it must NOT collapse into a
-    futures_chain bundle (BYBIT is a per-contract futures venue)."""
+    futures_chain bundle (BYBIT is a per-contract futures venue). Filter out the
+    venue-grain pre-launch pass so the assertion stays focused on per-instrument."""
     catalog = [_opt_entry("BTC-27JUN25", "BTC", instrument_type="FUTURE", venue="BYBIT")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     # Stays per-contract: instrument_id unchanged, no futures_chain rollup.
     assert all(r.instrument_id == "BTC-27JUN25" for r in rows)
     assert not any(r.instrument_type == "futures_chain" for r in rows)
