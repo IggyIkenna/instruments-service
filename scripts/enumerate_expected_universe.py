@@ -8,6 +8,20 @@ Enumerates the expected universe per asset_group, finds (shard_key, day) tuples
 with NO manifest row, writes ``record_expected_empty(reason=EXPECTED_*)`` rows
 via per-VM shard isolation.
 
+The could-exist denominator is materialised along the selection axes declared per
+asset_group in :data:`unified_api_contracts.TOTAL_UNIVERSE_AXES` (the UAC SSOT for
+the total-reasonable-universe taxonomy — the HARDCODED_GENESIS venue/launch bounds
+plus the DOWNLOAD_DERIVED lifecycle catalogue). This module is the primary consumer
+of that SSOT; the module-level audit below asserts bidirectional coverage between
+:data:`SUPPORTED_ASSET_GROUPS` and :data:`TOTAL_UNIVERSE_AXES` at import time so an
+axis-taxonomy drift is caught loudly instead of silently seeding an un-declared
+asset_group's cells (or leaving a declared axis un-enumerated). The MVP ⊆ TOTAL
+invariant (an MVP cell is always in the total universe by construction) is enforced
+via :func:`classify_row_universe_tier` — a thin
+:func:`unified_api_contracts.universe_membership` wrapper the tests exercise across
+every enumerated ``ExpectedRow`` so an MVP cell that classifies ``NOT_IN_UNIVERSE``
+loud-fails.
+
 Closes the rollup-vs-drilldown denominator divergence per
 `unified-trading-pm/codex/02-data/availability-manifest-and-data-status.md`
 § "Rollup-vs-drilldown denominator divergence (codified 2026-05-07)" by
@@ -79,8 +93,10 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    TOTAL_UNIVERSE_AXES,
     VENUES_BY_ASSET_GROUP,
     Mode,
+    UniverseTier,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
@@ -88,7 +104,9 @@ from unified_api_contracts import (
     has_source_priority,
     is_in_mvp_capture_universe,
     is_mvp,
+    is_total_universe,
     pipeline_mode_for_source,
+    universe_membership,
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
@@ -218,6 +236,54 @@ def _sports_data_types() -> list[str]:
 SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
 
 
+# ---------------------------------------------------------------------------
+# TOTAL_UNIVERSE_AXES SSOT wiring (plan is_catalogue_completion_2d — B2 downstream).
+# ---------------------------------------------------------------------------
+#
+# The could-exist denominator this enumerator materialises is bounded by the
+# per-asset_group selection-axis taxonomy declared in
+# ``unified_api_contracts.TOTAL_UNIVERSE_AXES`` (SSOT:
+# ``unified_api_contracts.canonical.crosscutting.total_universe``). The audit below
+# fires at MODULE-IMPORT time so a drift between this enumerator's supported
+# asset_groups and the UAC axis-taxonomy declaration is caught loudly — either
+# direction is a bug:
+#
+#   * ``enumerator → SSOT`` — an asset_group in ``SUPPORTED_ASSET_GROUPS`` but NOT
+#     in ``TOTAL_UNIVERSE_AXES`` means the enumerator seeds an un-declared
+#     could-exist universe (the downstream coverage-status consumer has no axis
+#     taxonomy to hierarchy-classify against).
+#   * ``SSOT → enumerator`` — an asset_group declared in ``TOTAL_UNIVERSE_AXES`` but
+#     absent from ``SUPPORTED_ASSET_GROUPS`` means a declared axis taxonomy is not
+#     being enumerated (the ``_ENUMERATORS`` / ``_V2_ENUMERATORS`` dispatch tables
+#     silently skip it).
+#
+# Loud-fail at import time is the right cost: this file is imported by every
+# enumerator VM + every writegate audit + every unit test, so drift surfaces on the
+# next run of any consumer instead of manifesting as a silent denominator error.
+_UNDECLARED_IN_SSOT: frozenset[str] = frozenset(SUPPORTED_ASSET_GROUPS) - frozenset(TOTAL_UNIVERSE_AXES.keys())
+_UNENUMERATED_FROM_SSOT: frozenset[str] = frozenset(TOTAL_UNIVERSE_AXES.keys()) - frozenset(SUPPORTED_ASSET_GROUPS)
+if _UNDECLARED_IN_SSOT or _UNENUMERATED_FROM_SSOT:
+    raise ImportError(
+        "enumerate_expected_universe.py: SUPPORTED_ASSET_GROUPS ↔ TOTAL_UNIVERSE_AXES "
+        f"drift detected — un-declared in UAC SSOT: {sorted(_UNDECLARED_IN_SSOT)!r}; "
+        f"un-enumerated from UAC SSOT: {sorted(_UNENUMERATED_FROM_SSOT)!r}. Fix in "
+        "unified_api_contracts.canonical.crosscutting.total_universe or add / remove "
+        "the asset_group from this enumerator's dispatch tables (both ends must agree)."
+    )
+
+
+def total_universe_axes_for(asset_group: str) -> tuple[str, ...]:
+    """Return the axis-name tuple :data:`TOTAL_UNIVERSE_AXES` declares for ``asset_group``.
+
+    Materialises the enumerator's contract with the UAC SSOT: the tests use this to
+    assert every enumerated asset_group carries the declared axis vocabulary (so
+    the enumerator's per-AG filter code path exercises every axis the SSOT bounds
+    the could-exist universe on). Empty tuple for an un-declared asset_group — the
+    import-time audit above already loud-failed in that case, so this is defensive.
+    """
+    return tuple(axis.name for axis in TOTAL_UNIVERSE_AXES.get(asset_group, ()))
+
+
 def _default_bucket_for(asset_group: str) -> str:
     """Resolve the canonical manifest bucket for ``asset_group`` via the bucket-name SSOT.
 
@@ -290,6 +356,87 @@ class ExpectedRow:
     # the capture and the cell stays permanently ``expected_unattempted``. "" for
     # leaf / non-derivative rows.
     underlying: str = ""
+
+
+def classify_row_universe_tier(row: ExpectedRow) -> UniverseTier:
+    """Classify an :class:`ExpectedRow` into the universe hierarchy (MVP / TOTAL_ONLY / NOT_IN_UNIVERSE).
+
+    Thin wrapper around :func:`unified_api_contracts.universe_membership` scoped to
+    the fields an ``ExpectedRow`` carries. The MVP ⊆ TOTAL invariant declared by
+    :mod:`unified_api_contracts.canonical.crosscutting.total_universe` (an MVP cell
+    is ALWAYS in the total universe by construction) is enforced structurally by the
+    predicate — this helper exists so the enumerator (and its tests) can classify a
+    yielded row with the same call-site downstream data-status uses, and detect a
+    drift between the enumerator's per-AG filters (venue / data_type / lifecycle
+    gates) and the SSOT axis taxonomy without duplicating either half.
+
+    Forwards ``underlying`` as ``base_ccy`` (the TradFi underlier and cefi base
+    currency both land in this axis in the MVP rule set) and ``league_id`` as
+    ``league`` (the sports MVP axis), so a row carrying the extra fields lands the
+    finer MVP tier when applicable — a leaf row without them still lands
+    ``TOTAL_ONLY`` for a declared asset_group (correct: the enumerator's coarser
+    denominator grain classifies as at-least-TOTAL).
+    """
+    return universe_membership(
+        row.asset_group,
+        row.venue,
+        row.instrument_type,
+        row.data_type,
+        base_ccy=row.underlying or None,
+        league=row.league_id or None,
+    )
+
+
+def assert_mvp_subset_of_total(row: ExpectedRow) -> UniverseTier:
+    """Return the row's :class:`UniverseTier`, loud-failing on a MVP ⊄ TOTAL breach.
+
+    The MVP ⊆ TOTAL invariant is upheld structurally by
+    :func:`unified_api_contracts.universe_membership` (an MVP cell classifies MVP,
+    never NOT_IN_UNIVERSE, because :func:`is_mvp` returning ``True`` short-circuits
+    the tier resolution before the structural :func:`is_total_universe` gate). This
+    helper wraps the classification with an explicit assertion so a test /
+    debug-audit pass on real enumerator output loud-fails the moment an emitted row
+    breaks the invariant (e.g. an MVP row whose asset_group is NOT_IN_UNIVERSE would
+    signal the SSOT audit at the top of the module has drifted). The predicate is
+    the same UAC SSOT the data-status denominator reads, so a green audit here means
+    the enumerator + the coverage consumer see the same universe hierarchy.
+    """
+    tier = classify_row_universe_tier(row)
+    # A cell is MVP iff ``is_mvp`` returns True. Guard the ⊆ direction: an MVP cell
+    # must never fall out of the TOTAL universe (would violate the SSOT hierarchy).
+    if tier == UniverseTier.NOT_IN_UNIVERSE:
+        cell_is_mvp = is_mvp(
+            row.asset_group,
+            row.venue,
+            row.instrument_type,
+            row.data_type,
+            base_ccy=row.underlying or None,
+            league=row.league_id or None,
+        )
+        if cell_is_mvp:
+            raise ValueError(
+                "assert_mvp_subset_of_total: MVP ⊄ TOTAL invariant broken — "
+                f"asset_group={row.asset_group!r} venue={row.venue!r} "
+                f"instrument_type={row.instrument_type!r} data_type={row.data_type!r} "
+                "is MVP but classifies NOT_IN_UNIVERSE; TOTAL_UNIVERSE_AXES is "
+                "missing this asset_group's axis taxonomy."
+            )
+        # Non-MVP + NOT_IN_UNIVERSE: the row's asset_group is un-declared. The
+        # import-time audit above would have loud-failed in that case, so a runtime
+        # NOT_IN_UNIVERSE without MVP means the enumerator is emitting a cell for an
+        # asset_group its dispatch table supports but the axis SSOT does not — the
+        # enumerator's structural filters and the SSOT taxonomy have drifted, and a
+        # coverage-status consumer will silently discard the cell.
+        raise ValueError(
+            "assert_mvp_subset_of_total: asset_group ↔ TOTAL_UNIVERSE_AXES drift — "
+            f"asset_group={row.asset_group!r} classifies NOT_IN_UNIVERSE despite being "
+            "in the enumerator dispatch table. Reconcile the SSOT taxonomy."
+        )
+    # is_total_universe is the structural gate universe_membership consults after MVP;
+    # a MVP tier here also satisfies TOTAL (MVP ⊆ TOTAL by construction). Re-affirm
+    # for the fast-path documentation.
+    assert is_total_universe(row.asset_group, row.venue, row.instrument_type)
+    return tier
 
 
 def _emit_event(event: str, /, **details: object) -> None:

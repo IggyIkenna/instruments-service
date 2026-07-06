@@ -459,3 +459,185 @@ def test_row_data_types_capability_absent_venue_not_gated() -> None:
     cefi_dts = ["trades", "book_snapshot_5"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("BINANCE-DELIVERY", "PERPETUAL"), cefi_dts)
     assert "trades" in row_dts
+
+
+# --- TOTAL_UNIVERSE_AXES SSOT wire (plan is_catalogue_completion_2d — B2 downstream) --
+
+
+def test_enumerator_asset_groups_match_total_universe_axes_bidirectionally() -> None:
+    """SUPPORTED_ASSET_GROUPS ↔ TOTAL_UNIVERSE_AXES must agree exactly.
+
+    The enumerator materialises the could-exist denominator along the axis taxonomy
+    declared per asset_group in ``unified_api_contracts.TOTAL_UNIVERSE_AXES``; drift
+    in EITHER direction is a bug:
+
+    * ``enumerator → SSOT`` — the enumerator seeds an un-declared could-exist
+      universe (no axis taxonomy for downstream hierarchy classification).
+    * ``SSOT → enumerator`` — a declared axis taxonomy is silently un-enumerated.
+
+    The module-level audit at ``enumerate_expected_universe.py`` loud-fails at
+    import time; this test locks that contract so a PR that adds an asset_group
+    without updating both ends flips red here.
+    """
+    from unified_api_contracts import TOTAL_UNIVERSE_AXES
+
+    assert set(enumerator_module.SUPPORTED_ASSET_GROUPS) == set(TOTAL_UNIVERSE_AXES.keys()), (
+        f"enumerator SUPPORTED_ASSET_GROUPS={sorted(enumerator_module.SUPPORTED_ASSET_GROUPS)!r} "
+        f"drifted from UAC TOTAL_UNIVERSE_AXES={sorted(TOTAL_UNIVERSE_AXES.keys())!r}"
+    )
+
+
+def test_total_universe_axes_for_returns_declared_axis_names() -> None:
+    """``total_universe_axes_for(ag)`` returns the axis-name tuple declared in the SSOT.
+
+    Read of the SSOT is READ-ONLY here: we don't assert specific axis-name content
+    (that belongs to ``total_universe.py`` itself); we assert that the enumerator's
+    accessor faithfully surfaces the SSOT's declared axis names — a shape contract
+    the downstream data-status coverage view depends on.
+    """
+    from unified_api_contracts import TOTAL_UNIVERSE_AXES
+
+    for ag in enumerator_module.SUPPORTED_ASSET_GROUPS:
+        declared = tuple(a.name for a in TOTAL_UNIVERSE_AXES[ag])
+        assert enumerator_module.total_universe_axes_for(ag) == declared
+        # No accidental empty axis vector for a supported group (would mean the
+        # SSOT declared the AG but with no axes — an unbounded could-exist universe).
+        assert declared, f"asset_group={ag!r} has no declared TOTAL_UNIVERSE_AXES axes"
+
+
+def test_total_universe_axes_for_returns_empty_for_undeclared_asset_group() -> None:
+    """Un-declared asset_group returns an empty axis tuple (defensive read)."""
+    assert enumerator_module.total_universe_axes_for("__does_not_exist__") == ()
+
+
+def test_classify_row_universe_tier_classifies_supported_asset_group_as_at_least_total() -> None:
+    """A supported-AG cell classifies MVP or TOTAL_ONLY — never NOT_IN_UNIVERSE.
+
+    The enumerator's could-exist universe is exactly the union of MVP and TOTAL_ONLY;
+    any yielded row for a SUPPORTED_ASSET_GROUP must fall within that union or the
+    UAC axis taxonomy has drifted from the enumerator's dispatch table.
+    """
+    from unified_api_contracts import UniverseTier
+
+    for ag in enumerator_module.SUPPORTED_ASSET_GROUPS:
+        row = enumerator_module.ExpectedRow(
+            asset_group=ag,
+            venue="ANY_VENUE",
+            chain="",
+            data_type="trades",
+            instrument_type="ANY_TYPE",
+            instrument_id="",
+            league_id="",
+            date="2026-01-01",
+            reason="",
+        )
+        tier = enumerator_module.classify_row_universe_tier(row)
+        assert tier in (UniverseTier.MVP, UniverseTier.TOTAL_ONLY), (
+            f"asset_group={ag!r} classified {tier!r} — expected MVP or TOTAL_ONLY"
+        )
+
+
+def test_classify_row_universe_tier_classifies_undeclared_asset_group_as_not_in_universe() -> None:
+    """An un-declared asset_group classifies NOT_IN_UNIVERSE (defensive read).
+
+    The enumerator's import-time audit already loud-fails on an un-declared AG
+    reaching ``SUPPORTED_ASSET_GROUPS``; this test defensively verifies the
+    predicate itself returns NOT_IN_UNIVERSE for a hand-crafted row so a caller
+    outside the dispatch loop can still tell.
+    """
+    from unified_api_contracts import UniverseTier
+
+    row = enumerator_module.ExpectedRow(
+        asset_group="__undeclared_ag__",
+        venue="ANY",
+        chain="",
+        data_type="trades",
+        instrument_type="ANY",
+        instrument_id="",
+        league_id="",
+        date="2026-01-01",
+        reason="",
+    )
+    assert enumerator_module.classify_row_universe_tier(row) == UniverseTier.NOT_IN_UNIVERSE
+
+
+def test_classify_row_universe_tier_yields_mvp_for_binance_futures_btc_perp() -> None:
+    """A canonical CeFi BTC-perp MVP cell classifies as MVP (fine-grained axis binding).
+
+    Locks the axis-forwarding contract: ``ExpectedRow.underlying`` maps to
+    ``base_ccy`` and ``ExpectedRow.league_id`` maps to ``league`` in the
+    :func:`universe_membership` call. A regression that drops either axis would
+    silently downgrade every MVP row to TOTAL_ONLY (breaking the MVP-subset audit
+    and the downstream MVP-view data-status view).
+    """
+    from unified_api_contracts import UniverseTier
+
+    row = enumerator_module.ExpectedRow(
+        asset_group="cefi",
+        venue="BINANCE-FUTURES",
+        chain="",
+        data_type="trades",
+        instrument_type="PERPETUAL",
+        instrument_id="BINANCE-FUTURES:PERPETUAL:BTC-USDT",
+        league_id="",
+        date="2026-01-01",
+        reason="",
+        underlying="BTC",
+    )
+    assert enumerator_module.classify_row_universe_tier(row) == UniverseTier.MVP
+
+
+@pytest.mark.parametrize(
+    "asset_group,start,end",
+    [
+        ("tradfi", "2018-01-01", "2018-01-14"),
+        ("defi", "2015-01-01", "2015-01-14"),
+        ("cefi", "2018-01-01", "2018-01-14"),
+        ("prediction", "2020-01-01", "2020-01-14"),
+        ("sports", "2015-01-01", "2015-01-14"),
+    ],
+)
+def test_assert_mvp_subset_of_total_holds_over_v1_enumerator_output(
+    asset_group: str, start: str, end: str
+) -> None:
+    """MVP ⊆ TOTAL invariant: every v1-enumerated row classifies MVP or TOTAL_ONLY.
+
+    Dynamic test — walks each per-asset_group v1 enumerator over a small window
+    that yields a non-trivial number of rows and asserts every yielded row passes
+    :func:`assert_mvp_subset_of_total` (which loud-fails on NOT_IN_UNIVERSE). This
+    is the gate closure for the plan's ``MVP⊆TOTAL respected`` requirement — the
+    enumerator's structural filters (venue tables, launch-date registries, chain
+    genesis) MUST agree with the UAC SSOT axis taxonomy at every yield.
+    """
+    enumerator_fn = enumerator_module._ENUMERATORS[asset_group]
+    checked = 0
+    for row in enumerator_fn(start, end):
+        # Loud-fails on invariant breach — no assertion needed at the call site.
+        enumerator_module.assert_mvp_subset_of_total(row)
+        checked += 1
+    # Sanity: at least one row was actually classified. A zero-row window would
+    # make this test vacuously pass; the parametrised windows are chosen to yield
+    # a non-empty set for each AG.
+    assert checked > 0, f"asset_group={asset_group!r} yielded no rows to classify over [{start}, {end}]"
+
+
+def test_assert_mvp_subset_of_total_raises_on_undeclared_asset_group() -> None:
+    """``assert_mvp_subset_of_total`` loud-fails on a hand-crafted un-declared-AG row.
+
+    The invariant helper is the enumerator's structural drift detector; verify it
+    actually raises when a NOT_IN_UNIVERSE cell reaches it (so the test in the
+    parametric loop above is non-vacuous).
+    """
+    row = enumerator_module.ExpectedRow(
+        asset_group="__undeclared_ag__",
+        venue="ANY",
+        chain="",
+        data_type="trades",
+        instrument_type="ANY",
+        instrument_id="",
+        league_id="",
+        date="2026-01-01",
+        reason="",
+    )
+    with pytest.raises(ValueError, match="TOTAL_UNIVERSE_AXES"):
+        enumerator_module.assert_mvp_subset_of_total(row)
