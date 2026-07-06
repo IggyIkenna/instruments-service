@@ -1,27 +1,30 @@
 """Polymarket crypto-perp reference data adapter — POLYMARKET-PERP.
 
 Distinct from the prediction-market PolymarketReferenceDataAdapter in
-``adapters/prediction/polymarket.py``. Polymarket launched CFTC-regulated
-crypto perpetual futures (POLYMARKET-PERP beta) on 2026-04-21. These are
-NOT prediction YES/NO markets — they are continuous perpetual contracts with
-funding rates on a separate CLOB engine.
+``adapters/prediction/polymarket.py``. POLYMARKET-PERP is a real, intended cefi
+venue — Polymarket launched crypto perpetual futures (beta) on 2026-04-21
+(beta live 2026-05-28 for a restricted set of users). These are NOT prediction
+YES/NO markets — they are continuous perpetual contracts on a separate CLOB.
 
-API reference:
+⚠️  ENUMERATION DISABLED PENDING REPOINT (``_REPOINT_PENDING = True``). SSOT:
+``plans/active/prediction_capture_incident_remediation_2026_07_06.md`` Workstream B, Phase 3
+(issue ``plans/active/issues/prediction_universe_capture_dead_since_07_01_2026_07_06.md``).
+
+WHY: the perps endpoint + response schema below are an UNVERIFIED scaffold — the
+base URL ``https://perps-api.polymarket.com`` and field mapping were never
+confirmed against a live beta response (this adapter has emitted 0 rows so far,
+so it never contaminated the cefi catalogue, but it is not trustworthy either).
+Rather than leave an unverified fetch live alongside the KALSHI-PERP correction,
+enumeration is disabled (honest-empty) until Phase 3 confirms Polymarket's real
+perps API (endpoint + auth) against ``docs.polymarket.com`` and repoints here.
+The venue declaration stays; only the feed is empty.
+
+API reference (to be CONFIRMED in Phase 3 — do not trust as-is):
   Perps base URL (beta): https://perps-api.polymarket.com/
-  Contract list:  GET /markets              (public, no auth)
+  Contract list:  GET /markets              (public? — unverified)
   Funding rate:   GET /markets/{id}/funding_rate
-  Orderbook:      GET /orderbook/{id}
-  WebSocket:      wss://perps-ws.polymarket.com
-
-Public read — no API key required for contract enumeration.
-First data: 2026-04-21 (beta launch).
-
-TODO (BLOCKED-CREDENTIALS): the beta /markets endpoint response schema has not
-been confirmed live. The field mapping below is based on the plan API-research
-notes (prediction_venue_perps_and_live_clob_depth_2026_06_20.md Phase 0).
-Once the polymarket-perp-api-key is provisioned, run an integration test
-(@pytest.mark.requires_credentials) against the live endpoint to confirm field
-names and add cursor/pagination shape.
+Access: Polymarket perps beta is enrollment-gated (restricted users);
+prod cutover is Phase 4 (BLOCKED-OPERATOR-DECISION — Ikenna).
 """
 
 import logging
@@ -47,6 +50,12 @@ logger = logging.getLogger(__name__)
 _PERPS_BASE_URL = "https://perps-api.polymarket.com"
 _PAGE_LIMIT = 200
 _MAX_PAGES = 10  # cap at 2000 contracts per fetch
+
+# Enumeration is DISABLED until Phase 3 confirms + repoints against Polymarket's
+# real perps API (endpoint + auth unverified). While True,
+# get_instruments()/get_instrument() return honest-empty BEFORE any network call.
+# The venue declaration stays; only the feed is empty. See module docstring.
+_REPOINT_PENDING = True
 
 _STATUS_MAP: dict[int, str] = {429: "429", 401: "401", 403: "403", 400: "400"}
 _MSG_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
@@ -108,6 +117,18 @@ class PolymarketPerpReferenceDataAdapter(BaseReferenceDataAdapter):
         Other values return an empty list (venue only has PERPETUAL).
         """
         if instrument_type is not None and instrument_type != InstrumentType.PERPETUAL:
+            return []
+
+        if _REPOINT_PENDING:
+            # DISABLED pending Phase 3 repoint against Polymarket's real perps API
+            # (endpoint + auth unverified). Return honest-empty; no network call.
+            log_event(
+                "ADAPTER_DISABLED_PENDING_REPOINT",
+                details={
+                    "venue": self.venue,
+                    "reason": "perps endpoint/schema unverified; awaiting Phase 3 repoint",
+                },
+            )
             return []
 
         now = datetime.now(UTC)
@@ -224,6 +245,9 @@ class PolymarketPerpReferenceDataAdapter(BaseReferenceDataAdapter):
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single Polymarket perp contract by market_id."""
+        if _REPOINT_PENDING:
+            # DISABLED pending Phase 3 repoint — see get_instruments.
+            return None
         url = f"{_PERPS_BASE_URL}/markets/{symbol}"
         headers = {"Accept": "application/json"}
         now = datetime.now(UTC)
