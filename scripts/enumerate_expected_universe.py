@@ -1363,6 +1363,50 @@ def _blank_token(v: object) -> bool:
     return not str(v or "").strip()
 
 
+def _yield_v2_tradfi_non_trading_day_rows(
+    date_axis: list[date],
+    data_types: list[str],
+) -> Iterator[ExpectedRow]:
+    """Venue-grain non-trading-day pass for v2 tradfi (mirrors v1 ``_enumerate_tradfi``).
+
+    For each tradfi venue in ``VENUES_BY_ASSET_GROUP["tradfi"]``, walks the
+    ``date_axis`` and emits ONE row per ``(venue, day, data_type)`` when
+    ``is_non_trading_day(venue, day)`` is True. The reason is resolved via
+    ``non_trading_day_reason`` — ``EXPECTED_WEEKEND`` for Sat/Sun on
+    closed-on-weekends venues, ``EXPECTED_HOLIDAY`` for a weekday US-market
+    holiday. ``instrument_type`` / ``instrument_id`` are blank so the shard atom
+    matches v1's venue-grain output (the whole venue is closed on a non-trading
+    day; per-instrument disambiguation would over-fan the denominator).
+
+    Closes the v1→v2 asymmetry documented in
+    ``tests/integration/test_enumerate_v2_superset_property.py`` and unblocks
+    the eventual v1 dispatch retirement tracked in
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``.
+    """
+    venues = VENUES_BY_ASSET_GROUP.get("tradfi", [])
+    if not venues or not data_types:
+        return
+    for venue in venues:
+        venue_str = str(venue)
+        for d in date_axis:
+            iso = d.isoformat()
+            if not is_non_trading_day(venue_str, iso):
+                continue
+            reason = non_trading_day_reason(venue_str, iso) or "EXPECTED_HOLIDAY"
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="tradfi",
+                    venue=venue_str,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=iso,
+                    reason=reason,
+                )
+
+
 def _enumerate_v2_tradfi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1371,16 +1415,20 @@ def _enumerate_v2_tradfi(
     present_set: set[tuple[str, ...]] | None = None,
     present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
-    """Per-instrument tradfi v2 enumerator.
+    """Tradfi v2 enumerator — venue-grain non-trading days + per-instrument lifecycle.
 
-    Tradfi instruments respect available_from/available_to lifecycle bounds.
-    Weekend and holiday dates fall through to the pipeline (v1 handles them
-    at venue-grain; v2 only adds per-instrument rows for the non-trading-day
-    windows outside the instrument lifecycle).
+    Emits TWO row classes:
 
-    The seeded ``instrument_type`` is the CANONICAL WRITER grain (lowercase
-    ``future``/``equity``/``etf``/``combo``/``futures_chain``), NOT the raw
-    UPPERCASE catalogue leaf (``FUTURE``/``EQUITY``/…) — see
+    1. Venue-grain non-trading day rows (weekend/holiday) via
+       :func:`_yield_v2_tradfi_non_trading_day_rows` — mirrors v1
+       ``_enumerate_tradfi``'s weekend/holiday walk so v2 covers the same
+       calendar cells (superset property).
+    2. Per-instrument lifecycle rows: pre-listing / post-delisting empty_confirmed
+       plus alive-day ``expected_unattempted`` seeds against ``present_set``.
+
+    The seeded per-instrument ``instrument_type`` is the CANONICAL WRITER grain
+    (lowercase ``future``/``equity``/``etf``/``combo``/``futures_chain``), NOT
+    the raw UPPERCASE catalogue leaf (``FUTURE``/``EQUITY``/…) — see
     :func:`_canonical_writer_instrument_type`. Without this, the seeded shard
     atom (``FUTURE`` + uppercase) can NEVER be converted by the real capture
     (``future`` lowercase) → ~253k tradfi cells sit permanently
@@ -1393,6 +1441,7 @@ def _enumerate_v2_tradfi(
     * alive AND no manifest row (present_set provided) → expected_unattempted
     * alive AND present_set not provided → skip (legacy mode)
     """
+    yield from _yield_v2_tradfi_non_trading_day_rows(date_axis, data_types)
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
