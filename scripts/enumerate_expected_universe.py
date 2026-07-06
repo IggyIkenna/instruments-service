@@ -84,6 +84,7 @@ from unified_api_contracts import (
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
+    get_mvp_data_types_for_cefi_venue,
     grain_for_instrument_type,
     has_source_priority,
     is_in_mvp_capture_universe,
@@ -866,6 +867,11 @@ def _row_data_types(
         venue_caps = VENUE_DATA_TYPE_CAPABILITIES.get(instr.venue)
         if venue_caps:
             row_dts = [dt for dt in row_dts if dt in venue_caps or dt not in known_ag_dts]
+        # C2: Intersect with MVP scope data types for CeFi venues
+        # TODO: A17 build_expected will consolidate this into single producer
+        mvp_dts = get_mvp_data_types_for_cefi_venue(instr.venue)
+        if mvp_dts:
+            row_dts = [dt for dt in row_dts if dt in mvp_dts]
 
     return row_dts
 
