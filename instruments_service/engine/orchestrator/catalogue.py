@@ -29,7 +29,6 @@ __all__ = [
     "_check_emission_policy",
     "_get_instruments_bucket",
     "_write_catalogue_record",
-    "refresh_catalogue",
     "resolve_instruments_store_kind",
 ]
 
@@ -200,32 +199,3 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
             operation="manifest_writer",
             shard=path,
         )
-
-
-async def refresh_catalogue(
-    asset_groups: list[str] | None = None,
-    api_keys: dict[str, str] | None = None,
-) -> dict[str, str]:
-    """Rebuild the canonical instrument catalogue for the requested asset groups.
-
-    For each group in :data:`CATALOGUE_SUPPORTED_ASSET_GROUPS` this uses
-    :class:`CatalogueBuilder` to fetch instruments through URDI and writes
-    the result to ``reference_data/instruments/{asset_group}/all.parquet``.
-
-    Returns a mapping of ``asset_group -> written URI`` for observability.
-    """
-    from instruments_service.reference_data.catalogue import (
-        CATALOGUE_SUPPORTED_ASSET_GROUPS,
-        CatalogueBuilder,
-    )
-
-    builder = CatalogueBuilder(api_keys=api_keys)
-    target = [c.upper() for c in (asset_groups or list(CATALOGUE_SUPPORTED_ASSET_GROUPS))]
-    written: dict[str, str] = {}
-    for ag in target:
-        if ag not in CATALOGUE_SUPPORTED_ASSET_GROUPS:
-            _orch.logger.warning("refresh_catalogue: skipping unknown asset_group=%s", ag)
-            continue
-        records = await builder.build_asset_group_async(ag)
-        written[ag] = builder.write_to_gcs(records, ag)
-    return written
