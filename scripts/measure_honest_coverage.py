@@ -104,6 +104,14 @@ class _CompletenessModuleProto(Protocol):
         self, asset_group: str, df: pd.DataFrame, *, diagnose: bool = ...
     ) -> _AgLayer1ResultProto: ...
 
+    def filter_manifest_to_expected(
+        self,
+        asset_group: str,
+        df: pd.DataFrame,
+        *,
+        expected: set[tuple[str, str, str]] | None = ...,
+    ) -> pd.DataFrame: ...
+
 
 # ---------------------------------------------------------------------------
 # Lazy-load check_enumeration_completeness (sibling script, not a package module)
@@ -177,6 +185,21 @@ _STATUS_PRIORITY: dict[str, int] = {
     "empty_confirmed": 2,
     "expected_unattempted": 3,
 }
+
+# Asset groups whose Layer-2 counts are filtered to the EXPECTED-in-scope
+# manifest rows (the MVP read-time gate, cefi Layer-1 denominator gaps plan
+# task 2c, 2026-07-06).  For cefi this aligns Layer-2 numerator/denominator
+# with the Layer-1 EXPECTED matrix (MVP-scoped via
+# `get_mvp_data_types_for_cefi_venue`), killing the class of dishonest %
+# where non-MVP captures inflate the Layer-2 "captured" count over a
+# MVP-scoped EXPECTED denominator.  The MVP filter itself lives in
+# `expected_universe.build_expected` (2a); this constant enables the
+# read-time application in the Layer-2 harness.  Other AGs are excluded
+# until their EXPECTED matrices are certified complete (defi PROTOCOL work
+# in-flight; tradfi/sports/prediction on separate spines).  Layer-1
+# strays remain visible — the check consumes the UNFILTERED df.
+# SSOT: codex/02-data/honest-coverage-model.md § MVP filter (row `is_mvp`).
+_MVP_READ_TIME_GATE_AGS: frozenset[str] = frozenset({"cefi"})
 
 
 def _get_blob_updated(client: storage.Client, bucket_name: str) -> datetime | None:
@@ -469,28 +492,42 @@ def _compute_coverage(
     layer_1_by_ag: dict[str, object] = {}
     checker = _get_completeness_module()
     check_fn = checker.check_enumeration_completeness
+    filter_fn = checker.filter_manifest_to_expected
 
     for ag, df in dfs.items():
+        # MVP read-time gate (task 2c, 2026-07-06) — filter df to
+        # EXPECTED-in-scope rows for Layer-2 counting so that numerator +
+        # denominator align at the MVP grain.  ZERO manifest rows mutated
+        # (the input df is untouched; the gate returns a filtered VIEW).
+        # Layer-1 continues to consume the FULL, unfiltered df below so that
+        # stray tuples (writer emitting something UAC doesn't sanction) stay
+        # visible in `stray_tuples`.
+        if ag in _MVP_READ_TIME_GATE_AGS:
+            logger.info("  Applying MVP read-time gate for %s (Layer-2 in-scope filter) …", ag)
+            df_l2 = filter_fn(ag, df)
+        else:
+            df_l2 = df
+
         # level 1 — per asset_group
-        ag_counts = _count_statuses(df)
+        ag_counts = _count_statuses(df_l2)
         by_asset_group[ag] = ag_counts
 
         # level 2 — per (ag, venue)
         venue_group: dict[str, object] = {}
-        for venue, vdf in df.groupby("venue"):
+        for venue, vdf in df_l2.groupby("venue"):
             venue_group[str(venue)] = _count_statuses(vdf)
         by_venue[ag] = venue_group
 
         # level 3 — per (ag, venue, data_type)
         vdt_group: dict[str, dict[str, object]] = defaultdict(dict)
-        for (venue, data_type), vtdf in df.groupby(["venue", "data_type"]):
+        for (venue, data_type), vtdf in df_l2.groupby(["venue", "data_type"]):
             vdt_group[str(venue)][str(data_type)] = _count_statuses(vtdf)
         by_venue_data_type[ag] = dict(vdt_group)
 
         # level 4 — per (ag, venue, instrument_type) [v2]
         vit_group: dict[str, dict[str, object]] = defaultdict(dict)
-        if "instrument_type" in df.columns:
-            for (venue, itype), vitdf in df.groupby(["venue", "instrument_type"]):
+        if "instrument_type" in df_l2.columns:
+            for (venue, itype), vitdf in df_l2.groupby(["venue", "instrument_type"]):
                 vit_group[str(venue)][str(itype)] = _count_statuses(vitdf)
         else:
             logger.warning(
@@ -501,8 +538,8 @@ def _compute_coverage(
 
         # level 5 — per (ag, venue, instrument_type, data_type) [v2]
         vitdt_group: dict[str, dict[str, dict[str, object]]] = defaultdict(lambda: defaultdict(dict))
-        if "instrument_type" in df.columns:
-            for (venue, itype, dt), vitdtdf in df.groupby(["venue", "instrument_type", "data_type"]):
+        if "instrument_type" in df_l2.columns:
+            for (venue, itype, dt), vitdtdf in df_l2.groupby(["venue", "instrument_type", "data_type"]):
                 vitdt_group[str(venue)][str(itype)][str(dt)] = _count_statuses(vitdtdf)
         by_venue_instrument_type_data_type[ag] = {
             v: dict(it_map) for v, it_map in vitdt_group.items()
@@ -510,14 +547,15 @@ def _compute_coverage(
 
         # level 6 — per (ag, date) [v2]
         day_group: dict[str, object] = {}
-        if "date" in df.columns:
-            for day_val, daydf in df.groupby("date"):
+        if "date" in df_l2.columns:
+            for day_val, daydf in df_l2.groupby("date"):
                 day_group[str(day_val)] = _count_statuses(daydf)
         else:
             logger.warning("  [%s] date column absent — by_day will be empty", ag)
         by_day[ag] = day_group
 
-        # Layer-1 enumeration completeness check
+        # Layer-1 enumeration completeness check — uses the UNFILTERED df so
+        # stray tuples (writer emissions UAC doesn't sanction) remain visible.
         logger.info("  Running Layer-1 completeness check for %s …", ag)
         try:
             l1_result = check_fn(ag, df, diagnose=diagnose)

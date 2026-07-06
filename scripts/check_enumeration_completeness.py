@@ -591,3 +591,100 @@ def check_all_asset_groups(
     for ag, df in dfs.items():
         results[ag] = check_enumeration_completeness(ag, df)
     return Layer1Result(by_asset_group=results)
+
+
+def filter_manifest_to_expected(
+    asset_group: str,
+    df: pd.DataFrame,
+    *,
+    expected: set[tuple[str, str, str]] | None = None,
+) -> pd.DataFrame:
+    """MVP read-time gate — keep only manifest rows whose canonical
+    ``(venue, instrument_type, data_type)`` key is in ``EXPECTED``.
+
+    The retired manifest-pruning script `reclassify_cefi_manifest_mvp_universe_2026_06_23.py`
+    is the WRONG shape — its `_derive_base` mis-parses Bitfinex `ADAF0:USTF0`
+    + Kraken `PF_/PI_` wire-forms and would DELETE ~380k legit captured
+    BITFINEX/KRAKEN rows, and it derives the denominator from the manifest
+    (honest-coverage-v2 forbids this circular reference).
+
+    This function is the READ-TIME replacement: no manifest rows are ever
+    mutated (the returned DataFrame is a filtered VIEW of the input; the
+    input is unchanged). The gate uses `build_expected(asset_group)` as the
+    oracle, and `build_expected` already applies the CeFi MVP filter via
+    `get_mvp_data_types_for_cefi_venue`, plus the D2a `INSTRUMENT_TYPES_BY_VENUE`
+    gate + `VENUE_DATA_TYPE_CAPABILITIES` carve-out. So calling
+    `filter_manifest_to_expected("cefi", df)` yields a Layer-2 denominator
+    that matches the Layer-1 EXPECTED denominator — MVP-scoped, honestly.
+
+    Comparison is on the SAME canonical key `check_enumeration_completeness`
+    uses (`_canon_key`) so a manifest row whose (venue, itype, dt) folds to
+    the same key as an EXPECTED tuple is kept even if the raw tokens differ
+    (e.g. OKX-SPOT manifest row folds to OKX canonical venue).
+
+    Args:
+        asset_group: cefi/defi/tradfi/sports/prediction.
+        df: the manifest DataFrame (must have ``venue``, ``instrument_type``,
+            ``data_type`` columns; degrades gracefully when a column is missing
+            by returning the df unchanged + a WARNING log).
+        expected: optional pre-computed EXPECTED tuple set. When None,
+            ``build_expected(asset_group)`` is called.
+
+    Returns:
+        Filtered DataFrame containing only in-scope rows (input df is
+        unchanged; rows are neither reordered nor mutated).
+    """
+    required_cols = {"venue", "instrument_type", "data_type"}
+    missing_cols = required_cols - set(df.columns)
+    if missing_cols:
+        logger.warning(
+            "  filter_manifest_to_expected [%s]: missing columns %s — "
+            "returning df unchanged (gate cannot apply)",
+            asset_group,
+            sorted(missing_cols),
+        )
+        return df
+
+    exp = expected if expected is not None else _build_expected_tuples(asset_group)
+    exp_by_key = _canonicalise_tuple_set(asset_group, exp)
+    exp_keys = set(exp_by_key)
+
+    # Canonicalise ONLY the unique (venue, itype, dt) triples in the manifest —
+    # single-pass computation, O(unique_triples) not O(rows).  The cefi index
+    # is tens-of-millions of rows but only a few hundred unique triples.
+    triples = df[["venue", "instrument_type", "data_type"]].drop_duplicates()
+    in_scope: set[tuple[str, str, str]] = set()
+    for row in triples.itertuples(index=False):
+        venue = "" if pd.isna(row.venue) else str(row.venue)
+        itype = "" if pd.isna(row.instrument_type) else str(row.instrument_type)
+        dt = "" if pd.isna(row.data_type) else str(row.data_type)
+        key = _canon_key(asset_group, venue, itype, dt)
+        if key in exp_keys:
+            in_scope.add((row.venue, row.instrument_type, row.data_type))
+
+    if not in_scope:
+        logger.warning(
+            "  filter_manifest_to_expected [%s]: no manifest triples in EXPECTED — "
+            "gate would drop every row.  Returning EMPTY df (0 rows).",
+            asset_group,
+        )
+        return df.iloc[0:0].copy()
+
+    # Row-level mask via O(1) set membership.  itertuples-over-3-cols is fast
+    # in CPython (list-of-tuples membership check) and avoids the merge-reorder.
+    mask = pd.Series(
+        [(v, it, dt) in in_scope for v, it, dt in zip(df["venue"], df["instrument_type"], df["data_type"], strict=False)],
+        index=df.index,
+    )
+    filtered = df.loc[mask].reset_index(drop=True)
+    logger.info(
+        "  filter_manifest_to_expected [%s]: kept %d/%d rows (%.1f%%) — "
+        "%d/%d unique triples in EXPECTED",
+        asset_group,
+        len(filtered),
+        len(df),
+        (len(filtered) / len(df) * 100) if len(df) else 100.0,
+        len(in_scope),
+        len(triples),
+    )
+    return filtered
