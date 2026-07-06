@@ -8,6 +8,32 @@ Enumerates the expected universe per asset_group, finds (shard_key, day) tuples
 with NO manifest row, writes ``record_expected_empty(reason=EXPECTED_*)`` rows
 via per-VM shard isolation.
 
+Wired to the UAC :data:`TOTAL_UNIVERSE_AXES` SSOT (B2 downstream, plan
+``is_catalogue_completion_2d_2026_07_06.md``): the per-asset_group axis taxonomy
+declared in
+:mod:`unified_api_contracts.canonical.crosscutting.total_universe` is the SSOT
+for WHICH axes bound the total-reasonable ("could-exist") universe and WHERE
+each axis's membership lives. This module cross-joins EXACTLY those axes — the
+DOWNLOAD_DERIVED axes come from the instruments-service lifecycle catalogue
+(``build_instrument_catalogue`` roll-up → ``available_from`` / ``available_to``);
+the HARDCODED_GENESIS axes come from
+:data:`unified_api_contracts.VENUES_BY_ASSET_GROUP` +
+:data:`unified_api_contracts.DATA_TYPES_BY_ASSET_GROUP` +
+:data:`unified_api_contracts.registry.chain_env.CHAIN_GENESIS_DATES` +
+:data:`unified_api_contracts.registry.venue_launch_dates.{CEFI,PREDICTION}_VENUE_LAUNCH_DATES`.
+MVP ⊆ TOTAL by construction — see
+:func:`unified_api_contracts.universe_membership` /
+:func:`unified_api_contracts.is_total_universe`; the cefi / tradfi enumerators
+gate on the tighter MVP capture universe
+(``is_in_mvp_capture_universe`` — operator decision 2026-06-23) which is a
+strict subset of TOTAL, so a seeded cell that passes the MVP gate is TOTAL by
+the SSOT hierarchy.
+
+The :func:`total_universe_config_descriptor` (version + content hash) is emitted
+on every ``ENUMERATOR_STARTED`` event so a coverage delta attributes to a
+universe-DEFINITION change (SSOT hash flip) vs a DATA change (same hash, different
+catalogue rollup) — mirroring the ``mvp_scope`` config-descriptor pattern.
+
 Closes the rollup-vs-drilldown denominator divergence per
 `unified-trading-pm/codex/02-data/availability-manifest-and-data-status.md`
 § "Rollup-vs-drilldown denominator divergence (codified 2026-05-07)" by
@@ -79,6 +105,7 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    TOTAL_UNIVERSE_AXES,
     VENUES_BY_ASSET_GROUP,
     Mode,
     bundle_instrument_type_for_leaf,
@@ -88,7 +115,9 @@ from unified_api_contracts import (
     has_source_priority,
     is_in_mvp_capture_universe,
     is_mvp,
+    is_total_universe,
     pipeline_mode_for_source,
+    total_universe_config_descriptor,
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
@@ -212,10 +241,14 @@ def _sports_data_types() -> list[str]:
     return sorted(SPORTS_DATA_TYPE_TO_SOURCE.keys())
 
 
-# Asset groups this enumerator supports. The canonical MANIFEST bucket per group is
-# resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
+# Asset groups this enumerator supports. Derived from the UAC
+# :data:`TOTAL_UNIVERSE_AXES` SSOT — the SSOT names WHICH asset_groups have a
+# declared could-exist axis taxonomy, so the enumerator's supported set is
+# EXACTLY those (drift-proof: adding an AG to the SSOT auto-enrols it; removing
+# one auto-retires it). The canonical MANIFEST bucket per group is resolved at
+# run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
 # deployment-service/configs/cloud-providers.yaml) — see ``_default_bucket_for``.
-SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
+SUPPORTED_ASSET_GROUPS: tuple[str, ...] = tuple(sorted(TOTAL_UNIVERSE_AXES.keys()))
 
 
 def _default_bucket_for(asset_group: str) -> str:
@@ -2812,6 +2845,39 @@ def main() -> int:
     )
     full_history: bool = bool(args.full_history)
 
+    # UAC total-universe SSOT gate (B2 downstream, plan
+    # ``is_catalogue_completion_2d_2026_07_06.md``): refuse to enumerate an
+    # asset_group that has no declared axis taxonomy in
+    # :data:`unified_api_contracts.TOTAL_UNIVERSE_AXES`. The argparse
+    # ``choices=SUPPORTED_ASSET_GROUPS`` already keeps the CLI honest (the
+    # supported tuple is derived from ``TOTAL_UNIVERSE_AXES.keys()`` at import
+    # time), so this is a belt-and-braces check that catches any drift where a
+    # caller imports the enumerator internals bypassing argparse.
+    if not is_total_universe(asset_group, "", ""):
+        logger.error(
+            "asset_group=%r is not declared in the UAC TOTAL_UNIVERSE_AXES SSOT; "
+            "refusing to enumerate an undeclared universe. Add a taxonomy entry to "
+            "unified_api_contracts/canonical/crosscutting/total_universe.py first.",
+            asset_group,
+        )
+        _emit_event(
+            "ENUMERATOR_FAILED",
+            reason="asset_group_not_in_total_universe_ssot",
+            asset_group=asset_group,
+            run_id=run_id,
+        )
+        return 4
+
+    _tu_axes = TOTAL_UNIVERSE_AXES[asset_group]
+    _tu_desc = total_universe_config_descriptor()
+    logger.info(
+        "TOTAL_UNIVERSE_AXES for %s: axes=%s (config v%d/%s)",
+        asset_group,
+        [a.name for a in _tu_axes],
+        _tu_desc.config_version,
+        _tu_desc.config_content_hash,
+    )
+
     _emit_event(
         "ENUMERATOR_STARTED",
         enumerator="enumerate_expected_universe",
@@ -2824,6 +2890,12 @@ def main() -> int:
         max_writes_per_run=max_writes_per_run,
         data_types_override=data_types_override,
         full_history=full_history,
+        # Total-universe SSOT provenance — pinned on every run so a coverage
+        # delta attributes to a universe-DEFINITION change (hash flip) vs a
+        # DATA change (same hash, different catalogue rollup).
+        total_universe_config_version=_tu_desc.config_version,
+        total_universe_config_hash=_tu_desc.config_content_hash,
+        total_universe_axes=[a.name for a in _tu_axes],
         run_id=run_id,
     )
 
