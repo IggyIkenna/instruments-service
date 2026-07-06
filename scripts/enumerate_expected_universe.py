@@ -79,11 +79,14 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    MVP_SCOPE,
     VENUES_BY_ASSET_GROUP,
+    CeFiMvpRule,
     Mode,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
+    get_mvp_data_types_for_cefi_venue,
     grain_for_instrument_type,
     has_source_priority,
     is_in_mvp_capture_universe,
@@ -866,6 +869,34 @@ def _row_data_types(
         venue_caps = VENUE_DATA_TYPE_CAPABILITIES.get(instr.venue)
         if venue_caps:
             row_dts = [dt for dt in row_dts if dt in venue_caps or dt not in known_ag_dts]
+
+        # MVP data_type gate (bundle-aware) — kills the MVP-cut over-seed class
+        # where a venue's MVP data_type set is strictly narrower than its raw
+        # capability set (e.g. COINBASE-SPOT ships trades+book_snapshot_5 but
+        # MVP scope keeps only {trades}; without this gate the enumerator
+        # seeds book_snapshot_5 rows for COINBASE-SPOT that VMs will never
+        # capture). Complements the VENUE_DATA_TYPE_CAPABILITIES carve-out
+        # above (that's the "can-produce" half; this is the "MVP-cut" half).
+        # BUNDLE-AWARE skip: for instrument_types that MVP_SCOPE narrows via
+        # a per-instrument_type override (OPTION → {options_chain}), the
+        # validity matrix has ALREADY narrowed row_dts to the correct bundle
+        # data_type upstream — applying the venue-only helper here (which
+        # returns MVP_SCOPE.cefi.data_types = the flat tick set for Deribit,
+        # since Deribit has no venue override) would empty the correctly-
+        # narrowed ["trades"] slice for the post-rollup options_chain entry.
+        # _mvp_capture_itype normalises OPTIONS_CHAIN/COMBO → OPTION so the
+        # post-rollup bundle entry matches the override key too. A venue
+        # absent from MVP scope entirely (e.g. BINANCE-DELIVERY, COIN-M
+        # dropped per operator decision #3) returns an empty MVP set from
+        # the helper → the `if mvp_dts:` guard leaves row_dts unchanged,
+        # so the MVP gate does not blanket-block non-MVP-scoped venues.
+        cefi_rule = MVP_SCOPE.get("cefi")
+        if isinstance(cefi_rule, CeFiMvpRule):
+            itype_norm = _mvp_capture_itype(instr.instrument_type)
+            if itype_norm not in cefi_rule.instrument_type_data_types:
+                mvp_dts = get_mvp_data_types_for_cefi_venue(instr.venue)
+                if mvp_dts:
+                    row_dts = [dt for dt in row_dts if dt in mvp_dts or dt not in known_ag_dts]
 
     return row_dts
 
