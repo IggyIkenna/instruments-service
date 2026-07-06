@@ -298,6 +298,16 @@ class InstrumentsHandler(UnifiedServiceHandler):
         Reads API keys from the hot-reloader (always fresh after rotation).
         Skip-if-exists is handled by the orchestrator's check_shard_freshness()
         which uses the manifest with per-asset-group buckets (correct bucket resolution).
+
+        Wraps the engine call in a try/except that logs the full traceback via
+        ``logger.exception`` before re-raising — the UTL adapter's shard-level
+        failure isolation catches Exception at WARNING with the message only
+        (``_adapter.py`` "Handler %s failed on payload %d: %s"), which loses the
+        traceback and made the HYPERLIQUID `pd.NA` bug (issue:
+        instruments_handler_pd_na_ambiguous_and_af_classification_2026_07_06.md)
+        surface as a bare "boolean value of NA is ambiguous" with no source
+        line. Re-raising preserves the shard-level failure-isolation contract
+        (the outer adapter still counts the failure + moves on).
         """
         date = str(payload.date) if not isinstance(payload.date, str) else payload.date
         # Normalize datetime to YYYY-MM-DD string (BatchIO yields datetime objects)
@@ -307,20 +317,29 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
         asset_groups: list[str] = list(payload.asset_groups) if payload.asset_groups else ["ALL"]
         api_keys = self._key_reloader.current_keys if self._key_reloader else {}
-        result = await engine_orchestrator.process_instruments(
-            date=date,
-            asset_groups=asset_groups,
-            redo_all=redo_all,
-            api_keys=api_keys,
-            venue_override=self._venue_override,
-            mode=str(self.runtime.mode),
-            sports_entity_filter=self._sports_entity_filter,
-            sports_provider=self._sports_provider,
-            league_filter=self._league_filter,
-            season_override=self._season_override,
-            recovery_fixture_ids=self._recovery_fixture_ids,
-            source=self._source,
-        )
+        try:
+            result = await engine_orchestrator.process_instruments(
+                date=date,
+                asset_groups=asset_groups,
+                redo_all=redo_all,
+                api_keys=api_keys,
+                venue_override=self._venue_override,
+                mode=str(self.runtime.mode),
+                sports_entity_filter=self._sports_entity_filter,
+                sports_provider=self._sports_provider,
+                league_filter=self._league_filter,
+                season_override=self._season_override,
+                recovery_fixture_ids=self._recovery_fixture_ids,
+                source=self._source,
+            )
+        except Exception:
+            logger.exception(
+                "InstrumentsHandler.process failed for date=%s asset_groups=%s venues=%s",
+                date,
+                asset_groups,
+                self._venue_override,
+            )
+            raise
         self._emit_date_heartbeat(date, asset_groups, result)
         return result
 
