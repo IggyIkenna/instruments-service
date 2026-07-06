@@ -64,6 +64,22 @@ def _drop_v2_tradfi_venue_grain(rows: list) -> list:
     return [r for r in rows if r.instrument_id != "" or r.instrument_type != ""]
 
 
+def _drop_v2_venue_grain(rows: list) -> list:
+    """Filter out the venue-grain pre-launch sentinel pass from any v2 output.
+
+    ``_yield_v2_cefi_pre_venue_launch_rows`` / ``_yield_v2_defi_pre_launch_rows`` /
+    ``_yield_v2_prediction_pre_venue_launch_rows`` emit one row per
+    ``(venue, data_type, day)`` at ``instrument_type=""`` / ``instrument_id=""``
+    for venues with ZERO catalog instruments in the pre-launch window (subsumes
+    v1 ``_enumerate_cefi`` / ``_enumerate_defi`` / ``_enumerate_prediction``).
+    Per-instrument tests in this file assert per-instrument behavior against
+    catalogs and don't want the venue-grain pass to leak in (the venue-grain
+    <-> v1 parity is asserted separately in
+    ``tests/integration/test_enumerate_v2_superset_property.py``).
+    """
+    return [r for r in rows if r.instrument_id != "" or r.instrument_type != ""]
+
+
 # ---------------------------------------------------------------------------
 # Fixtures: catalog helpers
 # ---------------------------------------------------------------------------
