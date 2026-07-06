@@ -47,6 +47,24 @@ Per-asset-group implementation status (2026-05-07):
   ``PREDICTION_GROUPS`` STUB is closed — the v2 ``_enumerate_v2_prediction`` is
   the live path; the catalogue carries the grain.)
 
+Total-reasonable universe SSOT (B2, 2026-06-18)
+-----------------------------------------------
+This enumerator is the primary consumer of the total-reasonable (could-exist)
+universe defined at ``unified_api_contracts.canonical.crosscutting.total_universe``.
+The UAC ``TOTAL_UNIVERSE_AXES`` mapping codifies WHICH axes bound the
+could-exist universe per asset_group + WHERE each axis's membership SSOT lives
+(``base_currency`` / ``venue`` / ``data_type`` / ``defi_pool_volume`` / ``fixtures``
+/ ``combinations``), with each axis tagged ``HARDCODED_GENESIS`` (static seed
+lists / genesis / launch dates) or ``DOWNLOAD_DERIVED`` (the lifecycle catalogue
+this script reads). ``SUPPORTED_ASSET_GROUPS`` is derived directly from
+``TOTAL_UNIVERSE_AXES`` — adding a new AG in UAC flows through here without a
+code change. Each ``ENUMERATOR_STARTED`` event stamps ``TOTAL_UNIVERSE_CONFIG_VERSION``
++ ``TOTAL_UNIVERSE_CONFIG_HASH`` so a coverage delta attributes to a universe-
+DEFINITION change vs a DATA change (per the SSOT's config-version design).
+``universe_membership`` classifies emitted rows into ``UniverseTier.MVP`` /
+``TOTAL_ONLY`` / ``NOT_IN_UNIVERSE`` — dynamic tests assert the MVP⊆TOTAL
+invariant on the enumerator's output.
+
 Example::
 
     # Scan-only (TradFi)
@@ -79,8 +97,10 @@ from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
+    TOTAL_UNIVERSE_AXES,
     VENUES_BY_ASSET_GROUP,
     Mode,
+    UniverseTier,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
@@ -88,7 +108,10 @@ from unified_api_contracts import (
     has_source_priority,
     is_in_mvp_capture_universe,
     is_mvp,
+    is_total_universe,
     pipeline_mode_for_source,
+    total_universe_config_descriptor,
+    universe_membership,
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
@@ -212,10 +235,33 @@ def _sports_data_types() -> list[str]:
     return sorted(SPORTS_DATA_TYPE_TO_SOURCE.keys())
 
 
-# Asset groups this enumerator supports. The canonical MANIFEST bucket per group is
-# resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
-# deployment-service/configs/cloud-providers.yaml) — see ``_default_bucket_for``.
-SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
+# Asset groups this enumerator supports — derived directly from the UAC
+# total-reasonable-universe SSOT (``TOTAL_UNIVERSE_AXES``) so a new AG in UAC
+# flows through without an enumerator code change. The canonical MANIFEST
+# bucket per group is resolved at run-time via ``resolve_bucket_name`` (the
+# bucket-name SSOT, deployment-service/configs/cloud-providers.yaml) — see
+# ``_default_bucket_for``. A module-load sanity check below asserts the
+# per-AG dispatch tables (``_ENUMERATORS`` / ``_V2_ENUMERATORS``) cover exactly
+# these keys, so a drift between the UAC SSOT and the dispatch tables surfaces
+# at import time rather than at run-time.
+SUPPORTED_ASSET_GROUPS: tuple[str, ...] = tuple(sorted(TOTAL_UNIVERSE_AXES.keys()))
+
+
+def _ensure_asset_group_in_total_universe(asset_group: str, *, caller: str) -> None:
+    """Structural guard — the asset_group must be declared in ``TOTAL_UNIVERSE_AXES``.
+
+    ``is_total_universe`` returns ``True`` iff the asset_group is one of the five
+    declared universe-bearing AGs. A caller that hands in an unknown AG (typo,
+    stale config) gets a clean, SSOT-pointing error rather than a silent empty
+    enumeration downstream.
+    """
+    if not is_total_universe(asset_group, "", ""):
+        raise ValueError(
+            f"{caller}: asset_group={asset_group!r} is not declared in the UAC "
+            "total-reasonable-universe SSOT (TOTAL_UNIVERSE_AXES). Declared AGs: "
+            f"{sorted(TOTAL_UNIVERSE_AXES)}. SSOT: "
+            "unified_api_contracts.canonical.crosscutting.total_universe."
+        )
 
 
 def _default_bucket_for(asset_group: str) -> str:
@@ -290,6 +336,27 @@ class ExpectedRow:
     # the capture and the cell stays permanently ``expected_unattempted``. "" for
     # leaf / non-derivative rows.
     underlying: str = ""
+
+
+def _classify_membership_row(row: ExpectedRow) -> UniverseTier:
+    """Classify an emitted :class:`ExpectedRow` into the universe hierarchy.
+
+    Thin wrapper over the UAC ``universe_membership`` SSOT (the single call-site
+    for "which tier is this cell") so consumers of the enumerator's output can
+    tag rows with :class:`UniverseTier` without re-deriving the MVP predicate.
+    Not applied as an in-line filter (the per-AG enumerators already MVP-gate
+    where required) — the enumerator's job is to emit the TOTAL denominator;
+    downstream views (data-status MVP toggle) narrow to :attr:`UniverseTier.MVP`
+    via this classifier. The dynamic MVP⊆TOTAL invariant test uses it to assert
+    every emitted row from a declared AG is at least ``TOTAL_ONLY`` (never
+    ``NOT_IN_UNIVERSE``).
+    """
+    return universe_membership(
+        row.asset_group,
+        row.venue,
+        row.instrument_type,
+        row.data_type,
+    )
 
 
 def _emit_event(event: str, /, **details: object) -> None:
@@ -1800,6 +1867,31 @@ _V2_ENUMERATORS: dict[
 }
 
 
+# Module-load sanity check: the per-AG dispatch tables MUST cover exactly the
+# asset_groups declared in the UAC total-reasonable-universe SSOT. Surfacing a
+# drift here (a new AG in ``TOTAL_UNIVERSE_AXES`` without a matching enumerator,
+# or a stale enumerator entry for a retired AG) at import time avoids a silent
+# missing-enumeration at run-time. SSOT:
+# ``unified_api_contracts.canonical.crosscutting.total_universe``.
+def _check_enumerator_dispatch_covers_total_universe_axes() -> None:
+    _declared = frozenset(TOTAL_UNIVERSE_AXES)
+    _v1_missing = _declared - frozenset(_ENUMERATORS)
+    _v1_extra = frozenset(_ENUMERATORS) - _declared
+    _v2_missing = _declared - frozenset(_V2_ENUMERATORS)
+    _v2_extra = frozenset(_V2_ENUMERATORS) - _declared
+    if _v1_missing or _v1_extra or _v2_missing or _v2_extra:
+        raise RuntimeError(
+            "enumerate_expected_universe dispatch drift vs UAC TOTAL_UNIVERSE_AXES: "
+            f"v1_missing={sorted(_v1_missing)} v1_extra={sorted(_v1_extra)} "
+            f"v2_missing={sorted(_v2_missing)} v2_extra={sorted(_v2_extra)}. "
+            "Add / remove the per-AG enumerator + entry in _ENUMERATORS / "
+            "_V2_ENUMERATORS to match the UAC SSOT."
+        )
+
+
+_check_enumerator_dispatch_covers_total_universe_axes()
+
+
 def _derive_underlying(instrument_id: str) -> str:
     """Fallback underlying derivation when the catalogue ``underlying`` column is
     blank — the base asset is the token before the first ``-`` separator
@@ -1998,6 +2090,11 @@ def enumerate_v2(
     ``expected_universe_v2_design_2026_05_08.md`` Phase 1.A.
     Wave 3 (``expected_unattempted``): writegate plan Phase 3.D.5 item.
     """
+    # Structural universe check — asset_group MUST be declared in the UAC
+    # total-reasonable-universe SSOT (``TOTAL_UNIVERSE_AXES``). The module-load
+    # sanity check keeps ``_V2_ENUMERATORS`` in lock-step with the SSOT, so this
+    # guard doubles as a friendly SSOT-pointing error at the API boundary.
+    _ensure_asset_group_in_total_universe(asset_group, caller="enumerate_v2")
     if asset_group not in _V2_ENUMERATORS:
         raise ValueError(
             f"enumerate_v2: unsupported asset_group={asset_group!r}; must be one of {sorted(_V2_ENUMERATORS)}"
@@ -2812,6 +2909,10 @@ def main() -> int:
     )
     full_history: bool = bool(args.full_history)
 
+    # Stamp the UAC total-reasonable-universe config descriptor so a coverage
+    # delta attributes to a universe-DEFINITION change (version / hash flips)
+    # vs a DATA change (per the SSOT's config-version design).
+    _universe_desc = total_universe_config_descriptor()
     _emit_event(
         "ENUMERATOR_STARTED",
         enumerator="enumerate_expected_universe",
@@ -2825,6 +2926,8 @@ def main() -> int:
         data_types_override=data_types_override,
         full_history=full_history,
         run_id=run_id,
+        total_universe_config_version=_universe_desc.config_version,
+        total_universe_config_hash=_universe_desc.config_content_hash,
     )
 
     if full_history and enumerator_version != "v2":
