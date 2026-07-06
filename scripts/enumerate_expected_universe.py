@@ -92,6 +92,9 @@ from unified_api_contracts import (
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
+from unified_api_contracts.registry.market_data_categories import (
+    get_venue_data_type_start_date,
+)
 from unified_api_contracts.registry.chain_env import (
     CHAIN_GENESIS_DATES,
     GAS_FEE_CHAIN_START_DATES,
@@ -1016,6 +1019,25 @@ def _enumerate_v2_cefi(
         row_dts = _row_data_types("cefi", instr, data_types)
         if not row_dts:
             continue  # e.g. cefi OPTION leaf → frozenset() → skip entirely
+        # Per-(venue, data_type) source-coverage floor (2026-07-06, ASTER
+        # live-forward split — cefi_layer1_denominator_gaps_2026_07_03 task 007).
+        # A data_type at a venue may go live LATER than the venue itself
+        # (e.g. ASTER book_snapshot_5 / liquidations are live-only-forward — the
+        # "prediction-AG pattern" where live capture accumulates the history
+        # batch cannot provide). Days before the (venue, dt) source-coverage
+        # start MUST NOT be seeded expected_unattempted — those cells were
+        # never captureable and would only inflate the denominator (the
+        # 17,282-row over-seed purged 2026-07-03). Emit typed
+        # EXPECTED_PRE_SOURCE_COVERAGE_START instead so the honest absence is
+        # visible. Resolved once per (venue, dt) — same value across the axis;
+        # ``get_venue_data_type_start_date`` falls back to the venue-level start
+        # when no per-(venue, dt) entry exists (which is already redundantly
+        # gated by ``EXPECTED_PRE_VENUE_LAUNCH`` above → this branch only fires
+        # when the dt goes live STRICTLY LATER than the venue launch).
+        _dt_start: dict[str, pd.Timestamp | None] = {}
+        for dt in row_dts:
+            _s = get_venue_data_type_start_date(instr.venue, dt)
+            _dt_start[dt] = pd.Timestamp(_s) if _s else None
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -1027,10 +1049,30 @@ def _enumerate_v2_cefi(
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
             else:
-                if present_set is None:
-                    continue  # legacy mode: alive on this day — skip
-                # alive + manifest-aware: yield expected_unattempted for missing rows
+                # Alive on this day for the instrument lifecycle. Per-dt: check
+                # the per-(venue, dt) source-coverage floor before seeding EU.
                 for dt in row_dts:
+                    dt_start_ts = _dt_start[dt]
+                    if dt_start_ts is not None and d_ts < dt_start_ts:
+                        # (venue, dt) source not yet live on this date —
+                        # typed honest absence; NEVER seed expected_unattempted
+                        # for uncaptureable cells.
+                        yield ExpectedRow(
+                            asset_group="cefi",
+                            venue=instr.venue,
+                            chain=instr.chain,
+                            data_type=dt,
+                            instrument_type=instr.instrument_type,
+                            instrument_id=instr.instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="EXPECTED_PRE_SOURCE_COVERAGE_START",
+                        )
+                        continue
+                    if present_set is None:
+                        continue  # legacy mode: alive + in-coverage — skip
+                    # alive + manifest-aware: seed expected_unattempted for
+                    # missing rows.
                     row_key = tuple(
                         {
                             "venue": instr.venue,

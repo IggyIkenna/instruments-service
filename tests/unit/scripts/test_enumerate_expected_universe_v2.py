@@ -351,6 +351,163 @@ def test_cefi_v2_multiple_data_types() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CeFi v2 per-(venue, data_type) source-coverage floor tests
+# (cefi_layer1_denominator_gaps_2026_07_03 task 007 — the ASTER
+# live-forward split HARD PREREQ for the UAC capability flip).
+# The gate closes the "17,282-row over-seed" class: a live-only data_type
+# whose (venue, dt) start_date is later than the venue launch must NOT seed
+# expected_unattempted for pre-live dates — those cells were never
+# captureable and only inflate the denominator.
+# ---------------------------------------------------------------------------
+
+
+def test_cefi_v2_per_venue_dt_start_date_gates_expected_unattempted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-(venue, dt) start_date gate: pre-coverage dates emit typed absence,
+    from-start-date onward seeds expected_unattempted (manifest-aware mode).
+
+    ASTER-style scenario: a data_type live-wired LATER than the venue launch.
+    """
+
+    def _fake_start(venue: str, data_type: str) -> str | None:
+        # (BINANCE-FUTURES, ohlcv_1d) live from 2024-06-01; venue launched much
+        # earlier so venue_launch_ts does NOT gate 2024-05-15.
+        if venue == "BINANCE-FUTURES" and data_type == "ohlcv_1d":
+            return "2024-06-01"
+        return None
+
+    monkeypatch.setattr(enumerator_module, "get_venue_data_type_start_date", _fake_start)
+
+    catalog = [
+        _make_cefi_entry(
+            instrument_id="BTC-USDT",
+            venue="BINANCE-FUTURES",
+            available_from="2019-01-01",
+            available_to=None,
+        )
+    ]
+    dates = _date_axis("2024-05-15", "2024-06-01")
+    rows = list(
+        enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"], present_set=set())
+    )
+    by_date = {r.date: r for r in rows}
+    assert by_date["2024-05-15"].reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert by_date["2024-05-15"].capture_status != "expected_unattempted"
+    assert by_date["2024-06-01"].capture_status == "expected_unattempted"
+    assert by_date["2024-06-01"].reason == ""
+
+
+def test_cefi_v2_per_venue_dt_start_date_legacy_mode_still_emits_typed_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even in legacy mode (present_set=None), the per-(venue, dt) start_date
+    gate MUST emit EXPECTED_PRE_SOURCE_COVERAGE_START for pre-coverage dates.
+    Typed honest absence is independent of manifest-aware EU seeding — it
+    lands in the empty_confirmed layer of the denominator.
+    """
+
+    def _fake_start(venue: str, data_type: str) -> str | None:
+        if venue == "BINANCE-FUTURES" and data_type == "ohlcv_1d":
+            return "2024-06-01"
+        return None
+
+    monkeypatch.setattr(enumerator_module, "get_venue_data_type_start_date", _fake_start)
+
+    catalog = [
+        _make_cefi_entry(
+            instrument_id="BTC-USDT",
+            venue="BINANCE-FUTURES",
+            available_from="2019-01-01",
+            available_to=None,
+        )
+    ]
+    dates = _date_axis("2024-05-15", "2024-06-01")
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
+    # 2024-05-15 → EXPECTED_PRE_SOURCE_COVERAGE_START; 2024-06-01 → no row
+    # (legacy mode: alive + in-coverage days are skipped).
+    assert len(rows) == 1
+    assert rows[0].date == "2024-05-15"
+    assert rows[0].reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert rows[0].capture_status != "expected_unattempted"
+
+
+def test_cefi_v2_per_venue_dt_start_date_none_leaves_seed_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When get_venue_data_type_start_date returns None for a (venue, dt), no
+    gate fires — the alive branch seeds expected_unattempted as before. Guards
+    the fall-through path so a venue absent from VENUE_DATA_TYPE_CAPABILITIES
+    stays seedable.
+    """
+    monkeypatch.setattr(
+        enumerator_module,
+        "get_venue_data_type_start_date",
+        lambda _v, _d: None,
+    )
+    catalog = [
+        _make_cefi_entry(
+            instrument_id="BTC-USDT",
+            venue="BINANCE-FUTURES",
+            available_from="2019-01-01",
+            available_to=None,
+        )
+    ]
+    dates = _date_axis("2024-06-01")
+    rows = list(
+        enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].reason == ""
+
+
+def test_cefi_v2_per_venue_dt_start_date_per_dt_isolation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate is per-(venue, dt) — one dt with a late start does NOT gate
+    the others. Guards against a bug where the presence of any dt start_date
+    would zero the whole instrument's other data_types.
+    """
+
+    def _fake_start(venue: str, data_type: str) -> str | None:
+        # Only ohlcv_1h is gated forward; ohlcv_1d passes through.
+        if venue == "BINANCE-FUTURES" and data_type == "ohlcv_1h":
+            return "2024-06-01"
+        return None
+
+    monkeypatch.setattr(enumerator_module, "get_venue_data_type_start_date", _fake_start)
+
+    catalog = [
+        _make_cefi_entry(
+            instrument_id="BTC-USDT",
+            venue="BINANCE-FUTURES",
+            available_from="2019-01-01",
+            available_to=None,
+        )
+    ]
+    dates = _date_axis("2024-05-15")
+    rows = list(
+        enumerator_module._enumerate_v2_cefi(
+            catalog, dates, ["ohlcv_1d", "ohlcv_1h"], present_set=set()
+        )
+    )
+    by_dt = {r.data_type: r for r in rows}
+    assert by_dt["ohlcv_1h"].reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert by_dt["ohlcv_1h"].capture_status != "expected_unattempted"
+    assert by_dt["ohlcv_1d"].capture_status == "expected_unattempted"
+    assert by_dt["ohlcv_1d"].reason == ""
+
+
+def test_cefi_v2_per_venue_dt_start_date_reason_in_canonical_set() -> None:
+    """The gate's emitted reason MUST be in the canonical EMPTY_CONFIRMED_REASONS
+    set — the manifest-writer schema rejects unknown reasons. Guards against
+    reason-name drift.
+    """
+    assert "EXPECTED_PRE_SOURCE_COVERAGE_START" in EMPTY_CONFIRMED_REASONS
+
+
+# ---------------------------------------------------------------------------
 # DeFi v2 enumerator tests
 # ---------------------------------------------------------------------------
 
