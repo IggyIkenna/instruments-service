@@ -91,7 +91,10 @@ from unified_api_contracts import (
     pipeline_mode_for_source,
     valid_data_types_for_venue_instrument_type,
 )
-from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
+from unified_api_contracts.registry import (
+    VENUE_DATA_TYPE_CAPABILITIES,
+    get_venue_data_type_start_date,
+)
 from unified_api_contracts.registry.chain_env import (
     CHAIN_GENESIS_DATES,
     GAS_FEE_CHAIN_START_DATES,
@@ -1016,6 +1019,19 @@ def _enumerate_v2_cefi(
         row_dts = _row_data_types("cefi", instr, data_types)
         if not row_dts:
             continue  # e.g. cefi OPTION leaf → frozenset() → skip entirely
+        # Per-(venue, dt) coverage start-date gate. When UAC declares a wire-date
+        # for a (venue, data_type) via VENUE_DATA_TYPE_CAPABILITIES (e.g. the
+        # ASTER book_snapshot_5 live-forward carve-out — plan
+        # cefi_layer1_denominator_gaps_2026_07_03.md), dates BEFORE that start
+        # are OUT of the collectable universe for that data_type: the source
+        # cannot supply it yet, so seeding expected_unattempted would recreate
+        # the ~17k-row over-seed purged 2026-07-03. Hoisted here (per-instrument,
+        # outside the date loop) — String comparison is safe on ISO YYYY-MM-DD.
+        dt_start_iso: dict[str, str] = {}
+        for dt in row_dts:
+            start = get_venue_data_type_start_date(instr.venue, dt)
+            if start:
+                dt_start_iso[dt] = start
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -1031,6 +1047,11 @@ def _enumerate_v2_cefi(
                     continue  # legacy mode: alive on this day — skip
                 # alive + manifest-aware: yield expected_unattempted for missing rows
                 for dt in row_dts:
+                    # Per-(venue, dt) start-date gate — out-of-universe when
+                    # UAC says the source cannot yet supply this data_type.
+                    start_iso = dt_start_iso.get(dt)
+                    if start_iso is not None and iso < start_iso:
+                        continue
                     row_key = tuple(
                         {
                             "venue": instr.venue,
