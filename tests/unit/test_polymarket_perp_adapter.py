@@ -1,12 +1,16 @@
 """Unit tests for the Polymarket crypto-perp reference data adapter (POLYMARKET-PERP).
 
-Tests are credential-free: all HTTP calls are mocked.  The integration tests
-that hit the live Polymarket perp API are marked @pytest.mark.requires_credentials
-and skipped by default.
+Enumeration is DISABLED pending the Phase-3 repoint against Polymarket's real
+perps API (``_REPOINT_PENDING``; plan
+``prediction_capture_incident_remediation_2026_07_06.md`` Workstream B). These
+tests encode that contract: the adapter emits 0 records and makes no network call
+while disabled. The parser/helper tests remain so Phase 3 has a baseline. All
+HTTP is mocked; the live integration test is skipped.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,12 +18,17 @@ from unified_api_contracts.internal import InstrumentStatus, InstrumentType
 
 from instruments_service.reference_data.adapters.cefi.polymarket_perp import (
     PolymarketPerpReferenceDataAdapter,
+    _classify_polymarket_perp_error,
     _extract_base_asset,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+_SAMPLE_MARKET: dict[str, object] = {
+    "market_id": "BTC-USD",
+    "title": "BTC/USD Perpetual",
+    "base_asset": "BTC",
+    "quote_asset": "USD",
+    "status": "active",
+}
 
 
 def _make_session_mock(json_payload: object) -> tuple[MagicMock, MagicMock]:
@@ -43,23 +52,6 @@ def _make_session_mock(json_payload: object) -> tuple[MagicMock, MagicMock]:
     return mock_session_cm, mock_session_obj
 
 
-_SAMPLE_MARKET = {
-    "market_id": "BTC-USD",
-    "title": "BTC/USD Perpetual",
-    "base_asset": "BTC",
-    "quote_asset": "USD",
-    "status": "active",
-}
-
-_SAMPLE_MARKET_2 = {
-    "market_id": "ETH-USD",
-    "title": "ETH/USD Perpetual",
-    "base_asset": "ETH",
-    "quote_asset": "USD",
-    "status": "active",
-}
-
-
 # ---------------------------------------------------------------------------
 # Tests: venue property
 # ---------------------------------------------------------------------------
@@ -72,274 +64,91 @@ class TestVenueProperty:
 
 
 # ---------------------------------------------------------------------------
-# Tests: get_instruments — happy path
+# Tests: repoint-pending guard — DISABLED, emits 0, no network
 # ---------------------------------------------------------------------------
 
 
-class TestGetInstruments:
+class TestRepointPendingGuard:
     @pytest.mark.asyncio
-    async def test_enumerates_n_contracts_returns_n_records(self) -> None:
-        """N contracts in the API response → N InstrumentRecords returned."""
-        # Beta API returns a list-of-markets under "markets" key.
-        payload = {"markets": [_SAMPLE_MARKET, _SAMPLE_MARKET_2]}
-        mock_session_cm, _ = _make_session_mock(payload)
-
+    async def test_get_instruments_returns_empty_and_makes_no_network_call(self) -> None:
         adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
+        with patch.object(adapter, "_make_session") as mock_make_session:
             results = await adapter.get_instruments()
 
-        assert len(results) == 2
-        ids = {r.instrument_key for r in results}
-        assert "BTC-USD" in ids
-        assert "ETH-USD" in ids
+        assert results == []
+        mock_make_session.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_all_records_have_perpetual_instrument_type(self) -> None:
-        payload = {"markets": [_SAMPLE_MARKET, _SAMPLE_MARKET_2]}
-        mock_session_cm, _ = _make_session_mock(payload)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            results = await adapter.get_instruments()
-
-        for record in results:
-            assert record.instrument_type == InstrumentType.PERPETUAL, (
-                f"Expected PERPETUAL, got {record.instrument_type}"
-            )
-
-    @pytest.mark.asyncio
-    async def test_venue_on_records_matches_adapter_venue(self) -> None:
+    async def test_get_instruments_empty_even_with_payload(self) -> None:
+        """Even fed a plausible perps payload, the guard short-circuits to []."""
         payload = {"markets": [_SAMPLE_MARKET]}
-        mock_session_cm, _ = _make_session_mock(payload)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            results = await adapter.get_instruments()
-
-        assert len(results) == 1
-        assert results[0].venue == "POLYMARKET-PERP"
-
-    @pytest.mark.asyncio
-    async def test_base_and_quote_assets_extracted_from_fields(self) -> None:
-        payload = {"markets": [_SAMPLE_MARKET]}
-        mock_session_cm, _ = _make_session_mock(payload)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            results = await adapter.get_instruments()
-
-        record = results[0]
-        assert record.base_asset == "BTC"
-        assert record.quote_asset == "USD"
-
-    @pytest.mark.asyncio
-    async def test_base_asset_falls_back_to_market_id_parsing(self) -> None:
-        """When base_asset field is absent, parse from market_id."""
-        market_no_base = {
-            "market_id": "SOL-USD",
-            "title": "SOL/USD Perpetual",
-            "status": "active",
-        }
-        payload = {"markets": [market_no_base]}
-        mock_session_cm, _ = _make_session_mock(payload)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            results = await adapter.get_instruments()
-
-        assert len(results) == 1
-        assert results[0].base_asset == "SOL"
-
-    @pytest.mark.asyncio
-    async def test_accepts_data_key_in_response(self) -> None:
-        """Beta API may return markets under 'data' key instead of 'markets'."""
-        payload = {"data": [_SAMPLE_MARKET]}
-        mock_session_cm, _ = _make_session_mock(payload)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            results = await adapter.get_instruments()
-
-        assert len(results) == 1
-
-    @pytest.mark.asyncio
-    async def test_accepts_direct_list_response(self) -> None:
-        """Beta API may return a raw list of markets (no wrapper key)."""
-        payload = [_SAMPLE_MARKET, _SAMPLE_MARKET_2]
-        mock_session_cm, _ = _make_session_mock(payload)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            results = await adapter.get_instruments()
-
-        assert len(results) == 2
-
-    @pytest.mark.asyncio
-    async def test_is_active_correctly_set(self) -> None:
-        inactive = {**_SAMPLE_MARKET_2, "status": "closed"}
-        payload = {"markets": [_SAMPLE_MARKET, inactive]}
-        mock_session_cm, _ = _make_session_mock(payload)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            results = await adapter.get_instruments()
-
-        assert len(results) == 2
-        btc = next(r for r in results if r.instrument_key == "BTC-USD")
-        eth = next(r for r in results if r.instrument_key == "ETH-USD")
-        assert btc.status == InstrumentStatus.ACTIVE
-        assert eth.status == InstrumentStatus.DELISTED
-
-
-# ---------------------------------------------------------------------------
-# Tests: honest-absence — empty market list
-# ---------------------------------------------------------------------------
-
-
-class TestHonestAbsence:
-    @pytest.mark.asyncio
-    async def test_empty_market_list_returns_empty_list(self) -> None:
-        """Empty markets list → empty result (not an error)."""
-        payload = {"markets": []}
-        mock_session_cm, _ = _make_session_mock(payload)
+        mock_session_cm, mock_session_obj = _make_session_mock(payload)
 
         adapter = PolymarketPerpReferenceDataAdapter()
         with patch.object(adapter, "_make_session", return_value=mock_session_cm):
             results = await adapter.get_instruments()
 
         assert results == []
+        mock_session_obj.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_instrument_returns_none_no_network(self) -> None:
+        adapter = PolymarketPerpReferenceDataAdapter()
+        with patch.object(adapter, "_make_session") as mock_make_session:
+            result = await adapter.get_instrument("BTC-USD")
+
+        assert result is None
+        mock_make_session.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_instrument_type_filter_non_perpetual_returns_empty(self) -> None:
-        """Filtering by SPOT_PAIR returns [] — venue only has PERPETUAL."""
         adapter = PolymarketPerpReferenceDataAdapter()
         results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert results == []
 
-    @pytest.mark.asyncio
-    async def test_instrument_type_filter_perpetual_passes_through(self) -> None:
-        """Filtering by PERPETUAL is equivalent to None (all)."""
-        payload = {"markets": [_SAMPLE_MARKET]}
-        mock_session_cm, _ = _make_session_mock(payload)
 
+# ---------------------------------------------------------------------------
+# Tests: _parse_market baseline (parser retained for Phase 3 repoint)
+# ---------------------------------------------------------------------------
+
+
+class TestParseMarket:
+    def test_parses_sample_market_to_perpetual_record(self) -> None:
         adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type=InstrumentType.PERPETUAL)
+        record = adapter._parse_market(_SAMPLE_MARKET, datetime.now(UTC))
+        assert record is not None
+        assert record.instrument_key == "BTC-USD"
+        assert record.instrument_type == InstrumentType.PERPETUAL
+        assert record.venue == "POLYMARKET-PERP"
+        assert record.base_asset == "BTC"
+        assert record.status == InstrumentStatus.ACTIVE
 
-        assert len(results) == 1
+    def test_missing_id_parses_to_none(self) -> None:
+        adapter = PolymarketPerpReferenceDataAdapter()
+        assert adapter._parse_market({"title": "no id"}, datetime.now(UTC)) is None
 
 
 # ---------------------------------------------------------------------------
-# Tests: error → classify_venue_error path
+# Tests: error classification (pure fn — reused by the Phase-3 repoint path)
 # ---------------------------------------------------------------------------
 
 
 class TestErrorClassification:
-    @pytest.mark.asyncio
-    async def test_network_error_raises_runtime_error_and_emits_fetch_failed(self) -> None:
-        """A ClientError causes a RuntimeError and ADAPTER_FETCH_FAILED is emitted."""
-        import aiohttp
+    def test_status_429_maps_to_rate_limit(self) -> None:
+        assert _classify_polymarket_perp_error(Exception("boom"), status=429) == "429"
 
-        mock_resp = AsyncMock()
-        mock_resp.status = 200
-        mock_resp.raise_for_status = MagicMock(side_effect=aiohttp.ClientError("timeout"))
+    def test_status_5xx_maps_to_500(self) -> None:
+        assert _classify_polymarket_perp_error(Exception("boom"), status=502) == "500"
 
-        mock_cm = MagicMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_cm.__aexit__ = AsyncMock(return_value=None)
+    def test_message_pattern_without_status(self) -> None:
+        assert _classify_polymarket_perp_error(Exception("403 forbidden")) == "403"
 
-        mock_session_obj = MagicMock()
-        mock_session_obj.get = MagicMock(return_value=mock_cm)
-
-        mock_session_cm = MagicMock()
-        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
-        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_make_session", return_value=mock_session_cm),
-            patch("instruments_service.reference_data.adapters.cefi.polymarket_perp.log_event") as mock_log,
-            pytest.raises(RuntimeError, match="recording attempted_failed"),
-        ):
-            await adapter.get_instruments()
-
-        mock_log.assert_called()
-        event_name = mock_log.call_args[0][0]
-        assert event_name == "ADAPTER_FETCH_FAILED"
-
-    @pytest.mark.asyncio
-    async def test_all_pages_fail_raises_runtime_error(self) -> None:
-        """All-pages-failed with 0 records → raises RuntimeError (not silent empty)."""
-        import aiohttp
-
-        mock_resp = AsyncMock()
-        mock_resp.raise_for_status = MagicMock(side_effect=aiohttp.ClientError("connection reset"))
-        mock_resp.status = 500
-
-        mock_cm = MagicMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_cm.__aexit__ = AsyncMock(return_value=None)
-
-        mock_session_obj = MagicMock()
-        mock_session_obj.get = MagicMock(return_value=mock_cm)
-
-        mock_session_cm = MagicMock()
-        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
-        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_make_session", return_value=mock_session_cm),
-            patch("instruments_service.reference_data.adapters.cefi.polymarket_perp.log_event"),
-            pytest.raises(RuntimeError, match="recording attempted_failed"),
-        ):
-            await adapter.get_instruments()
+    def test_unknown_error(self) -> None:
+        assert _classify_polymarket_perp_error(Exception("weird")) == "UNKNOWN"
 
 
 # ---------------------------------------------------------------------------
-# Tests: get_instrument (single contract)
-# ---------------------------------------------------------------------------
-
-
-class TestGetInstrument:
-    @pytest.mark.asyncio
-    async def test_returns_none_on_404(self) -> None:
-        mock_resp = AsyncMock()
-        mock_resp.status = 404
-
-        mock_cm = MagicMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_cm.__aexit__ = AsyncMock(return_value=None)
-
-        mock_session_obj = MagicMock()
-        mock_session_obj.get = MagicMock(return_value=mock_cm)
-
-        mock_session_cm = MagicMock()
-        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
-        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            result = await adapter.get_instrument("UNKNOWN-MARKET")
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_returns_record_for_known_market(self) -> None:
-        payload = {"market": _SAMPLE_MARKET}
-        mock_session_cm, _ = _make_session_mock(payload)
-
-        adapter = PolymarketPerpReferenceDataAdapter()
-        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
-            result = await adapter.get_instrument("BTC-USD")
-
-        assert result is not None
-        assert result.instrument_key == "BTC-USD"
-        assert result.instrument_type == InstrumentType.PERPETUAL
-
-
-# ---------------------------------------------------------------------------
-# Tests: _extract_base_asset helper
+# Tests: _extract_base_asset helper (unchanged; reused by Phase 3)
 # ---------------------------------------------------------------------------
 
 
@@ -361,25 +170,131 @@ class TestExtractBaseAsset:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests (skipped without credentials)
+# Tests: fetch/error path with the guard LIFTED — coverage of the reusable HTTP
+# machinery (session, response-shape branches, error classification, single
+# lookup) that the Phase-3 repoint builds on. Unit test of the plumbing.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="live network call — run manually against real Polymarket perp API")
+_POLY_MODULE = "instruments_service.reference_data.adapters.cefi.polymarket_perp"
+
+
+def _client_error_session() -> MagicMock:
+    import aiohttp
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.raise_for_status = MagicMock(side_effect=aiohttp.ClientError("timeout"))
+
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    mock_session_obj = MagicMock()
+    mock_session_obj.get = MagicMock(return_value=mock_cm)
+
+    mock_session_cm = MagicMock()
+    mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+    mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+    return mock_session_cm
+
+
+def _status_only_session(status: int) -> MagicMock:
+    mock_resp = AsyncMock()
+    mock_resp.status = status
+
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+    mock_session_obj = MagicMock()
+    mock_session_obj.get = MagicMock(return_value=mock_cm)
+
+    mock_session_cm = MagicMock()
+    mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+    mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+    return mock_session_cm
+
+
+class TestFetchPathWhenEnabled:
+    @pytest.mark.asyncio
+    async def test_enumerates_markets_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(f"{_POLY_MODULE}._REPOINT_PENDING", False)
+        eth: dict[str, object] = {**_SAMPLE_MARKET, "market_id": "ETH-USD", "base_asset": "ETH"}
+        payload = {"markets": [_SAMPLE_MARKET, eth]}
+        mock_session_cm, _ = _make_session_mock(payload)
+
+        adapter = PolymarketPerpReferenceDataAdapter()
+        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+
+        assert {r.instrument_key for r in results} == {"BTC-USD", "ETH-USD"}
+        assert all(r.instrument_type == InstrumentType.PERPETUAL for r in results)
+
+    @pytest.mark.asyncio
+    async def test_accepts_data_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(f"{_POLY_MODULE}._REPOINT_PENDING", False)
+        payload = {"data": [_SAMPLE_MARKET]}
+        mock_session_cm, _ = _make_session_mock(payload)
+        adapter = PolymarketPerpReferenceDataAdapter()
+        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+        assert len(results) == 1
+
+    @pytest.mark.asyncio
+    async def test_accepts_direct_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(f"{_POLY_MODULE}._REPOINT_PENDING", False)
+        payload = [_SAMPLE_MARKET]
+        mock_session_cm, _ = _make_session_mock(payload)
+        adapter = PolymarketPerpReferenceDataAdapter()
+        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+        assert len(results) == 1
+
+    @pytest.mark.asyncio
+    async def test_network_error_raises_and_emits_fetch_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(f"{_POLY_MODULE}._REPOINT_PENDING", False)
+        adapter = PolymarketPerpReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_client_error_session()),
+            patch(f"{_POLY_MODULE}.log_event") as mock_log,
+            pytest.raises(RuntimeError, match="recording attempted_failed"),
+        ):
+            await adapter.get_instruments()
+        mock_log.assert_called()
+        assert mock_log.call_args[0][0] == "ADAPTER_FETCH_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_get_instrument_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(f"{_POLY_MODULE}._REPOINT_PENDING", False)
+        payload = {"market": _SAMPLE_MARKET}
+        mock_session_cm, _ = _make_session_mock(payload)
+        adapter = PolymarketPerpReferenceDataAdapter()
+        with patch.object(adapter, "_make_session", return_value=mock_session_cm):
+            result = await adapter.get_instrument("BTC-USD")
+        assert result is not None
+        assert result.instrument_key == "BTC-USD"
+
+    @pytest.mark.asyncio
+    async def test_get_instrument_404_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(f"{_POLY_MODULE}._REPOINT_PENDING", False)
+        adapter = PolymarketPerpReferenceDataAdapter()
+        with patch.object(adapter, "_make_session", return_value=_status_only_session(404)):
+            result = await adapter.get_instrument("UNKNOWN-MARKET")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Integration test (skipped — re-enable in Phase 3 against the real perps API)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skip(reason="adapter disabled pending Phase-3 repoint — re-enable against confirmed Polymarket perps API")
 @pytest.mark.asyncio
-async def test_get_instruments_live() -> None:
-    """Integration test: hits the real Polymarket perp API.
-
-    The beta endpoint is public-read so no credential is technically required;
-    marked requires_credentials anyway to avoid CI network calls and because
-    the beta endpoint schema is still being confirmed.
-
-    Run with: pytest -m requires_credentials
-    """
+async def test_get_instruments_live_perps_api() -> None:
+    """Phase 3: hits the real Polymarket perps API once the endpoint is confirmed."""
     adapter = PolymarketPerpReferenceDataAdapter()
     results = await adapter.get_instruments()
-    # Beta may return 0 contracts if the endpoint is down or unreachable.
-    # Just verify shape when we get records back.
     for record in results:
         assert record.instrument_type == InstrumentType.PERPETUAL
         assert record.venue == "POLYMARKET-PERP"
