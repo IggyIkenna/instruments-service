@@ -53,8 +53,8 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/reference_data/adapters/sports/adapters/base.py"
     # engine/orchestrator package: pre-existing lazy in-function imports moved
     # verbatim in the orchestrator.py split (pure code motion — hoisting them is
-    # behaviour change / cycle risk, e.g. catalogue.refresh_catalogue's import is
-    # cycle-breaking). Scoped to ONLY the carrying modules, not the package.
+    # behaviour change / cycle risk). Scoped to ONLY the carrying modules, not
+    # the package.
     # Plan: unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md
     "!**/engine/orchestrator/catalogue.py"
     "!**/engine/orchestrator/footystats.py"
@@ -141,7 +141,6 @@ DEEP_IMPORT_EXCLUDE_GLOBS=(
     "!**/reference_data/utils/*.py"
     "!**/reference_data/intent_resolver.py"
     "!**/reference_data/adapters/sports/adapters/*.py"
-    "!**/reference_data/catalogue/*.py"
     # engine/orchestrator package: module-level deep imports now live in the
     # package __init__.py (auto-exempt via the check's !**/__init__.py glob).
     # Only in-function lazy deep imports (capability_declarations._defi,
@@ -268,6 +267,12 @@ if [[ -d "${QG_SCRIPTS_DIR}" ]]; then
     if [[ -f "${QG_SCRIPTS_DIR}/no_blank_empty_reason.sh" ]]; then
         run_timeout 30 bash "${QG_SCRIPTS_DIR}/no_blank_empty_reason.sh" "${WORKSPACE_ROOT}" \
             || log_warn "Blank or string-literal record_empty reason — use EmptyConfirmedReason enum. SSOT: service-contract-audit-template.md § Pattern 4"
+    fi
+    # STEP 5.86: IS writer data_type regression guard — non-sports record_captured must stamp data_type='instruments'
+    # (regression 2026-06-29..2026-07-06: data_type="" caused 260 cefi/defi/tradfi shards to appear absent)
+    if [[ -f "${QG_SCRIPTS_DIR}/no_blank_instruments_data_type.sh" ]]; then
+        run_timeout 30 bash "${QG_SCRIPTS_DIR}/no_blank_instruments_data_type.sh" "${WORKSPACE_ROOT}" \
+            || log_warn "IS writer blank data_type regression — see plans/active/issues/is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06.md"
     fi
 else
     log_warn "IS-MTDS QG scripts dir not found at ${QG_SCRIPTS_DIR}"

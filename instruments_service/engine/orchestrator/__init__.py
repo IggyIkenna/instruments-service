@@ -394,9 +394,6 @@ from instruments_service.engine.orchestrator.catalogue import (
     _write_catalogue_record as _write_catalogue_record,
 )
 from instruments_service.engine.orchestrator.catalogue import (
-    refresh_catalogue as refresh_catalogue,
-)
-from instruments_service.engine.orchestrator.catalogue import (
     resolve_instruments_store_kind as resolve_instruments_store_kind,
 )
 from instruments_service.engine.orchestrator.defi import (
@@ -865,7 +862,6 @@ __all__ = [
     "publish_with_policy",
     "re",
     "read_availability_index",
-    "refresh_catalogue",
     "resolve_bucket_name",
     "resolve_instruments_store_kind",
     "sfi",
