@@ -997,6 +997,80 @@ def _tradfi_entry_in_mvp_universe(instr: InstrumentCatalogEntry) -> bool:
     )
 
 
+def _yield_v2_cefi_pre_venue_launch_venue_grain_rows(
+    catalog: list[InstrumentCatalogEntry],
+    date_axis: list[date],
+    data_types: list[str],
+) -> Iterator[ExpectedRow]:
+    """Venue-grain pre-venue-launch pass for v2 cefi (mirrors v1 ``_enumerate_cefi``).
+
+    For each cefi venue in ``VENUES_BY_ASSET_GROUP["cefi"]`` with a launch date in
+    ``CEFI_VENUE_LAUNCH_DATES`` after ``date_axis[0]``, emits ONE row per
+    ``(venue, data_type, day)`` for every pre-launch day when the catalog has NO
+    qualifying instrument for that venue in the window (a qualifying instrument
+    is one :func:`_enumerate_v2_cefi`'s per-instrument loop would emit a
+    ``EXPECTED_PRE_VENUE_LAUNCH`` row for — in MVP universe, lifecycle overlaps
+    the window, ``_row_data_types`` non-empty). When ≥1 qualifying instrument
+    exists for a venue, the per-instrument branch covers every pre-launch day at
+    finer grain and this helper skips the venue — no double-counting at two
+    grains. ``instrument_type`` / ``instrument_id`` are blank so the shard atom
+    matches v1's venue-grain output.
+
+    Closes the "empty catalog window" v1→v2 asymmetry: for a fresh asset_group
+    whose historical catalog is empty during the pre-launch window, v2 would
+    otherwise emit ZERO ``EXPECTED_PRE_VENUE_LAUNCH`` rows where v1 emits a full
+    sentinel matrix. Unblocks the eventual v1 dispatch retirement tracked in
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``.
+    """
+    venues = VENUES_BY_ASSET_GROUP.get("cefi", [])
+    if not venues or not data_types or not date_axis:
+        return
+    window_start_ts = pd.Timestamp(date_axis[0])
+    window_end_ts = pd.Timestamp(date_axis[-1])
+    _perp_bases = _cefi_perp_bases(catalog)
+    covered_venues: set[str] = set()
+    for instr in catalog:
+        if not _cefi_entry_in_mvp_universe(instr, _perp_bases):
+            continue
+        af_raw = pd.Timestamp(instr.available_from) if instr.available_from else None
+        at_raw = pd.Timestamp(instr.available_to) if instr.available_to else None
+        af_ts = af_raw.tz_localize(None) if (af_raw is not None and af_raw.tzinfo is not None) else af_raw
+        at_ts = at_raw.tz_localize(None) if (at_raw is not None and at_raw.tzinfo is not None) else at_raw
+        if at_ts is not None and at_ts < window_start_ts:
+            continue
+        if af_ts is not None and af_ts > window_end_ts:
+            continue
+        if not _row_data_types("cefi", instr, data_types):
+            continue
+        covered_venues.add(instr.venue)
+    for venue in venues:
+        venue_str = str(venue)
+        if venue_str in covered_venues:
+            continue
+        launch_str = CEFI_VENUE_LAUNCH_DATES.get(venue_str)
+        if launch_str is None:
+            continue
+        launch_ts = pd.Timestamp(launch_str)
+        if window_start_ts >= launch_ts:
+            continue
+        for d in date_axis:
+            if pd.Timestamp(d) >= launch_ts:
+                continue
+            iso = d.isoformat()
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="cefi",
+                    venue=venue_str,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=iso,
+                    reason="EXPECTED_PRE_VENUE_LAUNCH",
+                )
+
+
 def _enumerate_v2_cefi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1007,6 +1081,17 @@ def _enumerate_v2_cefi(
 ) -> Iterator[ExpectedRow]:
     """Per-instrument cefi v2 enumerator.
 
+    Emits TWO row classes:
+
+    1. Venue-grain pre-venue-launch sentinel rows via
+       :func:`_yield_v2_cefi_pre_venue_launch_venue_grain_rows` for venues with
+       NO qualifying catalog instrument — mirrors v1 ``_enumerate_cefi``'s
+       venue-grain pre-launch matrix so v2 covers the same
+       ``(venue, data_type, day)`` cells even when the catalog is empty for
+       that venue in the pre-launch window.
+    2. Per-instrument lifecycle rows: pre-listing / post-delisting empty_confirmed
+       plus alive-day ``expected_unattempted`` seeds against ``present_set``.
+
     For each instrument in the catalog:
       * date < available_from  → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
       * date > available_to    → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
@@ -1016,6 +1101,7 @@ def _enumerate_v2_cefi(
     Also respects venue launch dates (EXPECTED_PRE_VENUE_LAUNCH) for dates
     before the venue launched — same logic as v1's _enumerate_cefi.
     """
+    yield from _yield_v2_cefi_pre_venue_launch_venue_grain_rows(catalog, date_axis, data_types)
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     # Pre-compute window bounds once for overlap filter below.
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
