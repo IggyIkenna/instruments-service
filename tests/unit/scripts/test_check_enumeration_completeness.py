@@ -3,7 +3,7 @@
 Tests cover:
   - Carve-out table assertions (each expected-absence row from the codex table is NOT a hole)
   - Deribit options_chain bundle IS a hole when absent from ENUMERATED
-  - ASTER missing book_snapshot_5 / liquidations is NOT a hole
+  - ASTER book_snapshot_5 IS a hole when absent (live-wire capability, uac@3652f99f); ASTER liquidations still not in MVP
   - HYPERLIQUID missing liquidations is NOT a hole
   - UPBIT derivative_ticker absent (capability carve-out) is NOT a hole
   - completeness_pct and denominator_complete behaviour
@@ -139,30 +139,32 @@ class TestDeribitOptionsChainCarveOut:
 
 
 # ---------------------------------------------------------------------------
-# Test: carve-out — ASTER has no book_snapshot_5, no liquidations
-#   Source: absent from VENUE_DATA_TYPE_CAPABILITIES["ASTER"]
+# Test: ASTER capability profile — book_snapshot_5 is live-wire from 2026-06-23,
+# liquidations still carved out (not in MVP scope).
+#   Source: VENUE_DATA_TYPE_CAPABILITIES["ASTER"] (uac@3652f99f 2026-07-07,
+#   cefi_layer1_denominator_gaps-008 UAC ASTER capability flip).
 # ---------------------------------------------------------------------------
 
 
-class TestAsterCarveOut:
-    def test_aster_book_snapshot_5_not_in_expected(self, mod: ModuleType) -> None:
-        """book_snapshot_5 is NOT expected for ASTER (absent from VENUE_DATA_TYPE_CAPABILITIES)."""
+class TestAsterCapabilities:
+    def test_aster_book_snapshot_5_is_in_expected(self, mod: ModuleType) -> None:
+        """book_snapshot_5 IS expected for ASTER (live-wire capability landed uac@3652f99f, MVP includes it)."""
         expected = mod._build_expected_tuples("cefi")
         aster_bs5 = {(v, it, dt) for (v, it, dt) in expected if v == "ASTER" and dt == "book_snapshot_5"}
-        assert len(aster_bs5) == 0, (
-            f"ASTER book_snapshot_5 should NOT be in EXPECTED (venue capability absent): {aster_bs5}"
+        assert aster_bs5 == {("ASTER", "perpetual", "book_snapshot_5")}, (
+            f"ASTER book_snapshot_5 should be in EXPECTED (live-wire capability from 2026-06-23): {aster_bs5}"
         )
 
     def test_aster_liquidations_not_in_expected(self, mod: ModuleType) -> None:
-        """liquidations is NOT expected for ASTER (absent from VENUE_DATA_TYPE_CAPABILITIES)."""
+        """liquidations is NOT expected for ASTER — capability present but liquidations not in MVP scope."""
         expected = mod._build_expected_tuples("cefi")
         aster_liq = {(v, it, dt) for (v, it, dt) in expected if v == "ASTER" and dt == "liquidations"}
         assert len(aster_liq) == 0, (
-            f"ASTER liquidations should NOT be in EXPECTED (venue capability absent): {aster_liq}"
+            f"ASTER liquidations should NOT be in EXPECTED (not in MVP scope): {aster_liq}"
         )
 
-    def test_aster_book_snapshot_5_absent_from_manifest_is_not_a_hole(self, mod: ModuleType) -> None:
-        """A manifest with no ASTER book_snapshot_5 rows has 0 missing for that tuple."""
+    def test_aster_book_snapshot_5_absent_from_manifest_is_a_hole(self, mod: ModuleType) -> None:
+        """A manifest with no ASTER book_snapshot_5 rows now surfaces as a Layer-1 hole (live-wire capability)."""
         df = _make_manifest(
             [
                 {"capture_status": "captured", "venue": "ASTER", "instrument_type": "perpetual", "data_type": "trades"},
@@ -172,7 +174,7 @@ class TestAsterCarveOut:
         aster_bs5_missing = [
             m for m in result.missing_tuples if m.venue == "ASTER" and m.data_type == "book_snapshot_5"
         ]
-        assert len(aster_bs5_missing) == 0, "ASTER book_snapshot_5 should NOT be a Layer-1 hole (it is a carve-out)"
+        assert len(aster_bs5_missing) == 1, "ASTER book_snapshot_5 IS a Layer-1 hole when absent from manifest"
 
 
 # ---------------------------------------------------------------------------
