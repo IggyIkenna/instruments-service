@@ -1132,6 +1132,108 @@ def test_cefi_v2_legacy_mode_alive_date_skipped() -> None:
     assert rows == []
 
 
+# ---------------------------------------------------------------------------
+# Per-(venue, data_type) start_date gate — cefi_layer1_denominator_gaps 2026_07_03 item -007
+#
+# The alive branch must consult get_venue_data_type_start_date(venue, dt) before
+# seeding expected_unattempted: dates before a data_type's UAC-declared start
+# emit EXPECTED_PRE_SOURCE_COVERAGE_START (empty_confirmed) instead. Prevents
+# the 17,282-row over-seed class purged 2026-07-03 (ASTER book_snapshot_5:
+# venue live from 2023-07-22 but the source archive did not cover book_snapshot_5
+# until the live-wire date). Reference scenario: HYPERLIQUID PERPETUAL trades —
+# venue launched 2023-06-14 but the S3 archive only ships trades from
+# 2025-03-22.
+# ---------------------------------------------------------------------------
+
+
+def test_cefi_v2_alive_date_before_dt_start_yields_pre_source_coverage_start() -> None:
+    """Alive date < get_venue_data_type_start_date(venue, dt) → EXPECTED_PRE_SOURCE_COVERAGE_START."""
+    # HYPERLIQUID trades start_date = 2025-03-22 (post-launch source floor).
+    catalog = [
+        _make_cefi_entry(
+            venue="HYPERLIQUID",
+            instrument_type="PERPETUAL",
+            instrument_id="BTC-USD",
+            available_from="2023-06-14",
+            base_asset="BTC",
+            mvp=True,
+        )
+    ]
+    date_axis = _date_axis("2024-06-01")  # post-venue-launch, pre-trades-start
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades"], present_set=set()))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert r.capture_status == "empty_confirmed"
+    assert r.data_type == "trades"
+    assert r.venue == "HYPERLIQUID"
+    assert r.date == "2024-06-01"
+    # closed-set compliance
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+
+
+def test_cefi_v2_alive_date_on_dt_start_yields_expected_unattempted() -> None:
+    """Alive date >= get_venue_data_type_start_date(venue, dt) → expected_unattempted (unchanged)."""
+    catalog = [
+        _make_cefi_entry(
+            venue="HYPERLIQUID",
+            instrument_type="PERPETUAL",
+            instrument_id="BTC-USD",
+            available_from="2023-06-14",
+            base_asset="BTC",
+            mvp=True,
+        )
+    ]
+    # 2025-03-22 = the declared HYPERLIQUID trades start_date (inclusive).
+    date_axis = _date_axis("2025-03-22")
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].reason == ""
+
+
+def test_cefi_v2_per_dt_start_gates_data_types_independently() -> None:
+    """Per-(venue, dt) start_date gate is applied PER data_type — the 17,282-row over-seed regression guard.
+
+    HYPERLIQUID: trades start_date=2025-03-22, book_snapshot_5 start_date=2023-04-15.
+    On 2024-06-01 (post-venue-launch 2023-06-14):
+      - trades: pre-source-coverage → EXPECTED_PRE_SOURCE_COVERAGE_START
+      - book_snapshot_5: post-source-coverage → expected_unattempted
+    """
+    catalog = [
+        _make_cefi_entry(
+            venue="HYPERLIQUID",
+            instrument_type="PERPETUAL",
+            instrument_id="BTC-USD",
+            available_from="2023-06-14",
+            base_asset="BTC",
+            mvp=True,
+        )
+    ]
+    date_axis = _date_axis("2024-06-01")
+    rows = list(
+        enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades", "book_snapshot_5"], present_set=set())
+    )
+    by_dt = {r.data_type: r for r in rows}
+    assert by_dt["trades"].reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert by_dt["trades"].capture_status == "empty_confirmed"
+    assert by_dt["book_snapshot_5"].reason == ""
+    assert by_dt["book_snapshot_5"].capture_status == "expected_unattempted"
+
+
+def test_cefi_v2_dt_start_gate_no_start_date_permissive() -> None:
+    """Unknown venue/dt (no start_date registered) → gate is permissive (no emit change)."""
+    # ohlcv_1d on BINANCE (bare) — BINANCE-FUTURES has entries but bare BINANCE
+    # + non-cefi-standard data_type falls off the VENUE_DATA_TYPE_CAPABILITIES
+    # gate AND the VenueMapping venue-level fallback (bare BINANCE not indexed).
+    catalog = [_make_cefi_entry(venue="BINANCE", available_from="2019-01-01")]
+    date_axis = _date_axis("2019-06-01")
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].reason == ""
+
+
 def test_defi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
     """DeFi alive instrument date absent from manifest → expected_unattempted."""
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
