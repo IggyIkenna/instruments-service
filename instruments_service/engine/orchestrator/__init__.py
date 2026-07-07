@@ -643,7 +643,7 @@ from instruments_service.engine.orchestrator.writers import (
     _canonical_manifest_venue_chain as _canonical_manifest_venue_chain,
 )
 from instruments_service.engine.orchestrator.writers import (
-    _derive_instrument_type as _derive_instrument_type,
+    _split_by_instrument_type as _split_by_instrument_type,
 )
 from instruments_service.engine.orchestrator.writers import (
     _write_futures_contracts as _write_futures_contracts,
@@ -733,7 +733,6 @@ __all__ = [
     "_count_per_venue",
     "_defi_universe_cache",
     "_defi_universe_retryable",
-    "_derive_instrument_type",
     "_empty_lifecycle_columns",
     "_enforce_defi_monotonicity",
     "_extract_fixture_venue_ids",
@@ -775,6 +774,7 @@ __all__ = [
     "_should_skip_date_for_per_league",
     "_should_skip_shard",
     "_snapshot_blob_path_player_values",
+    "_split_by_instrument_type",
     "_sports_ref_canonical_blob_path",
     "_sports_ref_legacy_blob_path",
     "_sports_ref_pm",

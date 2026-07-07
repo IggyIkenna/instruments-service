@@ -1088,9 +1088,9 @@ class TestExtractFixtureVenueIds:
         assert result == ["V1"]
 
 
-def test_derive_instrument_type_single_type_stamps_real_type() -> None:
-    """Audit §K: a single-type venue df → the real instrument_type is stamped."""
-    from instruments_service.engine.orchestrator import _derive_instrument_type
+def test_split_by_instrument_type_single_type_one_group() -> None:
+    """Audit §K: a single-type venue df → exactly one group, stamped with the real type."""
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
 
     df = pd.DataFrame(
         [
@@ -1098,26 +1098,36 @@ def test_derive_instrument_type_single_type_stamps_real_type() -> None:
             {"instrument_key": "ETH-PERP", "instrument_type": "PERPETUAL"},
         ]
     )
-    assert _derive_instrument_type(df) == "PERPETUAL"
+    groups = _split_by_instrument_type(df)
+    assert [g[0] for g in groups] == ["PERPETUAL"]
+    assert len(groups[0][1]) == 2
 
 
-def test_derive_instrument_type_mixed_types_blank() -> None:
-    """A mixed-type venue df → "" (a single tag would misrepresent the shard)."""
-    from instruments_service.engine.orchestrator import _derive_instrument_type
+def test_split_by_instrument_type_mixed_types_one_group_per_type() -> None:
+    """A mixed-type venue df (e.g. Deribit) → one group PER distinct type, never blended."""
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
 
     df = pd.DataFrame(
         [
             {"instrument_key": "BTC-PERP", "instrument_type": "PERPETUAL"},
             {"instrument_key": "BTC-USDT", "instrument_type": "SPOT_PAIR"},
+            {"instrument_key": "BTC-OPT", "instrument_type": "OPTION"},
         ]
     )
-    assert _derive_instrument_type(df) == ""
+    groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
+    assert groups == {"PERPETUAL": 1, "SPOT_PAIR": 1, "OPTION": 1}
 
 
-def test_derive_instrument_type_absent_or_empty_blank() -> None:
-    """No instrument_type column, an empty df, or all-blank values → "" (honest blank)."""
-    from instruments_service.engine.orchestrator import _derive_instrument_type
+def test_split_by_instrument_type_absent_or_empty_single_blank_group() -> None:
+    """No instrument_type column, an empty df, or all-blank values → one "" group (honest blank)."""
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
 
-    assert _derive_instrument_type(pd.DataFrame([{"instrument_key": "X"}])) == ""
-    assert _derive_instrument_type(pd.DataFrame(columns=["instrument_type"])) == ""
-    assert _derive_instrument_type(pd.DataFrame([{"instrument_type": ""}, {"instrument_type": None}])) == ""
+    no_col = _split_by_instrument_type(pd.DataFrame([{"instrument_key": "X"}]))
+    assert [g[0] for g in no_col] == [""]
+
+    empty_df = _split_by_instrument_type(pd.DataFrame(columns=["instrument_type"]))
+    assert [g[0] for g in empty_df] == [""]
+
+    blank_vals = _split_by_instrument_type(pd.DataFrame([{"instrument_type": ""}, {"instrument_type": None}]))
+    assert [g[0] for g in blank_vals] == [""]
+    assert len(blank_vals[0][1]) == 2
