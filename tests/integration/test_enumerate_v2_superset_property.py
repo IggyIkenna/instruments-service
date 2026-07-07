@@ -163,16 +163,18 @@ def test_defi_v2_covers_v1_pre_genesis_chain_cells() -> None:
     end = end_ts.strftime("%Y-%m-%d")
 
     v1_rows_all = list(enumerator_module._enumerate_defi(start, end))
-    sampled_venues = {f"{proto.upper()}-{chain.upper()}" for (chain, proto), _ in sampled}
-    v1_rows = [r for r in v1_rows_all if r.venue in sampled_venues]
+    # v1 ``_enumerate_defi`` emits venue=protocol.upper() (bare protocol; the
+    # 2026-05 canonical-naming fix moved off the glued PROTOCOL-CHAIN form).
+    sampled_protocols_upper = {proto.upper() for (_, proto), _ in sampled}
+    v1_rows = [r for r in v1_rows_all if r.venue in sampled_protocols_upper]
     v1_cells = _venue_day_dt_cells(v1_rows)
-    assert len(v1_cells) > 0, "v1 should yield ≥1 pre-launch cell for sampled defi venues"
+    assert len(v1_cells) > 0, "v1 should yield ≥1 pre-launch cell for sampled defi protocols"
 
     catalog = [
         InstrumentCatalogEntry(
             instrument_id=f"{proto.upper()}-{chain.upper()}-INSTR",
             instrument_type="SPOT",
-            venue=f"{proto.upper()}-{chain.upper()}",
+            venue=proto.upper(),  # canonical bare protocol (matches v1 emit)
             chain=chain.upper(),
             league_id="",
             available_from=launch_date,  # alive on protocol launch
@@ -251,6 +253,150 @@ def test_prediction_v2_covers_v1_pre_venue_launch_cells() -> None:
     missing = v1_cells - v2_cells
     assert not missing, (
         f"v2 prediction missing {len(missing)} pre-launch cells covered by v1 (sample: {sorted(missing)[:5]})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Empty-catalogue superset — closes the v1→v2 asymmetry for empty catalogues.
+#
+# Regression guard for
+# ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``
+# todo #3: v1 cefi/defi/prediction enumerators emit venue-grain PRE_VENUE_LAUNCH
+# (and PRE_GENESIS_CHAIN for defi) sentinel rows independent of any catalogue.
+# The per-instrument v2 path requires ≥1 catalog entry in the pre-launch window
+# to emit anything, so a fresh / empty catalogue used to silently drop the
+# venue-grain row class. The ``_yield_v2_{cefi,defi,prediction}_pre_venue_launch_rows``
+# helpers close that gap. Assert v2 covers every v1 venue-grain cell with an
+# empty catalog input.
+# ---------------------------------------------------------------------------
+
+
+def test_cefi_v2_covers_v1_pre_venue_launch_cells_with_empty_catalog() -> None:
+    """v2 cefi covers every v1 venue-grain PRE_VENUE_LAUNCH cell with empty catalog.
+
+    Regression: v2's per-instrument PRE_VENUE_LAUNCH branch requires ≥1 catalog
+    instrument overlapping the pre-launch window to emit anything, so a fresh
+    (empty) catalogue would silently drop the venue-grain sentinel matrix v1
+    emits. The venue-grain pass
+    (``_yield_v2_cefi_pre_venue_launch_rows``, wired via ``yield from`` at the
+    top of ``_enumerate_v2_cefi``) closes that gap.
+    """
+    cefi_venue_launches = enumerator_module.CEFI_VENUE_LAUNCH_DATES
+    # Sample 3 venues with the earliest launches (gives us a long pre-launch window).
+    venues = sorted(cefi_venue_launches.keys(), key=lambda v: cefi_venue_launches[v])[:3]
+    latest_launch = max(cefi_venue_launches[v] for v in venues)
+    start = "2010-01-01"
+    end_ts = pd.Timestamp(latest_launch) - pd.Timedelta(days=1)
+    end = end_ts.strftime("%Y-%m-%d")
+
+    v1_rows_all = list(enumerator_module._enumerate_cefi(start, end))
+    v1_rows = [r for r in v1_rows_all if r.venue in venues]
+    v1_cells = _venue_day_dt_cells(v1_rows)
+    assert len(v1_cells) > 0, "v1 should yield ≥1 pre-launch cell for sampled venues"
+
+    data_types_in_v1 = sorted({r.data_type for r in v1_rows})
+    v2_rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="cefi",
+            catalog=[],  # EMPTY catalog — venue-grain pass must still fire
+            date_axis=_date_axis(start, end),
+            data_types=data_types_in_v1,
+        )
+    )
+    v2_cells = _venue_day_dt_cells(v2_rows)
+
+    missing = v1_cells - v2_cells
+    assert not missing, (
+        f"v2 missing {len(missing)} pre-launch cells covered by v1 for EMPTY catalog "
+        f"(sample: {sorted(missing)[:5]})"
+    )
+
+
+def test_defi_v2_covers_v1_pre_launch_cells_with_empty_catalog() -> None:
+    """v2 defi covers every v1 venue-grain pre-launch cell with empty catalog.
+
+    Regression: v2's per-instrument path requires ≥1 catalog entry on the
+    matching (venue, chain) tuple. The per-protocol venue-grain pass
+    (``_yield_v2_defi_pre_launch_rows``, wired via ``yield from`` at the top of
+    ``_enumerate_v2_defi``) plus its chain-level ``gas_fees`` pre-genesis pass
+    ensure v2 covers v1's ``EXPECTED_PRE_GENESIS_CHAIN`` /
+    ``EXPECTED_INSTRUMENT_NOT_LISTED`` matrix even for empty catalogues.
+    """
+    protocol_launches = enumerator_module.PROTOCOL_LAUNCH_DATES
+    # Sample 3 (chain, protocol) tuples with earliest launches.
+    sampled = sorted(protocol_launches.items(), key=lambda kv: kv[1])[:3]
+    latest_launch = sampled[-1][1]
+    start = "2018-01-01"
+    end_ts = pd.Timestamp(latest_launch) - pd.Timedelta(days=1)
+    end = end_ts.strftime("%Y-%m-%d")
+
+    v1_rows_all = list(enumerator_module._enumerate_defi(start, end))
+    sampled_venues = {f"{proto.upper()}-{chain.upper()}" for (chain, proto), _ in sampled}
+    # v1's _enumerate_defi emits per-protocol rows keyed by venue=<PROTOCOL> (chain=CHAIN)
+    # after the venue_label = protocol.upper() line — no PROTOCOL-CHAIN glue.
+    sampled_protocols_upper = {proto.upper() for (_, proto), _ in sampled}
+    v1_rows = [r for r in v1_rows_all if r.venue in sampled_protocols_upper or r.venue in sampled_venues]
+    v1_cells = _venue_day_dt_cells(v1_rows)
+    assert len(v1_cells) > 0, "v1 should yield ≥1 pre-launch cell for sampled defi protocols"
+
+    data_types_in_v1 = sorted({r.data_type for r in v1_rows})
+    v2_rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="defi",
+            catalog=[],  # EMPTY catalog — venue-grain pass must still fire
+            date_axis=_date_axis(start, end),
+            data_types=data_types_in_v1,
+        )
+    )
+    v2_cells = _venue_day_dt_cells(v2_rows)
+
+    missing = v1_cells - v2_cells
+    assert not missing, (
+        f"v2 defi missing {len(missing)} pre-launch cells covered by v1 for EMPTY catalog "
+        f"(sample: {sorted(missing)[:5]})"
+    )
+
+
+def test_prediction_v2_covers_v1_pre_venue_launch_cells_with_empty_catalog() -> None:
+    """v2 prediction covers every v1 venue-grain PRE_VENUE_LAUNCH cell with empty catalog.
+
+    Regression: v2's per-market path requires ≥1 catalogue market with
+    ``market_created_at`` overlapping the pre-launch window. The venue-grain
+    pass (``_yield_v2_prediction_pre_venue_launch_rows``, wired via
+    ``yield from`` at the top of ``_enumerate_v2_prediction``) ensures v2
+    covers v1's ``EXPECTED_PRE_VENUE_LAUNCH`` sentinel matrix even for empty
+    catalogues.
+    """
+    pred_launches = enumerator_module.PREDICTION_VENUE_LAUNCH_DATES
+    if not pred_launches:
+        pytest.skip("PREDICTION_VENUE_LAUNCH_DATES is empty — nothing to assert")
+    venues = sorted(pred_launches.keys(), key=lambda v: pred_launches[v])[:2]
+    latest = max(pred_launches[v] for v in venues)
+    start = "2018-01-01"
+    end_ts = pd.Timestamp(latest) - pd.Timedelta(days=1)
+    end = end_ts.strftime("%Y-%m-%d")
+
+    v1_rows_all = list(enumerator_module._enumerate_prediction(start, end))
+    v1_rows = [r for r in v1_rows_all if r.venue in venues]
+    if not v1_rows:
+        pytest.skip("v1 prediction enumerator yielded 0 rows for sampled venues")
+    v1_cells = _venue_day_dt_cells(v1_rows)
+
+    data_types_in_v1 = sorted({r.data_type for r in v1_rows})
+    v2_rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="prediction",
+            catalog=[],  # EMPTY catalog — venue-grain pass must still fire
+            date_axis=_date_axis(start, end),
+            data_types=data_types_in_v1,
+        )
+    )
+    v2_cells = _venue_day_dt_cells(v2_rows)
+
+    missing = v1_cells - v2_cells
+    assert not missing, (
+        f"v2 prediction missing {len(missing)} pre-launch cells covered by v1 for EMPTY catalog "
+        f"(sample: {sorted(missing)[:5]})"
     )
 
 
