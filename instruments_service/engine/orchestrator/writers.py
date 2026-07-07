@@ -80,28 +80,23 @@ def _canonical_manifest_venue_chain(venue_str: str) -> tuple[str, str]:
     return venue_str, ""
 
 
-def _derive_instrument_type(df: _orch.pd.DataFrame) -> str:
-    """Return the single ``instrument_type`` for a venue's instrument-definition df.
+def _split_by_instrument_type(df: _orch.pd.DataFrame) -> list[tuple[str, _orch.pd.DataFrame]]:
+    """Split a venue's instrument-definition df into ``(instrument_type, sub_df)`` groups.
 
-    The manifest row is at (venue, date) grain. The instrument-definition parquet
-    (``InstrumentRecord.model_dump()``) carries an ``instrument_type`` column. When
-    every instrument in this venue x date shard is the SAME type (the common case —
-    a venue df is typically one type, e.g. all PERPETUAL or all SPOT_PAIR), stamp
-    that real type so the v9 manifest carries per-instrument_type counts (Audit §K).
+    The manifest row grain is ``(date, venue, instrument_type)``. Multi-type venues
+    (e.g. DERIBIT: OPTION/FUTURE/PERPETUAL/FUTURE_COMBO; CME: futures_chain/options_chain/
+    combo) must emit one manifest row PER type instead of one blended row per venue, or
+    the type-specific counts/dates are lost and ``instrument_type`` is stamped "" on every
+    row (Audit §K / SSOT: plans/active/issues/honest_coverage_shard_dimension_model_definitional_data_2026_07_07.md).
 
-    Returns "" (honest blank — never fabricated) when the column is absent, empty,
-    or holds MIXED types (a single-type tag would misrepresent the shard).
+    Returns "" as the group key (never fabricated) when the column is absent, empty, or
+    the value itself is blank for that row — single-type venues (ASTER, HYPERLIQUID, ...)
+    naturally yield exactly one group and behave identically to before this split existed.
     """
     if "instrument_type" not in df.columns or df.empty:
-        return ""
-    # Coerce to plain str (NaN/None → ""), drop blanks, then require a SINGLE
-    # distinct non-blank type. Uses pandas string-dtype ops (no .tolist()/Any).
+        return [("", df)]
     col: _orch.pd.Series = df["instrument_type"].astype("string").fillna("").astype(str)
-    nonblank: _orch.pd.Series = col[col.str.len() > 0]
-    distinct: list[str] = [str(v) for v in nonblank.drop_duplicates()]
-    if len(distinct) != 1:
-        return ""
-    return distinct[0]
+    return [(str(_itype), _sub_df) for _itype, _sub_df in df.groupby(col)]
 
 
 def _write_venue(
@@ -217,9 +212,6 @@ def _write_venue(
                     )
                 else:
                     _cat = "defi" if manifest_chain else (VENUE_TO_ASSET_GROUP.get(venue_str, "cefi"))
-                    _rk: dict[str, str] = {"date": date, "venue": manifest_venue}
-                    if manifest_chain:
-                        _rk["chain"] = manifest_chain
                     # NOTE: instrument-definition rows are PRODUCER-emitted
                     # (pipeline_mode=BATCH_INSTRUMENTS_SERVICE). Per the C-#6
                     # source⇔pipeline_mode contract (2026-06-07) a BATCH row's
@@ -228,26 +220,35 @@ def _write_venue(
                     # source auto-resolves (blank/instruments_service). Which vendor
                     # served the snapshot is the adapter's routing concern, not a
                     # per-row manifest tag for producer rows.
-                    # v9 instrument_type column (Audit §K): stamp the REAL type when
-                    # the venue x date shard is single-type, "" when mixed/absent. This
-                    # enables per-instrument_type counts off the manifest.
+                    # v9 instrument_type column (Audit §K): one manifest row PER
+                    # distinct instrument_type in this venue x date shard (never
+                    # blended) — a single-type venue (ASTER, HYPERLIQUID, ...)
+                    # naturally yields one group, so this is a no-op for those.
+                    # instrument_type is part of the row_key (not just a kwarg) so
+                    # a manifest.lookup() filtered on it can't conflate types.
                     # Stamp the canonical reference data_type at emission time so
                     # the availability index atom is correct from the first write.
                     # Matches REFERENCE_DATA_TYPE in scripts/migrate_instruments_store_v9.py
                     # (SSOT for the reference-data-type stamp). The migration remains a
                     # one-time backfill for pre-2026-07-06 legacy blank rows. Regression
                     # SSOT: plans/active/issues/is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06.md
-                    manifest.record_captured(  # QG-allow: emission-policy-not-applicable
-                        row_key=_rk,
-                        df=_stamped_venue_df,
-                        asset_group=_cat,
-                        instrument_type=_derive_instrument_type(_stamped_venue_df),
-                        data_type="instruments",
-                        venue=manifest_venue,
-                        chain=manifest_chain,
-                        pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
-                        service_emission_state=None,
-                    )
+                    # Multi-type split SSOT: plans/active/issues/honest_coverage_shard_dimension_model_definitional_data_2026_07_07.md
+                    for _itype, _itype_df in _split_by_instrument_type(_stamped_venue_df):
+                        _rk: dict[str, str] = {"date": date, "venue": manifest_venue, "instrument_type": _itype}
+                        if manifest_chain:
+                            _rk["chain"] = manifest_chain
+                        manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                            row_key=_rk,
+                            df=_itype_df,
+                            row_count=len(_itype_df),
+                            asset_group=_cat,
+                            instrument_type=_itype,
+                            data_type="instruments",
+                            venue=manifest_venue,
+                            chain=manifest_chain,
+                            pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                            service_emission_state=None,
+                        )
             else:
                 path = f"instrument_availability/by_date/day={date}/venue={venue_str}/instruments.parquet"
                 _orch._write_catalogue_record(bucket, path, date, len(df))
