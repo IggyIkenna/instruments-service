@@ -1,7 +1,7 @@
 {
   "asset_group": "cefi",
   "captured_at": "2026-07-07",
-  "tuple_count": 73,
+  "tuple_count": 75,
   "tuples": [
     ["ASTER", "perpetual", "book_snapshot_5"],
     ["ASTER", "perpetual", "derivative_ticker"],
@@ -38,6 +38,8 @@
     ["BYBIT", "perpetual", "trades"],
     ["BYBIT", "spot_pair", "book_snapshot_5"],
     ["BYBIT", "spot_pair", "trades"],
+    ["BYBIT-SPOT", "spot_pair", "book_snapshot_5"],
+    ["BYBIT-SPOT", "spot_pair", "trades"],
     ["COINBASE-FUTURES", "future", "trades"],
     ["COINBASE-FUTURES", "perpetual", "trades"],
     ["DERIBIT", "futures_chain", "trades"],
