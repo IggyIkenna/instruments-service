@@ -82,6 +82,9 @@ from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
     GRAIN_BUNDLE_BY_UNDERLYING,
     MVP_SCOPE,
+    TOTAL_UNIVERSE_AXES,
+    TOTAL_UNIVERSE_CONFIG_HASH,
+    TOTAL_UNIVERSE_CONFIG_VERSION,
     VENUES_BY_ASSET_GROUP,
     CeFiMvpRule,
     Mode,
@@ -93,6 +96,7 @@ from unified_api_contracts import (
     has_source_priority,
     is_in_mvp_capture_universe,
     is_mvp,
+    is_total_universe,
     pipeline_mode_for_source,
     valid_data_types_for_venue_instrument_type,
 )
@@ -1954,6 +1958,19 @@ _V2_ENUMERATORS: dict[
     "prediction": _enumerate_v2_prediction,
 }
 
+# SSOT parity check (B2 downstream — is_catalogue_completion_2d): the enumerator's
+# per-AG dispatch (v1 + v2 + argparse choices) MUST equal the set of asset_groups
+# the UAC total-universe taxonomy (``TOTAL_UNIVERSE_AXES``) declares. Any drift
+# means the enumerator would enumerate an AG the SSOT doesn't recognise (silent
+# could-exist under-count) OR the SSOT declares an AG the enumerator can't serve
+# (silent zero denominator). Fail loud at import so the divergence surfaces before
+# a run stamps a wrong denominator into an availability manifest.
+assert set(_V2_ENUMERATORS) == set(TOTAL_UNIVERSE_AXES) == set(_ENUMERATORS) == set(SUPPORTED_ASSET_GROUPS), (
+    f"enumerator dispatch drift — v1={sorted(_ENUMERATORS)} v2={sorted(_V2_ENUMERATORS)} "
+    f"cli={sorted(SUPPORTED_ASSET_GROUPS)} must all equal UAC "
+    f"TOTAL_UNIVERSE_AXES keys {sorted(TOTAL_UNIVERSE_AXES)}"
+)
+
 
 def _derive_underlying(instrument_id: str) -> str:
     """Fallback underlying derivation when the catalogue ``underlying`` column is
@@ -2152,10 +2169,23 @@ def enumerate_v2(
     Gate G3 of ``manifest_evolution_SUPERSEDED_2026_05_21``. Ships per
     ``expected_universe_v2_design_2026_05_08.md`` Phase 1.A.
     Wave 3 (``expected_unattempted``): writegate plan Phase 3.D.5 item.
+
+    The could-exist denominator this enumerator materialises is bound to the UAC
+    ``TOTAL_UNIVERSE_AXES`` taxonomy (SSOT — the shipped ``UniverseProvenance``
+    HARDCODED_GENESIS vs DOWNLOAD_DERIVED split). ``asset_group`` MUST be
+    universe-bearing per :func:`is_total_universe` — an unknown AG raises rather
+    than silently emitting zero rows (which would look like a green
+    ``expected_universe`` coverage under a wrong denominator).
     """
-    if asset_group not in _V2_ENUMERATORS:
+    # SSOT gate: the total-reasonable-universe is defined per-asset_group by
+    # ``TOTAL_UNIVERSE_AXES`` (universe = MVP ⊆ TOTAL ⊆ ALL). An unknown AG is not
+    # universe-bearing; there is nothing to enumerate. This replaces the private
+    # dispatch check as the authoritative gate.
+    if not is_total_universe(asset_group, "", ""):
         raise ValueError(
-            f"enumerate_v2: unsupported asset_group={asset_group!r}; must be one of {sorted(_V2_ENUMERATORS)}"
+            f"enumerate_v2: unsupported asset_group={asset_group!r}; must be one of "
+            f"{sorted(TOTAL_UNIVERSE_AXES)} (UAC TOTAL_UNIVERSE_AXES — the total-reasonable "
+            f"could-exist SSOT)"
         )
     # G1-ENUM bundle-grain roll-up (Era-B): collapse option/combo leaves → ONE
     # synthetic per-underlying options_chain instrument entry (data_type resolved
@@ -2980,6 +3010,11 @@ def main() -> int:
         data_types_override=data_types_override,
         full_history=full_history,
         run_id=run_id,
+        # Stamp the UAC total-universe SSOT descriptor (B2 downstream): a coverage
+        # delta then attributes to a UNIVERSE-DEFINITION change (version/hash
+        # flip) vs a DATA change (same version/hash).
+        total_universe_config_version=TOTAL_UNIVERSE_CONFIG_VERSION,
+        total_universe_config_hash=TOTAL_UNIVERSE_CONFIG_HASH,
     )
 
     if full_history and enumerator_version != "v2":
