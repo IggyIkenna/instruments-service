@@ -432,18 +432,19 @@ def _entry(venue: str, instrument_type: str) -> object:
     )
 
 
-def test_row_data_types_aster_capability_carveout() -> None:
-    """ASTER cannot produce book_snapshot_5/liquidations (absent from
-    VENUE_DATA_TYPE_CAPABILITIES["ASTER"]) — the enumerator must NEVER seed
-    them (the 2026-06-29 over-seed contradiction: UAC is correct, the
-    enumerator over-seeded 3,477 expected_unattempted rows each)."""
+def test_row_data_types_aster_capability_profile() -> None:
+    """ASTER capability profile after uac@3652f99f (cefi-008 live-wire flip 2026-07-07):
+    book_snapshot_5 IS a declared capability (live-only from 2026-06-23 via
+    aster_book_liq_ws) and IS in MVP scope, so the enumerator seeds it;
+    liquidations remains carved out at the MVP-scope layer (capability present
+    but not in MVP for ASTER). Retains the historical guard that survivors ⊆ capabilities."""
     from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
 
     cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations", "perp_funding"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("ASTER", "PERPETUAL"), cefi_dts)
-    assert "book_snapshot_5" not in row_dts, "ASTER book_snapshot_5 must be carved out"
-    assert "liquidations" not in row_dts, "ASTER liquidations must be carved out"
-    # What survives is exactly the venue's declared capability ∩ validity.
+    assert "book_snapshot_5" in row_dts, "ASTER book_snapshot_5 is a live-wire capability (from 2026-06-23) and must be seeded"
+    assert "liquidations" not in row_dts, "ASTER liquidations is not in MVP scope"
+    # What survives is exactly the venue's declared capability ∩ validity ∩ MVP.
     assert set(row_dts) <= set(VENUE_DATA_TYPE_CAPABILITIES["ASTER"]), row_dts
     assert "trades" in row_dts, "ASTER trades is a declared capability and must survive"
 
