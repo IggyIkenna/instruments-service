@@ -100,7 +100,10 @@ from unified_api_contracts import (
     pipeline_mode_for_source,
     valid_data_types_for_venue_instrument_type,
 )
-from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
+from unified_api_contracts.registry import (
+    VENUE_DATA_TYPE_CAPABILITIES,
+    get_venue_data_type_start_date,
+)
 from unified_api_contracts.registry.chain_env import (
     CHAIN_GENESIS_DATES,
     GAS_FEE_CHAIN_START_DATES,
@@ -1053,6 +1056,22 @@ def _enumerate_v2_cefi(
         row_dts = _row_data_types("cefi", instr, data_types)
         if not row_dts:
             continue  # e.g. cefi OPTION leaf → frozenset() → skip entirely
+        # Per-(venue, data_type) start_date gate — cefi_layer1_denominator_gaps
+        # 2026_07_03 item -007. Alive dates BEFORE a data_type's UAC-declared
+        # start_date must NOT seed expected_unattempted (they emit
+        # EXPECTED_PRE_SOURCE_COVERAGE_START instead). Prevents the 17,282-row
+        # over-seed class that hit ASTER 2026-07-03: a UAC capability entry
+        # (e.g. ASTER book_snapshot_5 = live-wire date) that arrives AFTER the
+        # venue launch would otherwise over-seed the alive-but-pre-source
+        # window with expected_unattempted rows the venue cannot yet produce.
+        # Pre-computed once per instrument (one UAC lookup per data_type, not
+        # per date × data_type). Priority order per UAC:
+        # VENUE_DATA_TYPE_CAPABILITIES → VENUE_REFERENCE_DATA_CAPABILITIES →
+        # VenueMapping.venue_start_dates (venue-level fallback).
+        dt_start_ts_by_dt: dict[str, pd.Timestamp | None] = {}
+        for dt in row_dts:
+            _start = get_venue_data_type_start_date(instr.venue, dt)
+            dt_start_ts_by_dt[dt] = pd.Timestamp(_start) if _start else None
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -1067,7 +1086,23 @@ def _enumerate_v2_cefi(
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
                 # alive + manifest-aware: yield expected_unattempted for missing rows
+                # (or EXPECTED_PRE_SOURCE_COVERAGE_START for dates before the
+                # data_type's UAC-declared start_date — see gate comment above).
                 for dt in row_dts:
+                    dt_start_ts = dt_start_ts_by_dt.get(dt)
+                    if dt_start_ts is not None and d_ts < dt_start_ts:
+                        yield ExpectedRow(
+                            asset_group="cefi",
+                            venue=instr.venue,
+                            chain=instr.chain,
+                            data_type=dt,
+                            instrument_type=instr.instrument_type,
+                            instrument_id=instr.instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="EXPECTED_PRE_SOURCE_COVERAGE_START",
+                        )
+                        continue
                     row_key = tuple(
                         {
                             "venue": instr.venue,
