@@ -121,11 +121,11 @@ real, intentional, just asymmetric — not itself part of the PERP/PERPETUAL fin
 Live connectors (MTDS `hyperliquid_ws.py`/`hyperliquid_l2book_ws.py`/`hyperliquid_ticker_ws.py`/`aster_book_liq_ws.py`)
 
 - the onchain-perp batch handler's catalogue-driven symbol enumeration were updated in the same pass to keep live=batch
-  consistent — see `market-tick-data-service@<PENDING-SHA>`. Historical batch tick-data GCS objects + the availability
+  consistent — see `market-tick-data-service@c20ea464`. Historical batch tick-data GCS objects + the availability
   manifest were NOT yet migrated in this pass (real, non-trivial volume — a dry-run-scoped migration script + follow-up
   apply is tracked as its own todo, not silently skipped); see
   [`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`](../../../unified-trading-pm/plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md).
-  Shipped: `instruments-service@<PENDING-SHA>` (the 5 adapters above), `unified-api-contracts@58a03793` (ASTER's UAC
+  Shipped: `instruments-service@f7cf3ea5` (the 5 adapters above), `unified-api-contracts@58a03793` (ASTER's UAC
   normalize.py, same fix for the live/WS-tick normalization path).
 
 ### AAVE_V3-OPTIMISM misspelled venue-token duplicate (finding 5) — FIXED 2026-07-08
@@ -227,15 +227,42 @@ duplicate — the `instrument_id` string itself is identical (`EXTENDED-STARKNET
 different bug class living in `reference_data/adapters/cefi/extended.py`, outside this pass's DeFi-adapter-naming
 scope.
 
-**Key-vs-field abbreviation mismatch, extended pattern** — also real in this doc's own scope beyond the
-PERP/PERPETUAL and A_TOKEN/LENDING cases above: every yield/LST/restaking adapter checked stamps `LST` or `VAULT` in
-the instrument key while the `instrument_type` field says `YIELD_BEARING` — e.g. `lido.py:90,94`
-(`{venue}:LST:{symbol}` / `YIELD_BEARING`), `etherfi.py:83,87`, `renzo.py:116,119` (all `:LST:`); `yearn.py:145,148`,
-`beefy.py:260,263`, `karak.py:117,120`, `idle.py:127,130` (all `:VAULT:`). This is the same class of divergence as
-PERP-vs-PERPETUAL, just not yet named as its own finding in the canonicalization doc — flagged here for whoever scopes
-that migration next. The audit separately found 10 more Solana/DeFi venues with the same class of mismatch (drift,
-mango, zeta, flash_trade, meteora, jupiter, phoenix, lifinity, kamino, marinade) — out of this doc's scope, tracked in
-the audit doc for whichever doc covers Solana-native DeFi.
+**Key-vs-field abbreviation mismatch, extended pattern — FIXED 2026-07-08 for this doc's 12 in-scope protocols.**
+Every yield/LST/restaking adapter in this doc's scope stamped `LST` or `VAULT` in the instrument key while the
+`instrument_type` field said `YIELD_BEARING` — e.g. `lido.py:90,94` (`{venue}:LST:{symbol}` / `YIELD_BEARING`),
+`etherfi.py`, `renzo.py`, `kelpdao.py`, `puffer.py`, `rocket_pool.py` (all `:LST:`); `yearn.py`, `beefy.py`,
+`karak.py`, `idle.py`, `symbiotic.py`, `convex.py` (all `:VAULT:`). Same divergence class as PERP-vs-PERPETUAL, but
+**which side won differs per group — checked real downstream consumers before picking, per the PERP/PERPETUAL
+precedent's own caveat**:
+
+- **The 6 `LST`-keyed adapters (Lido, EtherFi, Renzo, KelpDAO, Puffer, RocketPool): the FIELD was fixed to match the
+  KEY**, i.e. `instrument_type` now stamps `InstrumentType.LST` (a real, distinct enum member — not a shorthand for
+  `YIELD_BEARING`). This is the OPPOSITE direction from the PERP/PERPETUAL fix, for good reason: `LST` is a real
+  `InstrumentType` enum member (`unified_api_contracts/_instrument_enums.py`) with its own real downstream ledger
+  treatment — `ledger_asset_resolution.py` maps `InstrumentType.LST → LedgerAssetClass.LST` and
+  `InstrumentType.YIELD_BEARING → LedgerAssetClass.VAULT_SHARE`, a real accounting distinction, not a cosmetic one —
+  and real consumers (execution-service's `catalog_validator.py`/`dependency_validator.py`/`data_availability_
+validator.py`, strategy-service's `pnl_calculator.py`/`settlement_service.py`/`risk_monitor.py`) already parse the
+  KEY's `:LST:` segment directly for real validation and PnL/risk logic, so the field — which was the one lying —
+  was fixed to match. The `get_instruments(instrument_type=...)` filter guard was widened (not narrowed) to accept
+  either `InstrumentType.LST` or `InstrumentType.YIELD_BEARING`, so no existing caller regresses.
+- **The 6 `VAULT`-keyed adapters (Yearn, Beefy, Karak, Idle, Symbiotic, Convex): the KEY was fixed to match the
+  FIELD**, i.e. the key's middle segment is now `YIELD_BEARING`, dropping the `VAULT` shorthand. Unlike `LST`,
+  `VAULT` is NOT a real `InstrumentType` enum member (checked: no `InstrumentType.VAULT` exists), and no real
+  consumer in instruments-service/strategy-service/execution-service parses a `:VAULT:` key-substring for
+  classification — so there was no real consumer to break, and the field (`YIELD_BEARING`, already correct) won.
+- **Sanctum, Solblaze, and Jito-restaking were checked and intentionally NOT touched** — all 3 are explicitly
+  out-of-scope Solana venues per this doc's own scope section (a separate "Solana DeFi" surface), and share the
+  same `LST`/`VAULT` pattern; flagged for whichever future pass covers Solana-native DeFi, along with the 10 more
+  Solana/DeFi venues (drift, mango, zeta, flash_trade, meteora, jupiter, phoenix, lifinity, kamino, marinade) the
+  original audit found with the same mismatch class.
+- **Known related-but-unfixed finding**: `market-tick-data-service` has its own SEPARATE, independently-written
+  adapters for some of these same protocols (`restaking_karak_adapter.py`, `vault_pendle_adapter.py`,
+  `restaking_symbiotic_adapter.py`, `restaking_jito_adapter.py` — all still build `:VAULT:` keys) — checked and
+  confirmed these are NOT wired into MTDS's `factory.py` dispatch table (no `_ADAPTERS`-equivalent entry references
+  them; only reachable from their own dedicated unit tests), so they appear to be orphaned/unwired scaffolding, not
+  a live parallel path that would now disagree with instruments-service's fixed convention. Not touched in this
+  pass (out of this doc's repo scope) — worth a cleanup pass if/when they're ever wired in.
 
 ---
 
@@ -297,15 +324,28 @@ number no longer matches the real code. The major-assets whitelist filter (below
 TVL-ranked fetch, not instead of it — it's a two-stage pipeline: (1) fetch the highest-TVL pools up to the real
 ceiling, (2) keep only the ones where both `base_asset` and `quote_asset` pass the whitelist.
 
-**Real, still-open coverage risk from this two-stage design**: a genuine major-asset pool (e.g. a real WBTC/WETH pool
-on a smaller-TVL fork) that happens to rank below the ~6,000-pool cutoff on a given day is never fetched at all, so
-the whitelist filter never gets a chance to keep it — the TVL ceiling is a hard cutoff applied _before_ curation, not
-a fallback safety net for curated pairs. This is the same gap the pre-consolidation docs already flagged as a "planned
-future improvement": fetch by token address directly in the GraphQL query (`where: { token0_in: [...] }`) instead of
-paging through a TVL-ranked list, which would guarantee every curated major-asset pool is captured regardless of its
-TVL rank. Not yet implemented — the ~6,000-pool TVL ceiling is real production behavior today, and "MVP universe" for
-DEX pools is therefore whatever the whitelist filter keeps _from within that ceiling_, not a hard guarantee that every
-whitelisted pair is captured.
+**Coverage gap — PARTIALLY FIXED 2026-07-08 (Uniswap V3 + the 8 shared-class protocols only).** A genuine major-asset
+pool (e.g. a real DAI/USDT pool on a smaller-TVL fork) that ranks below the ~6,000-pool cutoff on a given day was
+never fetched at all, so the whitelist filter never got a chance to keep it — the TVL ceiling was a hard cutoff
+applied _before_ curation, not a fallback safety net for curated pairs. **Fix implemented**: `uniswap_v3.py` now runs
+a supplementary query (`_fetch_major_asset_pools`) that asks the subgraph directly for pools where both `token0` AND
+`token1` are in `DEFI_MAJOR_ASSET_ADDRESS_LIST` (`unified_api_contracts/registry/defi_major_assets.py` — an
+Ethereum-mainnet address list that already existed in the registry for exactly this purpose but had never been wired
+into any adapter), merging any pools the TVL-ranked cascade missed into the result set. **Verified live against the
+production gateway (2026-07-08)**: this query found a real `DAI-USDT` pool
+(`0x3196f48548c3b8c901bc4cc5ad662ba97c9c0b2b`, feeTier 10000) with `totalValueLockedUSD ≈ $0.0004` — many orders of
+magnitude below the ~$2,195 TVL of the pool ranked #6000 in the plain TVL-ranked pagination, proving the old pipeline
+would have silently dropped it; a full live `get_instruments()` run went from 5,958 pools (TVL-ranked only) to 6,169
+(+172 major-asset pools recovered) on Ethereum mainnet. Because this fires on top of (not instead of) the existing
+cascade, it also transitively covers the 8 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug`
+(PancakeSwap*V3, Sushiswap_V3, Sushiswap, Camelot_V3, Aerodrome_V3, Velodrome_V2, TraderJoe_V2, GMX) whenever they run
+on Ethereum. **Known remaining gaps, not fixed in this pass**: (1) `DEFI_MAJOR_ASSET_ADDRESS_LIST` is Ethereum-only —
+the same 9 protocols still have the uncovered TVL-ceiling gap on every other chain (Arbitrum, Base, Optimism, Polygon,
+BSC, Avalanche, zkSync); (2) Uniswap V2, Uniswap V4, Balancer, and Curve (4 separate adapter classes, each with their
+own independent fetch/pagination code) were not touched — they still have the original TVL-rank-then-filter gap on
+every chain. A full fix would need either a per-chain major-asset address registry (doesn't exist today, would need
+real per-chain token address verification before use) or a symbol-based nested-entity query
+(`where: { token0*: { symbol_in: [...] } }`) applied to all 4 remaining adapter files.
 
 ---
 
@@ -335,10 +375,28 @@ not a bug.
 **Data-type coverage varies by protocol** — Venus and Benqi's subgraph schemas expose neither a daily-snapshot history
 entity nor a dedicated liquidation/risk-param entity (introspected 2026-06-02), so those two are `lending_indices`
 only. Aave_V3/Morpho additionally collect `liquidation_events`, `flash_loan_events` (Aave_V3 only), and top-position
-`position_data`. Fluid's `lending_indices` MTDS collector is currently 100% broken on an uncaught `ContractCustomError`
-(tracked in `defi_lending_atoken_debttoken_instrument_split_2026_07_07.md`, not yet fixed). Gas-fee data is collected
-once per chain under the synthetic venue `ALCHEMY`, not once per protocol — a lending protocol's chain being covered
-there is sufficient, it doesn't need its own `gas_fees` data type.
+`position_data`. **Fluid's `lending_indices` MTDS collector — FIXED 2026-07-08** (previously tracked in
+`defi_lending_atoken_debttoken_instrument_split_2026_07_07.md` as "100% broken on an uncaught `ContractCustomError`,
+not yet fixed"). Root cause confirmed live: `market-tick-data-service/market_tick_data_service/market_interface/
+adapters/defi/fluid_adapter.py` called `totalSupply()`/`totalBorrow()`/`exchangePrice()` directly on the Fluid vault
+contract — an ERC-4626-style ABI shape that doesn't exist on Fluid's real VaultT1 implementation. Calling those
+selectors hits the proxy's fallback dispatcher, which reverts with an unrecognized custom error
+(`0x60121cca...`) that web3.py surfaces as `ContractCustomError` — reproduced live against all 8 curated MVP vaults
+(100% failure rate, confirming the doc's "100% broken" claim exactly). **Fix**: read vault state via Fluid's own
+periphery `FluidVaultResolver` contract (`0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC`, Ethereum mainnet — verified
+against both the official `Instadapp/fluid-contracts-public` deployments manifest and Etherscan's verified contract
+name) and its `getVaultEntireData(vault)` method, which is the resolver Fluid itself provides for exactly this read
+path; also added real per-token ERC-20 `decimals()` lookups (the old code assumed 1e18 for both collateral and debt,
+which was wrong for 6-decimal assets like USDC/USDT) and native-ETH sentinel handling (Fluid vaults can hold native
+ETH directly, which has no ERC-20 contract to query). **Verified with a real on-chain call**: after the fix, the same
+8 vaults return real, sane data — e.g. the ETH-USDC vault now returns `total_supply=0.65 ETH`,
+`total_borrow=131.75 USDC`, `supply_exchange_price=1.089`, `borrow_exchange_price=1.207` at a real historical block,
+through the actual `download_market_data()` production code path (not a standalone probe). **Known remaining gap**:
+`utilization_rate = total_borrow / total_supply` is still a raw cross-asset ratio (Fluid vaults hold DIFFERENT
+collateral and debt assets, unlike Aave's shared-pool model) — this was a pre-existing conceptual issue before this
+fix too; a true utilization metric would need an oracle price conversion to a common unit, not implemented here.
+Gas-fee data is collected once per chain under the synthetic venue `ALCHEMY`, not once per protocol — a lending
+protocol's chain being covered there is sufficient, it doesn't need its own `gas_fees` data type.
 
 ---
 
