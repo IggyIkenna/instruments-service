@@ -184,6 +184,12 @@ async def _fetch_footystats_predictions(
                     "; ".join(violations),
                 )
             counts["footystats_predictions"] = len(df)
+            # Fixture-calendar completion tracking — leagues captured this date.
+            # Mirrors the MATCHES pattern (footystats.py _fetch_footystats_matches)
+            # so cup/continental competitions with no fixture today still resolve
+            # to a terminal empty_confirmed(EXPECTED_NO_FIXTURE) row instead of
+            # leaving pending_fetch un-typed forever.
+            _captured_leagues: set[str] = set()
 
             # Write per-league partitioned files when canonical_fixture_id is available.
             if "canonical_fixture_id" in df.columns:
@@ -241,6 +247,7 @@ async def _fetch_footystats_predictions(
                         source=_orch._sports_ref_source("footystats_predictions"),
                         service_emission_state=None,
                     )
+                    _captured_leagues.add(_pred_canonical)
 
                 if not _without_league.empty:
                     _pred_unmapped = _without_league.drop(columns=["_pred_league"])
@@ -291,6 +298,19 @@ async def _fetch_footystats_predictions(
                     source=_orch._sports_ref_source("footystats_predictions"),
                     service_emission_state=None,
                 )
+
+            # Honest-coverage per-league: record_empty for expected footystats
+            # leagues with no predictions on this date (cup/continental
+            # competitions don't play every day). Mirrors the MATCHES pattern
+            # above — without this, a no-fixture cup date left pending_fetch
+            # un-typed forever instead of resolving to a terminal state.
+            for _exp_lid in sorted(set(_ft_expected) - _captured_leagues):
+                pred_manifest.record_empty(
+                    row_key={"date": date, "data_type": "PREDICTIONS", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                    pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
+                )
             pred_manifest.write()
 
             _orch.logger.info(
@@ -300,16 +320,17 @@ async def _fetch_footystats_predictions(
             )
         else:
             _orch.logger.info("FootyStats predictions: no predictive data for date=%s", date)
-            # Honest-coverage: legitimate empty (no predictions for this date).
-            # footystats catalog refresh tagged canonical BATCH_FOOTYSTATS
-            # (Q2=(A) flip 2026-05-12; resolves
-            # footystats_pipeline_mode_gap_2026_05_12.md workaround).
-            pred_manifest.record_empty(
-                row_key=_row_key,
-                attempted_at=attempt_ts,
-                reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
-                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
-            )
+            # Honest-coverage per-league: emit record_empty for ALL expected
+            # leagues — mirrors the MATCHES pattern (per-league granularity,
+            # not a single date-aggregate row) so cup/continental competitions
+            # with no fixture today resolve to a terminal typed state.
+            for _exp_lid in sorted(set(_ft_expected)):
+                pred_manifest.record_empty(
+                    row_key={"date": date, "data_type": "PREDICTIONS", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                    pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
+                )
             pred_manifest.write()
     except Exception as exc:
         _orch.classify_and_emit_error(
