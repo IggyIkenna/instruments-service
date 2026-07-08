@@ -22,7 +22,7 @@ batch-vs-live swap-capture split.
   Sushiswap_V3/Sushiswap, Camelot_V3, Aerodrome_V3, TraderJoe_V2, Velodrome_V2) and GMX (perps-via-pool).
 - **Lending**: Aave_V3, Spark, Compound_V3, Morpho, Euler_V2, Fluid, Radiant, Venus, Benqi.
 - **Yield-bearing / LST / restaking**: Lido, EtherFi, Ethena, RocketPool, Renzo, KelpDAO, Puffer, Symbiotic, Karak,
-  Convex, Idle, Yearn(_V3), Beefy, Pendle, EigenLayer.
+  Convex, Idle, Yearn(\_V3), Beefy, Pendle, EigenLayer.
 - **On-chain-perp DEXes**: Hyperliquid, Aster, Pacifica-Solana, Extended-Starknet, Lighter-Zksync.
 
 **Out of scope** (covered in other consolidated docs / not yet written up anywhere): Solana-native AMMs and perps
@@ -48,7 +48,7 @@ current-vs-target, not current-vs-already-fixed. Full detail, decision rationale
   basis-point value (100/500/3000/10000), dash-separated. `pool_address` stays its own column, it stops being the
   entire identity key.
 - **Audit's stated current-state**: a bare on-chain pool address with zero `VENUE:TYPE:SYMBOL` structure, confirmed
-  across 6,180 real rows / 13 protocols (Uniswap V2/V3/V4, Balancer, Curve, PancakeSwap_V3, Sushiswap/_V3, Camelot_V3,
+  across 6,180 real rows / 13 protocols (Uniswap V2/V3/V4, Balancer, Curve, PancakeSwap_V3, Sushiswap/\_V3, Camelot_V3,
   Aerodrome_V3, TraderJoe_V2, Velodrome_V2, GMX) in the production catalog.
 - **Reconciled 2026-07-08**: the current adapter code for the native-schema DEX adapters already builds a structured
   key, not a bare address — `instrument_key = f"{venue_tag}:POOL:{base}-{quote}:{fee_str}"` (`uniswap_v3.py:490-492`,
@@ -281,11 +281,11 @@ there is sufficient, it doesn't need its own `gas_fees` data type.
 
 15 protocols in scope, split by real `ProtocolClass` in the capability registry:
 
-| Class                                   | Protocols                                                      | Chains                                                                                                                                                                                                                                                                      |
-| --------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Yield** (vaults / yield-tokenization) | Lido, EtherFi, Ethena, Convex, Idle, Yearn(_V3), Beefy, Pendle | Lido/EtherFi/Ethena/Convex/Idle: Ethereum (Idle also Arbitrum); Yearn: Ethereum + Arbitrum; Beefy: Ethereum, Arbitrum, Base, BSC, Avalanche (Polygon deliberately excluded — every Polygon vault was `status=eol` on the curated snapshot date); Pendle: Ethereum, Arbitrum |
-| **Restaking** (`SPOT_ASSET`-typed)      | EigenLayer, Symbiotic, Karak, Renzo, KelpDAO, Puffer           | EigenLayer/Symbiotic/KelpDAO/Puffer: Ethereum; Karak/Renzo: Ethereum + Arbitrum                                                                                                                                                                                             |
-| **Staking** (native LST, non-restaking) | RocketPool                                                     | Ethereum                                                                                                                                                                                                                                                                    |
+| Class                                   | Protocols                                                       | Chains                                                                                                                                                                                                                                                                      |
+| --------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Yield** (vaults / yield-tokenization) | Lido, EtherFi, Ethena, Convex, Idle, Yearn(\_V3), Beefy, Pendle | Lido/EtherFi/Ethena/Convex/Idle: Ethereum (Idle also Arbitrum); Yearn: Ethereum + Arbitrum; Beefy: Ethereum, Arbitrum, Base, BSC, Avalanche (Polygon deliberately excluded — every Polygon vault was `status=eol` on the curated snapshot date); Pendle: Ethereum, Arbitrum |
+| **Restaking** (`SPOT_ASSET`-typed)      | EigenLayer, Symbiotic, Karak, Renzo, KelpDAO, Puffer            | EigenLayer/Symbiotic/KelpDAO/Puffer: Ethereum; Karak/Renzo: Ethereum + Arbitrum                                                                                                                                                                                             |
+| **Staking** (native LST, non-restaking) | RocketPool                                                      | Ethereum                                                                                                                                                                                                                                                                    |
 
 All of these are **static curated adapters** (Alchemy SDK + direct on-chain calls), not subgraph-driven — unlike DEX
 pools and most lending protocols, there's no "top-N by TVL" query; each adapter has a fixed, hand-maintained token/vault
