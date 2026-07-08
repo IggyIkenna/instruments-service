@@ -198,10 +198,10 @@ raw_symbol=event_ticker`). **Why the populated values never survive into the pro
   canonical-id builder at all (see above).
 - **Newly confirmed this session** (resolves part of finding 8's open question): the ~50% "duplication rate"
   finding 8 flagged (1,243,069 unique of 2,486,092 rows) is mostly an artifact of this catalog file carrying **two
-  rows per real market** (one `trades`, one `market_lifecycle` — both data_types share the same `instrument_id`) —
+  rows per real market** (one `trades`, one `market_lifecycle` — both data*types share the same `instrument_id`) —
   not evidence of real cross-market or cross-venue id collision. The exact reconciliation: 1,242,992 real markets ×
   2 data_types = 2,485,984 rows, plus 108 `prediction_canonical_question_group` cluster rows (of which 31 labels are
-  shared across venues, so they contribute only 77 _additional_ unique ids) = 1,242,992 + 77 = **1,243,069 unique
+  shared across venues, so they contribute only 77 \_additional* unique ids) = 1,242,992 + 77 = **1,243,069 unique
   ids** — an exact match to the real `nunique()` count. So the "short readable label shared verbatim across venues"
   behavior finding 8 flagged as unconfirmed is the `canonical_question_group` cluster mechanism described above, not
   a separate phenomenon — but this still doesn't explain the NULL-field question above, which remains genuinely open.
