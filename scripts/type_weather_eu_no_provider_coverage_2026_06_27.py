@@ -19,6 +19,17 @@ source=open_meteo) as ``empty_confirmed(reason=EXPECTED_NO_PROVIDER_COVERAGE)``.
 The weather.py orchestrator also has a parallel fix to pass source="open_meteo"
 in all manifest calls so future runs use consistent source stamping.
 
+CORRECTNESS FIX (2026-07-08): the original mask had NO league-coverage check —
+it blanket-typed every blank-reason EU row for open_meteo/WEATHER regardless of
+whether the league is actually covered. On 2026-06-27 that happened to be safe
+because every matching row was for a non-covered league; re-running it unchanged
+today would have mistyped 264 rows for GENUINELY covered leagues (recent dates
+2026-06-30..2026-07-08, real pending-fetch, not a coverage gap) as
+EXPECTED_NO_PROVIDER_COVERAGE — a silent-placeholder violation. The mask now
+excludes rows whose ``league_id`` IS in the open_meteo expected set, so a
+covered-league gap always surfaces as genuine ``pending_fetch``, never silently
+retyped.
+
 CONSOLIDATOR-SAFE WRITE: writes ONLY the re-typed rows as a per-VM shard at
 ``_index/per_vm/{VM_NAME}.parquet``. The consolidator's last-write-wins merge
 picks the shard rows (fresher ``attempted_at``) over the canonical index rows →
@@ -45,6 +56,7 @@ from datetime import UTC, datetime
 
 import gcsfs
 import pandas as pd
+from unified_api_contracts import get_expected_leagues_for_source
 from unified_trading_library import resolve_bucket_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -55,17 +67,26 @@ _PER_VM_PATH_TEMPLATE = "_index/per_vm/{instance}.parquet"
 _NO_PROVIDER_COVERAGE_REASON = "EXPECTED_NO_PROVIDER_COVERAGE"
 
 
-def _build_mask(df: pd.DataFrame) -> pd.Series:
-    """True for WEATHER expected_unattempted rows with blank reason and source=open_meteo."""
+def _covered_leagues() -> frozenset[str]:
+    """Leagues open_meteo is expected to cover — never type these away as no-coverage."""
+    return frozenset(league.league_id for league in get_expected_leagues_for_source("open_meteo"))
+
+
+def _build_mask(df: pd.DataFrame, covered: frozenset[str]) -> pd.Series:
+    """True for WEATHER expected_unattempted rows with blank reason, source=open_meteo,
+    and league_id NOT in the open_meteo-covered set (a covered-league gap is a real
+    pending_fetch, never silently retyped as no-coverage)."""
     cs = df["capture_status"].astype("string").fillna("")
     dt = df["data_type"].astype("string").fillna("").str.upper()
     reason = df["error_reason"].astype("string").fillna("")
     source = df.get("source", pd.Series("", index=df.index)).astype("string").fillna("")
+    league = df["league_id"].astype("string").fillna("")
     return (
         (dt == "WEATHER")
         & (cs == "expected_unattempted")
         & (reason == "")
         & (source == "open_meteo")
+        & (~league.isin(covered))
     )
 
 
@@ -81,9 +102,7 @@ def main(argv: list[str] | None = None) -> int:
 
     instance = os.environ.get("VM_NAME", "")
     if args.apply and (os.environ.get("MANIFEST_PER_VM_SHARDS") != "true" or not instance):
-        logger.error(
-            "--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. Refusing."
-        )
+        logger.error("--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. Refusing.")
         return 1
 
     bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
@@ -99,7 +118,9 @@ def main(argv: list[str] | None = None) -> int:
     if "error_reason" not in df.columns:
         df["error_reason"] = pd.array([None] * len(df), dtype="string")
 
-    mask = _build_mask(df)
+    covered = _covered_leagues()
+    logger.info("open_meteo covered leagues (never typed away): %d", len(covered))
+    mask = _build_mask(df, covered)
     n = int(mask.sum())
     logger.info("WEATHER pending_fetch rows to type: %d", n)
 
