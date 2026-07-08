@@ -30,8 +30,8 @@ async def test_get_instruments_yields_vault_records() -> None:
     assert len(records) >= 1
     for rec in records:
         assert isinstance(rec, InstrumentRecord)
-        assert rec.venue == "YEARN-ETHEREUM"
-        assert rec.instrument_key.startswith("YEARN-ETHEREUM:VAULT:")
+        assert rec.venue == "YEARN_V3-ETHEREUM"
+        assert rec.instrument_key.startswith("YEARN_V3-ETHEREUM:YIELD_BEARING:")
         assert rec.instrument_type == InstrumentType.YIELD_BEARING
         assert rec.status == InstrumentStatus.ACTIVE
         assert rec.available_from_datetime == _EXPECTED_DEPLOY_DATE
@@ -40,7 +40,7 @@ async def test_get_instruments_yields_vault_records() -> None:
 @pytest.mark.asyncio
 async def test_get_instruments_filters_on_instrument_type() -> None:
     adapter = YearnReferenceDataAdapter()
-    assert await adapter.get_instruments(instrument_type="yield_bearing")
+    assert await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
     assert await adapter.get_instruments(instrument_type="perpetual") == []
 
 
@@ -50,7 +50,7 @@ async def test_get_instrument_lookup() -> None:
     by_addr = await adapter.get_instrument(_YVWETH_ADDRESS)
     by_symbol = await adapter.get_instrument("YVWETH-1")
     assert by_addr is not None and by_symbol is not None
-    assert by_addr.instrument_key == by_symbol.instrument_key == "YEARN-ETHEREUM:VAULT:YVWETH-1"
+    assert by_addr.instrument_key == by_symbol.instrument_key == "YEARN_V3-ETHEREUM:YIELD_BEARING:YVWETH-1"
     assert await adapter.get_instrument("NOPE") is None
 
 

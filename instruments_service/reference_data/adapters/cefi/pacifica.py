@@ -72,7 +72,18 @@ class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
             sym = f"{coin}-PERP"
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"PACIFICA-SOLANA:PERP:{sym}",
+                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE (2026-07-08
+                    # canonicalization — dropped the PERP shorthand + the fake
+                    # "-PERP" quote segment in favour of the real settlement currency.
+                    # Confirmed live via docs.pacifica.fi/trading-on-pacifica/
+                    # unified-margin 2026-07-08: "Pacifica users' account's USDC
+                    # balance, unrealized PnL, and spot holdings are margined
+                    # together" — perp PnL/margin is USDC-denominated for all
+                    # markets. SSOT:
+                    # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
+                    # finding 3+4;
+                    # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
+                    instrument_key=f"PACIFICA-SOLANA:PERPETUAL:{coin}-USDC",
                     venue=self.venue,
                     raw_symbol=sym,
                     instrument_type=InstrumentType.PERPETUAL,
