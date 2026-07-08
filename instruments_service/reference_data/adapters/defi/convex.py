@@ -82,7 +82,7 @@ class ConvexReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Convex yield tokens as yield-bearing instruments."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []

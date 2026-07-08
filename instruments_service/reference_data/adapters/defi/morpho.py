@@ -87,7 +87,7 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Morpho Blue lending markets as instruments."""
-        if instrument_type not in (None, "lending_market"):
+        if instrument_type not in (None, InstrumentType.LENDING):
             return []
 
         chain_id = _MORPHO_CHAIN_IDS.get(self._chain)
