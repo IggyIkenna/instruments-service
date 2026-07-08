@@ -31,7 +31,7 @@ async def test_get_instruments_yields_vault_records() -> None:
     for rec in records:
         assert isinstance(rec, InstrumentRecord)
         assert rec.venue == "IDLE-ETHEREUM"
-        assert rec.instrument_key.startswith("IDLE-ETHEREUM:VAULT:")
+        assert rec.instrument_key.startswith("IDLE-ETHEREUM:YIELD_BEARING:")
         assert rec.instrument_type == InstrumentType.YIELD_BEARING
         assert rec.status == InstrumentStatus.ACTIVE
         assert rec.available_from_datetime == _EXPECTED_DEPLOY_DATE
@@ -50,7 +50,7 @@ async def test_get_instrument_lookup() -> None:
     by_addr = await adapter.get_instrument(_IDLEDAI_ADDRESS)
     by_symbol = await adapter.get_instrument("IDLEDAI-BEST")
     assert by_addr is not None and by_symbol is not None
-    assert by_addr.instrument_key == by_symbol.instrument_key == "IDLE-ETHEREUM:VAULT:IDLEDAI-BEST"
+    assert by_addr.instrument_key == by_symbol.instrument_key == "IDLE-ETHEREUM:YIELD_BEARING:IDLEDAI-BEST"
     assert await adapter.get_instrument("NOPE") is None
 
 

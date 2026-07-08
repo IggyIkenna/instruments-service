@@ -33,7 +33,9 @@ async def test_get_instruments_yields_pufeth_record() -> None:
     assert rec.venue == "PUFFER-ETHEREUM"
     assert rec.instrument_key == "PUFFER-ETHEREUM:LST:PUFETH"
     assert rec.raw_symbol == _PUFETH_ADDRESS
-    assert rec.instrument_type == InstrumentType.YIELD_BEARING
+    # 2026-07-08: field fixed to match the `:LST:` key segment (key/field consistency
+    # fix, same class as PERP-vs-PERPETUAL — see lido.py's module docstring).
+    assert rec.instrument_type == InstrumentType.LST
     assert rec.base_asset == "ETH"
     assert rec.underlying == "ETH"
     assert rec.status == InstrumentStatus.ACTIVE

@@ -1,7 +1,9 @@
 """Puffer Finance reference data adapter — instrument discovery for the pufETH LRT.
 
 Discovers the Puffer Finance liquid restaking token (pufETH) on Ethereum.
-Token is returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Token is returned as InstrumentRecord with instrument_type="LST" (fixed
+2026-07-08 — key/field mismatch, same class as PERP-vs-PERPETUAL; see
+`lido.py`'s module docstring for the full rationale).
 
 References:
 - https://www.puffer.fi/
@@ -72,7 +74,7 @@ class PufferReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Puffer LRT tokens as yield-bearing instruments."""
-        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
+        if instrument_type not in (None, InstrumentType.LST, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -88,7 +90,7 @@ class PufferReferenceDataAdapter(BaseReferenceDataAdapter):
                     instrument_key=f"{venue_tag}:LST:{symbol}",
                     venue=venue_tag,
                     raw_symbol=address,
-                    instrument_type=InstrumentType.YIELD_BEARING,
+                    instrument_type=InstrumentType.LST,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000001"),
