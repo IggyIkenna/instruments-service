@@ -46,6 +46,9 @@ class TestBuildLegs:
         assert DeribitComboReferenceDataAdapter._build_legs("not_a_list") == []
 
     def test_signed_amount_maps_to_side_and_ratio(self) -> None:
+        """Leg instrument_key carries the full VENUE:TYPE:SYMBOL grammar (real Deribit
+        option leg names, verified against live get_combos, 2026-07-09) — the :TYPE:
+        segment (here OPTION) was the bug this todo fixes (previously missing entirely)."""
         from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
             DeribitComboReferenceDataAdapter,
         )
@@ -57,9 +60,10 @@ class TestBuildLegs:
             ]
         )
         assert len(legs) == 2
-        assert legs[0].instrument_key == "DERIBIT:BTC-19JUN26-69000-C"
+        assert legs[0].instrument_key == "DERIBIT:OPTION:BTC-19JUN26-69000-C"
         assert legs[0].side == "SELL"
         assert legs[0].ratio == 1
+        assert legs[1].instrument_key == "DERIBIT:OPTION:BTC-26JUN26-69000-C"
         assert legs[1].side == "BUY"
         assert legs[1].ratio == 2
 
@@ -77,7 +81,88 @@ class TestBuildLegs:
             ]
         )
         assert len(legs) == 1
-        assert legs[0].instrument_key == "DERIBIT:BTC-26JUN26-69000-C"
+        assert legs[0].instrument_key == "DERIBIT:OPTION:BTC-26JUN26-69000-C"
+
+    def test_perpetual_and_future_legs_classified(self) -> None:
+        """Real Deribit futures-spread (FS) combo legs — verified against live
+        get_combos (BTC-FS-10JUL26_9JUL26 → 2 dated-future legs; BTC-FS-10JUL26_PERP
+        → 1 perpetual + 1 dated-future leg), 2026-07-09."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        legs = DeribitComboReferenceDataAdapter._build_legs(
+            [
+                {"amount": -1, "instrument_name": "BTC-PERPETUAL"},
+                {"amount": 1, "instrument_name": "BTC-10JUL26"},
+            ]
+        )
+        assert len(legs) == 2
+        assert legs[0].instrument_key == "DERIBIT:PERPETUAL:BTC-PERPETUAL"
+        assert legs[0].side == "SELL"
+        assert legs[1].instrument_key == "DERIBIT:FUTURE:BTC-10JUL26"
+        assert legs[1].side == "BUY"
+
+    def test_unclassifiable_leg_shape_dropped(self) -> None:
+        """A leg name that matches none of the known real Deribit shapes (2-part
+        dated/PERPETUAL, 4-part option) is dropped, not raised — same
+        degrade-gracefully convention as a missing/empty instrument_name."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        legs = DeribitComboReferenceDataAdapter._build_legs(
+            [
+                {"amount": 1, "instrument_name": "BTC-WEIRD-SHAPE-EXTRA-PART"},  # 5 parts → drop
+                {"amount": 1, "instrument_name": "BTC"},  # 1 part → drop
+                {"amount": 1, "instrument_name": "BTC-10JUL26"},  # kept
+            ]
+        )
+        assert len(legs) == 1
+        assert legs[0].instrument_key == "DERIBIT:FUTURE:BTC-10JUL26"
+
+
+class TestClassifyDeribitLegInstrumentType:
+    """_classify_deribit_leg_instrument_type — real Deribit instrument_name shapes."""
+
+    def test_perpetual_suffix(self) -> None:
+        from unified_api_contracts.internal import InstrumentType
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            _classify_deribit_leg_instrument_type,
+        )
+
+        assert _classify_deribit_leg_instrument_type("BTC-PERPETUAL") == InstrumentType.PERPETUAL
+        assert _classify_deribit_leg_instrument_type("ETH-PERPETUAL") == InstrumentType.PERPETUAL
+
+    def test_dated_future_two_part(self) -> None:
+        from unified_api_contracts.internal import InstrumentType
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            _classify_deribit_leg_instrument_type,
+        )
+
+        assert _classify_deribit_leg_instrument_type("BTC-10JUL26") == InstrumentType.FUTURE
+        assert _classify_deribit_leg_instrument_type("ETH-25DEC26") == InstrumentType.FUTURE
+
+    def test_option_four_part(self) -> None:
+        from unified_api_contracts.internal import InstrumentType
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            _classify_deribit_leg_instrument_type,
+        )
+
+        assert _classify_deribit_leg_instrument_type("BTC-17JUL26-65000-C") == InstrumentType.OPTION
+        assert _classify_deribit_leg_instrument_type("ETH-11JUL26-1800-P") == InstrumentType.OPTION
+
+    def test_unknown_shape_returns_none(self) -> None:
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            _classify_deribit_leg_instrument_type,
+        )
+
+        assert _classify_deribit_leg_instrument_type("BTC") is None
+        assert _classify_deribit_leg_instrument_type("BTC-10JUL26-65000-X") is None  # not C/P
+        assert _classify_deribit_leg_instrument_type("BTC-A-B-C-D") is None  # 5 parts
 
 
 # ---------------------------------------------------------------------------
