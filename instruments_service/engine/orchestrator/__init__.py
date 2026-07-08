@@ -529,6 +529,9 @@ from instruments_service.engine.orchestrator.sports_fixtures import (
     _read_fixture_ids_from_gcs as _read_fixture_ids_from_gcs,
 )
 from instruments_service.engine.orchestrator.sports_fixtures import (
+    _read_per_league_entity_df as _read_per_league_entity_df,
+)
+from instruments_service.engine.orchestrator.sports_fixtures import (
     _resolve_sports_ref_blob as _resolve_sports_ref_blob,
 )
 from instruments_service.engine.orchestrator.sports_fixtures import (
@@ -628,13 +631,7 @@ from instruments_service.engine.orchestrator.venue_core import (
     reject_junk_instruments as reject_junk_instruments,
 )
 from instruments_service.engine.orchestrator.weather import (
-    _extract_fixture_venue_ids as _extract_fixture_venue_ids,
-)
-from instruments_service.engine.orchestrator.weather import (
     _fetch_weather_data as _fetch_weather_data,
-)
-from instruments_service.engine.orchestrator.weather import (
-    _load_venue_coordinates as _load_venue_coordinates,
 )
 from instruments_service.engine.orchestrator.writers import (
     _build_market_lifecycle_df as _build_market_lifecycle_df,
@@ -735,7 +732,6 @@ __all__ = [
     "_defi_universe_retryable",
     "_empty_lifecycle_columns",
     "_enforce_defi_monotonicity",
-    "_extract_fixture_venue_ids",
     "_extract_prediction_canonical_group",
     "_fetch_footystats_matches",
     "_fetch_footystats_predictions",
@@ -752,7 +748,6 @@ __all__ = [
     "_get_venue_epoch",
     "_is_in_canonical_write_universe",
     "_lifecycle_columns_from_af_response",
-    "_load_venue_coordinates",
     "_master_blob_path",
     "_maybe_emit_drift_anomaly",
     "_merge_with_existing_per_league_parquet",
@@ -761,6 +756,7 @@ __all__ = [
     "_pipeline_mode_for_sports_data_type",
     "_read_existing_per_league_fixture_ids",
     "_read_fixture_ids_from_gcs",
+    "_read_per_league_entity_df",
     "_read_sfi_league_mapping",
     "_read_transfermarkt_team_mapping",
     "_resolve_sports_ref_blob",

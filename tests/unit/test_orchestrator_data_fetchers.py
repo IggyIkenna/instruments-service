@@ -186,7 +186,9 @@ class TestFetchUnderstatXg:
         captured_leagues = {c.kwargs.get("league_id") for c in mock_mw.record_captured.call_args_list}
         assert "BUNDESLIGA" in captured_leagues, f"XG must CAPTURE the league; got captured={captured_leagues}"
         empty_leagues = {c.kwargs["row_key"].get("league_id") for c in mock_mw.record_empty.call_args_list}
-        assert "BUNDESLIGA" not in empty_leagues, f"captured league must not ALSO be recorded empty; empty={empty_leagues}"
+        assert "BUNDESLIGA" not in empty_leagues, (
+            f"captured league must not ALSO be recorded empty; empty={empty_leagues}"
+        )
 
     @pytest.mark.asyncio
     async def test_exception_records_failed_per_league(self) -> None:
@@ -633,6 +635,195 @@ class TestFetchWeatherData:
             result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET, api_key="test-key")
         mock_mw.record_captured_from_counts.assert_called()
         assert result.get("weather") == 1
+
+    @pytest.mark.asyncio
+    async def test_fixtures_read_finds_data_only_present_at_canonical_prefix(self) -> None:
+        """Regression (2026-07-08 stale-path fix).
+
+        Before the fix, ``_fetch_weather_data`` listed ONLY the legacy bare
+        ``entity=fixtures/`` prefix (no ``pipeline_mode=``) — real fixtures
+        data is written per-league under the canonical ``pipeline_mode=``
+        hive segment and was never found there, so real fixture-having dates
+        were silently treated as ``empty_confirmed``. This mock storage
+        returns fixture data ONLY when the requested prefix carries
+        ``pipeline_mode=batch_api_football/entity=fixtures`` — everything
+        else (the legacy bare prefix, the weather-existence checks) returns
+        empty — so a pass here proves the read genuinely consults the
+        canonical per-league location rather than relying on side_effect
+        call-order coincidence.
+        """
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_weather_match_window = AsyncMock(return_value={"temperature": 15.0})
+        mock_adapter_cls = MagicMock(return_value=mock_adapter)
+
+        fixture_df = pd.DataFrame({"venue_name": ["Anfield"], "league_id": ["EPL"]})
+        buf = io.BytesIO()
+        fixture_df.to_parquet(buf)
+        parquet_bytes = buf.getvalue()
+
+        canonical_blob = MagicMock()
+        canonical_blob.name = (
+            f"sports_reference/by_date/day={_DATE}/pipeline_mode=batch_api_football/"
+            "entity=fixtures/league=EPL/fixtures.parquet"
+        )
+
+        def list_blobs_side_effect(**kwargs: object) -> list[MagicMock]:
+            prefix = str(kwargs.get("prefix", ""))
+            if "pipeline_mode=batch_api_football/entity=fixtures" in prefix:
+                return [canonical_blob]
+            # Legacy bare fixtures prefix (the pre-fix stale path) and the
+            # weather existing-data checks all find nothing.
+            return []
+
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = list_blobs_side_effect
+        mock_storage.download_bytes.return_value = parquet_bytes
+
+        fake_coords = {"ANFIELD": SimpleNamespace(latitude=53.43, longitude=-2.96)}
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.open_meteo.OpenMeteoAdapter",
+                mock_adapter_cls,
+            ),
+            patch("unified_api_contracts.registry.sports_venue_coordinates.VENUE_COORDINATES", new=fake_coords),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET, api_key="test-key")
+
+        # Pre-fix, this would be {} with a spurious EXPECTED_NO_FIXTURE
+        # record_empty — the legacy-only probe never sees the canonical data.
+        mock_mw.record_captured_from_counts.assert_called()
+        mock_mw.record_empty.assert_not_called()
+        assert result.get("weather") == 1
+
+    @pytest.mark.asyncio
+    async def test_incremental_rerun_preserves_previously_captured_venue(self) -> None:
+        """Regression (2026-07-08 merge-bug fix).
+
+        Simulates an incremental re-run: ANFIELD's weather was already
+        captured (found via the canonical ``pipeline_mode=`` weather prefix),
+        and this run adds a new venue (OLD_TRAFFORD). Before the fix, the
+        "merge with existing" step re-derived a hardcoded LEGACY-ONLY weather
+        prefix (no ``pipeline_mode=``) instead of reusing the already-resolved
+        canonical prefix — real captured data (like ANFIELD's row here) was
+        never found there, so the per-league write silently dropped it,
+        writing ONLY the newly-fetched venue. This mock storage returns
+        weather data ONLY for the canonical prefix; a pass here proves the
+        merge step reuses that same canonical location and both venues
+        survive the write.
+        """
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_weather_match_window = AsyncMock(return_value={"temperature": 12.0})
+        mock_adapter_cls = MagicMock(return_value=mock_adapter)
+
+        fixture_df = pd.DataFrame({"venue_name": ["Anfield", "Old Trafford"], "league_id": ["EPL", "EPL"]})
+        fixtures_buf = io.BytesIO()
+        fixture_df.to_parquet(fixtures_buf)
+        fixtures_bytes = fixtures_buf.getvalue()
+
+        existing_weather_df = pd.DataFrame(
+            {"venue_id": ["ANFIELD"], "date": [_DATE], "latitude": [53.43], "longitude": [-2.96]}
+        )
+        weather_buf = io.BytesIO()
+        existing_weather_df.to_parquet(weather_buf)
+        weather_bytes = weather_buf.getvalue()
+
+        fixtures_blob = MagicMock()
+        fixtures_blob.name = (
+            f"sports_reference/by_date/day={_DATE}/pipeline_mode=batch_api_football/"
+            "entity=fixtures/league=EPL/fixtures.parquet"
+        )
+        weather_blob = MagicMock()
+        weather_blob.name = (
+            f"sports_reference/by_date/day={_DATE}/pipeline_mode=batch_open_meteo/entity=weather/weather.parquet"
+        )
+
+        def list_blobs_side_effect(**kwargs: object) -> list[MagicMock]:
+            prefix = str(kwargs.get("prefix", ""))
+            if "pipeline_mode=batch_api_football/entity=fixtures" in prefix:
+                return [fixtures_blob]
+            if "pipeline_mode=batch_open_meteo/entity=weather" in prefix:
+                # Real data lives ONLY at the canonical (pipeline_mode=) weather
+                # prefix — the legacy bare prefix (the pre-fix merge step's
+                # hardcoded, wrong location) has nothing.
+                return [weather_blob]
+            return []
+
+        def download_bytes_side_effect(**kwargs: object) -> bytes:
+            blob_path = str(kwargs.get("blob_path", ""))
+            if "entity=fixtures" in blob_path:
+                return fixtures_bytes
+            return weather_bytes
+
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = list_blobs_side_effect
+        mock_storage.download_bytes.side_effect = download_bytes_side_effect
+
+        fake_coords = {
+            "ANFIELD": SimpleNamespace(latitude=53.43, longitude=-2.96),
+            "OLD_TRAFFORD": SimpleNamespace(latitude=53.46, longitude=-2.29),
+        }
+
+        mock_sink = MagicMock()
+        mock_gated_write = MagicMock()
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.open_meteo.OpenMeteoAdapter",
+                mock_adapter_cls,
+            ),
+            patch("unified_api_contracts.registry.sports_venue_coordinates.VENUE_COORDINATES", new=fake_coords),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._gated_sink_write", mock_gated_write),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET, api_key="test-key")
+
+        # Only the NEW venue (OLD_TRAFFORD) triggers a fresh API call...
+        mock_adapter.get_weather_match_window.assert_called_once()
+        # ...but the WRITTEN data must carry BOTH venues — pre-fix, the merge
+        # step found zero existing blobs (wrong prefix) and this would be 1.
+        assert mock_gated_write.call_count == 1
+        written_df = mock_gated_write.call_args.kwargs["data"]
+        assert len(written_df) == 2, (
+            f"Expected merged write of 2 venues (ANFIELD preserved + OLD_TRAFFORD new), got {len(written_df)}"
+        )
+        assert set(written_df["venue_id"]) == {"ANFIELD", "OLD_TRAFFORD"}
+        assert result.get("weather") == 2
 
     @pytest.mark.asyncio
     async def test_fixture_parquet_no_venue_name_column(self) -> None:
