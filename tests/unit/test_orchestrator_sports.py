@@ -338,26 +338,36 @@ class TestProcessInstrumentsSportsProviderRouting:
 # ---------------------------------------------------------------------------
 
 
-def _ft_pred_stack(skip: bool = False, predictions: list | None = None) -> tuple:
+def _ft_pred_stack(
+    skip: bool = False,
+    predictions: list | None = None,
+    expected_league_ids: list[str] | None = None,
+) -> tuple:
     mock_adapter = MagicMock()
     mock_adapter.get_fixture_predictions = AsyncMock(return_value=predictions if predictions is not None else [])
     mock_mw = MagicMock()
     mock_mw_cls = MagicMock(return_value=mock_mw)
+    expected_leagues = [_make_league(lid) for lid in (expected_league_ids or ["EPL"])]
 
     patches = _stack(
         patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
         patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
         patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
-        patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_make_league("EPL")]),
+        patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=expected_leagues),
         patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=skip),
         patch("instruments_service.engine.orchestrator._gated_sink_write"),
         patch("instruments_service.engine.orchestrator.stamp_available_at_explicit", side_effect=lambda df, **kw: df),
         patch("instruments_service.engine.orchestrator._validate_predictions_null_rates", return_value=[]),
         patch("instruments_service.engine.orchestrator._canonical_league_id", side_effect=lambda lid: str(lid)),
+        patch("instruments_service.engine.orchestrator._is_in_canonical_write_universe", return_value=True),
         patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="footystats"),
         patch("unified_api_contracts.sports.build_fixture_id", return_value="EPL:ARSENAL_v_CHELSEA:2026-01-15"),
         patch("unified_api_contracts.sports.resolve_footystats_team", side_effect=lambda t: t.upper()),
         patch("instruments_service.engine.orchestrator.FOOTYSTATS_HISTORICAL_SEASON_IDS", {123: "EPL"}),
+        patch(
+            "instruments_service.engine.orchestrator._pipeline_mode_for_sports_data_type",
+            return_value="batch_footystats",
+        ),
     )
     return patches, mock_adapter, mock_mw
 
@@ -398,6 +408,56 @@ class TestFetchFootystatsPredictions:
         assert "footystats_predictions" in result
         assert result["footystats_predictions"] == 1
         mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cup_league_with_no_fixture_today_records_empty_expected_no_fixture(self) -> None:
+        """Fixture-calendar-awareness regression (footystats_matches_predictions_fetch_gaps-002).
+
+        A cup/continental competition (e.g. UECL) doesn't play every day. When
+        FootyStats returns predictions for EPL only (UECL has no fixture today),
+        UECL must resolve to a terminal record_empty(EXPECTED_NO_FIXTURE) row
+        instead of silently getting no manifest row at all (which left
+        pending_fetch un-typed forever pre-fix).
+        """
+        predictions = [
+            {
+                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "kickoff_utc": "2026-01-15T15:00:00Z",
+                "btts_potential": 0.6,
+            }
+        ]
+        stack, _, mock_mw = _ft_pred_stack(skip=False, predictions=predictions, expected_league_ids=["EPL", "UECL"])
+        with stack:
+            result = await _fetch_footystats_predictions(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert result["footystats_predictions"] == 1
+        # record_captured for EPL (has a fixture) + record_empty for UECL (no fixture today).
+        mock_mw.record_captured.assert_called_once()
+        mock_mw.record_empty.assert_called_once()
+        empty_call = mock_mw.record_empty.call_args
+        assert empty_call.kwargs["row_key"] == {
+            "date": _DATE,
+            "data_type": "PREDICTIONS",
+            "league_id": "UECL",
+        }
+        assert empty_call.kwargs["reason"].name == "EXPECTED_NO_FIXTURE"
+        mock_mw.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_all_leagues_off_today_records_empty_per_league(self) -> None:
+        """No predictions at all for the date — every expected league (incl. cup
+        competitions) gets its own record_empty(EXPECTED_NO_FIXTURE) row, not a
+        single date-aggregate row (mirrors the MATCHES per-league pattern)."""
+        stack, _, mock_mw = _ft_pred_stack(skip=False, predictions=[], expected_league_ids=["EPL", "UECL"])
+        with stack:
+            result = await _fetch_footystats_predictions(date=_DATE, api_key="key", bucket=_BUCKET)
+        assert result == {}
+        assert mock_mw.record_empty.call_count == 2
+        called_league_ids = {c.kwargs["row_key"]["league_id"] for c in mock_mw.record_empty.call_args_list}
+        assert called_league_ids == {"EPL", "UECL"}
+        for c in mock_mw.record_empty.call_args_list:
+            assert c.kwargs["reason"].name == "EXPECTED_NO_FIXTURE"
 
     @pytest.mark.asyncio
     async def test_happy_path_no_team_names_skips_canonical_id(self) -> None:
