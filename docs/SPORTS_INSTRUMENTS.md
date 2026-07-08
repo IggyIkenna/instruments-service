@@ -250,33 +250,49 @@ All paths are hive-partitioned, BigQuery-compatible. Timestamps coerced to micro
 ## Known gaps and open findings
 
 These are real, currently-open findings surfaced by the 2026-07-08 canonical-instrument-id audit — genuine
-data-completeness and format bugs, distinct from the by-design ID-scheme decision above.
+data-completeness and format bugs, distinct from the by-design ID-scheme decision above. Both items below were
+re-investigated in a 2026-07-08 follow-up session with real GCS reads (not just static code reading); the follow-up
+found the real picture is more nuanced than the audit's one-line summaries, and neither turned into a same-session
+code fix — see the linked plan/issue docs for why and for the concrete next steps.
 
-### The real reference catalog is bare (data-completeness gap, not a format issue)
+### The real reference catalog is bare — CONFIRMED genuinely bigger than a single bug, now scoped into a plan
 
-Per real `prod/catalog.parquet` reads (confirmed 2026-07-08): Sports' catalog is currently very thin relative to the
-pipeline described above —
+Per real `prod/catalog.parquet` reads (confirmed 2026-07-08, re-confirmed in the 2026-07-08 follow-up): `venue` is an
+empty string for all 116 real rows, one row's key is the literal sentinel `"UNKNOWN"`, and only league-level entities
+exist. The follow-up traced the real root cause by reading the actual builder code
+(`scripts/build_instrument_catalogue.py`): this is **not** a silently-broken write path — `asset_group == "sports"`
+dispatches to `build_sports_catalogue_from_manifest()`, which is a **documented, deliberate 2026-06-07 design
+decision** to scope the sports "could-exist" catalog to league grain only, because the captured manifest atom itself
+is per-`(league_id, data_type, date)` with no fixture/team/player grain (a fixture-grain catalogue would inflate
+`expected_unattempted` against a manifest that can never match it). The 11-step pipeline above genuinely does write
+fixture/team/player reference DATA to GCS — that part is real — it just never gets rolled into catalog/coverage rows.
+Fixture/team/player-grain catalog + coverage tracking for Sports was **never implemented**, not silently broken.
+Scoped into `unified-trading-pm/plans/active/sports_catalog_league_grain_only_scope_2026_07_08.md` (operator decision
+needed on whether fixture-grain coverage tracking is even wanted, plus the manifest-schema work it would require).
 
-- `venue` is an **empty string for all 116 real rows** in the catalog today.
-- One row's key is the literal sentinel string `"UNKNOWN"`.
-- **Only league-level entities exist** in the real catalog — there are no team-level, match/fixture-level, or
-  player-level `instrument_id`s in production today, despite the 11-step pipeline above being designed to carry
-  fixtures, teams, players, and referees all the way through.
+Pulling on the `"UNKNOWN"` sentinel row surfaced a separate, real, **currently-active** data-correctness bug: the
+underlying manifest (`_index/availability_index.parquet`) has **2,373 rows** with `league_id="UNKNOWN"` across all 17
+sports data_types, dated 2025-12-15 through **2026-07-08 (today)** — not a historical artifact, still recurring. Root
+cause not yet pinned to a specific write call site (the per-fixture-entity write path was checked and ruled out — it
+explicitly guards against bare unmapped-league writes). Filed as
+`unified-trading-pm/plans/active/issues/sports_manifest_unknown_league_id_2026_07_08.md`.
 
-This is a genuine, still-open data-completeness gap: the pipeline/adapters described in this doc are real and wired
-up, but the real catalog output doesn't yet reflect fixture-level (let alone team/player-level) granularity. It is
-not a symptom of the ID-format decision above — even a correctly-shaped `LEAGUE:MATCHUP:DATE` id would still be
-missing for anything below league level, because those rows simply aren't being written yet.
-
-### Betfair: real `/` delimiter bug in `instrument_key`
+### Betfair: real `/` delimiter in `instrument_key` — NOT a same-repo fix; real cross-repo dependency found
 
 Confirmed via `instruments-service/instruments_service/reference_data/adapters/sports/adapters/betfair.py:279`
-(`_build_runner_record`): Betfair's `instrument_key` is built as `f"{market_id}/{selection_id}"` — a raw
-`marketId/selectionId` pair joined with a forward slash, not the workspace's `:`-delimited convention used
-everywhere else (including Sports' own `LEAGUE:MATCHUP:DATE` scheme). This is confirmed genuinely sports-scoped (the
-adapter lives under `reference_data/adapters/sports/`, sets `venue="betfair"` and
-`instrument_type=InstrumentType.EXCHANGE_ODDS`) — this is the audit's "most degenerate raw-passthrough found" finding,
-and it lives in this doc's domain, not TradFi's.
+(`_build_runner_record`): Betfair's `instrument_key` is built as `f"{market_id}/{selection_id}"`, not the workspace's
+`:`-delimited `VENUE:TYPE:SYMBOL` convention used everywhere else. The audit that flagged this
+(`plans/audit/results/canonical_instrument_id_audit_2026_07_08.md`, "the most degenerate raw-passthrough found")
+only checked instruments-service. A 2026-07-08 follow-up checking real downstream consumers before changing it found
+the exact same `{market_id}/{selection_id}` `/`-shape independently built AND parsed in two sibling repos:
+strategy-service (`position_interface/adapters/betfair.py`, plus a real `rsplit("/", 1)` parser in
+`position/core/fill_event_consumer.py` that would silently mis-parse a colon-delimited id) and execution-service
+(`sports_execution/adapters/exchanges/betfair_order_mapping.py`, order placement + listing). A real GCS read of
+`prod/catalog.parquet` confirmed Betfair reference-data fetching is not wired into the production sports pipeline
+today (0 Betfair rows), so changing only instruments-service's delimiter would fix no live bug while creating a new
+3-way format mismatch with two repos this session could not edit. Left as-is; filed as
+`unified-trading-pm/plans/active/issues/betfair_instrument_id_delimiter_cross_repo_2026_07_08.md` pending a
+cross-repo decision (formalize `/` as Betfair's own convention, or a coordinated 3-repo migration to `:`).
 
 ### `canonical_id_builder.py` docstring inaccuracy
 
