@@ -115,6 +115,7 @@ async def _fetch_footystats_predictions(
                 reason=_ftp_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                source=_orch._sports_ref_source("footystats_predictions"),
             )
         return counts
 
@@ -133,6 +134,7 @@ async def _fetch_footystats_predictions(
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                source=_orch._sports_ref_source("footystats_predictions"),
             )
         return counts
 
@@ -472,6 +474,7 @@ async def _fetch_footystats_matches(
                 reason=_ftm_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                source=_orch._sports_ref_source("footystats_matches"),
             )
         return counts
 
@@ -490,6 +493,7 @@ async def _fetch_footystats_matches(
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                source=_orch._sports_ref_source("footystats_matches"),
             )
         return counts
 
