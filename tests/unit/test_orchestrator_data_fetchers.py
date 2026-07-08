@@ -186,7 +186,9 @@ class TestFetchUnderstatXg:
         captured_leagues = {c.kwargs.get("league_id") for c in mock_mw.record_captured.call_args_list}
         assert "BUNDESLIGA" in captured_leagues, f"XG must CAPTURE the league; got captured={captured_leagues}"
         empty_leagues = {c.kwargs["row_key"].get("league_id") for c in mock_mw.record_empty.call_args_list}
-        assert "BUNDESLIGA" not in empty_leagues, f"captured league must not ALSO be recorded empty; empty={empty_leagues}"
+        assert "BUNDESLIGA" not in empty_leagues, (
+            f"captured league must not ALSO be recorded empty; empty={empty_leagues}"
+        )
 
     @pytest.mark.asyncio
     async def test_exception_records_failed_per_league(self) -> None:
@@ -315,6 +317,7 @@ class TestFetchUnderstatXg:
         ):
             result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET)
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         assert isinstance(result, dict)
 
 
@@ -468,6 +471,7 @@ class TestRunUnderstatShotsDate:
         ):
             result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
@@ -693,6 +697,7 @@ class TestFetchWeatherData:
         ):
             result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET)
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         assert isinstance(result, dict)
 
 
@@ -1175,6 +1180,7 @@ class TestFetchFootystatsPredictions:
         ):
             result = await _fetch_footystats_predictions(date=_DATE, api_key="key", bucket=_BUCKET)
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
@@ -1232,6 +1238,7 @@ class TestFetchFootystatsMatches:
         ):
             result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
@@ -1297,6 +1304,7 @@ class TestOffSeasonSeasonWindowGuard:
             result = await _fetch_understat_xg(date="2026-06-15", bucket=_BUCKET)
         mock_adapter.get_fixtures.assert_not_called()
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
         assert "EXPECTED_POST_SEASON" in _reasons
         assert isinstance(result, dict)
@@ -1325,6 +1333,7 @@ class TestOffSeasonSeasonWindowGuard:
             result = await _run_understat_shots_date(date="2026-06-15", bucket=_BUCKET)
         mock_adapter.get_match_ids_for_date.assert_not_called()
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
         assert "EXPECTED_PRE_SEASON" in _reasons
         assert isinstance(result, dict)
@@ -1356,6 +1365,7 @@ class TestOffSeasonSeasonWindowGuard:
         mock_mw.record_captured.assert_not_called()
         mock_mw.record_empty.assert_not_called()
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
         assert "EXPECTED_POST_SEASON" in _reasons
         assert isinstance(result, dict)
@@ -1414,6 +1424,7 @@ class TestOffSeasonSeasonWindowGuard:
             result = await _fetch_footystats_predictions(date="2026-06-15", api_key="key", bucket=_BUCKET)
         mock_adapter.get_fixture_predictions.assert_not_called()
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
         assert "EXPECTED_PRE_SEASON" in _reasons
         assert isinstance(result, dict)
@@ -1442,6 +1453,7 @@ class TestOffSeasonSeasonWindowGuard:
             result = await _fetch_footystats_matches(date="2026-06-15", api_key="key", bucket=_BUCKET)
         mock_adapter.get_fixtures.assert_not_called()
         mock_mw.record_expected_empty.assert_called()
+        mock_mw.write.assert_called_once()
         _reasons = {c.kwargs.get("reason") for c in mock_mw.record_expected_empty.call_args_list}
         assert "EXPECTED_POST_SEASON" in _reasons
         assert isinstance(result, dict)

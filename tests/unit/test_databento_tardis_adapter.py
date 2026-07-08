@@ -984,7 +984,7 @@ def test_default_exchanges_cover_captured_cefi_venues() -> None:
     BITFINEX-SPOT (bitfinex) + BITGET (bitget). Their absence is the exact CF-14 gap."""
     from instruments_service.reference_data.adapters.cefi.tardis import _DEFAULT_EXCHANGES
 
-    for exch in ("kraken", "cryptofacilities", "bitfinex", "bitget", "lighter-zksync"):
+    for exch in ("kraken", "cryptofacilities", "bitfinex", "bitget", "lighter"):
         assert exch in _DEFAULT_EXCHANGES, f"captured-venue Tardis exchange {exch!r} missing from IS reference universe"
 
 
@@ -1089,9 +1089,7 @@ def test_create_fx_spot_records_contains_g10_majors() -> None:
     records = adapter._create_fx_spot_records()
     keys = {r.instrument_key for r in records}
     for expected_key in _FX_G10_INSTRUMENT_KEYS:
-        assert expected_key in keys, (
-            f"{expected_key} missing from _create_fx_spot_records — check UAC FX_SPOT_PAIRS"
-        )
+        assert expected_key in keys, f"{expected_key} missing from _create_fx_spot_records — check UAC FX_SPOT_PAIRS"
 
 
 def test_create_fx_spot_records_all_are_fx_venue_spot_pair() -> None:
@@ -1113,9 +1111,7 @@ def test_create_fx_spot_records_yahoo_ticker_ends_with_equals_x() -> None:
     adapter = DatabentoReferenceDataAdapter()
     records = adapter._create_fx_spot_records()
     for r in records:
-        assert r.raw_symbol.endswith("=X"), (
-            f"{r.instrument_key}: raw_symbol={r.raw_symbol!r} must end with '=X'"
-        )
+        assert r.raw_symbol.endswith("=X"), f"{r.instrument_key}: raw_symbol={r.raw_symbol!r} must end with '=X'"
 
 
 # ---------------------------------------------------------------------------

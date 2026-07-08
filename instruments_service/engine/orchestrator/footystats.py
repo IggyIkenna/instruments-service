@@ -116,6 +116,7 @@ async def _fetch_footystats_predictions(
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
             )
+        pred_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -134,6 +135,7 @@ async def _fetch_footystats_predictions(
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
             )
+        pred_manifest.write()
         return counts
 
     try:
@@ -439,6 +441,7 @@ async def _fetch_footystats_matches(
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
             )
+        _ft_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -457,6 +460,7 @@ async def _fetch_footystats_matches(
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
             )
+        _ft_manifest.write()
         return counts
 
     try:

@@ -107,6 +107,7 @@ async def _fetch_understat_xg(
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
             )
+        xg_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -125,6 +126,7 @@ async def _fetch_understat_xg(
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
             )
+        xg_manifest.write()
         return counts
 
     try:
@@ -416,6 +418,7 @@ async def _run_understat_shots_date(
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
             )
+        shots_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -434,6 +437,7 @@ async def _run_understat_shots_date(
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
             )
+        shots_manifest.write()
         return counts
 
     try:
