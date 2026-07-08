@@ -195,7 +195,16 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
         for raw_symbol, base_asset, quote_asset, tick_size, lot_size in eligible:
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"ASTER:PERP:{raw_symbol}",
+                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE (2026-07-08
+                    # canonicalization — dropped the PERP shorthand + the raw
+                    # concatenated exchange symbol in favour of the real per-instrument
+                    # settlement currency already parsed above (confirmed live:
+                    # 504/509 real ASTER perps quote USDT, spot-checked via
+                    # fapi.asterdex.com/fapi/v1/exchangeInfo 2026-07-08). SSOT:
+                    # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
+                    # finding 3+4;
+                    # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
+                    instrument_key=f"ASTER:PERPETUAL:{base_asset}-{quote_asset}",
                     venue="ASTER",
                     raw_symbol=raw_symbol,
                     instrument_type=InstrumentType.PERPETUAL,

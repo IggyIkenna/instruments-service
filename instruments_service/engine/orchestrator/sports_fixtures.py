@@ -18,6 +18,7 @@ split, and mutable caches remain package-level attributes.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,6 +32,7 @@ __all__ = [
     "_per_league_fixtures_data_unchanged",
     "_read_existing_per_league_fixture_ids",
     "_read_fixture_ids_from_gcs",
+    "_read_per_league_entity_df",
     "_resolve_sports_ref_blob",
     "_sports_ref_canonical_blob_path",
     "_sports_ref_legacy_blob_path",
@@ -145,31 +147,98 @@ def _resolve_sports_ref_blob(
     return legacy
 
 
+def _read_per_league_entity_df(
+    bucket: str,
+    date: str,
+    entity_name: str,
+    *,
+    max_results: int | None = 100,
+    inject_league_id: bool = False,
+) -> _orch.pd.DataFrame | None:
+    """Read + concatenate every per-league parquet for a sports_reference entity on a date.
+
+    Post-migration, entities like FIXTURES/FIXTURES_SCHEDULE/FIXTURES_OUTCOMES are
+    written per-league under a ``pipeline_mode=`` hive segment
+    (``.../entity={entity}/league={L}/{entity}.parquet``) — there is no bare
+    date-level file to probe with a single exact-blob check (see
+    ``_sports_dependency.py::_prefix_has_object``, which documents the same
+    per-league shape for the FIXTURES dependency pre-flight). This lists the
+    canonical ``pipeline_mode=`` prefix first (post-migration) and falls back to
+    the legacy prefix (pre-migration, no ``pipeline_mode=``) only when the
+    canonical prefix has zero objects — mirrors
+    ``footystats._load_scheduled_footystats_fixture_map``'s established
+    canonical-then-legacy prefix-listing pattern.
+
+    Args:
+        bucket: Sports instruments-store bucket.
+        date: Target shard date (YYYY-MM-DD).
+        entity_name: Sports-reference entity short-name (e.g. ``"fixtures"``).
+        max_results: Cap passed to each ``list_blobs`` call (``None`` = unbounded).
+        inject_league_id: When True, a frame missing a ``league_id`` column gets
+            one populated from its blob path's ``league={L}/`` hive segment (the
+            partition value, which may be a raw provider league id for
+            leagues outside the canonical set — callers that need a properly
+            UAC-canonical ``league_id`` should resolve it themselves, e.g. via
+            ``af_league_id`` + the prediction-league reverse mapping, rather
+            than relying on this injection).
+
+    Returns:
+        The concatenated DataFrame, or ``None`` if no ``.parquet`` blobs were
+        found under either prefix for the date.
+
+    Raises:
+        Exception: A GCS transport/read error propagates to the caller —
+            this helper does NOT swallow errors, so callers that must
+            distinguish "no data" from "read failed" (e.g. honest-coverage
+            manifest writers choosing between ``record_empty``/``record_failed``)
+            can catch it themselves rather than silently losing that signal.
+    """
+    pm = _orch._sports_ref_pm(entity_name)
+    canonical_prefix = f"sports_reference/by_date/day={date}/pipeline_mode={pm}/entity={entity_name}/"
+    legacy_prefix = f"sports_reference/by_date/day={date}/entity={entity_name}/"
+    storage_client = _orch.get_storage_client()
+    blobs = list(storage_client.list_blobs(bucket=bucket, prefix=canonical_prefix, max_results=max_results))
+    if not blobs:
+        blobs = list(storage_client.list_blobs(bucket=bucket, prefix=legacy_prefix, max_results=max_results))
+    parquet_blobs = [b for b in blobs if b.name.endswith(".parquet")]
+    if not parquet_blobs:
+        return None
+    frames: list[_orch.pd.DataFrame] = []
+    for blob_meta in parquet_blobs:
+        data = storage_client.download_bytes(bucket=bucket, blob_path=blob_meta.name)
+        frame = _orch.pd.read_parquet(_orch.io.BytesIO(data))
+        if inject_league_id and "league_id" not in frame.columns:
+            league_match = re.search(r"/league=([^/]+)/", blob_meta.name)
+            if league_match:
+                frame = frame.copy()
+                frame["league_id"] = league_match.group(1)
+        frames.append(frame)
+    return _orch.pd.concat(frames, ignore_index=True) if frames else None
+
+
 def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
     """Read completed fixture IDs from existing GCS fixtures parquet.
 
     Returns fixture IDs with status FT/AET/PEN. Falls back to empty list
-    if no fixtures parquet exists for the date (zero-fixture day).
+    if no fixtures parquets exist for the date (zero-fixture day).
+
+    FIXTURES are written per-league (see ``_read_per_league_entity_df``) —
+    prior to 2026-07-08 this probed a single bare ``entity=fixtures/fixtures.parquet``
+    blob that no writer has populated since the per-league migration, so this
+    always silently returned ``[]`` for any post-migration date.
     """
-    _canon_prefix = _orch._sports_ref_canonical_blob_path(date, "fixtures", filename="fixtures.parquet")
-    _legacy_prefix = _orch._sports_ref_legacy_blob_path(date, "fixtures", filename="fixtures.parquet")
     try:
-        storage_client = _orch.get_storage_client()
-        prefix = _orch._resolve_sports_ref_blob(storage_client, bucket, _canon_prefix, _legacy_prefix)
-        blob = storage_client.bucket(bucket).blob(prefix)
-        if not blob.exists():
-            _orch.logger.debug("No fixtures parquet at gs://%s/%s", bucket, prefix)
+        df = _orch._read_per_league_entity_df(bucket, date, "fixtures")
+        if df is None:
+            _orch.logger.debug("No fixtures parquets found for date=%s", date)
             return []
-        local = f"{_orch.tempfile.gettempdir()}/_fixture_ids_{date}.parquet"
-        blob.download_to_filename(local)
-        df = _orch.pd.read_parquet(local)
         completed = {"FT", "AET", "PEN"}
         if "status_short" in df.columns and "af_fixture_id" in df.columns:
             mask = df["status_short"].isin(completed)
             ids = df.loc[mask, "af_fixture_id"].dropna().astype(int).tolist()
             _orch.logger.info("GCS fixture lookup date=%s: %d completed fixture IDs", date, len(ids))
             return ids
-        _orch.logger.debug("Fixtures parquet missing expected columns for date=%s", date)
+        _orch.logger.debug("Fixtures parquets missing expected columns for date=%s", date)
         return []
     except Exception as exc:
         _orch.logger.debug("Failed to read fixtures from GCS for date=%s: %s", date, exc)
@@ -265,9 +334,7 @@ def _write_fixtures_per_league(
         if (
             skip_if_unchanged
             and bucket
-            and _orch._per_league_fixtures_data_unchanged(
-                bucket, date, "fixtures_schedule", _canonical_lid, _ldf_clean
-            )
+            and _orch._per_league_fixtures_data_unchanged(bucket, date, "fixtures_schedule", _canonical_lid, _ldf_clean)
         ):
             _orch.logger.debug(
                 "FIXTURES skip-if-unchanged: day=%s league=%s (source=%s) unchanged — skipping re-write",
@@ -518,9 +585,15 @@ def _merge_with_existing_per_league_parquet(
 def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]:
     """Build a mapping from AF fixture_id (str) to canonical league_id.
 
-    Reads the fixtures parquet from GCS (sports_reference/by_date/day={date}/entity=fixtures/)
-    which contains af_fixture_id and league_id columns. Returns an empty dict if the
-    fixtures file is missing or lacks the required columns.
+    Reads the per-league fixtures parquets from GCS (see
+    ``_read_per_league_entity_df``) which carry ``af_fixture_id`` and
+    (usually) ``af_league_id`` columns. Returns an empty dict if no fixtures
+    files are found or the required columns are missing.
+
+    Prior to 2026-07-08 this probed a single bare
+    ``entity=fixtures/fixtures.parquet`` blob that no writer has populated
+    since the per-league migration, so this always silently returned ``{}``
+    for any post-migration date.
     """
     # Build reverse mapping from UAC: af_league_id -> canonical league_id
     _af_league_to_canonical: dict[int, str] = {}
@@ -528,18 +601,11 @@ def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]
         if league_def.api_football_id is not None:
             _af_league_to_canonical[league_def.api_football_id] = league_def.league_id
 
-    _canon_pfx = _orch._sports_ref_canonical_blob_path(date, "fixtures", filename="fixtures.parquet")
-    _legacy_pfx = _orch._sports_ref_legacy_blob_path(date, "fixtures", filename="fixtures.parquet")
     try:
-        storage_client = _orch.get_storage_client()
-        prefix = _orch._resolve_sports_ref_blob(storage_client, bucket, _canon_pfx, _legacy_pfx)
-        blob = storage_client.bucket(bucket).blob(prefix)
-        if not blob.exists():
-            _orch.logger.debug("No fixtures parquet at gs://%s/%s for league mapping", bucket, prefix)
+        df = _orch._read_per_league_entity_df(bucket, date, "fixtures")
+        if df is None:
+            _orch.logger.debug("No fixtures parquets found for date=%s for league mapping", date)
             return {}
-        local = f"{_orch.tempfile.gettempdir()}/_fixture_league_map_{date}.parquet"
-        blob.download_to_filename(local)
-        df = _orch.pd.read_parquet(local)
         result: dict[str, str] = {}
         if "af_fixture_id" in df.columns:
             # Prefer league_id column if present

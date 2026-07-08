@@ -981,10 +981,13 @@ def test_default_exchanges_track_ssot_no_drift() -> None:
 def test_default_exchanges_cover_captured_cefi_venues() -> None:
     """The Tardis exchange ids behind the CeFi venues MTDS actually captures must be in
     the default universe — KRAKEN-SPOT (kraken) + KRAKEN-FUTURES (cryptofacilities) +
-    BITFINEX-SPOT (bitfinex) + BITGET (bitget). Their absence is the exact CF-14 gap."""
+    BITFINEX-SPOT (bitfinex) + BITGET (bitget) + LIGHTER-ZKSYNC (lighter). Their absence
+    is the exact CF-14 gap. "lighter" not "lighter-zksync": UAC's VenueMapping corrected
+    the slug to the real Tardis identifier (unified-api-contracts@f16c79e8) — "lighter-
+    zksync" is not a valid Tardis exchange slug."""
     from instruments_service.reference_data.adapters.cefi.tardis import _DEFAULT_EXCHANGES
 
-    for exch in ("kraken", "cryptofacilities", "bitfinex", "bitget", "lighter-zksync"):
+    for exch in ("kraken", "cryptofacilities", "bitfinex", "bitget", "lighter"):
         assert exch in _DEFAULT_EXCHANGES, f"captured-venue Tardis exchange {exch!r} missing from IS reference universe"
 
 
@@ -1089,9 +1092,7 @@ def test_create_fx_spot_records_contains_g10_majors() -> None:
     records = adapter._create_fx_spot_records()
     keys = {r.instrument_key for r in records}
     for expected_key in _FX_G10_INSTRUMENT_KEYS:
-        assert expected_key in keys, (
-            f"{expected_key} missing from _create_fx_spot_records — check UAC FX_SPOT_PAIRS"
-        )
+        assert expected_key in keys, f"{expected_key} missing from _create_fx_spot_records — check UAC FX_SPOT_PAIRS"
 
 
 def test_create_fx_spot_records_all_are_fx_venue_spot_pair() -> None:
@@ -1113,9 +1114,7 @@ def test_create_fx_spot_records_yahoo_ticker_ends_with_equals_x() -> None:
     adapter = DatabentoReferenceDataAdapter()
     records = adapter._create_fx_spot_records()
     for r in records:
-        assert r.raw_symbol.endswith("=X"), (
-            f"{r.instrument_key}: raw_symbol={r.raw_symbol!r} must end with '=X'"
-        )
+        assert r.raw_symbol.endswith("=X"), f"{r.instrument_key}: raw_symbol={r.raw_symbol!r} must end with '=X'"
 
 
 # ---------------------------------------------------------------------------

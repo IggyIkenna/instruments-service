@@ -12,9 +12,7 @@ from unified_api_contracts.internal import InstrumentRecord
 
 from instruments_service.engine.orchestrator import (
     _build_defi_venues,
-    _extract_fixture_venue_ids,
     _get_instruments_bucket,
-    _load_venue_coordinates,
     _validate_predictions_null_rates,
     _write_catalogue_record,
     _write_fixture_mapping,
@@ -77,9 +75,13 @@ class TestRejectJunkInstruments:
     def test_cjk_base_asset_is_rejected(self) -> None:
         """The 2026-06-24 audit junk (龙虾/币安人生/我踏马来了) is rejected by non-ASCII base."""
         records = [
-            _make_record(instrument_key="BITGET-FUTURES:PERPETUAL:龙虾-USDT", venue="BITGET-FUTURES", base_asset="龙虾"),
+            _make_record(
+                instrument_key="BITGET-FUTURES:PERPETUAL:龙虾-USDT", venue="BITGET-FUTURES", base_asset="龙虾"
+            ),
             _make_record(instrument_key="ASTER:PERP:我踏马来了USDT", venue="ASTER", base_asset="我踏马来了"),
-            _make_record(instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生"),
+            _make_record(
+                instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生"
+            ),
         ]
         kept = reject_junk_instruments(records)
         assert kept == []
@@ -101,9 +103,15 @@ class TestRejectJunkInstruments:
     def test_legitimate_instruments_pass_through(self) -> None:
         """Normal ASCII instruments (incl. Binance stocks AAPL/XAU) are kept."""
         records = [
-            _make_record(instrument_key="BINANCE-FUTURES:PERPETUAL:BTC-USDT", venue="BINANCE-FUTURES", base_asset="BTC"),
-            _make_record(instrument_key="BINANCE-FUTURES:PERPETUAL:AAPL-USDT", venue="BINANCE-FUTURES", base_asset="AAPL"),
-            _make_record(instrument_key="BINANCE-FUTURES:PERPETUAL:XAU-USDT", venue="BINANCE-FUTURES", base_asset="XAU"),
+            _make_record(
+                instrument_key="BINANCE-FUTURES:PERPETUAL:BTC-USDT", venue="BINANCE-FUTURES", base_asset="BTC"
+            ),
+            _make_record(
+                instrument_key="BINANCE-FUTURES:PERPETUAL:AAPL-USDT", venue="BINANCE-FUTURES", base_asset="AAPL"
+            ),
+            _make_record(
+                instrument_key="BINANCE-FUTURES:PERPETUAL:XAU-USDT", venue="BINANCE-FUTURES", base_asset="XAU"
+            ),
         ]
         kept = reject_junk_instruments(records)
         assert len(kept) == 3
@@ -111,7 +119,9 @@ class TestRejectJunkInstruments:
     def test_mixed_keeps_only_clean(self) -> None:
         """A mixed batch keeps the clean records and drops only the junk."""
         good = _make_record(instrument_key="BINANCE-SPOT:SPOT_PAIR:ETH-USDT", venue="BINANCE-SPOT", base_asset="ETH")
-        junk = _make_record(instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生")
+        junk = _make_record(
+            instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生"
+        )
         kept = reject_junk_instruments([good, junk])
         assert kept == [good]
 
@@ -327,9 +337,7 @@ class TestVenueProducerUACInvariant:
         is_sports = set(get_venues_for_asset_groups(["SPORTS"]))
         uac_sports = set(VENUES_BY_ASSET_GROUP["sports"])
         overlap = is_sports & uac_sports
-        assert not overlap, (
-            f"IS sports and UAC sports must be disjoint (two-registry model): overlap={overlap}"
-        )
+        assert not overlap, f"IS sports and UAC sports must be disjoint (two-registry model): overlap={overlap}"
 
 
 # ---------------------------------------------------------------------------
@@ -880,212 +888,6 @@ class TestValidatePredictionsNullRates:
         )
         violations = _validate_predictions_null_rates(df, "2026-01-15")
         assert violations == []
-
-
-# ---------------------------------------------------------------------------
-# _load_venue_coordinates
-# ---------------------------------------------------------------------------
-
-
-class TestLoadVenueCoordinates:
-    """Tests for _load_venue_coordinates (lines 7409-7441)."""
-
-    def test_blob_not_found_returns_empty(self) -> None:
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = False
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
-            result = _load_venue_coordinates("test-bucket")
-        assert result == {}
-
-    def test_parquet_missing_venue_id_column_returns_empty(self, tmp_path) -> None:
-        df = pd.DataFrame({"latitude": [53.43], "longitude": [-2.96]})
-        local_path = str(tmp_path / "venues.parquet")
-        df.to_parquet(local_path)
-
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert result == {}
-
-    def test_parquet_missing_lat_lon_columns_returns_empty(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue_id": ["v1"]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert result == {}
-
-    def test_valid_parquet_returns_coords(self, tmp_path) -> None:
-        df = pd.DataFrame(
-            {
-                "venue_id": ["v1", "v2"],
-                "latitude": [53.43, 51.5],
-                "longitude": [-2.96, -0.12],
-            }
-        )
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert "v1" in result
-        assert result["v1"] == (53.43, -2.96)
-        assert "v2" in result
-
-    def test_zero_coords_skipped(self, tmp_path) -> None:
-        df = pd.DataFrame(
-            {
-                "venue_id": ["v_zero"],
-                "latitude": [0.0],
-                "longitude": [0.0],
-            }
-        )
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert "v_zero" not in result
-
-    def test_gcs_exception_returns_empty(self) -> None:
-        with patch(
-            "instruments_service.engine.orchestrator.get_storage_client",
-            side_effect=RuntimeError("GCS down"),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# _extract_fixture_venue_ids
-# ---------------------------------------------------------------------------
-
-
-class TestExtractFixtureVenueIds:
-    """Tests for _extract_fixture_venue_ids (lines 7444-7479)."""
-
-    def test_no_blob_returns_empty(self) -> None:
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = False
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == []
-
-    def test_venue_dict_ids_extracted(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue": [{"venue_id": "V1"}, {"venue_id": "V2"}]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == ["V1", "V2"]
-
-    def test_venue_string_ids_extracted(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue": ["ANFIELD", "OLD_TRAFFORD"]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == ["ANFIELD", "OLD_TRAFFORD"]
-
-    def test_duplicate_venue_ids_deduplicated(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue": ["ANFIELD", "ANFIELD", "OLD_TRAFFORD"]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == ["ANFIELD", "OLD_TRAFFORD"]
-
-    def test_no_venue_column_returns_empty(self, tmp_path) -> None:
-        df = pd.DataFrame({"fixture_id": ["f1", "f2"]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == []
-
-    def test_gcs_exception_returns_empty(self) -> None:
-        with patch(
-            "instruments_service.engine.orchestrator.get_storage_client",
-            side_effect=RuntimeError("GCS down"),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == []
-
-    def test_venue_dict_without_venue_id_key_skipped(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue": [{"other_key": "xyz"}, {"venue_id": "V1"}]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == ["V1"]
 
 
 def test_split_by_instrument_type_single_type_one_group() -> None:

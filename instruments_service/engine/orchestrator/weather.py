@@ -26,90 +26,8 @@ else:  # pragma: no cover - runtime namespace indirection
     from instruments_service.engine.orchestrator._pkg_ref import orch_namespace as _orch
 
 __all__ = [
-    "_extract_fixture_venue_ids",
     "_fetch_weather_data",
-    "_load_venue_coordinates",
 ]
-
-
-def _load_venue_coordinates(bucket: str) -> dict[str, tuple[float, float]]:
-    """Load venue_id → (lat, lon) lookup from the global venues.parquet.
-
-    Returns an empty dict if the file does not exist or cannot be read.
-    The venues.parquet is written by ``_write_venues_from_teams`` at:
-        sports_reference/venues/venues.parquet
-    """
-    venues_path = "sports_reference/venues/venues.parquet"
-    try:
-        storage = _orch.get_storage_client()
-        blob = storage.bucket(bucket).blob(venues_path)
-        if not blob.exists():
-            _orch.logger.info("Weather: venues.parquet not found at gs://%s/%s", bucket, venues_path)
-            return {}
-        local = f"{_orch.tempfile.gettempdir()}/_weather_venues.parquet"
-        blob.download_to_filename(local)
-        venues_df = _orch.pd.read_parquet(local)
-        if "venue_id" not in venues_df.columns:
-            _orch.logger.warning("Weather: venues.parquet missing 'venue_id' column")
-            return {}
-        coords: dict[str, tuple[float, float]] = {}
-        has_lat = "latitude" in venues_df.columns
-        has_lon = "longitude" in venues_df.columns
-        if not has_lat or not has_lon:
-            _orch.logger.warning("Weather: venues.parquet missing latitude/longitude columns")
-            return {}
-        for _, row in venues_df.iterrows():
-            vid = str(row["venue_id"])
-            lat = row["latitude"]
-            lon = row["longitude"]
-            # pandas returns NaN for missing values, not None
-            if _orch.pd.notna(lat) and _orch.pd.notna(lon):
-                lat_f = float(lat)
-                lon_f = float(lon)
-                if lat_f != 0.0 and lon_f != 0.0:
-                    coords[vid] = (lat_f, lon_f)
-        return coords
-    except Exception as exc:
-        _orch.logger.debug("Weather: could not load venues.parquet: %s", exc)
-        return {}
-
-
-def _extract_fixture_venue_ids(bucket: str, date: str) -> list[str]:
-    """Extract venue_ids from the fixtures parquet for a given date.
-
-    Fixtures store the ``venue`` field as a dict with a ``venue_id`` key.
-    Returns deduplicated venue IDs for fixtures on the requested date.
-    """
-    prefix = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
-    try:
-        storage = _orch.get_storage_client()
-        blob = storage.bucket(bucket).blob(prefix)
-        if not blob.exists():
-            _orch.logger.debug("Weather: no fixtures parquet at gs://%s/%s", bucket, prefix)
-            return []
-        local = f"{_orch.tempfile.gettempdir()}/_weather_fixtures_{date}.parquet"
-        blob.download_to_filename(local)
-        df = _orch.pd.read_parquet(local)
-        venue_ids: list[str] = []
-        if "venue" in df.columns:
-            for venue_val in df["venue"].dropna():
-                if isinstance(venue_val, dict):
-                    vid = venue_val.get("venue_id")
-                    if vid:
-                        venue_ids.append(str(vid))
-                elif isinstance(venue_val, str):
-                    venue_ids.append(venue_val)
-        # Deduplicate while preserving order
-        seen: set[str] = set()
-        unique: list[str] = []
-        for vid in venue_ids:
-            if vid not in seen:
-                seen.add(vid)
-                unique.append(vid)
-        return unique
-    except Exception as exc:
-        _orch.logger.debug("Weather: could not read fixtures for date=%s: %s", date, exc)
-        return []
 
 
 async def _fetch_weather_data(
@@ -239,29 +157,26 @@ async def _fetch_weather_data(
     # UAC venue coordinates: SCREAMING_SNAKE keys → (lat, lon)
     from unified_api_contracts.registry import VENUE_COORDINATES
 
-    # 1. Read fixtures for this date — get venue_name + kickoff hour
+    # 1. Read fixtures for this date — get venue_name + kickoff hour.
+    #
+    # Bug fix (2026-07-08): this previously listed the LEGACY bare prefix
+    # (``entity=fixtures/`` with no ``pipeline_mode=`` segment), which real
+    # fixtures data has fully migrated away from — the real writer partitions
+    # per-league under a canonical ``pipeline_mode=`` hive segment
+    # (``entity=fixtures/league={L}/fixtures.parquet``). The stale bare-prefix
+    # probe always found zero blobs, so this function treated every date as
+    # having no fixtures and silently skipped real weather fetching
+    # (recording ``empty_confirmed`` when fixtures actually existed).
+    # ``_read_per_league_entity_df`` lists the canonical per-league prefix
+    # first, falling back to the legacy per-league prefix — the same
+    # canonical-then-legacy pattern already proven correct elsewhere in this
+    # package (``footystats._load_scheduled_footystats_fixture_map``,
+    # ``sports_dependency.py::_prefix_has_object``).
+    storage_client = _orch.get_storage_client()
     fixtures_df = None
     _fixtures_read_failed = False
     try:
-        fixtures_prefix = f"sports_reference/by_date/day={date}/entity=fixtures/"
-        storage_client = _orch.get_storage_client()
-        blobs = list(storage_client.list_blobs(bucket=bucket, prefix=fixtures_prefix, max_results=50))
-        parquet_blobs = [b for b in blobs if b.name.endswith(".parquet")]
-        if parquet_blobs:
-            frames = []
-            for blob_meta in parquet_blobs:
-                data = storage_client.download_bytes(bucket=bucket, blob_path=blob_meta.name)
-                _frame = _orch.pd.read_parquet(_orch.io.BytesIO(data))
-                # Hive-partition enrichment: per-league fixtures parquets encode
-                # league_id in the GCS path (league=X/) but may omit it from the
-                # data columns. Extract and inject so _venue_to_leagues can be built.
-                if "league_id" not in _frame.columns:
-                    _league_m = re.search(r"/league=([^/]+)/", blob_meta.name)
-                    if _league_m:
-                        _frame = _frame.copy()
-                        _frame["league_id"] = _league_m.group(1)
-                frames.append(_frame)
-            fixtures_df = _orch.pd.concat(frames, ignore_index=True) if frames else None
+        fixtures_df = _orch._read_per_league_entity_df(bucket, date, "fixtures", inject_league_id=True)
     except Exception as exc:
         _orch.logger.warning("Weather: could not read fixtures for date=%s: %s", date, exc)
         _fixtures_read_failed = True
@@ -342,6 +257,12 @@ async def _fetch_weather_data(
     # 3. Check existing weather data — only fetch venues not already covered.
     # Enables incremental runs: add more venue coords → re-run → only new venues fetched.
     existing_venue_ids: set[str] = set()
+    # Bound before the try (not just inside it) so the merge step further below
+    # can safely reuse the resolved location — it's only ever read there when
+    # ``existing_venue_ids`` is non-empty, which can only happen after this
+    # try block assigns a real value, but a static analyzer can't correlate
+    # that across the two blocks without an explicit default.
+    weather_prefix: str = f"sports_reference/by_date/day={date}/entity=weather/"
     try:
         # v9: probe canonical path (pipeline_mode= in prefix) first, then legacy.
         _w_pm = _orch._sports_ref_pm("weather")
@@ -494,13 +415,24 @@ async def _fetch_weather_data(
             new_df["available_at"] = _orch.pd.Timestamp(date, tz="UTC") + _orch.pd.Timedelta(hours=12)
 
         # Merge with existing weather data (append new venues to existing).
-        # Note: existing parquet may live at the bare or per-league path; we
-        # walk the prefix and concatenate everything we find — the per-league
-        # write loop below dedups by (venue_id, league_id) implicitly because
-        # group-by partitions are mutually exclusive on league_id.
+        # Note: existing parquet may live at the canonical or legacy per-date
+        # path; we walk the prefix and concatenate everything we find — the
+        # per-league write loop below dedups by (venue_id, league_id)
+        # implicitly because group-by partitions are mutually exclusive on
+        # league_id.
+        #
+        # Bug fix (2026-07-08): this previously re-derived a LEGACY-ONLY
+        # prefix (no ``pipeline_mode=``) instead of reusing ``weather_prefix``
+        # (already resolved canonical-then-legacy above, at the exact
+        # location ``existing_venue_ids`` was read from). The real writer
+        # (``_sports_ref_sink_for`` → canonical ``pipeline_mode=`` path) never
+        # populates the legacy-only prefix, so this merge always found zero
+        # blobs and silently wrote ONLY the newly-fetched venues — dropping
+        # previously-captured venues' weather data on any incremental re-run
+        # that added new venues for an already-partially-covered date (a real
+        # data-loss bug, not just a missed performance win).
         if existing_venue_ids:
             try:
-                weather_prefix = f"sports_reference/by_date/day={date}/entity=weather/"
                 for wb in storage_client.list_blobs(bucket=bucket, prefix=weather_prefix, max_results=20):
                     if wb.name.endswith(".parquet"):
                         wdata = storage_client.download_bytes(bucket=bucket, blob_path=wb.name)

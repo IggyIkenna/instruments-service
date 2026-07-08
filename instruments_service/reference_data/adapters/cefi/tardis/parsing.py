@@ -440,9 +440,12 @@ def _passes_asset_filter(base: str, quote: str, instrument_type: str, venue: str
     not coin-curation:
       1. accepted-quote gate — USDT/USDC/USD fleet-wide, PLUS the per-venue
          extensions from the UAC SSOT ``accepted_quotes_for_venue`` (KRW is
-         accepted ONLY for UPBIT — the kimchi-premium venue, operator 2026-06-23).
-         Drops exotic cross pairs (BASE/EUR, BASE/BTC) elsewhere; derivatives
-         carry no quote and pass.
+         accepted ONLY for UPBIT — the kimchi-premium venue, operator 2026-06-23;
+         BTC is accepted ONLY for BITFINEX-FUTURES — Bitfinex's real BTC-margined
+         inverse perps like ETHF0:BTCF0, bug fix 2026-07-08). Drops exotic cross
+         pairs (BASE/EUR, BASE/BTC) elsewhere; most derivatives carry no quote
+         and pass trivially (Bitfinex derivatives is the exception — it DOES
+         resolve a real quote, so it goes through the gate above).
       2. OPTIONS underlyings stay restricted to ``CEFI_OPTIONS_UNDERLYINGS``
          (BTC/ETH) — a Deribit-options-per-coin explosion is a genuine
          data-volume constraint (DERIBIT already ~213k historical rows), and the

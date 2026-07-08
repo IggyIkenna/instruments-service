@@ -153,7 +153,15 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
             lot = Decimal(10) ** -sz_decimals
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"HYPERLIQUID:PERP:{name}",
+                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE (2026-07-08
+                    # canonicalization — dropped the PERP shorthand, added the real
+                    # settlement currency; HYPERLIQUID quotes/settles in USD notionally
+                    # even though the vault collateral token is USDC, matching
+                    # ``quote_asset`` below). SSOT:
+                    # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
+                    # finding 3+4;
+                    # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
+                    instrument_key=f"HYPERLIQUID:PERPETUAL:{name}-USD",
                     venue=self.venue,
                     raw_symbol=name,
                     instrument_type=InstrumentType.PERPETUAL,

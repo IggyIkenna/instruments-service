@@ -136,7 +136,15 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
             base_asset = sym.split("-")[0].upper() if "-" in sym else sym.upper()
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"EXTENDED-STARKNET:PERP:{sym.upper()}",
+                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE (2026-07-08
+                    # canonicalization — dropped the PERP shorthand only; this venue
+                    # was already dash-normalized with a real settlement currency
+                    # (``sym`` is e.g. "BTC-USD", confirmed live:
+                    # collateralAssetName="USD" uniformly across markets). SSOT:
+                    # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
+                    # finding 3+4;
+                    # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
+                    instrument_key=f"EXTENDED-STARKNET:PERPETUAL:{sym.upper()}",
                     venue=self.venue,
                     raw_symbol=sym,
                     instrument_type=InstrumentType.PERPETUAL,

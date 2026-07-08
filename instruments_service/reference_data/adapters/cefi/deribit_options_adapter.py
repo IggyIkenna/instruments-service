@@ -22,6 +22,7 @@ import aiohttp
 from unified_api_contracts import UnsupportedCapabilityError, classify_venue_error
 from unified_api_contracts._instrument_enums import OptionType
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -92,8 +93,15 @@ def _parse_option(item: object) -> InstrumentRecord | None:
         expiry = datetime.fromtimestamp(int(item.get("expiration_timestamp", 0)) / 1000, tz=UTC)
     except (ValueError, OSError, OverflowError):
         return None
+    # `name` is Deribit's raw instrument_name, already encoding
+    # expiry/strike/right (e.g. "BTC-25DEC26-70000-C") — passthrough=True
+    # wraps it verbatim via the shared UAC builder instead of an ad hoc
+    # f-string, matching the Tardis batch-mode convention for the same
+    # instrument (canonical_id_builder.build_instrument_id, 2026-07-08
+    # one-builder-for-everything retrofit; behavior-preserving — identical
+    # output to the prior f"DERIBIT:OPTION:{name}").
     return InstrumentRecord(
-        instrument_key=f"DERIBIT:OPTION:{name}",
+        instrument_key=build_instrument_id("DERIBIT", InstrumentType.OPTION, name, passthrough=True),
         venue="DERIBIT",
         raw_symbol=name,
         instrument_type=InstrumentType.OPTION,
@@ -164,9 +172,7 @@ class DeribitOptionsReferenceDataAdapter(BaseReferenceDataAdapter):
                 return inst
         return None
 
-    async def get_options_chain(
-        self, underlying: str, expiry: datetime | None = None
-    ) -> CanonicalOptionsChain:
+    async def get_options_chain(self, underlying: str, expiry: datetime | None = None) -> CanonicalOptionsChain:
         """Build a CanonicalOptionsChain (strikes, calls, puts, mark IV) for one expiry.
 
         ``expiry=None`` → the nearest (soonest) expiry with active contracts.
@@ -232,9 +238,7 @@ class DeribitOptionsReferenceDataAdapter(BaseReferenceDataAdapter):
         await asyncio.gather(*[_one(leg) for leg in legs])
         return mark_iv, underlying_mark
 
-    async def get_expiry_calendar(
-        self, underlying: str, instrument_type: str = "OPTION"
-    ) -> CanonicalExpiryCalendar:
+    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "OPTION") -> CanonicalExpiryCalendar:
         """Return the distinct option expiries for an underlying."""
         async with self._make_session() as session:
             opts = await self._fetch_options_for_currency(session, underlying.upper())

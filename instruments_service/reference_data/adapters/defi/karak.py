@@ -1,7 +1,12 @@
 """Karak reference data adapter — instrument discovery for Karak restaking vaults.
 
 Discovers Karak restaking vaults on Ethereum and Arbitrum. Vaults are returned as
-InstrumentRecord with instrument_type="YIELD_BEARING".
+InstrumentRecord with instrument_type="YIELD_BEARING" (fixed 2026-07-08 — the
+`instrument_key`'s middle segment previously said the shorthand `VAULT`, which is
+not a real `InstrumentType` enum member (unlike `LST`, which is real and used by
+the LST-named adapters — see `lido.py`'s module docstring). No downstream
+consumer parses a `VAULT` key-substring for real classification, so the key was
+fixed to match the field instead of the reverse).
 
 Pure static-registry adapter: get_instruments returns a hardcoded curated list of
 primary Karak vaults with no network access. Tests are credential-free and offline.
@@ -99,7 +104,7 @@ class KarakReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Karak restaking vaults as yield-bearing instruments."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -114,7 +119,7 @@ class KarakReferenceDataAdapter(BaseReferenceDataAdapter):
 
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:VAULT:{symbol}",
+                    instrument_key=f"{venue_tag}:YIELD_BEARING:{symbol}",
                     venue=venue_tag,
                     raw_symbol=vault_address,
                     instrument_type=InstrumentType.YIELD_BEARING,

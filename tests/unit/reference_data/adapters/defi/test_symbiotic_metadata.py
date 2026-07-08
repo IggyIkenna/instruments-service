@@ -31,7 +31,7 @@ async def test_get_instruments_yields_vault_records() -> None:
     for rec in records:
         assert isinstance(rec, InstrumentRecord)
         assert rec.venue == "SYMBIOTIC-ETHEREUM"
-        assert rec.instrument_key.startswith("SYMBIOTIC-ETHEREUM:VAULT:")
+        assert rec.instrument_key.startswith("SYMBIOTIC-ETHEREUM:YIELD_BEARING:")
         assert rec.instrument_type == InstrumentType.YIELD_BEARING
         assert rec.base_asset == "ETH"
         assert rec.status == InstrumentStatus.ACTIVE
@@ -42,7 +42,7 @@ async def test_get_instruments_yields_vault_records() -> None:
 @pytest.mark.asyncio
 async def test_get_instruments_filters_on_instrument_type() -> None:
     adapter = SymbioticReferenceDataAdapter()
-    assert await adapter.get_instruments(instrument_type="yield_bearing")
+    assert await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
     assert await adapter.get_instruments(instrument_type="perpetual") == []
 
 
@@ -52,7 +52,7 @@ async def test_get_instrument_lookup() -> None:
     by_addr = await adapter.get_instrument(_WSTETH_VAULT)
     by_symbol = await adapter.get_instrument("SYMB-WSTETH")
     assert by_addr is not None and by_symbol is not None
-    assert by_addr.instrument_key == by_symbol.instrument_key == "SYMBIOTIC-ETHEREUM:VAULT:SYMB-WSTETH"
+    assert by_addr.instrument_key == by_symbol.instrument_key == "SYMBIOTIC-ETHEREUM:YIELD_BEARING:SYMB-WSTETH"
     assert await adapter.get_instrument("NOPE") is None
 
 
