@@ -106,6 +106,7 @@ async def _fetch_understat_xg(
                 reason=_us_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                source=_orch._sports_ref_source("understat_xg"),
             )
         return counts
 
@@ -124,6 +125,7 @@ async def _fetch_understat_xg(
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                source=_orch._sports_ref_source("understat_xg"),
             )
         return counts
 
@@ -251,6 +253,7 @@ async def _fetch_understat_xg(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                    source=_orch._sports_ref_source("understat_xg"),
                 )
             xg_manifest.write()
             _orch.logger.info("Understat xG: %d rows written for date=%s", len(df), date)
@@ -296,6 +299,7 @@ async def _fetch_understat_xg(
                         attempted_at=attempt_ts,
                         reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                        source=_orch._sports_ref_source("understat_xg"),
                     )
             else:
                 _orch.logger.info("Understat xG: no fixtures for date=%s", date)
@@ -307,6 +311,7 @@ async def _fetch_understat_xg(
                         attempted_at=attempt_ts,
                         reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                        source=_orch._sports_ref_source("understat_xg"),
                     )
             xg_manifest.write()
     except Exception as exc:
@@ -415,6 +420,7 @@ async def _run_understat_shots_date(
                 reason=_uss_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                source=_orch._sports_ref_source("understat_xg_shots"),
             )
         return counts
 
@@ -433,6 +439,7 @@ async def _run_understat_shots_date(
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                source=_orch._sports_ref_source("understat_xg_shots"),
             )
         return counts
 
@@ -543,6 +550,7 @@ async def _run_understat_shots_date(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                    source=_orch._sports_ref_source("understat_xg_shots"),
                 )
         shots_manifest.write()
         _orch.logger.info(

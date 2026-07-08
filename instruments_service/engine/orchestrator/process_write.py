@@ -424,9 +424,7 @@ def _write_tradfi_non_trading_day_entries(
     suppress regular parquet writes for them (see the per-venue loop in
     ``_write_all_venues``).
     """
-    tradfi_empty = {
-        v for v in (non_error_venues - set(counts.keys())) if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"
-    }
+    tradfi_empty = {v for v in (non_error_venues - set(counts.keys())) if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"}
     if not tradfi_empty:
         return set()
     target_dt = _orch.date_type.fromisoformat(date)
@@ -443,6 +441,10 @@ def _write_tradfi_non_trading_day_entries(
             reason=_reason,
             attempted_at=_nt_attempt_ts,
             pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            # C-#6 contract: an explicit BATCH source must equal
+            # source_string_for(pipeline_mode) — see
+            # plans/active/issues/manifest_record_expected_empty_blank_source_2026_07_08.md.
+            source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
         )
         counts[venue] = 0
     _orch.logger.info(
@@ -473,10 +475,7 @@ def _pre_stamp_non_trading_tradfi(
     Returns the set of non-trading tradfi venues that were stamped (callers suppress
     parquet writes for these venues to avoid writing look-back artefacts as captured).
     """
-    _attempted = {
-        v for v in (non_error_venues | {r.venue for r in records})
-        if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"
-    }
+    _attempted = {v for v in (non_error_venues | {r.venue for r in records}) if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"}
     target_dt = _orch.date_type.fromisoformat(date)
     non_trading: set[str] = {v for v in _attempted if _orch.is_non_trading_day(v, target_dt)}
     if not non_trading:
@@ -489,6 +488,7 @@ def _pre_stamp_non_trading_tradfi(
             reason=_nt_reason,
             attempted_at=_nt_attempt_ts,
             pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
         )
         counts[_ntv] = 0
     _orch.logger.info(
@@ -788,6 +788,7 @@ def _seed_expected_unattempted_for_target_universe(
                 reason=_pre_launch_reason,
                 attempted_at=_seed_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
             )
             _pre_launch_stamped += 1
             continue

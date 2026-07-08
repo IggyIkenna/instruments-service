@@ -129,10 +129,11 @@ async def _fetch_weather_data(
         _om_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _om_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
         for _exp_lid in sorted(_expected_weather_league_ids):
             manifest.record_expected_empty(
-                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid, "source": "open_meteo"},
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 reason=_om_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+                source="open_meteo",
             )
         return counts
 
@@ -147,10 +148,11 @@ async def _fetch_weather_data(
             if _status is None:
                 continue
             manifest.record_expected_empty(
-                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid, "source": "open_meteo"},
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+                source="open_meteo",
             )
         return counts
 
