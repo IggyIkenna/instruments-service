@@ -885,6 +885,15 @@ async def _fetch_footystats_odds(
                         date,
                     )
             counts["footystats_odds"] = len(df)
+            # Fixture-calendar completion tracking — leagues captured this date.
+            # Mirrors the MATCHES/PREDICTIONS pattern (root-caused 2026-07-08,
+            # footystats_matches_predictions_fetch_gaps-005/006): without this,
+            # an expected league with no fixture today (while OTHER leagues DO
+            # have fixtures, so odds_rows is non-empty) gets no manifest row at
+            # all — neither captured nor empty_confirmed — leaving it
+            # pending_fetch forever regardless of how many times a backfill
+            # VM re-runs.
+            _captured_leagues: set[str] = set()
 
             if "canonical_fixture_id" in df.columns:
                 df["_odds_league"] = df["canonical_fixture_id"].str.split(":").str[0]
@@ -894,6 +903,22 @@ async def _fetch_footystats_odds(
 
                 for _odds_lid, _odds_league_df in _with_league.groupby("_odds_league"):
                     _odds_lid_str = str(_odds_lid)
+                    _odds_league_canonical = _orch._canonical_league_id(_odds_lid_str)
+                    if not _orch._is_in_canonical_write_universe(_odds_league_canonical):
+                        continue
+                    if _odds_league_canonical not in set(_ft_expected):
+                        # Same out-of-subscription write-gate gap as MATCHES/PREDICTIONS
+                        # (root-caused 2026-07-08, instruments-service@1af6c92): don't let
+                        # incidental bulk-endpoint rows for a PRED_NO_FOOTYSTATS league
+                        # masquerade as `captured` ODDS coverage.
+                        _orch.logger.debug(
+                            "FootyStats odds: dropping out-of-subscription "
+                            "league=%s date=%s (not in footystats ODDS "
+                            "expected-leagues set)",
+                            _odds_league_canonical,
+                            date,
+                        )
+                        continue
                     _odds_clean = _odds_league_df.drop(columns=["_odds_league"])
                     _stamped_odds_clean = _orch.stamp_available_at_explicit(
                         _odds_clean, when=_orch.datetime.now(_orch.UTC)
@@ -914,13 +939,13 @@ async def _fetch_footystats_odds(
                         row_key={
                             "date": date,
                             "data_type": "ODDS",
-                            "league_id": _orch._canonical_league_id(_odds_lid_str),
+                            "league_id": _odds_league_canonical,
                         },
                         df=_stamped_odds_clean,
                         asset_group="sports",
                         instrument_type="",
                         data_type="ODDS",
-                        league_id=_orch._canonical_league_id(_odds_lid_str),
+                        league_id=_odds_league_canonical,
                         pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                         source=_orch._sports_ref_source("footystats_odds"),
                         service_emission_state=None,
@@ -930,6 +955,7 @@ async def _fetch_footystats_odds(
                         cluster_extractor=lambda sym: sym,
                         cluster_symbol_column="canonical_fixture_id",
                     )
+                    _captured_leagues.add(_odds_league_canonical)
 
                 if not _without_league.empty:
                     _odds_unmapped = _without_league.drop(columns=["_odds_league"])
@@ -964,6 +990,16 @@ async def _fetch_footystats_odds(
                         cluster_extractor=lambda sym: sym,
                         cluster_symbol_column="canonical_fixture_id",
                     )
+
+                # Honest-coverage per-league: record_empty for expected footystats
+                # leagues with no odds/fixture on this date (mirrors MATCHES/PREDICTIONS).
+                for _exp_lid in sorted(set(_ft_expected) - _captured_leagues):
+                    odds_manifest.record_empty(
+                        row_key={"date": date, "data_type": "ODDS", "league_id": _exp_lid},
+                        attempted_at=attempt_ts,
+                        reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                        pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+                    )
             else:
                 _stamped_odds_df = _orch.stamp_available_at_explicit(df, when=_orch.datetime.now(_orch.UTC))
                 _orch._gated_sink_write(
@@ -993,12 +1029,16 @@ async def _fetch_footystats_odds(
             _orch.logger.info("FootyStats odds: %d rows written for date=%s", len(df), date)
         else:
             _orch.logger.info("FootyStats odds: no odds data and no scheduled fixtures for date=%s", date)
-            odds_manifest.record_empty(
-                row_key=_row_key,
-                attempted_at=attempt_ts,
-                reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
-                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
-            )
+            # Honest-coverage: emit per-league record_empty for ALL expected
+            # leagues (mirrors the MATCHES/PREDICTIONS all-empty branch) rather
+            # than a single date-aggregate row with no league_id.
+            for _exp_lid in sorted(set(_ft_expected)):
+                odds_manifest.record_empty(
+                    row_key={"date": date, "data_type": "ODDS", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                    pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+                )
             odds_manifest.write()
     except Exception as exc:
         _orch.classify_and_emit_error(
