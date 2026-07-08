@@ -429,6 +429,56 @@ class TestFetchFootystatsPredictions:
         assert result == {}
         mock_mw.record_failed.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_out_of_subscription_league_dropped_not_captured(self) -> None:
+        """Same write-gate regression as MATCHES (2026-07-08): a
+        PRED_NO_FOOTYSTATS league (e.g. LIGA_MX) must not be written as
+        `captured` PREDICTIONS just because it canonicalizes fine and is
+        tracked under api_football.
+        """
+        predictions = [
+            {
+                "fixture_id": "307:CLUB_AMERICA_v_CRUZ_AZUL:2026-01-15",
+                "home_team": "Club America",
+                "away_team": "Cruz Azul",
+                "kickoff_utc": "2026-01-15T15:00:00Z",
+                "btts_potential": 0.6,
+            }
+        ]
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixture_predictions = AsyncMock(return_value=predictions)
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_sink_write = MagicMock()
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            # Only EPL is footystats-subscribed for PREDICTIONS here — LIGA_MX
+            # is deliberately absent (PRED_NO_FOOTYSTATS).
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_make_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._gated_sink_write", mock_sink_write),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit", side_effect=lambda df, **kw: df
+            ),
+            patch("instruments_service.engine.orchestrator._validate_predictions_null_rates", return_value=[]),
+            patch("instruments_service.engine.orchestrator._canonical_league_id", side_effect=lambda lid: str(lid)),
+            patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="footystats"),
+            patch(
+                "unified_api_contracts.sports.build_fixture_id",
+                return_value="LIGA_MX:CLUBAMERICA_v_CRUZAZUL:2026-01-15",
+            ),
+            patch("unified_api_contracts.sports.resolve_footystats_team", side_effect=lambda t: t.upper()),
+            patch("instruments_service.engine.orchestrator.FOOTYSTATS_HISTORICAL_SEASON_IDS", {307: "LIGA_MX"}),
+        ):
+            result = await _fetch_footystats_predictions(date=_DATE, api_key="key", bucket=_BUCKET)
+
+        assert isinstance(result, dict)
+        mock_mw.record_captured.assert_not_called()
+        mock_sink_write.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # _fetch_footystats_matches
@@ -516,6 +566,71 @@ class TestFetchFootystatsMatches:
             result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
         assert result == {}
         mock_mw.record_failed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_out_of_subscription_league_dropped_not_captured(self) -> None:
+        """Regression (2026-07-08 root cause): a league that canonicalizes fine
+        and is tracked under api_football (so it passes the generic
+        write-universe gate) but is NOT on the FootyStats subscription for
+        MATCHES (PRED_NO_FOOTYSTATS — e.g. CHILE_PRIMERA, K_LEAGUE_1, LIGA_MX,
+        ARGENTINA_PRIMERA) must be dropped, not written as `captured`. A prior
+        bug wrote these as captured, fooling the coverage-typing tooling's
+        "≥1 captured row = covered" heuristic and seeding a permanent
+        full-history pending_fetch gap for these leagues.
+        """
+        fixtures = [
+            {
+                "home_team_name": "Colo-Colo",
+                "away_team_name": "Universidad de Chile",
+                "fixture_id": "494:COLO_COLO_v_U_DE_CHILE:2026-01-15",
+                "status": "complete",
+                "home_goals": "1",
+                "away_goals": "1",
+            }
+        ]
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(return_value=fixtures)
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_sink_write = MagicMock()
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            # Only EPL is footystats-subscribed for MATCHES in this scenario —
+            # CHILE_PRIMERA is deliberately absent (PRED_NO_FOOTYSTATS).
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_make_league("EPL")]),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator._gated_sink_write", mock_sink_write),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit", side_effect=lambda df, **kw: df
+            ),
+            # Identity passthrough — CHILE_PRIMERA is a REAL api_football-tracked
+            # league (unmocked _is_in_canonical_write_universe), so it passes
+            # the generic write-universe gate and only the new subscription
+            # check should stop it.
+            patch("instruments_service.engine.orchestrator._canonical_league_id", side_effect=lambda lid: str(lid)),
+            patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="footystats"),
+            patch(
+                "unified_api_contracts.sports.build_fixture_id",
+                return_value="CHILE_PRIMERA:COLOCOLO_v_UDECHILE:2026-01-15",
+            ),
+            patch("unified_api_contracts.sports.resolve_footystats_team", side_effect=lambda t: t.upper()),
+            patch("instruments_service.engine.orchestrator.FOOTYSTATS_HISTORICAL_SEASON_IDS", {494: "CHILE_PRIMERA"}),
+        ):
+            result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
+
+        assert isinstance(result, dict)
+        # No captured row for the out-of-subscription league.
+        mock_mw.record_captured.assert_not_called()
+        # No GCS write for the dropped league either.
+        mock_sink_write.assert_not_called()
+        # EPL (the only footystats-expected league) is correctly typed
+        # expected-but-not-captured for this date.
+        mock_mw.record_empty.assert_called_once()
+        _, empty_kwargs = mock_mw.record_empty.call_args
+        assert empty_kwargs["row_key"]["league_id"] == "EPL"
 
 
 # ---------------------------------------------------------------------------
