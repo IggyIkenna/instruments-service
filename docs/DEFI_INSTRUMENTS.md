@@ -93,51 +93,95 @@ not a new architectural decision. Fixing is staged per-protocol, not a single PR
 ofc"). MARGINFI/SOLEND (Solana lending, out of this doc's scope) have no instruments-service adapter at all yet — a
 separate gap from the split question.
 
-### On-chain-perp DEXes — PERP-vs-PERPETUAL key/field mismatch + base-quote inconsistency (findings 3+4)
+### On-chain-perp DEXes — PERP-vs-PERPETUAL key/field mismatch + base-quote inconsistency (findings 3+4) — FIXED 2026-07-08
 
 All 5 on-chain-perp adapters live under `reference_data/adapters/cefi/` (not `defi/`) organizationally, despite being
-economically on-chain perpetual DEXes — a real filing quirk worth knowing when hunting for the code. Real current key
-construction, all confirmed correctly stamping `instrument_type=InstrumentType.PERPETUAL` in the field while using the
-`PERP` shorthand in the key — the mismatch is between key and field, not a field-level bug:
+economically on-chain perpetual DEXes — a real filing quirk worth knowing when hunting for the code. All 5 previously
+stamped `instrument_type=InstrumentType.PERPETUAL` correctly in the field while using the `PERP` shorthand (and an
+inconsistent base-quote shape) in the key — the mismatch was between key and field, not a field-level bug.
 
-| Venue               | Current key (file:line)                                       | Base-quote shape today                                                                                    |
-| ------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `HYPERLIQUID`       | `f"HYPERLIQUID:PERP:{name}"` (`hyperliquid.py:156`)           | Bare symbol, no quote segment (e.g. `HYPERLIQUID:PERP:BTC`)                                               |
-| `ASTER`             | `f"ASTER:PERP:{raw_symbol}"` (`aster.py:198`)                 | Raw concatenated exchange symbol, no dash (e.g. `ASTER:PERP:BTCUSDT`)                                     |
-| `PACIFICA-SOLANA`   | `f"PACIFICA-SOLANA:PERP:{sym}"` (`pacifica.py:75`)            | Quote segment is literally the string `PERP` (e.g. `SOL-PERP`), not a currency                            |
-| `EXTENDED-STARKNET` | `f"EXTENDED-STARKNET:PERP:{sym.upper()}"` (`extended.py:139`) | Already dash-normalized with a real currency (e.g. `ETH-USD`) — the one venue that's already correct here |
-| `LIGHTER-ZKSYNC`    | `f"LIGHTER-ZKSYNC:PERP:{sym}"` (`lighter.py:111`)             | Bare symbol, no quote segment                                                                             |
+**Shipped**: `VENUE:PERPETUAL:BASE-QUOTE` uniformly, dropping the `PERP` shorthand, with the REAL per-venue settlement
+currency (confirmed live 2026-07-08 — method noted per row; HYPERLIQUID/EXTENDED-STARKNET were already confirmed USD
+in an earlier session pass):
+
+| Venue               | Real settlement currency + verification                                                                                                                                    | Before → after (`instrument_key`)                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `HYPERLIQUID`       | USD (notional quote; vault collateral is USDC — pre-confirmed)                                                                                                             | `HYPERLIQUID:PERP:BTC` → `HYPERLIQUID:PERPETUAL:BTC-USD`                                 |
+| `ASTER`             | Real per-symbol `quoteAsset`, confirmed live `fapi.asterdex.com/fapi/v1/exchangeInfo`: 504/509 real perps quote USDT, 3 quote USD1, 2 quote a bare "U" — no longer assumed | `ASTER:PERP:BTCUSDT` → `ASTER:PERPETUAL:BTC-USDT` (per-symbol real quote, not hardcoded) |
+| `PACIFICA-SOLANA`   | USDC, confirmed live `docs.pacifica.fi/trading-on-pacifica/unified-margin`: "Pacifica users' account's USDC balance, unrealized PnL... are margined together"              | `PACIFICA-SOLANA:PERP:SOL-PERP` → `PACIFICA-SOLANA:PERPETUAL:SOL-USDC`                   |
+| `EXTENDED-STARKNET` | USD (pre-confirmed live: `collateralAssetName="USD"` uniformly across markets) — already dash-normalized pre-fix, only the `PERP`→`PERPETUAL` rename applied               | `EXTENDED-STARKNET:PERP:ETH-USD` → `EXTENDED-STARKNET:PERPETUAL:ETH-USD`                 |
+| `LIGHTER-ZKSYNC`    | USDC, confirmed live `docs.lighter.xyz/trading/multi-asset-margin`: "Portfolio Balance is the USDC value of the account including unrealized PnL on perpetual positions"   | `LIGHTER-ZKSYNC:PERP:BTC` → `LIGHTER-ZKSYNC:PERPETUAL:BTC-USDC`                          |
 
 Note the venue-naming asymmetry too: `HYPERLIQUID`/`ASTER` carry no chain suffix (each is effectively its own
 app-chain — `chain="HYPERLIQUID"` lives in the instrument's `chain` attribute, not the venue token), while
 `PACIFICA-SOLANA`/`EXTENDED-STARKNET`/`LIGHTER-ZKSYNC` carry an explicit chain suffix in the venue itself. Both are
 real, intentional, just asymmetric — not itself part of the PERP/PERPETUAL finding.
 
-**Target (operator-decided)**: `VENUE:PERPETUAL:BASE-QUOTE` uniformly, dropping the `PERP` shorthand, with a real
-settlement currency for all 5 (e.g. `ASTER:PERPETUAL:BTC-USDT`, `HYPERLIQUID:PERPETUAL:BTC-USD`,
-`PACIFICA-SOLANA:PERPETUAL:SOL-USDC`, `LIGHTER-ZKSYNC:PERPETUAL:BTC-USDC` — illustrative, exact per-venue settlement
-currency still needs a live API confirmation per the canonicalization doc's open todo before this becomes an
-implementation target). No trailing `@VENUE` on top (operator explicitly rejected that — venue is already the first
-colon-segment).
+**No trailing `@VENUE`** on top (operator explicitly rejected that pattern — venue is already the first colon-segment).
+Live connectors (MTDS `hyperliquid_ws.py`/`hyperliquid_l2book_ws.py`/`hyperliquid_ticker_ws.py`/`aster_book_liq_ws.py`)
 
-### AAVE_V3-OPTIMISM misspelled venue-token duplicate (finding 5)
+- the onchain-perp batch handler's catalogue-driven symbol enumeration were updated in the same pass to keep live=batch
+  consistent — see `market-tick-data-service@<PENDING-SHA>`. Historical batch tick-data GCS objects + the availability
+  manifest were NOT yet migrated in this pass (real, non-trivial volume — a dry-run-scoped migration script + follow-up
+  apply is tracked as its own todo, not silently skipped); see
+  [`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`](../../../unified-trading-pm/plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md).
+  Shipped: `instruments-service@<PENDING-SHA>` (the 5 adapters above), `unified-api-contracts@58a03793` (ASTER's UAC
+  normalize.py, same fix for the live/WS-tick normalization path).
 
-`AAVEV3-OPTIMISM` (missing underscore, 4 real rows) coexists with the correctly-spelled `AAVE_V3-OPTIMISM` (12 real
-rows) in production, fragmenting the real per-chain reserve set into 2 disjoint keys. **Target**: consolidate all rows
-under `AAVE_V3-OPTIMISM` only; the misspelled variant is retired, not migrated (it's a typo, not a distinct entity).
-The registry layer already tracks a related but distinct problem — `AAVEV3` (no chain suffix, no underscore) is listed
-in `DEPRECATED_DEFI_GHOST_VENUE_NAMES` (`unified_api_contracts/registry/capability_declarations/_defi_coverage.py`) as
-an already-known ghost superseded by `AAVE_V3`. The `AAVEV3-OPTIMISM` chain-suffixed variant this finding describes is
-a live production artifact, not yet added to that deprecated-names list.
+### AAVE_V3-OPTIMISM misspelled venue-token duplicate (finding 5) — FIXED 2026-07-08
 
-### MORPHO market-address disambiguator uses a reserved delimiter (finding 6)
+`AAVEV3-OPTIMISM` (missing underscore, 4 real rows) coexisted with the correctly-spelled `AAVE_V3-OPTIMISM` (12 real
+rows) in production, fragmenting the real per-chain reserve set into 2 disjoint keys. Root-cause check: the CURRENT
+`aave_v3.py` adapter code already builds the correct spelling (`venue_tag = f"{self._venue_prefix}-{self._chain}"` →
+`AAVE_V3-OPTIMISM`, since the underscore in `AAVE_V3` is part of the protocol name, not a joiner) — confirmed no
+caller anywhere passes a misspelled `protocol_slug`. The 4 ghost rows (`AAAVE`/`ALINK`/`ALUSD`/`ASUSD` reserves, since
+retired from the curated static-reserve list) were pure historical drift: a prior `collapse_defi_drift_to_canonical_
+2026_06_25.py` pass had already normalised the `venue`/`chain` COLUMNS (all 16 rows show `venue=AAVE_V3
+chain=OPTIMISM`) but never touched the `instrument_id` STRING column itself, leaving the ghost prefix baked into 4
+`instrument_id` values even though the row's own `venue` column was already correct.
+**Fixed**: consolidated all 16 rows under `AAVE_V3-OPTIMISM:` — no adapter-code change needed (already correct
+go-forward); `instruments-service/scripts/instrument_id_venue_spelling_backfill_2026_07_08.py` relabelled the 4
+stale `instrument_id` strings in place directly on `gs://instruments-store-defi-prd-central-element-323112/
+prod/catalog.parquet` (backup: `prod/catalog.20260708-184138.venuefix.bak.parquet`), re-deriving the corrected key
+from the row's own already-correct `venue`/`chain` columns — no re-download from Aave. Verified post-write: 0 rows
+matching the `AAVEV3-OPTIMISM:` prefix, 16 rows under `AAVE_V3-OPTIMISM:`, total row count unchanged (7,284), no new
+duplicate `instrument_id` introduced. The registry layer separately tracks a related-but-distinct problem — bare
+`AAVEV3` (no chain suffix) is listed in `DEPRECATED_DEFI_GHOST_VENUE_NAMES`
+(`unified_api_contracts/registry/capability_declarations/_defi_coverage.py`) as an already-known ghost superseded by
+`AAVE_V3` — already confirmed sufficient for the one live prefix-matching consumer
+(`deployment-api/deployment_api/services/data_status/rollup_cache.py::strip_defi_ghost_venues`, which strips on
+`venue.split("-", 1)[0]`, so `AAVEV3-OPTIMISM` was already filtered there even before this fix); no separate registry
+change was needed for that consumer.
 
-Confirmed in real code, not just captured data: `morpho.py:191` builds
+### MORPHO market-address disambiguator uses a reserved delimiter (finding 6) — FIXED 2026-07-08
+
+Confirmed in real code, not just captured data: `morpho.py:191` built
 `instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}:{market_key[:8]}"` — a 3rd colon inside the symbol segment,
 ambiguous to any naive `split(":")` parser since colon is the reserved top-level `VENUE:TYPE:SYMBOL` delimiter.
-**Target**: dash-separate instead — `MORPHO-{CHAIN}:LENDING_MARKET:{collateral}-{loan}-{market_key[:8]}` (and, once
-the A_TOKEN/DEBT_TOKEN split above lands, this becomes two records with the same dash-separated disambiguator suffix
-per market).
+**Fixed**: `morpho.py` now dash-separates instead —
+`instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}-{market_key[:8]}"` (e.g.
+`MORPHO-BASE:LENDING_MARKET:USDC-EURC-0x305dd1`). All 466 real captured Morpho rows in production (100% of the
+venue's catalog, spanning Ethereum + Base) carried the old 3-colon shape — relabelled in place by the same
+`instrument_id_venue_spelling_backfill_2026_07_08.py` script (last colon → dash), verified zero collisions (dash-join
+produces no duplicate `instrument_id` across the 466 rows) and zero remaining 3-colon Morpho rows post-write.
+
+### YEARN vs YEARN_V3 canonical venue-prefix contradiction — FIXED 2026-07-08
+
+Real registry contradiction found writing this doc (see "Systemic venue-token duplicate-spelling pattern" below for
+the full evidence + decision rationale): `yearn.py`'s adapter code hardcoded `venue_tag = f"YEARN-{self._chain}"`
+(bare `YEARN`), which matched only `VENUE_TO_ADAPTER_KEY`'s 2 stale entries — every other UAC registry
+(`defi_venue_capabilities.py`, `venue_launch_dates.py`, `defi_venues.py`, `PROTOCOL_CAPABILITIES`, `chain_env.py`,
+`DEPRECATED_DEFI_GHOST_VENUE_NAMES`) already treated `YEARN_V3` as canonical. **Fixed**: `yearn.py` now builds
+`venue_tag = f"YEARN_V3-{self._chain}"`; `VENUE_TO_ADAPTER_KEY` (`venue_adapter_keys.py`) relabelled
+`YEARN-ETHEREUM`/`YEARN-ARBITRUM` → `YEARN_V3-ETHEREUM`/`YEARN_V3-ARBITRUM`. No production-catalog backfill was
+needed — 0 real Yearn rows exist in `prod/catalog.parquet` today (confirmed directly), so this is a pure go-forward
+fix, not a data migration. **Known follow-up, out of this fix's repo scope**: `market-tick-data-service`'s
+`vault_yearn_adapter.py:37` and `execution-service`'s `defi_execution/protocols/yearn.py:50` +
+`defi_execution/protocols/base.py:100` still hardcode the now-superseded bare `"YEARN-ETHEREUM"` — per the
+canonicalization doc's explicitly-authorized staged migration order (UAC → instruments-service → MTDS →
+strategy-service → deployment, "live breakage explicitly authorized"), those 2 repos need a follow-up fix to match
+before Yearn capability/venue-gated checks are consistent end-to-end. Not fixed here (outside this pass's repo
+scope: instruments-service + unified-api-contracts only).
 
 ---
 
@@ -145,22 +189,43 @@ per market).
 
 Beyond AAVE_V3/AAVEV3 above, the audit found this class is systemic: `MORPHO_VAULTS`/`MORPHOVAULTS`,
 `YEARN_V3`/`YEARNV3`, `UNISWAP_V3`/`UNISWAPV3` (real, though the last 2 are acknowledged only in a code comment inside
-a manifest-rebuild script, never fixed at the GCS-object-path level). The registry already carries a real
-`DEPRECATED_DEFI_GHOST_VENUE_NAMES` frozenset (`_defi_coverage.py`) that the manifest consolidator and data-status
-service both filter against at read time: `UNISWAPV3`/`UNISWAPV2`/`UNISWAPV4`, `AAVEV2`/`AAVEV3`, `CAMELOTV3`,
-`COMPOUNDV3`, `MORPHO_VAULTS` (legacy underscore form superseded by the fully-glued `MORPHOVAULTS`), `PANCAKESWAPV3`,
-`SUSHISWAPV3`, `VELODROMEV2`, `TRADER_JOEV2`/`TRADERJOEV2`, `YEARNV3`, `AERODROMEV3`. This filters the symptom
-downstream (keeps ghost names out of the manifest/UI) but doesn't stop new duplicate writes at the adapter/writer
-source — the underlying fix is still the canonicalization migration above.
+a manifest-rebuild script, never fixed at the GCS-object-path level — that's a different bucket/layer
+(`market-tick-data-service`'s manifest) than the `instruments-service` catalog this doc covers, out of this pass's
+repo scope). The registry already carries a real `DEPRECATED_DEFI_GHOST_VENUE_NAMES` frozenset (`_defi_coverage.py`)
+that the manifest consolidator and data-status service both filter against at read time: `UNISWAPV3`/`UNISWAPV2`/
+`UNISWAPV4`, `AAVEV2`/`AAVEV3`, `CAMELOTV3`, `COMPOUNDV3`, `MORPHO_VAULTS` (legacy underscore form superseded by the
+fully-glued `MORPHOVAULTS`), `PANCAKESWAPV3`, `SUSHISWAPV3`, `VELODROMEV2`, `TRADER_JOEV2`/`TRADERJOEV2`, `YEARNV3`,
+`AERODROMEV3`. This filters the symptom downstream (keeps ghost names out of the manifest/UI) but doesn't stop new
+duplicate writes at the adapter/writer source — the underlying fix is still the canonicalization migration above.
 
-**Additional real inconsistency found while writing this doc, not previously flagged anywhere** (noting as an open
-question rather than resolving unilaterally): Yearn's canonical venue prefix disagrees across two different registry
-tables in the same codebase. `VENUE_TO_ADAPTER_KEY` (`unified_api_contracts/registry/venue_adapter_keys.py`) declares
-static entries `YEARN-ETHEREUM`/`YEARN-ARBITRUM` → adapter key `yearn`. But `PROTOCOL_CAPABILITIES`
-(`_defi.py`) declares the protocol under key `yearn_v3` with `venue_prefix="YEARN_V3"`, and
-`DEPRECATED_DEFI_GHOST_VENUE_NAMES` separately lists `YEARNV3` as a ghost superseded by `YEARN_V3` — i.e. one registry
-thinks the canonical prefix is bare `YEARN`, another thinks it's `YEARN_V3`. Worth resolving in the same pass as the
-other duplicate-spelling fixes rather than treated as separate.
+**YEARN vs YEARN_V3 — RESOLVED 2026-07-08.** Yearn's canonical venue prefix disagreed across registries: `VENUE_TO_
+ADAPTER_KEY` (`unified_api_contracts/registry/venue_adapter_keys.py`) declared static entries `YEARN-ETHEREUM`/
+`YEARN-ARBITRUM` → adapter key `yearn`, while `PROTOCOL_CAPABILITIES` (`_defi.py`) declared the protocol under key
+`yearn_v3` with `venue_prefix="YEARN_V3"`, and `DEPRECATED_DEFI_GHOST_VENUE_NAMES` separately listed `YEARNV3` as a
+ghost superseded by `YEARN_V3`. **Decision evidence** (real registry-consumer count, since 0 real Yearn rows exist in
+`prod/catalog.parquet` today to compare row counts on): `YEARN_V3` is the canonical form in 6 separate real
+registries/locations — `defi_venue_capabilities.py` (3 chain entries: ETHEREUM/ARBITRUM/OPTIMISM),
+`venue_launch_dates.py`, `defi_venues.py` (8 entries across `ALL_DEFI_VENUES` / `LEGACY_DEFI_VENUE_ALIASES` /
+`DATA_SOURCE_MAP`), `_defi.py`'s `PROTOCOL_CAPABILITIES`, `chain_env.py` (3 entries), and
+`DEPRECATED_DEFI_GHOST_VENUE_NAMES` (which explicitly names `YEARNV3` — the glued form — as the retired ghost of
+`YEARN_V3`, confirming the underscore form is the one this registry's own design treats as real). `VENUE_TO_ADAPTER_
+KEY`'s 2 bare `YEARN-*` entries (no `OPTIMISM` entry even, unlike the other 6 registries) were the sole outlier — and
+the real adapter bug this uncovered: `yearn.py` itself emitted `venue_tag = f"YEARN-{self._chain}"`, matching ONLY
+that one outlier registry and none of the other 6. **Fixed**: `yearn.py` → `YEARN_V3-{chain}`; `VENUE_TO_ADAPTER_KEY`
+→ `YEARN_V3-ETHEREUM`/`YEARN_V3-ARBITRUM`. See "Instrument ID format" above for the full writeup + the MTDS/
+execution-service follow-up this surfaces.
+
+**Post-fix full-catalog scan (2026-07-08)**: re-ran the same ghost-detection check
+(`canonicalize_defi_venue_combined` applied to every real `instrument_id` prefix in `prod/catalog.parquet`, 7,284
+rows) after the AAVE_V3-OPTIMISM + MORPHO fixes above landed — 0 remaining venue-prefix mismatches found anywhere in
+the live DeFi catalog. The `MORPHO_VAULTS`/`MORPHOVAULTS`/`UNISWAP_V3`/`UNISWAPV3` instances named above are real but
+live in the MTDS manifest / GCS-object-path layer (a different repo/bucket, out of this pass's scope), not in this
+catalog. Also checked and explicitly ruled out as a same-class bug (informational, not touched — the file is CeFi-
+classified, not a DeFi adapter): `EXTENDED` (1 row, `venue=EXTENDED chain=STARKNET`) vs `EXTENDED-STARKNET` (14 rows,
+`venue=EXTENDED-STARKNET chain=""`) is a `venue`/`chain` COLUMN-split inconsistency, not an `instrument_id` spelling
+duplicate — the `instrument_id` string itself is identical (`EXTENDED-STARKNET:PERP:...`) in both cases, so it's a
+different bug class living in `reference_data/adapters/cefi/extended.py`, outside this pass's DeFi-adapter-naming
+scope.
 
 **Key-vs-field abbreviation mismatch, extended pattern** — also real in this doc's own scope beyond the
 PERP/PERPETUAL and A_TOKEN/LENDING cases above: every yield/LST/restaking adapter checked stamps `LST` or `VAULT` in
