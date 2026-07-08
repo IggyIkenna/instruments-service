@@ -55,15 +55,13 @@ currently produce **structurally different `instrument_id` values for the same r
 | `BITFINEX-FUTURES`                      | `bitfinex-derivatives`                | —               | Perpetuals (linear USDT-margined **and** inverse BTC-margined — see the open Bitfinex bug below)                                                                 |
 | `BITGET-SPOT` / `BITGET-FUTURES`        | `bitget` / `bitget-futures`           | —               | Spot / perpetuals (Tardis Tier-3, added 2026-05-01)                                                                                                              |
 
-**Declared but not currently active**: `VenueMapping.all_tardis_exchanges`
-(`unified_api_contracts/registry/venue_mapping.py:32-60`) also declares `bitstamp`, `huobi`, and `huobi-dm` as Tardis
-endpoints (and `venue_to_ccxt`/`venue_instrument_type_to_tardis` have matching `BITSTAMP-SPOT`/`HUOBI-SPOT`/
-`HUOBI-FUTURES` entries) — but none of the three appear in `VENUES_BY_ASSET_GROUP["cefi"]`
-(`unified_api_contracts/registry/market_data_categories.py:226-274`), which is the actual enumerated active-venue list
-driving the download/manifest universe. Adapter plumbing exists; these 3 are not part of the current capture universe.
-**Open question, not resolved by this doc**: whether this is a deliberate deprioritization (lower liquidity than the
-Tier-3 additions that did make the cut) or a stale declaration nobody's pruned — worth a quick check before treating
-either Bitstamp or Huobi/HTX as "coming soon."
+**Removed** (2026-07-08, operator-confirmed): `bitstamp`, `huobi`, `huobi-dm` — previously declared in
+`VenueMapping.all_tardis_exchanges` (`unified_api_contracts/registry/venue_mapping.py`, plus matching
+`venue_to_ccxt`/`tardis_to_venue`/`tardis_exchange_instrument_types` entries) but never active in
+`VENUES_BY_ASSET_GROUP["cefi"]` — a stale declaration, not a deliberate deprioritization. Removed from all registries
+and mappings, same treatment as the earlier GEMINI-SPOT/PHEMEX-SPOT removal below. The deeper `external/bitstamp/`
+and `external/huobi/` normalize/schema submodules were left in place (matching the Gemini/Phemex precedent — only the
+registry/mapping declarations that drive the active venue list get pruned, not the adapter-level code underneath).
 
 **Removed** (from an earlier iteration of this doc, still true): GEMINI-SPOT, PHEMEX-SPOT — low volume, removed from
 all registries.
