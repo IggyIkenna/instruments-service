@@ -640,6 +640,119 @@ class TestUniswapV3Adapter:
         ):
             await adapter.get_instruments()
 
+    @pytest.mark.asyncio
+    async def test_get_instruments_merges_major_asset_pools_below_cutoff(self) -> None:
+        """Bug fix 2026-07-08: a major-asset pool ranked below the TVL cutoff is still
+        captured via the supplementary token-address-direct query and merged into results
+        (not silently dropped by the TVL-rank-then-filter two-stage pipeline)."""
+        from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+
+        adapter = UniswapV3ReferenceDataAdapter(api_key="test-key", chain="ETHEREUM")
+        primary_pool = {
+            "id": "0xpool1",
+            "feeTier": "3000",
+            "token0": {"id": "0xt0", "symbol": "WETH", "name": "Wrapped Ether", "decimals": "18"},
+            "token1": {"id": "0xt1", "symbol": "USDC", "name": "USD Coin", "decimals": "6"},
+            "totalValueLockedUSD": "5000000",
+            "createdAtTimestamp": "1677000000",
+        }
+        # Below-cutoff major/major pool that only the supplementary query would find.
+        below_cutoff_pool = {
+            "id": "0xpool2",
+            "feeTier": "10000",
+            "token0": {"id": "0xt2", "symbol": "DAI", "name": "Dai Stablecoin", "decimals": "18"},
+            "token1": {"id": "0xt3", "symbol": "USDT", "name": "Tether", "decimals": "6"},
+            "totalValueLockedUSD": "0.0004",
+            "createdAtTimestamp": "1677000000",
+        }
+        call_count = 0
+
+        def mock_post_side_effect(*_args: object, **_kwargs: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            mock_r = AsyncMock()
+            mock_r.status = 200
+            mock_r.raise_for_status = MagicMock()
+            if call_count == 1:
+                mock_r.json = AsyncMock(return_value={"data": {"pools": [primary_pool]}})
+            else:
+                mock_r.json = AsyncMock(return_value={"data": {"pools": [below_cutoff_pool]}})
+            cm = MagicMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_r)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            return cm
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(side_effect=mock_post_side_effect)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.defi.uniswap_v3.SUBGRAPH_IDS",
+                {"uniswap_v3": {"ETHEREUM": "test-subgraph-id"}},
+            ),
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+        ):
+            results = await adapter.get_instruments()
+
+        base_quote_pairs = {(r.base_asset, r.quote_asset) for r in results}
+        assert ("WETH", "USDC") in base_quote_pairs
+        assert ("DAI", "USDT") in base_quote_pairs
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_skips_major_asset_query_on_non_ethereum_chain(self) -> None:
+        """The major-asset address list is Ethereum-mainnet-derived — the supplementary
+        query must not fire for other chains (would silently query wrong-chain pools with
+        Ethereum addresses)."""
+        from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+
+        adapter = UniswapV3ReferenceDataAdapter(api_key="test-key", chain="ARBITRUM")
+        primary_pool = {
+            "id": "0xpool1",
+            "feeTier": "3000",
+            "token0": {"id": "0xt0", "symbol": "WETH", "name": "Wrapped Ether", "decimals": "18"},
+            "token1": {"id": "0xt1", "symbol": "USDC", "name": "USD Coin", "decimals": "6"},
+            "totalValueLockedUSD": "5000000",
+            "createdAtTimestamp": "1677000000",
+        }
+        mock_session_cm = _mock_aiohttp_session_post({"data": {"pools": [primary_pool]}})
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.defi.uniswap_v3.SUBGRAPH_IDS",
+                {"uniswap_v3": {"ARBITRUM": "test-subgraph-id"}},
+            ),
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+        ):
+            results = await adapter.get_instruments()
+
+        assert len(results) == 1
+        # Only the primary pagination call should have happened (single POST call captured
+        # by the shared mock session), not a second call for the major-asset query.
+        underlying_session = mock_session_cm.__aenter__.return_value
+        assert underlying_session.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_major_asset_pools_uses_lowercase_token_addresses(self) -> None:
+        """Regression guard: The Graph's `Bytes_in` filter is case-sensitive against the
+        lowercased addresses it stores internally — verified live against the production
+        gateway (checksummed input -> 0 pools; lowercased input -> hundreds of pools, same
+        subgraph, same call). The adapter must always lowercase before querying."""
+        from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+
+        adapter = UniswapV3ReferenceDataAdapter(api_key="test-key", chain="ETHEREUM")
+        mock_session_cm = _mock_aiohttp_session_post({"data": {"pools": []}})
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            await adapter._fetch_major_asset_pools("https://fake-url.com", None)
+
+        underlying_session = mock_session_cm.__aenter__.return_value
+        _call_args, call_kwargs = underlying_session.post.call_args
+        posted_tokens = call_kwargs["json"]["variables"]["tokens"]
+        assert posted_tokens, "expected a non-empty token address list"
+        assert all(t == t.lower() for t in posted_tokens)
+
 
 # ── RaydiumReferenceDataAdapter ───────────────────────────────────────────────
 
@@ -2544,7 +2657,9 @@ class TestLidoAdapter:
         symbols = {r.instrument_key.split(":")[-1] for r in results}
         assert "STETH" in symbols
         assert "WSTETH" in symbols
-        assert all(r.instrument_type == InstrumentType.YIELD_BEARING for r in results)
+        # 2026-07-08: field fixed to match the `:LST:` key segment (key/field consistency
+        # fix, same class as PERP-vs-PERPETUAL — see lido.py's module docstring).
+        assert all(r.instrument_type == InstrumentType.LST for r in results)
 
     @pytest.mark.asyncio
     async def test_get_instruments_yield_bearing_type(self) -> None:
@@ -2601,7 +2716,8 @@ class TestEtherFiAdapter:
         adapter = EtherFiReferenceDataAdapter()
         results = await adapter.get_instruments()
         assert len(results) == 1
-        assert results[0].instrument_type == InstrumentType.YIELD_BEARING
+        # 2026-07-08: field fixed to match the `:LST:` key segment.
+        assert results[0].instrument_type == InstrumentType.LST
         assert results[0].base_asset == "ETH"
         assert "WEETH" in results[0].instrument_key
 

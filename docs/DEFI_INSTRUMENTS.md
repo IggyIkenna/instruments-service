@@ -62,9 +62,21 @@ current-vs-target, not current-vs-already-fixed. Full detail, decision rationale
   gap layered on top of 2 real remaining code gaps, not a from-scratch code problem**: (a) the code's own fee-tier
   segment uses a colon (`:{fee_str}`) where the target wants a dash, and (b) `fee_str` embeds Uniswap's raw feeTier
   units (e.g. `3000`) rather than real basis points (a correct bps value is computed separately as
-  `pool_fee_tier_bps` on the same record but isn't the one written into the instrument_key string). Only Uniswap V3
-  was re-checked against the live catalog for this reconciliation — the other 12 protocols in finding 2's scope
-  haven't been individually re-verified against current code, so don't assume the same shape holds for all of them.
+  `pool_fee_tier_bps` on the same record but isn't the one written into the instrument_key string).
+- **UPDATE 2026-07-08 — all 13 protocols individually re-verified (not just Uniswap V3).** Read
+  `prod/catalog.parquet` directly (6,180 real DEX-pool rows) and traced every protocol's own adapter code. **Result:
+  the exact same shape holds for all 13, zero exceptions — every protocol's code already builds a structured key,
+  every protocol's persisted catalog still shows the old bare-address form.** Balancer (`balancer.py:224-226`),
+  Uniswap V2 (`uniswap_v2.py:216-218`), Uniswap V4 (`uniswap_v4.py:245-247`), and Curve (`curve.py:162-164`) are 4
+  independent adapter classes, each individually read and confirmed structured. The remaining 8 protocols
+  (PancakeSwap_V3, Sushiswap_V3, Sushiswap, Camelot_V3, Aerodrome_V3, Velodrome_V2, TraderJoe_V2, GMX) all
+  instantiate `UniswapV3ReferenceDataAdapter` via `factory.py`'s `protocol_slug` routing (confirmed in
+  `factory.py`'s `supports_protocol_slug`/`VENUE_PREFIX_TO_PROTOCOL` logic) — they run the literal same
+  `_build_pool_record` method already confirmed for Uniswap V3, so verifying Uniswap V3 transitively verifies all 8.
+  **Zero of the 13 protocols has a genuine code gap** — this is purely a catalog-regeneration/backfill job across
+  the board. Full per-protocol row-count + chain table and the dedicated regeneration todo:
+  `unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md` (finding 2, 2026-07-08
+  update).
 
 ### Lending — A_TOKEN/DEBT_TOKEN split (from `defi_lending_atoken_debttoken_instrument_split_2026_07_07.md`)
 

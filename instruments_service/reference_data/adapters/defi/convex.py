@@ -4,7 +4,10 @@ Discovers Convex Finance's primary yield-bearing tokens on Ethereum:
 - CVX: Convex governance + staking token (earns protocol fees from Curve LP boosting)
 - cvxCRV: CRV staked via Convex (earns veCRV rewards + trading fees)
 
-Tokens are returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Tokens are returned as InstrumentRecord with instrument_type="YIELD_BEARING"
+(fixed 2026-07-08 — the `instrument_key`'s middle segment previously said the
+shorthand `VAULT`, which is not a real `InstrumentType` enum member; see
+`karak.py`'s module docstring for the full rationale).
 
 Pure static-registry adapter: get_instruments returns a hardcoded token catalogue
 with no network access. Tests are credential-free and offline.
@@ -95,7 +98,7 @@ class ConvexReferenceDataAdapter(BaseReferenceDataAdapter):
 
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:VAULT:{symbol}",
+                    instrument_key=f"{venue_tag}:YIELD_BEARING:{symbol}",
                     venue=venue_tag,
                     raw_symbol=address,
                     instrument_type=InstrumentType.YIELD_BEARING,

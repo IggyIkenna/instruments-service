@@ -41,7 +41,7 @@ async def test_get_instruments_yields_vault_records() -> None:
     for rec in records:
         assert isinstance(rec, InstrumentRecord)
         assert rec.venue == "BEEFY-ETHEREUM"
-        assert rec.instrument_key.startswith("BEEFY-ETHEREUM:VAULT:")
+        assert rec.instrument_key.startswith("BEEFY-ETHEREUM:YIELD_BEARING:")
         assert rec.instrument_type == InstrumentType.YIELD_BEARING
         assert rec.status == InstrumentStatus.ACTIVE
         assert rec.available_from_datetime == _ETH_DEPLOY_DATE
@@ -56,7 +56,7 @@ async def test_get_instruments_arbitrum_yields_vault_records() -> None:
     assert len(records) >= 1
     for rec in records:
         assert rec.venue == "BEEFY-ARBITRUM"
-        assert rec.instrument_key.startswith("BEEFY-ARBITRUM:VAULT:")
+        assert rec.instrument_key.startswith("BEEFY-ARBITRUM:YIELD_BEARING:")
         assert rec.available_from_datetime == _ARB_DEPLOY_DATE
 
 
@@ -91,7 +91,9 @@ async def test_get_instrument_lookup() -> None:
     by_symbol = await adapter.get_instrument(_ETH_MORPHO_USDC_FRONTIER_SYMBOL)
     assert by_addr is not None and by_symbol is not None
     assert (
-        by_addr.instrument_key == by_symbol.instrument_key == f"BEEFY-ETHEREUM:VAULT:{_ETH_MORPHO_USDC_FRONTIER_SYMBOL}"
+        by_addr.instrument_key
+        == by_symbol.instrument_key
+        == f"BEEFY-ETHEREUM:YIELD_BEARING:{_ETH_MORPHO_USDC_FRONTIER_SYMBOL}"
     )
     assert await adapter.get_instrument("DOES-NOT-EXIST") is None
 

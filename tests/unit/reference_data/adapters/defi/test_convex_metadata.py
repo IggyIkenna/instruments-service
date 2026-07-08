@@ -54,7 +54,7 @@ async def test_get_instrument_lookup() -> None:
     by_addr = await adapter.get_instrument(_CVX_ADDRESS)
     by_symbol = await adapter.get_instrument("CVX")
     assert by_addr is not None and by_symbol is not None
-    assert by_addr.instrument_key == by_symbol.instrument_key == "CONVEX-ETHEREUM:VAULT:CVX"
+    assert by_addr.instrument_key == by_symbol.instrument_key == "CONVEX-ETHEREUM:YIELD_BEARING:CVX"
     assert await adapter.get_instrument("NOPE") is None
 
 
