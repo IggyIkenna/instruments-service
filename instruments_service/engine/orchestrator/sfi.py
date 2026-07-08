@@ -286,6 +286,7 @@ async def _fetch_sfi_data(
             reason=_sfi_reason,
             attempted_at=attempt_ts,
             pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+            source=_orch._sports_ref_source("progressive_stats"),
         )
         for _exp_lid in sorted(_expected_sfi_league_ids):
             manifest.record_expected_empty(
@@ -297,6 +298,7 @@ async def _fetch_sfi_data(
                 reason=_sfi_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                source=_orch._sports_ref_source("progressive_stats"),
             )
         _want_sfi_progressive = False
     # Season-window guard — when EVERY expected league is in its off-season
@@ -321,6 +323,7 @@ async def _fetch_sfi_data(
                     reason=_status,
                     attempted_at=attempt_ts,
                     pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                    source=_orch._sports_ref_source("progressive_stats"),
                 )
             _want_sfi_progressive = False
     if _want_sfi_progressive:
