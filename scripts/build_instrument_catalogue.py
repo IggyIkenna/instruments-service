@@ -136,6 +136,22 @@ SPORTS_LEAGUE_ENTITY = "leagues"
 #: The ``instrument_type`` stamped on every sports league catalogue row.
 SPORTS_LEAGUE_INSTRUMENT_TYPE = "league"
 
+#: Sentinel ``league_id`` values that must NEVER be rolled up into a catalogue
+#: row (2026-07-08/09 phantom-league fix, `A1` in
+#: `instruments_docs_audit_outstanding_items_2026_07_08.md`). Real, currently
+#: legitimate manifest ``league_id`` values include 22 raw numeric leagues
+#: (long-tail, not yet in UAC ``LEAGUE_REGISTRY`` — see `sports.py:57`
+#: ``_canonical_league_id()`` docstring) plus non-registry strings like
+#: ``LA_LIGA_2``/``RFPL``/``SCOTTISH_LEAGUE_CUP_185`` (verified against the
+#: real prod catalogue 2026-07-09), so filtering must stay a narrow sentinel
+#: check — NOT a full ``LEAGUE_REGISTRY`` membership check, which would wrongly
+#: drop all 22 of those real leagues. ``api_football_reference.py:165`` is the
+#: only known writer of the literal ``"UNKNOWN"`` value (frozen since the
+#: 2026-06-24 write-universe gate — no new captures land under it), but the
+#: uppercase compare below also catches any case-variant that might otherwise
+#: re-enter this roll-up.
+SPORTS_LEAGUE_ID_SENTINELS = frozenset({"UNKNOWN"})
+
 #: The canonical catalogue filename the launcher + v2 enumerator read.
 CATALOG_FILENAME = "catalog.parquet"
 
@@ -1214,6 +1230,14 @@ def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFr
     ``api_football_id`` map (``canonicalize_league_id`` does not provide it) and is
     gated on the IS instrument backfill regardless.
 
+    Excludes :data:`SPORTS_LEAGUE_ID_SENTINELS` (e.g. the ``"UNKNOWN"`` phantom
+    pseudo-league) BEFORE the roll-up — this was previously unguarded and minted
+    a real, persisted ``instrument_id="UNKNOWN"/league_id="UNKNOWN"`` catalogue
+    row that a downstream v2-enumerator bug then amplified into thousands of
+    manifest rows (root-caused + fixed 2026-07-09; see
+    :data:`SPORTS_LEAGUE_ID_SENTINELS` for why this stays a narrow sentinel
+    check rather than a full canonical-registry membership check).
+
     Args:
         manifest_df: the canonical sports ``_index`` (needs ``league_id`` /
             ``data_type`` / ``date`` columns). Read via
@@ -1221,7 +1245,8 @@ def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFr
 
     Returns:
         A DataFrame with :data:`CATALOG_COLUMNS`, one row per distinct current
-        canonical league, sorted by ``league_id`` for deterministic output.
+        canonical league (sentinel league_ids excluded), sorted by ``league_id``
+        for deterministic output.
     """
     cols = list(CATALOG_COLUMNS)
     needed = {"league_id", "data_type", "date"}
@@ -1234,7 +1259,11 @@ def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFr
     df = manifest_df.loc[:, ["league_id", "data_type", "date"]].copy()
     df["league_id"] = df["league_id"].fillna("").astype(str)
     df["data_type"] = df["data_type"].fillna("").astype(str)
-    df = df[(df["league_id"] != "") & (df["data_type"].isin(current))]
+    df = df[
+        (df["league_id"] != "")
+        & (~df["league_id"].str.upper().isin(SPORTS_LEAGUE_ID_SENTINELS))
+        & (df["data_type"].isin(current))
+    ]
     if df.empty:
         return pd.DataFrame(columns=cols)
     df["date"] = df["date"].astype(str)
