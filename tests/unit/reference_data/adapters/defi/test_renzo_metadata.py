@@ -62,7 +62,7 @@ async def test_get_instruments_arbitrum_yields_bridged_record() -> None:
 @pytest.mark.asyncio
 async def test_get_instruments_filters_on_instrument_type() -> None:
     adapter = RenzoReferenceDataAdapter()
-    assert await adapter.get_instruments(instrument_type="yield_bearing")
+    assert await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
     assert await adapter.get_instruments(instrument_type="perpetual") == []
 
 

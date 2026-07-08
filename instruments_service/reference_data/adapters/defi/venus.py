@@ -80,7 +80,7 @@ class VenusReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch all instruments from the venue."""
-        if instrument_type not in (None, "lending_market"):
+        if instrument_type not in (None, InstrumentType.LENDING):
             return []
 
         markets = _MVP_MARKETS_BY_CHAIN.get(self._chain, [])

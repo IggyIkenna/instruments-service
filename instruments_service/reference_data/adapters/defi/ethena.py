@@ -57,7 +57,7 @@ class EthenaReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return sUSDe as a yield-bearing instrument."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
             return []
 
         venue_tag = f"ETHENA-{self._chain}"
