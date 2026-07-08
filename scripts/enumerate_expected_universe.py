@@ -85,6 +85,7 @@ from unified_api_contracts import (
     TOTAL_UNIVERSE_AXES,
     TOTAL_UNIVERSE_CONFIG_HASH,
     TOTAL_UNIVERSE_CONFIG_VERSION,
+    TRADFI_ROOTS,
     VENUES_BY_ASSET_GROUP,
     CeFiMvpRule,
     Mode,
@@ -2239,15 +2240,25 @@ assert set(_V2_ENUMERATORS) == set(TOTAL_UNIVERSE_AXES) == set(_ENUMERATORS) == 
 )
 
 
-def _derive_underlying(instrument_id: str) -> str:
+def _derive_underlying(instrument_id: str, asset_group: str = "") -> str:
     """Fallback underlying derivation when the catalogue ``underlying`` column is
     blank — the base asset is the token before the first ``-`` separator
-    (``BTC-29MAR24-50000-C`` → ``BTC``; ``BTC-29MAR24`` → ``BTC``). Returns "" if
-    no separator (cannot key a bundle → caller skips rather than mis-key)."""
+    (``BTC-29MAR24-50000-C`` → ``BTC``; ``BTC-29MAR24`` → ``BTC``).
+
+    ``asset_group="tradfi"`` symbols with no ``-`` separator (ICE COMBO/spread
+    codes carry extra whitespace + numeric spread ids instead of the standard
+    letter+month-code shape, e.g. ``BRN   3  30615524`` / ``G   FSF0032.M0032``)
+    fall back to the whitespace-delimited leading token when it is a registered
+    TradFi root (``TRADFI_ROOTS``). Returns "" if neither shape resolves (cannot
+    key a bundle → caller skips rather than mis-key)."""
     iid = instrument_id.strip()
-    if "-" not in iid:
-        return ""
-    return iid.split("-", 1)[0]
+    if "-" in iid:
+        return iid.split("-", 1)[0]
+    if asset_group == "tradfi":
+        tokens = iid.split()
+        if tokens and tokens[0] in TRADFI_ROOTS:
+            return tokens[0]
+    return ""
 
 
 def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str) -> list[InstrumentCatalogEntry]:
@@ -2312,7 +2323,7 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
         if not is_bundle_leaf:
             passthrough.append(instr)
             continue
-        underlying = instr.underlying or _derive_underlying(instr.instrument_id)
+        underlying = instr.underlying or _derive_underlying(instr.instrument_id, asset_group)
         if not underlying:
             # Cannot key the bundle (no underlying) → drop the leaf rather than
             # mis-key a candidate (under-seed beats false over-seed). Logged once.

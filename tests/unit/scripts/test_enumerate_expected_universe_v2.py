@@ -1868,9 +1868,7 @@ def test_cefi_v2_bundle_grain_matches_uac_grain_axis() -> None:
     spot_catalog = [_make_cefi_entry(instrument_type="SPOT", venue="BINANCE", available_from="2025-01-01")]
     spot_rows = _drop_v2_venue_grain(
         list(
-            enumerator_module._enumerate_v2_cefi(
-                spot_catalog, _date_axis("2024-06-01", "2025-06-01"), _CEFI_DATA_TYPES
-            )
+            enumerator_module._enumerate_v2_cefi(spot_catalog, _date_axis("2024-06-01", "2025-06-01"), _CEFI_DATA_TYPES)
         )
     )
     assert len(spot_rows) > 0, "leaf SPOT must still fan per-data_type"
@@ -2280,6 +2278,53 @@ def test_make_tradfi_entry_underlying_kw_supported() -> None:
 
 
 # ---------------------------------------------------------------------------
+# ICE COMBO underlying-extraction gap (tradfi_manifest_cf4_source_and_cf7_
+# phantom_gaps_2026_07_07.md) — ICE COMBO symbols carry extra whitespace +
+# numeric spread ids instead of the standard letter+month-code shape, so the
+# generic "-"-split fallback in _derive_underlying can't key them and they were
+# dropped from the roll-up with a WARNING.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("instrument_id", "expected_root"),
+    [
+        ("BRN   3  30615524", "BRN"),
+        ("G   FSF0032.M0032", "G"),
+    ],
+)
+def test_derive_underlying_ice_combo_whitespace_symbol(instrument_id: str, expected_root: str) -> None:
+    """A whitespace-delimited ICE COMBO leading token resolves via TRADFI_ROOTS."""
+    assert enumerator_module._derive_underlying(instrument_id, "tradfi") == expected_root
+
+
+def test_derive_underlying_ice_combo_unknown_root_returns_blank() -> None:
+    """A leading token that isn't a registered TradFi root still returns "" (no mis-key)."""
+    assert enumerator_module._derive_underlying("ZZZNOTAROOT 123 456", "tradfi") == ""
+
+
+def test_derive_underlying_whitespace_fallback_is_tradfi_only() -> None:
+    """The whitespace-token fallback is scoped to tradfi — a non-tradfi asset_group with no
+    ``-`` separator still returns "" rather than risk mis-keying a cefi/defi bundle."""
+    assert enumerator_module._derive_underlying("BRN   3  30615524", "cefi") == ""
+    assert enumerator_module._derive_underlying("BRN   3  30615524") == ""
+
+
+def test_rollup_bundle_grain_tradfi_ice_combo_no_underlying_column_recovers_via_symbol() -> None:
+    """CF-minor finding: ICE COMBO leaves with a blank ``underlying`` catalogue column
+    (the real-world shape — the store never populated it for these rows) now collapse
+    into ONE synthetic combo entry instead of being dropped from the roll-up."""
+    catalog = [
+        _make_tradfi_entry(instrument_id="BRN   3  30615524", instrument_type="COMBO", venue="ICE"),
+        _make_tradfi_entry(instrument_id="BRN   4  30615525", instrument_type="COMBO", venue="ICE"),
+    ]
+    rolled = enumerator_module._rollup_bundle_grain(catalog, "tradfi")
+    synth = [e for e in rolled if e.instrument_type == "combo"]
+    assert len(synth) == 1
+    assert synth[0].instrument_id == "BRN"
+
+
+# ---------------------------------------------------------------------------
 # DeFi canonical venue/chain split — gotcha #3 (defi-canonical-naming-ssot.md)
 #
 # The instruments-service catalog stores legacy combined venue='AAVEV3-ARBITRUM'
@@ -2452,9 +2497,7 @@ def test_cefi_v2_mvp_gate_computes_predicate_when_column_absent() -> None:
         )
     ]
     rows_drop = _drop_v2_venue_grain(
-        list(
-            enumerator_module._enumerate_v2_cefi(spot_only, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
-        )
+        list(enumerator_module._enumerate_v2_cefi(spot_only, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set()))
     )
     assert rows_drop == []
 
@@ -2501,7 +2544,9 @@ def test_tradfi_v2_nyse_etf_alive_yields_empty_confirmed_delivery_lag() -> None:
     denominator is not inflated by cells that can never be captured from
     XNYS.PILLAR. Mirrors the writer-side fix in MTDS (307ffa05).
     """
-    catalog = [_make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2020-01-01")]
+    catalog = [
+        _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2020-01-01")
+    ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
             catalog,
@@ -2518,7 +2563,9 @@ def test_tradfi_v2_nyse_etf_alive_yields_empty_confirmed_delivery_lag() -> None:
 
 def test_tradfi_v2_nasdaq_etf_alive_yields_expected_unattempted() -> None:
     """NASDAQ ETFs in-window seed expected_unattempted (no ARCX filter applies)."""
-    catalog = [_make_tradfi_entry(instrument_id="QQQ", instrument_type="ETF", venue="NASDAQ", available_from="2020-01-01")]
+    catalog = [
+        _make_tradfi_entry(instrument_id="QQQ", instrument_type="ETF", venue="NASDAQ", available_from="2020-01-01")
+    ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
             catalog,
@@ -2534,7 +2581,9 @@ def test_tradfi_v2_nasdaq_etf_alive_yields_expected_unattempted() -> None:
 
 def test_tradfi_v2_nyse_equity_alive_yields_expected_unattempted() -> None:
     """NYSE equities (non-ETF) in-window still seed expected_unattempted."""
-    catalog = [_make_tradfi_entry(instrument_id="JPM", instrument_type="EQUITY", venue="NYSE", available_from="2020-01-01")]
+    catalog = [
+        _make_tradfi_entry(instrument_id="JPM", instrument_type="EQUITY", venue="NYSE", available_from="2020-01-01")
+    ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
             catalog,
@@ -2550,7 +2599,9 @@ def test_tradfi_v2_nyse_equity_alive_yields_expected_unattempted() -> None:
 
 def test_tradfi_v2_nyse_etf_pre_listing_still_yields_not_listed() -> None:
     """NYSE ETF pre-listing dates keep EXPECTED_INSTRUMENT_NOT_LISTED (beats ARCX check)."""
-    catalog = [_make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2026-06-01")]
+    catalog = [
+        _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2026-06-01")
+    ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
             catalog,
