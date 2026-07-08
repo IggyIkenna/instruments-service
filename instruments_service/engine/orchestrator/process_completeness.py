@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from unified_api_contracts import source_string_for
 from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
 from unified_api_contracts.sports import get_league
 
@@ -488,6 +489,7 @@ def _finalize_completeness(
                     reason=_nt_reason,
                     attempted_at=_failed_attempt_ts,
                     pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                    source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
                 )
                 _nt_stamped.append(_failed_venue)
             else:
