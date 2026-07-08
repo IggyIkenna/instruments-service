@@ -5,7 +5,7 @@
 > [`instrument_id_format_canonicalization_2026_07_08.md`](../../../unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md)
 > (the decided target canonical format for dated derivatives, not shipped yet) ·
 > [`canonical_instrument_id_audit_2026_07_08.md`](../../../unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md)
-> (the full cross-repo compliance audit this doc's "known bugs" section summarizes) ·
+> (the full cross-repo compliance audit this doc's "Known limitations" section draws from) ·
 > [`ADAPTER_ARCHITECTURE.md`](../ADAPTER_ARCHITECTURE.md) (adapter code structure, `canonical_id_builder.py` caveats) ·
 > [`DEFI_INSTRUMENTS.md`](./DEFI_INSTRUMENTS.md) (on-chain/DeFi perp venues — Hyperliquid, Aster, and the rest of the
 > on-chain CLOB cluster live there, not here — see "Scope" below).
@@ -13,7 +13,7 @@
 ## Scope
 
 This doc covers **genuinely centralized exchanges**: Binance, Bybit, OKX, Deribit, Coinbase, Upbit, Kraken /
-Kraken-Futures, Bitfinex, Bitget, HTX/Huobi, Bitstamp.
+Kraken-Futures, Bitfinex, Bitget.
 
 **Not covered here** (documented in `DEFI_INSTRUMENTS.md` instead): the on-chain perp CLOBs — Hyperliquid, Aster,
 Pacifica (Solana), Extended (Starknet), Lighter (zkSync) — and the prediction-platform crypto-perp CLOBs — Kalshi-Perp,
@@ -28,43 +28,42 @@ technical asset-group.
 
 ## Venues
 
-Two independent modes exist per venue family, and — per a real, still-open bug (see "Known bugs" below) — they
-currently produce **structurally different `instrument_id` values for the same real instrument**:
+Two independent modes exist per venue family:
 
 - **Batch mode** — Tardis (historical data). `unified_api_contracts.registry.venue_mapping.VenueMapping.tardis_to_venue`
   is the reverse Tardis-exchange-slug → canonical-venue mapping.
 - **Live mode** — CCXT (real-time, public endpoints, no API key needed for instrument discovery) for a 13-canonical-venue
   subset. `instruments_service/reference_data/factory.py:95-114` (`_CANONICAL_VENUE_TO_CCXT_EXCHANGE`).
 
+Both modes construct the same canonical `instrument_key` for the same real instrument: `VENUE:TYPE:BASE-QUOTE` for
+SPOT_PAIR/PERPETUAL (reconstructed from base/quote), `VENUE:TYPE:RAW_SYMBOL` for FUTURE/OPTION (the exchange-native id
+verbatim, upper-cased) — `ccxt_adapter.py::_build_instrument_key` mirrors the construction
+`tardis/adapter.py::_parse_tardis_instrument` uses in batch mode, so live and batch converge on one id per instrument.
+
 | Canonical venue                         | Batch (Tardis slug)                   | Live (CCXT id)  | Instrument types                                                                                                                                                 |
 | --------------------------------------- | ------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BINANCE-SPOT`                          | `binance`                             | `binance`       | Spot pairs                                                                                                                                                       |
 | `BINANCE-FUTURES`                       | `binance-futures`                     | `binanceusdm`   | Perpetuals + dated futures, USDT-margined (linear)                                                                                                               |
-| `BINANCE-DELIVERY`                      | (via binance-futures data)            | —               | COIN-M perps + dated futures, coin-margined (inverse); distinct endpoint from `BINANCE-FUTURES` (2026-06-24)                                                     |
+| `BINANCE-DELIVERY`                      | (via binance-futures data)            | —               | COIN-M perps + dated futures, coin-margined (inverse); distinct endpoint from `BINANCE-FUTURES`                                                                  |
 | `BYBIT`                                 | `bybit`                               | `bybit`         | Perpetuals + dated futures + options                                                                                                                             |
-| `BYBIT-SPOT`                            | `bybit-spot`                          | `bybit`         | Spot pairs (distinct canonical venue since 2026-06-23 so the perp-gate pairs BYBIT-SPOT↔BYBIT)                                                                   |
+| `BYBIT-SPOT`                            | `bybit-spot`                          | `bybit`         | Spot pairs (distinct canonical venue so the perp-gate pairs BYBIT-SPOT↔BYBIT)                                                                                    |
 | `OKX-SPOT` / `OKX-SWAP` / `OKX-FUTURES` | `okex` / `okex-swap` / `okex-futures` | `okx` (unified) | Spot / perpetuals ("swap") / dated futures — bare `OKX` has no instruments itself; the real data lives on these 3 suffixed venues                                |
 | `DERIBIT`                               | `deribit`                             | `deribit`       | **Both** linear (USDC-settled) and inverse (USD-quoted, BTC/ETH-settled) options + futures + perps + spot — see "Deribit margin types" below                     |
 | `DERIBIT-COMBO`                         | `deribit` (own adapter)               | —               | Multi-leg combo/spread instruments (33 structure codes — vertical/calendar/butterfly/condor/box/jelly-roll); own manifest shard, own `deribit_combo` adapter key |
 | `COINBASE-SPOT`                         | `coinbase`                            | `coinbase`      | Spot pairs (USD quote — for coinbase premium)                                                                                                                    |
-| `COINBASE-FUTURES`                      | `coinbase-international`              | —               | Coinbase Derivatives (perps); distinct canonical venue since 2026-06-23                                                                                          |
+| `COINBASE-FUTURES`                      | `coinbase-international`              | —               | Coinbase Derivatives (perps); distinct canonical venue from COINBASE-SPOT                                                                                        |
 | `UPBIT`                                 | `upbit`                               | `upbit`         | Spot pairs, KRW/BTC/USDT quotes (QUOTE-BASE format, inverted by the adapter — see below)                                                                         |
 | `KRAKEN-SPOT`                           | `kraken`                              | `kraken`        | Spot pairs                                                                                                                                                       |
 | `KRAKEN-FUTURES`                        | `cryptofacilities`                    | `krakenfutures` | Perpetuals + dated futures                                                                                                                                       |
-| `BITFINEX-SPOT`                         | `bitfinex`                            | —               | Spot pairs (Tardis Tier-3, added 2026-05-01)                                                                                                                     |
-| `BITFINEX-FUTURES`                      | `bitfinex-derivatives`                | —               | Perpetuals (linear USDT-margined **and** inverse BTC-margined — see the open Bitfinex bug below)                                                                 |
-| `BITGET-SPOT` / `BITGET-FUTURES`        | `bitget` / `bitget-futures`           | —               | Spot / perpetuals (Tardis Tier-3, added 2026-05-01)                                                                                                              |
+| `BITFINEX-SPOT`                         | `bitfinex`                            | —               | Spot pairs (Tardis Tier-3)                                                                                                                                       |
+| `BITFINEX-FUTURES`                      | `bitfinex-derivatives`                | —               | Perpetuals (linear USDT-margined **and** inverse BTC-margined — see "Accepted quote assets" below)                                                               |
+| `BITGET-SPOT` / `BITGET-FUTURES`        | `bitget` / `bitget-futures`           | —               | Spot / perpetuals (Tardis Tier-3)                                                                                                                                |
 
-**Removed** (2026-07-08, operator-confirmed): `bitstamp`, `huobi`, `huobi-dm` — previously declared in
-`VenueMapping.all_tardis_exchanges` (`unified_api_contracts/registry/venue_mapping.py`, plus matching
-`venue_to_ccxt`/`tardis_to_venue`/`tardis_exchange_instrument_types` entries) but never active in
-`VENUES_BY_ASSET_GROUP["cefi"]` — a stale declaration, not a deliberate deprioritization. Removed from all registries
-and mappings, same treatment as the earlier GEMINI-SPOT/PHEMEX-SPOT removal below. The deeper `external/bitstamp/`
-and `external/huobi/` normalize/schema submodules were left in place (matching the Gemini/Phemex precedent — only the
-registry/mapping declarations that drive the active venue list get pruned, not the adapter-level code underneath).
-
-**Removed** (from an earlier iteration of this doc, still true): GEMINI-SPOT, PHEMEX-SPOT — low volume, removed from
-all registries.
+`bitstamp`, `huobi`, `huobi-dm` remain declared in `VenueMapping.all_tardis_exchanges`
+(`unified_api_contracts/registry/venue_mapping.py`, plus matching `venue_to_ccxt`/`tardis_to_venue` entries) but are
+not members of `VENUES_BY_ASSET_GROUP["cefi"]` (`unified_api_contracts/registry/market_data_categories.py`) — stale
+declarations excluded from the active CeFi venue set, with no row in the Venues table above. `GEMINI-SPOT` and
+`PHEMEX-SPOT` have been fully removed from `VenueMapping` (no declaration remains).
 
 ### Deribit margin types
 
@@ -72,9 +71,32 @@ Deribit is **not** single-margin-type — it runs both linear and inverse instru
 distinguishes them by quote currency: `instruments_service/reference_data/adapters/cefi/tardis/parsing.py:303,410,423`
 (`_resolve_base_quote` / `_infer_margin_type`) — inverse instruments are USD-quoted but BTC/ETH-settled
 (`BTC-PERPETUAL`, coin-margined), linear instruments are USDC-quoted and USDC-settled (`BTC_USDC-PERPETUAL`). Both are
-captured; `margin_type` (`LINEAR`/`INVERSE`) and `quote_asset` are populated per-instrument in the v6 schema. An
-earlier version of this doc's Venues table didn't call this out explicitly even though the schema already tracked it —
-corrected here.
+captured; `margin_type` (`LINEAR`/`INVERSE`) and `quote_asset` are populated per-instrument in the v6 schema.
+
+### Deribit combo leg `instrument_key` format (fixed 2026-07-09)
+
+`DERIBIT-COMBO` (`deribit_combo_adapter.py::_build_legs`) previously built each leg's `instrument_key` with an ad hoc
+`f"DERIBIT:{leg_name}"` — missing the `:TYPE:` segment entirely (2 colon-parts instead of the workspace's
+`VENUE:TYPE:SYMBOL` grammar). Fixed by routing through the shared UAC `build_leg()` builder
+(`unified_api_contracts.internal.reference.canonical_id_builder`), with a per-leg `InstrumentType` classified from
+Deribit's own `instrument_name` shape — `get_combos` returns only `{amount, instrument_name}` per leg, no per-leg type
+field. Classification (`_classify_deribit_leg_instrument_type`, verified against real live `get_combos` responses for
+BTC/ETH, 2026-07-09 — every leg name observed across both currencies' active combos was either 2 or 4 dash-parts, no
+other shape): `{BASE}-PERPETUAL` → `PERPETUAL`; `{BASE}-{DDMMMYY}` (2 dash-parts) → `FUTURE`;
+`{BASE}-{DDMMMYY}-{STRIKE}-{C|P}` (4 dash-parts) → `OPTION`. A leg whose name matches none of these shapes is dropped
+(logged), not raised.
+
+Real before/after (from a live `BTC-FS-10JUL26_PERP` futures-spread combo and a live `BTC-CCAL-24JUL26_10JUL26-75000`
+call-calendar combo, `get_combos?currency=BTC`, 2026-07-09):
+
+| Leg (real `instrument_name`) | Before (bug)                  | After (fixed)                        |
+| ---------------------------- | ----------------------------- | ------------------------------------ |
+| `BTC-PERPETUAL`              | `DERIBIT:BTC-PERPETUAL`       | `DERIBIT:PERPETUAL:BTC-PERPETUAL`    |
+| `BTC-10JUL26`                | `DERIBIT:BTC-10JUL26`         | `DERIBIT:FUTURE:BTC-10JUL26`         |
+| `BTC-17JUL26-65000-C`        | `DERIBIT:BTC-17JUL26-65000-C` | `DERIBIT:OPTION:BTC-17JUL26-65000-C` |
+
+The combo's own top-level `instrument_key` (e.g. `DERIBIT:COMBO:BTC-CCAL-24JUL26_10JUL26-75000`) was already correct
+and unaffected — the bug was leg-scoped only.
 
 ### UPBIT symbol inversion
 
@@ -88,12 +110,8 @@ segment when Tardis's own `expiry` field isn't populated (common for active opti
 
 ## MVP Universe
 
-**The old claim in this doc's predecessor spec (`specs/MVP_INSTRUMENTS.md`) — 21 base assets × 5 CeFi exchanges = 168
-instruments — is stale and should not be used.** That list (SOL, BTC, ETH, AVAX, ADA, SUSHI, CAKE, XRP, DOGE, XLM, LTC,
-ALGO, FIL, TRX, BNB, LINK, MATIC, APT, VET, ATOM, NEAR across Binance/OKX/Bybit/Upbit/Coinbase) describes a much
-earlier, narrower phase of the project. The real, current MVP-scoping mechanism is the UAC registry
-`unified_api_contracts/registry/cefi_instrument_universe.py` — the actual SSOT for which base assets instruments-service
-tracks (and MTDS captures) across every CeFi venue.
+The MVP-scoping mechanism is the UAC registry `unified_api_contracts/registry/cefi_instrument_universe.py` — the SSOT
+for which base assets instruments-service tracks (and MTDS captures) across every CeFi venue.
 
 ### `CEFI_BASE_ASSET_UNIVERSE` — the real curated set (~540 base assets)
 
@@ -120,7 +138,7 @@ per-venue extensions exist (`_CEFI_VENUE_QUOTE_EXTENSIONS`): **UPBIT** additiona
 ENTITY prefix, so `UPBIT`/`UPBIT-SPOT` both resolve) — KRW is deliberately not added fleet-wide (it would admit
 thousands of cross pairs on other venues). **BITFINEX-FUTURES** additionally accepts `BTC` (keyed on the FULL
 canonical venue string, NOT the bare `BITFINEX` entity, so the sibling `BITFINEX-SPOT` does **not** get the
-extension) — fixed 2026-07-08, see "Known bugs" below for the prior gap.
+extension).
 
 ### Options underlyings
 
@@ -131,32 +149,18 @@ comment; a per-coin option-chain expansion would multiply that further for littl
 ### Equity/commodity-basis perp universe
 
 `CEFI_EQUITY_PERP_BASE_UNIVERSE` (`cefi_instrument_universe.py`) is a separate curated set covering
-single-stock/commodity/index perps listed on crypto venues (17 OKX US-equity perps + a much larger Binance
-tradfi-perp-symmetry set added 2026-06-24, re-synced 2026-07-08 — now **124 entries**) — this exists specifically so
-each crypto-venue tradfi-underlying perp has a captured basis-arb counterpart in the TradFi MVP universe. Crypto
-majors (BTC/ETH/SOL/…) are **not** in this set — only the tradfi-underlying perps.
+single-stock/commodity/index perps listed on crypto venues (**124 entries**: US and Korean equities, the Binance
+tradfi-perp-symmetry set, pre-IPO/premarket share perps, commodities, and index/sector/leveraged ETFs) — this exists
+specifically so each crypto-venue tradfi-underlying perp has a captured basis-arb counterpart in the TradFi MVP
+universe. Crypto majors (BTC/ETH/SOL/…) are **not** in this set — only the tradfi-underlying perps.
 
-**2026-07-08 re-sync** against the live Binance `fapi/v1/exchangeInfo` (`contractType=TRADIFI_PERPETUAL`, 118 symbols
-live that day, all `status=TRADING`) versus the 105-entry 2026-06-24 snapshot:
-
-- **+21 added**: ANTHROPIC / OPENAI (pre-IPO share perps, `underlyingType=PREMARKET`), BBX, BSP, BX, BZ
-  (`underlyingType=COMMODITY`), CAT, CBRS, DRAM, FLEX, KORU, KSTR, MVLL, QNTX, SQQQ, STRC, STXX, TER, TQQQ, TTWO, TXN.
-- **3 renamed**: the Korean single-stock entries moved from the KRX numeric code to the actual live `baseAsset`
-  string, confirmed identical on Binance, OKX, **and** Bybit — `005930`→`SAMSUNG`, `000660`→`SKHYNIX`,
-  `005380`→`HYUNDAI`. The numeric KRX code never matched any live venue's real base*ccy for \_this* (cefi-perp)
-  universe; it remains correct and unchanged for the separate TradFi-side identifier space
-  (`TRADFI_EQUITY_PERP_BASIS_UNIVERSE` / `KRX_EQUITIES`, keyed by the Yahoo/Databento ticker root).
-- **2 removed**: `AMC`, `MARA` — verified genuinely delisted (absent from Binance, OKX across
-  SWAP/FUTURES/SPOT/MARGIN, and Bybit; `AMC-USDT-SWAP`/`MARA-USDT-SWAP` return OKX error 51001 "doesn't exist"). The
-  matching dead cross-reference in `crypto_equity_link.CRYPTO_EQUITY_PERP_TO_REAL_EQUITY` was removed in the same
-  commit.
-- **6 kept despite an open question** — `CFG`, `DIA`, `INX`, `ROBO`, `SLX`, `SPX` no longer appear under
-  `contractType=TRADIFI_PERPETUAL` on Binance; Binance now tags them `underlyingType=COIN` (subtypes
-  Meme/Infrastructure/RWA/Alpha) — the ticker has been reused by an unrelated crypto token (e.g. `SPX` is now the
-  "SPX6900" meme coin, not the S&P 500), not a simple delisting. All 6 still have live symmetric entries in
-  `TRADFI_EQUITY_PERP_BASIS_UNIVERSE` (real ETFs/stocks) and in `crypto_equity_link.py`. Resolving this needs a
-  dedicated cross-venue audit (does OKX/Bybit's same-ticker perp reuse the same crypto token, or a genuine surviving
-  equity-basis product?) rather than a unilateral removal — see the new row in "Known bugs" below.
+**Six tickers kept despite an open cross-venue question**: `CFG`, `DIA`, `INX`, `ROBO`, `SLX`, `SPX` no longer appear
+under `contractType=TRADIFI_PERPETUAL` on Binance; Binance now tags them `underlyingType=COIN` (subtypes
+Meme/Infrastructure/RWA/Alpha) — the ticker has been reused by an unrelated crypto token (e.g. `SPX` is now the
+"SPX6900" meme coin, not the S&P 500), not a simple delisting. All 6 still have live symmetric entries in
+`TRADFI_EQUITY_PERP_BASIS_UNIVERSE` (real ETFs/stocks) and in `crypto_equity_link.py`. Resolving this needs a
+dedicated cross-venue audit (does OKX/Bybit's same-ticker perp reuse the same crypto token, or a genuine surviving
+equity-basis product?) rather than a unilateral removal.
 
 ### Two separate layers — raw capture vs. MVP classification (don't conflate them)
 
@@ -171,7 +175,7 @@ both involve "is this base asset in scope":
    1. **Accepted-quote gate** — USDT/USDC/USD fleet-wide + the per-venue KRW/UPBIT and BTC/BITFINEX-FUTURES
       extensions. Drops exotic cross pairs (`BASE/EUR`, `BASE/BTC`) on other venues (incl. `BITFINEX-SPOT`, which
       does NOT get the BTC extension); most derivatives carry no quote and pass trivially — Bitfinex derivatives is
-      the documented exception (it DOES resolve a real quote), fixed 2026-07-08, see "Known bugs" below.
+      the documented exception (it DOES resolve a real quote).
    2. **Options-underlying gate** — BTC/ETH only, as above.
 
 2. **MVP classification** (a separate, later-stage question — "does this already-captured row count as MVP for
@@ -192,19 +196,19 @@ both involve "is this base asset in scope":
 
 ## Instrument ID format: current vs. decided target (dated derivatives)
 
-**Not fixed yet — this section shows real current output alongside the operator-decided target, same
-current-vs-target framing as the A_TOKEN/DEBT_TOKEN lending-instrument decision.** Full detail:
+**This section shows real current output alongside the operator-decided target, same current-vs-target framing as the
+A_TOKEN/DEBT_TOKEN lending-instrument decision.** Full detail:
 [`instrument_id_format_canonicalization_2026_07_08.md`](../../../unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md).
 
 Dated-derivative (FUTURE/OPTION) instrument_ids are **not consistent with each other across venues today**, and don't
 get the same cleanup the same venue's own PERPETUAL gets:
 
-| Venue           | Real current instrument_id (as of 2026-07-08)    | Note                                                                                                                                                                                                            |
-| --------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| KRAKEN-FUTURES  | `KRAKEN-FUTURES:FUTURE:XBT-USD-inverse-20260731` | Raw `FI_`/`FF_`/`PI_`/`PF_` prefix now correctly stripped (collision bug fixed — see "Known bugs" below), but still `-inverse-` word-form margin marker + raw expiry digits, not yet the target `@INV-YYYYMMDD` |
-| BINANCE-FUTURES | `BINANCE-FUTURES:FUTURE:BTCUSDT_260925`          | Raw concatenated base+quote, underscore-date                                                                                                                                                                    |
-| BYBIT           | `BYBIT:FUTURE:BTC-01DEC23`                       | No quote segment at all; `DDMMMYY` date                                                                                                                                                                         |
-| DERIBIT         | `DERIBIT:OPTION:BTC-10JUL26-48000-C`             | `DDMMMYY` date — looks clean in isolation, but does not match the other 3 venues, and `DDMMMYY` does not sort chronologically as a string                                                                       |
+| Venue           | Real current instrument_id                       | Note                                                                                                                                           |
+| --------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| KRAKEN-FUTURES  | `KRAKEN-FUTURES:FUTURE:XBT-USD-inverse-20260731` | Raw `FI_`/`FF_`/`PI_`/`PF_` prefix stripped, still `-inverse-` word-form margin marker + raw expiry digits, not yet the target `@INV-YYYYMMDD` |
+| BINANCE-FUTURES | `BINANCE-FUTURES:FUTURE:BTCUSDT_260925`          | Raw concatenated base+quote, underscore-date                                                                                                   |
+| BYBIT           | `BYBIT:FUTURE:BTC-01DEC23`                       | No quote segment at all; `DDMMMYY` date                                                                                                        |
+| DERIBIT         | `DERIBIT:OPTION:BTC-10JUL26-48000-C`             | `DDMMMYY` date — looks clean in isolation, but does not match the other 3 venues, and `DDMMMYY` does not sort chronologically as a string      |
 
 **Decided target (operator, 2026-07-08)**: `VENUE:TYPE:BASE[_QUOTE]@LIN|@INV-YYYYMMDD[-STRIKE-C|P]` — uniform across
 every CeFi venue and both dated-derivative types. Examples: `KRAKEN-FUTURES:FUTURE:XBT-USD@INV-20260731`,
@@ -222,25 +226,19 @@ The convention must be enforced via real, callable builder functions everywhere 
 assertions (the current state of both `canonical_id_builder.py` and strategy-service's `@LIN`/`@INV` handling). Migration
 mechanics (backfill vs. go-forward-only) are an open todo in the canonicalization decision doc, not yet scoped.
 
-## Known bugs / open findings (as of 2026-07-08)
+## Known limitations
 
-Summarized from the full [canonical instrument_id audit](../../../unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md).
-Status reflects each finding's own fix-plan as of this writing — **do not assume anything below is fixed just because
-it's old; check the cited plan's `status:` before relying on this table.**
+Full audit trail: [canonical instrument_id audit](../../../unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md).
 
-| Finding                                                                         | Status                                        | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------------------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Bitfinex BTC-margined-perp silently dropped**                                 | **FIXED** (2026-07-08)                        | The accepted-quote gate (`parsing.py:463`, docstring: "derivatives carry no quote and pass") assumed derivatives never carry a quote — but Bitfinex's own derivative symbol parser (`parsing.py:325-339`) _does_ extract a real quote for Bitfinex inverse perps (`ETHF0:BTCF0` → base=ETH, quote=BTC). Since `BTC` wasn't in the accepted-quote set for Bitfinex, real Bitfinex BTC-margined perps were rejected as if they were an exotic cross-pair. Confirmed live via `api-pub.bitfinex.com/v2/tickers`: `ETHF0:BTCF0` trades ~~2,000+ ETH/day (~~$6-7M/day) — not a negligible edge case; same family includes `LTCF0:BTCF0`, `XRPF0:BTCF0`, `XAUTF0:BTCF0`. **Fix shipped**: `BTC` added as a `BITFINEX-FUTURES`-keyed accepted-quote extension (`_CEFI_VENUE_QUOTE_EXTENSIONS`, `cefi_instrument_universe.py`) — keyed on the FULL canonical venue string rather than the bare entity (unlike the UPBIT/KRW extension) so the sibling `BITFINEX-SPOT` does not also start accepting `BASE/BTC` cross-pairs. Verified end-to-end: `_passes_asset_filter("ETH", "BTC", "PERPETUAL", venue="BITFINEX-FUTURES")` now returns `True`; `BITFINEX-SPOT` `ETH/BTC` still correctly returns `False`. `unified-api-contracts@4e096316`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **Equity-perp base universe stale vs. Binance's live listing (105→124)**        | **PARTIALLY OPEN**                            | `CEFI_EQUITY_PERP_BASE_UNIVERSE` was re-synced 2026-07-08 against live Binance `fapi/v1/exchangeInfo` — see "Equity/commodity-basis perp universe" above for the full +21/-2/3-renamed diff. **Still open**: `CFG`, `DIA`, `INX`, `ROBO`, `SLX`, `SPX` no longer appear as `TRADIFI_PERPETUAL` on Binance (Binance now tags them `underlyingType=COIN` — the ticker was reused by an unrelated crypto token, e.g. `SPX` = the "SPX6900" meme coin) but were **not removed** pending a dedicated cross-venue audit, since all 6 still have live symmetric entries in `TRADFI_EQUITY_PERP_BASIS_UNIVERSE` and `crypto_equity_link.py`, and OKX/Bybit list a same-ticker perp too (not yet confirmed whether that's the same crypto token or a surviving equity product). `unified-api-contracts@4e096316`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **CCXT live-mode instrument_id ≠ batch-mode (Tardis) instrument_id, 13 venues** | **OPEN — P0**                                 | `instruments_service/reference_data/adapters/cefi/ccxt_adapter.py:156` (`_parse_ccxt_market`) stores `instrument_key=symbol` — the bare, unmodified ccxt-native market symbol (`"BTC/USDT"`, `"BTC/USDT:USDT"`) — with zero canonicalization. This is the live-mode route for all 13 CCXT-backed venues in the Venues table above. Batch mode (Tardis) produces a differently-shaped, properly dash-cleaned id for the same real instrument. Same instrument, structurally different ids depending on capture mode — a direct live=batch determinism violation. Not yet fixed (fix plan `canonical_id_p0_ccxt_live_batch_divergence_2026_07_08.md`, 0/4 todos done as of this writing). This is also a **blocking prerequisite** for the strategy-service position-reconciliation fix (below) to actually work end-to-end.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **Live position reconciliation silently defeated for every CCXT venue**         | **OPEN — P0**                                 | Downstream consequence of the divergence above: strategy-service's `reconciliation_engine.py::_find_exchange_qty` compares the internal canonical `instrument_id` against the raw exchange symbol coming back from these same CCXT-backed adapters — they never match, so the check that's supposed to catch a real position mismatch always falls through to "no exchange position." Not yet fixed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| **Kraken-Futures dated-future symbol collision**                                | **FIXED** (core bug + historical remediation) | 5 genuinely distinct real instruments (BCH/ETH/LTC/XBT/XRP quarterly futures, same expiry) previously collapsed onto one identical `instrument_id` because the underlying-extraction regex assumed a `TICKER-QUOTE` shape and Kraken's real dated-future format is `{TYPE_PREFIX}_{PAIR}_{DATE}`. Fixed and shipped: `market-tick-data-service@3d7491b1bcbebc17af0aa31219e90f38478d57cd` (added `_KRAKEN_DATED_PREFIX_RE`, verified against all 5 original colliding files + 2 more real symbols — all now distinct). **Historical remediation done (2026-07-08)**: full-corpus GCS scope found real Kraken-Futures dated-future captures on exactly 5 real days (`2022-03-01`, `2022-03-04`, `2024-02-01`, `2025-01-10`, `2026-01-10`), 125 real parquet files, 37,559,524 rows, 6 real tickers (BCH/ETH/LTC/SOL/XBT/XRP) — every file was already single-real-instrument by filename (the bug never physically merged files, only corrupted the `underlying`/`instrument_id` COLUMN VALUES), so all 125 files were fixed in place (server-side backup first, then column recompute from the untouched raw `symbol`), 0 errors; independent re-verification confirms 0 remaining collisions between different real tickers. **New, separate finding from this verification (not fixed, not this bug)**: 13 (ticker, expiry) pairs — ETH/XBT only — have both a real `FI_` and a real `FF_` raw symbol with genuinely different row counts that now collapse onto the same corrected `instrument_id` (`derive_row_instrument_id` has no field for the `FI`/`FF` contract-subtype) — see the plan's new P2 todo. Note the core fix + remediation restored per-instrument (ticker,expiry) distinctness only; it did **not** migrate the format to the `@INV`/`YYYYMMDD` target above — that's a separate, still-pending migration. |
-| **Kraken-Futures `FI_` vs `FF_` same-(ticker,expiry) ambiguity**                | **OPEN — P2 (new, found 2026-07-08)**         | Discovered while verifying the collision fix above: 13 real (ticker, expiry) combinations (`ETH`/`XBT` only, 2024-2026 range) have BOTH a real `FI_` and a real `FF_` raw Tardis symbol with different row counts (e.g. `FI_ETHUSD_240329` = 129,010 book*snapshot_5 rows + 447 trades vs `FF_ETHUSD_240329` = 107,156 book_snapshot_5 rows + 330 trades) — not duplicates, two genuinely different real data series — that both derive `KRAKEN-FUTURES:FUTURE:ETH-USD-inverse-20240329` today. `derive_row_instrument_id`'s FUTURE branch has no field to encode the `FI`/`FF` contract-subtype at all, so this isn't an extraction bug like the row above — it's a schema gap. The existing code comment in `tardis_shared.py` describing `FI*`as "old index, pre-2020, no longer active" is contradicted by this real 2024-2026 data. Needs an operator decision on what`FI*`vs`FF*`actually represents for KRAKEN-FUTURES and how (or whether) to encode it in the canonical instrument_id before any further Kraken-Futures work. Tracked in`canonical_id_p0_kraken_futures_collision_2026_07_08.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **23 DeFi adapters silently return empty on canonical-form type filters**       | Fixed (DeFi-scope, not CeFi)                  | Out of this doc's scope — see `DEFI_INSTRUMENTS.md`. Noted here only because the audit found it in the same pass; its fix plan (`canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08.md`) is complete (4/4 todos).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Limitation                                                                              | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`CEFI_EQUITY_PERP_BASE_UNIVERSE` ticker reuse**                                       | Six tickers (`CFG`/`DIA`/`INX`/`ROBO`/`SLX`/`SPX`) are kept pending a dedicated cross-venue audit — see "Equity/commodity-basis perp universe" above.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Kraken-Futures dated-future `instrument_id` — margin-marker format not yet migrated** | Per-(ticker, expiry) distinctness is correctly resolved (`_KRAKEN_FUTURES_RE` in `market-tick-data-service/.../adapters/cefi/tardis_shared.py` extracts the real ticker from the `{TYPE_PREFIX}_{PAIR}_{DATE}` raw symbol shape), but the format is still the v6 word-form margin marker (`KRAKEN-FUTURES:FUTURE:XBT-USD-inverse-20260731`), not yet the operator-decided `@INV-YYYYMMDD` target — see "Instrument ID format" above.                                                                                                                                                                                                                                                                            |
+| **Kraken-Futures `FI_` vs `FF_` same-(ticker, expiry) ambiguity**                       | 13 real (ticker, expiry) combinations (`ETH`/`XBT`, 2024-2026 range) have both a real `FI_` and a real `FF_` raw Tardis symbol with different row counts (e.g. `FI_ETHUSD_240329` vs `FF_ETHUSD_240329`) that collapse onto the same `instrument_id` today — `derive_row_instrument_id`'s FUTURE branch (`tardis_shared.py`) has no field to encode the `FI`/`FF` contract-subtype. The adjacent code comment describing `FI*` as pre-2020/"no longer active" is contradicted by real 2024-2026 capture data (a data-state claim, not independently re-verified here). Needs an operator decision on what `FI*` vs `FF*` represents for KRAKEN-FUTURES before it can be encoded in the canonical instrument_id. |
 
 ## Caching strategy
 
-Three layers, unchanged from the prior version of this doc and still accurate:
+Three layers:
 
 1. **Adapter TTL cache** — `get_instruments_cached()` stores results for 1hr; first call hits the API, subsequent calls
    return instantly.
