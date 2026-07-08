@@ -177,6 +177,29 @@ venue's catalog, spanning Ethereum + Base) carried the old 3-colon shape — rel
 `instrument_id_venue_spelling_backfill_2026_07_08.py` script (last colon → dash), verified zero collisions (dash-join
 produces no duplicate `instrument_id` across the 466 rows) and zero remaining 3-colon Morpho rows post-write.
 
+**What is `market_key` / that trailing `0x305dd1` segment, in plain language?** It is NOT a fee tier, a version
+number, or arbitrary padding — it's a (truncated) piece of Morpho Blue's own on-chain **market identifier**, and
+it's load-bearing, not decorative. Confirmed directly in `morpho.py:185` (`market_key = str(market.get("marketId",
+""))`, sourced from the `blue-api.morpho.org` GraphQL API) plus the query itself (`morpho.py:48-65`), which also
+fetches `lltv` per market. Here's why Morpho needs a 3rd identity segment at all, when every other lending protocol
+in this doc (Aave_V3, Compound_V3, Euler_V2, Fluid, ...) identifies a market by token symbol alone:
+
+- On Aave/Compound-style pooled lending, there is exactly **one** market per asset (e.g. one USDC pool) — the token
+  symbol IS a unique key, so `{venue}:LENDING_MARKET:USDC` is unambiguous.
+- Morpho Blue is architecturally different: it's a **permissionless, isolated-market** protocol. Anyone can create a
+  brand-new market for the exact same collateral/loan token pair, but with a _different_ LLTV (max loan-to-value,
+  the `lltv` field this adapter already queries), a different price oracle, and a different interest-rate model. Each
+  combination is its own fully isolated market with its own risk profile — a USDC/EURC market at 86% LLTV is a
+  completely different (and differently risky) instrument from a USDC/EURC market at 77% LLTV, even though "USDC-EURC"
+  as a symbol would be identical for both.
+- So the token-pair symbol alone is genuinely NOT a unique key on Morpho — Morpho's own protocol design solves this by
+  hashing the market's full parameter set (loan token, collateral token, oracle, interest-rate model, LLTV) into one
+  `bytes32` **market ID** on-chain, which is exactly the `marketId` this adapter reads from the API. The trailing
+  segment in `MORPHO-BASE:LENDING_MARKET:USDC-EURC-0x305dd1` is the first 8 hex characters of that market ID
+  (`market_key[:8]`) — just enough to disambiguate two markets that would otherwise collide on symbol alone, without
+  inflating the instrument key with the full 66-character hash. It's the dash-separated (not colon-separated, see the
+  fix above) equivalent of "which specific isolated market", not a cosmetic suffix.
+
 ### YEARN vs YEARN_V3 canonical venue-prefix contradiction — FIXED 2026-07-08
 
 Real registry contradiction found writing this doc (see "Systemic venue-token duplicate-spelling pattern" below for
@@ -194,6 +217,52 @@ canonicalization doc's explicitly-authorized staged migration order (UAC → ins
 strategy-service → deployment, "live breakage explicitly authorized"), those 2 repos need a follow-up fix to match
 before Yearn capability/venue-gated checks are consistent end-to-end. Not fixed here (outside this pass's repo
 scope: instruments-service + unified-api-contracts only).
+
+### Balancer cross-chain pool-address collision — FIXED 2026-07-08
+
+Found while re-checking the AAVE_V3-OPTIMISM/MORPHO fixes above for other real duplicate `instrument_id` values
+elsewhere in the catalog: **5 pairs (10 rows) of real, economically-unrelated Balancer pools shared an identical
+`instrument_id`** — the only duplicate `instrument_id` values anywhere in the entire 7,284-row `prod/catalog.parquet`
+(confirmed by a whole-catalog duplicate scan, not just a Balancer-scoped one). Before (real rows, sorted by the
+colliding id):
+
+| `instrument_id` (before)                     | chain (row 1) | pool (row 1)                     | chain (row 2) | pool (row 2)                               |
+| -------------------------------------------- | ------------- | -------------------------------- | ------------- | ------------------------------------------ |
+| `0x01abc00e86c7e258823b9a055fd62ca6cf61a163` | ETHEREUM      | "DeFi Revenue Leaders" (YFI-UNI) | POLYGON       | "Balancer 33 BIFI 33 WETH 33 WBTC"         |
+| `0x03cd191f589d12b0582a99808cf19851e468e6b5` | ETHEREUM      | "Balancer 50 BAL 50 MKR"         | POLYGON       | "Balancer Polygon Tricrypto"               |
+| `0x06df3b2bbb68adc8b0e302443692037ed9f91b42` | ETHEREUM      | "Balancer USD Stable Pool"       | POLYGON       | "Balancer Polygon Stable Pool"             |
+| `0xc6a5032dc4bf638e15b4a66bc718ba7ba474ff73` | ETHEREUM      | "Balancer 60 WETH 40 DAI"        | POLYGON       | "Balancer Polygon BAL Pool"                |
+| `0xfeadd389a5c427952d8fdb8057d6c8ba1156cc56` | ETHEREUM      | "Balancer BTC Stable Pool"       | POLYGON       | "Balancer Polygon WBTC-renBTC Stable Pool" |
+
+**Root cause, confirmed by reading the real adapter code (not assumed to match the AAVE_V3/MORPHO venue-token-spelling
+class of bug — it doesn't)**: `balancer.py`'s current adapter code already builds a fully chain-qualified key
+(`venue_tag = f"BALANCER-{self._chain}"`, `instrument_key = f"{venue_tag}:POOL:{base}-{quote}"`,
+`balancer.py:225-226`), and the catalog's own `glued_pair_id` column is likewise already correctly
+chain-differentiated for every one of these 10 rows (e.g. `BALANCER-ETHEREUM:POOL:YFI-UNI:15.0` vs
+`BALANCER-POLYGON:POOL:WBTC-WETH:25.0` for the first pair above) — no adapter-code change needed, same "already
+correct go-forward, stale persisted data" shape as the AAVE_V3-OPTIMISM fix. The real bug is one layer up: every
+DEX-pool row's **primary** `instrument_id` in the persisted catalog is the bare on-chain pool contract address alone
+(`pool_address.lower()`, no chain) — this is the already-documented, already-target-decided "DEX pools (finding 2)"
+gap above, which affects all 13 DEX-pool protocols and has its own separately-tracked full-catalog migration (not
+yet shipped). That chain-agnostic scheme is silently fine for the other ~7,274 rows (every other pool address in the
+catalog happens to be globally unique) but breaks for these exact 5 Balancer pools, whose on-chain contract address
+is bit-for-bit identical on both Ethereum and Polygon — a real, benign on-chain coincidence: Balancer deployed its
+pool factory to both chains within days of each other in 2021, and pools are created via sequential `CREATE` from
+that per-chain factory address; when the Nth-pool deployment nonce happens to line up across the two chains'
+independent histories, the resulting contract address collides even though the two pools are unrelated (different
+token pairs, different names, different `market_created_at` dates — confirmed per-row above).
+
+**Fixed (surgical, not the full finding-2 migration)**: `scripts/balancer_cross_chain_pool_address_collision_
+backfill_2026_07_08.py` relabelled only the 10 colliding rows in place directly on
+`gs://instruments-store-defi-prd-central-element-323112/prod/catalog.parquet` (backup:
+`prod/catalog.20260708-200135.balancerchainfix.bak.parquet`), appending the row's own already-correct `chain` column
+via the `@CHAIN` suffix this doc's general `VENUE:TYPE:PAYLOAD[@CHAIN]` grammar already establishes — e.g.
+`0x01abc00e86c7e258823b9a055fd62ca6cf61a163` → `0x01abc00e86c7e258823b9a055fd62ca6cf61a163@ETHEREUM` /
+`...@POLYGON`. The other 2,403 non-colliding Balancer rows (and every other DEX-pool row) were left untouched —
+they aren't broken today, and migrating them wholesale to the finding-2 target format is that separately-tracked
+job, not this one. **Verified after write, by re-downloading the live blob fresh (not reusing the pre-write
+in-memory frame)**: row count unchanged (7,284 → 7,284), and a whole-catalog duplicate-`instrument_id` scan across
+every venue found **0 remaining collisions** (down from the 10 rows / 5 pairs found before).
 
 ---
 
