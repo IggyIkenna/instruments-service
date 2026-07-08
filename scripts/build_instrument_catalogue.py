@@ -839,6 +839,19 @@ class _PredLifecycle:
     #: convention — prediction settlement / availability semantics SSOT:
     #: ``codex/02-data/prediction-settlement-availability-convention.md``).
     settled: str | None = None
+    #: Venue-native fields carried straight through from the per-date InstrumentRecord
+    #: (Kalshi ``event_ticker`` / Polymarket ``slug`` for ``raw_symbol``; Kalshi
+    #: ``series_ticker`` / Polymarket's synthesized category label for ``base_asset`` —
+    #: see ``instruments_service.reference_data.adapters.prediction.*``). BUG FIX
+    #: 2026-07-08: these were captured on every per-date row but never threaded through
+    #: this conditionId-grain accumulator, so ``_emit`` always wrote them blank and the
+    #: real, adapter-populated values never survived into ``prod/catalog.parquet`` (100%
+    #: NULL across 2.49M rows). Only meaningful at the per-conditionId (CID) grain — a
+    #: cqg spans many conditionIds with different raw_symbol/base_asset, so the cqg-grain
+    #: accumulator intentionally leaves these at their "" default (honest absence, not a
+    #: per-market value). See ``docs/PREDICTION_INSTRUMENTS.md`` § "Canonical identity model".
+    raw_symbol: str = ""
+    base_asset: str = ""
 
 
 def _merge_lifecycle(
@@ -849,6 +862,8 @@ def _merge_lifecycle(
     instrument_type: str,
     created: str | None,
     settled: str | None,
+    raw_symbol: str = "",
+    base_asset: str = "",
 ) -> None:
     """Fold one (entity, day) observation into the lifecycle accumulator."""
     cur = acc.get(key)
@@ -860,15 +875,30 @@ def _merge_lifecycle(
             instrument_type=instrument_type,
             created=created,
             settled=settled,
+            raw_symbol=raw_symbol,
+            base_asset=base_asset,
         )
         return
     if day < cur.first_day:
         cur.first_day = day
     if day > cur.last_day:
         cur.last_day = day
-        # Metadata (instrument_type) follows the most-recent observation.
+        # Metadata (instrument_type / raw_symbol / base_asset) follows the
+        # most-recent observation, same convention as instrument_type below.
         if instrument_type:
             cur.instrument_type = instrument_type
+        if raw_symbol:
+            cur.raw_symbol = raw_symbol
+        if base_asset:
+            cur.base_asset = base_asset
+    else:
+        # An earlier day's row may be the only one carrying a value (e.g. a market's
+        # last snapshot before delisting had a transiently-blank field) — backfill
+        # rather than leaving an available value unused.
+        if not cur.raw_symbol and raw_symbol:
+            cur.raw_symbol = raw_symbol
+        if not cur.base_asset and base_asset:
+            cur.base_asset = base_asset
     if created and (cur.created is None or created < cur.created):
         cur.created = created
     if settled and (cur.settled is None or settled > cur.settled):
@@ -955,12 +985,20 @@ def build_prediction_catalogue_dataframe(
                 or _opt_field(row, "settlement_time")
                 or _opt_field(row, "available_to_datetime")
             )
+            # Venue-native fields the adapters DO populate at InstrumentRecord
+            # construction (Kalshi event_ticker / Polymarket slug for raw_symbol;
+            # Kalshi series_ticker / Polymarket's synthesized category label for
+            # base_asset) — present on every per-date row via _records_to_dataframe's
+            # model_dump(), just never read here before this fix. Per-conditionId
+            # grain only (see _PredLifecycle docstring for why the cqg grain skips them).
+            raw_symbol = _str_field(row, "raw_symbol")
+            base_asset = _str_field(row, "base_asset")
             cqg_itype = cqg_itype or itype
             if created and (cqg_created is None or created < cqg_created):
                 cqg_created = created
             if settled and (cqg_settled is None or settled > cqg_settled):
                 cqg_settled = settled
-            _merge_lifecycle(cid_acc, (venue_str, cid), day, venue_str, itype, created, settled)
+            _merge_lifecycle(cid_acc, (venue_str, cid), day, venue_str, itype, created, settled, raw_symbol, base_asset)
         # cqg grain only when the writer emits a cqg (249-b, gated on decision
         # 338). Currently always empty → no cqg rows, conditionId grain only.
         if saw_member and cqg_str:
@@ -1001,6 +1039,21 @@ def build_prediction_catalogue_dataframe(
                 "market_created_at": lc.created,
                 "settlement_time": lc.settled,
                 "data_type": data_type,
+                # BUG FIX 2026-07-08 (see _PredLifecycle docstring): raw_symbol / base_asset
+                # are real, adapter-populated venue-native fields (Kalshi event_ticker/
+                # series_ticker, Polymarket slug/category label) — now threaded through
+                # from the per-date rows instead of always emitting blank. "" (not the prior
+                # implicit NaN) at the cqg grain — a canonical_question_group has no single
+                # per-market raw_symbol/base_asset (honest absence, not unpopulated).
+                "raw_symbol": lc.raw_symbol,
+                "base_asset": lc.base_asset,
+                # `underlying` is genuinely NOT computed for prediction rows today (no
+                # adapter sets InstrumentRecord.underlying) — "" makes that an explicit,
+                # documented absence rather than an implicit NaN. See
+                # docs/PREDICTION_INSTRUMENTS.md "Canonical identity model" for the
+                # decision + the follow-up plan to populate it from the existing
+                # classify_*_to_canonical_group / underlying_for_group SSOT.
+                "underlying": "",
                 # Non-DeFi grain → no dual-form pool ids.
                 "glued_pair_id": "",
                 "pool_address": "",
@@ -1908,7 +1961,7 @@ def _merge_incremental(
          keeps a stopped venue's instruments active exactly like the full
          rebuild) → copied through unchanged.
 
-    The output row set is prev ∪ window-new, so ``len(merged) >= len(prev)`` and
+    The output row set is prev UNION window-new, so ``len(merged) >= len(prev)`` and
     the monotonic guard passes by construction.
     """
     out_columns = [c for c in CATALOG_COLUMNS if c != "mvp"]
@@ -1939,7 +1992,9 @@ def _merge_incremental(
         carried = prev_af.reindex(_incremental_merge_keys(updated, asset_group=asset_group).to_numpy()).to_numpy()
         own = updated["available_from"].astype(str).to_numpy()
         # ISO dates compare lexicographically == chronologically; keep the earlier.
-        updated["available_from"] = [min(c, o) if isinstance(c, str) and c else o for c, o in zip(carried, own)]
+        updated["available_from"] = [
+            min(c, o) if isinstance(c, str) and c else o for c, o in zip(carried, own, strict=True)
+        ]
     fresh = window[~known_mask]
 
     # Branch 3+4 — prev rows absent from the window.
@@ -2132,7 +2187,9 @@ def run_rollup(
         prev_catalogue = _load_previous_catalogue(storage, bucket, canonical_blob)
         if prev_catalogue is None:
             # Cold start: no previous catalogue to merge onto → full rebuild.
-            logger.info("No previous catalogue at gs://%s/%s — cold start, falling back to --mode full", bucket, canonical_blob)
+            logger.info(
+                "No previous catalogue at gs://%s/%s — cold start, falling back to --mode full", bucket, canonical_blob
+            )
             mode = "full"
 
     _emit_event(
@@ -2154,7 +2211,9 @@ def run_rollup(
     )
 
     # Phase C: by_date listing + download-pool
-    print(f"[BISECT-C] by_date listing / download-pool asset_group={asset_group} bucket={bucket} mode={mode}", flush=True)
+    print(
+        f"[BISECT-C] by_date listing / download-pool asset_group={asset_group} bucket={bucket} mode={mode}", flush=True
+    )
     if asset_group == "sports":
         # League-grain could-exist universe — derived from the canonical MANIFEST
         # (the namespace-correct superset), NOT the entity=leagues slice (whose RAW
