@@ -404,13 +404,14 @@ list`)**: it invokes `instruments-service/scripts/daily_is_enumeration.py` → `
 --asset-group sports --start-date {D-2} --end-date {D} --force` with NO `--sports-entity` scoping, so
   TEAMS/STANDINGS get fetched unconditionally alongside everything else, every day. **There IS a season-boundary-gated
   design already built for exactly this** (`deployment-service`'s `SportsTriggerScheduler` Tier-2 `reference` tier,
-  `configs/sports-trigger-tiers.yaml`) — but it has been silently non-functional in production since at least
-  2026-06-24 due to a real, root-caused CLI/deployment wiring gap, filed as
-  `unified-trading-pm/plans/active/issues/sports_trigger_scheduler_cloud_dispatch_broken_2026_07_08.md` (out of scope
-  for this pass — it's a `deployment-service` fix, and `deployment-service` is outside this session's authorized edit
-  scope). **Real cost**: modest (roughly 66 AF calls per invocation, not per day of range), so this is not an urgent
-  API-budget emergency — but it is genuinely wasteful relative to the season-boundary design that already exists and
-  just needs its deployment gap closed; don't launch a big migration, close the existing gap instead.
+  `configs/sports-trigger-tiers.yaml`) — it WAS silently non-functional in production from 2026-06-24 to 2026-07-08
+  due to a CLI/deployment wiring gap, filed and then fixed the same day as
+  `unified-trading-pm/plans/active/issues/sports_trigger_scheduler_cloud_dispatch_broken_2026_07_08.md` (see the
+  Phase B section below for the fix + real-infra verification). **Real cost**: modest (roughly 66 AF calls per
+  invocation, not per day of range), so this was not an urgent API-budget emergency — but it was genuinely wasteful
+  relative to the season-boundary design, which is now dispatching for real again; re-evaluate narrowing
+  `is-daily-enum-sports`'s unconditional TEAMS/STANDINGS scope only after the season-boundary path proves reliable
+  over a real season boundary (don't create a coverage gap in between).
 - **Team mappings — the doc's "6,245 teams x 5 providers" claim was pointing at the WRONG (stale) file.**
   `sports_reference/mappings/team_mapping.parquet` (the path this doc previously cited) is a small, legacy,
   incomplete file — **76 rows, 2 leagues (EPL/Bundesliga only), 2 of 5 providers** (`odds_api_name`/`understat_name`
@@ -662,14 +663,14 @@ An earlier pass of this doc flagged the file's docstring as mis-citing the sport
 doesn't have a clean TYPE/SYMBOL concept" — fixed as part of the one-builder architecture landing today (see
 "Instrument identity" above). No further action needed.
 
-## Seasonal refresh (Phase B) — real status: ALREADY BUILT AND DEPLOYED, but currently non-functional (root-caused 2026-07-08)
+## Seasonal refresh (Phase B) — FIXED 2026-07-08: real dispatch confirmed working against production
 
 An earlier pass of this doc described Phase B as "not yet implemented," with a 4-step spec (daily no-op check; call
-AF `/leagues`; if a new season started, fetch teams/league IDs/venues; else no-op). **That's now known to be
-incorrect** — this exact design already exists, in real code, in `deployment-service` (not instruments-service):
+AF `/leagues`; if a new season started, fetch teams/league IDs/venues; else no-op). **That's incorrect** — this
+exact design already exists, in real code, in `deployment-service` (not instruments-service):
 `SportsTriggerScheduler` + `PeriodicTierDispatcher`
 (`deployment-service/deployment_service/sports_trigger_scheduler.py` / `sports_trigger_periodic.py`), configured by
-`configs/sports-trigger-tiers.yaml`'s Tier-2 `reference` section — `TEAMS` and `LEAGUES` are already gated on
+`configs/sports-trigger-tiers.yaml`'s Tier-2 `reference` section — `TEAMS` and `LEAGUES` are gated on
 `window_condition: season_boundary` (`_gate_by_season_boundary()`, tolerance ±3 days around each expected league's
 real season start/end dates — real code, not a stub). `pipeline_mode` for this path is the `batch_api_football`/
 `batch_*` family, matching the operator's own "batch on live, since it's slow-moving stuff" framing — confirmed
@@ -677,21 +678,43 @@ correct. Because this refresh writes through the exact same instruments-service 
 every other invocation, it lands in the SAME real historical GCS structure documented above — genuine batch=live
 symmetry already holds structurally, by construction, with no separate code path to keep in sync.
 
-**However — confirmed via real `gcloud` evidence, not guessed — it is currently non-functional in production.** The
-Cloud Run Job cron that should drive it (`uts-prod-sports-scheduler-cron`, `*/5 * * * *`, ENABLED) IS firing
-continuously (verified real executions throughout 2026-07-08), but the scheduler's own GCS state file
-(`sports_scheduler_state/scheduler.json`) shows `last_run.reference = 2026-06-24` — 14 days stale despite thousands
-of real executions since then, proving zero successful dispatches in that window. Root-caused to the exact code: the
-CLI (`cli/commands/sports_trigger.py::sports_trigger_run`) never passes a `backend`/`workspace_root` argument, so it
-silently defaults to `backend="local"` inside a Cloud Run Job container that only ships `deployment-service` code
-(`FROM api AS sports-scheduler`, Dockerfile) — every dispatch subprocess call fails immediately, and the failure is
-invisible (the job still exits 0). What's actually keeping Sports data flowing today is a separate, blunter,
-unconditional daily job (`is-daily-enum-sports` — see the Step 3/4 note above). Full root-cause detail + a concrete,
-scoped fix recommendation filed as
-`unified-trading-pm/plans/active/issues/sports_trigger_scheduler_cloud_dispatch_broken_2026_07_08.md` — **not fixed
-in this pass**: `deployment-service` is outside this session's authorized edit scope (instruments-service is the
-primary edit target for this round), so the responsible choice was to root-cause and document precisely rather than
-make an unreviewed cross-repo change to a shared production cron.
+**It WAS non-functional in production for ~14 days (2026-06-24 -> 2026-07-08) — now fixed and verified live.** Root
+cause (confirmed via real `gcloud` evidence): the CLI (`cli/commands/sports_trigger.py::sports_trigger_run`) never
+passed a `backend`/`workspace_root`/`cloud_run_config` argument to `SportsTriggerScheduler(...)`, so it silently
+defaulted to `backend="local"` inside the Cloud Run Job container that only ships `deployment-service` code
+(`FROM api AS sports-scheduler`, Dockerfile) — every dispatch subprocess call failed immediately, invisibly (the job
+still exited 0; `PeriodicTierDispatcher` only persists `last_run[tier]` when `dispatched > 0`, so the GCS state file
+(`sports_scheduler_state/scheduler.json`) went stale — `last_run.reference = 2026-06-24` despite thousands of real
+cron executions since then). Filed as
+`unified-trading-pm/plans/active/issues/sports_trigger_scheduler_cloud_dispatch_broken_2026_07_08.md`, then fixed in
+`deployment-service` the same day:
+
+- Added `--backend`/`--workspace-root`/`--cloud-run-*` CLI options (`cli/commands/sports_trigger.py`), wired into
+  `SportsTriggerScheduler(...)` for both `run` and `evaluate`; the terraform Cloud Run Job
+  (`terraform/gcp/sports_scheduler_cron.tf`) now passes `--backend cloud` + the real project/region/service-account.
+- `configs/sports-trigger-tiers.yaml`'s `cloud_run_job_name` fields were repointed at the REAL, already-provisioned
+  per-service Cloud Run Jobs the T+1 batch reconciliation cron already dispatches into
+  (`uts-prod-instruments-service-t1-recon`, `uts-prod-market-tick-data-service-fast-t1-recon`,
+  `features-sports-service-job`) rather than a set of scheduler-specific jobs that were never provisioned (verified
+  via `gcloud run jobs list` — zero matches for any of the old `sports-trigger-*` names). No dedicated ml-service
+  Cloud Run Job exists yet, so that one entry (`inference_pre_match`) ships with an empty `cloud_run_job_name` — a
+  real, separate infra gap, not silently papered over (fires a loud warning + skips instead).
+- Fixed a second latent bug found in the same code path: `_dispatch_services`'s cloud branch passed the FULL
+  `"python -m <module> ..."` command as the Cloud Run Jobs execution-override `args` — but Cloud Run Jobs V2 can only
+  override `args`, never `command`/entrypoint, and the real target jobs (verified via `gcloud run jobs describe
+uts-prod-instruments-service-t1-recon`: `command: None`, `args: ['--operation=instruments', ...]`) already bake the
+  module invocation into the image's own ENTRYPOINT. Would have broken every cloud dispatch even after the CLI fix.
+- **Verified against real production infra, not just tests**: instantiated the fixed `SportsTriggerScheduler` with
+  `backend="cloud"` and called `_check_reference()` directly against the real GCS state file and real Cloud Run Jobs
+  API. Result: `INJURIES` (`run_always: true`) and `TRANSFERS` (transfer window open for 49 leagues that day) both
+  dispatched successfully via real `uts-prod-instruments-service-t1-recon` executions, and the real state file's
+  `last_run.reference` advanced from the stale `2026-06-24` to `2026-07-08` — the exact staleness this bug caused,
+  now cured. Unit test regressions added for the CLI wiring and the args-stripping fix
+  (`tests/unit/test_sports_trigger_cli.py`, `tests/unit/test_sports_trigger_scheduler_periodic.py`).
+
+What was keeping Sports data flowing during the outage was a separate, blunter, unconditional daily job
+(`is-daily-enum-sports` — see the Step 3/4 note above); that mechanism is unaffected by this fix and can be
+re-evaluated for narrowing once the season-boundary path has proven reliable over a real season boundary.
 
 ## Batch -> Live: minimal delta (corrected 2026-07-08 — the real trigger mechanism, not a Pub/Sub design)
 
@@ -700,14 +723,14 @@ real design principle stated directly in `sports_trigger_scheduler.py`'s own mod
 batch with `--date today`, fired at fixture-proximate times. Same CLI, same service, just triggered by fixture
 proximity instead of daily cron"), not the Pub/Sub-based design an earlier pass of this doc implied. The real
 trigger tiers (`configs/sports-trigger-tiers.yaml`, deployed as `uts-prod-sports-scheduler`; see the Phase B section
-above for its current non-functional-in-practice caveat):
+above — dispatch was broken 2026-06-24 -> 2026-07-08 and is now fixed + verified live):
 
-| Tier           | What                                                                                 | Real cadence                                                                      | Change from batch                                                      |
-| -------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| 1 — Discovery  | Fixture calendar + standings refresh                                                 | Rolling window (today-1..today+7), every 6h                                       | Trigger only                                                           |
-| 2 — Reference  | INJURIES (daily) / TRANSFERS / LEAGUES / TEAMS (season-boundary-gated)               | Daily cadence check; season-boundary items fire only near a real season start/end | Trigger + real gating (currently non-functional in prod — see Phase B) |
-| 3 — Pre-match  | Odds snapshots (T-24h/T-6h/T-1h), lineups, weather, pre-match features, ML inference | Fixture-proximate, offset from real `kickoff_utc`                                 | Trigger + frequency                                                    |
-| 4 — Post-match | Final stats (T+30m), delayed xG (T+24h), post-match features (T+25h)                 | Fixture-proximate, offset from real match-end estimate                            | Trigger + frequency                                                    |
+| Tier           | What                                                                                 | Real cadence                                                                      | Change from batch                                                         |
+| -------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 1 — Discovery  | Fixture calendar + standings refresh                                                 | Rolling window (today-1..today+7), every 6h                                       | Trigger only                                                              |
+| 2 — Reference  | INJURIES (daily) / TRANSFERS / LEAGUES / TEAMS (season-boundary-gated)               | Daily cadence check; season-boundary items fire only near a real season start/end | Trigger + real gating (fixed + verified live 2026-07-08 — see Phase B)    |
+| 3 — Pre-match  | Odds snapshots (T-24h/T-6h/T-1h), lineups, weather, pre-match features, ML inference | Fixture-proximate, offset from real `kickoff_utc`                                 | Trigger + frequency (ML inference has no Cloud Run Job yet — see Phase B) |
+| 4 — Post-match | Final stats (T+30m), delayed xG (T+24h), post-match features (T+25h)                 | Fixture-proximate, offset from real match-end estimate                            | Trigger + frequency                                                       |
 
 instruments-service itself makes NO code distinction between batch and live — it is always the same
 `--operation instruments --mode batch --asset-group SPORTS --start-date X --end-date Y` CLI contract; only the
