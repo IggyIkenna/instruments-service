@@ -398,16 +398,3 @@ async def _fetch_one_venue(
                 )
             )
             return []
-
-
-async def fetch_instruments_via_urdi(
-    venue: str,
-    instrument_type: str | None = None,
-    api_keys: dict[str, str] | None = None,
-    date: str | None = None,
-) -> list[InstrumentRecord]:
-    """Single-venue fetch. Delegates to fetch_instruments_for_all_venues."""
-    result = await fetch_instruments_for_all_venues(
-        [venue], instrument_type=instrument_type, api_keys=api_keys, date=date
-    )
-    return result.records
