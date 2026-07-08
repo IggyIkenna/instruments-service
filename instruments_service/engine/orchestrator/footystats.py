@@ -197,6 +197,19 @@ async def _fetch_footystats_predictions(
                     _pred_canonical = _orch._canonical_league_id(_pred_lid_str)
                     if not _orch._is_in_canonical_write_universe(_pred_canonical):
                         continue
+                    if _pred_canonical not in set(_ft_expected):
+                        # Same out-of-subscription write-gate gap as MATCHES
+                        # (root-caused 2026-07-08): don't let incidental
+                        # bulk-endpoint rows for a PRED_NO_FOOTYSTATS league
+                        # masquerade as `captured` PREDICTIONS coverage.
+                        _orch.logger.debug(
+                            "FootyStats predictions: dropping out-of-subscription "
+                            "league=%s date=%s (not in footystats PREDICTIONS "
+                            "expected-leagues set)",
+                            _pred_canonical,
+                            date,
+                        )
+                        continue
                     _pred_clean = _pred_league_df.drop(columns=["_pred_league"])
                     _stamped_pred_clean = _orch.stamp_available_at_explicit(
                         _pred_clean, when=_orch.datetime.now(_orch.UTC)
@@ -528,6 +541,27 @@ async def _fetch_footystats_matches(
                     _ft_lid_str = str(_ft_lid)
                     _ft_canonical = _orch._canonical_league_id(_ft_lid_str)
                     if not _orch._is_in_canonical_write_universe(_ft_canonical):
+                        continue
+                    if _ft_canonical not in set(_ft_expected):
+                        # League canonicalizes fine and is tracked elsewhere
+                        # (e.g. api_football), but is NOT on our FootyStats
+                        # subscription for MATCHES (PRED_NO_FOOTYSTATS, e.g.
+                        # CHILE_PRIMERA/K_LEAGUE_1/LIGA_MX/ARGENTINA_PRIMERA).
+                        # The bulk /todays-matches endpoint can still return
+                        # incidental rows for it; writing those as `captured`
+                        # would fool the dynamic "≥1 captured row = covered"
+                        # heuristic in the footystats coverage-typing tooling
+                        # into seeding a full-history expected-universe
+                        # denominator that this loop (scoped to _ft_expected)
+                        # never systematically backfills — a permanent,
+                        # unclosable pending_fetch gap (root-caused 2026-07-08).
+                        _orch.logger.debug(
+                            "FootyStats matches: dropping out-of-subscription "
+                            "league=%s date=%s (not in footystats MATCHES "
+                            "expected-leagues set)",
+                            _ft_canonical,
+                            date,
+                        )
                         continue
                     _ft_clean = _ft_league_df.drop(columns=["_ft_league"])
                     _stamped_ft_df = _orch.stamp_available_at_explicit(_ft_clean, when=_orch.datetime.now(_orch.UTC))
