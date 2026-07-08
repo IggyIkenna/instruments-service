@@ -98,6 +98,7 @@ from unified_api_contracts import (
     is_mvp,
     is_total_universe,
     pipeline_mode_for_source,
+    source_string_for,
     valid_data_types_for_venue_instrument_type,
 )
 from unified_api_contracts.registry import (
@@ -310,7 +311,7 @@ def _emit_event(event: str, /, **details: object) -> None:
     logger.info("EVENT %s", payload)
 
 
-def _derive_pm_source_transport(asset_group: str, data_type: str) -> tuple[str, str, str]:
+def _derive_pm_source_transport(asset_group: str, data_type: str, venue: str = "") -> tuple[str, str, str]:
     """Return ``(pipeline_mode, source, transport)`` for a seeded expected row.
 
     #4 (``pipeline_mode_source_batch_live_replay_standardisation_2026_06_05`` +
@@ -326,8 +327,20 @@ def _derive_pm_source_transport(asset_group: str, data_type: str) -> tuple[str, 
       seed denominator is a BATCH expectation (the T+1 floor we owe).
     * ``transport`` = ``default_transport_for_source(source)`` (the column SSOT).
 
-    Computed/service-only + unregistered cells (no external source) get
-    ``("", "", "")`` — they are exempt (no external vendor to owe data from).
+    CF-3 fix (2026-07-08, ``tradfi_manifest_cf4_source_and_cf7_phantom_gaps``):
+    when ``(asset_group, data_type)`` has NO ``SOURCE_PRIORITY`` entry, fall back
+    to UTL ``derive_pipeline_mode_for_row`` — the SAME per-``(venue, data_type)``
+    override + per-asset_group default (``tradfi`` → ``BATCH_DATABENTO``, etc.)
+    the REAL capture writer (MTDS orchestrator ``_resolve_pipeline_mode_for_sentinel``)
+    already uses. Without this, a real-vendor data_type simply missing a
+    SOURCE_PRIORITY row (e.g. ``mbp_10`` / ``corporate_action_confirmed`` /
+    ``earnings_result`` / ``macro_result`` for tradfi — genuinely Databento-sourced
+    but never registered) seeds a permanently-blank denominator row while the real
+    writer stamps a concrete ``pipeline_mode`` for the same cell — an unfixable
+    corpus-wide divergence (CF-3). Reusing the real writer's helper guarantees the
+    seed always matches what the real row will eventually carry, and costs nothing
+    for genuinely computed/service-only asset_groups (no ``_ASSET_GROUP_FALLBACKS``
+    entry there either, so those keep returning blank exactly as before).
     Sports data_types are registered upper-case in ``SOURCE_PRIORITY`` while the
     enumerator carries them lower-case, so both are tried.
     """
@@ -340,14 +353,23 @@ def _derive_pm_source_transport(asset_group: str, data_type: str) -> tuple[str, 
             external = external_sources_for(ag, dt)
             if external:
                 break
-    if not external:
+    if external:
+        source = external[0]
+        try:
+            pipeline_mode = pipeline_mode_for_source(source, Mode.BATCH).value
+            return pipeline_mode, source, default_transport_for_source(source)
+        except ValueError:
+            pass  # No batch member for this source — fall through to the writer fallback.
+
+    from unified_trading_library import derive_pipeline_mode_for_row
+
+    fallback_pm = derive_pipeline_mode_for_row(venue=venue, asset_group=ag, data_type=data_type)
+    if fallback_pm is None:
         return "", "", ""
-    source = external[0]
-    try:
-        pipeline_mode = pipeline_mode_for_source(source, Mode.BATCH).value
-    except ValueError:
+    fallback_source = source_string_for(fallback_pm) or ""
+    if not fallback_source:
         return "", "", ""
-    return pipeline_mode, source, default_transport_for_source(source)
+    return fallback_pm.value, fallback_source, default_transport_for_source(fallback_source)
 
 
 # ---------------------------------------------------------------------------
@@ -1126,7 +1148,7 @@ def _enumerate_v2_cefi(
         # venue launch would otherwise over-seed the alive-but-pre-source
         # window with expected_unattempted rows the venue cannot yet produce.
         # Pre-computed once per instrument (one UAC lookup per data_type, not
-        # per date × data_type). Priority order per UAC:
+        # per date x data_type). Priority order per UAC:
         # VENUE_DATA_TYPE_CAPABILITIES → VENUE_REFERENCE_DATA_CAPABILITIES →
         # VenueMapping.venue_start_dates (venue-level fallback).
         dt_start_ts_by_dt: dict[str, pd.Timestamp | None] = {}
@@ -2796,7 +2818,7 @@ def _write_range_artifact(
     attempted_at_iso = datetime.now(UTC).isoformat()
     records: list[dict[str, object]] = []
     for r in ranges:
-        pipeline_mode, source, transport = _derive_pm_source_transport(asset_group, r.data_type)
+        pipeline_mode, source, transport = _derive_pm_source_transport(asset_group, r.data_type, venue=r.venue)
         records.append(
             {
                 "asset_group": r.asset_group,
@@ -3115,7 +3137,7 @@ def _write_absent_rows(
     for r in absent_rows:
         # #4 — stamp pipeline_mode + source + transport so seeded denominator
         # rows match the real rows they reconcile against (else CF-3 reads blank).
-        pipeline_mode, source, transport = _derive_pm_source_transport(asset_group, r.data_type)
+        pipeline_mode, source, transport = _derive_pm_source_transport(asset_group, r.data_type, venue=r.venue)
         record: dict[str, object] = {
             "asset_group": asset_group,
             "venue": r.venue,
