@@ -95,24 +95,25 @@ async def _ensure_canonical_fixtures_for_override(
     The URDI phase writes instrument records, but features-sports needs the
     canonical fixture format (af_fixture_id, timestamp, home/away names, etc.).
     Read from the old path (sports_reference/fixtures/day=) or fetch from API.
-    v9: probe canonical path (pipeline_mode= in prefix) first, then legacy.
+
+    Bug fix (2026-07-08): the "already have canonical data" check previously
+    probed a single bare ``entity=fixtures/fixtures.parquet`` blob — FIXTURES
+    are written per-league under a ``pipeline_mode=`` hive segment
+    (``entity=fixtures/league={L}/fixtures.parquet``), so that bare blob is
+    never populated post-migration and the check always found nothing. That
+    meant this function always fell through to the old-path/API-fetch branch
+    even when real per-league fixtures were already captured — wasting 33
+    api-football calls per date (a real cost bug, not a data-loss one, since
+    the write path below is unaffected). Uses the canonical-then-legacy
+    per-league prefix listing (``_read_per_league_entity_df``) instead.
     """
-    _new_fixtures_canonical = _orch._sports_ref_canonical_blob_path(date, "fixtures", filename="fixtures.parquet")
-    _new_fixtures_legacy = _orch._sports_ref_legacy_blob_path(date, "fixtures", filename="fixtures.parquet")
     try:
         _storage = _orch.get_storage_client()
-        _new_fixtures_path = _orch._resolve_sports_ref_blob(
-            _storage, bucket, _new_fixtures_canonical, _new_fixtures_legacy
-        )
-        _new_blob = _storage.bucket(bucket).blob(_new_fixtures_path)
-        # Check if path already has canonical data (not instrument records)
+        # Check if per-league canonical data already exists (not instrument records)
         _needs_write = True
-        if _new_blob.exists():
-            _existing = _orch.pd.read_parquet(
-                _orch.io.BytesIO(_storage.download_bytes(bucket=bucket, blob_path=_new_fixtures_path))
-            )
-            if "af_fixture_id" in _existing.columns or "timestamp" in _existing.columns:
-                _needs_write = False  # Already canonical format
+        _existing = _orch._read_per_league_entity_df(bucket, date, "fixtures")
+        if _existing is not None and ("af_fixture_id" in _existing.columns or "timestamp" in _existing.columns):
+            _needs_write = False  # Already canonical format
 
         if _needs_write:
             # Try old path first (zero API calls)
