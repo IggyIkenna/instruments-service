@@ -132,10 +132,19 @@ async def test_instrument_type_filter_rejects_non_lending() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lending_market_alias_is_accepted() -> None:
+async def test_canonical_lending_type_is_accepted() -> None:
+    """P0 regression guard: real callers filter on the canonical uppercase
+    ``InstrumentType.LENDING`` value. A prior guard compared against the
+    lowercase literal ``"lending_market"`` instead, which never matched and
+    silently returned ``[]`` for any canonical-form request — see
+    canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08.md. The lowercase
+    literal was never a real alias; it was the bug itself, so it is now
+    correctly rejected like any other non-matching value.
+    """
     adapter = VenusReferenceDataAdapter(chain="BSC")
     with patch(_RESOLVER_PATHS["venus"], return_value={}):
-        assert await adapter.get_instruments(instrument_type="lending_market")
+        assert await adapter.get_instruments(instrument_type=InstrumentType.LENDING)
+        assert await adapter.get_instruments(instrument_type="lending_market") == []
 
 
 @pytest.mark.asyncio

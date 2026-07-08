@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import cast
 
 import ccxt.async_support as ccxta
-from unified_api_contracts import BAR_TIMEFRAMES, BarTimeframe
+from unified_api_contracts import BAR_TIMEFRAMES, BarTimeframe, VenueMapping
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType, OptionType
 from unified_trading_library.availability_stamping import compute_bar_close_boundary  # noqa: qg-deep-import
 
@@ -39,11 +39,40 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         super().__init__(project_id=project_id, api_key=api_key)
         self._exchange_id = venue
         self._venue = canonical_venue or venue
+        # Precomputed ONCE per adapter instance (not per-market — VenueMapping()
+        # rebuilds several dict/list field factories, too costly for a per-market
+        # hot loop over thousands of instruments). See _resolve_instrument_key_venue.
+        self._instrument_key_venue = self._resolve_instrument_key_venue(self._venue)
 
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
         return self._venue
+
+    @staticmethod
+    def _resolve_instrument_key_venue(canonical_venue: str) -> str:
+        """Resolve the VENUE token to use inside ``instrument_key``.
+
+        A handful of canonical venues (e.g. ``BYBIT-FUTURES``) are UAC-registered
+        aliases that route to the SAME underlying Tardis exchange as their
+        "primary" venue (``BYBIT``) — ``TardisReferenceDataAdapter._parse_tardis_
+        instrument`` derives its ``canonical_venue`` purely from
+        ``VenueMapping.tardis_to_venue[exchange]``, so a batch-mode query for the
+        alias venue still comes back tagged with the PRIMARY venue token (e.g.
+        querying batch mode for ``BYBIT-FUTURES`` yields ``instrument_key``s
+        prefixed ``BYBIT:...``, not ``BYBIT-FUTURES:...``). Mirroring that
+        resolution here (rather than using the alias verbatim) is required for
+        the live/batch ``instrument_key`` to converge for these alias venues too.
+
+        Falls back to ``canonical_venue`` unchanged when it has no Tardis
+        exchange mapping (e.g. bare ``OKX`` — has no live batch-mode counterpart
+        to converge with in the first place).
+        """
+        vm = VenueMapping()
+        tardis_exchange = vm.get_tardis_exchange_for_venue(canonical_venue)
+        if tardis_exchange is None:
+            return canonical_venue
+        return vm.tardis_to_venue.get(tardis_exchange, canonical_venue)
 
     def _get_exchange(self) -> ccxta.Exchange:
         """Instantiate a ccxt async exchange by venue name."""
@@ -84,6 +113,40 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         if ccxt_type == "option":
             return InstrumentType.OPTION
         return InstrumentType.SPOT_PAIR
+
+    @staticmethod
+    def _build_instrument_key(
+        canonical_venue: str,
+        instrument_type: InstrumentType,
+        base: str,
+        quote: str,
+        raw_symbol: str,
+    ) -> str:
+        """Build the canonical ``instrument_key`` for a live-mode CCXT market.
+
+        Mirrors the construction ``TardisReferenceDataAdapter._parse_tardis_
+        instrument`` uses for the SAME 13 canonical CeFi venues in batch mode
+        (``instruments_service/reference_data/adapters/cefi/tardis/adapter.py``)
+        so live and batch converge on an identical id for the identical
+        instrument — this is the workspace's ``paper(W) == batch-rerun(W)``
+        determinism invariant (canonical_id_p0_ccxt_live_batch_divergence
+        2026-07-08). Deliberately NOT ``canonical_id_builder.build_instrument_id``
+        — that builder reconstructs FUTURE/OPTION ids from expiry/strike/right
+        components, which does not match Tardis's raw-id passthrough below.
+
+        * SPOT_PAIR / PERPETUAL: ``VENUE:TYPE:BASE-QUOTE`` — reconstructed from
+          ccxt's own ``base``/``quote`` market fields, exactly like Tardis's
+          ``f"{base}-{quote}"``.
+        * FUTURE / OPTION (and anything else): ``VENUE:TYPE:RAW_SYMBOL`` — the
+          exchange-native id verbatim, upper-cased, matching Tardis's
+          ``raw_id.upper()`` (both vendors proxy the exchange's own instrument
+          name, so a dated/derivative symbol converges without reconstruction).
+        """
+        if instrument_type in (InstrumentType.SPOT_PAIR, InstrumentType.PERPETUAL) and base and quote:
+            symbol = f"{base.upper()}-{quote.upper()}"
+        else:
+            symbol = raw_symbol.upper()
+        return f"{canonical_venue}:{instrument_type.value}:{symbol}"
 
     @staticmethod
     def _extract_market_sizes(
@@ -153,10 +216,12 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         if mapped_type == InstrumentType.OPTION and strike is None:
             return None
 
+        raw_symbol = str(market.get("id") or symbol)
+
         return InstrumentRecord(
-            instrument_key=symbol,
+            instrument_key=self._build_instrument_key(self._instrument_key_venue, mapped_type, base, quote, raw_symbol),
             venue=self.venue,
-            raw_symbol=str(market.get("id") or symbol),
+            raw_symbol=raw_symbol,
             instrument_type=mapped_type,
             base_asset=base,
             quote_asset=quote,

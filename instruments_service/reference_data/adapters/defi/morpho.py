@@ -87,7 +87,7 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Morpho Blue lending markets as instruments."""
-        if instrument_type not in (None, "lending_market"):
+        if instrument_type not in (None, InstrumentType.LENDING):
             return []
 
         chain_id = _MORPHO_CHAIN_IDS.get(self._chain)
@@ -188,7 +188,11 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         symbol = f"{collateral_symbol}-{loan_symbol}"
-        instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}:{market_key[:8]}"
+        # Dash-separate the market-key disambiguator, not colon — colon is the
+        # reserved top-level VENUE:TYPE:SYMBOL delimiter, so a 3rd colon inside the
+        # symbol segment is ambiguous to any naive split(":") parser (operator
+        # decision 2026-07-08, instrument_id_format_canonicalization finding 6).
+        instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}-{market_key[:8]}"
 
         # DeFi metadata: Morpho Blue uses the bytes32 uniqueKey as the
         # canonical market identifier; surface that as pool_address along

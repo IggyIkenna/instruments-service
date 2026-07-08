@@ -1,27 +1,36 @@
-# Sports Instrument Pipeline
+# Sports Instruments
 
-<!-- POST_PLAN_SECTION_2026_05_06 -->
+> One of 7 consolidated instruments-service docs (docs-consolidation Phase 3,
+> `unified-trading-pm/plans/active/instruments_service_docs_consolidation_2026_07_08.md`). Covers sports-betting
+> fixtures/odds instruments: leagues, matchups, and bookmakers-as-venues.
 
-## Post-2026-05-06 additions
+**Workspace SSOTs**: [POST_PLAN_REALITY](../../unified-trading-pm/codex/POST_PLAN_REALITY_2026_05_06.md) (10
+cross-cutting principles), [availability-manifest-and-data-status](../../unified-trading-pm/codex/02-data/availability-manifest-and-data-status.md),
+[shard-level-failure-isolation](../../unified-trading-pm/codex/04-architecture/shard-level-failure-isolation.md).
+**Live mockup**: the Sports tab of the instruments-definitions mockup
+(https://claude.ai/code/artifact/e2824e52-3a51-43e0-b4b1-933bee469f9d) renders this model directly — a fixture IS the
+instrument, and a bookmaker is treated as a venue, exactly as described below.
 
-**Post-2026-05-06 additions** — sports per-fixture sharding clarified per multi-axis plan: manifest shard atom is `(asset_group=sports, source, data_type, league_id, day)`; fixture_id is a row-level column in the parquet for drill-down; per-fixture detail comes from parquet read at drill-down time, NOT from a separate manifest row. Avoids 10× manifest inflation. League stays as a higher-level rollup grouping for filtering.
-
-**Workspace SSOTs**: [POST_PLAN_REALITY](../../unified-trading-pm/codex/POST_PLAN_REALITY_2026_05_06.md) (10 cross-cutting principles + active plans), [availability-manifest-and-data-status](../../unified-trading-pm/codex/02-data/availability-manifest-and-data-status.md), [deployment-clusters-live-vs-batch](../../unified-trading-pm/codex/05-infrastructure/deployment-clusters-live-vs-batch.md), [shard-level-failure-isolation](../../unified-trading-pm/codex/04-architecture/shard-level-failure-isolation.md), [error-handling](../../unified-trading-pm/codex/06-coding-standards/error-handling.md), [validation-patterns](../../unified-trading-pm/codex/06-coding-standards/validation-patterns.md).
+---
 
 ## Overview
 
-Sports instruments follow an 11-step pipeline from static config (UAC) through reference data (instruments-service) to
-market data (MTDS) to features (FSS). The pipeline mirrors CeFi/DeFi: **instruments-service -> MTDS -> FSS**.
+Sports instruments follow an 11-step pipeline from static config (UAC) through reference data
+(instruments-service) to market data (MTDS) to features (FSS) — the same **instruments-service -> MTDS -> FSS**
+shape as CeFi/DeFi. Key difference: MTDS owns both instrument discovery AND tick data for sports, because the Odds
+API returns markets + prices in a single response, so there is no separate "sports instrument discovery" step at the
+market-data layer the way there is for CeFi order books.
 
-Key difference: MTDS owns both instrument discovery AND tick data for sports, because the Odds API returns markets +
-prices in a single response.
+**Sole Source Rule**: API-Football is the sole source of truth for reference data. If a league, team, fixture,
+player, venue, or referee does not exist in API-Football, it does not exist in our universe. All other providers
+(FootyStats, Understat, SoccerFootball, Transfermarkt, Open-Meteo, Odds API) are enrichment or market-data only.
 
-## Sole Source Rule
+## The fixture-is-the-instrument model
 
-**API-Football is the sole source of truth for all reference data.** If a league, team, fixture, player, venue, or
-referee does not exist in API-Football, it does not exist in our universe. All other providers are enrichment only.
-
-## Terminology
+Unlike CeFi/DeFi, where an _instrument_ is a standing tradeable object (a spot pair, a perpetual) that exists
+independently of any one trade, in Sports the **fixture itself is the instrument** — a specific match between two
+specific teams on a specific date. Markets (who wins?) and selections (Arsenal to win) are attached to that fixture,
+and a bookmaker fills the venue role.
 
 | Term               | Definition                               | CeFi Analogy                             |
 | ------------------ | ---------------------------------------- | ---------------------------------------- |
@@ -31,9 +40,48 @@ referee does not exist in API-Football, it does not exist in our universe. All o
 | Betting instrument | Fixture + market + selection + bookmaker | Specific instrument on specific exchange |
 | Odds               | Price at a point in time                 | Bid/ask price                            |
 
-## Prediction Leagues (33 active)
+## Instrument identity: Sports has its own ID scheme, by design
 
-Defined in UAC `LEAGUE_REGISTRY`. A league is "Prediction" only if Odds API covers it (no odds = can't trade).
+Sports does **not** use the general CeFi/DeFi `VENUE:TYPE:SYMBOL` convention, and that is an intentional,
+operator-confirmed design decision — not a gap or a bug.
+
+The 2026-07-08 canonical-instrument-id audit
+([`canonical_instrument_id_audit_2026_07_08.md`](../../unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md))
+and the follow-on decision doc
+([`instrument_id_format_canonicalization_2026_07_08.md`](../../unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md))
+reviewed whether Sports should be forced into `VENUE:TYPE:SYMBOL` like every other asset group, and the operator
+explicitly decided **no**: _"sports doesn't have a clean TYPE/SYMBOL concept."_ A fixture is not a `TYPE` with a
+`SYMBOL` in the way a spot pair or perpetual is — it's an event between two named participants on a date, so a
+`LEAGUE:MATCHUP:DATE`-shaped identity fits the domain better than shoehorning it into the venue-first convention. This
+sits alongside a matching, separately-confirmed decision for Prediction: the 31 `canonical_question_group` keys
+shared between Polymarket/Kalshi are **not** a collision — the label is a deliberate cross-venue-arb mechanism, the
+same pattern as Sports fixtures being venue/bookmaker-independent at the fixture level even though bookmaker odds are
+venue-scoped underneath.
+
+In code, `unified_api_contracts.canonical.domain.sports.canonical_ids.build_fixture_id()` builds exactly this shape:
+
+```
+{LEAGUE}:{HOME}_v_{AWAY}:{YYYYMMDD}[_{HHMM}]
+```
+
+e.g. `ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322`. This is the real, current canonical fixture id builder, used
+by the API-Football and FootyStats normalizers.
+
+**One real documentation bug worth flagging while we're here**: `canonical_id_builder.py`
+(`unified-api-contracts/unified_api_contracts/internal/reference/canonical_id_builder.py`) — the file that other docs
+treat as the workspace's general instrument-id SSOT — cites this same sports builder family in its own docstring as
+"the correct integrated example of the `VENUE:TYPE:SYMBOL` convention." It isn't: `build_fixture_id()` produces
+`LEAGUE:MATCHUP:DATE`, a structurally different scheme, with its own separate fallback path. That's now understood as
+_reasonable_ per the operator decision above (Sports legitimately needs its own scheme) — but the docstring's framing
+of it as a `VENUE:TYPE:SYMBOL` example is simply incorrect and should be corrected wherever `canonical_id_builder.py`
+is next touched.
+
+## MVP universe today (real, from the current adapter registry)
+
+### Prediction Leagues (33 active)
+
+Defined in UAC `LEAGUE_REGISTRY` (`unified_api_contracts/canonical/domain/sports/league_registry.py`). A league is
+"Prediction" only if the Odds API covers it (no odds = can't trade).
 
 | Country     | Leagues                                   | AF IDs         |
 | ----------- | ----------------------------------------- | -------------- |
@@ -63,19 +111,42 @@ Defined in UAC `LEAGUE_REGISTRY`. A league is "Prediction" only if Odds API cove
 | Mexico      | Liga MX                                   | 262            |
 | USA         | MLS                                       | 253            |
 
-## Data Providers (7)
+### Reference-data providers (7)
 
-| Provider       | Role                                                       | API Key         | Secret Name                    | Coverage              |
-| -------------- | ---------------------------------------------------------- | --------------- | ------------------------------ | --------------------- |
-| API-Football   | Reference data SSOT (fixtures, teams, standings, injuries) | Required        | `api-football-api-key`         | 100% of leagues       |
-| Odds API       | Market data (odds, betting instruments)                    | Required        | `odds-api-key`                 | 33 prediction leagues |
-| FootyStats     | Enrichment (advanced shooting/passing stats)               | Required        | `footystats-api-key`           | ~73% of fixtures      |
-| Understat      | Enrichment (xG, shot data)                                 | None (scraping) | N/A                            | 5 leagues only        |
-| SoccerFootball | Enrichment (progressive stats, standings)                  | Required        | `soccer-football-info-api-key` | ~38%                  |
-| Transfermarkt  | Enrichment (player valuations, transfers)                  | Required        | `transfermarkt-api-key`        | ~41%                  |
-| Open-Meteo     | Enrichment (weather at venue)                              | None (free)     | N/A                            | 100% (needs lat/lon)  |
+Adapters live in `instruments-service/instruments_service/reference_data/adapters/sports/adapters/`, registered in
+`sports/factory.py`'s `_ADAPTERS` map (`api_football`, `footystats`, `open_meteo`, `soccer_football_info` /
+`soccerfootball_info`, `transfermarkt`, `understat`). Enrichment adapters depend on API-Football having already been
+fetched for the target date — the factory pre-flight checks this and raises `DependencyError` if not.
 
-## 11-Step Pipeline
+| Provider       | Role                                                       | API Key         | Coverage              |
+| -------------- | ---------------------------------------------------------- | --------------- | --------------------- |
+| API-Football   | Reference data SSOT (fixtures, teams, standings, injuries) | Required        | 100% of leagues       |
+| Odds API       | Market data (odds, betting instruments) — via MTDS, not IS | Required        | 33 prediction leagues |
+| FootyStats     | Enrichment (advanced shooting/passing stats)               | Required        | ~73% of fixtures      |
+| Understat      | Enrichment (xG, shot data)                                 | None (scraping) | 5 leagues only        |
+| SoccerFootball | Enrichment (progressive stats, standings)                  | Required        | ~38%                  |
+| Transfermarkt  | Enrichment (player valuations, transfers)                  | Required        | ~41%                  |
+| Open-Meteo     | Enrichment (weather at venue)                              | None (free)     | 100% (needs lat/lon)  |
+
+**Betfair** (`sports/adapters/betfair.py`) is a distinct, separately-registered reference-data adapter — it goes
+through the general `reference_data/factory.py` (as a `BaseReferenceDataAdapter`), not the sports-domain
+`sports/factory.py` (whose adapters extend `BaseSportsReferenceAdapter`). It surfaces Betfair's `listMarketCatalogue`
+runners as `InstrumentRecord`s with `instrument_type=EXCHANGE_ODDS`. See "Known gaps" below for a real format bug in
+its `instrument_key`.
+
+### Bookmakers (20, via Odds API — MTDS market data, not instruments-service reference data)
+
+`pinnacle, betfair_ex_uk, matchbook, betonlineag, lowvig, onexbet, marathonbet, bovada, betsson, unibet, unibet_uk,
+livescorebet, skybet, paddypower, betway, coral, boylesports, leovegas, casumo, virginbet`
+
+**Markets**: h2h (match odds), totals (over/under), spreads (handicap). **Time buckets (14 per fixture-day)**: T-24h,
+T-12h, T-6h, T-90m, T-80m, T-70m, T-60m, T-50m, T-40m, T-30m, T-20m, T-10m, T-0, HT.
+
+Note: the MVP-crypto-instruments spec (`docs/specs/MVP_INSTRUMENTS.md`) is a CeFi/DeFi/TradFi-only document with zero
+sports content — it does not describe the sports universe at all, and should not be treated as a sports reference.
+This doc, and the real adapter registry it's sourced from, are the sports MVP-universe reference.
+
+## 11-step pipeline
 
 ### Steps 1-2: Config (UAC, no runtime)
 
@@ -84,7 +155,7 @@ Defined in UAC `LEAGUE_REGISTRY`. A league is "Prediction" only if Odds API cove
 | 1    | Prediction leagues (33)                   | UAC `LEAGUE_REGISTRY`        | Manual                   |
 | 2    | League mappings (AF->FT/US/SF/TM/OddsAPI) | UAC `provider_league_ids.py` | Yearly (FootyStats only) |
 
-### Steps 3-8: Reference Data (instruments-service -> GCS)
+### Steps 3-8: Reference data (instruments-service -> GCS)
 
 | Step | What                                      | Source                     | Refresh           | GCS Path                                               |
 | ---- | ----------------------------------------- | -------------------------- | ----------------- | ------------------------------------------------------ |
@@ -95,25 +166,19 @@ Defined in UAC `LEAGUE_REGISTRY`. A league is "Prediction" only if Odds API cove
 | 7    | Venues (3,445, 95% geocoded)              | AF `/venues` + Nominatim   | Yearly            | `sports_reference/venues/venues.parquet`               |
 | 8    | Players, referees, injuries               | AF `/injuries`, `/lineups` | Daily/per-fixture | `sports_reference/by_date/day={date}/entity=injuries/` |
 
-**CLI**: `python -m instruments_service.cli.main --operation instruments --mode batch --asset-group SPORTS --start-date {date} --end-date {date}`
+**CLI**: `python -m instruments_service.cli.main --operation instruments --mode batch --asset-group SPORTS
+--start-date {date} --end-date {date}`. **Timing**: ~42 seconds per day (33 leagues, ~180 fixtures, ~900 injuries,
+~690 standings).
 
-**Timing**: ~42 seconds per day (33 leagues, ~180 fixtures, ~900 injuries, ~690 standings).
-
-### Step 9: Market Data — Odds (MTDS -> GCS)
+### Step 9: Market data — odds (MTDS -> GCS)
 
 | What                       | Source                 | Refresh                         | GCS Path                                                        |
 | -------------------------- | ---------------------- | ------------------------------- | --------------------------------------------------------------- |
 | Odds + betting instruments | Odds API v4 historical | 14 time buckets per fixture day | `raw_tick_data/by_date/day={date}/venue=ODDS_API/ticks.parquet` |
 
-**Time buckets (14)**: T-24h, T-12h, T-6h, T-90m, T-80m, T-70m, T-60m, T-50m, T-40m, T-30m, T-20m, T-10m, T-0, HT
-
-**Bookmakers (20)**: pinnacle, betfair_ex_uk, matchbook, betonlineag, lowvig, onexbet, marathonbet, bovada, betsson, unibet, unibet_uk, livescorebet, skybet, paddypower, betway, coral, boylesports, leovegas, casumo, virginbet
-
-**Markets**: h2h (match odds), totals (over/under), spreads (handicap)
-
-**API cost**: Uses `bookmakers=` parameter (not `regions=`) for 4x lower credit usage.
-Historical: `10 × 3 markets × 1 = 30 credits/call`. Live: `3 markets × 1 = 3 credits/call`.
-Per day (batch): `30 × 14 buckets × 33 leagues = 13,860 credits`. 80-day backfill = ~1.1M credits.
+**API cost**: `bookmakers=` param (not `regions=`) for 4x lower credit usage. Historical: `10 × 3 markets × 1 = 30
+credits/call`. Live: `3 markets × 1 = 3 credits/call`. Per day (batch): `30 × 14 buckets × 33 leagues = 13,860
+credits`. 80-day backfill = ~1.1M credits.
 
 **Schema**:
 
@@ -125,7 +190,8 @@ market_key, outcome_name, price, point
 time_bucket, timestamp_utc, kickoff_utc, bm_time, m_time, source, date
 ```
 
-**CLI**: `python -m market_tick_data_service.cli.main --operation download --mode batch --asset-group SPORTS --start-date {date} --end-date {date}`
+**CLI**: `python -m market_tick_data_service.cli.main --operation download --mode batch --asset-group SPORTS
+--start-date {date} --end-date {date}`
 
 ### Steps 10-11: Features (FSS -> GCS)
 
@@ -134,11 +200,14 @@ time_bucket, timestamp_utc, kickoff_utc, bm_time, m_time, source, date
 | 10   | Derived stable (form, standings, goals)            | instruments-service GCS   | `features-sports-*/sports_features/by_date/day={date}/feature_group={group}/` |
 | 11   | Derived complex (xG, weather, odds microstructure) | Multi-provider APIs + GCS | Same path                                                                     |
 
-**23 calculators, 672 features** across: odds microstructure, team goals, h2h, league context, advanced stats, player lineup, halftime, xG, venue context, weather, steam detection, referee, season context, poisson xG, team form, team xG, team derived.
+**23 calculators, 672 features** across: odds microstructure, team goals, h2h, league context, advanced stats,
+player lineup, halftime, xG, venue context, weather, steam detection, referee, season context, poisson xG, team
+form, team xG, team derived.
 
-**CLI**: `python -m features_sports_service.cli.main --operation compute --mode batch --start-date {date} --end-date {date}`
+**CLI**: `python -m features_sports_service.cli.main --operation compute --mode batch --start-date {date} --end-date
+{date}`
 
-## GCS Bucket Layout
+## GCS bucket layout
 
 ```
 gs://instruments-store-sports-{env}-{project}/
@@ -163,7 +232,7 @@ gs://features-sports-{project}/
 
 All paths are hive-partitioned, BigQuery-compatible. Timestamps coerced to microseconds.
 
-## Data Counts (as of 2026-03-27)
+## Data counts (as of 2026-03-27 — a snapshot, not live-verified in this pass)
 
 | Entity                  | Source               | Count                       | Date Range         |
 | ----------------------- | -------------------- | --------------------------- | ------------------ |
@@ -178,27 +247,70 @@ All paths are hive-partitioned, BigQuery-compatible. Timestamps coerced to micro
 
 **Gap**: 2025-12-31 to 2026-03-21 (~80 days of odds missing). MTDS can backfill via `download_batch()`.
 
-## BigQuery External Table
+## Known gaps and open findings
 
-```sql
--- Already created
-SELECT * FROM `sports_analytics.odds_ticks_hive`
-WHERE day = "2025-12-20" AND time_bucket = "T-24h" AND sport_key = "Premier League"
-```
+These are real, currently-open findings surfaced by the 2026-07-08 canonical-instrument-id audit — genuine
+data-completeness and format bugs, distinct from the by-design ID-scheme decision above. Both items below were
+re-investigated in a 2026-07-08 follow-up session with real GCS reads (not just static code reading); the follow-up
+found the real picture is more nuanced than the audit's one-line summaries, and neither turned into a same-session
+code fix — see the linked plan/issue docs for why and for the concrete next steps.
 
-Note: The hive partition `venue=ODDS_API` shadows the in-file `venue` column (bookmaker). Use the
-`instrument_id` to extract the bookmaker, or query the parquet directly via pandas.
+### The real reference catalog is bare — CONFIRMED genuinely bigger than a single bug, now scoped into a plan
 
-## Seasonal Refresh (Phase B — not yet implemented)
+Per real `prod/catalog.parquet` reads (confirmed 2026-07-08, re-confirmed in the 2026-07-08 follow-up): `venue` is an
+empty string for all 116 real rows, one row's key is the literal sentinel `"UNKNOWN"`, and only league-level entities
+exist. The follow-up traced the real root cause by reading the actual builder code
+(`scripts/build_instrument_catalogue.py`): this is **not** a silently-broken write path — `asset_group == "sports"`
+dispatches to `build_sports_catalogue_from_manifest()`, which is a **documented, deliberate 2026-06-07 design
+decision** to scope the sports "could-exist" catalog to league grain only, because the captured manifest atom itself
+is per-`(league_id, data_type, date)` with no fixture/team/player grain (a fixture-grain catalogue would inflate
+`expected_unattempted` against a manifest that can never match it). The 11-step pipeline above genuinely does write
+fixture/team/player reference DATA to GCS — that part is real — it just never gets rolled into catalog/coverage rows.
+Fixture/team/player-grain catalog + coverage tracking for Sports was **never implemented**, not silently broken.
+Scoped into `unified-trading-pm/plans/active/sports_catalog_league_grain_only_scope_2026_07_08.md` (operator decision
+needed on whether fixture-grain coverage tracking is even wanted, plus the manifest-schema work it would require).
+
+Pulling on the `"UNKNOWN"` sentinel row surfaced a separate, real, **currently-active** data-correctness bug: the
+underlying manifest (`_index/availability_index.parquet`) has **2,373 rows** with `league_id="UNKNOWN"` across all 17
+sports data_types, dated 2025-12-15 through **2026-07-08 (today)** — not a historical artifact, still recurring. Root
+cause not yet pinned to a specific write call site (the per-fixture-entity write path was checked and ruled out — it
+explicitly guards against bare unmapped-league writes). Filed as
+`unified-trading-pm/plans/active/issues/sports_manifest_unknown_league_id_2026_07_08.md`.
+
+### Betfair: real `/` delimiter in `instrument_key` — NOT a same-repo fix; real cross-repo dependency found
+
+Confirmed via `instruments-service/instruments_service/reference_data/adapters/sports/adapters/betfair.py:279`
+(`_build_runner_record`): Betfair's `instrument_key` is built as `f"{market_id}/{selection_id}"`, not the workspace's
+`:`-delimited `VENUE:TYPE:SYMBOL` convention used everywhere else. The audit that flagged this
+(`plans/audit/results/canonical_instrument_id_audit_2026_07_08.md`, "the most degenerate raw-passthrough found")
+only checked instruments-service. A 2026-07-08 follow-up checking real downstream consumers before changing it found
+the exact same `{market_id}/{selection_id}` `/`-shape independently built AND parsed in two sibling repos:
+strategy-service (`position_interface/adapters/betfair.py`, plus a real `rsplit("/", 1)` parser in
+`position/core/fill_event_consumer.py` that would silently mis-parse a colon-delimited id) and execution-service
+(`sports_execution/adapters/exchanges/betfair_order_mapping.py`, order placement + listing). A real GCS read of
+`prod/catalog.parquet` confirmed Betfair reference-data fetching is not wired into the production sports pipeline
+today (0 Betfair rows), so changing only instruments-service's delimiter would fix no live bug while creating a new
+3-way format mismatch with two repos this session could not edit. Left as-is; filed as
+`unified-trading-pm/plans/active/issues/betfair_instrument_id_delimiter_cross_repo_2026_07_08.md` pending a
+cross-repo decision (formalize `/` as Betfair's own convention, or a coordinated 3-repo migration to `:`).
+
+### `canonical_id_builder.py` docstring inaccuracy
+
+See "Instrument identity" above — the file's own docstring mis-cites the sports fixture-id builder as a
+`VENUE:TYPE:SYMBOL` example when it's actually a structurally different `LEAGUE:MATCHUP:DATE` scheme. Not a behavior
+bug (the builder itself works correctly for its actual, by-design scheme), just a documentation correction still
+outstanding in that file.
+
+## Seasonal refresh (Phase B — not yet implemented)
 
 instruments-service should run a daily no-op check:
 
-1. Call AF `/leagues` for 33 prediction leagues
+1. Call AF `/leagues` for the 33 prediction leagues.
 2. Check `seasons[].current` — has a new season started?
-3. If yes: fetch new teams, update FT league IDs, fetch venues
-4. If no: do nothing
+3. If yes: fetch new teams, update FT league IDs, fetch venues.
+4. If no: do nothing.
 
-## Batch -> Live: Minimal Delta
+## Batch -> Live: minimal delta
 
 | Concern             | Batch                         | Live                        | Change         |
 | ------------------- | ----------------------------- | --------------------------- | -------------- |
@@ -208,3 +320,14 @@ instruments-service should run a daily no-op check:
 | FSS fetch           | Providers called once/day     | Per-fixture (~60min pre-KO) | Frequency only |
 | GCS paths           | Same                          | Same                        | Nothing        |
 | Schema              | Same                          | Same                        | Nothing        |
+
+## BigQuery external table
+
+```sql
+-- Already created
+SELECT * FROM `sports_analytics.odds_ticks_hive`
+WHERE day = "2025-12-20" AND time_bucket = "T-24h" AND sport_key = "Premier League"
+```
+
+Note: the hive partition `venue=ODDS_API` shadows the in-file `venue` column (bookmaker). Use the `instrument_id` to
+extract the bookmaker, or query the parquet directly via pandas.

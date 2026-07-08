@@ -33,7 +33,9 @@ async def test_get_instruments_yields_rseth_record() -> None:
     assert rec.venue == "KELPDAO-ETHEREUM"
     assert rec.instrument_key == "KELPDAO-ETHEREUM:LST:RSETH"
     assert rec.raw_symbol == _RSETH_ADDRESS
-    assert rec.instrument_type == InstrumentType.YIELD_BEARING
+    # 2026-07-08: field fixed to match the `:LST:` key segment (key/field consistency
+    # fix, same class as PERP-vs-PERPETUAL — see lido.py's module docstring).
+    assert rec.instrument_type == InstrumentType.LST
     assert rec.base_asset == "ETH"
     assert rec.underlying == "ETH"
     assert rec.status == InstrumentStatus.ACTIVE
@@ -45,7 +47,7 @@ async def test_get_instruments_yields_rseth_record() -> None:
 @pytest.mark.asyncio
 async def test_get_instruments_filters_on_instrument_type() -> None:
     adapter = KelpDaoReferenceDataAdapter()
-    assert await adapter.get_instruments(instrument_type="yield_bearing")
+    assert await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
     assert await adapter.get_instruments(instrument_type="perpetual") == []
 
 

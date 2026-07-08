@@ -36,7 +36,9 @@ async def test_get_instruments_yields_ezeth_record() -> None:
     assert rec.venue == "RENZO-ETHEREUM"
     assert rec.instrument_key == "RENZO-ETHEREUM:LST:EZETH"
     assert rec.raw_symbol == _EZETH_ETH_ADDRESS
-    assert rec.instrument_type == InstrumentType.YIELD_BEARING
+    # 2026-07-08: field fixed to match the `:LST:` key segment (key/field consistency
+    # fix, same class as PERP-vs-PERPETUAL — see lido.py's module docstring).
+    assert rec.instrument_type == InstrumentType.LST
     assert rec.base_asset == "ETH"
     assert rec.underlying == "ETH"
     assert rec.status == InstrumentStatus.ACTIVE
@@ -62,7 +64,7 @@ async def test_get_instruments_arbitrum_yields_bridged_record() -> None:
 @pytest.mark.asyncio
 async def test_get_instruments_filters_on_instrument_type() -> None:
     adapter = RenzoReferenceDataAdapter()
-    assert await adapter.get_instruments(instrument_type="yield_bearing")
+    assert await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
     assert await adapter.get_instruments(instrument_type="perpetual") == []
 
 

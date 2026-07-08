@@ -245,7 +245,7 @@ class PendleReferenceDataAdapter(BaseReferenceDataAdapter):
         Each curated market emits THREE records (PT, YT, SY). PT/YT carry the
         market's maturity datetime in ``expiry``; SY carries ``expiry=None``.
         """
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []

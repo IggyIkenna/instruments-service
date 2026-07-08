@@ -75,7 +75,7 @@ class BenqiReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch all instruments from the venue."""
-        if instrument_type not in (None, "lending_market"):
+        if instrument_type not in (None, InstrumentType.LENDING):
             return []
         if self._chain != "AVALANCHE":
             logger.info("Benqi: no markets — Benqi is AVALANCHE-only (got %s)", self._chain)
