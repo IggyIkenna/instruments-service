@@ -179,20 +179,47 @@ the full captured universe.
   write-universe gate (`_is_in_canonical_write_universe()`) scopes to `get_expected_leagues_for_source("api_football")`,
   which returns all 94 leagues, not just the 33. So the raw fixture/team/standings DATA for the other 61 leagues is
   real and present.
-- **Operator's stated purpose — real answer, partially implemented (checked against the real FSS feature registry,
-  2026-07-08)**: the intent (per the operator) is using this non-tradeable data for (a) a promoted/relegated team's
-  prior-season form from its previous (lower) division, and (b) fixture-congestion / schedule-density context.
-  - **(a) Promotion/relegation cross-league historical form — NOT implemented in the live pipeline.** Real,
-    well-built logic exists at `features-service/features_service/sports/calculators/promoted_team_handler.py`
-    (`blend_promoted_features()`, a `LEAGUE_STRENGTH`-ratio decay-weighted blend explicitly for "promoted to a new
-    league... no history in new league... blend from previous league") — but it is called ONLY by itself and its own
-    unit tests; it is not registered in `feature_catalog.py`'s `DERIVED_CALCULATOR_GROUPS`, so no batch/live compute
-    path ever invokes it today. A separate, already-wired feature, `season_context.py`'s `is_promotion_relegation`
-    flag, is a different concept (a CURRENT-season "team is in a relegation/promotion battle" boolean, not
-    cross-league historical form), and `team_form.py`'s `prev_season_ppg` explicitly filters to the SAME league
-    (does not cross into a Reference-tier division). **So: the Reference-tier data needed for this exists and is
-    captured, and the feature-computation logic to use it exists in code, but nothing wires them together yet — this
-    is a real, scoped, not-yet-shipped feature, not a fabricated claim of "already works."**
+- **Operator's stated purpose — now implemented end-to-end (updated 2026-07-08, features-service sub-agent pass)**:
+  the intent (per the operator) is using this non-tradeable data for (a) a promoted/relegated team's prior-season
+  form from its previous (lower) division, (b) fixture-congestion / schedule-density context, (c) a historical
+  first-season-back baseline for promoted/relegated teams, and (d) injury-data carryover for starting-lineup
+  predictions. All four are now real and wired into the real batch/live compute path (`export_derived_features()`,
+  invoked from `features_service/sports/cli/handlers/batch_handler.py` — the same entrypoint batch AND live use).
+  - **(a) Promotion/relegation cross-league historical form — NOW WIRED.** The previously-orphaned
+    `promoted_team_handler.blend_promoted_features()` (a `LEAGUE_STRENGTH`-ratio decay-weighted blend of a team's
+    prior-division form, described above as real-but-unwired) is now invoked by a new calculator group,
+    `features-service/features_service/sports/calculators/promoted_team_features_calculator.py`
+    (`compute_promoted_team_batch`), registered in `feature_catalog.py`'s `DERIVED_CALCULATOR_GROUPS["promoted_team"]`
+    and run from `derived_features_exporter.py::_run_history_based_calculators` alongside team*form/team_xg/h2h — the
+    same multi-league, multi-season `history` DataFrame those calculators already consume (built by
+    `_build_team_history`, which spans all 94 UAC-classified leagues, not just the 33 Prediction-tier ones) is reused
+    directly, so no new data plumbing was needed. For each fixture's home/away team, it detects promoted/relegated
+    status via the existing `is_promoted_team()` threshold (fewer than `MIN_MATCHES_FOR_STABLE`=10 matches played in
+    the current league+season), finds that team's most recent season in a DIFFERENT league in the same `history`, and
+    blends current-vs-previous-division form (`promoted_blend_ppg`/`_win_rate`/`_goals_scored_std`/
+    `_goals_conceded_std`/`_clean_sheet_rate`/`_conversion_rate`, home*/away\_ prefixed) via the real
+    `blend_promoted_features()` — unchanged, still the same tested decay/strength-ratio math, just finally called
+    from a real compute path. `season_context.py`'s `is_promotion_relegation` (current-season relegation-battle flag)
+    and `team_form.py`'s same-league `prev_season_ppg` remain untouched, distinct concepts.
+  - **(c) Promoted-team first-season historical baseline — NEW feature, real data.** The same calculator also adds
+    `promoted_cohort_avg_ppg` / `promoted_cohort_sample_size` (home*/away* prefixed): the real historical average
+    points-per-game that OTHER teams making the SAME cross-league transition (e.g. `ENG_CHAMPIONSHIP` -> `EPL`)
+    achieved in their own first captured season at the new level, computed directly from real match-level rows in
+    `history` (wins/draws/losses from real `goals_for`/`goals_against`, not synthetic numbers) — an honest-absence
+    `0.0`/`0` when the captured lookback window has no other team on record making that transition, never a
+    fabricated baseline. Verified end-to-end against a real example: Luton Town's actual 2022-23 Championship
+    promotion (3rd place, 80 points, 21W-17D-8L) into their real first 9 Premier League 2023-24 matches (1W-2D-6L,
+    matches_played=9 < 10 so still in the blend window) — see
+    `features-service/tests/sports/unit/calculators/test_promoted_team_features_calculator.py`.
+  - **(d) Injury-data carryover — was ALREADY real and wired, not a gap.** Checked the real feature registry rather
+    than assuming: `features-service/features_service/sports/calculators/injury_impact_calculator.py`
+    (`compute_injury_impact_batch`, consuming API-Football's real `injuries` reference entity — home/away injury
+    counts, severity score, key-player-injured flag, crisis indicator) is registered in
+    `DERIVED_CALCULATOR_GROUPS["injury_impact"]`, run from `derived_new_calculators.py::run_new_calculators` (same
+    real `export_derived_features()` path), and its Phase-0 output feeds a Phase-1 `replacement_model` calculator
+    (`depends_on=["player_lineup", "injury_impact"]`) that scores expected quality-drop/tactical-distortion from
+    missing players — i.e. real captured injury data already flows into a starting-lineup-strength feature today. No
+    new work was needed here; this doc previously did not call this out explicitly.
   - **(b) Fixture congestion / schedule density — REAL, implemented, multiple wired-in calculators.** `team_form.py`
     computes `days_rest`, `games_last_7d`, `games_last_14d`, `games_per_week`; `venue_context.py` computes
     home/away `days_since_last_match`; `h2h_calculator.py` computes `h2h_days_since_last`;
@@ -208,15 +235,15 @@ Adapters live in `instruments-service/instruments_service/reference_data/adapter
 `soccerfootball_info`, `transfermarkt`, `understat`). Enrichment adapters depend on API-Football having already been
 fetched for the target date — the factory pre-flight checks this and raises `DependencyError` if not.
 
-| Provider       | Role                                                       | API Key         | Coverage              |
-| -------------- | ---------------------------------------------------------- | --------------- | --------------------- |
-| API-Football   | Reference data SSOT (fixtures, teams, standings, injuries) | Required        | 100% of leagues       |
-| Odds API       | Market data (odds, betting instruments) — via MTDS, not IS | Required        | 33 prediction leagues |
-| FootyStats     | Enrichment (advanced shooting/passing stats)               | Required        | ~73% of fixtures      |
-| Understat      | Enrichment (xG, shot data)                                 | None (scraping) | 5 leagues only        |
-| SoccerFootball | Enrichment (progressive stats, standings)                  | Required        | ~38%                  |
-| Transfermarkt  | Enrichment (player valuations, transfers)                  | Required        | ~41%                  |
-| Open-Meteo     | Enrichment (weather at venue)                              | None (free)     | 100% (needs lat/lon)  |
+| Provider       | Role                                                       | API Key         | Coverage                                          |
+| -------------- | ---------------------------------------------------------- | --------------- | ------------------------------------------------- |
+| API-Football   | Reference data SSOT (fixtures, teams, standings, injuries) | Required        | 100% of leagues                                   |
+| Odds API       | Market data (odds, betting instruments) — via MTDS, not IS | Required        | 33 prediction leagues                             |
+| FootyStats     | Enrichment (advanced shooting/passing stats)               | Required        | ~73% of fixtures                                  |
+| Understat      | Enrichment (xG, shot data)                                 | None (scraping) | 5 leagues only                                    |
+| SoccerFootball | Enrichment (progressive stats, standings)                  | Required        | ~99% (current era) / 99.9% (all-time) — see below |
+| Transfermarkt  | Enrichment (player valuations, transfers)                  | Required        | ~99% (current era) / 75.4% (all-time) — see below |
+| Open-Meteo     | Enrichment (weather at venue)                              | None (free)     | 100% (needs lat/lon)                              |
 
 **Coverage root cause — real investigation, 2026-07-08 (live API calls + static-mapping reads, not re-guessed):**
 
@@ -234,24 +261,54 @@ fetched for the target date — the factory pre-flight checks this and raises `D
   "Turkey Süper Lig" with a different diacritic) — worth checking our fetch code resolves leagues by FootyStats'
   numeric `footystats_id` (which `team_mapping_v2.parquet`/`league_mapping.parquet` both carry) rather than by name,
   since a name-based match would silently miss these three.
-- **SFI / Soccer Football Info (~38%)**: **NOT a missing-leagues problem** — `SOCCER_FOOTBALL_INFO_IDS`
-  (`unified-api-contracts/unified_api_contracts/canonical/domain/sports/provider_league_ids.py:30-64`) has a real,
-  static hex-id entry for **all 33 of 33** Prediction leagues (verified by direct read, zero missing). Since every
-  league has a real, configured provider id, the ~38% shortfall is necessarily a per-fixture-level gap (SFI's own
-  site not indexing every fixture, or our per-fixture fetch/match logic under-matching) — not "missing whole
-  leagues." I did not have time this pass for a live per-fixture SFI spot-check (no stored SFI API credential found
-  in Secret Manager under an obvious name, unlike FootyStats/Transfermarkt) to confirm which.
-- **Transfermarkt (~41%)**: `TRANSFERMARKT_IDS` (`provider_league_ids.py:67-100`) covers **32 of 33** Prediction
-  leagues (only Greek Super League is missing a Transfermarkt code) — so, like SFI, "missing whole leagues" is
-  NOT the primary explanation (only ~3%). More importantly, a **real framing correction**: Transfermarkt's actual
-  captured output entity is `player_values` (`sports_reference/by_date/day={date}/pipeline_mode=batch_transfermarkt/
-entity=player_values/`) — a team/player VALUATION snapshot, not a per-FIXTURE artifact at all. Measuring
-  Transfermarkt "fixture coverage %" applies a fixture-level yardstick to a provider whose real unit of capture is
-  team/squad-level — the ~41% figure, whatever it was actually computed against, is likely not measuring the same
-  thing FootyStats' fixture-level % measures, and should not be read as directly comparable. Also worth noting:
-  Transfermarkt "has no official public API" (confirmed via the adapter's own docstring) — our access is via an
-  unofficial RapidAPI wrapper or an Apify scraper, both inherently less complete/stable than FootyStats' documented
-  official API, a structurally different risk profile from FootyStats' gap.
+- **SFI / Soccer Football Info — RESOLVED 2026-07-08, was a stale figure, not a live data gap.**
+  `SOCCER_FOOTBALL_INFO_IDS` (`unified-api-contracts/unified_api_contracts/canonical/domain/sports/provider_league_ids.py:30-64`)
+  has a real, static hex-id entry for **all 33 of 33** Prediction leagues (verified by direct read, zero missing), so
+  "missing whole leagues" was already ruled out. This pass went further and traced the ACTUAL coverage-% code
+  end-to-end: `deployment-api/deployment_api/services/data_status/breakdowns_domain.py::_build_sports_entity_entry()`
+  calls `deployment-api/deployment_api/services/data_status/sports_helpers.py::sports_honest_coverage()`, whose
+  `SPORTS_DATA_TYPE_META["SFI_PROGRESSIVE_STATS"]` entry uses axis `per_league_per_fixture_date` — i.e. it's
+  denominated on the real per-fixture calendar across the 33 SFI-expected leagues, which is the RIGHT grain for this
+  data_type (SFI progressive stats genuinely are one row per fixture). I downloaded the live production manifest
+  (`gs://instruments-store-sports-prd-central-element-323112/_index/availability_index.parquet`, 78.9 MiB, 4,955,493
+  rows, pulled 2026-07-08) and called this real function directly (not re-implemented, not guessed) against it:
+  **SFI_PROGRESSIVE_STATS = 63,798 / 63,862 expected (league, fixture-date) shards = 99.9%** over the full 2014-2026
+  history, and **14,627 / 14,691 = 99.56%** over the current era (2025-01-01 to 2026-07-08). There is no metric bug
+  AND no meaningful live data gap — the previously-recorded "~38%" figure in earlier passes of this doc did not
+  reflect the real production honest-coverage code or real manifest data; it was stale and is superseded by the
+  numbers above.
+- **Transfermarkt — RESOLVED 2026-07-08, the denominator-grain bug was real but was already fixed before this
+  pass, on 2026-06-11 (`deployment-api@6b7aa696`), a full month before this investigation.** `TRANSFERMARKT_IDS`
+  (`provider_league_ids.py:67-100`) covers **32 of 33** Prediction leagues (only Greek Super League lacks a
+  Transfermarkt code), so missing-leagues was never the primary explanation. The real framing issue described in the
+  previous pass of this doc — Transfermarkt's captured entity is `player_values`, a team/league VALUATION snapshot,
+  not a per-fixture artifact — turns out to already be fixed in code: `SPORTS_DATA_TYPE_META["PLAYER_VALUES"]` in
+  `sports_helpers.py` uses axis `per_league_trigger_date` (NOT `per_league_per_fixture_date`), denominated on the
+  real count of trigger dates per league (season-start + transfer-window-open + transfer-window-close, via UAC
+  `get_reference_refresh_dates`) — each trigger-date shard bundles the whole league's team valuations, so this
+  axis is the correct team/league-season grain, not a fixture count. Verified by direct read of the code (the fix
+  landed in the same commit that decomposed the 6,663-line `data_status_service.py` god-module) AND by running the
+  real function against the real manifest downloaded above: **PLAYER_VALUES = 2,564 / 3,400 expected
+  (league, trigger-date) shards = 75.41%** over the full 2014-2026 history (54 of the 55 UAC-declared leagues had
+  ≥1 real trigger date in-window), and **439 / 441 = 99.55%** over the current era (2025-01-01 to 2026-07-08). The
+  75.41% all-time figure reflects genuine historical-backfill incompleteness (older seasons, mostly pre-2025, only
+  partially backfilled with player-value snapshots) — a real but already-tracked data-completeness gap, not a live
+  pipeline defect and not a metric bug. **No code change was needed in this pass** — the denominator-correctness fix
+  already existed; the previously-recorded "~41%" figure in earlier passes of this doc predates that fix (or was
+  never recomputed against it) and is superseded by the numbers above. Also still true: Transfermarkt "has no
+  official public API" (confirmed via the adapter's own docstring) — access is via an unofficial RapidAPI wrapper or
+  an Apify scraper, less complete/stable than FootyStats' documented official API.
+  **Separate, unrelated, NOT fixed this pass** (flagged, low-priority, no live impact): `deployment-api`'s
+  older per-VENUE breakdown path (`deployment_api/services/data_status/venue_resolution.py::_resolve_expected_dates`)
+  has a docstring claiming a "Transfermarkt → transfer-window dates" priority branch, backed by real helper functions
+  (`sports.py::_is_transfer_window_venue`, `venue_resolution.py::_resolve_transfer_window_dates`,
+  `_is_understat_venue`, `_resolve_understat_fixture_dates`) — but none of the four are ever called from
+  `_resolve_expected_dates` (confirmed via grep across the repo); they're dead code and the docstring is inaccurate.
+  Confirmed this does NOT affect the numbers above: the only manifest rows with `venue=TRANSFERMARKT`/`transfermarkt`
+  (92 rows, all `capture_status=attempted_failed`, and 2,991 unrelated rows from 2018 tagged with prediction-market
+  `data_type`s like `arbitrage_opportunity`) are legacy/orphaned artifacts, not real Transfermarkt data — the real
+  `PLAYER_VALUES` rows (272,212 of them) carry a blank `venue` column and are keyed by `data_type`, going through
+  `sports_honest_coverage()` above instead. Left as dead-code cleanup for a future pass.
 
 **Betfair** (`sports/adapters/betfair.py`) is a distinct, separately-registered reference-data adapter — it goes
 through the general `reference_data/factory.py` (as a `BaseReferenceDataAdapter`), not the sports-domain
@@ -259,8 +316,7 @@ through the general `reference_data/factory.py` (as a `BaseReferenceDataAdapter`
 runners as `InstrumentRecord`s with `instrument_type=EXCHANGE_ODDS`. See "Known gaps" below for a real format bug in
 its `instrument_key`.
 
-**Betfair's real current state, and the real "4 live adapters" (verified 2026-07-08 — an open strategic question for
-the operator, not resolved unilaterally per instruction):**
+**Betfair's real current state, and the real "4 live adapters" (verified 2026-07-08):**
 
 - **Is Betfair reference data live, static, or nothing?** The adapter code itself is real and live-capable — it
   hits `https://api.betfair.com/exchange/betting/json-rpc/v1` (`listMarketCatalogue`) with a session token +
@@ -273,24 +329,29 @@ the operator, not resolved unilaterally per instruction):**
 - **The real "4 live adapters"**: `execution-service/execution_service/sports_execution/adapters/exchanges/`
   contains exactly 4 modules — `betfair.py` (via `betfairlightweight`, real order placement/cancel/list), `matchbook.py`
   (real REST API), `polymarket_clob.py` (real EIP-712 + HMAC-signed CLOB API), `kalshi.py` (real RSA-signed REST
-  API) — all 4 are genuinely implemented (not stubs), matching the operator's "4 live adapters." Separately,
-  `adapters/scrapers/` holds **14** bookmaker-scraping modules (`bet365`, `ladbrokes`, `skybet`, `paddypower`,
-  `betvictor`, `coral`, `betway`, `unibet`, `bwin`, `boylesports`, `bet888sport`, `williamhill`, `betfred`, `sbobet`)
-  — this is precisely the "go direct to Bet365 and scrape" approach the operator says is NOT the plan.
-  `adapters/bookmaker_api/` (`onexbet.py`, `api_football.py`) is a smaller, real-API (non-scraping) bookmaker access
-  path. `adapters/aggregator/odds_api.py` is the same Odds API aggregator MTDS uses. `adapters/unity/` is a real,
-  substantial scaffold for **Unity**, "a prime broker for sports books that exposes a single TCP connection
-  multiplexed across 10 child books (VX/SharpBet, Pinnacle, Bet365, …)" (per its own docstring) — commercial
-  turnover/rollover-gate tracking ($260k/mo subscription-waiver gate) is real and implemented, but "concrete I/O is
-  intentionally stubbed — production requires the Unity-issued binary + real TCP framing spec," i.e. this is
-  scaffolded-but-not-live, exactly matching "still deciding which broker."
-- **Not touched/deleted per instruction** — this is a real strategic scoping call only the operator can make.
-  **Open question for the operator**: given the stated plan (predict on odds movement; trade via either a
-  still-undecided broker — Unity looks like the real current broker candidate — or Betfair directly; backtest
-  venue-agnostically), should the 14 `scrapers/` modules + the `bookmaker_api/onexbet.py` path be retired now, kept
-  dormant, or is there a reason to keep them (e.g. odds cross-checking without paying for the Odds API)? Please
-  confirm which of `exchanges/` (Betfair, Matchbook, Polymarket CLOB, Kalshi), `unity/`, `bookmaker_api/`, and
-  `scrapers/` should be kept vs. retired.
+  API) — all 4 are genuinely implemented (not stubs), matching the operator's "4 live adapters." `adapters/bookmaker_api/`
+  (`onexbet.py`, `api_football.py`) is a smaller, real-API (non-scraping) bookmaker access path — kept: `onexbet` is
+  one of the 20 active Odds-API-sourced bookmakers (see below) and `OneXBetAdapter` is a genuine, tested, non-stub
+  HTTP integration, categorically different from the Playwright scrapers below. `adapters/aggregator/odds_api.py` is
+  the same Odds API aggregator MTDS uses. `adapters/unity/` is a real, substantial scaffold for **Unity**, "a prime
+  broker for sports books that exposes a single TCP connection multiplexed across 10 child books (VX/SharpBet,
+  Pinnacle, Bet365, …)" (per its own docstring) — commercial turnover/rollover-gate tracking ($260k/mo
+  subscription-waiver gate) is real and implemented, but "concrete I/O is intentionally stubbed — production requires
+  the Unity-issued binary + real TCP framing spec," i.e. this is scaffolded-but-not-live, exactly matching "still
+  deciding which broker."
+- **Scrapers RETIRED 2026-07-08 per operator decision** (superseding the 2026-05-12 DEFERRED-INDEFINITELY
+  scaffolding-retention call): the 14 UK/EU Playwright bookmaker-scraping modules that used to live at
+  `execution-service/execution_service/sports_execution/adapters/scrapers/` (`bet365`, `bet888sport`, `betfred`,
+  `betvictor`, `betway`, `boylesports`, `bwin`, `coral`, `ladbrokes`, `paddypower`, `sbobet`, `skybet`, `unibet`,
+  `williamhill` — plus their shared `base_scraper.py` + `version_registry.py` infra and package `__init__.py`) have
+  been **deleted outright** (source + their 14 dedicated test files + the version-registry test + the
+  scraper-specific cases in `test_adapter_stubs.py`), not just left dormant. Confirmed zero real callers before
+  deletion (grep across the workspace — the only references were the package's own re-export in
+  `adapters/__init__.py` and their dedicated tests; already 0 rows in production and already stripped from UAC
+  `VENUES_BY_ASSET_GROUP["sports"]` / `VENUE_DATA_TYPE_CAPABILITIES` and MTDS `_ADAPTER_PATHS` back in 2026-05-12).
+  `bookmaker_api/onexbet.py` was explicitly evaluated and **kept** — it is a real, non-scraping API adapter for an
+  actively-used bookmaker, not part of this retirement. See `unified-trading-pm/plans/epics/sports_master.md` §
+  "Scrapers retired 2026-07-08 per operator" for the canonical provenance record.
 
 ### Bookmakers (20, via Odds API — MTDS market data, not instruments-service reference data)
 
@@ -343,13 +404,14 @@ list`)**: it invokes `instruments-service/scripts/daily_is_enumeration.py` → `
 --asset-group sports --start-date {D-2} --end-date {D} --force` with NO `--sports-entity` scoping, so
   TEAMS/STANDINGS get fetched unconditionally alongside everything else, every day. **There IS a season-boundary-gated
   design already built for exactly this** (`deployment-service`'s `SportsTriggerScheduler` Tier-2 `reference` tier,
-  `configs/sports-trigger-tiers.yaml`) — but it has been silently non-functional in production since at least
-  2026-06-24 due to a real, root-caused CLI/deployment wiring gap, filed as
-  `unified-trading-pm/plans/active/issues/sports_trigger_scheduler_cloud_dispatch_broken_2026_07_08.md` (out of scope
-  for this pass — it's a `deployment-service` fix, and `deployment-service` is outside this session's authorized edit
-  scope). **Real cost**: modest (roughly 66 AF calls per invocation, not per day of range), so this is not an urgent
-  API-budget emergency — but it is genuinely wasteful relative to the season-boundary design that already exists and
-  just needs its deployment gap closed; don't launch a big migration, close the existing gap instead.
+  `configs/sports-trigger-tiers.yaml`) — it WAS silently non-functional in production from 2026-06-24 to 2026-07-08
+  due to a CLI/deployment wiring gap, filed and then fixed the same day as
+  `unified-trading-pm/plans/active/issues/sports_trigger_scheduler_cloud_dispatch_broken_2026_07_08.md` (see the
+  Phase B section below for the fix + real-infra verification). **Real cost**: modest (roughly 66 AF calls per
+  invocation, not per day of range), so this was not an urgent API-budget emergency — but it was genuinely wasteful
+  relative to the season-boundary design, which is now dispatching for real again; re-evaluate narrowing
+  `is-daily-enum-sports`'s unconditional TEAMS/STANDINGS scope only after the season-boundary path proves reliable
+  over a real season boundary (don't create a coverage gap in between).
 - **Team mappings — the doc's "6,245 teams x 5 providers" claim was pointing at the WRONG (stale) file.**
   `sports_reference/mappings/team_mapping.parquet` (the path this doc previously cited) is a small, legacy,
   incomplete file — **76 rows, 2 leagues (EPL/Bundesliga only), 2 of 5 providers** (`odds_api_name`/`understat_name`
@@ -432,14 +494,21 @@ this doc previously carried forward. Coverage areas: odds microstructure, team g
 context, advanced stats, player lineup, halftime, xG (incl. Poisson xG), venue context, weather, steam detection,
 referee, season context, European-competition fatigue, bucketed rest-day features.
 
-**A real, separate, currently-unreconciled legacy tracking system** — `features_service/sports/tracking/registry.py`
-(+ its `_registry_data_*` modules) is a DIFFERENT feature catalog: **1,057 named entries**, of which only **10** are
-marked `FeatureStatus.COMPLETE` and **1,047** are `NOT_STARTED`. Its own docstring says it was "populated from
-FEATURES_CATALOG (footballbets) and sports-betting-service modules" — a legacy import, apparently disconnected from
-the real `feature_catalog.py` SSOT (sampled entries have `module=""`, i.e. not wired to any real calculator). There
-is no evidence of an active migration between the two catalogs; they appear to coexist unreconciled. Confirming
-whether this legacy registry should be retired, migrated, or is genuinely tracking a real future feature backlog is
-a real, scoped follow-up this pass didn't have time to resolve.
+**Resolved 2026-07-08 (`features-service@4d57c766`)**: the legacy tracking system flagged above —
+`features_service/sports/tracking/registry.py` (+ its `_registry_data_*` modules, 1,057 named entries, 10 marked
+`FeatureStatus.COMPLETE`) — was **dead scaffolding, not a real feature backlog, and has been deleted**. Evidence: (1)
+zero real consumers workspace-wide — only its own unit test (`tests/sports/unit/test_registry.py`) imported it; (2)
+`git log --follow` shows it entered the repo in one shot via the `features-sports-service` git-subtree merge
+(`b144552d`) and was never touched again except mechanical refactors (type-ignore sweeps, file-size splits) — never
+a content update; (3) even its strongest claim to accuracy, the 10 "complete" entries, was mostly wrong: only 4
+(`steam_detected_home/away`, `steam_magnitude_home/away`) correspond to a real computed feature (in
+`exporters/odds_features_exporter.py::_compute_steam_features`), and all 10 were mis-attributed to
+`calculators/steam_detector.py` — a real, live module, but an unrelated real-time execution-signal detector
+(`SteamDetector`/`SteamMoveSignal`), not a feature calculator; the other 6 entries (`steam_flag_*`,
+`steam_timing_*`, `league_steam_frequency`) don't exist anywhere in the real calculators. Deleted rather than
+migrated (no real backlog content to preserve); stale doc references to its `FeatureRegistryEntry` taxonomy were
+also cleaned up in the same commit. `feature_builder_registry.py` (the live calculator-group dependency DAG used by
+the pipeline exporter) is a separate, actively-used file and was untouched.
 
 **FSS fetch/compute cadence — real, current design (answers "what is FSS fetch" and the 60-minute-poll concern):**
 "FSS" = **Features Sports Service**. Live-mode compute is genuinely **event-driven**, not a fixed poll: FSS
@@ -497,9 +566,9 @@ All paths are hive-partitioned, BigQuery-compatible. Timestamps coerced to micro
 `pipeline_mode=` in its real GCS paths, confirmed on both the instruments-service side
 (`sports_dependency.py`'s `batch_api_football`, and the real `batch_footystats`/`batch_transfermarkt`/
 `batch_soccer_football_info` variants seen in production) and the MTDS side (`pipeline_mode_for_source("odds_api")`
-→ `PipelineMode.BATCH_ODDS_API`) — this directly answers the "do we even need pipeline_mode for sports, since it's
+→ `PipelineMode.BATCH_ODDS_API`) — this directly answers the "do we even need pipeline\*mode for sports, since it's
 slow-moving" question: yes, it's already there and in active use, source-scoped per the workspace's
-`{mode}_{source}` convention, not a design gap.**
+`{mode}*{source}` convention, not a design gap.**
 
 ## Data counts (as of 2026-03-27 — still a stale snapshot; the feature/calculator counts above WERE re-verified live
 
@@ -594,14 +663,14 @@ An earlier pass of this doc flagged the file's docstring as mis-citing the sport
 doesn't have a clean TYPE/SYMBOL concept" — fixed as part of the one-builder architecture landing today (see
 "Instrument identity" above). No further action needed.
 
-## Seasonal refresh (Phase B) — real status: ALREADY BUILT AND DEPLOYED, but currently non-functional (root-caused 2026-07-08)
+## Seasonal refresh (Phase B) — FIXED 2026-07-08: real dispatch confirmed working against production
 
 An earlier pass of this doc described Phase B as "not yet implemented," with a 4-step spec (daily no-op check; call
-AF `/leagues`; if a new season started, fetch teams/league IDs/venues; else no-op). **That's now known to be
-incorrect** — this exact design already exists, in real code, in `deployment-service` (not instruments-service):
+AF `/leagues`; if a new season started, fetch teams/league IDs/venues; else no-op). **That's incorrect** — this
+exact design already exists, in real code, in `deployment-service` (not instruments-service):
 `SportsTriggerScheduler` + `PeriodicTierDispatcher`
 (`deployment-service/deployment_service/sports_trigger_scheduler.py` / `sports_trigger_periodic.py`), configured by
-`configs/sports-trigger-tiers.yaml`'s Tier-2 `reference` section — `TEAMS` and `LEAGUES` are already gated on
+`configs/sports-trigger-tiers.yaml`'s Tier-2 `reference` section — `TEAMS` and `LEAGUES` are gated on
 `window_condition: season_boundary` (`_gate_by_season_boundary()`, tolerance ±3 days around each expected league's
 real season start/end dates — real code, not a stub). `pipeline_mode` for this path is the `batch_api_football`/
 `batch_*` family, matching the operator's own "batch on live, since it's slow-moving stuff" framing — confirmed
@@ -609,21 +678,43 @@ correct. Because this refresh writes through the exact same instruments-service 
 every other invocation, it lands in the SAME real historical GCS structure documented above — genuine batch=live
 symmetry already holds structurally, by construction, with no separate code path to keep in sync.
 
-**However — confirmed via real `gcloud` evidence, not guessed — it is currently non-functional in production.** The
-Cloud Run Job cron that should drive it (`uts-prod-sports-scheduler-cron`, `*/5 * * * *`, ENABLED) IS firing
-continuously (verified real executions throughout 2026-07-08), but the scheduler's own GCS state file
-(`sports_scheduler_state/scheduler.json`) shows `last_run.reference = 2026-06-24` — 14 days stale despite thousands
-of real executions since then, proving zero successful dispatches in that window. Root-caused to the exact code: the
-CLI (`cli/commands/sports_trigger.py::sports_trigger_run`) never passes a `backend`/`workspace_root` argument, so it
-silently defaults to `backend="local"` inside a Cloud Run Job container that only ships `deployment-service` code
-(`FROM api AS sports-scheduler`, Dockerfile) — every dispatch subprocess call fails immediately, and the failure is
-invisible (the job still exits 0). What's actually keeping Sports data flowing today is a separate, blunter,
-unconditional daily job (`is-daily-enum-sports` — see the Step 3/4 note above). Full root-cause detail + a concrete,
-scoped fix recommendation filed as
-`unified-trading-pm/plans/active/issues/sports_trigger_scheduler_cloud_dispatch_broken_2026_07_08.md` — **not fixed
-in this pass**: `deployment-service` is outside this session's authorized edit scope (instruments-service is the
-primary edit target for this round), so the responsible choice was to root-cause and document precisely rather than
-make an unreviewed cross-repo change to a shared production cron.
+**It WAS non-functional in production for ~14 days (2026-06-24 -> 2026-07-08) — now fixed and verified live.** Root
+cause (confirmed via real `gcloud` evidence): the CLI (`cli/commands/sports_trigger.py::sports_trigger_run`) never
+passed a `backend`/`workspace_root`/`cloud_run_config` argument to `SportsTriggerScheduler(...)`, so it silently
+defaulted to `backend="local"` inside the Cloud Run Job container that only ships `deployment-service` code
+(`FROM api AS sports-scheduler`, Dockerfile) — every dispatch subprocess call failed immediately, invisibly (the job
+still exited 0; `PeriodicTierDispatcher` only persists `last_run[tier]` when `dispatched > 0`, so the GCS state file
+(`sports_scheduler_state/scheduler.json`) went stale — `last_run.reference = 2026-06-24` despite thousands of real
+cron executions since then). Filed as
+`unified-trading-pm/plans/active/issues/sports_trigger_scheduler_cloud_dispatch_broken_2026_07_08.md`, then fixed in
+`deployment-service` the same day:
+
+- Added `--backend`/`--workspace-root`/`--cloud-run-*` CLI options (`cli/commands/sports_trigger.py`), wired into
+  `SportsTriggerScheduler(...)` for both `run` and `evaluate`; the terraform Cloud Run Job
+  (`terraform/gcp/sports_scheduler_cron.tf`) now passes `--backend cloud` + the real project/region/service-account.
+- `configs/sports-trigger-tiers.yaml`'s `cloud_run_job_name` fields were repointed at the REAL, already-provisioned
+  per-service Cloud Run Jobs the T+1 batch reconciliation cron already dispatches into
+  (`uts-prod-instruments-service-t1-recon`, `uts-prod-market-tick-data-service-fast-t1-recon`,
+  `features-sports-service-job`) rather than a set of scheduler-specific jobs that were never provisioned (verified
+  via `gcloud run jobs list` — zero matches for any of the old `sports-trigger-*` names). No dedicated ml-service
+  Cloud Run Job exists yet, so that one entry (`inference_pre_match`) ships with an empty `cloud_run_job_name` — a
+  real, separate infra gap, not silently papered over (fires a loud warning + skips instead).
+- Fixed a second latent bug found in the same code path: `_dispatch_services`'s cloud branch passed the FULL
+  `"python -m <module> ..."` command as the Cloud Run Jobs execution-override `args` — but Cloud Run Jobs V2 can only
+  override `args`, never `command`/entrypoint, and the real target jobs (verified via `gcloud run jobs describe
+uts-prod-instruments-service-t1-recon`: `command: None`, `args: ['--operation=instruments', ...]`) already bake the
+  module invocation into the image's own ENTRYPOINT. Would have broken every cloud dispatch even after the CLI fix.
+- **Verified against real production infra, not just tests**: instantiated the fixed `SportsTriggerScheduler` with
+  `backend="cloud"` and called `_check_reference()` directly against the real GCS state file and real Cloud Run Jobs
+  API. Result: `INJURIES` (`run_always: true`) and `TRANSFERS` (transfer window open for 49 leagues that day) both
+  dispatched successfully via real `uts-prod-instruments-service-t1-recon` executions, and the real state file's
+  `last_run.reference` advanced from the stale `2026-06-24` to `2026-07-08` — the exact staleness this bug caused,
+  now cured. Unit test regressions added for the CLI wiring and the args-stripping fix
+  (`tests/unit/test_sports_trigger_cli.py`, `tests/unit/test_sports_trigger_scheduler_periodic.py`).
+
+What was keeping Sports data flowing during the outage was a separate, blunter, unconditional daily job
+(`is-daily-enum-sports` — see the Step 3/4 note above); that mechanism is unaffected by this fix and can be
+re-evaluated for narrowing once the season-boundary path has proven reliable over a real season boundary.
 
 ## Batch -> Live: minimal delta (corrected 2026-07-08 — the real trigger mechanism, not a Pub/Sub design)
 
@@ -632,14 +723,14 @@ real design principle stated directly in `sports_trigger_scheduler.py`'s own mod
 batch with `--date today`, fired at fixture-proximate times. Same CLI, same service, just triggered by fixture
 proximity instead of daily cron"), not the Pub/Sub-based design an earlier pass of this doc implied. The real
 trigger tiers (`configs/sports-trigger-tiers.yaml`, deployed as `uts-prod-sports-scheduler`; see the Phase B section
-above for its current non-functional-in-practice caveat):
+above — dispatch was broken 2026-06-24 -> 2026-07-08 and is now fixed + verified live):
 
-| Tier           | What                                                                                 | Real cadence                                                                      | Change from batch                                                      |
-| -------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| 1 — Discovery  | Fixture calendar + standings refresh                                                 | Rolling window (today-1..today+7), every 6h                                       | Trigger only                                                           |
-| 2 — Reference  | INJURIES (daily) / TRANSFERS / LEAGUES / TEAMS (season-boundary-gated)               | Daily cadence check; season-boundary items fire only near a real season start/end | Trigger + real gating (currently non-functional in prod — see Phase B) |
-| 3 — Pre-match  | Odds snapshots (T-24h/T-6h/T-1h), lineups, weather, pre-match features, ML inference | Fixture-proximate, offset from real `kickoff_utc`                                 | Trigger + frequency                                                    |
-| 4 — Post-match | Final stats (T+30m), delayed xG (T+24h), post-match features (T+25h)                 | Fixture-proximate, offset from real match-end estimate                            | Trigger + frequency                                                    |
+| Tier           | What                                                                                 | Real cadence                                                                      | Change from batch                                                         |
+| -------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 1 — Discovery  | Fixture calendar + standings refresh                                                 | Rolling window (today-1..today+7), every 6h                                       | Trigger only                                                              |
+| 2 — Reference  | INJURIES (daily) / TRANSFERS / LEAGUES / TEAMS (season-boundary-gated)               | Daily cadence check; season-boundary items fire only near a real season start/end | Trigger + real gating (fixed + verified live 2026-07-08 — see Phase B)    |
+| 3 — Pre-match  | Odds snapshots (T-24h/T-6h/T-1h), lineups, weather, pre-match features, ML inference | Fixture-proximate, offset from real `kickoff_utc`                                 | Trigger + frequency (ML inference has no Cloud Run Job yet — see Phase B) |
+| 4 — Post-match | Final stats (T+30m), delayed xG (T+24h), post-match features (T+25h)                 | Fixture-proximate, offset from real match-end estimate                            | Trigger + frequency                                                       |
 
 instruments-service itself makes NO code distinction between batch and live — it is always the same
 `--operation instruments --mode batch --asset-group SPORTS --start-date X --end-date Y` CLI contract; only the
