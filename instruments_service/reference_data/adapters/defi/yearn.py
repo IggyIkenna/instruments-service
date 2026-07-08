@@ -1,7 +1,10 @@
 """Yearn Finance reference data adapter — instrument discovery for Yearn V3 vaults.
 
 Discovers Yearn V3 yield vaults on Ethereum, Arbitrum, and Optimism. Vaults are
-returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+returned as InstrumentRecord with instrument_type="YIELD_BEARING" (fixed
+2026-07-08 — the `instrument_key`'s middle segment previously said the
+shorthand `VAULT`, which is not a real `InstrumentType` enum member; see
+`karak.py`'s module docstring for the full rationale).
 
 Pure static-registry adapter: get_instruments returns a hardcoded curated list of
 primary Yearn V3 vaults with no network access. Tests are credential-free and offline.
@@ -130,7 +133,13 @@ class YearnReferenceDataAdapter(BaseReferenceDataAdapter):
             return []
 
         results: list[InstrumentRecord] = []
-        venue_tag = f"YEARN-{self._chain}"
+        # YEARN_V3, not bare YEARN — every other UAC registry (defi_venue_capabilities.py,
+        # venue_launch_dates.py, defi_venues.py, PROTOCOL_CAPABILITIES, chain_env.py,
+        # DEPRECATED_DEFI_GHOST_VENUE_NAMES) treats YEARN_V3 as canonical and YEARNV3 as
+        # the retired ghost; bare YEARN never matched any of them (operator decision
+        # 2026-07-08, instrument_id_format_canonicalization systemic-duplicate-spelling
+        # pass — YEARN_V3 chosen for having 6x more real registry consumers).
+        venue_tag = f"YEARN_V3-{self._chain}"
         deploy_date = _get_deploy_date(self._chain)
         vaults = _YEARN_VAULTS_BY_CHAIN.get(self._chain, [])
 
@@ -142,7 +151,7 @@ class YearnReferenceDataAdapter(BaseReferenceDataAdapter):
 
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:VAULT:{symbol}",
+                    instrument_key=f"{venue_tag}:YIELD_BEARING:{symbol}",
                     venue=venue_tag,
                     raw_symbol=vault_address,
                     instrument_type=InstrumentType.YIELD_BEARING,
