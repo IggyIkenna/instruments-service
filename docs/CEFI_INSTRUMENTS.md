@@ -136,24 +136,36 @@ SPX/SPY/QQQ/… index & sector-ETF perps) — this exists specifically so each c
 captured basis-arb counterpart in the TradFi MVP universe. Crypto majors (BTC/ETH/SOL/…) are **not** in this set —
 only the tradfi-underlying perps.
 
-### Staking/LST spot exception
+### Two separate layers — raw capture vs. MVP classification (don't conflate them)
 
-`STAKING_SPOT_EXCEPTION` (`cefi_instrument_universe.py:249-254`) is the one carve-out from the ordinary "spot only
-where a perp also exists" rule: liquid-staking/restaking tokens (STETH, WSTETH, RETH, WEETH, EETH, EIGEN, ETHFI, the
-Solana LSTs MSOL/JITOSOL/JSOL/BSOL/SCNSOL/INF, and more) get their spot captured on any venue that lists them, perp or
-no perp — these are the `carry_staked_basis`/DeFi-seasonal-reward legs the strategy layer needs spot liquidity for.
+There are two distinct, independently-gated mechanisms here — a doc-reader (or agent) can easily conflate them since
+both involve "is this base asset in scope":
 
-### The two surviving gates
+1. **Raw capture gate** (what actually gets fetched from the venue and written to GCS) — per
+   `instruments_service/reference_data/adapters/cefi/tardis/parsing.py:430-466` (`_passes_asset_filter`), the curated
+   base-asset whitelist is **no longer a gate** for SPOT/PERP/FUTURE (operator 2026-06-23 — the reference universe
+   must equal each venue's real listed universe, not a curated subset, so small/illiquid-coin funding/price history
+   isn't lost). The two gates that remain here are venue-volume-safe, not coin-curation:
+   1. **Accepted-quote gate** — USDT/USDC/USD fleet-wide + the per-venue KRW/UPBIT extension. Drops exotic cross
+      pairs (`BASE/EUR`, `BASE/BTC`) on other venues; derivatives are documented as "carry no quote and pass" —
+      **this documented behavior is exactly where the open Bitfinex bug below diverges from reality.**
+   2. **Options-underlying gate** — BTC/ETH only, as above.
 
-Per `instruments_service/reference_data/adapters/cefi/tardis/parsing.py:430-466` (`_passes_asset_filter`), the curated
-base-asset whitelist is **no longer a gate** for SPOT/PERP/FUTURE (operator 2026-06-23 — the reference universe must
-equal each venue's real listed universe, not a curated subset, so small/illiquid-coin funding/price history isn't
-lost). The two gates that remain are venue-volume-safe, not coin-curation:
-
-1. **Accepted-quote gate** — USDT/USDC/USD fleet-wide + the per-venue KRW/UPBIT extension. Drops exotic cross pairs
-   (`BASE/EUR`, `BASE/BTC`) on other venues; derivatives are documented as "carry no quote and pass" — **this
-   documented behavior is exactly where the open Bitfinex bug below diverges from reality.**
-2. **Options-underlying gate** — BTC/ETH only, as above.
+2. **MVP classification** (a separate, later-stage question — "does this already-captured row count as MVP for
+   downstream reporting/scope purposes") — real function:
+   `unified_api_contracts/canonical/crosscutting/mvp_scope.py::is_in_mvp_capture_universe`. This one DOES still
+   apply a real spot-vs-perp rule, fully active, not superseded by the 2026-06-23 raw-capture change above:
+   - **PERP / EQUITY_PERP**: in-universe on base-membership alone — "the perp IS the gate," no spot required.
+   - **SPOT** (`SPOT_PAIR`/`SPOT_ASSET`): HARD-gated — requires the _same venue_ to also list a perp for that base —
+     **except**: (a) the base is in `STAKING_SPOT_EXCEPTION` (`cefi_instrument_universe.py:249-254` — 28
+     liquid-staking/restaking tokens: STETH, WSTETH, RETH, WEETH, EETH, EIGEN, ETHFI, the Solana LSTs
+     MSOL/JITOSOL/JSOL/BSOL/SCNSOL/INF, and more — captured on ANY venue regardless of perp existence, the
+     `carry_staked_basis`/DeFi-seasonal-reward legs the strategy layer needs spot liquidity for), or (b) the venue
+     is in `_CEFI_SPOT_PERP_GATE_EXEMPT_VENUES = {UPBIT}` (Upbit lists no perps at all — spot-only Korean exchange —
+     so its spot is captured unconditionally rather than vacuously failing the gate).
+   - **Quote assets** (USDT/USDC/USD/BTC/ETH) sidestep this rule entirely — they're validated by the separate
+     accepted-quote gate above, never evaluated as a "base" needing a perp.
+   - **DATED FUTURE**: base-membership + venue only, not perp-gated (shares the base with the futures complex).
 
 ## Instrument ID format: current vs. decided target (dated derivatives)
 
