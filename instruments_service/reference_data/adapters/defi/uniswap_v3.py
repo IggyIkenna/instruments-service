@@ -14,7 +14,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
-from unified_api_contracts.registry import SUBGRAPH_IDS
+from unified_api_contracts.registry import DEFI_MAJOR_ASSET_ADDRESS_LIST, SUBGRAPH_IDS
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -55,6 +55,32 @@ query GetPools($first: Int!, $skip: Int!) {{
 _FETCH_LIMIT = 1000
 # The Graph caps skip at 5000 — max reachable = 5000 + 1000 = 6000 pools
 _MAX_SKIP = 5000
+
+# Bug fix (2026-07-08, `docs/DEFI_INSTRUMENTS.md` "Subgraph fetch" section): the
+# TVL-ranked pagination above applies the major-assets whitelist AFTER the ~6,000-pool
+# ranking cutoff, so a genuine major/major pool that happens to rank below the cutoff
+# on a given day was silently never fetched at all. This supplementary query asks the
+# subgraph directly for pools where BOTH token0 AND token1 are in the known major-asset
+# address list — guaranteeing every major/major pool is captured regardless of TVL rank.
+# Verified live against the production Uniswap V3 gateway (2026-07-08): this exact query
+# found a real DAI/USDT pool with totalValueLockedUSD ~= $0.0004 — many orders of magnitude
+# below the ~$2,195 TVL of the pool ranked #6000 in the plain TVL-ranked pagination — proving
+# the old two-stage pipeline would have silently dropped it.
+_MAJOR_ASSET_POOLS_QUERY_TEMPLATE = """
+query GetMajorAssetPools($first: Int!, $skip: Int!, $tokens: [Bytes!]!) {{
+    pools(
+        first: $first, skip: $skip, orderBy: totalValueLockedUSD, orderDirection: desc
+        where: {{ token0_in: $tokens, token1_in: $tokens }}{block_clause}
+    ) {{
+        id
+        feeTier
+        token0 {{ id symbol name decimals }}
+        token1 {{ id symbol name decimals }}
+        totalValueLockedUSD
+        createdAtTimestamp
+    }}
+}}
+"""
 
 # Algebra fork schema (Camelot V3, etc.) — no feeTier, uses directional feeZtO/feeOtZ
 _ALGEBRA_POOLS_QUERY_TEMPLATE = """
@@ -242,6 +268,27 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         if not all_pools:
             all_pools = await self._fetch_messari_pools(url)
 
+        # Supplementary: query directly for pools where both tokens are known major
+        # assets (see _MAJOR_ASSET_POOLS_QUERY_TEMPLATE above) — closes the TVL-ceiling
+        # coverage gap without replacing the TVL-ranked cascade above. Additive only:
+        # a failure here must not invalidate an otherwise-successful primary fetch, so
+        # it never sets self._cascade_errored. Ethereum-only for now (the address list
+        # is Ethereum-mainnet-derived; other chains keep the pre-existing TVL-ranked
+        # behavior — a known, documented remaining gap, not silently "fixed everywhere").
+        if self._chain == "ETHEREUM" and DEFI_MAJOR_ASSET_ADDRESS_LIST:
+            major_pools = await self._fetch_major_asset_pools(url, block_num)
+            if major_pools:
+                seen_ids = {p.get("id") for p in all_pools}
+                new_pools = [p for p in major_pools if p.get("id") not in seen_ids]
+                if new_pools:
+                    logger.info(
+                        "UniswapV3: major-asset direct query found %d additional pool(s) "
+                        "below the TVL-ranked cutoff on %s",
+                        len(new_pools),
+                        self._chain,
+                    )
+                all_pools.extend(new_pools)
+
         # All cascade legs exhausted with zero pools. If ANY leg genuinely errored (transient /
         # malformed / GraphQL-errors), the empty universe is NOT trustworthy — raise so discovery
         # records attempted_failed (DeFi-plan A8b). If every leg cleanly returned an empty result,
@@ -262,6 +309,60 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         logger.info("UniswapV3: fetched %d pool instruments on %s", len(results), self._chain)
         return results
+
+    async def _fetch_major_asset_pools(self, url: str, block_num: int | None) -> list[dict[str, object]]:
+        """Query pools where both tokens are known major assets, directly by address.
+
+        Supplementary to the TVL-ranked cascade in ``get_instruments`` — closes the
+        "genuine major-asset pool ranked below the ~6,000 TVL cutoff is never fetched"
+        gap (see ``docs/DEFI_INSTRUMENTS.md`` "Subgraph fetch" section). Failure here is
+        soft: logs and returns ``[]`` without setting ``self._cascade_errored``, since this
+        is an additive enhancement, not a required leg of the discovery cascade.
+        """
+        block_clause = f", block: {{number: {block_num}}}" if block_num else ""
+        query = _MAJOR_ASSET_POOLS_QUERY_TEMPLATE.format(block_clause=block_clause)
+        # The Graph stores/compares `Bytes` (address) entity fields lowercased — a
+        # mixed-case checksummed address in an `_in` filter silently matches nothing
+        # (verified live: checksummed input -> 0 pools, identical lowercased input ->
+        # 404 pools, same subgraph, same call). Never pass checksummed case here.
+        tokens = [addr.lower() for addr in DEFI_MAJOR_ASSET_ADDRESS_LIST]
+
+        all_pools: list[dict[str, object]] = []
+        skip = 0
+        try:
+            async with self._make_session() as session:
+                while skip <= _MAX_SKIP:
+                    variables = {"first": _FETCH_LIMIT, "skip": skip, "tokens": tokens}
+                    async with session.post(
+                        url,
+                        json={"query": query, "variables": variables},
+                        headers={"Content-Type": "application/json"},
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+
+                    if not isinstance(data, dict) or data.get("errors"):
+                        if data.get("errors") if isinstance(data, dict) else None:
+                            logger.debug(
+                                "UniswapV3 major-asset query returned errors on %s: %s",
+                                self._chain,
+                                data.get("errors"),
+                            )
+                        break
+
+                    page: list[dict[str, object]] = (data.get("data") or {}).get("pools") or []
+                    if not page:
+                        break
+
+                    all_pools.extend(page)
+                    if len(page) < _FETCH_LIMIT:
+                        break
+                    skip += _FETCH_LIMIT
+        except aiohttp.ClientError as exc:
+            logger.warning("UniswapV3 major-asset query failed on %s (non-fatal): %s", self._chain, exc)
+            return []
+
+        return all_pools
 
     async def _fetch_messari_pools(self, url: str) -> list[dict[str, object]]:
         """Fetch pools from Messari-schema subgraph and normalise to official format.

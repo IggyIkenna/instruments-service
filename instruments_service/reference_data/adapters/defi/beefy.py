@@ -3,7 +3,10 @@
 Discovers Beefy Finance ``mooXxx`` vault tokens across Ethereum, Arbitrum, Base,
 BSC, and Avalanche. Vaults are returned as ``InstrumentRecord`` with
 ``instrument_type=YIELD_BEARING`` and ``raw_symbol`` set to the vault contract
-(``earnContractAddress``).
+(``earnContractAddress``). The ``instrument_key``'s middle segment is also
+``YIELD_BEARING`` (fixed 2026-07-08 — it previously said the shorthand
+``VAULT``, which is not a real ``InstrumentType`` enum member; see
+``karak.py``'s module docstring for the full rationale).
 
 Pure static-registry adapter: ``get_instruments`` returns a hardcoded curated
 list of primary Beefy vaults with no network access. Tests are credential-free
@@ -257,7 +260,7 @@ class BeefyReferenceDataAdapter(BaseReferenceDataAdapter):
 
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:VAULT:{symbol}",
+                    instrument_key=f"{venue_tag}:YIELD_BEARING:{symbol}",
                     venue=venue_tag,
                     raw_symbol=vault_address,
                     instrument_type=InstrumentType.YIELD_BEARING,

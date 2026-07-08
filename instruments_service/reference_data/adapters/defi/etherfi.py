@@ -1,7 +1,9 @@
 """EtherFi reference data adapter — instrument discovery for LST tokens.
 
 Discovers EtherFi liquid staking token (weETH) on Ethereum.
-Token is returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Token is returned as InstrumentRecord with instrument_type="LST" (fixed
+2026-07-08 — key/field mismatch, same class as PERP-vs-PERPETUAL; see
+`lido.py`'s module docstring for the full rationale).
 
 Reference: https://www.ether.fi/
 """
@@ -67,7 +69,7 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return EtherFi weETH as a yield-bearing instrument."""
-        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
+        if instrument_type not in (None, InstrumentType.LST, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -84,7 +86,7 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
                     venue=venue_tag,
                     raw_symbol=address,
                     base_asset_contract_address=address,
-                    instrument_type=InstrumentType.YIELD_BEARING,
+                    instrument_type=InstrumentType.LST,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000001"),
