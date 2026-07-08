@@ -300,24 +300,71 @@ registration table rather than trusting a static list in any doc (this one inclu
 > full 7-layer compliance audit) for full evidence. **None of the "target" forms below are live in production today**
 > — this section shows current-real vs target-canonical explicitly, same pattern as the live mockup.
 
-### The most important structural fact: there is no single enforced builder
+### The architecture is now decided: ONE shared builder for every asset group — adoption is still in progress
 
-`unified-api-contracts/unified_api_contracts/internal/reference/canonical_id_builder.py` reads as the intended single
-SSOT dispatch point — its own module docstring calls it "Centralised canonical instrument ID builder — SSOT" — but
-**it has almost no real callers today.** The 2026-07-08 audit sampled instruments-service (39+ adapter files), MTDS,
-deployment-api, and strategy-service and found that **virtually every adapter builds its own `instrument_key` ad hoc**
-(direct f-string construction, as shown in the real `aave_v3.py` / `uniswap_v3.py` / `morpho.py` snippets referenced
-above). A later follow-up pass found a **few** more real callers than initially known (MTDS's `canonical_write.py`
-for DeFi `lst_rates`, and `tardis_shared.py` for CeFi/TradFi dated-derivative backfills) — but even those routes
-coexist with other ingestion paths for the _same_ data types that still bypass the builder, producing a 3rd/4th
-distinct construction convention for the same instrument shape.
+**RESOLVED 2026-07-08** (operator, `instrument_id_format_canonicalization_2026_07_08.md`): _"one builder for
+everything would make more sense... every asset group, every instrument type, can get its canonical instrument IDs,
+same with fixtures [sports], just by filling in the right inputs."_ Per-domain builders that each independently
+canonicalize are explicitly **rejected**. This section previously described a real gap ("there is no single enforced
+builder") found by the 2026-07-08 audit, which sampled instruments-service (39+ adapter files), MTDS, deployment-api,
+and strategy-service and found that virtually every adapter built its own `instrument_key` ad hoc (direct f-string
+construction, as shown in the real `aave_v3.py` / `uniswap_v3.py` / `morpho.py` snippets referenced above). That gap
+is now a decided target-state with a real, shipped implementation — but **adoption across the ~40+ existing ad hoc
+call sites is NOT yet complete**; most adapters still build `instrument_key` the old way until retrofitted. Treat this
+section as "the one builder now exists and is the required target for every NEW call site," not "every adapter
+already uses it."
 
-**If you are writing a new adapter today: there is no enforced function you must call.** `build_instrument_id()` in
-`canonical_id_builder.py` is a reasonable reference implementation of the target format below, but calling it is not
-currently required or checked anywhere in the pipeline. The operator has explicitly decided the convention **must**
-eventually be enforced via real, callable builder functions everywhere it applies — not docstring-only assertions —
-but that enforcement work has not shipped yet (open question: one shared builder vs. many per-domain builders that
-each independently canonicalize consistently — tracked as an open decision in the format-canonicalization issue doc).
+**The one entry point**: `unified_api_contracts.build_canonical_instrument_id(asset_group, venue, instrument_type,
+**kwargs)` (`unified-api-contracts/unified_api_contracts/internal/reference/canonical_id_builder.py`). It dispatches
+to the one real construction implementation per asset group — callers never need to know which internal helper to
+call:
+
+```python
+from unified_api_contracts import AssetGroup, InstrumentType, build_canonical_instrument_id
+
+# CeFi
+build_canonical_instrument_id(AssetGroup.CEFI, "bybit", InstrumentType.PERPETUAL, "BTCUSDT")
+# → "BYBIT:PERPETUAL:BTCUSDT"
+
+# DeFi (VENUE-CHAIN composition)
+build_canonical_instrument_id(AssetGroup.DEFI, "aave_v3", InstrumentType.LENDING, "USDC", chain="arbitrum")
+# → "AAVE_V3-ARBITRUM:LENDING:USDC"
+
+# TradFi (dated derivative, structured expiry)
+build_canonical_instrument_id(AssetGroup.TRADFI, "cme", InstrumentType.FUTURE, "ES", expiry_date=date(2026, 6, 20))
+# → "CME:FUTURE:ES-20260620"
+
+# Sports — dispatches to the fixture-id domain builder, NOT VENUE:TYPE:SYMBOL
+# (an intentional, separately operator-confirmed design decision — see "What's
+# explicitly out of scope for this canonicalization" below)
+build_canonical_instrument_id(
+    AssetGroup.SPORTS, league="ENG_PREMIER_LEAGUE", home_team="ARSENAL",
+    away_team="CHELSEA", fixture_date="2026-03-22",
+)
+# → "ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322"
+```
+
+Two supporting additions ship alongside the entry point, both extending — not duplicating — existing infrastructure:
+
+- **`passthrough=True`** on `build_instrument_id()` — wraps an already-fully-formed raw/native symbol verbatim as
+  `VENUE[-CHAIN]:TYPE:SYMBOL` instead of reconstructing it from `expiry_date`/`strike`/`option_right`. This closes the
+  real gap that made the CCXT live-mode fix (`instruments-service@8544273d`,
+  `canonical_id_p0_ccxt_live_batch_divergence_2026_07_08.md`) deliberately NOT route through this module: dated
+  FUTURE/OPTION ids need to pass through the raw exchange-native id (matching Tardis), not get reconstructed from
+  parts. `passthrough=True` is exactly that pass-through path, now available in the shared builder.
+- **`build_leg(venue, instrument_type, symbol, *, side, ratio=1, ...)`** — builds one
+  `unified_api_contracts.internal.InstrumentLeg` via the same shared construction, for multi-leg combos. Extends the
+  real existing `InstrumentLeg`/`InstrumentType.COMBO` infrastructure already used by `databento/symbology.py`'s
+  `_parse_cme_calendar_spread_legs` and both Deribit combo builders, each of which today builds a leg's
+  `instrument_key` with its own ad hoc f-string (e.g. `f"{venue}:FUTURE:{front}"`, `f"DERIBIT:{leg_name}"` — the
+  latter missing its `:TYPE:` segment entirely).
+
+**Retrofit status (2026-07-08)**: `deribit_options_adapter.py` now calls `build_instrument_id(..., passthrough=True)`
+for its OPTION `instrument_key` (behavior-preserving — same real output, `DERIBIT:OPTION:<raw_name>`, verified by the
+adapter's existing regression test). The remaining ~40 ad hoc call sites (every DeFi pool/lending/LST adapter, the
+on-chain-perp adapters, Deribit's combo-leg builder, TradFi's Databento/CME path, sports/prediction adapters, and
+MTDS's `canonical_write.py`/`tardis_shared.py`) are tracked as a follow-up retrofit checklist — see
+`unified-trading-pm/plans/active/canonical_id_builder_retrofit_checklist_2026_07_08.md`.
 
 ### Top-level grammar
 
@@ -367,11 +414,13 @@ docstring examples as stale relative to this decided target.
 **Decided target**: `YYYYMMDD`, e.g. `20260731`. String-sortable (chronological order = alphabetical order).
 `canonical_id_builder.py`'s real `_build_future`/`_build_option` code already emits this form
 (`expiry_date.strftime('%Y%m%d')`). What is **not** yet consistent is what real venue adapters do before that point:
-Kraken's raw `FF_`/`FI_` contract-type prefix is never cleaned (a real, structural bug — see the P0 Kraken-Futures
-collision finding below), Bybit uses a real `DDMMMYY` format with no quote segment at all (`BYBIT:FUTURE:BTC-01DEC23`),
-and Deribit's real `DDMMMYY` (`BTC-10JUL26`) — while internally clean — does not match `YYYYMMDD` either. An older
-6-digit `YYMMDD` grammar rule that appeared in prior docs was simply wrong; the real decided target has always been
-the 8-digit sortable form.
+Bybit uses a real `DDMMMYY` format with no quote segment at all (`BYBIT:FUTURE:BTC-01DEC23`), and Deribit's real
+`DDMMMYY` (`BTC-10JUL26`) — while internally clean — does not match `YYYYMMDD` either. (Kraken's raw `FF_`/`FI_`
+contract-type prefix causing a 5-instrument dated-future symbol collision was a real, structural bug here too — it is
+now **FIXED**, `market-tick-data-service@3d7491b1bcbebc17af0aa31219e90f38478d57cd`, confirmed in
+`CEFI_INSTRUMENTS.md`'s Known-bugs table; the fix restored per-instrument distinctness but did not migrate the format
+to the `@INV`/`YYYYMMDD` target — that remains a separate, still-pending migration.) An older 6-digit `YYMMDD` grammar
+rule that appeared in prior docs was simply wrong; the real decided target has always been the 8-digit sortable form.
 
 ### DeFi pool format: dash-separated fee tier, not colon-separated
 
