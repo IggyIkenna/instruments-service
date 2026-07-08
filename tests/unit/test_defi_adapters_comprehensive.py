@@ -2551,7 +2551,7 @@ class TestLidoAdapter:
         from instruments_service.reference_data.adapters.defi.lido import LidoReferenceDataAdapter
 
         adapter = LidoReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type="yield_bearing")
+        results = await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
         assert len(results) == 2
 
     @pytest.mark.asyncio
@@ -2610,7 +2610,7 @@ class TestEtherFiAdapter:
         from instruments_service.reference_data.adapters.defi.etherfi import EtherFiReferenceDataAdapter
 
         adapter = EtherFiReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type="yield_bearing")
+        results = await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
         assert len(results) == 1
 
     @pytest.mark.asyncio
@@ -2730,7 +2730,7 @@ class TestEthenaAdapter:
         from instruments_service.reference_data.adapters.defi.ethena import EthenaReferenceDataAdapter
 
         adapter = EthenaReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type="yield_bearing")
+        results = await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
         assert len(results) == 1
 
     @pytest.mark.asyncio
