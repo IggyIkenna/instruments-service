@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from unified_api_contracts import source_string_for
 from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
 
 if TYPE_CHECKING:
@@ -530,6 +531,7 @@ def _zero_records_non_sports(
                     reason=_reason,
                     attempted_at=_nt_attempt_ts,
                     pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                    source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
                 )
             manifest.write()
             _orch.logger.info(
