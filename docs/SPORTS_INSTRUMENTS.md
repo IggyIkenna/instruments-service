@@ -432,14 +432,21 @@ this doc previously carried forward. Coverage areas: odds microstructure, team g
 context, advanced stats, player lineup, halftime, xG (incl. Poisson xG), venue context, weather, steam detection,
 referee, season context, European-competition fatigue, bucketed rest-day features.
 
-**A real, separate, currently-unreconciled legacy tracking system** — `features_service/sports/tracking/registry.py`
-(+ its `_registry_data_*` modules) is a DIFFERENT feature catalog: **1,057 named entries**, of which only **10** are
-marked `FeatureStatus.COMPLETE` and **1,047** are `NOT_STARTED`. Its own docstring says it was "populated from
-FEATURES_CATALOG (footballbets) and sports-betting-service modules" — a legacy import, apparently disconnected from
-the real `feature_catalog.py` SSOT (sampled entries have `module=""`, i.e. not wired to any real calculator). There
-is no evidence of an active migration between the two catalogs; they appear to coexist unreconciled. Confirming
-whether this legacy registry should be retired, migrated, or is genuinely tracking a real future feature backlog is
-a real, scoped follow-up this pass didn't have time to resolve.
+**Resolved 2026-07-08 (`features-service@4d57c766`)**: the legacy tracking system flagged above —
+`features_service/sports/tracking/registry.py` (+ its `_registry_data_*` modules, 1,057 named entries, 10 marked
+`FeatureStatus.COMPLETE`) — was **dead scaffolding, not a real feature backlog, and has been deleted**. Evidence: (1)
+zero real consumers workspace-wide — only its own unit test (`tests/sports/unit/test_registry.py`) imported it; (2)
+`git log --follow` shows it entered the repo in one shot via the `features-sports-service` git-subtree merge
+(`b144552d`) and was never touched again except mechanical refactors (type-ignore sweeps, file-size splits) — never
+a content update; (3) even its strongest claim to accuracy, the 10 "complete" entries, was mostly wrong: only 4
+(`steam_detected_home/away`, `steam_magnitude_home/away`) correspond to a real computed feature (in
+`exporters/odds_features_exporter.py::_compute_steam_features`), and all 10 were mis-attributed to
+`calculators/steam_detector.py` — a real, live module, but an unrelated real-time execution-signal detector
+(`SteamDetector`/`SteamMoveSignal`), not a feature calculator; the other 6 entries (`steam_flag_*`,
+`steam_timing_*`, `league_steam_frequency`) don't exist anywhere in the real calculators. Deleted rather than
+migrated (no real backlog content to preserve); stale doc references to its `FeatureRegistryEntry` taxonomy were
+also cleaned up in the same commit. `feature_builder_registry.py` (the live calculator-group dependency DAG used by
+the pipeline exporter) is a separate, actively-used file and was untouched.
 
 **FSS fetch/compute cadence — real, current design (answers "what is FSS fetch" and the 60-minute-poll concern):**
 "FSS" = **Features Sports Service**. Live-mode compute is genuinely **event-driven**, not a fixed poll: FSS
