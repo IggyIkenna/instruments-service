@@ -21,7 +21,7 @@ from decimal import Decimal, InvalidOperation
 import aiohttp
 from unified_api_contracts import UnsupportedCapabilityError, classify_venue_error
 from unified_api_contracts._instrument_enums import OptionType
-from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_trading_library import log_event
 
@@ -76,6 +76,55 @@ def _emit_fetch_failed(endpoint: str, currency: str, error_code: str, exc: Excep
     )
 
 
+def _resolve_deribit_option_margin(item: dict[str, object], name: str) -> tuple[MarginType, str]:
+    """Resolve ``(margin_type, quote_asset)`` for a Deribit OPTION instrument.
+
+    Deribit is genuinely dual-margin-type — real inverse (USD-quoted,
+    BTC/ETH/…-settled) and real linear (USDC-quoted AND USDC-settled) options
+    coexist on the same venue (confirmed via live WS trades; see
+    ``docs/CEFI_INSTRUMENTS.md`` "Deribit margin types"). Deribit's own
+    ``quote_currency`` field is the reliable real signal — ``USD`` = inverse,
+    ``USDC`` = linear — used first. Falls back to ``settlement_currency``
+    (coin-settled → inverse, ``USDC``-settled → linear) and finally a
+    ``USDC``-in-``instrument_name`` heuristic for payloads that carry
+    neither field.
+    """
+    quote_ccy = str(item.get("quote_currency", "")).upper()
+    if quote_ccy == "USDC":
+        return MarginType.LINEAR, "USDC"
+    if quote_ccy == "USD":
+        return MarginType.INVERSE, "USD"
+    settlement = str(item.get("settlement_currency", "")).upper()
+    if settlement == "USDC":
+        return MarginType.LINEAR, "USDC"
+    if settlement:
+        return MarginType.INVERSE, "USD"
+    if "USDC" in name.upper():
+        return MarginType.LINEAR, "USDC"
+    return MarginType.INVERSE, "USD"
+
+
+def _build_deribit_option_symbol(
+    base: str, margin_type: MarginType, expiry: datetime, strike: Decimal, option_right: str
+) -> str:
+    """Build the target OPTION symbol: ``BASE@LIN|INV-YYYYMMDD-STRIKE-C|P``.
+
+    Deribit-local mirror of the shared Bybit/Kraken-Futures/OKX dated-
+    derivative marker convention (``tardis/parsing.py::
+    _build_dated_derivative_canonical_symbol`` — not imported directly here
+    to avoid a cross-package private-symbol reach from ``cefi/`` into the
+    sibling ``cefi/tardis/`` package, which ``basedpyright --strict``
+    (``reportPrivateUsage``) rejects even though ``tardis/__init__.py``
+    re-exports it). ``YYYYMMDD`` per the operator's date-format decision
+    (string-sortable, unlike Deribit's native ``DDMMMYY``); the quote segment
+    is intentionally omitted — Deribit's target drops it for dated
+    derivatives (unlike PERPETUAL, which keeps ``BASE-QUOTE@MARKER``).
+    """
+    marker = "INV" if margin_type is MarginType.INVERSE else "LIN"
+    strike_str = str(int(strike)) if strike == strike.to_integral_value() else format(strike.normalize(), "f")
+    return f"{base.upper()}@{marker}-{expiry.strftime('%Y%m%d')}-{strike_str}-{option_right}"
+
+
 def _parse_option(item: object) -> InstrumentRecord | None:
     """Parse one Deribit ``kind=option`` instrument dict into an InstrumentRecord."""
     if not isinstance(item, dict):
@@ -93,20 +142,28 @@ def _parse_option(item: object) -> InstrumentRecord | None:
         expiry = datetime.fromtimestamp(int(item.get("expiration_timestamp", 0)) / 1000, tz=UTC)
     except (ValueError, OSError, OverflowError):
         return None
-    # `name` is Deribit's raw instrument_name, already encoding
-    # expiry/strike/right (e.g. "BTC-25DEC26-70000-C") — passthrough=True
-    # wraps it verbatim via the shared UAC builder instead of an ad hoc
-    # f-string, matching the Tardis batch-mode convention for the same
-    # instrument (canonical_id_builder.build_instrument_id, 2026-07-08
-    # one-builder-for-everything retrofit; behavior-preserving — identical
-    # output to the prior f"DERIBIT:OPTION:{name}").
+    option_right = "C" if opt is OptionType.CALL else "P"
+    margin_type, quote_asset = _resolve_deribit_option_margin(item, name)
+    # Target canonical format (operator decision 2026-07-08/09,
+    # instrument_id_format_canonicalization_2026_07_08.md finding 1):
+    # VENUE:OPTION:BASE@LIN|INV-YYYYMMDD-STRIKE-C|P. Still routed through the
+    # shared UAC builder via passthrough=True (the same mechanism this
+    # adapter already used for the prior raw-DDMMMYY-passthrough format) —
+    # _build_deribit_option_symbol only computes the marker-embedded symbol
+    # string, matching the sibling Bybit/Kraken-Futures/OKX convention
+    # (tardis/parsing.py::_build_dated_derivative_canonical_symbol).
     return InstrumentRecord(
-        instrument_key=build_instrument_id("DERIBIT", InstrumentType.OPTION, name, passthrough=True),
+        instrument_key=build_instrument_id(
+            "DERIBIT",
+            InstrumentType.OPTION,
+            _build_deribit_option_symbol(base, margin_type, expiry, strike, option_right),
+            passthrough=True,
+        ),
         venue="DERIBIT",
         raw_symbol=name,
         instrument_type=InstrumentType.OPTION,
         base_asset=base,
-        quote_asset="USD",
+        quote_asset=quote_asset,
         settle_asset=str(item.get("settlement_currency", base)),
         underlying=base,
         status=InstrumentStatus.ACTIVE,
@@ -115,6 +172,7 @@ def _parse_option(item: object) -> InstrumentRecord | None:
         expiry=expiry,
         contract_size=Decimal("1"),
         timezone="UTC",
+        margin_type=margin_type,
     )
 
 
