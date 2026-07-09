@@ -49,18 +49,96 @@ migrated in production data. Full detail, decision rationale, and open todos:
   (100/500/3000/10000), dash-separated. `pool_address` is its own column, not the entire identity key.
 - **Current adapter code**: all 13 DEX-pool protocols in scope (the 5 native adapter classes — Uniswap V2/V3/V4,
   Balancer, Curve — plus the 8 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug`, see "Adapter
-  architecture" below) build a structured key — `instrument_key = f"{venue_tag}:POOL:{base}-{quote}:{fee_str}"`
+  architecture" below) build a structured key — `instrument_key = f"{venue_tag}:POOL:{base}-{quote}[-{fee_bps}]"`
   (confirmed in `uniswap_v3.py`, and equivalently in `uniswap_v2.py`/`uniswap_v4.py`/`balancer.py`) — with the
   pool/market address kept separately as `raw_symbol`, not as the instrument_id. Curve uses its own REST-API-derived
   key shape (see the Curve row under "Protocol × chain coverage" below).
-- **Known code gap**: the fee-tier segment is colon-separated (`:{fee_str}`) rather than dash-separated, and `fee_str`
-  embeds Uniswap's raw on-wire `feeTier` value (e.g. `3000`) rather than the real basis-points value — a correctly
-  computed bps value (`pool_fee_tier_bps`) already exists on the same record but isn't the one written into the
-  `instrument_key` string (`uniswap_v3.py:590-599`). Since the 8 fork/config-variant protocols share the same
-  `_build_pool_record` code path, this gap applies to all 13 protocols.
-- **Known gap, data state (not verifiable from code)**: whether the persisted production catalog has been
-  regenerated to the target dash/bps format across all 13 protocols is a live-data question, not a code fact — see
-  the migration doc above for current status.
+- **Fee-tier code gap — FIXED 2026-07-09** (`uniswap_v3.py`/`uniswap_v4.py::_build_pool_record`): the fee-tier
+  segment was colon-separated (`:{fee_str}`) rather than dash-separated, and embedded Uniswap's raw on-wire `feeTier`
+  value (e.g. `3000`) rather than the real basis-points value. Since the 8 fork/config-variant protocols share
+  Uniswap V3's `_build_pool_record` code path, fixing it there fixes all 8 too; V4 (separate adapter class) fixed
+  the same way. Now: `symbol = f"{base}-{quote}-{pool_fee_tier_bps}"` when a real fee tier exists, else
+  `f"{base}-{quote}"` (the fee segment is OMITTED, not a fabricated `-0`, matching the target's `[-FEE_TIER]`
+  optional-bracket grammar). Verified via `_build_pool_record` unit tests (264 passed,
+  `tests/unit/test_defi_adapters_comprehensive.py` + `tests/unit/reference_data/adapters/defi/test_dex_metadata_population.py`).
+  This fix affects `instrument_key`/`pool_fee_tier` on freshly-discovered rows and (once regenerated, see below)
+  `glued_pair_id` — it does **not** touch `instrument_id` for POOL rows, which is a separate, deliberately-different
+  field (next bullet).
+
+- **RE-VERIFIED 2026-07-09, finding corrected — this is NOT a simple catalog-regeneration gap.** The
+  2026-07-08 framing ("the persisted catalog predates the current adapter code... the fix is likely a catalog
+  regeneration/backfill against the current adapter code, not a from-scratch code change") is **incomplete**: reading
+  `scripts/build_instrument_catalogue.py::_defi_pool_dual_form()` directly shows the catalogue ROLLUP step (which
+  runs strictly downstream of adapter discovery and is what actually writes `prod/catalog.parquet`) **unconditionally**
+  sets `instrument_id = pool_address.lower()` for every DeFi POOL-typed row, via UAC's
+  `DefiPoolIdentity.canonical_instrument_id` (`unified_api_contracts/canonical/crosscutting/defi.py:299-301`) — by
+  design, not staleness. Re-running instrument discovery against the current (now-fixed) adapter code and re-rolling
+  the catalogue would **still** write the bare pool address into `instrument_id`, because that decision is made in
+  the rollup, not the adapter. This is **load-bearing, live, cross-repo**: `market-tick-data-service`'s
+  `engine/defi_catalog_reader.py` reads `instrument_id` from this exact catalogue expecting `pool_address.lower()`
+  for POOL rows (its own fallback deriver `_canonical_defi_id` independently recomputes the identical value) to
+  build its expected-universe join for DEX swap/pool market data — flipping `instrument_id` to the structured form
+  for POOL rows without a coordinated MTDS-side change would silently break that join for all 13 protocols. This is
+  exactly the class of change the canonicalization doc's already-planned "ground-up migration (UAC →
+  instruments-service → MTDS → strategy-service → deployment, live breakage explicitly authorized)" exists for — it
+  is **not** achievable as an instruments-service-only regen, and needs an explicit operator go-ahead + an MTDS-side
+  companion change shipped in lockstep, not a same-session smoke test. (Independently corroborated by
+  `scripts/balancer_cross_chain_pool_address_collision_backfill_2026_07_08.py`'s own header, which already flagged
+  the bare-`pool_address` `instrument_id` as "a known, already-documented architectural gap... that has not yet
+  shipped as a catalog-wide migration" — this pass adds the root-cause mechanism and the MTDS blocking dependency.)
+
+  **The good news**: the target structured form already exists TODAY, in a separate, already-populated column —
+  `glued_pair_id` (0 nulls across all 6,352 real POOL rows for the 13 protocols, verified live against
+  `prod/catalog.parquet` 2026-07-09) — built by the same `DefiPoolIdentity.glued_pair_id` property, documented as
+  "the human-readable UI form." It has 3 remaining format bugs relative to the operator's exact target grammar,
+  all cosmetic/string-level (no re-fetch needed to fix):
+  1. Ghost/no-underscore venue-chain prefix — `UNISWAPV3-ARBITRUM` instead of `UNISWAP_V3-ARBITRUM` (UAC's
+     `_strip_version_underscore()` deliberately builds this as "the glued-prefix display form"; the catalogue's own
+     `venue` column is already correctly spelled with the underscore, so a rewrite can just use it directly instead
+     of re-deriving from the ghost prefix).
+  2. Colon before the fee-tier segment instead of dash (`:POOL:SOL-WETH:500` vs target `:POOL:SOL-WETH-5`).
+  3. Raw on-wire feeTier units instead of bps for the Uniswap-V3-family + Uniswap V4 protocols (e.g. `10000` should
+     be `100`) — same root cause as the just-fixed adapter bug, further baked in by
+     `build_instrument_catalogue.py::_fee_from_instrument_key()` preferring the (buggy, pre-fix) legacy
+     `instrument_key`'s raw fee token over the already-correct bps `pool_fee_tier` field.
+
+  **Smoke-tested 2026-07-09 (dry-run only, no writes)**: a pure in-place string rewrite of `glued_pair_id` — using
+  the catalogue's own `venue`/`chain` columns (already correct) plus the existing `glued_pair_id`'s pair/fee segments
+  — against **all 6,352 real POOL rows across the 13 protocols** in live `prod/catalog.parquet`: **100% (6,352/6,352)
+  parsed and transformed to the exact target grammar, 0 failures, 0 grammar mismatches**, in 0.11s in-memory
+  (~59,400 rows/sec for the transform itself; a real write-back is a single-parquet-file GCS read+write, not a
+  per-row operation, so end-to-end ETA for all 13 protocols is well under 1 minute). This is safe to ship
+  independently of the `instrument_id`/MTDS question above — `glued_pair_id` has no external consumers today (grepped
+  the full workspace: only `build_instrument_catalogue.py` and the Balancer collision backfill script read it; no UI
+  or other service joins on it yet). Real row count grew from the 2026-07-08 finding's snapshot (6,180 → 6,352, +172
+  rows in the intervening day from ongoing backfill) — re-check counts before any real write, this catalogue is a
+  live, moving target. Real per-protocol row counts + parse results (2026-07-09, all 13/13 protocols spot-checked,
+  100% parse success on every protocol):
+
+  | Protocol              | Real POOL rows (2026-07-09) | `glued_pair_id` rewrite result                                   |
+  | --------------------- | --------------------------- | ---------------------------------------------------------------- |
+  | BALANCER              | 2,423                       | 2,423/2,423 ok                                                   |
+  | UNISWAP_V3            | 2,192                       | 2,192/2,192 ok                                                   |
+  | PANCAKESWAP_V3        | 614                         | 614/614 ok                                                       |
+  | UNISWAP_V4            | 413                         | 413/413 ok                                                       |
+  | TRADER_JOE_V2         | 304                         | 304/304 ok                                                       |
+  | SUSHISWAP_V3          | 122                         | 122/122 ok                                                       |
+  | VELODROME_V2          | 96                          | 96/96 ok                                                         |
+  | AERODROME_V3          | 76                          | 76/76 ok                                                         |
+  | CAMELOT_V3            | 63                          | 63/63 ok                                                         |
+  | UNISWAP_V2            | 24                          | 24/24 ok (no fee segment — V2 has none, correctly absent)        |
+  | CURVE                 | 20                          | 20/20 ok (no fee segment — Curve exposes none, correctly absent) |
+  | SUSHISWAP (legacy V2) | 4                           | 4/4 ok                                                           |
+  | GMX                   | 1                           | 1/1 ok                                                           |
+  | **Total**             | **6,352**                   | **6,352/6,352 ok (100%)**                                        |
+
+  (Old row-count baseline for comparison, 2026-07-08: 6,180. UNISWAP_V3 alone grew 2,030 → 2,192 in the intervening
+  day — ongoing backfill, not a discrepancy in either count.)
+  live, moving target.
+
+- **Known gap, data state (not verifiable from code)**: whether `glued_pair_id`'s 3 format bugs above have been
+  fixed in the live production catalog, and whether the `instrument_id`/MTDS migration has been authorized and
+  executed, are live-data/live-decision questions, not code facts — see the migration doc above for current status.
 
 ### Lending — A_TOKEN/DEBT_TOKEN split (from `defi_lending_atoken_debttoken_instrument_split_2026_07_07.md`)
 
