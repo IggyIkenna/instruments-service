@@ -67,8 +67,9 @@ Usage::
     .venv/bin/python scripts/canonicalize_binance_futures_delivery_catalog_2026_07_09.py --by-date-sample 10
     .venv/bin/python scripts/canonicalize_binance_futures_delivery_catalog_2026_07_09.py --by-date-sample 10 --apply --confirm
 
-    # Full historical sweep (9,234 files) — NOT run by the authoring dispatch, operator go/no-go only:
-    .venv/bin/python scripts/canonicalize_binance_futures_delivery_catalog_2026_07_09.py --by-date-all --apply --confirm
+    # Full historical sweep (9,234 files), thread-pool concurrent (--workers, default 16):
+    .venv/bin/python scripts/canonicalize_binance_futures_delivery_catalog_2026_07_09.py \
+        --by-date-all --apply --confirm --workers 16
 
 SSOT: ``unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md``
 finding 1; ``instruments-service/docs/CEFI_INSTRUMENTS.md`` "Instrument ID format: current vs.
@@ -78,9 +79,11 @@ decided target".
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import datetime as _dt
 import io
 import logging
+import threading
 import time
 
 import pandas as pd
@@ -348,8 +351,20 @@ def run_catalog(st, bucket: str, apply: bool, ts: str) -> None:
 
 
 def _list_by_date_targets(st, bucket: str, limit: int | None) -> list[str]:
+    """List real primary ``instruments.parquet`` blobs only.
+
+    Must exclude this script's own ``.binancefix.bak.parquet`` backup blobs — a bare
+    ``venue=BINANCE-FUTURES/`` substring match also matches
+    ``venue=BINANCE-FUTURES/instruments.<ts>.binancefix.bak.parquet`` (real, found live
+    2026-07-09: a prior smoke-test run's backups were sitting in the same prefix). Without
+    this exclusion, a sweep would re-migrate + re-backup its own backups, corrupting the
+    backup chain (mutates what's supposed to be an immutable pre-fix snapshot) and wildly
+    inflating file/changed counts as more backups accumulate across runs.
+    """
     targets: list[str] = []
     for b in st.list_blobs(bucket, prefix=BY_DATE_PREFIX):
+        if not b.name.endswith("/instruments.parquet"):
+            continue
         if "venue=BINANCE-FUTURES/" in b.name or "venue=BINANCE-DELIVERY/" in b.name:
             targets.append(b.name)
             if limit is not None and len(targets) >= limit:
@@ -357,34 +372,88 @@ def _list_by_date_targets(st, bucket: str, limit: int | None) -> list[str]:
     return targets
 
 
-def run_by_date(st, bucket: str, apply: bool, ts: str, limit: int | None) -> None:
+def _process_one_by_date_blob(st, bucket: str, blob: str, apply: bool, ts: str) -> dict[str, int]:
+    """Download+canonicalize+(optionally write) ONE by_date blob. Returns per-file stats.
+
+    Pure per-file unit of work — safe to call from multiple worker threads concurrently
+    (each call only touches its own local ``raw``/``df``/``out`` objects; the shared
+    storage client is used read-only-per-blob-path, same pattern as the rest of this
+    workspace's shard-level-isolated concurrent GCS I/O).
+    """
+    raw = st.download_bytes(bucket, blob)
+    df = pd.read_parquet(io.BytesIO(raw))
+    out, stats = canonicalize_by_date_frame(df)
+    if stats["rows_out"] != stats["rows_in"]:
+        logger.error("ABORT %s: row count changed (%d -> %d)", blob, stats["rows_in"], stats["rows_out"])
+        stats["changed"] = 0
+        return stats
+    id_col = "instrument_key" if "instrument_key" in df.columns else "instrument_id"
+    if stats["changed"] > 0:
+        _write_blob(st, bucket, blob, raw, out, id_col, apply, ts)
+    return stats
+
+
+def run_by_date(st, bucket: str, apply: bool, ts: str, limit: int | None, workers: int) -> None:
+    """Real-concurrency sweep over every target by_date blob (thread-pool, shard-isolated).
+
+    A single file is a serial download+backup-upload+rewrite-upload round trip (I/O-bound,
+    not CPU-bound), so a thread pool gives near-linear speedup up to GCS's per-project
+    concurrent-request ceiling. Per-file exceptions (network hiccup, malformed row) are
+    caught here and logged — one bad file never aborts the sweep (same shard-level-failure-
+    isolation convention as the rest of this workspace's per-shard capture loops).
+    """
     targets = _list_by_date_targets(st, bucket, limit)
-    logger.info("=== by_date: %d target file(s) (limit=%s) ===", len(targets), limit)
+    logger.info("=== by_date: %d target file(s) (limit=%s, workers=%d) ===", len(targets), limit, workers)
     total_rows_changed = 0
     total_files_changed = 0
+    total_errors = 0
+    completed = 0
+    lock = threading.Lock()
     t0 = time.time()
-    for i, blob in enumerate(targets, start=1):
-        raw = st.download_bytes(bucket, blob)
-        df = pd.read_parquet(io.BytesIO(raw))
-        out, stats = canonicalize_by_date_frame(df)
-        if stats["rows_out"] != stats["rows_in"]:
-            logger.error("ABORT %s: row count changed (%d -> %d)", blob, stats["rows_in"], stats["rows_out"])
-            continue
-        id_col = "instrument_key" if "instrument_key" in df.columns else "instrument_id"
-        if stats["changed"] > 0:
-            total_files_changed += 1
-            total_rows_changed += stats["changed"]
-            _write_blob(st, bucket, blob, raw, out, id_col, apply, ts)
-        logger.info("[%d/%d] %s rows=%d changed=%d", i, len(targets), blob, stats["rows_in"], stats["changed"])
+
+    def _run_one(blob: str) -> tuple[str, dict[str, int] | None]:
+        try:
+            return blob, _process_one_by_date_blob(st, bucket, blob, apply, ts)
+        except Exception:
+            logger.exception("ERROR %s — skipping (shard-isolated, sweep continues)", blob)
+            return blob, None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_run_one, blob) for blob in targets]
+        for future in concurrent.futures.as_completed(futures):
+            _blob, stats = future.result()
+            with lock:
+                completed += 1
+                if stats is None:
+                    total_errors += 1
+                elif stats["changed"] > 0:
+                    total_files_changed += 1
+                    total_rows_changed += stats["changed"]
+                if completed % 500 == 0 or completed == len(targets):
+                    elapsed_so_far = time.time() - t0
+                    logger.info(
+                        "[progress] %d/%d done, %.1fs elapsed (%.3fs/file avg) "
+                        "files_changed=%d rows_changed=%d errors=%d",
+                        completed,
+                        len(targets),
+                        elapsed_so_far,
+                        elapsed_so_far / completed,
+                        total_files_changed,
+                        total_rows_changed,
+                        total_errors,
+                    )
+
     elapsed = time.time() - t0
     per_file = elapsed / len(targets) if targets else 0.0
     logger.info(
-        "by_date DONE: files=%d files_changed=%d rows_changed=%d elapsed=%.1fs (%.3fs/file)",
+        "by_date DONE: files=%d files_changed=%d rows_changed=%d errors=%d elapsed=%.1fs (%.3fs/file, workers=%d)",
         len(targets),
         total_files_changed,
         total_rows_changed,
+        total_errors,
         elapsed,
         per_file,
+        workers,
     )
 
 
@@ -396,6 +465,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--by-date-all", action="store_true", help="Migrate ALL real by_date files (9,234) — full historical sweep."
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=16,
+        metavar="N",
+        help="Thread-pool concurrency for --by-date-* GCS read-modify-write ops (default: 16).",
     )
     ap.add_argument("--apply", action="store_true", help="Write fixes back to GCS (default: dry-run report only).")
     ap.add_argument("--confirm", action="store_true", help="Required alongside --apply to actually mutate blobs.")
@@ -416,9 +492,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.catalog:
         run_catalog(st, bucket, apply, ts)
     if args.by_date_sample:
-        run_by_date(st, bucket, apply, ts, args.by_date_sample)
+        run_by_date(st, bucket, apply, ts, args.by_date_sample, args.workers)
     if args.by_date_all:
-        run_by_date(st, bucket, apply, ts, None)
+        run_by_date(st, bucket, apply, ts, None, args.workers)
     return 0
 
 
