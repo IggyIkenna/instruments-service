@@ -241,28 +241,66 @@ its **full** curated list unfiltered even in MVP mode. Note also: the main adapt
 Canonical grammar (full spec lives in the shared instrument-ID doc): `VENUE:TYPE:PAYLOAD[@CHAIN]`. TradFi's
 `chain` is always `"off-chain"`.
 
-| Type     | Format                                            | Example                                                            |
-| -------- | ------------------------------------------------- | ------------------------------------------------------------------ |
-| `FUTURE` | `VENUE:FUTURE:BASE-QUOTE-YYMMDD`                  | `CME:FUTURE:ES-USD-241225`                                         |
-| `OPTION` | `VENUE:OPTION:BASE-QUOTE-YYMMDD-STRIKE-CALL\|PUT` | `CME:OPTION:ES-USD-241225-4500-CALL`                               |
-| `EQUITY` | `VENUE:EQUITY:SYMBOL`                             | `NASDAQ:EQUITY:AAPL`, `NYSE:EQUITY:SPY`                            |
-| `INDEX`  | `VENUE:INDEX:SYMBOL`                              | see §4 for the resolved Yahoo-sourced index `instrument_key` shape |
+| Type     | Format                                               | Example                                                            |
+| -------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
+| `FUTURE` | `VENUE:FUTURE:PRODUCT_ROOT@LIN-YYYYMMDD`             | `CME:FUTURE:GOLD@LIN-20260821`                                     |
+| `OPTION` | `VENUE:OPTION:PRODUCT_ROOT@LIN-YYYYMMDD-STRIKE-C\|P` | `CME:OPTION:NASDAQ100@LIN-20260918-32000-C`                        |
+| `EQUITY` | `VENUE:EQUITY:SYMBOL`                                | `NASDAQ:EQUITY:AAPL`, `NYSE:EQUITY:SPY`                            |
+| `INDEX`  | `VENUE:INDEX:SYMBOL`                                 | see §4 for the resolved Yahoo-sourced index `instrument_key` shape |
 
-**Single-leg dated-derivative `@LIN`/`@INV`-`YYYYMMDD` extension — REVERSED 2026-07-09, NOT implemented.**
-The 2026-07-08 assessment above (real exchange contract codes like `CME:FUTURE:6AF0` are already fine, no fix
-needed) was the original call, but the operator explicitly reversed it 2026-07-09
+**Single-leg dated-derivative `@LIN`-`YYYYMMDD` extension — SHIPPED 2026-07-09 (write path + historical
+migration, MTDS repo).** The 2026-07-08 assessment above (real exchange contract codes like `CME:FUTURE:6AF0`
+are already fine, no fix needed) was the original call; the operator reversed it 2026-07-09
 (`instrument_id_format_canonicalization_2026_07_08.md` finding 1, "What this is NOT"): "I'd rather adjust
 tradfi... that's the whole point of cross-AG normalisation" — TradFi single-leg dated derivatives (`FUTURE`/
-`OPTION`) are now IN SCOPE for the same `BASE[-QUOTE]@LIN|@INV-YYYYMMDD[-STRIKE-C|P]` target already shipped for
-CeFi (`BINANCE-FUTURES`/`BINANCE-DELIVERY`, on-chain-perps). **This is NOT implemented in this pass** — it is a
-separate, substantial migration (every TradFi `FUTURE`/`OPTION` `instrument_key` construction site in both the
-Databento and IBKR adapters, plus its own historical catalog + by_date migration, at a scale comparable to the
-dedicated single-venue CeFi `@LIN`/`@INV` migrations that each shipped as their own focused commit) — it is
-explicitly out of scope for the combo/leg plan (§11) this document's Multi-Leg section covers, and is not yet
-tracked as its own dedicated fix plan. Real TradFi futures/options in this universe are margined/settled in the
-quote currency (fiat, typically USD) — there is no known BTC/crypto-margined ("inverse") TradFi product in this
-catalog, so a real implementation would plausibly apply `@LIN` uniformly (never `@INV`) rather than needing venue-
-by-venue margin-type detection the way CeFi did.
+`OPTION`) are now IN SCOPE for the same target already shipped for CeFi. **Implemented** (this is the
+market-tick-data-service raw-tick write path this doc's §8 table describes — a separate surface from the
+instruments-service reference-data catalog §11 covers):
+
+- **Write-path fix** (`market-tick-data-service/market_tick_data_service/market_interface/adapters/tradfi/
+databento_enrichment.py::_classify_row` for Databento CME/CBOE/DBEQ; `tradfi_shared.py::
+derive_tradfi_row_instrument_id` for IBKR, symmetric code-only fix — IBKR has zero real historical rows to
+  migrate, never wired into a live/backfill entrypoint): the raw exchange product root (e.g. `GC`, `NQ`, `VX`)
+  is translated to its human-canonical name (`GOLD`, `NASDAQ100`, `VIX`) via the UAC registry
+  `unified_api_contracts.registry.EXCHANGE_CODE_TO_NAME` (the SAME registry `instruments-service`'s
+  `_resolve_product_root()` already uses for §11's COMBO legs — one shared human-name mapping, not two), and
+  `build_instrument_id(..., margin_marker="LIN")` stamps the settlement suffix. Every real TradFi future/option
+  in this system is USD-settled — no inverse-margined TradFi product exists — so the marker is always `@LIN`,
+  never `@INV` (confirmed, not assumed: the CME/CBOE/ICE product universe in `tradfi_symbology.py` has no
+  crypto/BTC-margined instrument). A companion UAC fix
+  (`unified_api_contracts/external/databento/databento_classifier.py::_derive_cme_option_underlying`) added the
+  6 missing CME commodity-option root mappings (silver/palladium/platinum/copper/heating-oil/gasoline options —
+  `SO`/`PAO`/`PO`/`HXE`/`OH`/`OB`) that previously fell through to the raw option code unresolved. The
+  `underlying=` GCS partition segment (`futures_chain`/`options_chain` bundle files) follows the same DataFrame
+  column automatically — no separate path-builder fix needed, per `partitioned_writer.py`'s existing
+  per-underlying grouping.
+- **Historical migration**: `market-tick-data-service/scripts/migrate_tradfi_single_leg_product_root_lin_2026_07_09.py`
+  (backup-first — server-side copy to `_migration_backup_2026_07_09/` before every rewrite — real GCS
+  concurrency via `ThreadPoolExecutor`, dry-run-by-default, idempotent/resumable). Real scope, enumerated from
+  the existing `availability_index.parquet` manifest (single-walk discipline — no fresh corpus walk, real
+  `row_count>0` captured entries only): **158,812 real shard objects / ~1.19B rows** across CME
+  `futures_chain`+`options_chain` and CBOE `futures_chain` (`ohlcv_1s`/`ohlcv_1m` data_types only — see the
+  excluded-scope note below; ICE dropped out entirely, 0 real captured rows, consistent with §1's ICE-purge).
+  **Status as of 2026-07-09 14:31 UTC (real, in-progress — not yet complete)**: launched at real production
+  concurrency (48 workers); verified correct end-to-end on live samples across CME (6S→CHF, ZS→SOYBEAN,
+  6N→NZD, 6M→MXN, 6B→GBP, GC→GOLD, NQ→NASDAQ100 — real before/after GCS reads, backup+new-path+content all
+  confirmed) and CBOE (VX→VIX, real GCS listing confirmed post-migration); 9,000+ real objects processed (real
+  moves + in-place rewrites + genuinely-absent-shard skips), running continuously in the background at
+  ~6-13 real objects/sec (throughput varies with real shared-host GCS contention from concurrent workspace
+  agents) — real ETA at last measurement ~6-7 hours from launch. The script is idempotent (a shard already in
+  the target `@LIN` shape is a no-op), so it can be safely re-run/resumed to reach full completion:
+  `python scripts/migrate_tradfi_single_leg_product_root_lin_2026_07_09.py --worklist <worklist.parquet> --workers 48 --apply --stamp <new-stamp>`
+  (worklist = the same manifest-derived scope query documented in the script's own module docstring), followed
+  by `--skip-gcs` (manifest-only rewrite) once the GCS pass reaches 100%.
+  **Real gap found and deliberately excluded, not silently dropped**: CME's `data_type=options_chain` axis
+  (120,946 manifest entries, ~187.5M rows) uses a DIFFERENT, unverified legacy per-contract/per-spread flat file
+  layout (confirmed live via GCS listing: filenames like `CC__FMH0025!.parquet` directly under
+  `data_type=options_chain/`, no `underlying=X/` subdirectory at all; the manifest's own `underlying` column for
+  these rows holds per-contract keys like `ESU4_C5675`, not a product root) — this is NOT the
+  `underlying={ROOT}/ticks.parquet` bundled scheme the write-path fix and this migration target. Touching it
+  without first understanding its real physical layout risked silent data loss at ~187M-row scale, so it was
+  excluded from this pass rather than guessed at; flagged here as a real, open follow-up (a dedicated
+  investigation + fix plan, scope TBD) rather than deferred silently.
 
 **Multi-leg spreads/combos — the CODE fix is FIXED 2026-07-08/09; the historical catalog migration is real but
 NOT yet durable.** See §11 for the full picture, including why the historical migration needs re-running after
