@@ -81,9 +81,7 @@ def _build_mask(df: pd.DataFrame, data_type: str, covered_leagues: frozenset[str
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--apply", action="store_true", help="Write the re-typed rows as a per-VM shard.")
     args = p.parse_args(argv)
 
@@ -92,11 +90,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("DEPLOYMENT_ENV_SHORT must be set (e.g. prd). Refusing.")
         return 1
 
-    instance = os.environ.get("VM_NAME", "")
+    instance = os.environ.get("VM_NAME", "")  # noqa: qg-empty-fallback — unset VM_NAME => `not instance` refuses --apply below
     if args.apply and (os.environ.get("MANIFEST_PER_VM_SHARDS") != "true" or not instance):
-        logger.error(
-            "--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. Refusing."
-        )
+        logger.error("--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. Refusing.")
         return 1
 
     bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
