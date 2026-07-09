@@ -263,45 +263,50 @@ the instrument's `chain` attribute, not the venue token), while `PACIFICA-SOLANA
 carry an explicit chain suffix in the venue itself. **No trailing `@VENUE`** on top — venue is already the first
 colon-segment.
 
-**Known gap, data state (real, verified 2026-07-09 — narrower than a naive read of the migration script suggests)**:
+**Historical migration — real, shipped, fully applied (2026-07-09)**:
 `migrate_onchain_perp_perpetual_canonical_2026_07_08.py` in market-tick-data-service (dry-run by default, requires
 `--apply` to mutate) combines the PERP→PERPETUAL rename with the `@LIN` margin marker in one pass so historical rows
-are touched once. Its real scope, confirmed live against the production `market-data-tick-cefi-prd` bucket + the
-availability manifest:
+are touched once. The script was extended (same pass) to ALSO recognize an EVEN OLDER bare-symbol GCS filename shape —
+no venue prefix at all, e.g. HL `AAVE-PERP.parquet`, ASTER `AAVEUSDT.parquet` — by parsing the venue from the object's
+GCS **path** (`venue=` partition) rather than requiring it in the filename, mirroring the 2026-06-22 precedent's own
+path-based venue resolution. This was the real, largest remaining gap: the 2026-06-22 migration had NOT actually
+renamed the majority of real HL/ASTER objects to its own `{VENUE}:PERP:{SYMBOL}` intermediate shape, despite the
+manifest's `instrument_id` column already reading that shape for 100% of in-scope rows (a real manifest/GCS-filename
+divergence — the manifest was updated but the backing objects were not).
 
-- **Manifest** (`_index/availability_index.parquet`, 7,219,598 total rows): 498,388 HL/ASTER `batch_hyperliquid`/
-  `batch_aster` rows carry a `:PERP:`-shaped `instrument_id`; 100% of them (`instrument_ids_transformed=498388`,
-  `not_in_scope_shape_skipped=0`) transform cleanly to `VENUE:PERPETUAL:BASE-QUOTE@LIN` with 0 dedup collisions — this
-  half of the migration is real, fast (~2.5 min end-to-end on the real manifest), and unconditionally correct
-  regardless of the GCS-side finding below.
-- **GCS objects — real, more limited scope than the manifest's `capture_status=captured` count (19,435 rows) implies.**
-  A real object only gets renamed if its _filename_ (not the manifest's `instrument_id` cell) matches the script's
-  `{VENUE}:PERP:{SYMBOL}.parquet` regex. Spot-checking real objects across multiple real dates (narrow, scoped
-  `list_blobs` prefix reads — not a whole-corpus walk) found the REAL persisted filenames are a mix of at least 3
-  historical shapes, and the dominant shape for HL and ASTER `derivative_ticker` is an EVEN OLDER bare form the
-  `2026-06-22` precedent migration (`migrate_onchain_perp_canonical_instrument_id.py`) was supposed to have already
-  eliminated but apparently didn't for these slices:
-  - HL `book_snapshot_5`/`derivative_ticker` (9,063 + 9,293 = 18,356 captured manifest rows): real filenames are bare
-    `{SYMBOL}-PERP.parquet` (e.g. `AAVE-PERP.parquet`) on every sampled date (`2024-02-23`, `2024-03-13`,
-    `2025-01-05`) — **not** matched by the migration script's regex, so these are silently `skipped_not_in_scope` by
-    a `--apply` run, not renamed.
-  - ASTER `derivative_ticker` (899 captured manifest rows): real filenames are the raw concatenated exchange symbol
-    with no venue/type wrapper at all (e.g. `AAVEUSDT.parquet`) on every sampled date (`2024-08-01`, `2024-09-15`) —
-    also unmatched, also silently skipped.
-  - ASTER `trades` (180 captured manifest rows): real filenames ARE mostly in the script's target `ASTER:PERP:
-{SYMBOL}.parquet` shape (confirmed both sampled dates) — this slice IS what the migration's GCS-rename phase can
-    actually find and fix. **Real, verified smoke test** (3 production objects, `2024-08-01`, backed by the
-    copy-then-delete idempotent pattern): `ASTER:PERP:ADAUSDT.parquet` → `ASTER:PERPETUAL:ADA-USDT@LIN.parquet`,
-    same for `AVAXUSDT`/`BNBUSDT` — all 3 verified correct post-rename (source gone, target present). Real measured
-    throughput: ~3.3s/object sequential (2 describes + 1 copy + 1 delete per object); with the script's default
-    32-worker pool this slice (~180 objects) is a sub-minute operation.
-  - **Net real ETA for `--apply`**: manifest rewrite ~3 min (proven) + GCS rename well under 1 min for the ~180
-    real matched objects — but this leaves the ~19,255 HL + ASTER-`derivative_ticker` real objects (99% of the
-    "captured" count) in their pre-existing bare-symbol shape, NOT renamed, despite their manifest `instrument_id`
-    cell now reading the new canonical form. This manifest/GCS-filename divergence is a real, separate, pre-existing
-    gap (predates this pass) recommended for its own dedicated follow-up — extending the migration's shape-matching to
-    also parse venue from the object's PATH (not just the filename) so it can recognize the bare `{SYMBOL}[-PERP]`
-    forms too.
+Real before → after, measured against the production `market-data-tick-cefi-prd-central-element-323112` bucket +
+`_index/availability_index.parquet`:
+
+- **Manifest** (7,219,598 total rows, 498,388 HL/ASTER `batch_hyperliquid`/`batch_aster` rows in scope): 100% of
+  in-scope rows were ALREADY in the `:PERP:` shape (`instrument_ids_transformed_from_venue_perp_shape=498388`,
+  `instrument_ids_transformed_from_bare_legacy_shape=0`) — the manifest-side transform was a real no-op confirmation,
+  not new work; 0 dedup collisions, 0 row-count drift (7,219,598 rows before AND after). Post-apply verification:
+  100% of the 498,388 in-scope rows now read the final `VENUE:PERPETUAL:BASE-QUOTE@LIN` shape with `instrument_type`
+  uniformly `PERPETUAL` — confirmed by re-downloading and re-inspecting the real post-write manifest.
+- **GCS objects — real full-corpus scan, not a narrow sample.** A real listing of the entire
+  `raw_tick_data/by_date/` prefix (4,120,516 objects scanned across ALL CeFi venues; a single, expensive,
+  ~82-minute walk — the pipeline_mode partition sits below `day=` so there is no cheaper prefix) found **136,814**
+  real HL/ASTER objects in scope, split:
+  - **97,138** in the EVEN OLDER bare-symbol shape (the real target of this pass's extension) — e.g.
+    `AAVE-PERP.parquet` (HL) / `AAVEUSDT.parquet` (ASTER), confirmed coexisting ALONGSIDE the 2026-06-22-migrated
+    shape in the same `data_type=` partition on multiple real sampled dates.
+  - **39,202** already in the 2026-06-22-migrated `{VENUE}:PERP:{SYMBOL}` shape.
+  - 471 bundled legacy `ticks.parquet` (multi-symbol, no per-file identity) correctly left untouched; 3 already
+    fully canonical.
+  - **Real `--apply` result**: 134,855 renamed + 1,453 duplicate-old-shape sources cleaned up (cases where both the
+    bare-legacy AND `:PERP:`-shaped source existed for the same symbol/day, both correctly collapsing onto the SAME
+    canonical target) + 32 transient errors (SSL/connection-pool contention under high worker concurrency,
+    0.02% of 136,340) — all 32 resolved via a targeted idempotent retry (16 genuine renames, 11 duplicate-source
+    cleanups, 5 already-resolved), for a **final 0 errors, 0 remaining old-format objects**. Post-apply spot-checks
+    across 15+ real dates spanning 2023-04 through 2026-01 confirm every sampled `data_type=` partition now contains
+    exactly one canonical `VENUE:PERPETUAL:BASE-QUOTE@LIN.parquet` file per symbol — zero trace of the old `-PERP`
+    shorthand, the bare-symbol shape, or the intermediate `:PERP:` shape.
+  - Real backup: `gs://market-data-tick-cefi-prd-central-element-323112/_index/backups/availability_index.pre_perpetual_canonical_20260709T1323Z.parquet`.
+  - Real measured throughput note for future similar migrations: worker concurrency above the underlying HTTP
+    connection pool's default size (`--workers 96` here) causes transient "connection pool is full" churn and a
+    slow initial ramp (~400 renames/min), but throughput self-stabilizes as connections settle (~1,300-1,700
+    renames/min once warm) — net real wall-clock for the ~136K-object rename phase was ~2h20m at that profile
+    (excluding the ~82min discovery walk).
 
 See
 [`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`](../../../unified-trading-pm/plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md).
@@ -541,6 +546,40 @@ real ghost object has 476 raw rows but only 475 unique `raw_symbol` values — a
 re-listing, not corruption) — the merge already correctly deduped on the identity column, so the raw-row-count floor
 rejected a genuinely correct de-duplicated result as a false-positive "regression." Fixed (floor now uses the unique
 identity-column count) and all 11 re-ran clean (0 failures) in a scoped mop-up pass.
+
+**Real contamination bug found + fixed same day (2026-07-09 adversarial verification), fully remediated**: an
+independent verification pass on the FIRST shipped version of the migration (`instruments-service@11192be2`) found
+`_merge_frames` fixed the GCS _path_ to canonical but never rewrote a surviving ghost-only row's own
+`venue`/`instrument_key` COLUMN VALUES — e.g. `instrument_key='AAVEV3-OPTIMISM:A_TOKEN:ALINK'` (no underscore) lived
+on inside an otherwise-canonical-path parquet, confirmed for real on
+`AAVE_V3-OPTIMISM` day=2022-04-23 (3/15 rows), `UNISWAP_V3-OPTIMISM` day=2023-11-18 (6/288 rows), and
+`PANCAKESWAP_V3-BSC` day=2024-10-07 (59/145 rows). Any downstream reader filtering/joining on the `venue` COLUMN
+(not the GCS path) would have silently missed or mis-bucketed these specific rows.
+
+**Fix**: `legacy_naming_audit_dexpool_ghost_venue_merge_2026_07_09.py`'s `_merge_frames` now calls a new
+`_rewrite_ghost_venue_columns` (generic over every column, not hardcoded to `venue`/`instrument_key`) on the ghost
+frame BEFORE any dedup/concat, so a surviving row can never carry the ghost spelling in its data. Covered by a new
+real unit test suite (`tests/scripts/test_legacy_naming_audit_dexpool_ghost_venue_merge_2026_07_09.py`, 10 cases)
+that asserts the surviving rows' COLUMN VALUES are canonical post-merge, not merely that the row count/identity
+survived — verified to fail against the pre-fix code (10/10 fail with the old 2-arg `_merge_frames` signature) and
+pass against the fix.
+
+**Real, targeted remediation of already-migrated data** (`legacy_naming_audit_dexpool_ghost_venue_contamination_remediation_2026_07_09.py`
+— NOT a fresh full-corpus walk; every row this bug could reach lives under exactly the 29 canonical venue prefixes
+in `GHOST_TO_CANON`, in `-prd-` only, since `_process_one` always wrote the merged frame to the PRD bucket
+regardless of source): a real scoped per-venue-prefix listing found **35,594 real (canon_venue, day) pairs** across
+all 29 venues; **10,823 of them (30.4%) were genuinely contaminated** (390,784 real ghost-spelled cells found and
+rewritten to canonical — backup-first under
+`_migration_backup/legacy_naming_audit_dexpool_contamination_remediation_2026_07_09/`, verify-after on every write:
+row count unchanged, 0 ghost cells remain). 0 failures across all 35,594 pairs. An independent full re-run in
+dry-run mode immediately after confirmed **0 contaminated pairs remain anywhere** (`contaminated_pairs=0` across
+all 35,594). The 3 originally-cited sample files (`AAVE_V3-OPTIMISM` 2022-04-23, `UNISWAP_V3-OPTIMISM` 2023-11-18,
+`PANCAKESWAP_V3-BSC` 2024-10-07) were independently re-downloaded post-fix and confirmed genuinely clean (0
+ghost-spelled cells in any column). Interesting real finding: `VELODROME_V2-OPTIMISM` and the 3 `SUSHISWAP_V3-*`
+venues had **zero** contamination despite being in scope — verified for real (`VELODROME_V2-OPTIMISM`, a 100%
+pre-migration orphan, was independently spot-checked and its row-level `venue`/`instrument_key` values were ALREADY
+canonical-spelled at capture time; only its legacy GCS _path_ was ghost-shaped, a narrower bug than the general
+case).
 
 ### Finding 2 — lending/staking/yield venues: 25 requested, only 5 have ANY real object here (not a naming gap)
 
