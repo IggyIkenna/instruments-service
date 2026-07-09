@@ -23,7 +23,9 @@ if TYPE_CHECKING:
 
 import aiohttp
 from unified_api_contracts import (
+    AssetGroup,
     KalshiMarket,
+    build_canonical_instrument_id,
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
@@ -795,8 +797,18 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         # tick-gating; this floor only governs day-grain universe membership.
         _created = lifecycle.market_created_at if lifecycle else None
         _afd = _created.replace(hour=0, minute=0, second=0, microsecond=0) if _created else None
+        # Canonical instrument_key: VENUE:TYPE:SYMBOL (2026-07-09 fix —
+        # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 7). Before this,
+        # instrument_key was the bare ticker with zero VENUE:TYPE: structure — the
+        # only asset group missing it. Kalshi tickers are already upper-case by
+        # convention, so this is byte-identical to passthrough=True for this venue
+        # (unlike Polymarket's condition_id, kept consistent by NOT passing
+        # passthrough=True here either — see polymarket/parsing.py's fuller note).
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.PREDICTION, self.venue, InstrumentType.PREDICTION_MARKET, ticker
+        )
         return InstrumentRecord(
-            instrument_key=ticker,
+            instrument_key=instrument_key,
             venue=self.venue,
             symbol=str(title)[:100],
             raw_symbol=event_ticker,

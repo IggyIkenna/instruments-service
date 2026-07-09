@@ -1,13 +1,11 @@
 # Prediction Instruments — Polymarket & Kalshi
 
-> Renamed from `POLYMARKET_PREDICTION.md` (2026-07-08 docs consolidation — see
-> [`instruments_service_docs_consolidation_2026_07_08.md`](../../unified-trading-pm/plans/active/instruments_service_docs_consolidation_2026_07_08.md)).
 > Cross-links: the instrument-definitions drilldown mockup's **Prediction tab**
 > (https://claude.ai/code/artifact/e2824e52-3a51-43e0-b4b1-933bee469f9d) and the workspace's
 > [instrument_id canonicalization decision doc](../../unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md)
 > (finding 8) + the [canonical instrument_id audit](../../unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md).
-> `docs/specs/MVP_INSTRUMENTS.md` was checked for Prediction content while writing this doc and has **zero** real
-> Polymarket/Kalshi coverage (confirmed stale for this asset group) — this doc does not inherit anything from it.
+> `docs/specs/MVP_INSTRUMENTS.md` has no Polymarket/Kalshi coverage — this is the sole spec for the Prediction asset
+> group.
 
 ## Overview
 
@@ -29,8 +27,7 @@ Per `unified_api_contracts.canonical.crosscutting.mvp_scope.MVP_RULES["predictio
 current MVP definition is:
 
 - **Venues**: `POLYMARKET` + `KALSHI` — both required. The prediction MVP is explicitly the **Kalshi↔Polymarket
-  arbitrage overlap** (`arbitrage_price_dispersion`); a cross-venue spread cannot be quoted with only one leg. Kalshi
-  was a "post-MVP TODO" until an operator decision (2026-06-27, decision #5) flipped it in-MVP.
+  arbitrage overlap** (`arbitrage_price_dispersion`); a cross-venue spread cannot be quoted with only one leg.
 - **market_groups**: `crypto`, `politics`, `sports` (the `PredictionMarketCategory` values the arb-overlap spans).
   `financial` is explicitly **excluded** from MVP scope.
 - **data_types**: `trades` (CLOB fills), `market_lifecycle` (per-market lifecycle events), and
@@ -40,8 +37,8 @@ current MVP definition is:
   to narrow this to `{polymarket_clob, polymarket_gamma_api}` once source tagging is confirmed downstream; not done
   yet.
 
-**Real coverage, verified against a live `prod/catalog.parquet` pull this session** (bucket
-`instruments-store-pred-prd-central-element-323112`, 2,486,092 rows):
+**Real coverage** (from `prod/catalog.parquet`, bucket `instruments-store-pred-prd-central-element-323112`,
+2,486,092 rows):
 
 |            | Rows          | Distinct real markets |
 | ---------- | ------------- | --------------------- |
@@ -51,13 +48,13 @@ current MVP definition is:
 
 The row count is roughly double the distinct-market count because `trades` and `market_lifecycle` each contribute one
 row per real market (1,242,992 rows apiece) — that 2x factor, not cross-venue duplication, is the majority of the gap
-between "rows" and "distinct instrument_ids" reported in the canonicalization audit (see "Known gap" below for the
-full reconciliation). A further 108 rows (`data_type=prediction_canonical_question_group`) are cluster/group-grain,
+between "rows" and "distinct instrument_ids" reported in the canonicalization audit (see "Canonical identity model"
+below for the full reconciliation). A further 108 rows (`data_type=prediction_canonical_question_group`) are cluster/group-grain,
 not per-market, rows.
 
-Reminder (per the docs-consolidation operator ask): **MVP universe is not the same as everything captured**. The
-adapters below can enumerate far more than the 3 in-scope `market_groups` — `financial`-category markets, and any
-category outside crypto/politics/sports, are fetched and written but sit outside the arb-overlap MVP tag.
+Note: **MVP universe is not the same as everything captured**. The adapters below can enumerate far more than the 3
+in-scope `market_groups` — `financial`-category markets, and any category outside crypto/politics/sports, are fetched
+and written but sit outside the arb-overlap MVP tag.
 
 ## Polymarket — three-API architecture
 
@@ -97,21 +94,64 @@ Code: `instruments_service/reference_data/adapters/prediction/kalshi.py`.
   `/markets?series_ticker=...` for every series that classifies to a non-`OTHER` `CanonicalQuestionGroup`, merging
   in any markets missed by the flooded snapshot. Rate-limited to ~3 req/s with bounded 429 backoff-retry (a series is
   shard-skipped, not fatal, after 4 retries).
-- `venue` **must** return `"KALSHI"` (uppercase) — a 2026-06-22 bug shipped the lowercase source name `"kalshi"`
-  instead, which silently wrote the universe to `venue=kalshi` while the live MTDS reader searched `venue=KALSHI`,
-  making the entire Kalshi universe invisible to live trading with no error. Fixed; documented in the adapter's
-  `venue` property docstring as a durable warning against reintroducing it.
-- A separate `available_from_datetime` flooring bug (fixed 2026-06-22): Kalshi's live snapshot stamps `open_time` as
-  an intraday timestamp on the current day; the day-grain universe filter compares against midnight, so an
-  afternoon-opening market failed the `available_from <= date_dt` check and the entire day's universe was dropped.
-  Fixed by flooring `available_from_datetime` to the open date at day-grain (the precise timestamp is still carried
-  on `MarketLifecycle` for tick-gating).
+- `venue` **must** return `"KALSHI"` (uppercase, not the lowercase source name `"kalshi"`) — the live MTDS reader
+  looks up the instrument-parquet partition by `venue=KALSHI`; `venue` and `source` are distinct axes, and a
+  lowercase `venue` would silently make the entire Kalshi universe invisible to live trading with no error.
+- Kalshi's live snapshot stamps `open_time` as an intraday timestamp on the current day, but the day-grain universe
+  filter compares against midnight — so `available_from_datetime` is floored to the open date at day-grain before
+  that comparison (the precise timestamp is still carried on `MarketLifecycle` for tick-gating).
 
 ## Category routing & per-market instrument_id construction
 
-Both adapters classify a market into a canonical shape, but **only Polymarket's classification result ever reaches a
-canonical-looking field** — and even there, not the one that matters most. See "Known gap" below before assuming
-either venue's `instrument_id` is structured.
+### `instrument_key` wrap — `VENUE:TYPE:SYMBOL` (2026-07-09 fix)
+
+Until 2026-07-09, both adapters stored the bare raw provider id as `instrument_key` with **zero structure** — not
+even the `VENUE:TYPE:` prefix every other asset group carries (Polymarket: `market.condition_id` verbatim; Kalshi:
+`market.ticker` verbatim — see finding B5 /
+[`canonical_id_builder_retrofit_checklist_2026_07_08.md`](../../unified-trading-pm/plans/active/canonical_id_builder_retrofit_checklist_2026_07_08.md)
+todo 7). Both adapters now route through the shared
+`unified_api_contracts.build_canonical_instrument_id(AssetGroup.PREDICTION, venue, InstrumentType.PREDICTION_MARKET, raw_id)`
+builder:
+
+| Venue      | Before (bare)                | After (wrapped)                                 |
+| ---------- | ---------------------------- | ----------------------------------------------- |
+| Kalshi     | `KXBTC-21MAR26-T95000`       | `KALSHI:PREDICTION_MARKET:KXBTC-21MAR26-T95000` |
+| Polymarket | `0xabc123…` (`condition_id`) | `POLYMARKET:PREDICTION_MARKET:0xabc123…`        |
+
+**Deliberately NOT `passthrough=True`**: that mode upper-cases the symbol for every non-DeFi type
+(`canonical_id_builder.py::_build_passthrough`), which would corrupt Polymarket's `condition_id` — a real, lowercase
+`0x…64hex` hash (confirmed via real fixture values, e.g. `0xdeadbeef`, `0xabc123`) — into a non-matching id. Calling
+the builder WITHOUT `passthrough` for `InstrumentType.PREDICTION_MARKET` dispatches to
+`_build_sports_or_prediction()`, which wraps `VENUE:TYPE:{symbol}` with the symbol's case preserved verbatim —
+exactly what's needed here (Kalshi tickers are already upper-case by convention, so the two code paths are
+byte-identical for Kalshi; only Polymarket's case preservation is load-bearing).
+
+**Downstream consumers checked before the wrap landed** (all real, all confirmed compatible or already assuming the
+wrapped shape):
+
+- `instruments_service/engine/orchestrator/process_write.py::_records_to_dataframe()` joins the CLOB
+  `clob_token_ids` side-table by `instrument_key` — fixed in the same change by registering the side-table entry
+  under the final wrapped `instrument_key` (not the bare `condition_id`) at the point of construction, so the
+  `key == instrument_key` invariant the join relies on still holds.
+- `market-tick-data-service/.../live/_is_universe.py::prediction_instrument_ids_from_df()` already rebuilds a bare
+  Kalshi `instrument_key` to `KALSHI:PREDICTION_MARKET:{ticker}` and passes an already-prefixed key through
+  untouched — this fix makes that rebuild a no-op for fresh data going forward (forward-compatible). Polymarket
+  resolves solely via the separate `clob_token_ids` column, untouched by this fix.
+- `market-data-processing-service/.../adapters/prediction/trades_adapter.py::preprocess()` already independently
+  synthesizes `"POLYMARKET:PREDICTION_MARKET:" + condition_id` from the RAW tick stream's own `condition_id` column
+  (not from this catalog's `instrument_key`) — untouched by this fix, and now produces the SAME literal string as
+  the catalog's `instrument_key` for the same market (previously the two diverged in shape).
+- `features-service`'s cross-venue-dispatch calculators and MTDS's live Kalshi WS connectors already
+  assume/require the `KALSHI:PREDICTION_MARKET:{ticker}` wrapped form — this fix removes the gap between what the
+  catalog wrote and what these consumers already expected.
+- `polymarket/adapter.py::get_instrument(symbol)` matches by exact `instrument_key == symbol` (bare-`condition_id`
+  convention) — has no real (non-test) caller today (workspace-wide grep, 2026-07-09); left as a follow-up rather
+  than bundled into this fix — a future caller passing a bare `condition_id` would need `get_instrument()` updated
+  to also match the wrapped suffix.
+
+Both adapters still classify a market into a canonical _shape_ for other fields, but **only Polymarket's
+classification result ever reaches a canonical-looking field** (`base_asset`) — and even there, not the one that
+matters most. See "Canonical identity model" below before assuming either venue's `base_asset` is structured.
 
 | Category (Polymarket) | `base_asset` field shape (NOT `instrument_id` — see below)                                                                | Example                                                  |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
@@ -120,19 +160,21 @@ either venue's `instrument_id` is structured.
 | Football sports       | `{LEAGUE}:{HOME}-v-{AWAY}:{DATE}:{MARKET_TYPE}` (via `build_prediction_instrument_id`, same builder Betfair/Odds API use) | `EPL:ARSENAL-CHELSEA:2025-26::HOME` (selection appended) |
 | Everything else       | first 50 chars of the raw `question` text                                                                                 | —                                                        |
 
-Kalshi has **no per-category id builder at all** — `instrument_key` is always the raw Kalshi ticker
-(`KXBTC-21MAR26-T95000`, `KXMLBSPREAD-26JUN231940LADMIN-LAD3`), full stop. The adapter does run
-`classify_kalshi_to_canonical_group()` per market, but that result feeds only the separate `MarketLifecycle` row
-(`canonical_group` + `settlement_lag`), never the `instrument_id`.
+Kalshi has **no per-category id builder for `base_asset`** — unlike Polymarket's category-shaped `base_asset` above,
+Kalshi's `base_asset` is just `series_ticker[:50]` (see "Canonical identity model" § field semantics below).
+`instrument_key` itself is now the wrapped `KALSHI:PREDICTION_MARKET:{ticker}` (see "instrument_key wrap" above,
+2026-07-09 fix) — the raw ticker (`KXBTC-21MAR26-T95000`, `KXMLBSPREAD-26JUN231940LADMIN-LAD3`) is the SYMBOL
+segment, not the whole id. The adapter does run `classify_kalshi_to_canonical_group()` per market, but that result
+feeds only the separate `MarketLifecycle` row (`canonical_group` + `settlement_lag`), never `base_asset`/
+`instrument_key`.
 
 ### Polymarket sports — team/league resolution
 
 Sports markets on Polymarket have generic `outcomes: ["Yes", "No"]`, so team names come from (priority order):
 `event_title` (100% hit rate, "Arsenal vs. Chelsea") → `outcomes` (works for spreads where outcomes ARE team names) →
 `question` text parsing. League resolution is via `series.slug` → `POLYMARKET_SERIES_TO_LEAGUE` (UAC
-`external/polymarket/sports_mappings.py`). Only leagues in `POLYMARKET_PREDICTION_LEAGUES` (23 leagues, verified
-2026-03-18 → 2026-03-26, re-checked unchanged this session) are kept — everything else (esports, cricket, rugby, F1,
-UFC, NBA) is dropped or reclassified `prediction::other`:
+`external/polymarket/sports_mappings.py`). Only leagues in `POLYMARKET_PREDICTION_LEAGUES` (23 leagues) are kept —
+everything else (esports, cricket, rugby, F1, UFC, NBA) is dropped or reclassified `prediction::other`:
 
 EPL, ENG_CHAMPIONSHIP, LA_LIGA, SEGUNDA_DIVISION, BUNDESLIGA, BUNDESLIGA_2, SERIE_A, SERIE_B, LIGUE_1, LIGUE_2,
 EREDIVISIE, PRIMEIRA_LIGA, SCOTTISH_PREMIERSHIP, SUPER_LIG, DANISH_SUPERLIGA, ELITESERIEN, MLS, LIGA_MX,
@@ -142,8 +184,9 @@ ARGENTINA_PRIMERA, BRASILEIRAO, A_LEAGUE, J1_LEAGUE, K_LEAGUE_1.
 `KALSHI_SPORTS_TICKER_PREFIXES` covers only 6 football leagues (EPL, Bundesliga, La Liga, Serie A/`SEA`, Ligue 1/`FL1`,
 Champions League) **plus NBA/NFL/MLB** — the 3 US leagues Polymarket's registry explicitly excludes. The two venues'
 "sports" prediction coverage is not the same 23-league set on both sides; the real cross-venue overlap is narrower
-than either venue's own list. (Kalshi's sports tickers are still raw passthrough, same as every other Kalshi
-`instrument_id` — this mapping only affects `MarketLifecycle` classification, not the `instrument_id` shape.)
+than either venue's own list. (Kalshi's sports tickers are still the raw ticker as the SYMBOL segment of
+`instrument_key` — see "instrument_key wrap" above — this mapping only affects `MarketLifecycle` classification,
+not the ticker content itself.)
 
 ## Cross-venue arbitrage mechanism — `canonical_question_group`
 
@@ -155,22 +198,20 @@ The mechanism that actually lets a strategy compare Polymarket vs. Kalshi pricin
 like `BTC_UP_DOWN_DAILY`, `BNB_PRICE_RANGE_DAILY`, `CPI_PRINT_PER_MONTH`, `FED_RATE_DECISION_PER_FOMC` — venue-agnostic
 labels for a recurring _class_ of question, not a specific dated market instance.
 
-> **This is correct-as-designed, not a bug.** An earlier pass this session initially flagged 31 `canonical_question_group`
-> values appearing verbatim on both venues as a "collision." That's wrong: `venue` is tracked as its own column
-> (`CatalogRow.venue`, `unified_api_contracts/canonical/domain/instruments_catalog.py`), `canonical_question_group` is
-> a _thematic cross-venue label_ by design (same docstring: `"canonical_question_group": e.g. "US_ELECTION_2024",
-"CRYPTO_BTC_DAILY"`), and sharing the label across venues is the **intended mechanism** for cross-venue arb
-> comparison — the same pattern sports fixtures use (a fixture_id is venue/bookmaker-independent; `venue` is the
-> separate axis that varies). Nothing downstream should ever need `canonical_question_group` to be globally unique
-> without also keying on `venue` — that combination is what identifies "this venue's instance of this recurring
-> question."
+> 31 `canonical_question_group` values appear verbatim on both venues — this is **by design, not a collision**.
+> `venue` is tracked as its own column (`CatalogRow.venue`, `unified_api_contracts/canonical/domain/instruments_catalog.py`),
+> `canonical_question_group` is a _thematic cross-venue label_ by design (same docstring: `"canonical_question_group":
+e.g. "US_ELECTION_2024", "CRYPTO_BTC_DAILY"`), and sharing the label across venues is the **intended mechanism** for
+> cross-venue arb comparison — the same pattern sports fixtures use (a fixture_id is venue/bookmaker-independent;
+> `venue` is the separate axis that varies). Nothing downstream should ever need `canonical_question_group` to be
+> globally unique without also keying on `venue` — that combination is what identifies "this venue's instance of this
+> recurring question."
 
-This session additionally **confirmed against a live `prod/catalog.parquet` pull** exactly how few rows this
-mechanism touches: only **108 of the 2,486,092 catalog rows** carry `data_type=prediction_canonical_question_group`
-(46 Polymarket-only + 31 shared labels × 2 venues = 62 shared-label rows). The other 2,485,984 rows are ordinary
-per-market `trades`/`market_lifecycle` rows with venue-opaque `instrument_id`s (see next section) — the shared-label
-mechanism is a small, deliberate cluster-grain overlay on top of the per-market catalog, not something that touches
-most rows.
+Only **108 of the 2,486,092 catalog rows** carry `data_type=prediction_canonical_question_group` (46 Polymarket-only
+
+- 31 shared labels × 2 venues = 62 shared-label rows). The other 2,485,984 rows are ordinary per-market
+  `trades`/`market_lifecycle` rows with venue-opaque `instrument_id`s (see next section) — the shared-label mechanism
+  is a small, deliberate cluster-grain overlay on top of the per-market catalog, not something that touches most rows.
 
 ### Per-instrument join — `cross_venue_mapping.build_cross_venue_mapping()`
 
@@ -201,63 +242,58 @@ the schema doesn't carry):
 The output, `PredictionMarketCrossVenueMapping`, carries both venues' native ids (`polymarket_condition_id` +
 `kalshi_market_ticker`) plus the shared `underlying` / `strike` / `expiry_utc` / `canonical_event_id` for a matched
 pair — this is the real, working "something we already have" for cross-venue Prediction matching. It runs on demand
-over two full venue universes (not wired into the per-day write path or persisted onto the catalog today) — see
-"Canonical identity model" below for how this session proposes closing that gap.
+over two full venue universes today — **not wired into the per-day write path or persisted onto the catalog** (see
+"Canonical identity model" below for the target scheme that closes this gap).
 
-## Canonical identity model — root cause diagnosed + fixed, target scheme decided (2026-07-08)
+## Canonical identity model
 
-> Supersedes this doc's prior "Known gap — per-market `instrument_id` is genuinely opaque" framing. Per the
-> [canonicalization decision doc](../../unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md)
-> finding 8 — the null-field question is now **answered** (not "genuinely opaque"), the conceptual-fit question the
-> operator raised is **answered**, and a canonical scheme is **decided**. What's left is a scoped migration, tracked
-> in a dedicated plan (see below), not an open investigation.
+Per the [canonicalization decision doc](../../unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md)
+finding 8: the null-field behavior below is understood, the field semantics are settled, and a canonical scheme for
+per-instance cross-venue identity is decided (§3) — implementation is a scoped migration, tracked in a dedicated plan
+(see end of this section).
 
-### 1. Root cause of the 100%-NULL `base_asset`/`raw_symbol` — a catalog-rollup bug, now fixed
+### 1. `base_asset` / `raw_symbol` / `underlying` — current population state
 
-Both adapters' `_parse_market()` genuinely populate `base_asset` and `raw_symbol` at `InstrumentRecord` construction
+Both adapters' `_parse_market()` populate `base_asset` and `raw_symbol` at `InstrumentRecord` construction
 (Polymarket: `base_asset=<category id>, raw_symbol=slug`; Kalshi: `base_asset=series_ticker[:50],
-raw_symbol=event_ticker`), and `process_write.py::_records_to_dataframe()` correctly serializes every
-`InstrumentRecord` field (via `model_dump()`) into the per-day `instrument_availability/by_date/.../instruments.parquet`
-snapshots — so the values genuinely exist in GCS. The bug was one level up:
-`scripts/build_instrument_catalogue.py::build_prediction_catalogue_dataframe()` — Prediction's dedicated
-multi-grain roll-up (cqg bundle + per-conditionId, distinct from the generic `build_catalogue_dataframe()` every
-other asset group uses) — reads each per-day row into a `_PredLifecycle` accumulator that only ever tracked
-`instrument_type` / `created` / `settled`; `raw_symbol` and `base_asset` were never read off the row, so the
-`_emit()` helper that builds each `prod/catalog.parquet` row never included those keys, and `pd.DataFrame(rows,
-columns=CATALOG_COLUMNS)` silently filled them with `NaN` for all 2,486,092 rows. The generic roll-up's
-`_extract_meta()` (used by cefi/defi/tradfi) reads and carries these fields correctly — Prediction's dedicated
-roll-up simply never mirrored that. **Fixed 2026-07-08**: `_PredLifecycle` / `_merge_lifecycle` / `_emit()` now
-thread `raw_symbol` + `base_asset` through at the per-conditionId grain (a `canonical_question_group` bundle row
-still leaves them `""` — honest absence, a family has no single per-market value). Next full catalogue regen
-picks up real values for every `trades`/`market_lifecycle` row.
+raw_symbol=event_ticker`), and `process_write.py::_records_to_dataframe()` serializes every `InstrumentRecord`
+field (via `model_dump()`) into the per-day `instrument_availability/by_date/.../instruments.parquet` snapshots —
+so both fields exist in GCS at the per-day grain. `scripts/build_instrument_catalogue.py`'s Prediction-specific
+multi-grain roll-up (`build_prediction_catalogue_dataframe()`, distinct from the generic
+`build_catalogue_dataframe()` every other asset group uses) threads `raw_symbol` + `base_asset` through its
+`_PredLifecycle` / `_merge_lifecycle` / `_emit()` accumulator at the per-conditionId grain (a
+`canonical_question_group` bundle row leaves them `""` — honest absence, a family has no single per-market value).
+**Known gap (data-state, not code-verifiable here)**: this rollup logic has not yet had a full catalogue regen run
+against it — `prod/catalog.parquet` may still reflect the pre-fix `NaN` values for `raw_symbol`/`base_asset` until
+that regen runs.
 
-`underlying` is a **different** case — no adapter ever passes `underlying=` to `InstrumentRecord` at all (it's not
-dropped downstream; it's genuinely never computed upstream). See §3 for why, and what's proposed.
+`underlying` is a **different** case — no adapter ever passes `underlying=` to `InstrumentRecord` at all; it is not
+dropped downstream, it is genuinely never computed upstream (see §3 for the closed-form fix).
 
-### 2. Are `base_asset` / `underlying` / `raw_symbol` conceptually sensible for Prediction? — direct answer
+### 2. Field semantics: `base_asset` / `underlying` / `raw_symbol`
 
-- **`raw_symbol`: yes, and not vestigial.** It's real venue-native data (Kalshi's `event_ticker`, Polymarket's
-  `slug`) — the same fields `cross_venue_mapping.py` already parses strikes/fixtures from, and the field the
-  generic catalogue's UTL reader prefers for unique venue+id matching. This was purely a rollup bug (§1).
-- **`base_asset`: real values, but a misleading field name for Prediction.** For Kalshi it's a genuine venue-native
+- **`raw_symbol`**: real venue-native data (Kalshi's `event_ticker`, Polymarket's `slug`) — the same fields
+  `cross_venue_mapping.py` parses strikes/fixtures from, and the field the generic catalogue's UTL reader prefers
+  for unique venue+id matching. Not vestigial.
+- **`base_asset`**: real values, but a misleading field name for Prediction. For Kalshi it's a genuine venue-native
   grouping key (`series_ticker`). For Polymarket it is **not** a base asset in the CeFi/DeFi sense — it's a
   synthesized display label whose shape varies by category: `BTC:UP_DOWN:2026-03-25` for crypto (asset-like),
   `EPL:ARSENAL-CHELSEA:...` for sports (instrument-id-like, not asset-like), and the **raw truncated question text**
-  for everything else (`"other"` category) — not an asset at all. The values aren't garbage; the field is just
-  reused for something the CeFi/DeFi/TradFi schema didn't design it to hold. Left as-is here (already correctly
-  populated once §1 ships); not renamed, to avoid a schema-wide breaking change over a naming nitpick.
-- **`underlying`: conceptually sensible for a REAL SUBSET, honestly absent for the rest — and there's already a
-  closed-form way to compute it correctly.** `unified_api_contracts/canonical/domain/predictions/two_axis.py`'s
-  `PredictionUnderlying` enum is a **comprehensive** decomposition — every `CanonicalQuestionGroup` maps to exactly
-  one `PredictionUnderlying` member (`BTC`, `SPX`, `CPI`, `TRUMP`, `GEO_ISRAEL_IRAN`, `SPORTS_MLB`, …, `OTHER`).
-  `cross_venue_mapping.py::_build_mapping()` already applies the right convention for the matched-pair schema:
-  `underlying=None if is_sports else underlying.value` — sports fixtures don't have a single scalar "underlying" any
-  more sensible than the fixture itself; crypto/macro/commodity price markets do (BTC, CPI, GOLD, …); politics/geo/
-  entertainment don't (no natural subject asset) and correctly fall to `PredictionUnderlying.OTHER`. So: `underlying`
-  is the right field, `None`/`OTHER` is the right honest value for the markets that don't have one, and the bug is
-  simply that **no adapter ever calls this already-existing classification pipeline to populate it.**
+  for everything else (`"other"` category) — not an asset at all. The values aren't garbage; the field is reused
+  for something the CeFi/DeFi/TradFi schema didn't design it to hold. Not renamed, to avoid a schema-wide breaking
+  change over a naming nitpick.
+- **`underlying`**: conceptually sensible for a real subset, honestly absent for the rest.
+  `unified_api_contracts/canonical/domain/predictions/two_axis.py`'s `PredictionUnderlying` enum is a
+  **comprehensive** decomposition — every `CanonicalQuestionGroup` maps to exactly one `PredictionUnderlying` member
+  (`BTC`, `SPX`, `CPI`, `TRUMP`, `GEO_ISRAEL_IRAN`, `SPORTS_MLB`, …, `OTHER`). `cross_venue_mapping.py::_build_mapping()`
+  already applies the right convention for the matched-pair schema: `underlying=None if is_sports else
+underlying.value` — sports fixtures don't have a single scalar "underlying" any more sensible than the fixture
+  itself; crypto/macro/commodity price markets do (BTC, CPI, GOLD, …); politics/geo/entertainment don't (no natural
+  subject asset) and correctly fall to `PredictionUnderlying.OTHER`. `underlying` is the right field, `None`/`OTHER`
+  is the right honest value for the markets that don't have one; the gap is that **no adapter calls this
+  already-existing classification pipeline to populate it** (§3, item 2).
 
-### 3. The canonical scheme — one mechanism, reusing what exists (operator: "pick one … some things just can't be the same")
+### 3. Canonical scheme for cross-venue identity — decided, not yet implemented
 
 Three real market shapes, three real examples, ONE mechanism (not three parallel ones):
 
@@ -267,37 +303,35 @@ Three real market shapes, three real examples, ONE mechanism (not three parallel
 | Crypto/macro arb pair           | "BTC above $95k by June 24" (Polymarket) ↔ `KXBTCD-26JUN24-T95000` (Kalshi) | `canonical_question_group=BTC_UP_DOWN_DAILY`          | `underlying=BTC` (`PredictionUnderlying.BTC`, from the SAME classifier); `canonical_event_id` from `build_cross_venue_mapping()`'s `(BTC, UP_DOWN, 2026-06-24, strike)` join |
 | Sports arb pair                 | Arsenal vs. Chelsea, EPL, 2026-03-22 (Polymarket ↔ Kalshi `KXEPLGAME-...`)  | `canonical_question_group=SPORTS_EPL_MATCH`           | `canonical_event_id` from `SportsFixtureKey.pairing_key()` (league + sorted teams + date); `underlying=None` (fixture identity, not a scalar asset)                          |
 
-Decision — extend the **existing** mechanism, not a new one:
+Target scheme — extend the **existing** mechanism, not a new one:
 
 1. **`canonical_question_group`** stays the family/theme axis exactly as-is (no change).
-2. **`underlying`**: populate at adapter-construction time (Polymarket `_parse_market()` / Kalshi `_parse_market()`)
-   by calling the same `classify_*_to_canonical_group()` → `underlying_for_group()` pipeline already used for
-   `MarketLifecycle.canonical_group`, applying `cross_venue_mapping._build_mapping()`'s existing
-   `None if sports else value` rule. Zero new classification logic — this reuses code that already runs per-market
-   today for the `MARKET_LIFECYCLE` data_type, just doesn't write its result onto `InstrumentRecord.underlying`.
+2. **`underlying`** (not yet implemented — known limitation, see §1): populate at adapter-construction time
+   (Polymarket `_parse_market()` / Kalshi `_parse_market()`) by calling the same `classify_*_to_canonical_group()` →
+   `underlying_for_group()` pipeline already used for `MarketLifecycle.canonical_group`, applying
+   `cross_venue_mapping._build_mapping()`'s existing `None if sports else value` rule. Zero new classification
+   logic — this reuses code that already runs per-market today for the `MARKET_LIFECYCLE` data_type, just doesn't
+   write its result onto `InstrumentRecord.underlying`.
 3. **`canonical_instrument_id`** (an `InstrumentRecord` field that already exists — currently populated only by
-   TradFi/Databento adapters, always `None` for Prediction) is the right home for the per-instance cross-venue join
-   key: populate it with `PredictionMarketCrossVenueMapping.canonical_event_id` when `build_cross_venue_mapping()`
-   finds a same-market pair, else leave it `None` (honest absence — no false pairs, matching the matcher's own
-   design). This requires running the matcher over both venues' universes and merging results back — a real
-   migration (adapters only see their own venue in isolation; the join needs both), NOT an adapter-local field
-   population like `underlying`.
-4. **Sports ↔ Sports-asset-group alignment (the operator's "sports arbitrage… canonical for sports that matches"
-   ask)**: Prediction's sports fixture key (`SportsFixtureKey.pairing_key()`, team-name based) and the Sports asset
-   group's own canonical fixture id (`build_fixture_id()` → `{LEAGUE}:{HOME}_v_{AWAY}:{YYYYMMDD}`,
-   [`SPORTS_INSTRUMENTS.md`](./SPORTS_INSTRUMENTS.md)) carry the **same information** (league + two teams + date)
-   but are **two independent implementations today** — they are not guaranteed to normalize team names identically.
-   Polymarket's adapter already has an **unused** `_cross_reference_fixture()` method
-   (`reference_data/adapters/prediction/polymarket/parsing.py`) that resolves a real API-Football `fixture_id` for a
-   Polymarket sports market — it is defined but never called from `_parse_market()`/`_build_sports_id()`. Wiring
-   that up (or reusing `build_fixture_id()`'s own team registry inside `fixture_parsing.py`) is the concrete way to
-   make a Prediction sports market's identity byte-identical to the Sports asset group's fixture_id for the same
-   real event, not just conceptually similar.
+   TradFi/Databento adapters, **always `None` for Prediction**, not yet implemented) is the right home for the
+   per-instance cross-venue join key: populate it with `PredictionMarketCrossVenueMapping.canonical_event_id` when
+   `build_cross_venue_mapping()` finds a same-market pair, else leave it `None` (honest absence — no false pairs,
+   matching the matcher's own design). This requires running the matcher over both venues' universes and merging
+   results back — a real migration (adapters only see their own venue in isolation; the join needs both), NOT an
+   adapter-local field population like `underlying`.
+4. **Sports ↔ Sports-asset-group alignment** (not yet implemented): Prediction's sports fixture key
+   (`SportsFixtureKey.pairing_key()`, team-name based) and the Sports asset group's own canonical fixture id
+   (`build_fixture_id()` → `{LEAGUE}:{HOME}_v_{AWAY}:{YYYYMMDD}`, [`SPORTS_INSTRUMENTS.md`](./SPORTS_INSTRUMENTS.md))
+   carry the **same information** (league + two teams + date) but are **two independent implementations today** —
+   they are not guaranteed to normalize team names identically. Polymarket's adapter has an **unused**
+   `_cross_reference_fixture()` method (`reference_data/adapters/prediction/polymarket/parsing.py`) that resolves a
+   real API-Football `fixture_id` for a Polymarket sports market — it is defined but never called from
+   `_parse_market()`/`_build_sports_id()`. Wiring that up (or reusing `build_fixture_id()`'s own team registry
+   inside `fixture_parsing.py`) is the concrete way to make a Prediction sports market's identity byte-identical to
+   the Sports asset group's fixture_id for the same real event, not just conceptually similar.
 
-Items 3 and 4 are real migrations (cross-venue join wiring, adapter changes, tests) — tracked in
-[`prediction_canonical_identity_migration_2026_07_08.md`](../../unified-trading-pm/plans/active/prediction_canonical_identity_migration_2026_07_08.md),
-not implemented in this pass. Item 2 (`underlying`) is scoped in the same plan since it touches the same two adapter
-files and should ship together with the sports-null convention rather than piecemeal.
+Items 2-4 are real migrations (cross-venue join wiring, adapter changes, tests), none implemented yet — tracked in
+[`prediction_canonical_identity_migration_2026_07_08.md`](../../unified-trading-pm/plans/active/prediction_canonical_identity_migration_2026_07_08.md).
 
 ## GCS output & the bucket-naming split
 
@@ -313,60 +347,59 @@ gs://instruments-store-pred-{env}-{project}/
           instruments.json
 ```
 
-**FIXED 2026-07-08** (was: confirmed, real, still-live infra bug — `instruments-store-pred-prd-central-element-323112`
-exists with 33,122 blobs; `instruments-store-prediction-prd-central-element-323112` returned a 404). Two independent
-code paths resolved "the prediction instruments bucket" to two different real strings:
+The real, live bucket is the abbreviated `instruments-store-pred-{env}-{project_id}`
+(`instruments-store-pred-prd-central-element-323112` exists with 33,122 blobs; the unabbreviated
+`instruments-store-prediction-{env}-{project_id}` has never existed — 404). Two independent code paths resolve "the
+prediction instruments bucket," and both now agree on the abbreviated form:
 
-1. **The live, correct path (unchanged)** — instruments-service's own special-cased flat-kind resolver
-   (`instruments_service/engine/orchestrator/catalogue.py`, `scripts/build_instrument_catalogue.py`): the string kind
-   `"instruments-store-prediction"` is passed to `resolve_bucket_name(kind="instruments-store-prediction")`, which
-   resolves through the cloud-providers.yaml SSOT to the real, abbreviated bucket
-   `instruments-store-pred-{env}-{project_id}`. This is the bucket that actually has data.
-2. **The dead, broken path — fixed.** `unified_api_contracts/canonical/gcs_paths.py`'s
-   `BUCKET_TEMPLATES_BY_ASSET_GROUP_KIND` table, keyed by `(AssetGroup, BucketKind)`, templated
-   `(AssetGroup.PREDICTION, BucketKind.INSTRUMENTS)` as the **unabbreviated**
-   `instruments-store-prediction-{env}-{project_id}` — a bucket that has never existed. No consumer reached this
-   facade for `PREDICTION` + `BucketKind.INSTRUMENTS` at the time this was found (so it was a dormant landmine, not
-   an active 404), but it now resolves to the correct abbreviated `instruments-store-pred-{env}-{project_id}`.
-   **`BucketKind.MARKET_DATA` was deliberately left AS THE UNABBREVIATED long form** —
-   `market-data-tick-prediction-{env}-{project_id}` is a real, still-live legacy bucket mid-migration to the
-   canonical `market-data-tick-pred-prd-{pid}` (`market-tick-data-service/scripts/migrate_prediction_to_pred_prd_v9.py`,
+1. **instruments-service's own special-cased flat-kind resolver** (`instruments_service/engine/orchestrator/catalogue.py`,
+   `scripts/build_instrument_catalogue.py`): the string kind `"instruments-store-prediction"` is passed to
+   `resolve_bucket_name(kind="instruments-store-prediction")`, which resolves through the cloud-providers.yaml SSOT
+   to `instruments-store-pred-{env}-{project_id}`. This is the bucket that actually has data.
+2. **`unified_api_contracts/canonical/gcs_paths.py`'s `BUCKET_TEMPLATES_BY_ASSET_GROUP_KIND` table**, keyed by
+   `(AssetGroup, BucketKind)`: `(AssetGroup.PREDICTION, BucketKind.INSTRUMENTS)` resolves to the same abbreviated
+   `instruments-store-pred-{env}-{project_id}`. `(AssetGroup.PREDICTION, BucketKind.MARKET_DATA)` is deliberately
+   kept as the **unabbreviated long form** — `market-data-tick-prediction-{env}-{project_id}` is a real,
+   still-live legacy bucket mid-migration to the canonical `market-data-tick-pred-prd-{pid}`
+   (`market-tick-data-service/scripts/migrate_prediction_to_pred_prd_v9.py`,
    `prediction_manifest_canonicalisation_2026_06_01.md` §C), and it IS actively read by
    `market-data-processing-service`'s `DependencyChecker.UPSTREAM_DEPS_BY_ASSET_GROUP["PREDICTION"]` — flipping it
    before that migration's `--drop-stale` step completes would point that dependency check at the less-complete
-   bucket. Follow-up: `market-data-processing-service/tests/unit/test_dependency_checker_sports_prediction.py`
-   (lines ~149, ~155) asserts the OLD unabbreviated `instruments-store-prediction-` INSTRUMENTS value — that repo is
-   outside this fix's scope (owned separately this round) and will need its assertions updated once it bumps its
-   `unified-api-contracts` pin.
+   bucket (data-state, not code-verifiable from this repo).
+
+**Known limitation (cross-repo)**: `market-data-processing-service/tests/unit/test_dependency_checker_sports_prediction.py`
+(lines ~149, ~155) still asserts the OLD unabbreviated `instruments-store-prediction-` value for the INSTRUMENTS
+bucket_template — that repo's `unified-api-contracts` pin has not picked up the abbreviated-form fix yet, so its
+assertions need updating once it bumps that pin.
 
 ## Key files
 
-| File                                                       | Repo                  | Purpose                                                                                                                                 |
-| ---------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `reference_data/adapters/prediction/polymarket/adapter.py` | instruments-service   | Gamma live listing + `get_instruments()` entrypoint                                                                                     |
-| `reference_data/adapters/prediction/polymarket/parsing.py` | instruments-service   | Market → `InstrumentRecord`/`MarketLifecycle`, category/id builders                                                                     |
-| `reference_data/adapters/prediction/polymarket/clob.py`    | instruments-service   | CLOB historical enumeration + clob_token_id registration                                                                                |
-| `reference_data/adapters/prediction/kalshi.py`             | instruments-service   | Kalshi adapter — live/historical routing, RSA-PSS signing, series-scoped capture                                                        |
-| `canonical/domain/prediction/prediction_mapping.py`        | unified-api-contracts | Legacy keyword classifier (`PredictionMarketMapper`) — category only reaches adapters; its own `canonical_id` is unused                 |
-| `canonical/domain/predictions/canonical_groups.py`         | unified-api-contracts | `CanonicalQuestionGroup` enum + `CANONICAL_GROUP_METADATA` (settlement lags)                                                            |
-| `canonical/domain/predictions/classifiers.py`              | unified-api-contracts | `classify_polymarket_to_canonical_group` / `classify_kalshi_to_canonical_group`                                                         |
-| `canonical/domain/predictions/two_axis.py`                 | unified-api-contracts | `PredictionUnderlying` (Axis-1, comprehensive) / `PredictionBetType` (Axis-2) + `underlying_for_group()` / `bet_type_for_group()`       |
-| `canonical/domain/predictions/cross_venue_mapping.py`      | unified-api-contracts | `build_cross_venue_mapping()` — the real per-instrument Kalshi↔Polymarket same-market matcher                                           |
-| `canonical/domain/predictions/fixture_parsing.py`          | unified-api-contracts | `SportsFixtureKey` + `parse_kalshi_sports_fixture` / `parse_polymarket_sports_fixture` — the sports per-fixture join                    |
-| `scripts/build_instrument_catalogue.py`                    | instruments-service   | `build_prediction_catalogue_dataframe()` — the prediction multi-grain catalogue roll-up (the `raw_symbol`/`base_asset` fix lives here)  |
-| `canonical/domain/instruments_catalog.py`                  | unified-api-contracts | `CatalogRow` — the shared per-instrument catalog shape across all 5 asset groups                                                        |
-| `canonical/crosscutting/mvp_scope.py`                      | unified-api-contracts | `PredictionMvpRule` — the real MVP venues/market_groups/data_types definition                                                           |
-| `canonical/gcs_paths.py`                                   | unified-api-contracts | `BUCKET_TEMPLATES_BY_ASSET_GROUP_KIND` — the INSTRUMENTS-kind template FIXED 2026-07-08 (was the dead `instruments-store-prediction-*`) |
-| `external/polymarket/sports_mappings.py`                   | unified-api-contracts | Series→league, team→canonical, 23-league `POLYMARKET_PREDICTION_LEAGUES`                                                                |
-| `external/kalshi/sports_mappings.py`                       | unified-api-contracts | 6-football-league + NBA/NFL/MLB Kalshi ticker-prefix registry                                                                           |
-| `canonical/domain/sports/canonical_ids.py`                 | unified-api-contracts | `build_prediction_instrument_id()` (shared with Betfair/Odds API for sports)                                                            |
-| `engine/orchestrator/catalogue.py`                         | instruments-service   | The live, correct prediction bucket-kind resolver                                                                                       |
+| File                                                       | Repo                  | Purpose                                                                                                                                       |
+| ---------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reference_data/adapters/prediction/polymarket/adapter.py` | instruments-service   | Gamma live listing + `get_instruments()` entrypoint                                                                                           |
+| `reference_data/adapters/prediction/polymarket/parsing.py` | instruments-service   | Market → `InstrumentRecord`/`MarketLifecycle`, category/id builders                                                                           |
+| `reference_data/adapters/prediction/polymarket/clob.py`    | instruments-service   | CLOB historical enumeration + clob_token_id registration                                                                                      |
+| `reference_data/adapters/prediction/kalshi.py`             | instruments-service   | Kalshi adapter — live/historical routing, RSA-PSS signing, series-scoped capture                                                              |
+| `canonical/domain/prediction/prediction_mapping.py`        | unified-api-contracts | Legacy keyword classifier (`PredictionMarketMapper`) — category only reaches adapters; its own `canonical_id` is unused                       |
+| `canonical/domain/predictions/canonical_groups.py`         | unified-api-contracts | `CanonicalQuestionGroup` enum + `CANONICAL_GROUP_METADATA` (settlement lags)                                                                  |
+| `canonical/domain/predictions/classifiers.py`              | unified-api-contracts | `classify_polymarket_to_canonical_group` / `classify_kalshi_to_canonical_group`                                                               |
+| `canonical/domain/predictions/two_axis.py`                 | unified-api-contracts | `PredictionUnderlying` (Axis-1, comprehensive) / `PredictionBetType` (Axis-2) + `underlying_for_group()` / `bet_type_for_group()`             |
+| `canonical/domain/predictions/cross_venue_mapping.py`      | unified-api-contracts | `build_cross_venue_mapping()` — the real per-instrument Kalshi↔Polymarket same-market matcher                                                 |
+| `canonical/domain/predictions/fixture_parsing.py`          | unified-api-contracts | `SportsFixtureKey` + `parse_kalshi_sports_fixture` / `parse_polymarket_sports_fixture` — the sports per-fixture join                          |
+| `scripts/build_instrument_catalogue.py`                    | instruments-service   | `build_prediction_catalogue_dataframe()` — the prediction multi-grain catalogue roll-up (populates `raw_symbol`/`base_asset` per-conditionId) |
+| `canonical/domain/instruments_catalog.py`                  | unified-api-contracts | `CatalogRow` — the shared per-instrument catalog shape across all 5 asset groups                                                              |
+| `canonical/crosscutting/mvp_scope.py`                      | unified-api-contracts | `PredictionMvpRule` — the real MVP venues/market_groups/data_types definition                                                                 |
+| `canonical/gcs_paths.py`                                   | unified-api-contracts | `BUCKET_TEMPLATES_BY_ASSET_GROUP_KIND` — the per-asset-group INSTRUMENTS/MARKET_DATA bucket templates                                         |
+| `external/polymarket/sports_mappings.py`                   | unified-api-contracts | Series→league, team→canonical, 23-league `POLYMARKET_PREDICTION_LEAGUES`                                                                      |
+| `external/kalshi/sports_mappings.py`                       | unified-api-contracts | 6-football-league + NBA/NFL/MLB Kalshi ticker-prefix registry                                                                                 |
+| `canonical/domain/sports/canonical_ids.py`                 | unified-api-contracts | `build_prediction_instrument_id()` (shared with Betfair/Odds API for sports)                                                                  |
+| `engine/orchestrator/catalogue.py`                         | instruments-service   | The live, correct prediction bucket-kind resolver                                                                                             |
 
 ## See also
 
 - Mockup Prediction tab: https://claude.ai/code/artifact/e2824e52-3a51-43e0-b4b1-933bee469f9d
-- [`instrument_id_format_canonicalization_2026_07_08.md`](../../unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md) — finding 8, now updated with the resolved root cause + canonical scheme decision documented above
+- [`instrument_id_format_canonicalization_2026_07_08.md`](../../unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md) — finding 8: the canonical instrument_id scheme for Prediction
 - [`prediction_canonical_identity_migration_2026_07_08.md`](../../unified-trading-pm/plans/active/prediction_canonical_identity_migration_2026_07_08.md) — the tracked plan for the remaining migration (adapter-level `underlying` population + `canonical_instrument_id` cross-venue wiring + sports fixture_id alignment)
-- [`canonical_instrument_id_audit_2026_07_08.md`](../../unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md) — the full 7-layer audit this doc's findings are drawn from
+- [`canonical_instrument_id_audit_2026_07_08.md`](../../unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md) — the full 7-layer audit backing this doc's canonical-identity analysis
 - [`ADAPTER_ARCHITECTURE.md`](./ADAPTER_ARCHITECTURE.md) — general adapter code-structure conventions (not Prediction-specific)
 - [`SPORTS_INSTRUMENTS.md`](./SPORTS_INSTRUMENTS.md) — the full 94-league sports MVP (a different, larger registry than Polymarket/Kalshi's prediction-market football coverage above)

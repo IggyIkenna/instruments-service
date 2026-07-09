@@ -284,7 +284,9 @@ class TestKalshiAdapter:
             results = await adapter.get_instruments()
 
         tickers = {r.instrument_key for r in results}
-        assert "KXBTCD-26JUN23-T90000" in tickers, f"Series-scoped capture must include KXBTCD markets; got: {tickers}"
+        assert "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN23-T90000" in tickers, (
+            f"Series-scoped capture must include KXBTCD markets; got: {tickers}"
+        )
 
     @pytest.mark.asyncio
     async def test_series_scoped_per_series_failure_is_shard_isolated(self) -> None:
@@ -362,7 +364,9 @@ class TestKalshiAdapter:
             results = await adapter.get_instruments()  # must NOT raise
 
         tickers = {r.instrument_key for r in results}
-        assert "KXETHD-26JUN23-T3000" in tickers, f"KXETHD market must survive when KXBTCD fetch 500s; got: {tickers}"
+        assert "KALSHI:PREDICTION_MARKET:KXETHD-26JUN23-T3000" in tickers, (
+            f"KXETHD market must survive when KXBTCD fetch 500s; got: {tickers}"
+        )
 
     @pytest.mark.asyncio
     async def test_series_scoped_429_is_retried_not_dropped(self) -> None:
@@ -439,7 +443,9 @@ class TestKalshiAdapter:
 
         tickers = {r.instrument_key for r in results}
         assert btc_calls["n"] >= 2, "KXBTCD page must be retried after the 429"
-        assert "KXBTCD-26JUN23-T90000" in tickers, f"429 must be retried, not dropped; got: {tickers}"
+        assert "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN23-T90000" in tickers, (
+            f"429 must be retried, not dropped; got: {tickers}"
+        )
 
     @pytest.mark.asyncio
     async def test_series_scoped_skips_historical_path(self) -> None:
@@ -565,7 +571,9 @@ class TestKalshiAdapter:
             results = await adapter.get_instruments(date="2026-06-23")  # on/after cutoff = live
 
         tickers = {r.instrument_key for r in results}
-        assert "KXBTCD-26JUN23-T90000" in tickers, f"current-day batch must run series-scoped; got: {tickers}"
+        assert "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN23-T90000" in tickers, (
+            f"current-day batch must run series-scoped; got: {tickers}"
+        )
 
     def test_parse_kalshi_creds_rsa_blob(self) -> None:
         """RSA credential JSON blob → (api_key_id, private_key_pem); enables signing."""
