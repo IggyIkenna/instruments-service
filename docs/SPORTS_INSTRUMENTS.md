@@ -33,20 +33,56 @@ pipeline_mode=batch_odds_api/asset_group=sports/venue={BOOKMAKER}/league_id={LEA
 instrument_type=odds/data_type=trades/ticks.parquet` (per-bookmaker-per-fixture; `venue=` here is the BOOKMAKER, e.g.
 `PINNACLE`, not the literal string `ODDS_API`).
 
-**Known limitation — odds↔instruments row-level join-key gap**: the odds-tick row's own `instrument_id`
+**RESOLVED (2026-07-09) — odds↔instruments row-level join-key gap**: the odds-tick row's own `instrument_id`
 (`FOOTBALL:{BOOKMAKER}:{MARKET}:{LEAGUE}:{SEASON}:{HOME}-{AWAY}::{SELECTION}`, built by UAC's `build_instrument_id()`)
-never embeds instruments-service's canonical fixture id (`af_fixture_id` or the `LEAGUE:MATCHUP:DATE` fixture id) —
-MTDS derives `home_id`/`away_id` purely from the Odds API's own team-name strings via
-`validate_team_resolution()`/`build_team_id()`, independent of the fixture parquet it separately reads for manifest
-purposes. So there is no row-level join key from an odds tick back to instruments-service's fixture record — both
-sides write to the same GCS-partition scheme and both partition per-league/per-date, but they are not linked at the
-individual-row grain by a shared id. **Open architecture question for the operator**: is a row-level fixture-id join
-needed (e.g. threading `af_fixture_id` through the odds tick schema), or is manifest-level linkage (both reading and
-writing the same `(league_id, date)` partitions) sufficient, given fixtures are already uniquely identified by
-`(league, home, away, date)` in both places? (See the Step 9 schema section below for the same gap in the odds-tick
-schema.) Separately, `docs/SPORTS_ODDS.md` (MTDS's own doc, out of this repo's ownership) is stale on both the GCS
-path (shows an older `venue=ODDS_API` shape) and schema (lists `time_bucket`/`m_time` columns the current writer
-does not emit).
+never embedded instruments-service's canonical `af_fixture_id`, so there was no row-level join key from an odds tick
+back to instruments-service's fixture record — both sides wrote to the same GCS-partition scheme and both
+partitioned per-league/per-date, but were not linked at the individual-row grain by a shared id. Per operator decision
+(option A from the audit's E1 finding), `af_fixture_id` is now threaded through the odds tick schema as an additive
+column, closing the join.
+
+**Mechanism** — `market-tick-data-service/market_tick_data_service/market_interface/adapters/sports/
+fixture_id_resolver.py`'s `FixtureIdResolver`, wired into `odds_api_adapter.py::_build_fixture_rows()`. No new
+GCS-walk or team-matching heuristic was built: the resolver reads the SAME `entity=fixtures` parquet
+`SportsCatalogReader` already reads (via UAC's `candidate_parquet_paths()` path SSOT, canonical
+`pipeline_mode=batch_api_football` path first, legacy fallback after), and canonicalises both sides' team names
+through the SAME `validate_team_resolution()` universal alias index `_build_fixture_rows()` already used to build
+`home_id`/`away_id` — the `provider=` kwarg is informational only, so an Odds-API-derived and an
+API-Football-derived canonical team id for the same real team are the same string. A per-(league, day) lookup table
+is downloaded once and cached, so N odds rows for the same fixture cost one extra GCS read, not N. `af_fixture_id`
+resolution is attempted once per fixture (not per row/bookmaker/market/outcome) and stamped onto every row that
+fixture produces.
+
+**Honest-absence handling**: `af_fixture_id` stays a genuine nullable int (no magic sentinel value in the data
+column, per this workspace's honest-absence convention). A companion closed-set string column,
+`af_fixture_match_status` (`MATCHED` / `UNRESOLVED_TEAM_NAME` / `NO_FIXTURE_DATA`), makes a resolution _attempt with
+no match_ distinguishable from a genuine null — `UNRESOLVED_TEAM_NAME` means the odds tick's own team name (or the
+fixture's) didn't canonicalise; `NO_FIXTURE_DATA` means instruments-service has no usable fixture parquet for that
+`(league, day)`. `download_batch()` logs a per-day `Fixture-id join: X/Y rows matched (Z%)` summary line so the match
+rate is visible in monitoring, not just inferable from the column.
+
+**Real measured match rate** (production GCS data, 2026-07-09, the 4 most recent days with real captured
+`batch_odds_api` ticks as of that date — 2026-06-13, 2026-06-14, 2026-06-19, 2026-06-20; run by replaying the exact
+shipped resolver logic against already-captured production odds ticks and fixture parquets, no new API credits
+spent): **180 distinct real fixtures observed, 119 matched (66.1% fixture-level; 62.9% row-level across 12,053 real
+odds-tick rows)**. Only 2 Prediction leagues had real captured odds data in that window (June is off-season for most
+of the 33 leagues): `SEGUNDA_DIVISION` matched 38/38 (100%); `PRIMERA_DIVISION` (Chile) matched 81/142 (57.0%), with
+every miss classified `UNRESOLVED_TEAM_NAME` — zero `NO_FIXTURE_DATA` misses, i.e. instruments-service's fixture
+data was present and captured for every league/day the odds side needed, so 100% of the observed gap is a
+pre-existing team-name-alias coverage hole in `unified_api_contracts.external.api_football.team_mappings` for
+Chilean club names (e.g. `Coquimbo Unido`, `O'Higgins`, `Deportes Concepción`, `Universidad Católica (CHI)`), not a
+bug in the join itself. **This closes the original open question**: the implicit text-match the two systems relied
+on before this fix was reliable for at least one major league (100% on Segunda Division) but NOT reliable end-to-end
+across the full 33-league universe — the alias-dict gap for South American leagues is a real, separate,
+pre-existing data-quality item, tracked as follow-up (not fixed here, since the correct alias additions need
+per-team verification against API-Football's own naming, not a guessed rewrite).
+
+Test coverage: `market-tick-data-service/tests/market_interface/unit/sports/test_fixture_id_resolver.py` (resolver
+unit tests: matched/unresolved/no-fixture-data/caching/canonical-path-precedence) and
+`test_odds_api_fixture_id_join.py` (`_build_fixture_rows()` wiring + a full `download_batch()` end-to-end test
+through mocked HTTP). Separately, `docs/SPORTS_ODDS.md` (MTDS's own doc, out of this repo's ownership) is stale on
+both the GCS path (shows an older `venue=ODDS_API` shape) and schema (lists `time_bucket`/`m_time` columns the
+current writer does not emit) — unrelated to this fix, still open.
 
 **Sole Source Rule**: API-Football is the sole source of truth for reference data. If a league, team, fixture,
 player, venue, or referee does not exist in API-Football, it does not exist in our universe. All other providers
@@ -375,15 +411,16 @@ venue: {bookmaker_key}
 event_id, sport_key, home_team, away_team, commence_time
 market_key, outcome_name, price, point
 fetch_utc, kickoff_utc, minutes_to_kickoff, bm_minutes_to_kickoff, staleness_seconds, source, data_type, league_id, date
+af_fixture_id, af_fixture_match_status
 ```
 
 The `instrument_id` shape (`FOOTBALL:{BOOKMAKER}:{MARKET}:{LEAGUE}:{SEASON}:{HOME}-{AWAY}::{SELECTION}`) is built by
-UAC's `build_instrument_id()`. The real columns are as shown above; `time_bucket`/`bm_time`/`m_time` are not columns
-in the current writer (`odds_api_adapter.py::_build_fixture_rows()`).
+UAC's `build_instrument_id()` and is unchanged. The real columns are as shown above; `time_bucket`/`bm_time`/`m_time`
+are not columns in the current writer (`odds_api_adapter.py::_build_fixture_rows()`).
 
-The same odds↔instruments row-level join-key gap described under Overview above applies to this schema: this
-`instrument_id` never embeds instruments-service's canonical fixture id (neither `af_fixture_id` nor the
-`LEAGUE:MATCHUP:DATE` form) — MTDS derives `{HOME}`/`{AWAY}` from the Odds API's own team-name strings independently.
+`af_fixture_id` (nullable int) + `af_fixture_match_status` (`MATCHED`/`UNRESOLVED_TEAM_NAME`/`NO_FIXTURE_DATA`) are
+the row-level join-key columns added 2026-07-09 to close the odds↔instruments gap described under Overview above —
+see that section for the mechanism (`FixtureIdResolver`) and the real measured match rate.
 
 **CLI**: `python -m market_tick_data_service.cli.main --operation download --mode batch --asset-group SPORTS
 --start-date {date} --end-date {date}`
@@ -495,27 +532,84 @@ re-derived against a fresh GCS aggregation pass, so current real row counts may 
 Distinct from the by-design ID-scheme decision described above — see the linked plan/issue docs for next steps on
 each item below.
 
-### Sports reference catalog is league-grain only, by design
+### Sports reference catalog now carries FIXTURE/TEAM/PLAYER grain (2026-07-09)
 
-`prod/catalog.parquet` rows for Sports: `venue` is an empty string for all rows (correct, see below), and only
-league-level entities exist (the former phantom `"UNKNOWN"` sentinel row is fixed — see below).
-`scripts/build_instrument_catalogue.py`: this is not a silently-broken write path —
-`asset_group == "sports"` dispatches to `build_sports_catalogue_from_manifest()`, which is a documented, deliberate
-2026-06-07 design decision to scope the sports "could-exist" catalog to league grain only, because the captured
-manifest atom itself is per-`(league_id, data_type, date)` with no fixture/team/player grain (a fixture-grain
-catalogue would inflate `expected_unattempted` against a manifest that can never match it). The 11-step pipeline
-above does write fixture/team/player reference data to GCS — that part is real — it just never gets rolled into
-catalog/coverage rows. **Known limitation**: fixture/team/player-grain catalog + coverage tracking for Sports has
-never been implemented, not silently broken; an operator decision is needed on whether it's wanted, plus the
-manifest-schema work it would require. Scoped in
-`unified-trading-pm/plans/active/sports_catalog_league_grain_only_scope_2026_07_08.md`.
+**Supersedes the 2026-06-07 league-grain-only design decision** documented in
+`unified-trading-pm/plans/active/sports_catalog_league_grain_only_scope_2026_07_08.md` (a PM-repo plan doc, outside
+this repo's edit scope — flagged to the operator for its own status-flip to `superseded`/`resolved`, not edited from
+here). Operator decision 2026-07-09: extend the catalogue to also carry real fixture/team/player rows, not just
+league-grain.
 
-**`venue` vs `source`**: the empty `venue` string above is correct, by design, not a bug — `venue` is a bookmaker
-concept, and sports reference-data rows (fixtures/teams/leagues) have no bookmaker association, so an empty `venue`
-is the honest value. `source` is a separate column that does need to be populated (identifies the upstream vendor —
-`api_football`, `footystats`, etc.); the catalog builder (`build_instrument_catalogue.py`'s `CATALOG_COLUMNS`) does
-not carry a `source` column for the catalog artifact at all — that field lives on the separate manifest
-(`AvailabilityRecord`, populated via `record_captured(..., source=...)`), not on the catalog.
+`scripts/build_instrument_catalogue.py`'s sports dispatch now concatenates TWO architecturally distinct sources:
+
+1. **League-grain (unchanged)** — `build_sports_catalogue_from_manifest()`, still derived from the MANIFEST
+   could-exist universe exactly as before (`instrument_type="league"`).
+2. **Fixture/team/player-grain (new)** — `build_sports_fixture_team_player_catalogue()`, derived from REAL
+   OBSERVED captures (a by_date-snapshot roll-up of `entity=fixtures` / `entity=teams` / `entity=injuries`,
+   mirroring the same pattern `build_catalogue_dataframe` already uses for cefi/defi/tradfi), **not** a
+   manifest-derived could-exist projection. This is the key architectural move that avoids the exact
+   `expected_unattempted` inflation the 2026-06-07 decision warned about: these rows are never treated as a
+   could-exist projection, so they never seed coverage-denominator rows. `enumerate_expected_universe.py`'s
+   `_enumerate_v2_sports()` was updated in the same change to filter to `instrument_type="league"` only — a
+   fixture/team/player row's `league_id` is never treated as a per-league lifecycle window (a single fixture's
+   one-day availability window is not a league's lifecycle; letting it through would multiply the coverage
+   denominator once per fixture/team/player instead of once per league).
+
+**Instrument ids**: fixtures use UAC's canonical `LEAGUE:HOME_v_AWAY:DATE` shape (`build_fixture_id()`, e.g.
+`ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322`); teams reuse the canonical `team_id` the `entity=teams` writer
+already stamps (`build_team_id()`, e.g. `ARSENAL`); players use `build_player_id()` over a display-name split (e.g.
+`SAKA_B`) — both `build_team_id`/`build_player_id` already existed in
+`unified_api_contracts.canonical.domain.sports.canonical_ids` (used by the API-Football/FootyStats normalizers), so
+no new id scheme was invented.
+
+**Player-grain honest scope — real, but narrower than the 11-step pipeline table implies**: player rows are sourced
+from `entity=injuries` (real `player_id`/`player_name`/`team_id` columns, verified against real prod GCS
+2026-07-09) — currently-injured players only, not a full roster. `entity=fixture_lineups` (the fuller per-fixture
+roster source the Step 8 table above implies) was tried first and ruled out: its real per-league parquet on GCS
+carries ONLY `formation`/`fixture_id`/`available_at` columns — the per-fixture-entity writer's nested-column-drop
+guard (`sports_reference_fixtures.py::_write_per_fixture_entities`, "Dropping N nested columns") strips the raw
+`startXI`/`substitutes` blocks (which carry `player_id`/`player_name`) before they ever reach GCS, so no player
+identity survives there today. This is a real, separate data-completeness gap in the LINEUPS writer, not something
+the catalogue roll-up can paper over — flagged here as a genuine finding, not fixed in this change (out of scope: a
+writer bug, not a catalogue-roll-up bug). `entity=fixture_lineups` is also not currently active in production
+(last observed 2026-04-15 in a real GCS scan; `entity=injuries` is current).
+
+**Trailing-window scope, not full history**: unlike league-grain (a cheap single manifest-index read), the
+fixture/team/injuries by_date corpus has no GCS-side way to prefix-scope a LISTING to just those three entities (the
+`entity=` segment sits after `day=`/`pipeline_mode=` in the path) — an unwindowed full-history listing measured
+
+> 180s against real prod GCS 2026-07-09, before any downloads even start. `build_sports_fixture_team_player_catalogue`
+> therefore defaults to a `SPORTS_FTP_WINDOW_DAYS=400` trailing window (~13 months) rather than the full 2019-2026
+> history — a real, current, always-fresh catalogue slice, with a full historical fixture/team/player backfill left as
+> a genuine, separate, larger follow-up (mirrors the "needs a decision, not a rushed fix" framing the original
+> league-grain-only scoping plan used for its own P2/P3 items).
+
+**Real verification (2026-07-09, against real prod GCS, `gs://instruments-store-sports-prd-central-element-323112`)**:
+before this change, `prod/catalog.parquet` = 115 rows, 100% `instrument_type="league"`. A real (non-dry-run
+mechanics, `--dry-run`-guarded) rollup run against a real ~10-day trailing window (`since=2026-06-29`) produced
+**2,018 total rows**: 115 pre-existing league rows + 1,134 real fixture rows + 616 real team rows + 42 real player
+rows (from `entity=injuries`) — monotonic guard `ACCEPT (monotonic_ok)`, MVP-tagged 874/2,018 rows (MVP tagging is
+unaffected by the new grains — `SportsMvpRule` in UAC gates purely on `(league, data_type)`, not `instrument_type`,
+confirmed by reading `unified_api_contracts/canonical/crosscutting/mvp_scope.py`). The full `SPORTS_FTP_WINDOW_DAYS=400`
+production default was proven correct against real data separately (real fixture ids like
+`1031:BHUTAN_U19_v_RTC:20260701` for a Reference-tier numeric-keyed league) but was not run to completion
+interactively (extrapolates to ~15-30 minutes, consistent with this workspace's existing full-history rollup
+precedent for other asset groups — "2h17m tradfi" per this same script's own code comment) — it runs for real the
+next time the standing production Cloud Run catalogue-rollup job executes this script with the shipped code.
+
+**`venue` vs `source`**: the empty `venue` string is correct, by design, not a bug, for ALL FOUR grains (league,
+fixture, team, player) — `venue` is a bookmaker concept, and sports reference-data rows have no bookmaker
+association, so an empty `venue` is the honest value. `source` is a separate column that does need to be populated
+(identifies the upstream vendor — `api_football`, `footystats`, etc.); the catalog builder
+(`build_instrument_catalogue.py`'s `CATALOG_COLUMNS`) does not carry a `source` column for the catalog artifact at
+all — that field lives on the separate manifest (`AvailabilityRecord`, populated via
+`record_captured(..., source=...)`), not on the catalog.
+
+Unit test coverage: `tests/unit/scripts/test_build_instrument_catalogue.py` (fixture id construction, team/player
+lifecycle, sentinel-league exclusion, cross-module round-trip through the enumerator) and
+`tests/unit/scripts/test_enumerate_expected_universe_v2.py`
+(`test_sports_v2_fixture_team_player_grain_rows_never_treated_as_leagues` — the correctness guard for the
+`instrument_type` filter).
 
 ### `league_id="UNKNOWN"` sentinel — RESOLVED (2026-07-09)
 
