@@ -466,7 +466,7 @@ def _audit_generic(
     real_or_phantom: dict[int, bool] = {}
     for idx, plist in prefixes_by_idx.items():
         row = df.loc[idx]
-        data_type = str(row.get("data_type", "") or "")
+        data_type = str(row.get("data_type", "") or "")  # noqa: qg-empty-fallback — column may be absent (cross-AG report)
         raw_it = str(row.get("instrument_type", "") or "")  # noqa: qg-empty-fallback — schema-4 rows have no instrument_type (see docstring above)
         venue = str(row.get("venue", "") or "")  # noqa: qg-empty-fallback — column may be absent for this asset_group (cross-AG audit)
         chain = str(row.get("chain", "") or "")  # noqa: qg-empty-fallback — chain only applies to DeFi rows; absent elsewhere
