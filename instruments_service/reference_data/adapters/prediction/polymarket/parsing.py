@@ -127,16 +127,32 @@ class PolymarketParsingMixin:
             available_from = lifecycle.market_created_at
             available_to = lifecycle.settlement_time
 
+        # Canonical instrument_key: VENUE:TYPE:SYMBOL (2026-07-09 fix —
+        # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 7). Before this,
+        # instrument_key was the bare condition_id with zero VENUE:TYPE: structure —
+        # the only asset group missing it. Deliberately NOT passthrough=True: that mode
+        # upper-cases the symbol for every non-DeFi type (canonical_id_builder.py::
+        # _build_passthrough), which would corrupt condition_id — a real, lowercase
+        # 0x…64hex hash — into a non-matching id. Calling the builder without
+        # passthrough for PREDICTION_MARKET dispatches to _build_sports_or_prediction(),
+        # which wraps VENUE:TYPE:{symbol} with case preserved verbatim, exactly what's
+        # needed here.
+        instrument_key = _pm.build_canonical_instrument_id(
+            _pm.AssetGroup.PREDICTION, self.venue, _pm.InstrumentType.PREDICTION_MARKET, condition_id
+        )
+
         # InstrumentRecord (UAC) carries no clob_token_ids field, so register the
-        # per-outcome decimal CLOB token-ids in the package side-table keyed by
-        # condition_id (== instrument_key below). The orchestrator's
-        # _records_to_dataframe joins on instrument_key to materialise the
+        # per-outcome decimal CLOB token-ids in the package side-table keyed by the
+        # SAME final instrument_key (== the wrapped condition_id, not the bare id —
+        # process_write.py::_records_to_dataframe joins the side-table by whatever
+        # instrument_key resolves to, so registering under that same value keeps the
+        # join correct regardless of the id's shape) to materialise the
         # clob_token_ids availability-parquet column the Polymarket CLOB WS
         # subscribes by (live + batch resolve the same per-outcome token-ids).
-        _pm._register_clob_token_ids(condition_id, market.clob_token_ids)
+        _pm._register_clob_token_ids(instrument_key, market.clob_token_ids)
 
         return _pm.InstrumentRecord(
-            instrument_key=condition_id,
+            instrument_key=instrument_key,
             venue=self.venue,
             symbol=slug,
             raw_symbol=slug,

@@ -15,6 +15,7 @@ from typing import cast
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -118,7 +119,12 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
                     # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
                     # finding 3+4;
                     # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
-                    instrument_key=f"LIGHTER-ZKSYNC:PERPETUAL:{base_asset}-USDC",
+                    # Routed through the shared UAC builder (2026-07-09 retrofit,
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) —
+                    # pure DRY, output is behavior-identical to the prior f-string.
+                    instrument_key=build_instrument_id(
+                        "LIGHTER-ZKSYNC", InstrumentType.PERPETUAL, f"{base_asset}-USDC"
+                    ),
                     venue=self.venue,
                     raw_symbol=sym,
                     instrument_type=InstrumentType.PERPETUAL,

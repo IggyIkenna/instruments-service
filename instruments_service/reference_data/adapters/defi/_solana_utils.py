@@ -60,6 +60,9 @@ SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "sanctum": datetime(
         2023, 6, 1, tzinfo=UTC
     ),  # Sanctum v1 LST marketplace mainnet launch (conservative floor); medium confidence
+    # Plan: MarginFi + Solend Solana lending adapters (2026-07-09)
+    "solend": datetime(2021, 8, 13, tzinfo=UTC),  # Solend mainnet launch (confirmed 2021-08-13)
+    "marginfi": datetime(2023, 7, 1, tzinfo=UTC),  # marginfi v2 mainnet GA (July 2023, conservative floor)
 }
 
 # ── Timestamp cache ───────────────────────────────────────────────────

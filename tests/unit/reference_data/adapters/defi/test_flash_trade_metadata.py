@@ -62,7 +62,11 @@ def test_build_perp_record_sol() -> None:
     assert record is not None
     assert isinstance(record, InstrumentRecord)
     assert record.venue == "FLASH-SOLANA"
-    assert record.instrument_key == "FLASH-SOLANA:PERP:SOL"
+    # 2026-07-09: key's TYPE segment fixed from the non-canonical `PERP`
+    # shorthand to the real `PERPETUAL` InstrumentType, matching the field
+    # below (C4 key/field consistency fix — same class as the on-chain-perp
+    # PERP-vs-PERPETUAL canonicalization).
+    assert record.instrument_key == "FLASH-SOLANA:PERPETUAL:SOL"
     assert record.raw_symbol == "SOL-USDC"
     assert record.instrument_type == InstrumentType.PERPETUAL
     assert record.base_asset == "SOL"

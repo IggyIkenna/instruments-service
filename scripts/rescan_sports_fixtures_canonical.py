@@ -489,11 +489,18 @@ def _build_drop_filter(entity_data_type: str) -> Callable[[pd.Series], bool]:
     """
 
     def _filter(row: pd.Series) -> bool:
-        lid = row.get("league_id", "")
+        # Fail-safe defaults for an irreversible migration drop-predicate: a
+        # missing column (never expected on schema-v9 rows) defaults to "" below,
+        # which cannot equal entity_data_type/"instruments-service" and cannot
+        # pass the lid_s != "" check, so the row is PRESERVED (not dropped)
+        # rather than silently deleted. NaN league_id is handled explicitly on
+        # the next line, not by this default.
+        lid = row.get("league_id", "")  # noqa: qg-empty-fallback — missing col => preserved, not dropped
         lid_s = "" if lid is None or (isinstance(lid, float) and pd.isna(lid)) else str(lid)
         return (
-            str(row.get("data_type", "")) == entity_data_type
-            and str(row.get("service_name", "")) == "instruments-service"
+            str(row.get("data_type", "")) == entity_data_type  # noqa: qg-empty-fallback — missing col => preserved
+            and str(row.get("service_name", ""))  # noqa: qg-empty-fallback — missing col => preserved
+            == "instruments-service"
             and lid_s != ""
         )
 

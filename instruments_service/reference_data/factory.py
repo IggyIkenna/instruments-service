@@ -48,6 +48,7 @@ from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
 from .adapters.defi.mango import MangoReferenceDataAdapter
+from .adapters.defi.marginfi import MarginfiReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
@@ -60,6 +61,7 @@ from .adapters.defi.rocket_pool import RocketPoolReferenceDataAdapter
 from .adapters.defi.sanctum import SanctumReferenceDataAdapter
 from .adapters.defi.solana_native_staking import SolanaNativeStakingAdapter
 from .adapters.defi.solblaze import SolblazeReferenceDataAdapter
+from .adapters.defi.solend import SolendReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
 from .adapters.defi.symbiotic import SymbioticReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
@@ -144,6 +146,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "kamino": KaminoReferenceDataAdapter,
     "karak": KarakReferenceDataAdapter,
     "mango": MangoReferenceDataAdapter,
+    "marginfi": MarginfiReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
     "massive": MassiveReferenceDataAdapter,
     "ibkr": IBKRReferenceDataAdapter,
@@ -165,6 +168,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "sanctum": SanctumReferenceDataAdapter,
     "solana_native": SolanaNativeStakingAdapter,
     "solblaze": SolblazeReferenceDataAdapter,
+    "solend": SolendReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
     "symbiotic": SymbioticReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
@@ -231,6 +235,9 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "orca": "",
     "marinade": "",
     "jito": "",
+    # Solana lending adapters (2026-07-09) — public REST/JSON APIs, no API key needed.
+    "solend": "",
+    "marginfi": "",
     # Solana perp DEX adapters (Plan B 2026-05-13) — public REST APIs, no API key needed
     "mango": "",
     "zeta": "",

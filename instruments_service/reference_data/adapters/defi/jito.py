@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -122,8 +122,13 @@ class JitoReferenceDataAdapter(BaseReferenceDataAdapter):
             raise
 
         venue_tag = self.venue
+        # Routed through the shared canonical builder (2026-07-09 retrofit,
+        # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
+        # no output change.
         record = InstrumentRecord(
-            instrument_key=f"{venue_tag}:STAKING:JITOSOL",
+            instrument_key=build_canonical_instrument_id(
+                AssetGroup.DEFI, venue_tag, InstrumentType.STAKING, "JITOSOL", passthrough=True
+            ),
             venue=venue_tag,
             raw_symbol=_JITOSOL_MINT,
             base_asset_contract_address=_JITOSOL_MINT,
@@ -145,7 +150,9 @@ class JitoReferenceDataAdapter(BaseReferenceDataAdapter):
         )
 
         mev_record = InstrumentRecord(
-            instrument_key=f"{venue_tag}:STAKING:JITO-MEV-AGGREGATE",
+            instrument_key=build_canonical_instrument_id(
+                AssetGroup.DEFI, venue_tag, InstrumentType.STAKING, "JITO-MEV-AGGREGATE", passthrough=True
+            ),
             venue=venue_tag,
             raw_symbol="JITO-MEV-AGGREGATE",
             base_asset_contract_address=_JITOSOL_MINT,
