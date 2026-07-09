@@ -21,8 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from unified_api_contracts import source_string_for
-from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
+from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
 from unified_api_contracts.sports import get_league
 
 if TYPE_CHECKING:

@@ -24,8 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from unified_api_contracts import source_string_for
-from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
+from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
