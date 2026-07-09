@@ -472,6 +472,117 @@ passthrough=True)` instead of an ad hoc f-string — part of the same workspace-
 
 ---
 
+## Legacy GCS naming audit — real per-protocol findings and migration (2026-07-09)
+
+Generalizes the on-chain-perp bare-filename finding (operator 2026-07-09: "audit CeFi ... and DeFi ... historical GCS
+data for the same problem") to the 13 DEX-pool protocols + 25 lending/staking/yield/restaking venues. Real, narrow
+(single-venue-prefix) GCS listings against `instrument_availability/by_date/` — not a manifest summary — covering
+BOTH `instruments-store-defi-prd-{pid}` (2,363 real day-partitions, 2020-01-20 .. 2026-07-09) and the legacy env-less
+`instruments-store-defi-{pid}` (2,315 day-partitions, confirmed FROZEN since 2026-05-22 — zero real writes past that
+date, verified via a high-water-mark check; every current reader/writer resolves the `-prd-` bucket via
+`_get_instruments_bucket` → `resolve_bucket_name`).
+
+### Finding 1 — ghost/canonical venue-token duplicate GCS history (28 real venue×chain pairs, ~4 years) — MIGRATED
+
+A real ghost (no-underscore) vs canonical (underscore) venue-token spelling was found written **in parallel** for the
+same real protocol×chain×day, spanning 2022-03-27 .. ~2026-05-11 (then stopped for good — `writers.py`'s
+`canonicalize_defi_venue_combined(venue_str)` call, landed per `defi_coverage_capability_alignment_2026_05_22.md`,
+already fixed this going forward; this audit is the historical backfill that fix never covered). Real per-venue
+ghost-day counts (full real scan, both buckets, 2026-07-09):
+
+| Ghost venue                                               |     Ghost days | Canon days (pre-migration) | Note                                               |
+| --------------------------------------------------------- | -------------: | -------------------------: | -------------------------------------------------- |
+| AAVEV3-ARBITRUM/AVALANCHE/BASE/BSC/ETHEREUM/LINEA/POLYGON | 446–1,514 each |             495–1,572 each |                                                    |
+| AAVEV3-OPTIMISM                                           |          1,514 |                        108 | canon was a MINORITY of real history pre-migration |
+| AERODROMEV3-BASE                                          |            710 |                        792 |                                                    |
+| CAMELOTV3-ARBITRUM                                        |          1,032 |                      1,106 |                                                    |
+| COMPOUNDV3-ARBITRUM/BASE/ETHEREUM/OPTIMISM                | 757–1,359 each |             822–1,422 each |                                                    |
+| PANCAKESWAPV3-BASE/BSC/ETHEREUM                           | 954–1,105 each |           1,032–1,182 each |                                                    |
+| PANCAKESWAPV3-ZKSYNC                                      |            446 |                          0 | 100% orphan pre-migration                          |
+| SUSHISWAPV3-AVALANCHE/BASE/ETHEREUM                       | 245–1,103 each |             883–1,192 each |                                                    |
+| UNISWAPV2-ETHEREUM                                        |          2,189 |                      2,243 |                                                    |
+| UNISWAPV3-ARBITRUM/BASE/ETHEREUM/OPTIMISM/POLYGON         | 974–1,825 each |           1,006–1,883 each |                                                    |
+| UNISWAPV4-ETHEREUM                                        |            459 |                        525 |                                                    |
+| VELODROMEV2-OPTIMISM (legacy env-less bucket ONLY)        |          1,044 |          0 (either bucket) | 100% orphan + wrong bucket                         |
+
+**Total real scope: 33,003 (bucket, ghost_venue, day) triples** — 31,968 in `-prd-` + 1,044 legacy-bucket-only (9
+additional triples were processed during script validation ahead of the full run, for a real grand total of
+**33,012 real ghost objects**).
+
+**Not a byte-identical duplicate — a real content diff mattered.** 81 sampled ghost/canon same-day pairs (both
+parquets read, compared on the `raw_symbol` identity column) showed most pairs are NOT duplicates: each side commonly
+holds real pools the other is missing (e.g. `UNISWAPV3-OPTIMISM` day=2023-11-18: 168 ghost rows vs 282 canonical, 6
+ghost-only + 120 canonical-only; `PANCAKESWAPV3-BSC` day=2024-10-07: 129 ghost vs 86 canonical, 59 ghost-only). The
+canonical schema is also wider (51 real columns vs ghost's 40 — `canonical_instrument_id`/`product_root`/
+`available_at`/etc. were added to the writer after most ghost objects were captured). A blind rename in either
+direction would have destroyed real, non-redundant pool history.
+
+**Migration executed for real** —
+`instruments-service/scripts/legacy_naming_audit_dexpool_ghost_venue_merge_2026_07_09.py`: per-(bucket, day, venue)
+column-union + row-union merge (canonical wins on identity-column conflict, ghost-only rows carried over honestly,
+never fabricated), backup-first (every pre-migration object server-side-copied under
+`_migration_backup/legacy_naming_audit_dexpool_2026_07_09/` before any write), post-write verify-then-delete (ghost
+object only deleted after a re-read confirms the canonical row count ≥ the union floor), real `ThreadPoolExecutor`
+concurrency (48 workers). **Real results, both passes**: 33,003/33,003 succeeded (100%), 0 remaining failures, a
+follow-up idempotent full re-scan of all 29 ghost-venue prefixes across both buckets confirmed **0 real ghost objects
+remain anywhere** — durable, not just catalog-level. Real elapsed time: ~78 minutes wall-clock (main pass 4,568s +
+mop-up 41s + verification listings), real concurrency throughout (measured throughput ramped 4.4 → 7.6 objects/sec as
+the run progressed). Real content recovered: **2,314,285 total real rows read from ghost objects**, merged into
+canonical objects now totaling **2,828,070 rows** (the delta is real, previously-orphaned pool/reserve history now
+visible under the canonical venue name for the first time — most concentrated in `AAVE_V3-OPTIMISM`,
+`PANCAKESWAP_V3-ZKSYNC`, and `VELODROME_V2-OPTIMISM`, the 3 venues where canonical was a minority-or-zero share of
+real history pre-migration).
+
+**Real mid-run finding, fixed in the same pass**: 11 of 33,003 objects (1 transient GCS 503 on a backup-copy call, 10
+`UNISWAPV3-POLYGON` days) initially failed a post-write verify check — safely (ghost object was NOT deleted in either
+case, no data at risk). Root-caused: the verify floor compared the merged row count against the ghost object's RAW
+row count, but a real source file can carry an internal duplicate identity value (`UNISWAPV3-POLYGON` day=2025-01-10's
+real ghost object has 476 raw rows but only 475 unique `raw_symbol` values — a real subgraph-pagination-overlap
+re-listing, not corruption) — the merge already correctly deduped on the identity column, so the raw-row-count floor
+rejected a genuinely correct de-duplicated result as a false-positive "regression." Fixed (floor now uses the unique
+identity-column count) and all 11 re-ran clean (0 failures) in a scoped mop-up pass.
+
+### Finding 2 — lending/staking/yield venues: 25 requested, only 5 have ANY real object here (not a naming gap)
+
+A full real venue-token inventory (every distinct `venue=` token across the ENTIRE 2020-2026 history, both buckets —
+87 distinct tokens total) was cross-checked against all 25 requested lending/staking venues (Euler_V2, Fluid, Radiant,
+Venus, Benqi, MarginFi, Solend, Lido, EtherFi, Renzo, KelpDAO, Puffer, RocketPool, Sanctum, Solblaze, Yearn, Beefy,
+Karak, Idle, Symbiotic, Convex, plus Aave_V3/Spark/Compound_V3/Morpho already covered above). Only **Aave_V3, Spark,
+Compound_V3, Morpho, and Fluid** have ever written a single real object to `instrument_availability/by_date/`, under
+any spelling — Spark/Morpho/Fluid canonical-only (no ghost variant ever existed for these 3, nothing to migrate).
+The other **18 requested venues have ZERO real objects here, under any naming variant**: Euler_V2, Radiant, Venus,
+Benqi, MarginFi, Solend, Renzo, KelpDAO, Puffer, RocketPool, Sanctum, Solblaze, Yearn(\_V3), Beefy, Karak, Idle,
+Symbiotic, Convex. **This is NOT a naming-convention gap** (there is nothing mis-spelled to rename — these adapters
+have real code (`instruments_service/reference_data/adapters/defi/`) but have never run a real production capture
+against this specific GCS path) — it is a separate, already-tracked "not yet backfilled" state (see
+`DEFI_INSTRUMENTS_NOT_YET_COLLECTED`/`EMPTY_OR_DEPRECATED_DEFI_VENUES` under "Known gaps" above for the venues
+already flagged there; the remainder are simply un-backfilled, out of THIS audit's naming-migration scope). Two bonus
+finds beyond the requested 25 were also present with clean canonical-only real data, no gap: `EIGENLAYER-ETHEREUM`,
+`ETHENA-ETHEREUM`.
+
+### Finding 3 (flagged, NOT executed this pass) — orphaned `pipeline_mode=` duplicate-write tree
+
+While auditing Finding 1's day-partitions, a SECOND, fully distinct real path shape was found:
+`instrument_availability/by_date/day={D}/pipeline_mode=batch_instruments_service/asset_group=defi/venue={V}/instruments.parquet`
+— present in 2,353 of 2,363 real day-partitions in `-prd-` (stopped ~2026-06-30, evidence it's already dead
+going-forward too), mirroring the SAME venue set as the flat `day={D}/venue={V}/...` tree. Real hash comparison
+(CRC32C + MD5) on 2 samples spanning the oldest (`day=2020-01-20`) and a recent (`day=2026-06-10`) date confirmed
+**byte-for-byte identical content** to the flat-shape sibling for the same (day, venue). Crucially: **zero real
+readers consume this shape** — every real consumer (`unified_trading_library/instrument_lifecycle_loader.py`,
+`domain/instruments_client.py`, `domain_client/clients/instruments.py`, `options_cluster_lookup.py`,
+`core/cloud_data_provider.py`) reads only the flat `day=/venue=/instruments.parquet` shape;
+`pipeline_mode=`/`asset_group=` partitioning is a real, documented convention for MTDS's `raw_tick_data` (per
+`codex/02-data/defi-canonical-naming-ssot.md`) but was never wired to an `instrument_availability` reader. This
+represents an estimated ~104K real orphaned duplicate objects in `-prd-` alone (mirrors the flat tree's real
+venue-day objects for 2,353 of 2,363 days) — pure storage waste, not a correctness/migration-blocking gap (nothing
+silently drops data because nothing reads it). Left as a flagged follow-up (real evidence above; a dedicated
+SAFE-TO-DELETE audit + delete-list script, same pattern as MTDS's own
+`e2e-testing/scripts/defi/audit_legacy_gcs_dup_delete_list.py` precedent, is the right next step) rather than executed
+in this pass — out of THIS audit's "naming convention" scope (nothing here is mis-named; it's a write path that was
+never read) and a genuinely separate, large, operator-notify-worthy finding on its own.
+
+---
+
 ## DEX pools
 
 ### Adapter architecture: 5 native adapters, 8 protocols reuse one via config
