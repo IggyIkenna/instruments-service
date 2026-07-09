@@ -33,7 +33,10 @@ async def test_get_instruments_yields_bsol_record() -> None:
     assert rec.venue == "SOLBLAZE-SOLANA"
     assert rec.instrument_key == "SOLBLAZE-SOLANA:LST:BSOL"
     assert rec.raw_symbol == _BSOL_MINT
-    assert rec.instrument_type == InstrumentType.YIELD_BEARING
+    # 2026-07-09: field fixed to match the `:LST:` key segment (key/field
+    # consistency fix, C4 — same class as PERP-vs-PERPETUAL; see lido.py's
+    # module docstring).
+    assert rec.instrument_type == InstrumentType.LST
     assert rec.base_asset == "SOL"
     assert rec.underlying == "SOL"
     assert rec.status == InstrumentStatus.ACTIVE
@@ -45,8 +48,21 @@ async def test_get_instruments_yields_bsol_record() -> None:
 @pytest.mark.asyncio
 async def test_get_instruments_filters_on_instrument_type() -> None:
     adapter = SolblazeReferenceDataAdapter()
+    # Guard accepts both the real field value (LST) and the legacy
+    # YIELD_BEARING value for back-compat (2026-07-09 fix).
+    assert await adapter.get_instruments(instrument_type=InstrumentType.LST)
     assert await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
     assert await adapter.get_instruments(instrument_type="perpetual") == []
+
+
+@pytest.mark.asyncio
+async def test_record_has_lst_type_and_matching_key_segment() -> None:
+    """C4 regression guard: key's `:LST:` segment and instrument_type field must agree."""
+    records = await SolblazeReferenceDataAdapter().get_instruments()
+    assert records
+    for rec in records:
+        assert rec.instrument_type == InstrumentType.LST
+        assert ":LST:" in rec.instrument_key
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,10 @@ liquid representations users hold after depositing collateral (SOL / JitoSOL / o
 into a Jito Restaking vault that secures Node Consensus Networks (NCNs). Each VRT is
 issued by an independent vault operator (Renzo, Fragmetric, Kyros, ...).
 
-Returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Returned as InstrumentRecord with instrument_type="YIELD_BEARING". The
+`instrument_key`'s middle segment is also `YIELD_BEARING` (fixed 2026-07-09 —
+it previously said the shorthand `VAULT`, which is not a real `InstrumentType`
+enum member; see `karak.py`'s module docstring for the full rationale).
 
 NOT to be confused with the sibling adapter `defi/jito.py`, which covers the Jito **LST**
 (JitoSOL — the original MEV-enhanced liquid staking token, distinct from the restaking
@@ -35,6 +38,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -138,7 +142,15 @@ class JitoRestakingReferenceDataAdapter(BaseReferenceDataAdapter):
 
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:VAULT:{symbol}",
+                    # Routed through the shared canonical builder (2026-07-09 fix +
+                    # retrofit) — key's TYPE segment fixed from the non-canonical
+                    # `VAULT` shorthand to the real `YIELD_BEARING` InstrumentType
+                    # (matching the already-correct field below), per
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1
+                    # + instruments_docs_audit_outstanding_items_2026_07_08.md C4.
+                    instrument_key=build_canonical_instrument_id(
+                        AssetGroup.DEFI, venue_tag, InstrumentType.YIELD_BEARING, symbol, passthrough=True
+                    ),
                     venue=venue_tag,
                     raw_symbol=vault_address,
                     instrument_type=InstrumentType.YIELD_BEARING,
