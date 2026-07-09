@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_trading_library import log_event
 
@@ -223,7 +223,14 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
 
         symbol = f"{sym0}-{sym1}"
         venue_tag = f"BALANCER-{self._chain}"
-        instrument_key = f"{venue_tag}:POOL:{symbol}"
+        # Routed through the shared canonical builder (2026-07-09 retrofit,
+        # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
+        # no output change (POOL is a real InstrumentType; venue_tag already
+        # carries the composed VENUE-CHAIN token, so passthrough=True with no
+        # separate chain= kwarg reproduces the pre-retrofit f-string exactly).
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, venue_tag, InstrumentType.POOL, symbol, passthrough=True
+        )
 
         available_since = parse_created_timestamp(pool.get("createTime"))
 

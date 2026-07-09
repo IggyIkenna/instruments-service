@@ -155,6 +155,17 @@ _RETIRED_SPORTS_DATA_TYPES: frozenset[str] = frozenset(
     }
 )
 
+# Defense-in-depth mirror of ``build_instrument_catalogue.SPORTS_LEAGUE_ID_SENTINELS``
+# (2026-07-09 phantom-league fix, `A1` in
+# `instruments_docs_audit_outstanding_items_2026_07_08.md`). The primary fix drops
+# sentinel league_ids at the catalogue roll-up so ``catalog`` below should never
+# carry one, but this guard means ``_enumerate_v2_sports`` can never re-amplify a
+# phantom league into expected/empty rows even if one somehow re-enters the
+# catalogue (e.g. a stale/un-migrated catalogue snapshot). Duplicated (not
+# imported) — these are standalone ``scripts/`` entry points, not an importable
+# package, so a tiny local frozenset is simpler than a cross-script dependency.
+_SPORTS_LEAGUE_ID_SENTINELS: frozenset[str] = frozenset({"UNKNOWN"})
+
 # Full per-instrument present-set columns for cefi / defi / prediction.
 _DEFAULT_PRESENT_COLS: list[str] = [
     "venue",
@@ -1933,6 +1944,8 @@ def _enumerate_v2_sports(
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
             continue  # league not yet listed when window ended
         league_id = instr.league_id or instr.instrument_id
+        if league_id.upper() in _SPORTS_LEAGUE_ID_SENTINELS:
+            continue  # phantom/sentinel league (e.g. "UNKNOWN") — never emit expected rows for it
         # G1-ENUM: filter data_types to those valid for this league instrument's shape.
         row_dts = _row_data_types("sports", instr, data_types)
         if not row_dts:

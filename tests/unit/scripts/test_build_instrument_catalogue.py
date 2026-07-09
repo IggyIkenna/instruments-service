@@ -133,9 +133,7 @@ def test_rollup_thin_latest_day_does_not_false_delist_other_venues(rollup: Modul
     """
     d1, d2, d3 = date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)
     # VENUE_A: 10 perps every day INCLUDING the latest → all active.
-    a_rows = [
-        {"instrument_key": f"A{i}", "venue": "VENUE_A", "instrument_type": "PERPETUAL"} for i in range(10)
-    ]
+    a_rows = [{"instrument_key": f"A{i}", "venue": "VENUE_A", "instrument_type": "PERPETUAL"} for i in range(10)]
     snapshots = [
         (d1, _snapshot(a_rows)),
         (d2, _snapshot(a_rows)),
@@ -692,7 +690,9 @@ def test_prediction_rollup_available_to_datetime_used_as_settlement(rollup: Modu
         (latest, "KALSHI", "BTC_UP_DOWN_DAILY", _pred_snap([{"instrument_key": "0xfuture", "venue": "KALSHI"}])),
     ]
     df = rollup.build_prediction_catalogue_dataframe(snapshots)
-    row = next(r for r in df.to_dict("records") if r["instrument_id"] == "KXBTCUSD-26JUN27" and r["data_type"] == "trades")
+    row = next(
+        r for r in df.to_dict("records") if r["instrument_id"] == "KXBTCUSD-26JUN27" and r["data_type"] == "trades"
+    )
     # The Timestamp's DATE (Jun 27) should be the available_to.
     assert row["available_to"] == "2026-06-27", (
         f"Expected available_to='2026-06-27' from available_to_datetime but got {row['available_to']!r}."
@@ -839,6 +839,36 @@ def test_sports_catalogue_from_manifest_superset_and_excludes_retired(rollup: Mo
     # available_from = earliest captured date across that league's current data_types.
     assert by_id["ENG_PREMIER"]["available_from"] == "2024-01-05"
     assert by_id["ENG_PREMIER"]["available_to"] is None  # active (enumerator applies coverage window)
+
+
+def test_sports_catalogue_from_manifest_excludes_sentinel_league_ids(rollup: ModuleType) -> None:
+    """Sentinel league_ids (e.g. "UNKNOWN") never roll up into a catalogue row.
+
+    Regression for A1 (2026-07-08/09): an unguarded roll-up minted a real,
+    persisted ``instrument_id="UNKNOWN"/league_id="UNKNOWN"`` catalogue row that
+    the v2 enumerator then amplified into thousands of manifest
+    expected_unattempted/empty_confirmed rows. A case-variant is also excluded
+    (defensive — the known writer only ever emits the exact uppercase literal,
+    but the filter is a case-insensitive compare). Real leagues outside UAC
+    LEAGUE_REGISTRY (raw numeric long-tail ids, ``LA_LIGA_2``, ``RFPL``, ...)
+    must NOT be swept up by this filter — this stays a narrow sentinel check,
+    not a full canonical-registry membership check (verified against the real
+    prod catalogue 2026-07-09: 22 real leagues fail LEAGUE_REGISTRY membership).
+    """
+    manifest = pd.DataFrame(
+        [
+            {"league_id": "ENG_PREMIER", "data_type": "FIXTURES", "date": "2024-01-05"},
+            {"league_id": "UNKNOWN", "data_type": "FIXTURES", "date": "2025-12-15"},
+            {"league_id": "unknown", "data_type": "XG", "date": "2025-12-16"},
+            # Real long-tail league outside LEAGUE_REGISTRY — must survive the filter.
+            {"league_id": "15066", "data_type": "MATCHES", "date": "2024-03-01"},
+        ]
+    )
+    df = rollup.build_sports_catalogue_from_manifest(manifest)
+    by_id = {row["league_id"]: row for row in df.to_dict("records")}
+    assert set(by_id) == {"ENG_PREMIER", "15066"}
+    assert "UNKNOWN" not in by_id
+    assert "unknown" not in by_id
 
 
 def test_sports_catalogue_from_manifest_empty_or_missing_cols(rollup: ModuleType) -> None:
@@ -1440,7 +1470,7 @@ def test_rollup_non_pool_defi_ghost_lending_collapses_to_one_lifecycle(rollup: M
     catalogue row, NOT two.  Without the fix both keys produced separate rows
     each marked active → +171 AAVE_V3 catalogue over-count vs manifest.
     """
-    d_old = date(2026, 5, 1)   # old adapter (ghost prefix AAVEV3-)
+    d_old = date(2026, 5, 1)  # old adapter (ghost prefix AAVEV3-)
     d_switch = date(2026, 5, 8)  # adapter switched to canonical AAVE_V3-
     d_now = date(2026, 6, 20)  # recent snapshot (canonical)
 
@@ -1503,9 +1533,7 @@ def test_rollup_compound_v3_ghost_collapses_like_aave_v3(rollup: ModuleType) -> 
         ]
     )
     lending_rows = df[df["instrument_type"].astype(str).str.lower() == "lending"].to_dict("records")
-    assert len(lending_rows) == 1, (
-        f"COMPOUND_V3 ghost collapse failed: got {len(lending_rows)} rows."
-    )
+    assert len(lending_rows) == 1, f"COMPOUND_V3 ghost collapse failed: got {len(lending_rows)} rows."
     assert lending_rows[0]["available_to"] is None  # active on latest day (d_now)
 
 
@@ -1709,7 +1737,9 @@ def test_iter_by_date_since_lists_only_window_days(rollup: ModuleType) -> None:
 def test_merge_updated_row_carries_available_from_and_refreshes(rollup: ModuleType) -> None:
     """Branch 1: window recompute wins, but available_from is immutable (min of both)."""
     prev = pd.DataFrame([_cat_row(instrument_id="A", available_from="2024-01-01", available_to=None, raw_symbol="old")])
-    window = pd.DataFrame([_cat_row(instrument_id="A", available_from="2026-06-20", available_to=None, raw_symbol="new")])
+    window = pd.DataFrame(
+        [_cat_row(instrument_id="A", available_from="2026-06-20", available_to=None, raw_symbol="new")]
+    )
     window = window.drop(columns=["mvp"])
     merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12), asset_group="cefi")
     assert len(merged) == 1
@@ -1921,17 +1951,58 @@ def _cefi_corpus() -> list:
     for d in days:
         age = (today - d).days
         rows = [
-            {"instrument_key": "BTC-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "BTC"},
-            {"instrument_key": "ETH-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "ETH"},
-            {"instrument_key": "BTC-USDT", "venue": "BINANCE-SPOT", "instrument_type": "SPOT_PAIR", "base_asset": "BTC"},
-            {"instrument_key": "ETH-USDT", "venue": "BINANCE-SPOT", "instrument_type": "SPOT_PAIR", "base_asset": "ETH"},
+            {
+                "instrument_key": "BTC-PERP",
+                "venue": "BINANCE-FUTURES",
+                "instrument_type": "PERPETUAL",
+                "base_asset": "BTC",
+            },
+            {
+                "instrument_key": "ETH-PERP",
+                "venue": "BINANCE-FUTURES",
+                "instrument_type": "PERPETUAL",
+                "base_asset": "ETH",
+            },
+            {
+                "instrument_key": "BTC-USDT",
+                "venue": "BINANCE-SPOT",
+                "instrument_type": "SPOT_PAIR",
+                "base_asset": "BTC",
+            },
+            {
+                "instrument_key": "ETH-USDT",
+                "venue": "BINANCE-SPOT",
+                "instrument_type": "SPOT_PAIR",
+                "base_asset": "ETH",
+            },
         ]
         if age >= 30:  # delisted long before the window (frozen tail)
-            rows.append({"instrument_key": "OLD-USDT", "venue": "BINANCE-SPOT", "instrument_type": "SPOT_PAIR", "base_asset": "OLD"})
+            rows.append(
+                {
+                    "instrument_key": "OLD-USDT",
+                    "venue": "BINANCE-SPOT",
+                    "instrument_type": "SPOT_PAIR",
+                    "base_asset": "OLD",
+                }
+            )
         if age >= 8:  # delists mid-window
-            rows.append({"instrument_key": "MID-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "MID"})
+            rows.append(
+                {
+                    "instrument_key": "MID-PERP",
+                    "venue": "BINANCE-FUTURES",
+                    "instrument_type": "PERPETUAL",
+                    "base_asset": "MID",
+                }
+            )
         if age <= 5:  # brand-new listing inside the window
-            rows.append({"instrument_key": "NEW-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "NEW"})
+            rows.append(
+                {
+                    "instrument_key": "NEW-PERP",
+                    "venue": "BINANCE-FUTURES",
+                    "instrument_type": "PERPETUAL",
+                    "base_asset": "NEW",
+                }
+            )
         snapshots.append((d, _snapshot(rows)))
     return snapshots
 
@@ -1959,15 +2030,43 @@ def test_incremental_matches_full_rebuild_tradfi(rollup: ModuleType) -> None:
     for d in days:
         age = (today - d).days
         rows = [
-            {"instrument_key": "ESZ6", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "ES"},
-            {"instrument_key": "NQZ6", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "NQ"},
+            {
+                "instrument_key": "ESZ6",
+                "venue": "CME",
+                "instrument_type": "FUTURE",
+                "expiry": far_expiry,
+                "underlying": "ES",
+            },
+            {
+                "instrument_key": "NQZ6",
+                "venue": "CME",
+                "instrument_type": "FUTURE",
+                "expiry": far_expiry,
+                "underlying": "NQ",
+            },
             {"instrument_key": "SPY", "venue": "ARCA", "instrument_type": "SPOT_PAIR", "base_asset": "SPY"},
             {"instrument_key": "QQQ", "venue": "ARCA", "instrument_type": "SPOT_PAIR", "base_asset": "QQQ"},
         ]
         if age >= 25:  # expired contract that stopped appearing pre-window
-            rows.append({"instrument_key": "ESU6", "venue": "CME", "instrument_type": "FUTURE", "expiry": past_expiry, "underlying": "ES"})
+            rows.append(
+                {
+                    "instrument_key": "ESU6",
+                    "venue": "CME",
+                    "instrument_type": "FUTURE",
+                    "expiry": past_expiry,
+                    "underlying": "ES",
+                }
+            )
         if age <= 4:  # new contract series after the roll
-            rows.append({"instrument_key": "ESH7", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "ES"})
+            rows.append(
+                {
+                    "instrument_key": "ESH7",
+                    "venue": "CME",
+                    "instrument_type": "FUTURE",
+                    "expiry": far_expiry,
+                    "underlying": "ES",
+                }
+            )
         snapshots.append((d, _snapshot(rows)))
     full, incremental = _parity_frames(rollup, snapshots, asset_group="tradfi")
     _assert_frames_match(full, incremental)

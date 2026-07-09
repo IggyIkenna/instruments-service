@@ -4,6 +4,13 @@ Discovers token pairs available via Jupiter aggregation on Solana using
 the Jupiter Quote API v6. Jupiter is the dominant DEX aggregator on Solana,
 routing swaps across Raydium, Orca, Meteora, Phoenix and other venues.
 
+Returned as InstrumentRecord with instrument_type=SPOT_PAIR. The
+`instrument_key`'s middle TYPE segment matches (fixed 2026-07-09 — it
+previously said the shorthand `SPOT`, which is not a real `InstrumentType`
+enum member (`SPOT_PAIR` is); same class of fix as the on-chain-perp
+PERP-vs-PERPETUAL canonicalization — see
+`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`).
+
 Data source: Jupiter API v6 (https://lite-api.jup.ag/swap/v1/) — public, no auth required.
 Program ID: JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 (Jupiter v6 aggregator)
 Reference: https://dev.jup.ag/docs/
@@ -16,7 +23,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -171,7 +178,15 @@ class JupiterReferenceDataAdapter(BaseReferenceDataAdapter):
         if not base_asset or not quote_asset:
             return None
 
-        instrument_key = f"{self.venue}:SPOT:{base_asset}-{quote_asset}"
+        # Key/field mismatch fix (2026-07-09, C4) + builder retrofit — TYPE
+        # segment changed SPOT -> SPOT_PAIR to match instrument_type below.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI,
+            self.venue,
+            InstrumentType.SPOT_PAIR,
+            f"{base_asset}-{quote_asset}",
+            passthrough=True,
+        )
         raw_symbol = f"{base_asset}/{quote_asset}"
 
         return InstrumentRecord(

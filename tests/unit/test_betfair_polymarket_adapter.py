@@ -209,7 +209,7 @@ class TestPolymarketAdapterExtended:
             results = await adapter.get_instruments()
         assert len(results) == 1
         assert results[0].venue == "POLYMARKET"
-        assert results[0].instrument_key == "0xabc123"
+        assert results[0].instrument_key == "POLYMARKET:PREDICTION_MARKET:0xabc123"
         assert results[0].instrument_type == "PREDICTION_MARKET"
 
     @pytest.mark.asyncio

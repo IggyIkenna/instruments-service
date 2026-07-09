@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("DEPLOYMENT_ENV_SHORT must be set (e.g. prd). Refusing.")
         return 1
 
-    instance = os.environ.get("VM_NAME", "")
+    instance = os.environ.get("VM_NAME", "")  # noqa: qg-empty-fallback — unset VM_NAME => `not instance` refuses --apply below
     if args.apply and (os.environ.get("MANIFEST_PER_VM_SHARDS") != "true" or not instance):
         logger.error("--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. Refusing.")
         return 1

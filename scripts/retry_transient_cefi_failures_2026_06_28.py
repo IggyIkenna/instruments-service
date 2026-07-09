@@ -53,7 +53,6 @@ import io
 import logging
 import os
 import sys
-from datetime import UTC, datetime
 
 import pandas as pd
 from unified_trading_library import get_storage_client, resolve_bucket_name
@@ -65,12 +64,14 @@ INDEX_BLOB = "_index/availability_index.parquet"
 
 # Transient error patterns — exact matches and case-insensitive substrings.
 # Exact / uppercase patterns (Tardis error codes):
-_EXACT_PATTERNS: frozenset[str] = frozenset({
-    "TARDIS_HTTP_500",
-    "TARDIS_HTTP_503",
-    "HTTP_500",
-    "HTTP_503",
-})
+_EXACT_PATTERNS: frozenset[str] = frozenset(
+    {
+        "TARDIS_HTTP_500",
+        "TARDIS_HTTP_503",
+        "HTTP_500",
+        "HTTP_503",
+    }
+)
 
 # Case-insensitive substring patterns (network/payload errors):
 _SUBSTRING_PATTERNS_LOWER: tuple[str, ...] = (
@@ -145,8 +146,11 @@ def _report_distribution(df: pd.DataFrame, idx: pd.Index) -> None:
 
 
 def _validate_apply_env() -> bool:
-    per_vm = os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower()
-    vm_name = os.environ.get("VM_NAME", "").strip()
+    # Env vars legitimately unset is the expected "not configured for --apply"
+    # state; "" is the correctly-treated-as-falsy not-present value the checks
+    # below fail fast on (ok=False -> caller aborts).
+    per_vm = os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower()  # noqa: qg-empty-fallback — unset env => fails below
+    vm_name = os.environ.get("VM_NAME", "").strip()  # noqa: qg-empty-fallback — unset env => `not vm_name` fails below
     ok = True
     if per_vm not in ("1", "true", "yes"):
         logger.error("--apply requires MANIFEST_PER_VM_SHARDS=true. Aborting.")
@@ -176,9 +180,7 @@ def _flip_to_expected_unattempted(
             captured_before,
             captured_after,
         )
-        raise RuntimeError(
-            f"captured count changed {captured_before} → {captured_after} after flip — BUG"
-        )
+        raise RuntimeError(f"captured count changed {captured_before} → {captured_after} after flip — BUG")
 
     out = io.BytesIO()
     df.to_parquet(out, index=False)

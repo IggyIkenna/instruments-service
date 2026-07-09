@@ -21,6 +21,7 @@ from unified_api_contracts.internal import (
     InstrumentStatus,
     InstrumentType,
 )
+from unified_api_contracts.internal.reference.canonical_id_builder import build_leg
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -49,6 +50,34 @@ def _classify_deribit_error(exc: Exception, status: int | None = None) -> str:
     if (status is not None and status >= 500) or "500" in msg or "internal" in msg:
         return "500"
     return "UNKNOWN"
+
+
+_OPTION_RIGHTS: frozenset[str] = frozenset({"C", "P"})
+
+
+def _classify_deribit_leg_instrument_type(leg_name: str) -> InstrumentType | None:
+    """Classify a Deribit combo leg's ``InstrumentType`` from its ``instrument_name`` shape.
+
+    Deribit's ``public/get_combos`` leg objects are ``{amount, instrument_name}``
+    only — no per-leg type field is returned — so the type must be inferred
+    from the dash-delimited shape of ``instrument_name`` itself. Verified
+    against real, live ``get_combos`` responses for BTC/ETH (2026-07-09, every
+    currently-active combo for both currencies): every leg name is either 2
+    dash-parts (``{BASE}-PERPETUAL`` or ``{BASE}-{DDMMMYY}``) or 4 dash-parts
+    (``{BASE}-{DDMMMYY}-{STRIKE}-{C|P}``) — no 3-part or 5+-part shape was
+    observed. Real examples seen: ``BTC-PERPETUAL``, ``BTC-10JUL26``,
+    ``BTC-17JUL26-65000-C``.
+
+    Returns ``None`` (caller drops the leg — same degrade-gracefully
+    convention already used for a leg with a missing/empty ``instrument_name``
+    or zero ``amount``) if the name doesn't match any known shape.
+    """
+    parts = leg_name.split("-")
+    if len(parts) == 2:
+        return InstrumentType.PERPETUAL if parts[1] == "PERPETUAL" else InstrumentType.FUTURE
+    if len(parts) == 4 and parts[3] in _OPTION_RIGHTS:
+        return InstrumentType.OPTION
+    return None
 
 
 class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
@@ -288,7 +317,15 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
 
         Each Deribit leg is ``{"amount": <signed int>, "instrument_name": <str>}``.
         ``amount`` sign → side (>0 BUY / <0 SELL); ``abs(amount)`` → ratio;
-        ``instrument_name`` → the leg's ``instrument_key`` (DERIBIT:<name>).
+        ``instrument_name`` → the leg's ``instrument_key``, built via the
+        shared UAC ``build_leg()`` (canonical ``VENUE:TYPE:SYMBOL`` grammar)
+        instead of the prior ad hoc ``f"DERIBIT:{leg_name}"`` — which was
+        missing the ``:TYPE:`` segment entirely (2 colon-parts instead of 3).
+        The per-leg ``InstrumentType`` is classified from the raw
+        ``instrument_name`` shape via ``_classify_deribit_leg_instrument_type``
+        since ``get_combos`` doesn't return a per-leg type field. A leg whose
+        name doesn't match any known shape is dropped (logged) rather than
+        raised, matching the existing malformed-leg-skip convention below.
         """
         legs: list[InstrumentLeg] = []
         if not isinstance(raw_legs, list):
@@ -305,11 +342,22 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
                 amount = 0
             if amount == 0:
                 continue
+            leg_type = _classify_deribit_leg_instrument_type(leg_name)
+            if leg_type is None:
+                logger.warning(
+                    "DeribitComboAdapter: cannot classify leg instrument_type for "
+                    "instrument_name=%s (unexpected shape) — dropping leg",
+                    leg_name,
+                )
+                continue
             legs.append(
-                InstrumentLeg(
-                    instrument_key=f"DERIBIT:{leg_name}",
+                build_leg(
+                    "DERIBIT",
+                    leg_type,
+                    leg_name,
                     side="BUY" if amount > 0 else "SELL",
                     ratio=abs(amount),
+                    passthrough=True,
                 )
             )
         return legs

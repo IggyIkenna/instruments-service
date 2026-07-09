@@ -2,6 +2,11 @@
 
 Discovers Venus core-pool lending markets. BSC is the primary deployment
 (launched 2020-09); Ethereum mainnet launched the IL Core Pool 2024-04-15.
+Each curated market emits a supply-side ``A_TOKEN`` instrument (collateral
+deposited, vToken-equivalent) and a borrow-side ``DEBT_TOKEN`` instrument
+(loan asset borrowed against that collateral) — the same A_TOKEN/DEBT_TOKEN
+split ``aave_v3.py`` uses per reserve
+(defi_lending_atoken_debttoken_instrument_split_2026_07_07.md).
 
 Markets are curated (top-of-TVL by collateral asset).
 Reference: https://app.venus.io/
@@ -11,6 +16,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -98,40 +104,80 @@ class VenusReferenceDataAdapter(BaseReferenceDataAdapter):
 
         results: list[InstrumentRecord] = []
         for market in markets:
-            collateral = market["collateral_asset"]
-            borrow = market["borrow_asset"]
             address = market["vault_address"]
-            symbol = f"{collateral}-{borrow}"
-            instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}"
             available_since = creation_ts_map.get(address, floor_date)
-
-            results.append(
-                InstrumentRecord(
-                    instrument_key=instrument_key,
-                    venue=venue_tag,
-                    raw_symbol=address,
-                    pool_address=address,
-                    instrument_type=InstrumentType.LENDING,
-                    base_asset=collateral,
-                    quote_asset=borrow,
-                    tick_size=Decimal("0.000001"),
-                    min_size=Decimal("0.000001"),
-                    contract_size=Decimal("1"),
-                    expiry=None,
-                    strike=None,
-                    option_type=None,
-                    status=InstrumentStatus.ACTIVE,
-                    available_from_datetime=available_since,
-                    base_asset_decimals=resolve_evm_token_decimals(collateral),
-                )
-            )
+            results.extend(self._build_market_records(market, venue_tag, self._chain, available_since))
 
         logger.info(
-            "Venus: fetched %d lending market instruments on %s",
+            "Venus: fetched %d supply/debt instruments on %s",
             len(results),
             self._chain,
         )
         return results
+
+    @staticmethod
+    def _build_market_records(
+        market: dict[str, str],
+        venue_tag: str,
+        chain: str,
+        available_since: datetime,
+    ) -> list[InstrumentRecord]:
+        """Build the A_TOKEN (supply) + DEBT_TOKEN (borrow) pair for one curated vToken market.
+
+        Mirrors ``aave_v3.py``'s ``_build_reserve_records`` split: the
+        collateral asset deposited is the supply-side instrument, the
+        borrow asset drawn against it is the debt-side instrument. Both
+        share the market's on-chain identity (address, decimals,
+        available-since).
+        """
+        collateral = market["collateral_asset"]
+        borrow = market["borrow_asset"]
+        address = market["vault_address"]
+        pair_symbol = f"{collateral}-{borrow}"
+
+        base_kwargs = {
+            "venue": venue_tag,
+            "raw_symbol": address,
+            "pool_address": address,
+            "base_asset": collateral,
+            "quote_asset": borrow,
+            "tick_size": Decimal("0.000001"),
+            "min_size": Decimal("0.000001"),
+            "contract_size": Decimal("1"),
+            "expiry": None,
+            "strike": None,
+            "option_type": None,
+            "status": InstrumentStatus.ACTIVE,
+            "available_from_datetime": available_since,
+            "base_asset_decimals": resolve_evm_token_decimals(collateral),
+        }
+
+        return [
+            InstrumentRecord(
+                instrument_key=build_canonical_instrument_id(
+                    AssetGroup.DEFI,
+                    "venus",
+                    InstrumentType.A_TOKEN,
+                    f"A{pair_symbol}",
+                    chain=chain,
+                    passthrough=True,
+                ),
+                instrument_type=InstrumentType.A_TOKEN,
+                **base_kwargs,
+            ),
+            InstrumentRecord(
+                instrument_key=build_canonical_instrument_id(
+                    AssetGroup.DEFI,
+                    "venus",
+                    InstrumentType.DEBT_TOKEN,
+                    f"DEBT{pair_symbol}",
+                    chain=chain,
+                    passthrough=True,
+                ),
+                instrument_type=InstrumentType.DEBT_TOKEN,
+                **base_kwargs,
+            ),
+        ]
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single instrument by identifier."""

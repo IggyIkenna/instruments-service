@@ -1,7 +1,9 @@
 """Sanctum reference data adapter — instrument discovery for Sanctum LST marketplace.
 
 Discovers Sanctum-native liquid staking tokens (LSTs) on Solana.
-Tokens are returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Tokens are returned as InstrumentRecord with instrument_type="LST" (fixed
+2026-07-09 — key/field mismatch, same class as PERP-vs-PERPETUAL; see
+`lido.py`'s module docstring for the full rationale).
 
 Pure static-registry adapter: get_instruments returns a hardcoded catalogue of
 Sanctum-listed LSTs with active TVL. No network access required. Tests are
@@ -25,6 +27,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -105,7 +108,7 @@ class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Sanctum LST tokens as yield-bearing instruments."""
-        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
+        if instrument_type not in (None, InstrumentType.LST, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -118,10 +121,15 @@ class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
 
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:LST:{symbol}",
+                    # Routed through the shared canonical builder (2026-07-09 retrofit,
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
+                    # no output change.
+                    instrument_key=build_canonical_instrument_id(
+                        AssetGroup.DEFI, venue_tag, InstrumentType.LST, symbol, passthrough=True
+                    ),
                     venue=venue_tag,
                     raw_symbol=mint,
-                    instrument_type=InstrumentType.YIELD_BEARING,
+                    instrument_type=InstrumentType.LST,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000000001"),

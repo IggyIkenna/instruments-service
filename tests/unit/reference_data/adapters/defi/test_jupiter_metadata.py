@@ -46,7 +46,11 @@ def test_build_pair_record_sol_usdc() -> None:
     assert record is not None
     assert isinstance(record, InstrumentRecord)
     assert record.venue == "JUPITER-SOLANA"
-    assert record.instrument_key == "JUPITER-SOLANA:SPOT:SOL-USDC"
+    # 2026-07-09: key's TYPE segment fixed from the non-canonical `SPOT`
+    # shorthand to the real `SPOT_PAIR` InstrumentType, matching the field
+    # below (C4 key/field consistency fix — same class as the on-chain-perp
+    # PERP-vs-PERPETUAL canonicalization).
+    assert record.instrument_key == "JUPITER-SOLANA:SPOT_PAIR:SOL-USDC"
     assert record.raw_symbol == "SOL/USDC"
     assert record.instrument_type == InstrumentType.SPOT_PAIR
     assert record.base_asset == "SOL"
@@ -63,7 +67,7 @@ def test_build_pair_record_jitosol_usdc() -> None:
     assert record is not None
     assert record.base_asset == "JITOSOL"
     assert record.quote_asset == "USDC"
-    assert record.instrument_key == "JUPITER-SOLANA:SPOT:JITOSOL-USDC"
+    assert record.instrument_key == "JUPITER-SOLANA:SPOT_PAIR:JITOSOL-USDC"
 
 
 def test_build_pair_record_msol_sol() -> None:

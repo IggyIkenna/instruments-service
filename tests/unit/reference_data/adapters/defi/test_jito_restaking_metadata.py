@@ -38,7 +38,11 @@ async def test_get_instruments_yields_vault_records() -> None:
     for rec in records:
         assert isinstance(rec, InstrumentRecord)
         assert rec.venue == "JITORESTAKING-SOLANA"
-        assert rec.instrument_key.startswith("JITORESTAKING-SOLANA:VAULT:")
+        # 2026-07-09: key's TYPE segment fixed from the non-canonical `VAULT`
+        # shorthand to the real `YIELD_BEARING` InstrumentType, matching the
+        # field below (C4 key/field consistency fix — see karak.py's module
+        # docstring for the general rationale).
+        assert rec.instrument_key.startswith("JITORESTAKING-SOLANA:YIELD_BEARING:")
         assert rec.instrument_type == InstrumentType.YIELD_BEARING
         assert rec.status == InstrumentStatus.ACTIVE
         assert rec.available_from_datetime == _EXPECTED_DEPLOY_DATE
@@ -64,7 +68,7 @@ async def test_get_instrument_lookup() -> None:
     by_addr = await adapter.get_instrument(_EZSOL_MINT)
     by_symbol = await adapter.get_instrument("JTORK-EZSOL")
     assert by_addr is not None and by_symbol is not None
-    assert by_addr.instrument_key == by_symbol.instrument_key == "JITORESTAKING-SOLANA:VAULT:JTORK-EZSOL"
+    assert by_addr.instrument_key == by_symbol.instrument_key == "JITORESTAKING-SOLANA:YIELD_BEARING:JTORK-EZSOL"
     assert await adapter.get_instrument("NOPE") is None
 
 
