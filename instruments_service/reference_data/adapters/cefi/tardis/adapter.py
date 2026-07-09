@@ -103,7 +103,6 @@ _DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset(
         "binance-futures",
         "okex-futures",
         "okex-swap",
-        "huobi-dm",
         "bitfinex-derivatives",
         "bitget-futures",
         "cryptofacilities",  # Kraken Futures (Tardis legacy id) — derivatives only
