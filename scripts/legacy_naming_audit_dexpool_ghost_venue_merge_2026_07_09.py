@@ -94,7 +94,12 @@ For each (bucket, ghost_venue, day):
   2. BACKUP both real pre-migration objects (server-side copy, no egress) under
      ``_migration_backup/legacy_naming_audit_dexpool_2026_07_09/<run_id>/...``
      in the destination (``-prd-``) bucket, before any write.
-  3. Compute the column-union schema; row-union keyed by the first present
+  3. Relabel EVERY ghost row's columns to the canonical venue spelling
+     (``_rewrite_ghost_venue_columns`` — exact-match cells like ``venue`` and
+     ``<ghost_venue>:``-prefixed cells like ``instrument_key`` are rewritten to
+     canonical) BEFORE any dedup/concat, so a surviving ghost-only row never
+     carries the stale spelling in its DATA, only its (already-fixed) GCS path.
+     Compute the column-union schema; row-union keyed by the first present
      identity column (``raw_symbol`` else ``pool_address`` else ``instrument_key``),
      canonical row wins on conflict, ghost-only rows carried over with the
      canonical-only columns filled ``None`` (honest absence, not fabricated).
@@ -109,6 +114,23 @@ For each (bucket, ghost_venue, day):
 
 Idempotent: re-running finds 0 ghost objects once complete (the ghost venue
 prefix is empty).
+
+## Contamination bug + fix (2026-07-09, same-day follow-up)
+
+An adversarial verification pass on the FIRST shipped version of this script
+(``instruments-service@11192be2``) found ``_merge_frames`` fixed the GCS *path*
+but never rewrote a surviving ghost-only row's own ``venue``/``instrument_key``
+COLUMN values — e.g. ``instrument_key='AAVEV3-OPTIMISM:A_TOKEN:ALINK'`` (no
+underscore) lived on inside an otherwise-canonical-path parquet. Fixed here via
+``_rewrite_ghost_venue_columns`` (generic over every column, not hardcoded to
+those two names) called at the top of ``_merge_frames`` before any
+dedup/concat. The already-run first pass's real remediation (targeted re-read
++ in-place fix of every already-migrated canonical object, backup-first, same
+safety pattern as this script) is
+``scripts/legacy_naming_audit_dexpool_ghost_venue_contamination_remediation_2026_07_09.py``
+— see that script + the Progress Log in
+``unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md``
+for real before/after remediation counts.
 
 Usage::
 
@@ -228,8 +250,71 @@ def _read_parquet(bucket: storage.Bucket, path: str) -> pd.DataFrame | None:
     return pd.read_parquet(BytesIO(data))
 
 
-def _merge_frames(ghost_df: pd.DataFrame, canon_df: pd.DataFrame | None) -> pd.DataFrame:
-    """Column-union + row-union (canonical wins on conflict), never drops a real row."""
+def _rewrite_ghost_value(v: object, ghost_venue: str, ghost_prefix: str, canon_venue: str) -> object:
+    """Rewrite a single scalar cell if it embeds the ghost venue spelling.
+
+    An exact match (the ``venue`` column convention, e.g. ``AAVEV3-OPTIMISM``) is
+    replaced outright; a ``<ghost_venue>:`` prefix (the ``instrument_key``
+    convention, e.g. ``AAVEV3-OPTIMISM:A_TOKEN:ALINK``) is rewritten to
+    ``<canon_venue>:`` preserving the suffix. Non-string values (None/NaN/floats/
+    etc.) pass through untouched — never coerced to a string.
+    """
+    if not isinstance(v, str):
+        return v
+    if v == ghost_venue:
+        return canon_venue
+    if v.startswith(ghost_prefix):
+        return canon_venue + ":" + v[len(ghost_prefix) :]
+    return v
+
+
+def _rewrite_ghost_venue_columns(df: pd.DataFrame, ghost_venue: str, canon_venue: str) -> pd.DataFrame:
+    """Rewrite EVERY column value that embeds the ghost venue spelling to canonical.
+
+    Real per-row contamination finding (2026-07-09 adversarial verification of
+    this migration's first shipped version, ``instruments-service@11192be2``):
+    the original ``_merge_frames`` moved a ghost-only row's GCS *path* to the
+    canonical venue but never touched the *data inside* the row, so
+    ``venue='AAVEV3-OPTIMISM'`` and ``instrument_key='AAVEV3-OPTIMISM:A_TOKEN:
+    ALINK'`` (no underscore) survived the merge verbatim — any downstream reader
+    that filters/joins on the COLUMN value (not the GCS path) would silently
+    miss or mis-bucket these specific rows.
+
+    Generic over every object-dtype column (not hardcoded to ``venue``/
+    ``instrument_key``) so any other column following the same "bare venue" or
+    "``<venue>:``-prefixed" convention is covered without a future code change
+    (a real byte-level check of the 51-column production schema found only
+    ``venue`` and ``instrument_key`` actually embed it, but this does not
+    special-case those two names). Must run BEFORE any row is merged/
+    concatenated into the canonical frame — a row later dropped as a
+    canonical-side duplicate never needed rewriting, but every row that
+    survives into the merged output must never carry the ghost spelling in ANY
+    column.
+    """
+    if df.empty or ghost_venue == canon_venue:
+        return df
+    out = df.copy()
+    ghost_prefix = f"{ghost_venue}:"
+    for col in out.columns:
+        if out[col].dtype != object:
+            continue
+        out[col] = out[col].map(lambda v: _rewrite_ghost_value(v, ghost_venue, ghost_prefix, canon_venue))
+    return out
+
+
+def _merge_frames(
+    ghost_df: pd.DataFrame, canon_df: pd.DataFrame | None, ghost_venue: str, canon_venue: str
+) -> pd.DataFrame:
+    """Column-union + row-union (canonical wins on conflict), never drops a real row.
+
+    ``ghost_df`` is relabeled to the canonical venue spelling in every column
+    (not just the GCS path) BEFORE any branch below runs, so a ghost-only row
+    that survives into the merged output (whether via the identity-dedupe
+    branch, the no-shared-identity-column branch, or the pure-orphan
+    ``canon_df is None`` branch) is never written back with a stale
+    ``venue``/``instrument_key`` value.
+    """
+    ghost_df = _rewrite_ghost_venue_columns(ghost_df, ghost_venue, canon_venue)
     if canon_df is None or canon_df.empty:
         return ghost_df.copy()
     id_col = _identity_col(canon_df) or _identity_col(ghost_df)
@@ -272,7 +357,7 @@ def _process_one(
             return MergeResult(bucket_name, ghost_venue, canon_venue, day, False, 0, 0, 0, "ghost object vanished")
         canon_df = _read_parquet(dst_bucket, canon_path)
         canon_rows_before = 0 if canon_df is None else len(canon_df)
-        merged = _merge_frames(ghost_df, canon_df)
+        merged = _merge_frames(ghost_df, canon_df, ghost_venue, canon_venue)
 
         if not apply:
             return MergeResult(
