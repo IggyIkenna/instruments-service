@@ -25,6 +25,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, cast
 
 import aiohttp
+import pydantic
 from unified_api_contracts import VenueMapping
 from unified_api_contracts.internal import InstrumentType, OptionType
 
@@ -745,6 +746,21 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         # Kraken Futures symbol format: FI_XBTUSD_240329 → parse YYMMDD from last underscore segment
         if expiry is None and "_" in raw_id:
             expiry = _tardis._parse_underscore_yymmdd_symbol_expiry(raw_id)
+        # Bybit legacy coin-margined quarterly, no-dash CME-month-code shape:
+        # BTCUSDH22 → last Friday of the contract month (Bybit's real
+        # quarterly settlement day — see _parse_bybit_month_code_expiry's
+        # docstring for the cross-check against the 42 already-resolvable
+        # siblings). The currently-active contracts of this shape (e.g.
+        # BTCUSDU26/Z26, ETHUSDU26/Z26) have no availableTo yet to fall back
+        # to above, so without this branch they resolve expiry=None →
+        # InstrumentRecord(FUTURE) raises pydantic.ValidationError, which
+        # previously took down the ENTIRE Bybit fetch (real regression,
+        # live-verified 2026-07-09; see the per-item try/except added below
+        # around InstrumentRecord construction — the second, independent half
+        # of the fix: shard-level isolation so one bad symbol never again
+        # zeroes a whole venue).
+        if expiry is None and exchange == "bybit":
+            expiry = _tardis._parse_bybit_month_code_expiry(raw_id)
 
         strike, opt_type = _tardis._resolve_option_fields(item, instrument_type, raw_id)
 
@@ -821,23 +837,42 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             if not legs:
                 return None
 
-        return _tardis.InstrumentRecord(
-            instrument_key=instrument_key,
-            venue=canonical_venue,
-            raw_symbol=raw_id,
-            instrument_type=instrument_type,
-            base_asset=base,
-            quote_asset=quote,
-            tick_size=tick_size if not is_combo else None,
-            min_size=min_size if not is_combo else None,
-            contract_size=contract_size if not is_combo else None,
-            expiry=expiry,
-            strike=strike if not is_combo else None,
-            option_type=opt_type if not is_combo else None,
-            underlying=underlying,
-            legs=legs,
-            margin_type=margin_type,
-            available_from_datetime=available_since_dt,
-            available_to_datetime=available_to_dt,
-            timezone="UTC",
-        )
+        # Per-item isolation: a single symbol that slips past every guard
+        # above (e.g. a schema edge case the fallback chains don't cover yet)
+        # must never take down the whole venue fetch — pydantic.ValidationError
+        # here is the same class of failure as the empty-quote guard earlier
+        # in this function, just one step later (at construction time instead
+        # of pre-construction). Real regression 2026-07-09: a missing Bybit
+        # expiry-fallback branch let exactly this happen — one bad symbol's
+        # ValidationError propagated unguarded out of this per-item parse and
+        # zeroed the ENTIRE Bybit venue. Skip the one symbol, keep the venue's
+        # universe (shard-level isolation).
+        try:
+            return _tardis.InstrumentRecord(
+                instrument_key=instrument_key,
+                venue=canonical_venue,
+                raw_symbol=raw_id,
+                instrument_type=instrument_type,
+                base_asset=base,
+                quote_asset=quote,
+                tick_size=tick_size if not is_combo else None,
+                min_size=min_size if not is_combo else None,
+                contract_size=contract_size if not is_combo else None,
+                expiry=expiry,
+                strike=strike if not is_combo else None,
+                option_type=opt_type if not is_combo else None,
+                underlying=underlying,
+                legs=legs,
+                margin_type=margin_type,
+                available_from_datetime=available_since_dt,
+                available_to_datetime=available_to_dt,
+                timezone="UTC",
+            )
+        except pydantic.ValidationError as exc:
+            _tardis.logger.warning(
+                "Tardis %s: skipping %r — InstrumentRecord construction failed: %s",
+                exchange,
+                raw_id,
+                exc,
+            )
+            return None

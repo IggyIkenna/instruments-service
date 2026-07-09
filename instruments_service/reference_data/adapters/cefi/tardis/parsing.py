@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -48,6 +48,7 @@ __all__ = [
     "_infer_margin_type",
     "_margin_marker",
     "_normalize_option_type",
+    "_parse_bybit_month_code_expiry",
     "_parse_ddmmmyy",
     "_parse_deribit_symbol_expiry",
     "_parse_expiry",
@@ -665,6 +666,51 @@ def _split_bybit_symbol(upper_id: str) -> tuple[str, str]:
     if m:
         return m.group(1), "USD"
     return "", ""
+
+
+#: IMM/CME month-code letter → calendar month. Bybit's coin-margined
+#: quarterlies only actually cycle H/M/U/Z (Mar/Jun/Sep/Dec), but the full
+#: IMM set is accepted defensively here too, matching ``_BYBIT_MONTH_CODE_RE``.
+_BYBIT_MONTH_CODE_TO_MONTH: dict[str, int] = {
+    "F": 1,
+    "G": 2,
+    "H": 3,
+    "J": 4,
+    "K": 5,
+    "M": 6,
+    "N": 7,
+    "Q": 8,
+    "U": 9,
+    "V": 10,
+    "X": 11,
+    "Z": 12,
+}
+
+
+def _parse_bybit_month_code_expiry(raw_id: str) -> datetime | None:
+    """Parse expiry from Bybit's no-dash CME-month-code shape: ``BTCUSDH22``.
+
+    Bybit's legacy coin-margined quarterly futures settle on the LAST FRIDAY
+    of the contract month. Convention cross-checked 2026-07-09 against all 42
+    already-resolvable siblings of this shape (``api.tardis.dev/v1/exchanges/
+    bybit``): every one's Tardis ``availableTo`` timestamp lands exactly 1
+    calendar day after this function's computed Friday, with zero exceptions
+    (e.g. ``BTCUSDH22`` → last Friday of Mar-2022 = 2022-03-25,
+    ``availableTo`` = 2022-03-26). Returns UTC midnight of that Friday, or
+    ``None`` when ``raw_id`` doesn't match the shape.
+    """
+    m = _BYBIT_MONTH_CODE_RE.match(raw_id.upper())
+    if not m:
+        return None
+    month = _BYBIT_MONTH_CODE_TO_MONTH.get(m.group(2))
+    if month is None:
+        return None
+    year = 2000 + int(m.group(3))
+    next_month_first = datetime(year + 1, 1, 1, tzinfo=UTC) if month == 12 else datetime(year, month + 1, 1, tzinfo=UTC)
+    last_day_of_month = next_month_first - timedelta(days=1)
+    # Friday=4 under Python's Monday=0 weekday() convention.
+    offset_to_friday = (last_day_of_month.weekday() - 4) % 7
+    return last_day_of_month - timedelta(days=offset_to_friday)
 
 
 def _split_symbol(symbol: str) -> tuple[str, str]:
