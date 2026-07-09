@@ -166,6 +166,26 @@ _RETIRED_SPORTS_DATA_TYPES: frozenset[str] = frozenset(
 # package, so a tiny local frozenset is simpler than a cross-script dependency.
 _SPORTS_LEAGUE_ID_SENTINELS: frozenset[str] = frozenset({"UNKNOWN"})
 
+# instrument_type stamped on sports LEAGUE-grain catalogue rows (mirrors
+# build_instrument_catalogue.SPORTS_LEAGUE_INSTRUMENT_TYPE — duplicated, not
+# imported, matching the _SPORTS_LEAGUE_ID_SENTINELS convention above: these
+# are standalone scripts/ entry points, not an importable package). 2026-07-09:
+# the sports catalogue gained FIXTURE/TEAM/PLAYER-grain rows
+# (build_sports_fixture_team_player_catalogue) alongside the pre-existing
+# LEAGUE-grain rows. _enumerate_v2_sports below MUST filter to this
+# instrument_type — it treats every catalogue row's league_id as a per-league
+# lifecycle window and cross-products it against the full data_types x
+# date_axis to seed expected_unattempted/NOT_LISTED/DELISTED. A fixture row's
+# one-day window (or a team/player row's league_id) is NOT a league lifecycle;
+# letting it through here would both massively fan out the denominator (once
+# per fixture/team/player, not once per league) and fabricate NOT_LISTED/
+# DELISTED cells from a single match's one-day availability window — the exact
+# could-exist-projection inflation `sports_catalog_league_grain_only_scope_2026_07_08.md`
+# warned about, even though the fixture/team/player rows themselves are real
+# observed data (see build_instrument_catalogue.py's module comment above
+# build_sports_fixture_team_player_catalogue for the full architecture note).
+_SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE = "league"
+
 # Full per-instrument present-set columns for cefi / defi / prediction.
 _DEFAULT_PRESENT_COLS: list[str] = [
     "venue",
@@ -1937,6 +1957,11 @@ def _enumerate_v2_sports(
         entity_coverage[dt] = frozenset(x.upper() for x in _ec) if _ec is not None else None
 
     for instr in catalog:
+        if instr.instrument_type != _SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE:
+            # FIXTURE/TEAM/PLAYER-grain catalogue row (2026-07-09) — not a
+            # per-league lifecycle window. See _SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE's
+            # docstring for why this MUST be excluded from the loop below.
+            continue
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
         if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
