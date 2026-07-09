@@ -156,7 +156,13 @@ def _make_tradfi_entry(
 
 def _make_sports_entry(
     instrument_id: str = "FIX-1234",
-    instrument_type: str = "FIXTURE",
+    # LEAGUE-grain, matching the real production catalogue (build_instrument_catalogue's
+    # SPORTS_LEAGUE_INSTRUMENT_TYPE = "league") and the enumerator's own
+    # _SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE filter added 2026-07-09 alongside the
+    # sports catalogue's new FIXTURE/TEAM/PLAYER-grain rows — _enumerate_v2_sports
+    # now skips any non-"league" instrument_type, so every existing per-league
+    # lifecycle test below relies on this default matching that filter.
+    instrument_type: str = enumerator_module._SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE,
     venue: str = "api_football",
     league_id: str = "PL",
     available_from: str | None = "2024-01-10",
@@ -868,6 +874,63 @@ def test_sports_v2_sentinel_league_id_never_emits_rows() -> None:
     )
     assert all(r.league_id != "UNKNOWN" for r in rows)
     assert any(r.league_id == "PL" for r in rows)
+
+
+def test_sports_v2_fixture_team_player_grain_rows_never_treated_as_leagues() -> None:
+    """Regression (2026-07-09): FIXTURE/TEAM/PLAYER-grain catalogue rows must be
+    invisible to the LEAGUE-grain enumeration loop.
+
+    The sports catalogue gained real fixture/team/player-grain rows
+    (build_instrument_catalogue.build_sports_fixture_team_player_catalogue)
+    alongside the pre-existing league-grain rows in the SAME catalog.parquet.
+    _enumerate_v2_sports treats every catalog entry's league_id as a per-league
+    lifecycle window and cross-products it against data_types x date_axis — if a
+    fixture row (a single day's availability window) or a team/player row (whose
+    league_id is a real Prediction league, same as a genuine league row) leaked
+    through, it would fabricate NOT_LISTED/DELISTED/expected_unattempted rows
+    from a non-league lifecycle, multiplying the denominator once per fixture/
+    team/player instead of once per league — exactly the could-exist-projection
+    inflation `sports_catalog_league_grain_only_scope_2026_07_08.md` warned
+    about. A real sibling LEAGUE row in the same call must still emit normally.
+    """
+    # All four entries share league_id="PL" and an available_from on/after
+    # 2024-01-10 — each, if leaked through as if it were a league, would
+    # independently emit an EXPECTED_INSTRUMENT_NOT_LISTED row for the
+    # 2024-01-05 pre-listing date (available_from > 2024-01-05). Only
+    # real_league is a genuine "league"-grain row, so with the filter working
+    # exactly ONE NOT_LISTED row is emitted total; without it, FOUR (one per
+    # entry) — the sharpest possible discriminator for this regression.
+    fixture = _make_sports_entry(
+        instrument_id="ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20240111",
+        instrument_type="fixture",
+        league_id="PL",
+        available_from="2024-01-11",
+        available_to="2024-01-11",
+    )
+    team = _make_sports_entry(
+        instrument_id="ARSENAL",
+        instrument_type="team",
+        league_id="PL",
+        available_from="2024-01-11",
+        available_to=None,
+    )
+    player = _make_sports_entry(
+        instrument_id="SAKA_B",
+        instrument_type="player",
+        league_id="PL",
+        available_from="2024-01-11",
+        available_to=None,
+    )
+    real_league = _make_sports_entry(league_id="PL", available_from="2024-01-10", available_to="2024-01-15")
+    rows = list(
+        enumerator_module._enumerate_v2_sports(
+            [fixture, team, player, real_league], _date_axis("2024-01-05", "2024-01-12"), ["lineups"]
+        )
+    )
+    not_listed = [r for r in rows if r.reason == "EXPECTED_INSTRUMENT_NOT_LISTED"]
+    assert len(not_listed) == 1, f"fixture/team/player rows leaked into league-grain enumeration: {rows!r}"
+    assert not_listed[0].league_id == "PL"
+    assert not_listed[0].date == "2024-01-05"
 
 
 # ---------------------------------------------------------------------------
