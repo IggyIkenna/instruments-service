@@ -208,26 +208,72 @@ follow-up already tracked for every canonical-id migration in this doc, not a co
 All 5 on-chain-perp adapters live under `reference_data/adapters/cefi/` (not `defi/`) organizationally, despite being
 economically on-chain perpetual DEXes — a real filing quirk worth knowing when hunting for the code.
 
-Canonical format: `VENUE:PERPETUAL:BASE-QUOTE` uniformly (no `PERP` shorthand in the key, matching the
-`instrument_type=InstrumentType.PERPETUAL` field), with the real per-venue settlement currency as the quote:
+Canonical format: `VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV` uniformly (no `PERP` shorthand in the key, matching the
+`instrument_type=InstrumentType.PERPETUAL` field), with the real per-venue settlement currency as the quote and a real
+`@LIN`/`@INV` margin marker as a trailing suffix (2026-07-09 scope-expansion of the finding 1 dated-derivative margin
+marker to PERPETUAL — a venue's quote currency alone cannot disclose margin type, e.g. Kraken-Futures has both a
+linear and an inverse PERPETUAL quoted in the same `USD`):
 
-| Venue               | Settlement currency (quote)                                                     |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `HYPERLIQUID`       | USD (notional quote; vault collateral is USDC)                                  |
-| `ASTER`             | Per-symbol real `quoteAsset` (USDT/USD1/"U" depending on symbol, not hardcoded) |
-| `PACIFICA-SOLANA`   | USDC                                                                            |
-| `EXTENDED-STARKNET` | USD (`collateralAssetName="USD"` uniformly across markets)                      |
-| `LIGHTER-ZKSYNC`    | USDC                                                                            |
+| Venue               | Settlement currency (quote)                                                     | Margin type (verification)                                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HYPERLIQUID`       | USD (notional quote; vault collateral is USDC)                                  | `@LIN` — `hyperliquid.gitbook.io/hyperliquid-docs/trading/contract-specifications`: "Instrument type \| Linear perpetual" (venue's own explicit classification).              |
+| `ASTER`             | Per-symbol real `quoteAsset` (USDT/USD1/"U" depending on symbol, not hardcoded) | `@LIN` — `docs.asterdex.com`: perpetuals "fully settled in USDT"; live `exchangeInfo` shows 100% stablecoin `quoteAsset` across all 509 real perps, zero coin-margined pairs. |
+| `PACIFICA-SOLANA`   | USDC                                                                            | `@LIN` — real web research 2026-07-09: "Pacifica's core product is linear perpetual contracts", consistent with the already-confirmed USDC unified margin.                    |
+| `EXTENDED-STARKNET` | USD (`collateralAssetName="USD"` uniformly across markets)                      | `@LIN` — `docs.extended.exchange`: "USDC as the base collateral", uniformly USDC-settled markets, no inverse product offered.                                                 |
+| `LIGHTER-ZKSYNC`    | USDC                                                                            | `@LIN` — `docs.lighter.xyz/trading/multi-asset-margin`: "Portfolio Balance is the USDC value of the account" venue-wide (linear, not coin-margined).                          |
+
+None of the 5 on-chain-perp CLOBs offer an inverse (coin-margined) product — structurally consistent with the
+on-chain-perp DEX category as a whole (USD-stablecoin vault/cross-margin, never margined in the base crypto itself).
+The marker is embedded directly in the `symbol` argument passed to the shared UAC builder
+(`build_instrument_id(venue, InstrumentType.PERPETUAL, f"{base}-{quote}@{marker}")` — `_build_cefi_simple` upper-cases
+the symbol verbatim, so no UAC-side builder change was needed) rather than derived by the builder itself.
 
 `HYPERLIQUID`/`ASTER` carry no chain suffix (each is effectively its own app-chain — `chain="HYPERLIQUID"` lives in
 the instrument's `chain` attribute, not the venue token), while `PACIFICA-SOLANA`/`EXTENDED-STARKNET`/`LIGHTER-ZKSYNC`
 carry an explicit chain suffix in the venue itself. **No trailing `@VENUE`** on top — venue is already the first
 colon-segment.
 
-**Known gap, data state (not verifiable from code)**: a dry-run-scoped migration script
-(`migrate_onchain_perp_perpetual_canonical_2026_07_08.py` in market-tick-data-service, dry-run by default, requires
-`--apply` to mutate) exists to bring historical batch tick-data GCS objects and the availability manifest onto this
-key shape; whether `--apply` has been run against production is a live-data question the code cannot answer. See
+**Known gap, data state (real, verified 2026-07-09 — narrower than a naive read of the migration script suggests)**:
+`migrate_onchain_perp_perpetual_canonical_2026_07_08.py` in market-tick-data-service (dry-run by default, requires
+`--apply` to mutate) combines the PERP→PERPETUAL rename with the `@LIN` margin marker in one pass so historical rows
+are touched once. Its real scope, confirmed live against the production `market-data-tick-cefi-prd` bucket + the
+availability manifest:
+
+- **Manifest** (`_index/availability_index.parquet`, 7,219,598 total rows): 498,388 HL/ASTER `batch_hyperliquid`/
+  `batch_aster` rows carry a `:PERP:`-shaped `instrument_id`; 100% of them (`instrument_ids_transformed=498388`,
+  `not_in_scope_shape_skipped=0`) transform cleanly to `VENUE:PERPETUAL:BASE-QUOTE@LIN` with 0 dedup collisions — this
+  half of the migration is real, fast (~2.5 min end-to-end on the real manifest), and unconditionally correct
+  regardless of the GCS-side finding below.
+- **GCS objects — real, more limited scope than the manifest's `capture_status=captured` count (19,435 rows) implies.**
+  A real object only gets renamed if its _filename_ (not the manifest's `instrument_id` cell) matches the script's
+  `{VENUE}:PERP:{SYMBOL}.parquet` regex. Spot-checking real objects across multiple real dates (narrow, scoped
+  `list_blobs` prefix reads — not a whole-corpus walk) found the REAL persisted filenames are a mix of at least 3
+  historical shapes, and the dominant shape for HL and ASTER `derivative_ticker` is an EVEN OLDER bare form the
+  `2026-06-22` precedent migration (`migrate_onchain_perp_canonical_instrument_id.py`) was supposed to have already
+  eliminated but apparently didn't for these slices:
+  - HL `book_snapshot_5`/`derivative_ticker` (9,063 + 9,293 = 18,356 captured manifest rows): real filenames are bare
+    `{SYMBOL}-PERP.parquet` (e.g. `AAVE-PERP.parquet`) on every sampled date (`2024-02-23`, `2024-03-13`,
+    `2025-01-05`) — **not** matched by the migration script's regex, so these are silently `skipped_not_in_scope` by
+    a `--apply` run, not renamed.
+  - ASTER `derivative_ticker` (899 captured manifest rows): real filenames are the raw concatenated exchange symbol
+    with no venue/type wrapper at all (e.g. `AAVEUSDT.parquet`) on every sampled date (`2024-08-01`, `2024-09-15`) —
+    also unmatched, also silently skipped.
+  - ASTER `trades` (180 captured manifest rows): real filenames ARE mostly in the script's target `ASTER:PERP:
+{SYMBOL}.parquet` shape (confirmed both sampled dates) — this slice IS what the migration's GCS-rename phase can
+    actually find and fix. **Real, verified smoke test** (3 production objects, `2024-08-01`, backed by the
+    copy-then-delete idempotent pattern): `ASTER:PERP:ADAUSDT.parquet` → `ASTER:PERPETUAL:ADA-USDT@LIN.parquet`,
+    same for `AVAXUSDT`/`BNBUSDT` — all 3 verified correct post-rename (source gone, target present). Real measured
+    throughput: ~3.3s/object sequential (2 describes + 1 copy + 1 delete per object); with the script's default
+    32-worker pool this slice (~180 objects) is a sub-minute operation.
+  - **Net real ETA for `--apply`**: manifest rewrite ~3 min (proven) + GCS rename well under 1 min for the ~180
+    real matched objects — but this leaves the ~19,255 HL + ASTER-`derivative_ticker` real objects (99% of the
+    "captured" count) in their pre-existing bare-symbol shape, NOT renamed, despite their manifest `instrument_id`
+    cell now reading the new canonical form. This manifest/GCS-filename divergence is a real, separate, pre-existing
+    gap (predates this pass) recommended for its own dedicated follow-up — extending the migration's shape-matching to
+    also parse venue from the object's PATH (not just the filename) so it can recognize the bare `{SYMBOL}[-PERP]`
+    forms too.
+
+See
 [`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`](../../../unified-trading-pm/plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md).
 
 ### AAVE_V3-OPTIMISM venue-token spelling

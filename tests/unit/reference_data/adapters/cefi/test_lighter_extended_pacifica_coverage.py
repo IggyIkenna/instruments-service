@@ -87,11 +87,14 @@ class TestLighterAdapter:
         assert syms == {"BTC-USDC", "ETH-USDC"}
         assert all(r.instrument_type == InstrumentType.PERPETUAL for r in results)
         assert all(r.settle_asset == "USDC" for r in results)
-        # Canonical instrument_id VENUE:PERPETUAL:BASE-QUOTE, routed through the
+        # Canonical instrument_id VENUE:PERPETUAL:BASE-QUOTE@LIN, routed through the
         # shared UAC builder (2026-07-09 retrofit, canonical_id_builder_retrofit_
-        # checklist_2026_07_08.md todo 4) — byte-identical to the prior f-string.
+        # checklist_2026_07_08.md todo 4). 2026-07-09 (same day, later) —
+        # PERPETUAL scope-expansion added the real @LIN margin marker (LIGHTER
+        # confirmed linear-margined: docs.lighter.xyz/trading/multi-asset-margin
+        # states "Portfolio Balance is the USDC value of the account" venue-wide).
         keys = {r.instrument_key for r in results}
-        assert keys == {"LIGHTER-ZKSYNC:PERPETUAL:BTC-USDC", "LIGHTER-ZKSYNC:PERPETUAL:ETH-USDC"}
+        assert keys == {"LIGHTER-ZKSYNC:PERPETUAL:BTC-USDC@LIN", "LIGHTER-ZKSYNC:PERPETUAL:ETH-USDC@LIN"}
 
     @pytest.mark.asyncio
     async def test_get_instruments_non_dict_response(self) -> None:
@@ -257,12 +260,15 @@ class TestExtendedAdapter:
 
         assert len(results) == 2
         assert all(r.instrument_type == InstrumentType.PERPETUAL for r in results)
-        # Canonical instrument_id VENUE:PERPETUAL:SYMBOL, routed through the shared
-        # UAC builder (2026-07-09 retrofit, canonical_id_builder_retrofit_checklist_
-        # 2026_07_08.md todo 4) — byte-identical to the prior f-string. Extended's
-        # symbol is already dash-normalized ("BTC-USD"), passed straight through.
+        # Canonical instrument_id VENUE:PERPETUAL:SYMBOL@LIN, routed through the
+        # shared UAC builder (2026-07-09 retrofit, canonical_id_builder_retrofit_
+        # checklist_2026_07_08.md todo 4). Extended's symbol is already
+        # dash-normalized ("BTC-USD"), passed straight through. 2026-07-09 (same
+        # day, later) — PERPETUAL scope-expansion added the real @LIN margin
+        # marker (EXTENDED confirmed linear-margined: docs.extended.exchange
+        # states "USDC as the base collateral", uniformly USDC-settled markets).
         keys = {r.instrument_key for r in results}
-        assert keys == {"EXTENDED-STARKNET:PERPETUAL:BTC-USD", "EXTENDED-STARKNET:PERPETUAL:ETH-USD"}
+        assert keys == {"EXTENDED-STARKNET:PERPETUAL:BTC-USD@LIN", "EXTENDED-STARKNET:PERPETUAL:ETH-USD@LIN"}
 
     @pytest.mark.asyncio
     async def test_get_instruments_empty_active_falls_back(self) -> None:
@@ -423,11 +429,15 @@ class TestPacificaAdapter:
         assert len(results) == len(_PACIFICA_TOP_COINS)
         assert all(r.instrument_type == InstrumentType.PERPETUAL for r in results)
         assert all(r.venue == "PACIFICA-SOLANA" for r in results)
-        # Canonical instrument_id VENUE:PERPETUAL:BASE-QUOTE, routed through the
+        # Canonical instrument_id VENUE:PERPETUAL:BASE-QUOTE@LIN, routed through the
         # shared UAC builder (2026-07-09 retrofit, canonical_id_builder_retrofit_
-        # checklist_2026_07_08.md todo 4) — byte-identical to the prior f-string.
+        # checklist_2026_07_08.md todo 4). 2026-07-09 (same day, later) —
+        # PERPETUAL scope-expansion added the real @LIN margin marker (PACIFICA
+        # confirmed linear-margined: real web research 2026-07-09, "Pacifica's
+        # core product is linear perpetual contracts", consistent with the
+        # already-confirmed USDC unified margin).
         btc = next(r for r in results if r.base_asset == "BTC")
-        assert btc.instrument_key == "PACIFICA-SOLANA:PERPETUAL:BTC-USDC"
+        assert btc.instrument_key == "PACIFICA-SOLANA:PERPETUAL:BTC-USDC@LIN"
 
     @pytest.mark.asyncio
     async def test_get_instruments_perpetual_type_filter(self) -> None:

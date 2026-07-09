@@ -29,14 +29,16 @@ class TestHyperliquidAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_instrument_key_is_canonical(self) -> None:
-        """instrument_key is VENUE:PERPETUAL:BASE-QUOTE via the shared builder.
+        """instrument_key is VENUE:PERPETUAL:BASE-QUOTE@LIN via the shared builder.
 
         2026-07-09 DRY retrofit (canonical_id_builder_retrofit_checklist_2026_07_08.md
         todo 4) routed the ad hoc f-string through
-        ``unified_api_contracts.internal.reference.canonical_id_builder.build_instrument_id``
-        — this asserts the real adapter output is byte-identical to the prior
-        f-string construction (no behavior change expected). The per-coin funding-date
-        probe is patched out directly (bounded-concurrent HTTP fan-out, orthogonal to
+        ``unified_api_contracts.internal.reference.canonical_id_builder.build_instrument_id``.
+        2026-07-09 (same day, later) — PERPETUAL scope-expansion added the real
+        @LIN margin marker (HYPERLIQUID confirmed linear-margined via
+        hyperliquid.gitbook.io/hyperliquid-docs/trading/contract-specifications:
+        "Instrument type | Linear perpetual"). The per-coin funding-date probe is
+        patched out directly (bounded-concurrent HTTP fan-out, orthogonal to
         instrument_key construction) so the test stays fast and deterministic.
         """
         adapter = HyperliquidReferenceDataAdapter()
@@ -58,7 +60,7 @@ class TestHyperliquidAdapter:
         ):
             results = await adapter.get_instruments()
         assert len(results) == 1
-        assert results[0].instrument_key == "HYPERLIQUID:PERPETUAL:BTC-USD"
+        assert results[0].instrument_key == "HYPERLIQUID:PERPETUAL:BTC-USD@LIN"
 
     def test_parse_hl_candle_uses_close_edge_close_field(self) -> None:
         """_parse_hl_candle must stamp the T (close-time ms) field, not t (open-time ms).
