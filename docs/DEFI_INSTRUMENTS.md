@@ -102,43 +102,73 @@ migrated in production data. Full detail, decision rationale, and open todos:
      `build_instrument_catalogue.py::_fee_from_instrument_key()` preferring the (buggy, pre-fix) legacy
      `instrument_key`'s raw fee token over the already-correct bps `pool_fee_tier` field.
 
-  **Smoke-tested 2026-07-09 (dry-run only, no writes)**: a pure in-place string rewrite of `glued_pair_id` — using
-  the catalogue's own `venue`/`chain` columns (already correct) plus the existing `glued_pair_id`'s pair/fee segments
-  — against **all 6,352 real POOL rows across the 13 protocols** in live `prod/catalog.parquet`: **100% (6,352/6,352)
-  parsed and transformed to the exact target grammar, 0 failures, 0 grammar mismatches**, in 0.11s in-memory
-  (~59,400 rows/sec for the transform itself; a real write-back is a single-parquet-file GCS read+write, not a
-  per-row operation, so end-to-end ETA for all 13 protocols is well under 1 minute). This is safe to ship
-  independently of the `instrument_id`/MTDS question above — `glued_pair_id` has no external consumers today (grepped
-  the full workspace: only `build_instrument_catalogue.py` and the Balancer collision backfill script read it; no UI
-  or other service joins on it yet). Real row count grew from the 2026-07-08 finding's snapshot (6,180 → 6,352, +172
-  rows in the intervening day from ongoing backfill) — re-check counts before any real write, this catalogue is a
-  live, moving target. Real per-protocol row counts + parse results (2026-07-09, all 13/13 protocols spot-checked,
-  100% parse success on every protocol):
+  **WRITTEN BACK FOR REAL 2026-07-09** (was: smoke-tested dry-run only, same day). The dry-run smoke test (a pure
+  in-place string rewrite of `glued_pair_id` using the catalogue's own `venue`/`chain` columns plus the existing
+  `glued_pair_id`'s pair/fee segments) confirmed 100% (6,352/6,352) parse success with 0 grammar mismatches; the real
+  write-back ran the identical transform for real via
+  `scripts/dex_pool_glued_pair_id_canonicalize_2026_07_09.py --apply --confirm`: downloaded live
+  `prod/catalog.parquet` (7,888 total rows, re-verified in-scope POOL count still 6,352 across the 13 protocols — no
+  drift since the smoke test earlier the same day), wrote a full pre-write backup
+  (`prod/catalog.20260709-112522.gluedpairfix.bak.parquet`), rewrote `glued_pair_id` for all 6,352 in-scope rows
+  (6,332 actually changed, 20 already-canonical CURVE rows left byte-identical — idempotent no-op on those), and
+  **independently re-downloaded the written blob from GCS afterward** to verify: row count unchanged (7,888),
+  0 remaining ghost venue-prefixes, 0 remaining colon-before-fee delimiters, 6,352/6,352 in-scope `glued_pair_id`
+  values match the target grammar (`VENUE-CHAIN:POOL:BASE-QUOTE[-FEE_BPS]`), and `instrument_id` confirmed
+  byte-for-byte **unchanged** (still `pool_address.lower()`, 0 rows with a `:` in `instrument_id`) — the MTDS join
+  key was deliberately not touched (see the migration-blocker note below). This is safe to ship independently of the
+  `instrument_id`/MTDS question above — `glued_pair_id` has no external consumers today (grepped the full workspace:
+  only `build_instrument_catalogue.py` and the Balancer collision backfill script read it; no UI or other service
+  joins on it yet). Real per-protocol row counts + write-back results (2026-07-09):
 
-  | Protocol              | Real POOL rows (2026-07-09) | `glued_pair_id` rewrite result                                   |
-  | --------------------- | --------------------------- | ---------------------------------------------------------------- |
-  | BALANCER              | 2,423                       | 2,423/2,423 ok                                                   |
-  | UNISWAP_V3            | 2,192                       | 2,192/2,192 ok                                                   |
-  | PANCAKESWAP_V3        | 614                         | 614/614 ok                                                       |
-  | UNISWAP_V4            | 413                         | 413/413 ok                                                       |
-  | TRADER_JOE_V2         | 304                         | 304/304 ok                                                       |
-  | SUSHISWAP_V3          | 122                         | 122/122 ok                                                       |
-  | VELODROME_V2          | 96                          | 96/96 ok                                                         |
-  | AERODROME_V3          | 76                          | 76/76 ok                                                         |
-  | CAMELOT_V3            | 63                          | 63/63 ok                                                         |
-  | UNISWAP_V2            | 24                          | 24/24 ok (no fee segment — V2 has none, correctly absent)        |
-  | CURVE                 | 20                          | 20/20 ok (no fee segment — Curve exposes none, correctly absent) |
-  | SUSHISWAP (legacy V2) | 4                           | 4/4 ok                                                           |
-  | GMX                   | 1                           | 1/1 ok                                                           |
-  | **Total**             | **6,352**                   | **6,352/6,352 ok (100%)**                                        |
+  | Protocol              | Real POOL rows (2026-07-09) | `glued_pair_id` write-back result                                   |
+  | --------------------- | --------------------------- | ------------------------------------------------------------------- |
+  | BALANCER              | 2,423                       | 2,423/2,423 rewritten, verified                                     |
+  | UNISWAP_V3            | 2,192                       | 2,192/2,192 rewritten, verified                                     |
+  | PANCAKESWAP_V3        | 614                         | 614/614 rewritten, verified                                         |
+  | UNISWAP_V4            | 413                         | 413/413 rewritten, verified                                         |
+  | TRADER_JOE_V2         | 304                         | 304/304 rewritten, verified                                         |
+  | SUSHISWAP_V3          | 122                         | 122/122 rewritten, verified                                         |
+  | VELODROME_V2          | 96                          | 96/96 rewritten, verified                                           |
+  | AERODROME_V3          | 76                          | 76/76 rewritten, verified                                           |
+  | CAMELOT_V3            | 63                          | 63/63 rewritten, verified                                           |
+  | UNISWAP_V2            | 24                          | 24/24 rewritten, verified (no fee segment — V2 has none)            |
+  | CURVE                 | 20                          | 20/20 already-canonical, 0 changed (no fee segment — Curve none)    |
+  | SUSHISWAP (legacy V2) | 4                           | 4/4 rewritten, verified                                             |
+  | GMX                   | 1                           | 1/1 rewritten, verified                                             |
+  | **Total**             | **6,352**                   | **6,352/6,352 verified canonical (100%), 6,332 changed / 20 no-op** |
 
-  (Old row-count baseline for comparison, 2026-07-08: 6,180. UNISWAP_V3 alone grew 2,030 → 2,192 in the intervening
-  day — ongoing backfill, not a discrepancy in either count.)
-  live, moving target.
+  Example before → after (real rows, spot-checked post-write): `UNISWAPV3-ARBITRUM:POOL:SOL-WETH:500` →
+  `UNISWAP_V3-ARBITRUM:POOL:SOL-WETH-5`; `BALANCER-ARBITRUM:POOL:DAI-USDT:30` (already-bps, colon-only bug) →
+  `BALANCER-ARBITRUM:POOL:DAI-USDT-30`; `CURVE-AVALANCHE:POOL:DAI.E-USDC` unchanged (no fee segment, prefix already
+  canonical). (Row-count history: 6,180 on 2026-07-08 → 6,352 on 2026-07-09, both smoke-test and real write-back —
+  ongoing backfill grew the population between the two dates but it was stable within 2026-07-09 itself between the
+  smoke test and the real write a few hours later.) Idempotent — re-running the script against the now-canonical
+  catalog reports 0 rewrites (dry-run-verified). Script kept in `scripts/` per its own `Delete-when:` marker (delete
+  once a re-run shows 0 remaining mismatches AND the `instrument_id` migration below lands, at which point
+  `glued_pair_id` becomes redundant).
 
-- **Known gap, data state (not verifiable from code)**: whether `glued_pair_id`'s 3 format bugs above have been
-  fixed in the live production catalog, and whether the `instrument_id`/MTDS migration has been authorized and
-  executed, are live-data/live-decision questions, not code facts — see the migration doc above for current status.
+- **`instrument_id` catalogue regeneration — CONFIRMED STILL BLOCKED 2026-07-09, not attempted.** Re-checked both
+  halves of the blocker for real before deciding not to touch `instrument_id`: (1)
+  `market-tick-data-service/market_tick_data_service/engine/defi_catalog_reader.py` still reads `instrument_id`
+  directly off this exact catalogue expecting `pool_address.lower()` for POOL rows (its own fallback deriver
+  `_canonical_defi_id` independently recomputes the identical bare-address value) to build its expected-universe
+  join for DEX swap/pool market data — confirmed live in the current MTDS tree, not stale; (2)
+  `build_instrument_catalogue.py::_defi_pool_dual_form()` still unconditionally sets `instrument_id =
+pool_address.lower()` for every POOL row by design (the catalogue rollup step, not the adapter) — a regen/backfill
+  alone, even against the now-fixed adapter code, would still write the bare address. So this is **not** a bounded,
+  safely-scriptable regeneration the way `glued_pair_id` was: flipping `instrument_id` to the structured
+  `VENUE-CHAIN:POOL:...` form for POOL rows requires a coordinated MTDS-side change shipped in lockstep (MTDS's
+  reader + its `_canonical_defi_id` fallback both need the new shape at the same time `instrument_id` changes, or the
+  live DEX swap/pool market-data join breaks for all 13 protocols simultaneously) plus an explicit operator
+  go-ahead for that cross-repo, live-breakage-authorized migration — exactly the class of change
+  `instrument_id_format_canonicalization_2026_07_08.md`'s already-scoped "ground-up migration (UAC →
+  instruments-service → MTDS → strategy-service → deployment)" exists for. **Not run in this pass** — the real,
+  precise blocker (not a guess) is: no MTDS-side companion change exists yet, and none was authorized for this pass.
+  `glued_pair_id` (now canonical, see above) is the safe interim substitute for any human-readable/UI consumer until
+  that cross-repo migration ships.
+
+- **Known gap, data state**: the `instrument_id`/MTDS cross-repo migration above remains the only unresolved piece
+  of finding 2 — see the migration doc above for current status and the dedicated todo.
 
 ### Lending — A_TOKEN/DEBT_TOKEN split (from `defi_lending_atoken_debttoken_instrument_split_2026_07_07.md`)
 
