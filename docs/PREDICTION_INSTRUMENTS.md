@@ -149,6 +149,62 @@ wrapped shape):
   than bundled into this fix — a future caller passing a bare `condition_id` would need `get_instrument()` updated
   to also match the wrapped suffix.
 
+### MTDS raw-tick layer — batch writer fix + historical migration (2026-07-09)
+
+The wrap above is instruments-service's own reference-data catalog (`instrument_key`). A SEPARATE, real gap existed
+one layer down in `market-tick-data-service`'s raw trade-tick storage (the parquet files under
+`market-data-tick-pred-prd-{project_id}`): the **live** Kalshi/Polymarket WS connectors already wrote the wrapped
+`VENUE:PREDICTION_MARKET:{raw_id}` shape as the on-disk filename (verified via real 2026-06-28 GCS listing), but
+**batch** writes did not — a real, previously-undocumented batch/live divergence found by a dedicated discovery
+pass over this exact venue family:
+
+| Write path                           | Filename (before)                                          | Filename (after fix)                                   | `instrument_type` (before) | `instrument_type` (after)       |
+| ------------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------ | -------------------------- | ------------------------------- |
+| Kalshi batch (`trades`)              | `{ticker}.parquet` (no `instrument_id` col)                | `KALSHI:PREDICTION_MARKET:{ticker}.parquet`            | `prediction`               | `prediction_market`             |
+| Polymarket batch (`trades`)          | `{condition_id}.parquet`                                   | `POLYMARKET:PREDICTION_MARKET:{condition_id}.parquet`  | `prediction_market`        | `prediction_market` (unchanged) |
+| Both venues, live (WS)               | already `VENUE:PREDICTION_MARKET:{id}.parquet`             | unchanged — already compliant                          | `prediction_market`        | `prediction_market` (unchanged) |
+| Both venues, batch `book_snapshot_5` | shared `ticks.parquet` fan-in (no per-instrument filename) | unchanged — out of scope (no per-row `symbol` to wrap) | `prediction_market`        | `prediction_market` (unchanged) |
+
+Fix (stops new drift): `kalshi_adapter.py::_annotate_kalshi_ticker()` now stamps a wrapped `instrument_id` column
+and unifies `instrument_type` to `prediction_market` (matching the UAC SSOT builder's own default,
+`build_prediction_partition_path(instrument_type="prediction_market")`, and Polymarket batch + both live
+connectors — Kalshi batch's `prediction` value was drift, not a deliberate distinct value).
+`partitioned_writer.py::PartitionedTickWriter._get_writer()` gained a `file_symbol` param
+(`_resolve_file_symbol()`) that substitutes the wrapped `instrument_id` for the on-disk filename ONLY — verbatim,
+not run through MTDS's own colon-stripping `_sanitize_symbol()`, so batch now matches live's real GCS-verified
+shape byte-for-byte. The writer KEY / row-count / manifest market_id tracking stay on the bare ticker/condition_id
+(untouched) so Polymarket `book_snapshot_5`'s pre-existing shared-`ticks.parquet` fan-in (no per-row `symbol`) is
+unaffected. `ingest_kalshi_bulk_to_canonical.py` (the Jon-Becker deep-history seed script, which reuses
+`_annotate_kalshi_ticker` directly) updated in lockstep. `rebuild_prediction_manifest.py`'s `compute_object_atom`
+now also prefers a real `ticker` column over the parquet filename stem as the Kalshi market id (previously the
+ONLY fallback for Kalshi, since Kalshi objects carry no `conditionId`/`condition_id` column) — decouples the
+manifest rebuild from whatever the raw-tick filename happens to be.
+
+**Historical migration** (`market-tick-data-service/market_tick_data_service/scripts/`
+`migrate_prediction_instrument_id_wrap_2026_07_09.py`) — real, GCS-verified scope from a full day-sharded scan of
+the live bucket `market-data-tick-pred-prd-central-element-323112` (1,836 `day=` partitions, 2021-06-30 through
+2026-07-09, 2,730,659 total prediction objects listed):
+
+| Venue      | Legacy `trades` objects needing migration | Transform                                                                                                                        |
+| ---------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| KALSHI     | 1,552,991                                 | Real content rewrite (download, add/fix `instrument_id` + `instrument_type` columns, re-upload) + directory move + filename wrap |
+| POLYMARKET | 1,140,056                                 | Real content rewrite (download, add/fix `instrument_id` column, re-upload) + filename wrap                                       |
+
+A real smoke-apply on 2025-08-15 (both venues) found Polymarket's assumed "already has a correct `instrument_id`
+column, pure server-side rename suffices" premise was WRONG for ~53% of a real day's objects (pre-dating the
+`instrument_id` stamp landing in `_annotate_cid_dataframe`) — real post-write sample verification caught this
+(14/30 failed), so Polymarket's migration was corrected to also content-rewrite (derive `instrument_id` from the
+always-present `condition_id`/`conditionId` column), matching Kalshi's approach, not left as a partial fix.
+Backup-safe by construction: every object is COPIED to its new canonical key, never overwritten in place — the
+pre-migration original at its OLD key is the de-facto backup until a separate, explicit, irreversible
+`--drop-legacy` pass (never bundled with the first apply, mirroring `migrate_prediction_to_pred_prd_v9.py`'s own
+`--drop-stale` precedent). Real day-sharded, 5-way parallel apply launched 2026-07-09 (`--workers 64` per shard,
+GCS storage-client HTTP connection pool boosted to match — the default `requests` pool size of 10 caused severe
+thread contention/thrashing at high worker counts, a real measured finding: workers=128 was SLOWER than workers=32
+before the fix); real measured throughput ~15-30 objects/sec per shard once warmed up. Given the real corpus size,
+full completion is a multi-hour (not multi-minute) operation — see the migration script's own docstring and the
+tracked plan's Progress Log for the real elapsed time and final counts once complete.
+
 Both adapters still classify a market into a canonical _shape_ for other fields, but **only Polymarket's
 classification result ever reaches a canonical-looking field** (`base_asset`) — and even there, not the one that
 matters most. See "Canonical identity model" below before assuming either venue's `base_asset` is structured.
