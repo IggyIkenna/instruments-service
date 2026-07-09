@@ -2045,9 +2045,16 @@ class TestMorphoAdapter:
         }
         with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(market_data)):
             results = await adapter.get_instruments()
-        assert len(results) == 1
+        # One market → one A_TOKEN (supply) + one DEBT_TOKEN (borrow) pair.
+        assert len(results) == 2
+        assert results[0].instrument_type == InstrumentType.A_TOKEN
         assert results[0].base_asset == "WETH"
         assert results[0].quote_asset == "USDC"
+        assert results[0].instrument_key == "MORPHO-ETHEREUM:A_TOKEN:AWETH-USDC-0xmarket"
+        assert results[1].instrument_type == InstrumentType.DEBT_TOKEN
+        assert results[1].base_asset == "WETH"
+        assert results[1].quote_asset == "USDC"
+        assert results[1].instrument_key == "MORPHO-ETHEREUM:DEBT_TOKEN:DEBTWETH-USDC-0xmarket"
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
@@ -2096,46 +2103,55 @@ class TestMorphoAdapter:
         ):
             await adapter.get_instruments()
 
-    def test_market_to_record_valid(self) -> None:
+    def test_market_to_records_valid(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
-        record = MorphoReferenceDataAdapter._market_to_record(
+        records = MorphoReferenceDataAdapter._market_to_records(
             {
                 "marketId": "0xkey123456",
                 "loanAsset": {"symbol": "USDC", "decimals": 6},
                 "collateralAsset": {"symbol": "WETH", "decimals": 18},
             },
             "MORPHO-ETHEREUM",
+            "ETHEREUM",
         )
-        assert record is not None
-        assert record.base_asset == "WETH"
+        # A_TOKEN (supply) + DEBT_TOKEN (borrow) pair for the one market.
+        assert len(records) == 2
+        a_token, debt_token = records
+        assert a_token.instrument_type == InstrumentType.A_TOKEN
+        assert a_token.base_asset == "WETH"
+        assert debt_token.instrument_type == InstrumentType.DEBT_TOKEN
+        assert debt_token.base_asset == "WETH"
 
-    def test_market_to_record_missing_loan_asset(self) -> None:
+    def test_market_to_records_missing_loan_asset(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
-        record = MorphoReferenceDataAdapter._market_to_record(
+        records = MorphoReferenceDataAdapter._market_to_records(
             {"marketId": "0xkey", "loanAsset": "not_dict", "collateralAsset": {"symbol": "WETH"}},
             "MORPHO-ETHEREUM",
+            "ETHEREUM",
         )
-        assert record is None
+        assert records == []
 
-    def test_market_to_record_missing_collateral_symbol(self) -> None:
+    def test_market_to_records_missing_collateral_symbol(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
-        record = MorphoReferenceDataAdapter._market_to_record(
+        records = MorphoReferenceDataAdapter._market_to_records(
             {"marketId": "0xkey", "loanAsset": {"symbol": "USDC"}, "collateralAsset": {"symbol": ""}},
             "MORPHO-ETHEREUM",
+            "ETHEREUM",
         )
-        assert record is None
+        assert records == []
 
-    def test_market_to_record_missing_key(self) -> None:
+    def test_market_to_records_missing_key(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
-        record = MorphoReferenceDataAdapter._market_to_record(
+        records = MorphoReferenceDataAdapter._market_to_records(
             {"marketId": "", "loanAsset": {"symbol": "USDC"}, "collateralAsset": {"symbol": "WETH"}},
             "MORPHO-ETHEREUM",
+            "ETHEREUM",
         )
-        assert record is None
+        assert records == []
 
 
 # ── BalancerReferenceDataAdapter ──────────────────────────────────────────────
@@ -2546,8 +2562,10 @@ class TestFluidAdapter:
             return_value={},
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 6  # 6 curated markets
-        assert all(r.instrument_type == InstrumentType.LENDING for r in results)
+        # 6 curated markets, each an A_TOKEN (supply) + DEBT_TOKEN (borrow) pair.
+        assert len(results) == 12
+        assert all(r.instrument_type in (InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN) for r in results)
+        assert {r.instrument_type for r in results} == {InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN}
 
     @pytest.mark.asyncio
     async def test_get_instruments_with_creation_timestamps(self) -> None:
@@ -2560,11 +2578,12 @@ class TestFluidAdapter:
             return_value=ts_map,
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 6
-        # First market has vault address matching our mock
+        assert len(results) == 12
+        # First market has vault address matching our mock — its A_TOKEN + DEBT_TOKEN pair
+        # both inherit the resolved creation timestamp.
         eth_usdc = [r for r in results if r.base_asset == "ETH" and r.quote_asset == "USDC"]
-        assert len(eth_usdc) == 1
-        assert eth_usdc[0].available_from_datetime == datetime(2024, 10, 1, tzinfo=UTC)
+        assert len(eth_usdc) == 2
+        assert all(r.available_from_datetime == datetime(2024, 10, 1, tzinfo=UTC) for r in eth_usdc)
 
 
 # ── EigenLayerReferenceDataAdapter ────────────────────────────────────────────

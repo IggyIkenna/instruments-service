@@ -90,6 +90,10 @@ _SOLANA_DEFI_VENUES: list[str] = [
     "MARINADE-SOLANA",
     "JITO-SOLANA",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
+    # MarginFi + Solend Solana lending adapters (2026-07-09) — real public
+    # REST/JSON APIs, now IS-producible (marginfi.py / solend.py).
+    "MARGINFI-SOLANA",
+    "SOLEND-SOLANA",
 ]
 # NOTE: PACIFICA-SOLANA / LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp
 # CLOBs classified as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, same as HYPERLIQUID/

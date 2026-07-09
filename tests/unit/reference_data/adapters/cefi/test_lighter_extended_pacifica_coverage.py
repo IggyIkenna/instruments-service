@@ -87,6 +87,11 @@ class TestLighterAdapter:
         assert syms == {"BTC-USDC", "ETH-USDC"}
         assert all(r.instrument_type == InstrumentType.PERPETUAL for r in results)
         assert all(r.settle_asset == "USDC" for r in results)
+        # Canonical instrument_id VENUE:PERPETUAL:BASE-QUOTE, routed through the
+        # shared UAC builder (2026-07-09 retrofit, canonical_id_builder_retrofit_
+        # checklist_2026_07_08.md todo 4) — byte-identical to the prior f-string.
+        keys = {r.instrument_key for r in results}
+        assert keys == {"LIGHTER-ZKSYNC:PERPETUAL:BTC-USDC", "LIGHTER-ZKSYNC:PERPETUAL:ETH-USDC"}
 
     @pytest.mark.asyncio
     async def test_get_instruments_non_dict_response(self) -> None:
@@ -252,6 +257,12 @@ class TestExtendedAdapter:
 
         assert len(results) == 2
         assert all(r.instrument_type == InstrumentType.PERPETUAL for r in results)
+        # Canonical instrument_id VENUE:PERPETUAL:SYMBOL, routed through the shared
+        # UAC builder (2026-07-09 retrofit, canonical_id_builder_retrofit_checklist_
+        # 2026_07_08.md todo 4) — byte-identical to the prior f-string. Extended's
+        # symbol is already dash-normalized ("BTC-USD"), passed straight through.
+        keys = {r.instrument_key for r in results}
+        assert keys == {"EXTENDED-STARKNET:PERPETUAL:BTC-USD", "EXTENDED-STARKNET:PERPETUAL:ETH-USD"}
 
     @pytest.mark.asyncio
     async def test_get_instruments_empty_active_falls_back(self) -> None:
@@ -308,9 +319,9 @@ class TestExtendedAdapter:
         # the emit (not just patching it) locks it against the lint-sweep
         # regression class (deleted contract calls) at the TEST level, not only
         # the count baseline.
-        assert any(
-            call.args and call.args[0] == "ADAPTER_FETCH_FAILED" for call in mock_log_event.call_args_list
-        ), "ClientError on /info/markets must emit ADAPTER_FETCH_FAILED"
+        assert any(call.args and call.args[0] == "ADAPTER_FETCH_FAILED" for call in mock_log_event.call_args_list), (
+            "ClientError on /info/markets must emit ADAPTER_FETCH_FAILED"
+        )
 
     @pytest.mark.asyncio
     async def test_get_instruments_runtime_error_uses_fallback(self) -> None:
@@ -412,6 +423,11 @@ class TestPacificaAdapter:
         assert len(results) == len(_PACIFICA_TOP_COINS)
         assert all(r.instrument_type == InstrumentType.PERPETUAL for r in results)
         assert all(r.venue == "PACIFICA-SOLANA" for r in results)
+        # Canonical instrument_id VENUE:PERPETUAL:BASE-QUOTE, routed through the
+        # shared UAC builder (2026-07-09 retrofit, canonical_id_builder_retrofit_
+        # checklist_2026_07_08.md todo 4) — byte-identical to the prior f-string.
+        btc = next(r for r in results if r.base_asset == "BTC")
+        assert btc.instrument_key == "PACIFICA-SOLANA:PERPETUAL:BTC-USDC"
 
     @pytest.mark.asyncio
     async def test_get_instruments_perpetual_type_filter(self) -> None:

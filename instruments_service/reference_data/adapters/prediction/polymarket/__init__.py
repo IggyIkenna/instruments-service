@@ -42,7 +42,9 @@ if TYPE_CHECKING:
 
 import aiohttp as aiohttp
 from unified_api_contracts import (
+    AssetGroup,
     PolymarketGammaMarket,
+    build_canonical_instrument_id,
     classify_venue_error,
 )
 from unified_api_contracts.external.polymarket import (
@@ -50,7 +52,7 @@ from unified_api_contracts.external.polymarket import (
     get_canonical_league_for_polymarket_series,
     get_canonical_team_for_polymarket,
 )
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentType
 from unified_api_contracts.prediction import (
     PredictionMarketMapper,
 )
@@ -140,6 +142,7 @@ __all__ = [
     "_QUESTION_SUFFIX",
     "_SINGLE_TEAM_PATTERN",
     "_VS_PATTERN",
+    "AssetGroup",
     "BaseReferenceDataAdapter",
     "CanonicalExpiryCalendar",
     "CanonicalOptionsChain",
@@ -148,6 +151,7 @@ __all__ = [
     "Decimal",
     "FundingRateRef",
     "InstrumentRecord",
+    "InstrumentType",
     "MarketLifecycle",
     "OHLCVRef",
     "PolymarketClobMixin",
@@ -170,6 +174,7 @@ __all__ = [
     "_selection_from_outcomes",
     "adapter",
     "aiohttp",
+    "build_canonical_instrument_id",
     "build_crypto_prediction_id",
     "build_macro_prediction_id",
     "build_prediction_instrument_id",

@@ -1,7 +1,7 @@
 {
   "asset_group": "defi",
-  "captured_at": "2026-07-06",
-  "tuple_count": 171,
+  "captured_at": "2026-07-09",
+  "tuple_count": 173,
   "tuples": [
     ["AAVE_V3-ARBITRUM", "lending", "flash_loan_events"],
     ["AAVE_V3-ARBITRUM", "lending", "lending_indices"],
@@ -118,6 +118,7 @@
     ["LIDO-ETHEREUM", "yield_bearing", "oracle_prices"],
     ["LIDO-ETHEREUM", "yield_bearing", "rewards"],
     ["LIDO-ETHEREUM", "yield_bearing", "staking_yields"],
+    ["MARGINFI-SOLANA", "lending", "lending_indices"],
     ["MARINADE-SOLANA", "staking", "lst_rates"],
     ["MARINADE-SOLANA", "staking", "oracle_prices"],
     ["MORPHO-BASE", "lending", "lending_indices"],
@@ -140,6 +141,7 @@
     ["PANCAKESWAP_V3-ETHEREUM", "pool", "dex_pool_swaps"],
     ["RAYDIUM-SOLANA", "pool", "dex_pool_state"],
     ["RAYDIUM-SOLANA", "pool", "dex_pool_swaps"],
+    ["SOLEND-SOLANA", "lending", "lending_indices"],
     ["SPARK-ETHEREUM", "lending", "lending_indices"],
     ["SPARK-ETHEREUM", "lending", "liquidations"],
     ["SPARK-ETHEREUM", "lending", "risk_params"],

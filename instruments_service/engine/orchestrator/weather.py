@@ -135,6 +135,7 @@ async def _fetch_weather_data(
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
                 source="open_meteo",
             )
+        manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -154,6 +155,7 @@ async def _fetch_weather_data(
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
                 source="open_meteo",
             )
+        manifest.write()
         return counts
 
     # UAC venue coordinates: SCREAMING_SNAKE keys → (lat, lon)

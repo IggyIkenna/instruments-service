@@ -257,6 +257,31 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         }
 
         # Supply instrument (lend base asset)
+        # NOTE (2026-07-09 audit, C4 / B1 review): the `:SUPPLY:`/`:BORROW:` key
+        # segments below don't match the uniform `instrument_type=LENDING` field
+        # (base_kwargs), which fits the general key-vs-field mismatch pattern —
+        # but this pair is INTENTIONALLY left as an ad hoc f-string, not routed
+        # through build_canonical_instrument_id / collapsed to LENDING:
+        #   - SUPPLY vs BORROW is real, load-bearing information (two distinct
+        #     economic legs of a Comet market), unlike the VAULT/PERP/SPOT
+        #     shorthands fixed elsewhere — collapsing both to one `:LENDING:`
+        #     segment would erase that distinction from the key (symbol still
+        #     disambiguates via supply_symbol/borrow_symbol, but the type axis
+        #     would not).
+        #   - `build_canonical_instrument_id` cannot represent SUPPLY/BORROW as
+        #     a TYPE segment today — neither is a real `InstrumentType` member.
+        #   - Explicitly flagged as a "do not blindly map" case in
+        #     canonical_id_builder_retrofit_checklist_2026_07_08.md todo 2, and
+        #     already verified NOT a real bug (field is consistently LENDING,
+        #     no crash) per
+        #     instruments_docs_audit_outstanding_items_2026_07_08.md §G.
+        #   - test_defi_adapters_comprehensive.py::TestCompoundV3Adapter asserts
+        #     "SUPPLY"/"BORROW" literally appear in instrument_key — collapsing
+        #     to LENDING would also be a live test-contract change, not a
+        #     no-op.
+        # Left as-is pending an explicit A_TOKEN/DEBT_TOKEN-style enum decision
+        # (out of scope for this pass — see defi_lending_atoken_debttoken_
+        # instrument_split_2026_07_07.md for the sibling protocols' real split).
         supply_symbol = f"C{sym_upper}"
         results = [
             InstrumentRecord(

@@ -448,8 +448,15 @@ async def _run(args: argparse.Namespace) -> int:
             n_fixtures_this_pair,
         )
 
-    # Final flush — write the per-VM manifest shard to GCS.
-    manifest.flush()
+    # Guaranteed drain BEFORE the coroutine returns, not via atexit: atexit's
+    # process_final=True drain (which close() also performs) races the asyncio
+    # event loop's own executor teardown ("cannot schedule new futures after
+    # interpreter shutdown"), silently dropping buffered writes. flush() alone
+    # does NOT force the per-VM shard rewrite (only close()/atexit do) — call
+    # close() explicitly here, while the loop is still alive, so the per-VM
+    # shard write for this script's run is never left to the racy atexit path.
+    # See plans/active/issues/manifest_atexit_drain_races_asyncio_shutdown_2026_07_09.md.
+    manifest.close()
     logger.info(
         "Recovery complete: %d (league, season) pairs processed, %d days written, %d fixtures written, %d failed pairs",
         total,

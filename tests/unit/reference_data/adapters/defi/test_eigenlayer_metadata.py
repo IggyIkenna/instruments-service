@@ -15,6 +15,7 @@ Plan: instruments_service_metadata_refactor_2026_04_29 Phase 2c.
 from __future__ import annotations
 
 import pytest
+from unified_api_contracts.internal import InstrumentType
 
 from instruments_service.reference_data.adapters.defi.eigenlayer import (
     EigenLayerReferenceDataAdapter,
@@ -65,7 +66,14 @@ class TestEigenLayerMetadataRoundTrip:
 
     @pytest.mark.asyncio
     async def test_eigen_record_canonical_identity_unchanged(self) -> None:
-        """Phase 2c is metadata-only — pre-existing identity fields MUST be untouched."""
+        """Phase 2c is metadata-only — pre-existing identity fields MUST be untouched.
+
+        Exception (2026-07-09, C4): `instrument_key`'s TYPE segment was fixed
+        from the non-canonical `GOVERNANCE_TOKEN` shorthand to the real
+        `SPOT_PAIR` InstrumentType, matching the `instrument_type` field
+        (see karak.py's module docstring for the general key/field
+        consistency rationale). Every other identity field is unchanged.
+        """
         adapter = EigenLayerReferenceDataAdapter()
 
         results = await adapter.get_instruments()
@@ -73,28 +81,35 @@ class TestEigenLayerMetadataRoundTrip:
         assert len(results) == 1
         record = results[0]
 
-        assert record.instrument_key == "EIGENLAYER-ETHEREUM:GOVERNANCE_TOKEN:EIGEN"
+        assert record.instrument_key == "EIGENLAYER-ETHEREUM:SPOT_PAIR:EIGEN"
         assert record.venue == "EIGENLAYER-ETHEREUM"
         assert record.raw_symbol == "0xec53bF9167f50cDEB3Ae105f56099aaaB9061F83"
         assert record.base_asset == "EIGEN"
         assert record.quote_asset == "ETH"
         assert record.underlying == "ETH"
+        assert record.instrument_type == InstrumentType.SPOT_PAIR
 
     @pytest.mark.asyncio
     async def test_eigen_record_filters_on_instrument_type(self) -> None:
         """Filtering by instrument_type='SPOT_PAIR' or unrelated value should still work."""
         adapter = EigenLayerReferenceDataAdapter()
 
-        # Whitelisted filter values: None, 'GOVERNANCE_TOKEN', 'governance_token'.
+        # Whitelisted filter values: None, InstrumentType.SPOT_PAIR (the real
+        # field value, fixed 2026-07-09 — previously silently returned [] on
+        # this canonical-form filter, the same P0 casing-mismatch bug class
+        # as canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08.md),
+        # 'GOVERNANCE_TOKEN', 'governance_token' (legacy back-compat strings).
         results_default = await adapter.get_instruments()
+        results_spot_pair = await adapter.get_instruments(instrument_type=InstrumentType.SPOT_PAIR)
         results_upper = await adapter.get_instruments(instrument_type="GOVERNANCE_TOKEN")
         results_lower = await adapter.get_instruments(instrument_type="governance_token")
 
         assert len(results_default) == 1
+        assert len(results_spot_pair) == 1
         assert len(results_upper) == 1
         assert len(results_lower) == 1
         # Metadata is consistent across all filter modes.
-        for record in (results_default[0], results_upper[0], results_lower[0]):
+        for record in (results_default[0], results_spot_pair[0], results_upper[0], results_lower[0]):
             assert record.base_asset_decimals == 18
             assert record.base_asset_symbol_onchain == "EIGEN"
 

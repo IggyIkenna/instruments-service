@@ -852,6 +852,24 @@ def test_sports_v2_empty_catalog() -> None:
     assert rows == []
 
 
+def test_sports_v2_sentinel_league_id_never_emits_rows() -> None:
+    """Defense-in-depth guard for A1 (2026-07-08/09): a catalog entry whose
+    league_id resolves to a sentinel (e.g. "UNKNOWN") must yield ZERO rows,
+    even though the primary fix (build_instrument_catalogue's roll-up filter)
+    should mean such an entry never reaches this enumerator's catalog in the
+    first place. A real sibling league in the same call must be unaffected.
+    """
+    phantom = _make_sports_entry(
+        instrument_id="UNKNOWN", league_id="UNKNOWN", available_from="2025-12-15", available_to=None
+    )
+    real = _make_sports_entry(league_id="PL", available_from="2024-01-10", available_to="2024-01-15")
+    rows = list(
+        enumerator_module._enumerate_v2_sports([phantom, real], _date_axis("2024-01-05", "2024-01-12"), ["lineups"])
+    )
+    assert all(r.league_id != "UNKNOWN" for r in rows)
+    assert any(r.league_id == "PL" for r in rows)
+
+
 # ---------------------------------------------------------------------------
 # Prediction v2 enumerator tests
 # ---------------------------------------------------------------------------

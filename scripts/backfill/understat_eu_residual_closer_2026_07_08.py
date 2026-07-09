@@ -175,6 +175,17 @@ async def main() -> None:
     else:
         log.warning("=== MAX ROUNDS reached; still %s attempted_failed ===", len(attempted_failed_dates(touched)))
 
+    # Guaranteed drain BEFORE process exit, not via atexit: atexit's
+    # process_final=True drain races the asyncio event loop's own executor
+    # teardown ("cannot schedule new futures after interpreter shutdown"),
+    # silently dropping every write() call after the first per-VM shard
+    # rewrite (diagnosed 2026-07-09 — see
+    # plans/active/issues/manifest_atexit_drain_races_asyncio_shutdown_2026_07_09.md).
+    # Calling the drain explicitly here, while the loop is still alive,
+    # avoids the race for this one-off script.
+    flushed = _mw.flush_all_pending_buckets()
+    log.info("EXPLICIT PRE-EXIT DRAIN: %s", flushed)
+
     remaining = blank_reason_eu_dates()
     log.info("=== UNDERSTAT EU RESIDUAL CLOSER COMPLETE — %s blank-reason date(s) remain ===", len(remaining))
 
