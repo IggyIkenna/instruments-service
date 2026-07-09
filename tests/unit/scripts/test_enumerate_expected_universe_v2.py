@@ -65,8 +65,10 @@ def _drop_v2_venue_grain(rows: list) -> list:
 
     Per-instrument tests in this file assert per-instrument behavior against
     catalogs and don't want the venue-grain pass to leak in (the v1↔v2 parity
-    is asserted separately in
-    ``tests/integration/test_enumerate_v2_superset_property.py``).
+    was verified by ``tests/integration/test_enumerate_v2_superset_property.py``
+    before v1 was retired 2026-07-09 per
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``;
+    that file's job was done once v1 was deleted, so it was removed too).
     """
     return [r for r in rows if r.instrument_id != "" or r.instrument_type != ""]
 
@@ -361,8 +363,10 @@ def test_cefi_v2_pre_venue_launch_beats_instrument_lifecycle() -> None:
 def test_cefi_v2_empty_catalog() -> None:
     """Empty catalog → no per-instrument rows (venue-grain pre-venue-launch pass filtered out).
 
-    Venue-grain PRE_VENUE_LAUNCH sentinel coverage is asserted in
-    ``tests/integration/test_enumerate_v2_superset_property.py``.
+    Venue-grain PRE_VENUE_LAUNCH sentinel coverage (empty-catalog case) was
+    verified against v1's output by
+    ``tests/integration/test_enumerate_v2_superset_property.py`` before that
+    file was retired alongside v1 (2026-07-09).
     """
     rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi([], _date_axis("2024-01-01"), ["ohlcv_1d"])))
     assert rows == []
@@ -472,8 +476,10 @@ def test_defi_v2_pool_seeds_canonical_pool_address_id_and_lowercase_type() -> No
 def test_defi_v2_empty_catalog() -> None:
     """Empty catalog → no per-instrument rows (venue-grain pre-launch pass filtered out).
 
-    Venue-grain PRE_GENESIS_CHAIN / INSTRUMENT_NOT_LISTED sentinel coverage is
-    asserted in ``tests/integration/test_enumerate_v2_superset_property.py``.
+    Venue-grain PRE_GENESIS_CHAIN / INSTRUMENT_NOT_LISTED sentinel coverage
+    (empty-catalog case) was verified against v1's output by
+    ``tests/integration/test_enumerate_v2_superset_property.py`` before that
+    file was retired alongside v1 (2026-07-09).
     """
     rows = _drop_v2_venue_grain(
         list(enumerator_module._enumerate_v2_defi([], _date_axis("2024-01-01"), ["lending_indices"]))
@@ -1063,8 +1069,9 @@ def test_enumerate_v2_empty_catalog_returns_no_rows() -> None:
     EXPECTED_PRE_GENESIS_CHAIN + chain-level gas_fees pre-genesis mirroring
     v1 ``_enumerate_defi`` + ``_enumerate_defi_gas_fees``). Those are filtered
     out here so the assertion stays focused on the per-instrument denominator
-    (the venue-grain <-> v1 parity is asserted separately in
-    ``tests/integration/test_enumerate_v2_superset_property.py``).
+    (the venue-grain <-> v1 parity was verified separately by
+    ``tests/integration/test_enumerate_v2_superset_property.py`` before that
+    file was retired alongside v1 (2026-07-09)).
     """
     for ag in ("cefi", "defi", "tradfi", "sports", "prediction"):
         rows = list(
