@@ -94,6 +94,7 @@ from instruments_service.reference_data.adapters.cefi.tardis.parsing import (
     _QUOTE_CURRENCIES,
     _QUOTE_CURRENCIES_SET,
     _build_canonical_future_key,
+    _build_canonical_option_key,
     _build_canonical_perpetual_key,
     _build_dated_derivative_canonical_symbol,
     _build_perpetual_canonical_symbol,

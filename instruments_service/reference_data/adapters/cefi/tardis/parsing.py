@@ -560,7 +560,7 @@ def _passes_asset_filter(base: str, quote: str, instrument_type: str, venue: str
 
 def _resolve_option_fields(
     item: TardisInstrumentDetail, instrument_type: str, raw_id: str
-) -> tuple[Decimal | None, str | None]:
+) -> tuple[Decimal | None, OptionType | None]:
     """Extract strike price and option type from Tardis item metadata.
 
     Falls back to parsing Deribit-style option symbol names

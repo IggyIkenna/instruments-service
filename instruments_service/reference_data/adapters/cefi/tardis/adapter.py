@@ -773,8 +773,44 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             else Decimal("1")
         )
 
-        # Canonical instrument_key: VENUE:INSTRUMENT_TYPE:BASE-QUOTE
-        instrument_key = f"{canonical_venue}:{instrument_type}:{symbol}"
+        margin_type: MarginType | None = _tardis._infer_margin_type(instrument_type, quote, raw_id, exchange)
+
+        # Canonical instrument_key — the SINGLE shared construction site for
+        # every CeFi venue Tardis covers (instrument_id_format_canonicalization_
+        # 2026_07_08.md finding 1). Margined PERPETUAL/FUTURE/OPTION route
+        # through the shared @LIN/@INV builders built for Bybit/Kraken-Futures/
+        # OKX/Deribit (parsing.py) so this construction — not a per-venue
+        # duplicate — is what every future capture emits. Falls back to the
+        # legacy VENUE:TYPE:BASE-QUOTE / VENUE:TYPE:RAW_ID shape when the
+        # margin_type/expiry/strike/right inputs the target format needs
+        # aren't resolvable (shard-level isolation: degrade, never raise).
+        # Deribit's real target drops the quote segment for dated derivatives
+        # (FUTURE/OPTION) — quote="" — confirmed by test_deribit_canonical_id.py;
+        # every other margined venue keeps it (Bybit/Kraken-Futures/OKX/Binance).
+        instrument_key: str | None = None
+        if instrument_type is InstrumentType.PERPETUAL and margin_type is not None and base and quote:
+            instrument_key = _tardis._build_canonical_perpetual_key(canonical_venue, base, quote, margin_type)
+        elif instrument_type is InstrumentType.FUTURE and margin_type is not None and expiry is not None and base:
+            dated_quote = "" if exchange == "deribit" else quote
+            instrument_key = _tardis._build_canonical_future_key(
+                canonical_venue, base, dated_quote, margin_type, expiry
+            )
+        elif (
+            instrument_type is InstrumentType.OPTION
+            and margin_type is not None
+            and expiry is not None
+            and strike is not None
+            and opt_type is not None
+            and base
+        ):
+            dated_quote = "" if exchange == "deribit" else quote
+            option_right = "C" if opt_type is OptionType.CALL else "P"
+            instrument_key = _tardis._build_canonical_option_key(
+                canonical_venue, base, dated_quote, margin_type, expiry, strike, option_right
+            )
+        if instrument_key is None:
+            instrument_key = f"{canonical_venue}:{instrument_type}:{symbol}"
+
         is_combo = instrument_type == InstrumentType.COMBO
 
         # COMBO instruments: parse real legs from Deribit symbol encoding.
@@ -784,8 +820,6 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             legs = _tardis._parse_deribit_combo_legs(raw_id, canonical_venue)
             if not legs:
                 return None
-
-        margin_type: MarginType | None = _tardis._infer_margin_type(instrument_type, quote, raw_id, exchange)
 
         return _tardis.InstrumentRecord(
             instrument_key=instrument_key,
