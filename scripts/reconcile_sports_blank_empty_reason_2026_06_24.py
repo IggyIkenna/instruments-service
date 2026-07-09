@@ -183,7 +183,9 @@ def _classify(
     return _R_NO_FIXTURE if not has_fixture else _R_SOURCE_ZERO
 
 
-def reconcile(df: pd.DataFrame, fixture_index: set[tuple[str, str]]) -> tuple[pd.DataFrame, pd.Series, dict[str, object]]:
+def reconcile(
+    df: pd.DataFrame, fixture_index: set[tuple[str, str]]
+) -> tuple[pd.DataFrame, pd.Series, dict[str, object]]:
     er = df["error_reason"].astype("string").fillna("").str.strip()
     cs = df["capture_status"].astype("string")
     blank_mask = (cs == "empty_confirmed") & (er == "")
@@ -226,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("DEPLOYMENT_ENV_SHORT must be set (e.g. prd). Refusing — would resolve the stale env-less bucket.")
         return 1
 
-    instance = os.environ.get("VM_NAME", "")
+    instance = os.environ.get("VM_NAME", "")  # noqa: qg-empty-fallback — unset env => `not instance` fails below
     if args.apply and (os.environ.get("MANIFEST_PER_VM_SHARDS") != "true" or not instance):
         logger.error(
             "--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. The typing is written as a "

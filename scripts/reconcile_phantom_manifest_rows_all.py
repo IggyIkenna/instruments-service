@@ -58,7 +58,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pandas as pd
 from unified_api_contracts import canonical_path_templates
@@ -560,12 +560,22 @@ def _build_triage_records(
     """
     records: list[dict] = []
     for _, row in phantom_df.iterrows():
-        venue = str(row.get("venue", "") or "")
-        data_type = str(row.get("data_type", "") or "")
-        date_str = str(row.get("date", "") or "")
-        instrument_id = str(row.get("instrument_id", "") or "")
-        error_reason = str(row.get("error_reason", "") or "")
-        written_at = str(row.get("written_at", row.get("available_at", "")) or "")
+        # This report spans EVERY asset_group (cefi/defi/sports/tradfi/prediction) and
+        # every manifest schema vintage — unlike the DeFi-only helpers above (which
+        # unconditionally bracket-access these same column names because DeFi rows are
+        # schema-homogeneous), a generic cross-asset-group row genuinely may lack any of
+        # these columns (see the `"venue" in phantom_df.columns` guard a few dozen lines
+        # below in main(), which treats venue as legitimately-optional for exactly this
+        # reason). "" is the correct not-present marker for this best-effort triage JSONL
+        # — a human reviews it, no downstream code branches on these fields being non-empty.
+        venue = str(row.get("venue", "") or "")  # noqa: qg-empty-fallback — column may be absent for this asset_group
+        data_type = str(row.get("data_type", "") or "")  # noqa: qg-empty-fallback — column may be absent (cross-AG report)
+        date_str = str(row.get("date", "") or "")  # noqa: qg-empty-fallback — column may be absent (cross-AG report)
+        instrument_id = str(row.get("instrument_id", "") or "")  # noqa: qg-empty-fallback — row-key col defaults to "" by schema design
+        error_reason = str(row.get("error_reason", "") or "")  # noqa: qg-empty-fallback — pre-v8 rows lack this column entirely
+        # "" is the documented available_at sentinel (readers test truthiness, not is-not-None).
+        fallback_ts = row.get("available_at", "")  # noqa: qg-empty-fallback — available_at defaults to "" by schema design
+        written_at = str(row.get("written_at", fallback_ts) or "")
 
         reason = "PHANTOM_NO_PARQUET"
         confidence = "MEDIUM"
@@ -580,7 +590,8 @@ def _build_triage_records(
             recommendation = "accept_expected_gap"
         elif asset_group == "tradfi" and date_str:
             try:
-                dt = datetime.strptime(date_str[:10], "%Y-%m-%d")  # noqa: DTZ007  # date-only parse, no tz needed — weekday check only
+                # date (not datetime) — weekday check only, no tz concept applies to a date-only value.
+                dt = date.fromisoformat(date_str[:10])
                 if dt.weekday() >= 5:  # 5=Saturday, 6=Sunday
                     reason = "PHANTOM_WEEKEND_TRADFI"
                     confidence = "HIGH"
