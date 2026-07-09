@@ -4,6 +4,18 @@ Discovers the ETHFI governance token on Ethereum mainnet. ETHFI is the governanc
 token of the EtherFi protocol. It is distributed as seasonal (quarterly) rewards
 to weETH holders and operators.
 
+Returned as InstrumentRecord with instrument_type=SPOT_PAIR (ETHFI priced against
+its ETH quote asset). The `instrument_key`'s middle TYPE segment matches (fixed
+2026-07-09 — it previously said the shorthand `GOVERNANCE_TOKEN`, which is not a
+real `InstrumentType` enum member, while the field already correctly said
+`SPOT_PAIR`; same class of fix as the LST-vs-VAULT key/field mismatches — see
+`karak.py`'s module docstring for the general rationale). The `get_instruments`
+type-filter guard is fixed alongside it: it previously only matched the literal
+strings `"GOVERNANCE_TOKEN"`/`"governance_token"`, so filtering by the adapter's
+own real canonical `InstrumentType.SPOT_PAIR` value silently returned `[]` — the
+same P0 casing-mismatch bug class as
+`canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08.md`.
+
 Contract address: see ``_ETHFI_ADDRESS`` below (ETHFI on Ethereum mainnet; Etherscan-verified).
 Reference: https://www.ether.fi/
 """
@@ -12,6 +24,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -76,7 +89,7 @@ class EthFiGovernanceReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return ETHFI governance token as an instrument record."""
-        if instrument_type not in (None, "GOVERNANCE_TOKEN", "governance_token"):
+        if instrument_type not in (None, InstrumentType.SPOT_PAIR, "GOVERNANCE_TOKEN", "governance_token"):
             return []
 
         results: list[InstrumentRecord] = []
@@ -89,7 +102,9 @@ class EthFiGovernanceReferenceDataAdapter(BaseReferenceDataAdapter):
 
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:GOVERNANCE_TOKEN:{symbol}",
+                    instrument_key=build_canonical_instrument_id(
+                        AssetGroup.DEFI, venue_tag, InstrumentType.SPOT_PAIR, symbol, passthrough=True
+                    ),
                     venue=venue_tag,
                     raw_symbol=address,
                     instrument_type=InstrumentType.SPOT_PAIR,

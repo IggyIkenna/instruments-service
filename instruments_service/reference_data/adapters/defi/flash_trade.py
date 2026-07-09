@@ -1,7 +1,12 @@
 """Flash Trade reference data adapter — perpetual market discovery.
 
 Discovers Flash Trade perpetual markets on Solana via the Flash Trade REST API.
-Markets are returned as InstrumentRecord with instrument_type=PERPETUAL.
+Markets are returned as InstrumentRecord with instrument_type=PERPETUAL. The
+`instrument_key`'s middle TYPE segment matches (fixed 2026-07-09 — it
+previously said the shorthand `PERP`, which is not a real `InstrumentType`
+enum member (`PERPETUAL` is); same class of fix as the on-chain-perp
+PERP-vs-PERPETUAL canonicalization — see
+`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`).
 
 Data source: Flash Trade API (https://api.flash.trade/api/v1/) — public, no auth required.
 Program ID: FLASH6Lo6h3iasJKWDs2F8TkW2UKf3s15C8PMGuVfgBn
@@ -15,7 +20,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -156,7 +161,11 @@ class FlashTradeReferenceDataAdapter(BaseReferenceDataAdapter):
         base_asset = name.upper().split("-")[0].replace("_PERP", "").replace("/USDC", "")
 
         venue_tag = self.venue
-        instrument_key = f"{venue_tag}:PERP:{base_asset}"
+        # Key/field mismatch fix (2026-07-09, C4) + builder retrofit — TYPE
+        # segment changed PERP -> PERPETUAL to match instrument_type below.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, venue_tag, InstrumentType.PERPETUAL, base_asset, passthrough=True
+        )
 
         tick_size_raw = market.get("tickSize") or market.get("priceIncrement") or "0.0001"
         min_size_raw = market.get("minSize") or market.get("minTradeSize") or "0.001"
