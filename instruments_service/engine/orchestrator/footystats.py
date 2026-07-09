@@ -117,6 +117,7 @@ async def _fetch_footystats_predictions(
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                 source=_orch._sports_ref_source("footystats_predictions"),
             )
+        pred_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -136,6 +137,7 @@ async def _fetch_footystats_predictions(
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                 source=_orch._sports_ref_source("footystats_predictions"),
             )
+        pred_manifest.write()
         return counts
 
     try:
@@ -476,6 +478,7 @@ async def _fetch_footystats_matches(
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                 source=_orch._sports_ref_source("footystats_matches"),
             )
+        _ft_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -495,6 +498,7 @@ async def _fetch_footystats_matches(
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
                 source=_orch._sports_ref_source("footystats_matches"),
             )
+        _ft_manifest.write()
         return counts
 
     try:
