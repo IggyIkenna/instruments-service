@@ -158,7 +158,14 @@ async def process_date(date: str, sem: asyncio.Semaphore, tally: dict, attempts:
                 tally["xg_rows"] += sum(xg.values())
                 tally["shot_rows"] += sum(sh.values())
                 if tally["dates"] % 100 == 0:
-                    log.info("...%s/%s | xg=%s shots=%s raised=%s", tally["dates"], tally["total"], tally["xg_rows"], tally["shot_rows"], tally["raised"])
+                    log.info(
+                        "...%s/%s | xg=%s shots=%s raised=%s",
+                        tally["dates"],
+                        tally["total"],
+                        tally["xg_rows"],
+                        tally["shot_rows"],
+                        tally["raised"],
+                    )
                 return
             except Exception as exc:
                 if attempt < attempts:
@@ -172,11 +179,27 @@ async def run_pass(dates: list[str], conc: int, label: str) -> None:
     tally = {"dates": 0, "xg_rows": 0, "shot_rows": 0, "raised": 0, "total": len(dates)}
     sem = asyncio.Semaphore(conc)
     await asyncio.gather(*(process_date(d, sem, tally) for d in dates))
-    log.info("[%s] processed=%s xg_rows=%s shot_rows=%s raised=%s", label, tally["dates"], tally["xg_rows"], tally["shot_rows"], tally["raised"])
+    log.info(
+        "[%s] processed=%s xg_rows=%s shot_rows=%s raised=%s",
+        label,
+        tally["dates"],
+        tally["xg_rows"],
+        tally["shot_rows"],
+        tally["raised"],
+    )
 
 
 async def main() -> None:
-    log.info("bucket=%s seasons=%s..%s main=%s retry=%s cutoff=%s vm=%s", BUCKET, ARGS.start, ARGS.end, ARGS.main_conc, ARGS.retry_conc, ARGS.cutoff, ARGS.vm_name)
+    log.info(
+        "bucket=%s seasons=%s..%s main=%s retry=%s cutoff=%s vm=%s",
+        BUCKET,
+        ARGS.start,
+        ARGS.end,
+        ARGS.main_conc,
+        ARGS.retry_conc,
+        ARGS.cutoff,
+        ARGS.vm_name,
+    )
     all_dates = enumerate_dates()
     log.info("cache_entries=%s fixture-dates=%s", len(_LEAGUE_MATCH_CACHE), len(all_dates))
     if not all_dates:
@@ -184,7 +207,12 @@ async def main() -> None:
         sys.exit(1)
 
     todo = pending_dates(all_dates)
-    log.info("RESUME: %s/%s dates pending (%s already captured this era)", len(todo), len(all_dates), len(all_dates) - len(todo))
+    log.info(
+        "RESUME: %s/%s dates pending (%s already captured this era)",
+        len(todo),
+        len(all_dates),
+        len(all_dates) - len(todo),
+    )
     if todo:
         await run_pass(todo, ARGS.main_conc, "MAIN")
 
@@ -198,6 +226,15 @@ async def main() -> None:
         await run_pass(failed, ARGS.retry_conc, f"RETRY-{rnd}")
     else:
         log.warning("=== MAX ROUNDS reached; still %s attempted_failed ===", len(attempted_failed_dates()))
+
+    # Guaranteed drain BEFORE process exit, not via atexit: atexit's
+    # process_final=True drain races the asyncio event loop's own executor
+    # teardown ("cannot schedule new futures after interpreter shutdown"),
+    # silently dropping buffered writes. Calling the drain explicitly here,
+    # while the loop is still alive, avoids the race for this one-off script.
+    # See plans/active/issues/manifest_atexit_drain_races_asyncio_shutdown_2026_07_09.md.
+    flushed = _mw.flush_all_pending_buckets()
+    log.info("EXPLICIT PRE-EXIT DRAIN: %s", flushed)
 
     log.info("=== UNDERSTAT BULK BACKFILL COMPLETE ===")
 
