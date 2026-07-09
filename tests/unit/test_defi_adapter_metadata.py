@@ -214,15 +214,22 @@ class TestMorphoMetadataRoundTrip:
         with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(markets_data)):
             results = await adapter.get_instruments()
 
-        assert len(results) == 1
-        record = results[0]
-        # Morpho uses the bytes32 uniqueKey as the canonical pool identifier
-        assert record.pool_address == "0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc"
-        # Collateral = base
-        assert record.base_asset_contract_address == "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
-        assert record.base_asset_decimals == 18
-        assert record.base_asset_symbol_onchain == "WETH"
-        # Loan = quote
-        assert record.quote_asset_contract_address == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-        assert record.quote_asset_decimals == 6
-        assert record.quote_asset_symbol_onchain == "USDC"
+        # One market → A_TOKEN (supply) + DEBT_TOKEN (borrow); both share the
+        # same market's DeFi metadata (defi_lending_atoken_debttoken_instrument_split_2026_07_07.md).
+        assert len(results) == 2
+        for record in results:
+            # Morpho uses the bytes32 uniqueKey as the canonical pool identifier
+            assert record.pool_address == "0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc"
+            # Collateral = base
+            assert record.base_asset_contract_address == "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+            assert record.base_asset_decimals == 18
+            assert record.base_asset_symbol_onchain == "WETH"
+            # Loan = quote
+            assert record.quote_asset_contract_address == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+            assert record.quote_asset_decimals == 6
+            assert record.quote_asset_symbol_onchain == "USDC"
+
+        from unified_api_contracts.internal import InstrumentType
+
+        assert results[0].instrument_type == InstrumentType.A_TOKEN
+        assert results[1].instrument_type == InstrumentType.DEBT_TOKEN
