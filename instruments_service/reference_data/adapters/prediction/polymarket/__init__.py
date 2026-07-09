@@ -61,12 +61,16 @@ from unified_api_contracts.predictions import (
     CanonicalQuestionGroup,
     MarketLifecycle,
     classify_polymarket_to_canonical_group,
+    parse_polymarket_sports_fixture,
+    underlying_for_group,
 )
 from unified_api_contracts.sports import (
     POLYMARKET_MARKET_TO_CANONICAL,
     build_crypto_prediction_id,
+    build_fixture_id,
     build_macro_prediction_id,
     build_prediction_instrument_id,
+    build_team_id,
     slugify_canonical_name,
 )
 from unified_trading_library import log_event
@@ -176,8 +180,10 @@ __all__ = [
     "aiohttp",
     "build_canonical_instrument_id",
     "build_crypto_prediction_id",
+    "build_fixture_id",
     "build_macro_prediction_id",
     "build_prediction_instrument_id",
+    "build_team_id",
     "cast",
     "classify_polymarket_to_canonical_group",
     "classify_venue_error",
@@ -189,8 +195,10 @@ __all__ = [
     "logger",
     "logging",
     "markets",
+    "parse_polymarket_sports_fixture",
     "parsing",
     "re",
     "slugify_canonical_name",
     "time",
+    "underlying_for_group",
 ]

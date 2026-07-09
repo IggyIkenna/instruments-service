@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from unified_api_contracts import PolymarketGammaMarket
     from unified_api_contracts.internal import InstrumentRecord
-    from unified_api_contracts.predictions import MarketLifecycle
+    from unified_api_contracts.predictions import CanonicalQuestionGroup, MarketLifecycle
 
     from instruments_service.reference_data.adapters.prediction import polymarket as _pm
     from instruments_service.reference_data.adapters.prediction.polymarket.adapter import (
@@ -92,7 +92,22 @@ class PolymarketParsingMixin:
         )
         if result is None:
             return None  # League not in prediction registry — skip
-        _sub_category, base_asset = result
+        _sub_category, base_asset, sports_canonical_instrument_id = result
+
+        # Canonical question group — the SSOT classification pipeline (also drives
+        # MarketLifecycle.canonical_group below). Computed ONCE here and threaded
+        # into classify_lifecycle() (reuse, not reclassify) per
+        # prediction_canonical_identity_migration_2026_07_08.md todo 2.
+        group = (
+            _pm.classify_polymarket_to_canonical_group(
+                title=question,
+                slug=slug,
+                event_slug=market.event_slug or "",
+                outcome=(market.outcomes or [""])[0] if market.outcomes else "",
+                condition_id=condition_id,
+            )
+            or _pm.CanonicalQuestionGroup.OTHER
+        )
 
         # Per CLAUDE.md "Prediction market lifecycle timing": every
         # prediction instrument MUST carry market_created_at and
@@ -102,7 +117,7 @@ class PolymarketParsingMixin:
         # (the canonical SSOT slots) — the dedicated MARKET_LIFECYCLE
         # data_type carries the full lifecycle row including
         # canonical_question_group + current_status.
-        lifecycle = self.classify_lifecycle(market)
+        lifecycle = self.classify_lifecycle(market, group=group)
 
         # Lifecycle BOUNDS (available_from / available_to) are the honest-absence
         # gate: MTDS / UTL must only emit a manifest cell (captured / empty /
@@ -151,6 +166,20 @@ class PolymarketParsingMixin:
         # subscribes by (live + batch resolve the same per-outcome token-ids).
         _pm._register_clob_token_ids(instrument_key, market.clob_token_ids)
 
+        # underlying (prediction_canonical_identity_migration_2026_07_08.md todo 1 /
+        # docs/PREDICTION_INSTRUMENTS.md § "Canonical identity model" §3 item 2): the
+        # SAME classify_polymarket_to_canonical_group() -> underlying_for_group()
+        # pipeline that already runs above for MarketLifecycle.canonical_group,
+        # applying cross_venue_mapping.py::_build_mapping()'s existing convention —
+        # sports fixtures don't have a single scalar underlying (None, "not
+        # applicable"). Non-sports groups mostly resolve to a NAMED underlying (BTC,
+        # CPI, TRUMP, GEO_ISRAEL_IRAN, OSCARS, …) — PredictionUnderlying.OTHER.value
+        # is the honest catch-all reserved for genuinely-unclassified markets (cqg
+        # OTHER / MISC_NOVELTY), not a blanket "politics/geo" bucket.
+        underlying_axis = _pm.underlying_for_group(group)
+        is_sports = underlying_axis.value.startswith("SPORTS_")
+        underlying = None if is_sports else underlying_axis.value
+
         return _pm.InstrumentRecord(
             instrument_key=instrument_key,
             venue=self.venue,
@@ -171,6 +200,8 @@ class PolymarketParsingMixin:
             updated_at=now,
             available_from_datetime=available_from,
             available_to_datetime=available_to,
+            underlying=underlying,
+            canonical_instrument_id=sports_canonical_instrument_id,
         )
 
     def _build_instrument_id(
@@ -180,43 +211,50 @@ class PolymarketParsingMixin:
         question: str,
         slug: str,
         expiry: datetime | None,
-    ) -> tuple[str, str] | None:
-        """Build (instrument_type, base_asset) with canonical naming.
+    ) -> tuple[str, str, str | None] | None:
+        """Build (instrument_type, base_asset, canonical_instrument_id) with canonical naming.
 
         Returns:
             instrument_type: e.g. "prediction::crypto", "prediction::sports::EPL"
             base_asset: human-readable canonical e.g. "BTC:UP_DOWN:2026-03-25"
                         or "EPL:ARSENAL-v-CHELSEA:2026-03-25:MONEYLINE"
+            canonical_instrument_id: Sports-asset-group-aligned fixture_id
+                        (``LEAGUE:HOME_v_AWAY:YYYYMMDD``, see ``_build_sports_id``)
+                        for a resolvable sports fixture, else None (crypto/macro/
+                        other — populated separately by the cross-venue mapping
+                        rollup step, see ``build_instrument_catalogue.py``).
             None if the market should be skipped (e.g. league not in prediction registry).
         """
         date_str = expiry.strftime("%Y-%m-%d") if expiry else "unknown"
 
         # Sports markets: use team names + league + market type
         if market.sports_market_type and market.outcomes:
-            return self._build_sports_id(market, date_str)
+            return self._build_sports_id(market, slug, expiry, date_str)
 
         q_lower = question.lower()
         crypto_match = _pm._match_crypto_asset(q_lower)
         if crypto_match:
             canonical_id = _pm.build_crypto_prediction_id("polymarket", crypto_match, "1D", date_str)
-            return "prediction::crypto", canonical_id
+            return "prediction::crypto", canonical_id, None
 
         macro_match = _pm._match_macro_index(q_lower)
         if macro_match:
             canonical_id = _pm.build_macro_prediction_id("polymarket", macro_match, "1D", date_str)
-            return "prediction::macro", canonical_id
+            return "prediction::macro", canonical_id, None
 
         # Sports classified by PredictionMarketMapper but without sportsMarketType
         # (e.g. F1, UFC, NBA props) — reclassify as "other" since they're not
         # structured sports markets we can normalize.
         label = "other" if category == "sports" else category
-        return f"prediction::{label}", question[:50] if question else slug[:50]
+        return f"prediction::{label}", question[:50] if question else slug[:50], None
 
     def _build_sports_id(
         self: PolymarketReferenceDataAdapter,
         market: PolymarketGammaMarket,
+        slug: str,
+        expiry: datetime | None,
         date_str: str,
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, str | None] | None:
         """Build canonical sports instrument ID using the system-wide format.
 
         Uses ``build_prediction_instrument_id()`` from UAC canonical_ids so that
@@ -268,7 +306,44 @@ class PolymarketParsingMixin:
         )
 
         instrument_type = f"prediction::sports::{league_id}"
-        return instrument_type, instrument_id
+
+        # Sports <-> Sports-asset-group fixture_id alignment
+        # (prediction_canonical_identity_migration_2026_07_08.md todo 5 /
+        # docs/PREDICTION_INSTRUMENTS.md §3 item 4). The Sports asset group's own
+        # catalogue (build_instrument_catalogue.py::build_sports_fixture_team_player_catalogue)
+        # computes fixture_id = build_fixture_id(league_id, build_team_id(home),
+        # build_team_id(away), date_str) directly off the raw provider team names —
+        # no crosswalk, no network call. Reuse that EXACT (league_id, build_team_id,
+        # build_fixture_id) pipeline over the same "Away vs Home" pair
+        # parse_polymarket_sports_fixture() already extracts for the cross-venue
+        # matcher (fixture.home/away are only case/whitespace-normalized —
+        # build_team_id()'s _slug() is case/whitespace-insensitive, so this is
+        # byte-identical to calling build_team_id() on the raw split). Gives a
+        # Polymarket sports market's canonical_instrument_id BYTE-PARITY with the
+        # Sports asset group's fixture_id for the SAME real game, not just a
+        # conceptually-similar id. None (honest absence, never a guessed id) when
+        # event_title doesn't parse to a clean two-participant pair or no
+        # settlement date is resolvable — deliberately NOT wired through the
+        # unused, network-dependent _cross_reference_fixture() (a per-market
+        # API-Football call in the hot adapter-parsing path would be a real
+        # capture-throughput regression); that method remains available as a
+        # higher-fidelity follow-up for an async, rate-limited pipeline stage.
+        sports_canonical_instrument_id: str | None = None
+        fixture = _pm.parse_polymarket_sports_fixture(
+            league=league_id,
+            event_title=market.event_title or "",
+            slug=slug,
+            resolution_date=expiry.date() if expiry is not None else None,
+        )
+        if fixture is not None:
+            sports_canonical_instrument_id = _pm.build_fixture_id(
+                fixture.league,
+                _pm.build_team_id(fixture.home),
+                _pm.build_team_id(fixture.away),
+                fixture.fixture_date.isoformat(),
+            )
+
+        return instrument_type, instrument_id, sports_canonical_instrument_id
 
     def _extract_teams(
         self: PolymarketReferenceDataAdapter,
@@ -374,7 +449,9 @@ class PolymarketParsingMixin:
             return None
 
     def classify_lifecycle(
-        self: PolymarketReferenceDataAdapter, market: PolymarketGammaMarket
+        self: PolymarketReferenceDataAdapter,
+        market: PolymarketGammaMarket,
+        group: CanonicalQuestionGroup | None = None,
     ) -> MarketLifecycle | None:
         """Build a :class:`MarketLifecycle` for a Polymarket Gamma market.
 
@@ -383,6 +460,15 @@ class PolymarketParsingMixin:
         available (Gamma's ``createdAt`` is the only reliable creation
         timestamp; ``startDate`` is a scheduling hint that often disagrees
         for resolved markets).
+
+        ``group`` lets a caller that already classified the market (e.g.
+        ``_parse_market()``, which also needs the group for
+        ``InstrumentRecord.underlying``) pass it in so this method doesn't
+        reclassify — per
+        ``prediction_canonical_identity_migration_2026_07_08.md`` todo 1
+        ("reuse the result, don't reclassify"). Defaults to ``None``, which
+        preserves the original self-contained behaviour for other callers
+        (``get_market_lifecycles()``, direct test invocations).
 
         Lifecycle field derivation (per
         :mod:`unified_api_contracts.canonical.domain.predictions.lifecycle`):
@@ -415,16 +501,17 @@ class PolymarketParsingMixin:
         if resolution_time is None:
             return None
 
-        group = (
-            _pm.classify_polymarket_to_canonical_group(
-                title=market.question or "",
-                slug=market.market_slug or "",
-                event_slug=market.event_slug or "",
-                outcome=(market.outcomes or [""])[0] if market.outcomes else "",
-                condition_id=condition_id,
+        if group is None:
+            group = (
+                _pm.classify_polymarket_to_canonical_group(
+                    title=market.question or "",
+                    slug=market.market_slug or "",
+                    event_slug=market.event_slug or "",
+                    outcome=(market.outcomes or [""])[0] if market.outcomes else "",
+                    condition_id=condition_id,
+                )
+                or _pm.CanonicalQuestionGroup.OTHER
             )
-            or _pm.CanonicalQuestionGroup.OTHER
-        )
 
         settlement_lag = _pm.CANONICAL_GROUP_METADATA[group].settlement_lag
         settlement_time = resolution_time + settlement_lag

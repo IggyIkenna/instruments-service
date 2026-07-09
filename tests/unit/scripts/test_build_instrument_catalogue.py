@@ -607,6 +607,167 @@ def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleTy
 
 
 # ---------------------------------------------------------------------------
+# underlying / canonical_instrument_id threading + cross-venue mapping wiring
+# (prediction_canonical_identity_migration_2026_07_08.md todos 1 + 2 + 5)
+# ---------------------------------------------------------------------------
+
+
+def test_prediction_rollup_threads_underlying_from_per_date_row(rollup: ModuleType) -> None:
+    """A real, adapter-populated ``underlying`` column on the per-date row survives
+    into the catalogue's ``underlying`` column (was hardcoded "" before todo 1)."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "underlying": "BTC",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["underlying"] == "BTC"
+
+
+def test_prediction_rollup_cross_venue_mapping_matches_same_market(rollup: ModuleType) -> None:
+    """A real Kalshi<->Polymarket BTC UP_DOWN pair on the SAME settlement date gets
+    the SAME canonical_instrument_id on BOTH sides (todo 2's cross-venue join,
+    wired into this roll-up as the real, scheduled step)."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXBTCD-26JUN24",
+                        "end_date_iso": "2026-06-24T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xabc123",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "bitcoin-up-or-down-june-24-2026",
+                        "end_date_iso": "2026-06-24T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    trades = {
+        r["instrument_id"]: r["canonical_instrument_id"] for r in df.to_dict("records") if r["data_type"] == "trades"
+    }
+    kalshi_id = trades["KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000"]
+    poly_id = trades["POLYMARKET:PREDICTION_MARKET:0xabc123"]
+    assert kalshi_id  # non-empty — a real match was found
+    assert kalshi_id == poly_id  # SAME canonical_instrument_id on both venues
+
+
+def test_prediction_rollup_unmatched_instrument_keeps_blank_canonical_instrument_id(rollup: ModuleType) -> None:
+    """A Kalshi-only instrument (no Polymarket counterpart present) gets NO
+    canonical_instrument_id — honest absence, never a guessed/false pair."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXWEIRDTHING-26JUL",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXWEIRDTHING-26JUL",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["canonical_instrument_id"] == ""
+
+
+def test_prediction_rollup_preserves_adapter_populated_sports_fixture_id(rollup: ModuleType) -> None:
+    """A Polymarket sports row's adapter-populated canonical_instrument_id (todo 5's
+    Sports-asset-group-aligned fixture_id) survives the roll-up even though the
+    cross-venue matcher (todo 2, no titles supplied) can never produce a sports
+    match on its own — the two mechanisms are complementary, not conflicting."""
+    d1 = date(2026, 3, 22)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xsports1",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "epl-arsenal-vs-chelsea-2026-03-22",
+                        "canonical_instrument_id": "EPL:CHELSEA_v_ARSENAL:20260322",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["canonical_instrument_id"] == "EPL:CHELSEA_v_ARSENAL:20260322"
+
+
+def test_prediction_rollup_cqg_grain_never_gets_canonical_instrument_id(rollup: ModuleType) -> None:
+    """The cqg bundle row (family grain) never carries a per-instance
+    canonical_instrument_id — a family has no single per-market identity."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "BTC_UP_DOWN_DAILY",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "0xaaa",
+                        "venue": "POLYMARKET",
+                        "canonical_instrument_id": "SHOULD_NEVER_LEAK",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    cqg_row = next(r for r in df.to_dict("records") if r["data_type"] == "prediction_canonical_question_group")
+    assert cqg_row["canonical_instrument_id"] == ""
+
+
+# ---------------------------------------------------------------------------
 # Settlement-date convention tests (prediction available_to = settlement day)
 # SSOT: codex/02-data/prediction-settlement-availability-convention.md
 # ---------------------------------------------------------------------------
