@@ -54,11 +54,9 @@ verbatim, upper-cased) — `ccxt_adapter.py::_build_instrument_key` mirrors the 
 | `BITFINEX-FUTURES`                      | `bitfinex-derivatives`                | —               | Perpetuals (linear USDT-margined **and** inverse BTC-margined — see "Accepted quote assets" below)                                                               |
 | `BITGET-SPOT` / `BITGET-FUTURES`        | `bitget` / `bitget-futures`           | —               | Spot / perpetuals (Tardis Tier-3)                                                                                                                                |
 
-`bitstamp`, `huobi`, `huobi-dm` remain declared in `VenueMapping.all_tardis_exchanges`
-(`unified_api_contracts/registry/venue_mapping.py`, plus matching `venue_to_ccxt`/`tardis_to_venue` entries) but are
-not members of `VENUES_BY_ASSET_GROUP["cefi"]` (`unified_api_contracts/registry/market_data_categories.py`) — stale
-declarations excluded from the active CeFi venue set, with no row in the Venues table above. `GEMINI-SPOT` and
-`PHEMEX-SPOT` have been fully removed from `VenueMapping` (no declaration remains).
+`BITSTAMP-SPOT`, `HUOBI-SPOT`/`HUOBI-FUTURES` (Tardis `bitstamp`/`huobi`/`huobi-dm`), `GEMINI-SPOT`, and `PHEMEX-SPOT`
+are no longer part of the CeFi venue universe — fully removed from `VenueMapping` (no declaration remains), with no
+row in the Venues table above.
 
 ### Deribit margin types
 
