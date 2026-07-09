@@ -18,8 +18,13 @@ Kraken-Futures, Bitfinex, Bitget.
 **Not covered here** (documented in `DEFI_INSTRUMENTS.md` instead): the on-chain perp CLOBs — Hyperliquid, Aster,
 Pacifica (Solana), Extended (Starknet), Lighter (zkSync) — and the prediction-platform crypto-perp CLOBs — Kalshi-Perp,
 Polymarket-Perp (documented in `PREDICTION_INSTRUMENTS.md`, distinct from those venues' actual YES/NO prediction
-markets). **Important nuance**: at the data-pipeline/UAC level, all 7 of those venues are technically registered inside
-the same `"cefi"` asset-group bucket as the exchanges in this doc —
+markets). **2026-07-09**: those 5 on-chain-perp adapters (`reference_data/adapters/cefi/{hyperliquid,aster,pacifica,
+extended,lighter}.py`) were retrofitted to route their `VENUE:PERPETUAL:BASE-QUOTE` construction through the shared
+`unified_api_contracts.internal.reference.canonical_id_builder.build_instrument_id()` builder instead of an ad hoc
+f-string (pure DRY, real adapter output confirmed byte-identical before/after via unit test — no behavior change) —
+see `canonical_id_builder_retrofit_checklist_2026_07_08.md` todo 4 and `DEFI_INSTRUMENTS.md`'s "On-chain-perp DEXes"
+section for the full format spec. **Important nuance**: at the data-pipeline/UAC level, all 7 of those venues are
+technically registered inside the same `"cefi"` asset-group bucket as the exchanges in this doc —
 `unified_api_contracts/registry/market_data_categories.py:226-274` (`VENUES_BY_ASSET_GROUP["cefi"]`) lists HYPERLIQUID,
 ASTER, PACIFICA-SOLANA, EXTENDED-STARKNET, LIGHTER-ZKSYNC, KALSHI-PERP, and POLYMARKET-PERP alongside BINANCE-SPOT,
 DERIBIT, etc. — because they're CLOB-style order-book data like a real exchange, not AMM-pool data. This doc's

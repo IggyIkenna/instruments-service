@@ -89,6 +89,50 @@ class TestAsterAdapter:
         assert len(results) >= 0  # may still filter if BTC/USDT not in UAC universe
 
     @pytest.mark.asyncio
+    async def test_get_instruments_instrument_key_is_canonical(self) -> None:
+        """instrument_key is VENUE:PERPETUAL:BASE-QUOTE via the shared builder.
+
+        2026-07-09 DRY retrofit (canonical_id_builder_retrofit_checklist_2026_07_08.md
+        todo 4) routed the ad hoc f-string through
+        ``unified_api_contracts.internal.reference.canonical_id_builder.build_instrument_id``
+        — this asserts the real adapter output is byte-identical to the prior
+        f-string construction (no behavior change expected).
+        """
+        adapter = AsterReferenceDataAdapter()
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(
+            return_value={
+                "symbols": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "contractType": "PERPETUAL",
+                        "status": "TRADING",
+                        "baseAsset": "BTC",
+                        "quoteAsset": "USDT",
+                        "filters": [
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                            {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001"},
+                        ],
+                    }
+                ]
+            }
+        )
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+        assert len(results) == 1
+        assert results[0].instrument_key == "ASTER:PERPETUAL:BTC-USDT"
+
+    @pytest.mark.asyncio
     async def test_get_instruments_filters_non_trading(self) -> None:
         """Symbols with status != TRADING must be excluded."""
         adapter = AsterReferenceDataAdapter()
