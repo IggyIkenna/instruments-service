@@ -38,9 +38,11 @@ from instruments_service.reference_data.adapters.cefi.tardis import (
     _build_dated_derivative_canonical_symbol,
     _build_perpetual_canonical_symbol,
     _infer_margin_type,
+    _parse_bybit_month_code_expiry,
     _resolve_base_quote,
     _split_bybit_symbol,
 )
+from instruments_service.reference_data.adapters.cefi.tardis.adapter import TardisReferenceDataAdapter
 
 
 def _item(raw_id: str) -> TardisInstrumentDetail:
@@ -296,3 +298,121 @@ def test_end_to_end_kraken_futures_pi_vs_pf_no_longer_collide() -> None:
     assert pi_key == "KRAKEN-FUTURES:PERPETUAL:BTC-USD@INV"
     assert pf_key == "KRAKEN-FUTURES:PERPETUAL:BTC-USD@LIN"
     assert pi_key != pf_key
+
+
+# ---------------------------------------------------------------------------
+# Real regression fix (2026-07-09): the no-dash CME-month-code shape
+# (BTCUSDH22) had a resolvable base/quote (fixed above) but NO expiry-
+# resolution fallback branch — expiry stayed None, InstrumentRecord(FUTURE)
+# raised pydantic.ValidationError unguarded, and that ONE symbol's exception
+# killed the ENTIRE Bybit venue fetch (0 rows, live-reproduced 2026-07-09).
+# Two independent fixes: (1) _parse_bybit_month_code_expiry — a real
+# expiry-resolution branch; (2) a per-item try/except around InstrumentRecord
+# construction so no future gap of this shape can zero a whole venue again.
+# ---------------------------------------------------------------------------
+
+
+class TestParseBybitMonthCodeExpiry:
+    """_parse_bybit_month_code_expiry: last-Friday-of-contract-month convention.
+
+    Convention cross-checked 2026-07-09 against all 42 already-resolvable
+    siblings of this shape (api.tardis.dev/v1/exchanges/bybit): every one's
+    real ``availableTo`` timestamp lands exactly 1 calendar day after this
+    function's computed Friday, zero exceptions.
+    """
+
+    @pytest.mark.parametrize(
+        ("raw_id", "expected"),
+        [
+            # The 4 real, currently-ACTIVE contracts of this shape (no
+            # availableTo yet — these are the ones that genuinely had NO
+            # expiry-resolution path before this fix).
+            ("BTCUSDU26", datetime(2026, 9, 25, tzinfo=UTC)),
+            ("BTCUSDZ26", datetime(2026, 12, 25, tzinfo=UTC)),
+            ("ETHUSDU26", datetime(2026, 9, 25, tzinfo=UTC)),
+            ("ETHUSDZ26", datetime(2026, 12, 25, tzinfo=UTC)),
+            # Real, already-EXPIRED siblings — cross-check: computed Friday +
+            # 1 calendar day must equal the real Tardis availableTo above.
+            ("BTCUSDH22", datetime(2022, 3, 25, tzinfo=UTC)),  # availableTo 2022-03-26
+            ("BTCUSDU21", datetime(2021, 9, 24, tzinfo=UTC)),  # availableTo 2021-09-25
+            ("ETHUSDZ21", datetime(2021, 12, 31, tzinfo=UTC)),  # availableTo 2022-01-01
+            ("BTCUSDM23", datetime(2023, 6, 30, tzinfo=UTC)),  # availableTo 2023-07-01 (month-end rollover)
+            # Lowercase input still matches (raw_id.upper() inside the function).
+            ("btcusdu26", datetime(2026, 9, 25, tzinfo=UTC)),
+        ],
+    )
+    def test_resolves_last_friday_of_contract_month(self, raw_id: str, expected: object) -> None:
+        assert _parse_bybit_month_code_expiry(raw_id) == expected
+
+    @pytest.mark.parametrize(
+        "raw_id",
+        [
+            "BTCUSDT",  # perpetual — no month code
+            "BTC-01DEC23",  # dash shape — handled by a different fallback
+            "BTCUSDT-25DEC26",  # concatenated-quote dash shape
+            "NOTAMATCH",
+            "",
+        ],
+    )
+    def test_non_matching_shapes_return_none(self, raw_id: str) -> None:
+        assert _parse_bybit_month_code_expiry(raw_id) is None
+
+
+class TestBybitMonthCodeExpiryWiredIntoAdapter:
+    """End-to-end: the real adapter._parse_tardis_instrument, not just the
+    standalone parsing helper — proves the fix is actually wired into the
+    live fallback chain (adapter.py), not just unit-tested in isolation.
+    """
+
+    def _item(self, raw_id: str) -> TardisInstrumentDetail:
+        return TardisInstrumentDetail(id=raw_id, type="future")
+
+    @pytest.mark.parametrize(
+        ("raw_id", "expected_expiry"),
+        [
+            ("BTCUSDU26", datetime(2026, 9, 25, tzinfo=UTC)),
+            ("BTCUSDZ26", datetime(2026, 12, 25, tzinfo=UTC)),
+            ("ETHUSDU26", datetime(2026, 9, 25, tzinfo=UTC)),
+            ("ETHUSDZ26", datetime(2026, 12, 25, tzinfo=UTC)),
+        ],
+    )
+    def test_previously_broken_active_contracts_now_resolve(self, raw_id: str, expected_expiry: object) -> None:
+        """Before the fix: each of these 4 real, currently-active Bybit
+        symbols raised pydantic.ValidationError inside ``_parse_tardis_
+        instrument`` (expiry=None on a FUTURE) — and because that exception
+        was unguarded, it took the whole Bybit venue down with it. After the
+        fix: a valid InstrumentRecord with the correct expiry.
+        """
+        adapter = TardisReferenceDataAdapter()
+        record = adapter._parse_tardis_instrument(self._item(raw_id), "bybit")
+        assert record is not None
+        assert record.expiry == expected_expiry
+        assert record.instrument_type == InstrumentType.FUTURE
+        assert record.base_asset in ("BTC", "ETH")
+        assert record.quote_asset == "USD"
+
+    def test_bad_symbol_is_skipped_not_raised_and_does_not_poison_the_batch(self) -> None:
+        """Regression for the resiliency gap itself (independent of the
+        specific month-code bug): a synthetic FUTURE symbol that resolves a
+        non-empty quote (passes the pre-existing empty-quote guard) but has
+        NO matching expiry-resolution fallback of any kind must be SKIPPED
+        (return None), not raise — and must not stop the adapter from
+        parsing the good items around it in the same per-venue loop (the
+        exact failure mode that zeroed the whole Bybit venue pre-fix).
+        """
+        adapter = TardisReferenceDataAdapter()
+        good = self._item("BTCUSDH22")
+        unresolvable_expiry = TardisInstrumentDetail(id="AAAUSDT", type="future")
+
+        results = [
+            record
+            for record in (
+                adapter._parse_tardis_instrument(good, "bybit"),
+                adapter._parse_tardis_instrument(unresolvable_expiry, "bybit"),
+                adapter._parse_tardis_instrument(good, "bybit"),
+            )
+            if record is not None
+        ]
+
+        assert len(results) == 2
+        assert all(r.raw_symbol == "BTCUSDH22" for r in results)
