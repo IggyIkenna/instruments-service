@@ -12,10 +12,10 @@ in this migration lists options) plus real evidence that Deribit's
 PERPETUAL/FUTURE/OPTION targets all drop the quote segment (``quote=""``),
 unlike Kraken-Futures/Bybit which keep it.
 
-Real current → target pairs (confirmed against real
-``instruments-store-cefi-prd-central-element-323112/prod/catalog.parquet``,
-2026-07-09 — 263,979 real DERIBIT PERPETUAL/FUTURE/OPTION rows, 0 parse
-failures, 0 collisions against this exact transform):
+Real current → target pairs (confirmed against the real prod cefi catalog
+(``instruments-store-cefi-prd-<project>/prod/catalog.parquet``), 2026-07-09 —
+263,979 real DERIBIT PERPETUAL/FUTURE/OPTION rows, 0 parse failures, 0
+collisions against this exact transform):
   DERIBIT:PERPETUAL:BTC-USD        (inverse) -> DERIBIT:PERPETUAL:BTC-USD@INV
   DERIBIT:PERPETUAL:BTC-USDC       (linear)  -> DERIBIT:PERPETUAL:BTC-USDC@LIN
   DERIBIT:FUTURE:BTC-10JUL26       (inverse) -> DERIBIT:FUTURE:BTC@INV-20260710
