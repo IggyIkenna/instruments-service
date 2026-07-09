@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -26,6 +26,39 @@ class TestHyperliquidAdapter:
         with patch("aiohttp.ClientSession"):
             result = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_instrument_key_is_canonical(self) -> None:
+        """instrument_key is VENUE:PERPETUAL:BASE-QUOTE via the shared builder.
+
+        2026-07-09 DRY retrofit (canonical_id_builder_retrofit_checklist_2026_07_08.md
+        todo 4) routed the ad hoc f-string through
+        ``unified_api_contracts.internal.reference.canonical_id_builder.build_instrument_id``
+        — this asserts the real adapter output is byte-identical to the prior
+        f-string construction (no behavior change expected). The per-coin funding-date
+        probe is patched out directly (bounded-concurrent HTTP fan-out, orthogonal to
+        instrument_key construction) so the test stays fast and deterministic.
+        """
+        adapter = HyperliquidReferenceDataAdapter()
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(return_value={"universe": [{"name": "BTC", "szDecimals": 5}]})
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.post = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+            patch.object(adapter, "_probe_earliest_funding_dates", AsyncMock(return_value={})),
+        ):
+            results = await adapter.get_instruments()
+        assert len(results) == 1
+        assert results[0].instrument_key == "HYPERLIQUID:PERPETUAL:BTC-USD"
 
     def test_parse_hl_candle_uses_close_edge_close_field(self) -> None:
         """_parse_hl_candle must stamp the T (close-time ms) field, not t (open-time ms).

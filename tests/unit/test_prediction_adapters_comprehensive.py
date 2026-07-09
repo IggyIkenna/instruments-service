@@ -294,8 +294,77 @@ class TestPolymarketParseMarketBranches:
         assert result is not None
         assert result.instrument_type == "PREDICTION_MARKET"
         assert result.venue == "POLYMARKET"
-        assert result.instrument_key == "0xcrypto123"
+        assert result.instrument_key == "POLYMARKET:PREDICTION_MARKET:0xcrypto123"
         assert str(result.status) == "active"
+
+    def test_parse_market_instrument_key_preserves_condition_id_case(self) -> None:
+        """The wrapped instrument_key must NOT upper-case condition_id.
+
+        2026-07-09 fix (canonical_id_builder_retrofit_checklist_2026_07_08.md todo 7):
+        condition_id is a real, lowercase 0x…64hex hash — ``passthrough=True`` would
+        upper-case it via ``canonical_id_builder.py::_build_passthrough`` and corrupt
+        it into a non-matching id, so the adapter deliberately calls
+        ``build_canonical_instrument_id`` WITHOUT ``passthrough=True`` (dispatches to
+        ``_build_sports_or_prediction``, which preserves symbol case verbatim).
+        """
+        from unified_api_contracts import PolymarketGammaMarket
+
+        adapter = PolymarketReferenceDataAdapter()
+        market = PolymarketGammaMarket.model_validate(
+            {
+                "conditionId": "0xdeadbeefCaFe",
+                "marketSlug": "btc-above-100k",
+                "question": "Will Bitcoin reach $100,000 by end of 2026?",
+                "active": True,
+                "closed": False,
+                "outcomes": "Yes,No",
+                "endDateIso": "2026-12-31T23:59:59Z",
+            }
+        )
+        now = datetime.now(UTC)
+        result = adapter._parse_market(market, now)
+        assert result is not None
+        assert result.instrument_key == "POLYMARKET:PREDICTION_MARKET:0xdeadbeefCaFe", (
+            f"condition_id case must be preserved verbatim, got: {result.instrument_key!r}"
+        )
+
+    def test_parse_market_registers_clob_token_ids_under_wrapped_instrument_key(self) -> None:
+        """The clob_token_ids side-table must be keyed by the FINAL instrument_key.
+
+        process_write.py::_records_to_dataframe joins clob_token_ids by whatever
+        instrument_key resolves to (``key == instrument_key``) — this regression-
+        guards that the 2026-07-09 instrument_key wrap didn't break that join by
+        registering under the bare (pre-wrap) condition_id instead.
+        """
+        from unified_api_contracts import PolymarketGammaMarket
+
+        from instruments_service.reference_data.adapters.prediction.polymarket import (
+            _clob_token_ids_for_condition_id,
+        )
+
+        adapter = PolymarketReferenceDataAdapter()
+        market = PolymarketGammaMarket.model_validate(
+            {
+                "conditionId": "0xclobjoin1",
+                "marketSlug": "clob-join-test",
+                "question": "Will X happen?",
+                "active": True,
+                "closed": False,
+                "outcomes": "Yes,No",
+                "endDateIso": "2026-12-31T23:59:59Z",
+                "clobTokenIds": ["111", "222"],
+            }
+        )
+        now = datetime.now(UTC)
+        result = adapter._parse_market(market, now)
+        assert result is not None
+        assert result.instrument_key == "POLYMARKET:PREDICTION_MARKET:0xclobjoin1"
+        assert _clob_token_ids_for_condition_id(result.instrument_key) == ["111", "222"], (
+            "clob_token_ids must be registered under the SAME final instrument_key "
+            "the orchestrator's _records_to_dataframe looks up by."
+        )
+        # The bare (pre-wrap) condition_id must NOT be a separate, stale registration.
+        assert _clob_token_ids_for_condition_id("0xclobjoin1") is None
 
     def test_parse_market_macro_question(self) -> None:
         """Macro/financial question."""
@@ -828,7 +897,7 @@ class TestKalshiParseMarket:
         now = datetime.now(UTC)
         result = adapter._parse_market(raw, now)
         assert result is not None
-        assert result.instrument_key == "KXBTC-26MAR-90000"
+        assert result.instrument_key == "KALSHI:PREDICTION_MARKET:KXBTC-26MAR-90000"
         assert result.venue == "KALSHI"
         assert result.quote_asset == "USD"
         assert str(result.status) == "active"
