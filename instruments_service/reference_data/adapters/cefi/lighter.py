@@ -32,6 +32,16 @@ _LIGHTER_API_BASE = "https://mainnet.zklighter.elliot.ai/api/v1"
 # Lighter zkSync mainnet launch (first perpetual markets live 2024-08-01).
 _LIGHTER_DEPLOY_DATE = datetime(2024, 8, 1, tzinfo=UTC)
 
+# Real margin type (2026-07-09, instrument_id_format_canonicalization_2026_07_08.md
+# finding 1's PERPETUAL scope-expansion) — confirmed live via
+# docs.lighter.xyz/trading/multi-asset-margin: "Portfolio Balance is the USDC value
+# of the account including unrealized PnL on perpetual positions" — margin/PnL is
+# USDC-denominated venue-wide, explicitly "linear perpetuals (USDC-margined), not
+# inverse contracts". Derives the @LIN/@INV instrument_id marker FROM this field so
+# the two can never drift.
+_MARGIN_TYPE = MarginType.LINEAR
+_MARGIN_MARKER = _MARGIN_TYPE.value[:3].upper()
+
 
 def _classify_lighter_error(exc: Exception, status: int | None = None) -> str:
     msg = str(exc).lower()
@@ -109,21 +119,25 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
             base_asset = sym.split("-")[0] if "-" in sym else sym
             results.append(
                 InstrumentRecord(
-                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE (2026-07-08
-                    # canonicalization — dropped the PERP shorthand + the bare
-                    # no-quote symbol in favour of the real settlement currency.
+                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
+                    # (2026-07-08 canonicalization — dropped the PERP shorthand + the
+                    # bare no-quote symbol in favour of the real settlement currency.
                     # Confirmed live via docs.lighter.xyz/trading/multi-asset-margin
                     # 2026-07-08: "Portfolio Balance is the USDC value of the account
                     # including unrealized PnL on perpetual positions" — perp
-                    # PnL/margin is USDC-denominated for all markets. SSOT:
+                    # PnL/margin is USDC-denominated for all markets. 2026-07-09
+                    # scope-expansion — added the real @LIN margin marker, see
+                    # _MARGIN_TYPE above for the verification method). SSOT:
                     # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
-                    # finding 3+4;
+                    # finding 1 (2026-07-09 PERPETUAL scope-expansion) + finding 3+4;
                     # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
                     # Routed through the shared UAC builder (2026-07-09 retrofit,
-                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) —
-                    # pure DRY, output is behavior-identical to the prior f-string.
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) — the
+                    # marker is embedded in the symbol passed to the builder (PERPETUAL's
+                    # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
+                    # convention DeFi POOL fee-tiers already use).
                     instrument_key=build_instrument_id(
-                        "LIGHTER-ZKSYNC", InstrumentType.PERPETUAL, f"{base_asset}-USDC"
+                        "LIGHTER-ZKSYNC", InstrumentType.PERPETUAL, f"{base_asset}-USDC@{_MARGIN_MARKER}"
                     ),
                     venue=self.venue,
                     raw_symbol=sym,
@@ -131,7 +145,7 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
                     base_asset=base_asset,
                     quote_asset="USDC",
                     settle_asset="USDC",
-                    margin_type=MarginType.LINEAR,
+                    margin_type=_MARGIN_TYPE,
                     tick_size=Decimal("0.0001"),
                     min_size=Decimal("0.001"),
                     contract_size=Decimal("1"),
