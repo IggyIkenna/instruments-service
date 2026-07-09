@@ -2,7 +2,7 @@
 the UAC ``TOTAL_UNIVERSE_AXES`` SSOT.
 
 Verifies:
-  - The enumerator's dispatch tables (v1 / v2 / CLI) match ``TOTAL_UNIVERSE_AXES``.
+  - The enumerator's dispatch tables (v2 / CLI) match ``TOTAL_UNIVERSE_AXES``.
   - ``enumerate_v2`` rejects an asset_group NOT in the SSOT (structural gate).
   - The rejection message names the UAC SSOT so operators trace back to the axes.
   - MVP ⊆ TOTAL is respected — every row emitted for a valid AG classifies as
@@ -48,7 +48,7 @@ InstrumentCatalogEntry = enumerator_module.InstrumentCatalogEntry
 
 
 # ---------------------------------------------------------------------------
-# Dispatch parity — v1 / v2 / CLI choices ≡ TOTAL_UNIVERSE_AXES keys
+# Dispatch parity — v2 / CLI choices ≡ TOTAL_UNIVERSE_AXES keys
 # ---------------------------------------------------------------------------
 
 
@@ -60,11 +60,6 @@ def test_v2_dispatch_equals_uac_total_universe_axes() -> None:
     enumerator can't serve (silent zero denominator).
     """
     assert set(enumerator_module._V2_ENUMERATORS) == set(TOTAL_UNIVERSE_AXES)
-
-
-def test_v1_dispatch_equals_uac_total_universe_axes() -> None:
-    """_ENUMERATORS (v1 calendar/genesis-pre-skip) must also cover exactly the SSOT AGs."""
-    assert set(enumerator_module._ENUMERATORS) == set(TOTAL_UNIVERSE_AXES)
 
 
 def test_supported_asset_groups_equals_uac_total_universe_axes() -> None:
