@@ -27,72 +27,66 @@ batch-vs-live swap-capture split.
 
 **Out of scope** (covered in other consolidated docs / not yet written up anywhere): Solana-native AMMs and perps
 (Drift, Raydium, Orca, Phoenix, Jupiter, Mango, Zeta, Flash_Trade, Meteora, Lifinity, Kamino, Camino) and Solana
-staking/restaking (Marinade, Jito, JitoRestaking, Sanctum, Solblaze, Solana-native, MarginFi, Solend) — these have a
-real adapter presence too (see `instruments_service/reference_data/adapters/defi/`) but are organizationally a
+staking/restaking/lending (Marinade, Jito, JitoRestaking, Sanctum, Solblaze, Solana-native, MarginFi, Solend) — these
+have a real adapter presence too (see `instruments_service/reference_data/adapters/defi/`) but are organizationally a
 separate "Solana DeFi" surface from this doc's EVM-centric + on-chain-perp scope, per the 2026-07-08 docs-consolidation
-task split.
+task split. **MarginFi + Solend adapters shipped 2026-07-09** (see "Solana lending — MarginFi, Solend" under Lending
+below for the brief real-data-source writeup; full per-chain tables for the Solana surface are still tracked as a
+future doc split, not written up here).
 
 ---
 
-## Instrument ID format: current state vs. decided target (not yet implemented)
+## Instrument ID format: current state vs. decided target
 
-On 2026-07-08 the operator reviewed real production `catalog.parquet` samples and **decided target canonical formats**
-for several real divergences — decisions are final, but **no migration has shipped yet**. Everything below is
-current-vs-target, not current-vs-already-fixed. Full detail, decision rationale, and open todos:
-`unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md`; underlying 7-agent audit:
+Target canonical formats for several real format divergences have been decided (operator-decided, final) but not yet
+migrated in production data. Full detail, decision rationale, and open todos:
+`unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md`; underlying audit:
 `unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md`.
 
-### DEX pools (finding 2)
+### DEX pools
 
-- **Target** (operator-decided): `VENUE-CHAIN:POOL:TOKEN0-TOKEN1[-FEE_TIER]`, fee tier a real Uniswap-V3-style
-  basis-point value (100/500/3000/10000), dash-separated. `pool_address` stays its own column, it stops being the
-  entire identity key.
-- **Audit's stated current-state**: a bare on-chain pool address with zero `VENUE:TYPE:SYMBOL` structure, confirmed
-  across 6,180 real rows / 13 protocols (Uniswap V2/V3/V4, Balancer, Curve, PancakeSwap_V3, Sushiswap/\_V3, Camelot_V3,
-  Aerodrome_V3, TraderJoe_V2, Velodrome_V2, GMX) in the production catalog.
-- **Reconciled 2026-07-08**: the current adapter code for the native-schema DEX adapters already builds a structured
-  key, not a bare address — `instrument_key = f"{venue_tag}:POOL:{base}-{quote}:{fee_str}"` (`uniswap_v3.py:490-492`,
-  and the equivalent in `uniswap_v2.py`/`uniswap_v4.py`/`balancer.py`/`curve.py`) — with the pool/market address kept
-  separately as `raw_symbol`. But re-reading the REAL, CURRENT `prod/catalog.parquet` directly (7,284 DeFi rows,
-  2,030 real Uniswap V3 rows) confirms the audit's bare-address finding is still accurate for the **persisted data** —
-  every real row shows the bare pool address as `instrument_id` and a bare `UNISWAP_V3` venue with **no `-ETHEREUM`
-  chain suffix at all** — a shape the current adapter code doesn't even produce anymore (it always builds
-  `venue_tag = f"{prefix}-{chain}"`). This means the persisted catalog predates the current adapter code (or was
-  built by an older/different write path) and has never been regenerated since. **This is a data-regeneration/backfill
-  gap layered on top of 2 real remaining code gaps, not a from-scratch code problem**: (a) the code's own fee-tier
-  segment uses a colon (`:{fee_str}`) where the target wants a dash, and (b) `fee_str` embeds Uniswap's raw feeTier
-  units (e.g. `3000`) rather than real basis points (a correct bps value is computed separately as
-  `pool_fee_tier_bps` on the same record but isn't the one written into the instrument_key string).
-- **UPDATE 2026-07-08 — all 13 protocols individually re-verified (not just Uniswap V3).** Read
-  `prod/catalog.parquet` directly (6,180 real DEX-pool rows) and traced every protocol's own adapter code. **Result:
-  the exact same shape holds for all 13, zero exceptions — every protocol's code already builds a structured key,
-  every protocol's persisted catalog still shows the old bare-address form.** Balancer (`balancer.py:224-226`),
-  Uniswap V2 (`uniswap_v2.py:216-218`), Uniswap V4 (`uniswap_v4.py:245-247`), and Curve (`curve.py:162-164`) are 4
-  independent adapter classes, each individually read and confirmed structured. The remaining 8 protocols
-  (PancakeSwap_V3, Sushiswap_V3, Sushiswap, Camelot_V3, Aerodrome_V3, Velodrome_V2, TraderJoe_V2, GMX) all
-  instantiate `UniswapV3ReferenceDataAdapter` via `factory.py`'s `protocol_slug` routing (confirmed in
-  `factory.py`'s `supports_protocol_slug`/`VENUE_PREFIX_TO_PROTOCOL` logic) — they run the literal same
-  `_build_pool_record` method already confirmed for Uniswap V3, so verifying Uniswap V3 transitively verifies all 8.
-  **Zero of the 13 protocols has a genuine code gap** — this is purely a catalog-regeneration/backfill job across
-  the board. Full per-protocol row-count + chain table and the dedicated regeneration todo:
-  `unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md` (finding 2, 2026-07-08
-  update).
+- **Target format**: `VENUE-CHAIN:POOL:TOKEN0-TOKEN1[-FEE_TIER]`, fee tier a real Uniswap-V3-style basis-point value
+  (100/500/3000/10000), dash-separated. `pool_address` is its own column, not the entire identity key.
+- **Current adapter code**: all 13 DEX-pool protocols in scope (the 5 native adapter classes — Uniswap V2/V3/V4,
+  Balancer, Curve — plus the 8 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug`, see "Adapter
+  architecture" below) build a structured key — `instrument_key = f"{venue_tag}:POOL:{base}-{quote}:{fee_str}"`
+  (confirmed in `uniswap_v3.py`, and equivalently in `uniswap_v2.py`/`uniswap_v4.py`/`balancer.py`) — with the
+  pool/market address kept separately as `raw_symbol`, not as the instrument_id. Curve uses its own REST-API-derived
+  key shape (see the Curve row under "Protocol × chain coverage" below).
+- **Known code gap**: the fee-tier segment is colon-separated (`:{fee_str}`) rather than dash-separated, and `fee_str`
+  embeds Uniswap's raw on-wire `feeTier` value (e.g. `3000`) rather than the real basis-points value — a correctly
+  computed bps value (`pool_fee_tier_bps`) already exists on the same record but isn't the one written into the
+  `instrument_key` string (`uniswap_v3.py:590-599`). Since the 8 fork/config-variant protocols share the same
+  `_build_pool_record` code path, this gap applies to all 13 protocols.
+- **Known gap, data state (not verifiable from code)**: whether the persisted production catalog has been
+  regenerated to the target dash/bps format across all 13 protocols is a live-data question, not a code fact — see
+  the migration doc above for current status.
 
 ### Lending — A_TOKEN/DEBT_TOKEN split (from `defi_lending_atoken_debttoken_instrument_split_2026_07_07.md`)
 
 Real per-protocol current state, verified directly against adapter code:
 
-| Protocol        | Current key shape                                                                        | Current `instrument_type`                                       | Status                                                                                                                   |
-| --------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **AAVE_V3**     | `{venue}:A_TOKEN:{a_symbol}` / `{venue}:DEBT_TOKEN:{debt_symbol}` (`aave_v3.py:424,433`) | `LENDING` (hardcoded, `aave_v3.py:400`)                         | Split correct, field mislabeled (cheap fix — downstream ledger resolution already parses the key, not the field)         |
-| **SPARK**       | Same pattern (`spark.py:318,327`)                                                        | `LENDING`                                                       | Same mislabel as AAVE_V3                                                                                                 |
-| **COMPOUND_V3** | `{venue}:SUPPLY:{symbol}` / `{venue}:BORROW:{symbol}` (`compound_v3.py:263,272`)         | `SUPPLY`/`BORROW` — **not valid `InstrumentType` enum members** | Real crash risk: `asset_class_for_instrument_type()` raises `UnknownInstrumentTypeError` on unrecognized types by design |
-| **MORPHO**      | `{venue}:LENDING_MARKET:{collateral}-{loan}:{market_key[:8]}` (`morpho.py:190-191`)      | `LENDING`                                                       | No supply/borrow split at all — one flat record per market                                                               |
-| **EULER_V2**    | `{venue}:LENDING_MARKET:{symbol}` (`euler_v2.py:93`)                                     | `LENDING`                                                       | Same no-split gap as Morpho                                                                                              |
-| **FLUID**       | `{venue}:LENDING_MARKET:{symbol}` (`fluid.py:113`)                                       | `LENDING`                                                       | Same no-split gap                                                                                                        |
-| **RADIANT**     | `{venue}:LENDING_MARKET:{symbol}` (`radiant.py:121`)                                     | `LENDING`                                                       | Same no-split gap                                                                                                        |
-| **VENUS**       | `{venue}:LENDING_MARKET:{symbol}` (`venus.py:105`)                                       | `LENDING`                                                       | Same no-split gap                                                                                                        |
-| **BENQI**       | `{venue}:LENDING_MARKET:{symbol}` (`benqi.py:98`)                                        | `LENDING`                                                       | Same no-split gap                                                                                                        |
+| Protocol        | Current key shape                                                                                                                             | Current `instrument_type`                                                                           | Status                                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **AAVE_V3**     | `{venue}:A_TOKEN:{a_symbol}` / `{venue}:DEBT_TOKEN:{debt_symbol}` (`aave_v3.py:424,433`)                                                      | `LENDING` (hardcoded, `aave_v3.py:400`)                                                             | Split correct, field mislabeled (cheap fix — downstream ledger resolution already parses the key, not the field) |
+| **SPARK**       | Same pattern (`spark.py:318,327`)                                                                                                             | `LENDING`                                                                                           | Same mislabel as AAVE_V3                                                                                         |
+| **COMPOUND_V3** | `{venue}:SUPPLY:{symbol}` / `{venue}:BORROW:{symbol}` (`compound_v3.py:263,272`)                                                              | `LENDING` (both records; `SUPPLY`/`BORROW` appear only inside the key string, `compound_v3.py:240`) | No supply/borrow split at the `instrument_type` field level (the split lives only in the key text)               |
+| **MORPHO**      | `{venue}:A_TOKEN:A{collateral}-{loan}-{market_key[:8]}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{loan}-{market_key[:8]}` (`morpho.py:259-283`) | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two `InstrumentRecord`s per isolated market, correct field + key                           |
+| **EULER_V2**    | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`euler_v2.py:79-137`)                              | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated vault                                                              |
+| **FLUID**       | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`fluid.py:88-149`)                                 | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated vault                                                              |
+| **RADIANT**     | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`radiant.py:94-159`)                               | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated rToken market                                                      |
+| **VENUS**       | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`venus.py:78-142`)                                 | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated vToken market                                                      |
+| **BENQI**       | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`benqi.py:75-140`)                                 | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated qiToken market                                                     |
+
+Real before/after example (Morpho, one WETH/USDC market, `marketId="0xmarketkey123456789"`, disambiguator
+`marketId[:8]`):
+
+- **Before** (one flat record): venue `MORPHO-ETHEREUM`, type `LENDING_MARKET`, symbol
+  `WETH` + `-` + `USDC` + `-` + disambiguator — `instrument_type=LENDING`.
+- **After — supply side**: venue `MORPHO-ETHEREUM`, type `A_TOKEN`, symbol
+  `A` + `WETH` + `-` + `USDC` + `-` + disambiguator (collateral deposited into the market, earns yield).
+- **After — borrow side**: venue `MORPHO-ETHEREUM`, type `DEBT_TOKEN`, symbol
+  `DEBT` + `WETH` + `-` + `USDC` + `-` + disambiguator (loan asset drawn against that collateral, accrues interest).
 
 **Target (operator-decided 2026-07-08)**: every lending protocol's adapter emits exactly two `InstrumentRecord`s per
 position-bearing entity — `A_TOKEN` for the supply side, `DEBT_TOKEN` for the borrow side — with the field matching
@@ -102,84 +96,84 @@ this doc's scope. The strategy/execution layer already assumes this split exists
 (`unified_api_contracts/internal/domain/execution_service/defi_position.py:97-109`'s `is_supply`/`is_borrow`;
 `PositionPortfolio.net_value = total_supply_value - total_borrow_value`) — this is a reference-data-layer catch-up,
 not a new architectural decision. Fixing is staged per-protocol, not a single PR (operator: "fixing will be in stages
-ofc"). MARGINFI/SOLEND (Solana lending, out of this doc's scope) have no instruments-service adapter at all yet — a
-separate gap from the split question.
+ofc"). **6 of 9 protocols now emit the correct A_TOKEN/DEBT_TOKEN split** (Morpho/Euler_V2/Fluid/Radiant/Venus/Benqi,
+2026-07-09) — remaining: AAVE_V3/SPARK's `instrument_type` field mislabel (key already correct) and COMPOUND_V3's
+`SUPPLY`/`BORROW` → `A_TOKEN`/`DEBT_TOKEN` key-segment rename (needs a GCS partition migration, tracked separately).
+MARGINFI/SOLEND (Solana lending, out of this doc's EVM-centric scope) **now have real instruments-service adapters**
+(`marginfi.py`, `solend.py`, shipped 2026-07-09) — both emit the same A_TOKEN/DEBT_TOKEN split from day one (no
+flat-`LENDING`-record legacy phase to migrate through). See "Solana lending — MarginFi, Solend" below.
 
-### On-chain-perp DEXes — PERP-vs-PERPETUAL key/field mismatch + base-quote inconsistency (findings 3+4) — FIXED 2026-07-08
+**Shared canonical-id builder adoption**: these 6 protocols' `instrument_key` construction now routes through
+`unified_api_contracts.build_canonical_instrument_id(AssetGroup.DEFI, venue, InstrumentType.A_TOKEN | DEBT_TOKEN,
+symbol, chain=..., passthrough=True)` instead of an ad hoc f-string — part of the workspace-wide retrofit tracked in
+`canonical_id_builder_retrofit_checklist_2026_07_08.md`. `passthrough=True` preserves DeFi's on-chain symbol case
+(the builder dispatches DeFi passthrough calls to the same `VENUE-CHAIN:TYPE:SYMBOL` construction as the structured
+path) while still centralising venue-token composition + validation. AAVE_V3's existing `_build_reserve_records` is
+NOT yet on the shared builder either (still an ad hoc f-string, `aave_v3.py:424,433`) — out of this round's scope,
+tracked in the same retrofit checklist.
+
+**Downstream consumer check (2026-07-09, before shipping the 6-protocol split)**: grepped the full workspace for the
+old flat `LENDING_MARKET` key/type. Zero live consumers read instruments-service's reference-data catalog output for
+these 6 venues and branch on that exact string — `market-tick-data-service`'s `fluid_adapter.py` /
+`morpho_adapter.py` / `morpho_defi_ws.py` independently construct their **own** `LENDING_MARKET`-typed market-data
+keys (rate/index/utilization time series) by querying the same upstream protocol APIs directly, not by reading
+instruments-service's catalog — so this split does not break them mechanically, but it does widen the existing
+cross-repo naming divergence between MTDS's market-data keys and instruments-service's reference-data keys for
+Morpho/Fluid specifically (the same class of drift already tracked for MTDS's restaking adapters). The completed
+one-off migration script `scripts/instrument_id_venue_spelling_backfill_2026_07_08.py` and the UI's
+`instruments-snapshot.json` cache both reference the old shape but are point-in-time artifacts (a completed backfill
+and a materialized catalog snapshot respectively) that pick up the new shape on the next regen — the standard DATA
+follow-up already tracked for every canonical-id migration in this doc, not a code break.
+
+### On-chain-perp DEXes — instrument key format
 
 All 5 on-chain-perp adapters live under `reference_data/adapters/cefi/` (not `defi/`) organizationally, despite being
-economically on-chain perpetual DEXes — a real filing quirk worth knowing when hunting for the code. All 5 previously
-stamped `instrument_type=InstrumentType.PERPETUAL` correctly in the field while using the `PERP` shorthand (and an
-inconsistent base-quote shape) in the key — the mismatch was between key and field, not a field-level bug.
+economically on-chain perpetual DEXes — a real filing quirk worth knowing when hunting for the code.
 
-**Shipped**: `VENUE:PERPETUAL:BASE-QUOTE` uniformly, dropping the `PERP` shorthand, with the REAL per-venue settlement
-currency (confirmed live 2026-07-08 — method noted per row; HYPERLIQUID/EXTENDED-STARKNET were already confirmed USD
-in an earlier session pass):
+Canonical format: `VENUE:PERPETUAL:BASE-QUOTE` uniformly (no `PERP` shorthand in the key, matching the
+`instrument_type=InstrumentType.PERPETUAL` field), with the real per-venue settlement currency as the quote:
 
-| Venue               | Real settlement currency + verification                                                                                                                                    | Before → after (`instrument_key`)                                                        |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `HYPERLIQUID`       | USD (notional quote; vault collateral is USDC — pre-confirmed)                                                                                                             | `HYPERLIQUID:PERP:BTC` → `HYPERLIQUID:PERPETUAL:BTC-USD`                                 |
-| `ASTER`             | Real per-symbol `quoteAsset`, confirmed live `fapi.asterdex.com/fapi/v1/exchangeInfo`: 504/509 real perps quote USDT, 3 quote USD1, 2 quote a bare "U" — no longer assumed | `ASTER:PERP:BTCUSDT` → `ASTER:PERPETUAL:BTC-USDT` (per-symbol real quote, not hardcoded) |
-| `PACIFICA-SOLANA`   | USDC, confirmed live `docs.pacifica.fi/trading-on-pacifica/unified-margin`: "Pacifica users' account's USDC balance, unrealized PnL... are margined together"              | `PACIFICA-SOLANA:PERP:SOL-PERP` → `PACIFICA-SOLANA:PERPETUAL:SOL-USDC`                   |
-| `EXTENDED-STARKNET` | USD (pre-confirmed live: `collateralAssetName="USD"` uniformly across markets) — already dash-normalized pre-fix, only the `PERP`→`PERPETUAL` rename applied               | `EXTENDED-STARKNET:PERP:ETH-USD` → `EXTENDED-STARKNET:PERPETUAL:ETH-USD`                 |
-| `LIGHTER-ZKSYNC`    | USDC, confirmed live `docs.lighter.xyz/trading/multi-asset-margin`: "Portfolio Balance is the USDC value of the account including unrealized PnL on perpetual positions"   | `LIGHTER-ZKSYNC:PERP:BTC` → `LIGHTER-ZKSYNC:PERPETUAL:BTC-USDC`                          |
+| Venue               | Settlement currency (quote)                                                     |
+| ------------------- | ------------------------------------------------------------------------------- |
+| `HYPERLIQUID`       | USD (notional quote; vault collateral is USDC)                                  |
+| `ASTER`             | Per-symbol real `quoteAsset` (USDT/USD1/"U" depending on symbol, not hardcoded) |
+| `PACIFICA-SOLANA`   | USDC                                                                            |
+| `EXTENDED-STARKNET` | USD (`collateralAssetName="USD"` uniformly across markets)                      |
+| `LIGHTER-ZKSYNC`    | USDC                                                                            |
 
-Note the venue-naming asymmetry too: `HYPERLIQUID`/`ASTER` carry no chain suffix (each is effectively its own
-app-chain — `chain="HYPERLIQUID"` lives in the instrument's `chain` attribute, not the venue token), while
-`PACIFICA-SOLANA`/`EXTENDED-STARKNET`/`LIGHTER-ZKSYNC` carry an explicit chain suffix in the venue itself. Both are
-real, intentional, just asymmetric — not itself part of the PERP/PERPETUAL finding.
+`HYPERLIQUID`/`ASTER` carry no chain suffix (each is effectively its own app-chain — `chain="HYPERLIQUID"` lives in
+the instrument's `chain` attribute, not the venue token), while `PACIFICA-SOLANA`/`EXTENDED-STARKNET`/`LIGHTER-ZKSYNC`
+carry an explicit chain suffix in the venue itself. **No trailing `@VENUE`** on top — venue is already the first
+colon-segment.
 
-**No trailing `@VENUE`** on top (operator explicitly rejected that pattern — venue is already the first colon-segment).
-Live connectors (MTDS `hyperliquid_ws.py`/`hyperliquid_l2book_ws.py`/`hyperliquid_ticker_ws.py`/`aster_book_liq_ws.py`)
+**Known gap, data state (not verifiable from code)**: a dry-run-scoped migration script
+(`migrate_onchain_perp_perpetual_canonical_2026_07_08.py` in market-tick-data-service, dry-run by default, requires
+`--apply` to mutate) exists to bring historical batch tick-data GCS objects and the availability manifest onto this
+key shape; whether `--apply` has been run against production is a live-data question the code cannot answer. See
+[`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`](../../../unified-trading-pm/plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md).
 
-- the onchain-perp batch handler's catalogue-driven symbol enumeration were updated in the same pass to keep live=batch
-  consistent — see `market-tick-data-service@c20ea464`. Historical batch tick-data GCS objects + the availability
-  manifest were NOT yet migrated in this pass (real, non-trivial volume — a dry-run-scoped migration script + follow-up
-  apply is tracked as its own todo, not silently skipped); see
-  [`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`](../../../unified-trading-pm/plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md).
-  Shipped: `instruments-service@f7cf3ea5` (the 5 adapters above), `unified-api-contracts@58a03793` (ASTER's UAC
-  normalize.py, same fix for the live/WS-tick normalization path).
+### AAVE_V3-OPTIMISM venue-token spelling
 
-### AAVE_V3-OPTIMISM misspelled venue-token duplicate (finding 5) — FIXED 2026-07-08
-
-`AAVEV3-OPTIMISM` (missing underscore, 4 real rows) coexisted with the correctly-spelled `AAVE_V3-OPTIMISM` (12 real
-rows) in production, fragmenting the real per-chain reserve set into 2 disjoint keys. Root-cause check: the CURRENT
-`aave_v3.py` adapter code already builds the correct spelling (`venue_tag = f"{self._venue_prefix}-{self._chain}"` →
-`AAVE_V3-OPTIMISM`, since the underscore in `AAVE_V3` is part of the protocol name, not a joiner) — confirmed no
-caller anywhere passes a misspelled `protocol_slug`. The 4 ghost rows (`AAAVE`/`ALINK`/`ALUSD`/`ASUSD` reserves, since
-retired from the curated static-reserve list) were pure historical drift: a prior `collapse_defi_drift_to_canonical_
-2026_06_25.py` pass had already normalised the `venue`/`chain` COLUMNS (all 16 rows show `venue=AAVE_V3
-chain=OPTIMISM`) but never touched the `instrument_id` STRING column itself, leaving the ghost prefix baked into 4
-`instrument_id` values even though the row's own `venue` column was already correct.
-**Fixed**: consolidated all 16 rows under `AAVE_V3-OPTIMISM:` — no adapter-code change needed (already correct
-go-forward); `instruments-service/scripts/instrument_id_venue_spelling_backfill_2026_07_08.py` relabelled the 4
-stale `instrument_id` strings in place directly on `gs://instruments-store-defi-prd-central-element-323112/
-prod/catalog.parquet` (backup: `prod/catalog.20260708-184138.venuefix.bak.parquet`), re-deriving the corrected key
-from the row's own already-correct `venue`/`chain` columns — no re-download from Aave. Verified post-write: 0 rows
-matching the `AAVEV3-OPTIMISM:` prefix, 16 rows under `AAVE_V3-OPTIMISM:`, total row count unchanged (7,284), no new
-duplicate `instrument_id` introduced. The registry layer separately tracks a related-but-distinct problem — bare
-`AAVEV3` (no chain suffix) is listed in `DEPRECATED_DEFI_GHOST_VENUE_NAMES`
-(`unified_api_contracts/registry/capability_declarations/_defi_coverage.py`) as an already-known ghost superseded by
-`AAVE_V3` — already confirmed sufficient for the one live prefix-matching consumer
+`AAVE_V3-OPTIMISM` is the sole canonical spelling (the underscore is part of the protocol name, not a joiner) —
+`aave_v3.py` builds `venue_tag = f"{self._venue_prefix}-{self._chain}"` → `AAVE_V3-OPTIMISM`. The misspelled variant
+`AAVEV3` (no chain suffix, missing underscore) is listed in `DEPRECATED_DEFI_GHOST_VENUE_NAMES`
+(`unified_api_contracts/registry/capability_declarations/_defi_coverage.py`) as a ghost superseded by `AAVE_V3`, and
+is filtered by the one live prefix-matching consumer
 (`deployment-api/deployment_api/services/data_status/rollup_cache.py::strip_defi_ghost_venues`, which strips on
-`venue.split("-", 1)[0]`, so `AAVEV3-OPTIMISM` was already filtered there even before this fix); no separate registry
-change was needed for that consumer.
+`venue.split("-", 1)[0]`).
 
-### MORPHO market-address disambiguator uses a reserved delimiter (finding 6) — FIXED 2026-07-08
+### MORPHO market-address disambiguator
 
-Confirmed in real code, not just captured data: `morpho.py:191` built
-`instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}:{market_key[:8]}"` — a 3rd colon inside the symbol segment,
-ambiguous to any naive `split(":")` parser since colon is the reserved top-level `VENUE:TYPE:SYMBOL` delimiter.
-**Fixed**: `morpho.py` now dash-separates instead —
-`instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}-{market_key[:8]}"` (e.g.
-`MORPHO-BASE:LENDING_MARKET:USDC-EURC-0x305dd1`). All 466 real captured Morpho rows in production (100% of the
-venue's catalog, spanning Ethereum + Base) carried the old 3-colon shape — relabelled in place by the same
-`instrument_id_venue_spelling_backfill_2026_07_08.py` script (last colon → dash), verified zero collisions (dash-join
-produces no duplicate `instrument_id` across the 466 rows) and zero remaining 3-colon Morpho rows post-write.
+`morpho.py` dash-separates the market-disambiguator segment (not colon-separated, since colon is the reserved
+top-level `VENUE:TYPE:SYMBOL` delimiter). Post-split (2026-07-09, see "Lending — A_TOKEN/DEBT_TOKEN split" above),
+the disambiguator is appended to the A_TOKEN/DEBT_TOKEN symbol rather than a flat `LENDING_MARKET` symbol — e.g. for
+a real USDC/EURC market whose `market_key[:8]` disambiguator is `305dd1c2`: venue `MORPHO-BASE`, type `A_TOKEN`,
+symbol `A` + `USDC-EURC-305dd1c2` (supply) and type `DEBT_TOKEN`, symbol `DEBT` + `USDC-EURC-305dd1c2` (borrow) —
+same disambiguator, now on both halves of the split.
 
 **What is `market_key` / that trailing `0x305dd1` segment, in plain language?** It is NOT a fee tier, a version
 number, or arbitrary padding — it's a (truncated) piece of Morpho Blue's own on-chain **market identifier**, and
-it's load-bearing, not decorative. Confirmed directly in `morpho.py:185` (`market_key = str(market.get("marketId",
+it's load-bearing, not decorative. Confirmed directly in `morpho.py:198` (`market_key = str(market.get("marketId",
 ""))`, sourced from the `blue-api.morpho.org` GraphQL API) plus the query itself (`morpho.py:48-65`), which also
 fetches `lltv` per market. Here's why Morpho needs a 3rd identity segment at all, when every other lending protocol
 in this doc (Aave_V3, Compound_V3, Euler_V2, Fluid, ...) identifies a market by token symbol alone:
@@ -194,162 +188,129 @@ in this doc (Aave_V3, Compound_V3, Euler_V2, Fluid, ...) identifies a market by 
   as a symbol would be identical for both.
 - So the token-pair symbol alone is genuinely NOT a unique key on Morpho — Morpho's own protocol design solves this by
   hashing the market's full parameter set (loan token, collateral token, oracle, interest-rate model, LLTV) into one
-  `bytes32` **market ID** on-chain, which is exactly the `marketId` this adapter reads from the API. The trailing
-  segment in `MORPHO-BASE:LENDING_MARKET:USDC-EURC-0x305dd1` is the first 8 hex characters of that market ID
-  (`market_key[:8]`) — just enough to disambiguate two markets that would otherwise collide on symbol alone, without
-  inflating the instrument key with the full 66-character hash. It's the dash-separated (not colon-separated, see the
-  fix above) equivalent of "which specific isolated market", not a cosmetic suffix.
+  `bytes32` **market ID** on-chain, which is exactly the `marketId` this adapter reads from the API. In the
+  `MORPHO-BASE` / `A_TOKEN` / `AUSDC-EURC-305dd1c2` example above, the trailing `305dd1c2` is the first 8 hex
+  characters of that market ID (`market_key[:8]`) — just enough to disambiguate two markets that would otherwise
+  collide on symbol alone, without inflating the instrument key with the full 66-character hash.
 
-### YEARN vs YEARN_V3 canonical venue-prefix contradiction — FIXED 2026-07-08
+### YEARN_V3 canonical venue prefix
 
-Real registry contradiction found writing this doc (see "Systemic venue-token duplicate-spelling pattern" below for
-the full evidence + decision rationale): `yearn.py`'s adapter code hardcoded `venue_tag = f"YEARN-{self._chain}"`
-(bare `YEARN`), which matched only `VENUE_TO_ADAPTER_KEY`'s 2 stale entries — every other UAC registry
-(`defi_venue_capabilities.py`, `venue_launch_dates.py`, `defi_venues.py`, `PROTOCOL_CAPABILITIES`, `chain_env.py`,
-`DEPRECATED_DEFI_GHOST_VENUE_NAMES`) already treated `YEARN_V3` as canonical. **Fixed**: `yearn.py` now builds
-`venue_tag = f"YEARN_V3-{self._chain}"`; `VENUE_TO_ADAPTER_KEY` (`venue_adapter_keys.py`) relabelled
-`YEARN-ETHEREUM`/`YEARN-ARBITRUM` → `YEARN_V3-ETHEREUM`/`YEARN_V3-ARBITRUM`. No production-catalog backfill was
-needed — 0 real Yearn rows exist in `prod/catalog.parquet` today (confirmed directly), so this is a pure go-forward
-fix, not a data migration. **Known follow-up, out of this fix's repo scope**: `market-tick-data-service`'s
-`vault_yearn_adapter.py:37` and `execution-service`'s `defi_execution/protocols/yearn.py:50` +
-`defi_execution/protocols/base.py:100` still hardcode the now-superseded bare `"YEARN-ETHEREUM"` — per the
-canonicalization doc's explicitly-authorized staged migration order (UAC → instruments-service → MTDS →
-strategy-service → deployment, "live breakage explicitly authorized"), those 2 repos need a follow-up fix to match
-before Yearn capability/venue-gated checks are consistent end-to-end. Not fixed here (outside this pass's repo
-scope: instruments-service + unified-api-contracts only).
+`YEARN_V3` is the canonical venue prefix (not bare `YEARN`) across every UAC registry — `defi_venue_capabilities.py`,
+`venue_launch_dates.py`, `defi_venues.py`, `PROTOCOL_CAPABILITIES` (`_defi.py`), `chain_env.py`,
+`DEPRECATED_DEFI_GHOST_VENUE_NAMES` (which lists the glued `YEARNV3` as the retired ghost of `YEARN_V3`) — and in
+`yearn.py`'s adapter code (`venue_tag = f"YEARN_V3-{self._chain}"`) and `VENUE_TO_ADAPTER_KEY`
+(`YEARN_V3-ETHEREUM`/`YEARN_V3-ARBITRUM`).
 
-### Balancer cross-chain pool-address collision — FIXED 2026-07-08
+**Known gap, cross-repo**: `market-tick-data-service`'s `vault_yearn_adapter.py:37` and `execution-service`'s
+`defi_execution/protocols/yearn.py:50` + `defi_execution/protocols/base.py:100` still hardcode the superseded bare
+`"YEARN-ETHEREUM"`. Per the canonicalization doc's staged migration order (UAC → instruments-service → MTDS →
+strategy-service → deployment), those 2 repos need a follow-up fix before Yearn capability/venue-gated checks are
+consistent end-to-end.
 
-Found while re-checking the AAVE_V3-OPTIMISM/MORPHO fixes above for other real duplicate `instrument_id` values
-elsewhere in the catalog: **5 pairs (10 rows) of real, economically-unrelated Balancer pools shared an identical
-`instrument_id`** — the only duplicate `instrument_id` values anywhere in the entire 7,284-row `prod/catalog.parquet`
-(confirmed by a whole-catalog duplicate scan, not just a Balancer-scoped one). Before (real rows, sorted by the
-colliding id):
+### Balancer cross-chain pool-address collision
 
-| `instrument_id` (before)                     | chain (row 1) | pool (row 1)                     | chain (row 2) | pool (row 2)                               |
-| -------------------------------------------- | ------------- | -------------------------------- | ------------- | ------------------------------------------ |
-| `0x01abc00e86c7e258823b9a055fd62ca6cf61a163` | ETHEREUM      | "DeFi Revenue Leaders" (YFI-UNI) | POLYGON       | "Balancer 33 BIFI 33 WETH 33 WBTC"         |
-| `0x03cd191f589d12b0582a99808cf19851e468e6b5` | ETHEREUM      | "Balancer 50 BAL 50 MKR"         | POLYGON       | "Balancer Polygon Tricrypto"               |
-| `0x06df3b2bbb68adc8b0e302443692037ed9f91b42` | ETHEREUM      | "Balancer USD Stable Pool"       | POLYGON       | "Balancer Polygon Stable Pool"             |
-| `0xc6a5032dc4bf638e15b4a66bc718ba7ba474ff73` | ETHEREUM      | "Balancer 60 WETH 40 DAI"        | POLYGON       | "Balancer Polygon BAL Pool"                |
-| `0xfeadd389a5c427952d8fdb8057d6c8ba1156cc56` | ETHEREUM      | "Balancer BTC Stable Pool"       | POLYGON       | "Balancer Polygon WBTC-renBTC Stable Pool" |
-
-**Root cause, confirmed by reading the real adapter code (not assumed to match the AAVE_V3/MORPHO venue-token-spelling
-class of bug — it doesn't)**: `balancer.py`'s current adapter code already builds a fully chain-qualified key
-(`venue_tag = f"BALANCER-{self._chain}"`, `instrument_key = f"{venue_tag}:POOL:{base}-{quote}"`,
-`balancer.py:225-226`), and the catalog's own `glued_pair_id` column is likewise already correctly
-chain-differentiated for every one of these 10 rows (e.g. `BALANCER-ETHEREUM:POOL:YFI-UNI:15.0` vs
-`BALANCER-POLYGON:POOL:WBTC-WETH:25.0` for the first pair above) — no adapter-code change needed, same "already
-correct go-forward, stale persisted data" shape as the AAVE_V3-OPTIMISM fix. The real bug is one layer up: every
-DEX-pool row's **primary** `instrument_id` in the persisted catalog is the bare on-chain pool contract address alone
-(`pool_address.lower()`, no chain) — this is the already-documented, already-target-decided "DEX pools (finding 2)"
-gap above, which affects all 13 DEX-pool protocols and has its own separately-tracked full-catalog migration (not
-yet shipped). That chain-agnostic scheme is silently fine for the other ~7,274 rows (every other pool address in the
-catalog happens to be globally unique) but breaks for these exact 5 Balancer pools, whose on-chain contract address
-is bit-for-bit identical on both Ethereum and Polygon — a real, benign on-chain coincidence: Balancer deployed its
-pool factory to both chains within days of each other in 2021, and pools are created via sequential `CREATE` from
-that per-chain factory address; when the Nth-pool deployment nonce happens to line up across the two chains'
-independent histories, the resulting contract address collides even though the two pools are unrelated (different
-token pairs, different names, different `market_created_at` dates — confirmed per-row above).
-
-**Fixed (surgical, not the full finding-2 migration)**: `scripts/balancer_cross_chain_pool_address_collision_
-backfill_2026_07_08.py` relabelled only the 10 colliding rows in place directly on
-`gs://instruments-store-defi-prd-central-element-323112/prod/catalog.parquet` (backup:
-`prod/catalog.20260708-200135.balancerchainfix.bak.parquet`), appending the row's own already-correct `chain` column
-via the `@CHAIN` suffix this doc's general `VENUE:TYPE:PAYLOAD[@CHAIN]` grammar already establishes — e.g.
-`0x01abc00e86c7e258823b9a055fd62ca6cf61a163` → `0x01abc00e86c7e258823b9a055fd62ca6cf61a163@ETHEREUM` /
-`...@POLYGON`. The other 2,403 non-colliding Balancer rows (and every other DEX-pool row) were left untouched —
-they aren't broken today, and migrating them wholesale to the finding-2 target format is that separately-tracked
-job, not this one. **Verified after write, by re-downloading the live blob fresh (not reusing the pre-write
-in-memory frame)**: row count unchanged (7,284 → 7,284), and a whole-catalog duplicate-`instrument_id` scan across
-every venue found **0 remaining collisions** (down from the 10 rows / 5 pairs found before).
+`balancer.py` builds a fully chain-qualified key (`venue_tag = f"BALANCER-{self._chain}"`,
+`instrument_key = f"{venue_tag}:POOL:{base}-{quote}"`), and the catalog's `glued_pair_id` column is likewise
+chain-differentiated. A small number of Balancer pools happen to share a bit-for-bit identical on-chain contract
+address across Ethereum and Polygon (Balancer deployed its pool factory to both chains within days of each other in
+2021, via sequential `CREATE` from each per-chain factory address, so the Nth-pool deployment nonce can line up
+across the two chains' independent histories even though the pools are economically unrelated). Since every DEX-pool
+row's **primary** `instrument_id` today is the bare on-chain pool contract address alone (`pool_address.lower()`, no
+chain — the "DEX pools" gap above), these specific pools are disambiguated with an explicit `@CHAIN` suffix (the
+general `VENUE:TYPE:PAYLOAD[@CHAIN]` grammar's escape hatch) rather than waiting on the full finding-2 migration.
 
 ---
 
 ## Systemic venue-token duplicate-spelling pattern
 
-Beyond AAVE_V3/AAVEV3 above, the audit found this class is systemic: `MORPHO_VAULTS`/`MORPHOVAULTS`,
-`YEARN_V3`/`YEARNV3`, `UNISWAP_V3`/`UNISWAPV3` (real, though the last 2 are acknowledged only in a code comment inside
-a manifest-rebuild script, never fixed at the GCS-object-path level — that's a different bucket/layer
-(`market-tick-data-service`'s manifest) than the `instruments-service` catalog this doc covers, out of this pass's
-repo scope). The registry already carries a real `DEPRECATED_DEFI_GHOST_VENUE_NAMES` frozenset (`_defi_coverage.py`)
-that the manifest consolidator and data-status service both filter against at read time: `UNISWAPV3`/`UNISWAPV2`/
-`UNISWAPV4`, `AAVEV2`/`AAVEV3`, `CAMELOTV3`, `COMPOUNDV3`, `MORPHO_VAULTS` (legacy underscore form superseded by the
-fully-glued `MORPHOVAULTS`), `PANCAKESWAPV3`, `SUSHISWAPV3`, `VELODROMEV2`, `TRADER_JOEV2`/`TRADERJOEV2`, `YEARNV3`,
-`AERODROMEV3`. This filters the symptom downstream (keeps ghost names out of the manifest/UI) but doesn't stop new
-duplicate writes at the adapter/writer source — the underlying fix is still the canonicalization migration above.
+Beyond AAVE_V3/AAVEV3, this class is systemic: `MORPHO_VAULTS`/`MORPHOVAULTS`, `YEARN_V3`/`YEARNV3`,
+`UNISWAP_V3`/`UNISWAPV3` also occur (the last 2 live in the MTDS manifest / GCS-object-path layer — a different
+bucket/layer than the `instruments-service` catalog this doc covers — acknowledged in a code comment inside
+market-tick-data-service's `rebuild_defi_manifest.py`). The registry carries a `DEPRECATED_DEFI_GHOST_VENUE_NAMES`
+frozenset (`_defi_coverage.py`) that the manifest consolidator and data-status service both filter against at read
+time: `UNISWAPV3`/`UNISWAPV2`/`UNISWAPV4`, `AAVEV2`/`AAVEV3`, `CAMELOTV3`, `COMPOUNDV3`, `MORPHO_VAULTS` (legacy
+underscore form superseded by the fully-glued `MORPHOVAULTS`), `PANCAKESWAPV3`, `SUSHISWAPV3`, `VELODROMEV2`,
+`TRADER_JOEV2`/`TRADERJOEV2`, `YEARNV3`, `AERODROMEV3`. This filters the symptom downstream (keeps ghost names out
+of the manifest/UI) but doesn't stop new duplicate writes at the adapter/writer source.
 
-**YEARN vs YEARN_V3 — RESOLVED 2026-07-08.** Yearn's canonical venue prefix disagreed across registries: `VENUE_TO_
-ADAPTER_KEY` (`unified_api_contracts/registry/venue_adapter_keys.py`) declared static entries `YEARN-ETHEREUM`/
-`YEARN-ARBITRUM` → adapter key `yearn`, while `PROTOCOL_CAPABILITIES` (`_defi.py`) declared the protocol under key
-`yearn_v3` with `venue_prefix="YEARN_V3"`, and `DEPRECATED_DEFI_GHOST_VENUE_NAMES` separately listed `YEARNV3` as a
-ghost superseded by `YEARN_V3`. **Decision evidence** (real registry-consumer count, since 0 real Yearn rows exist in
-`prod/catalog.parquet` today to compare row counts on): `YEARN_V3` is the canonical form in 6 separate real
-registries/locations — `defi_venue_capabilities.py` (3 chain entries: ETHEREUM/ARBITRUM/OPTIMISM),
-`venue_launch_dates.py`, `defi_venues.py` (8 entries across `ALL_DEFI_VENUES` / `LEGACY_DEFI_VENUE_ALIASES` /
-`DATA_SOURCE_MAP`), `_defi.py`'s `PROTOCOL_CAPABILITIES`, `chain_env.py` (3 entries), and
-`DEPRECATED_DEFI_GHOST_VENUE_NAMES` (which explicitly names `YEARNV3` — the glued form — as the retired ghost of
-`YEARN_V3`, confirming the underscore form is the one this registry's own design treats as real). `VENUE_TO_ADAPTER_
-KEY`'s 2 bare `YEARN-*` entries (no `OPTIMISM` entry even, unlike the other 6 registries) were the sole outlier — and
-the real adapter bug this uncovered: `yearn.py` itself emitted `venue_tag = f"YEARN-{self._chain}"`, matching ONLY
-that one outlier registry and none of the other 6. **Fixed**: `yearn.py` → `YEARN_V3-{chain}`; `VENUE_TO_ADAPTER_KEY`
-→ `YEARN_V3-ETHEREUM`/`YEARN_V3-ARBITRUM`. See "Instrument ID format" above for the full writeup + the MTDS/
-execution-service follow-up this surfaces.
+**Key-vs-field abbreviation convention.** Yield/LST/restaking adapters historically diverged on whether the
+instrument key or the `instrument_type` field carries the more specific classification. The current convention,
+per group:
 
-**Post-fix full-catalog scan (2026-07-08)**: re-ran the same ghost-detection check
-(`canonicalize_defi_venue_combined` applied to every real `instrument_id` prefix in `prod/catalog.parquet`, 7,284
-rows) after the AAVE_V3-OPTIMISM + MORPHO fixes above landed — 0 remaining venue-prefix mismatches found anywhere in
-the live DeFi catalog. The `MORPHO_VAULTS`/`MORPHOVAULTS`/`UNISWAP_V3`/`UNISWAPV3` instances named above are real but
-live in the MTDS manifest / GCS-object-path layer (a different repo/bucket, out of this pass's scope), not in this
-catalog. Also checked and explicitly ruled out as a same-class bug (informational, not touched — the file is CeFi-
-classified, not a DeFi adapter): `EXTENDED` (1 row, `venue=EXTENDED chain=STARKNET`) vs `EXTENDED-STARKNET` (14 rows,
-`venue=EXTENDED-STARKNET chain=""`) is a `venue`/`chain` COLUMN-split inconsistency, not an `instrument_id` spelling
-duplicate — the `instrument_id` string itself is identical (`EXTENDED-STARKNET:PERP:...`) in both cases, so it's a
-different bug class living in `reference_data/adapters/cefi/extended.py`, outside this pass's DeFi-adapter-naming
-scope.
-
-**Key-vs-field abbreviation mismatch, extended pattern — FIXED 2026-07-08 for this doc's 12 in-scope protocols.**
-Every yield/LST/restaking adapter in this doc's scope stamped `LST` or `VAULT` in the instrument key while the
-`instrument_type` field said `YIELD_BEARING` — e.g. `lido.py:90,94` (`{venue}:LST:{symbol}` / `YIELD_BEARING`),
-`etherfi.py`, `renzo.py`, `kelpdao.py`, `puffer.py`, `rocket_pool.py` (all `:LST:`); `yearn.py`, `beefy.py`,
-`karak.py`, `idle.py`, `symbiotic.py`, `convex.py` (all `:VAULT:`). Same divergence class as PERP-vs-PERPETUAL, but
-**which side won differs per group — checked real downstream consumers before picking, per the PERP/PERPETUAL
-precedent's own caveat**:
-
-- **The 6 `LST`-keyed adapters (Lido, EtherFi, Renzo, KelpDAO, Puffer, RocketPool): the FIELD was fixed to match the
-  KEY**, i.e. `instrument_type` now stamps `InstrumentType.LST` (a real, distinct enum member — not a shorthand for
-  `YIELD_BEARING`). This is the OPPOSITE direction from the PERP/PERPETUAL fix, for good reason: `LST` is a real
-  `InstrumentType` enum member (`unified_api_contracts/_instrument_enums.py`) with its own real downstream ledger
-  treatment — `ledger_asset_resolution.py` maps `InstrumentType.LST → LedgerAssetClass.LST` and
-  `InstrumentType.YIELD_BEARING → LedgerAssetClass.VAULT_SHARE`, a real accounting distinction, not a cosmetic one —
-  and real consumers (execution-service's `catalog_validator.py`/`dependency_validator.py`/`data_availability_
-validator.py`, strategy-service's `pnl_calculator.py`/`settlement_service.py`/`risk_monitor.py`) already parse the
-  KEY's `:LST:` segment directly for real validation and PnL/risk logic, so the field — which was the one lying —
-  was fixed to match. The `get_instruments(instrument_type=...)` filter guard was widened (not narrowed) to accept
-  either `InstrumentType.LST` or `InstrumentType.YIELD_BEARING`, so no existing caller regresses.
-- **The 6 `VAULT`-keyed adapters (Yearn, Beefy, Karak, Idle, Symbiotic, Convex): the KEY was fixed to match the
-  FIELD**, i.e. the key's middle segment is now `YIELD_BEARING`, dropping the `VAULT` shorthand. Unlike `LST`,
-  `VAULT` is NOT a real `InstrumentType` enum member (checked: no `InstrumentType.VAULT` exists), and no real
-  consumer in instruments-service/strategy-service/execution-service parses a `:VAULT:` key-substring for
-  classification — so there was no real consumer to break, and the field (`YIELD_BEARING`, already correct) won.
-- **Sanctum, Solblaze, and Jito-restaking were checked and intentionally NOT touched** — all 3 are explicitly
-  out-of-scope Solana venues per this doc's own scope section (a separate "Solana DeFi" surface), and share the
-  same `LST`/`VAULT` pattern; flagged for whichever future pass covers Solana-native DeFi, along with the 10 more
-  Solana/DeFi venues (drift, mango, zeta, flash_trade, meteora, jupiter, phoenix, lifinity, kamino, marinade) the
-  original audit found with the same mismatch class.
-- **Known related-but-unfixed finding**: `market-tick-data-service` has its own SEPARATE, independently-written
-  adapters for some of these same protocols (`restaking_karak_adapter.py`, `vault_pendle_adapter.py`,
-  `restaking_symbiotic_adapter.py`, `restaking_jito_adapter.py` — all still build `:VAULT:` keys) — checked and
-  confirmed these are NOT wired into MTDS's `factory.py` dispatch table (no `_ADAPTERS`-equivalent entry references
-  them; only reachable from their own dedicated unit tests), so they appear to be orphaned/unwired scaffolding, not
-  a live parallel path that would now disagree with instruments-service's fixed convention. Not touched in this
-  pass (out of this doc's repo scope) — worth a cleanup pass if/when they're ever wired in.
+- **`LST`-keyed adapters (Lido, EtherFi, Renzo, KelpDAO, Puffer, RocketPool)**: the key uses `:LST:` and
+  `instrument_type` stamps `InstrumentType.LST` (a real, distinct enum member, not a shorthand for `YIELD_BEARING`).
+  `LST` has its own downstream ledger treatment — `ledger_asset_resolution.py` maps
+  `InstrumentType.LST → LedgerAssetClass.LST` and `InstrumentType.YIELD_BEARING → LedgerAssetClass.VAULT_SHARE`, a
+  real accounting distinction — and execution-service's `catalog_validator.py`/`dependency_validator.py`/
+  `data_availability_validator.py` and strategy-service's `pnl_calculator.py`/`settlement_service.py`/
+  `risk_monitor.py` parse the key's `:LST:` segment directly. `get_instruments(instrument_type=...)` accepts either
+  `InstrumentType.LST` or `InstrumentType.YIELD_BEARING`.
+- **`VAULT`-keyed adapters (Yearn, Beefy, Karak, Idle, Symbiotic, Convex)**: the key's middle segment is
+  `YIELD_BEARING`, not `VAULT` — `VAULT` is not a real `InstrumentType` enum member, and no consumer in
+  instruments-service/strategy-service/execution-service parses a `:VAULT:` key-substring for classification.
+- **Sanctum, Solblaze, and Jito-restaking are explicitly out-of-scope Solana venues** per this doc's own scope
+  section (a separate "Solana DeFi" surface) with real instruments-service adapters (`sanctum.py`, `solblaze.py`,
+  `jito_restaking.py`). **Fixed 2026-07-09** (`instruments_docs_audit_outstanding_items_2026_07_08.md` finding C4):
+  `sanctum.py`/`solblaze.py` both keyed `:LST:` while stamping `instrument_type=InstrumentType.YIELD_BEARING` — the
+  field was fixed to `InstrumentType.LST` (LST is the real, distinct enum member; same "field follows the already-real
+  key" convention as the `LST`-keyed group above). `jito_restaking.py` keyed `:VAULT:` against the same field — the
+  key was fixed to `:YIELD_BEARING:` (same "key follows the already-real field" convention as the `VAULT`-keyed group
+  above, since `VAULT` isn't a real `InstrumentType`). Real before/after:
+  `SANCTUM-SOLANA:LST:INF` (field YIELD_BEARING → LST, key unchanged) and
+  `JITORESTAKING-SOLANA:VAULT:JTORK-EZSOL` → `JITORESTAKING-SOLANA:YIELD_BEARING:JTORK-EZSOL` (key changed, field
+  unchanged). `get_instruments(instrument_type=...)` on Sanctum/Solblaze now accepts either `InstrumentType.LST` or
+  `InstrumentType.YIELD_BEARING` (back-compat), mirroring the `LST`-keyed group.
+- **Drift, Jupiter, Flash Trade — PERP/SPOT shorthand fixed 2026-07-09** (same C4 finding, same convention as the
+  on-chain-perp `PERP`-vs-`PERPETUAL` canonicalization above): `drift.py` keyed `:PERP:`/`:SPOT:` against
+  `instrument_type=PERPETUAL`/`SPOT_PAIR`; `jupiter.py` keyed `:SPOT:` against `SPOT_PAIR`; `flash_trade.py` keyed
+  `:PERP:` against `PERPETUAL`. All 3 keys were fixed to the real enum spelling (`PERPETUAL`/`SPOT_PAIR` aren't
+  shorthand-able — `PERP`/`SPOT` are not real `InstrumentType` members). Real before/after:
+  `DRIFT-SOLANA:PERP:SOL-PERP` → `DRIFT-SOLANA:PERPETUAL:SOL-PERP`,
+  `DRIFT-SOLANA:SPOT:SOL` → `DRIFT-SOLANA:SPOT_PAIR:SOL`,
+  `JUPITER-SOLANA:SPOT:SOL-USDC` → `JUPITER-SOLANA:SPOT_PAIR:SOL-USDC`,
+  `FLASH-SOLANA:PERP:SOL` → `FLASH-SOLANA:PERPETUAL:SOL`.
+- **EigenLayer, EthFi — `GOVERNANCE_TOKEN` shorthand fixed 2026-07-09** (new finding, same C4 class): both adapters
+  keyed `:GOVERNANCE_TOKEN:` while the field already correctly said `InstrumentType.SPOT_PAIR` (`GOVERNANCE_TOKEN` is
+  not a real `InstrumentType` member). Keys fixed to `:SPOT_PAIR:` to match the field. This also fixed a real
+  canonical-form type-filter bug (same class as
+  `canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08.md`): both adapters' `get_instruments(instrument_type=...)`
+  guard only matched the literal strings `"GOVERNANCE_TOKEN"`/`"governance_token"`, so filtering by the adapters' own
+  real field value (`InstrumentType.SPOT_PAIR`) silently returned `[]`; the guard now accepts
+  `InstrumentType.SPOT_PAIR` too (plus the legacy strings, back-compat). Real before/after:
+  `EIGENLAYER-ETHEREUM:GOVERNANCE_TOKEN:EIGEN` → `EIGENLAYER-ETHEREUM:SPOT_PAIR:EIGEN`,
+  `ETHERFI-GOV-ETHEREUM:GOVERNANCE_TOKEN:ETHFI` → `ETHERFI-GOV-ETHEREUM:SPOT_PAIR:ETHFI`.
+- **COMPOUND_V3's `SUPPLY`/`BORROW` key segments reviewed 2026-07-09, deliberately left as-is** — unlike the shorthand
+  tokens above, `SUPPLY`/`BORROW` carry real, load-bearing information (distinct supply-side vs borrow-side legs of
+  one Comet market) that a bare `LENDING` TYPE segment would erase; `build_canonical_instrument_id` also cannot
+  represent them today (neither is a real `InstrumentType`). This is the same key-segment rename this doc's lending
+  table above already tracks as a separate, GCS-partition-migration-gated follow-up
+  (`SUPPLY`/`BORROW` → `A_TOKEN`/`DEBT_TOKEN`), not a quick key/field alignment — left untouched pending that
+  migration, per `canonical_id_builder_retrofit_checklist_2026_07_08.md` todo 2's explicit caution against blindly
+  collapsing a load-bearing distinction.
+- **Remaining known limitation** — 7 more Solana/DeFi venues (mango, zeta, meteora, phoenix, lifinity, kamino,
+  marinade) still share the `PERP`/`SPOT`-vs-`PERPETUAL`/`SPOT_PAIR` shorthand mismatch class (e.g. `mango.py` keys
+  `:PERP:` against `instrument_type=InstrumentType.PERPETUAL`) — out of this pass's scope, a known follow-up for
+  whichever pass covers the rest of Solana-native DeFi conventions.
+- **Shared canonical-id builder adoption (2026-07-09)**: Sanctum/Solblaze/Jito-restaking/Drift/EigenLayer/EthFi/
+  Jupiter/Flash-Trade above, plus Balancer/Curve/Ethena/Jito/Beefy/Convex/Idle/Karak/EtherFi/KelpDAO (the
+  already-field-fixed `LST`/`VAULT`-keyed group from 2026-07-08), now all route `instrument_key` construction through
+  `unified_api_contracts.build_canonical_instrument_id(AssetGroup.DEFI, venue, InstrumentType.X, symbol,
+passthrough=True)` instead of an ad hoc f-string — part of the same workspace-wide retrofit tracked in
+  `canonical_id_builder_retrofit_checklist_2026_07_08.md` as the 6-protocol lending split above. `COMPOUND_V3` is
+  the one adapter in this batch NOT retrofitted, for the `SUPPLY`/`BORROW` reason above (the builder cannot represent
+  those TYPE segments).
+- **Known gap, cross-repo**: `market-tick-data-service` has its own separate adapters for some of these same
+  protocols (`restaking_karak_adapter.py`, `vault_pendle_adapter.py`, `restaking_symbiotic_adapter.py`,
+  `restaking_jito_adapter.py`) — these ARE wired into MTDS's `factory.py` dispatch table (`"karak"`, `"pendle"`,
+  `"jito_restaking"`, `"symbiotic"` entries) and still build `:VAULT:` keys with `instrument_type="RESTAKING_VAULT"`,
+  a live divergence from instruments-service's `YIELD_BEARING`-keyed convention for the equivalent protocols, not
+  dead/orphaned code.
 
 ---
 
 ## DEX pools
 
-### Adapter architecture: 5 native adapters, 7 protocols reuse one via config
+### Adapter architecture: 5 native adapters, 8 protocols reuse one via config
 
 Uniswap V2, Uniswap V3, Uniswap V4, Balancer, and Curve each have a dedicated adapter class. Seven more DEX
 protocols/forks (PancakeSwap_V3, Sushiswap_V3, Sushiswap, Aerodrome_V3, Camelot_V3, Velodrome_V2, TraderJoe_V2) plus
@@ -362,32 +323,33 @@ config variants of one of them."
 
 ### Protocol × chain coverage (real, from `SUBGRAPH_IDS`)
 
-| Protocol              | Chains with a live subgraph ID today                                                                                                 |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Uniswap V2            | Ethereum                                                                                                                             |
-| Uniswap V3            | Ethereum, Arbitrum, Base, Optimism, Polygon (Polygon subgraph returns 0 instruments — see gaps below)                                |
-| Uniswap V4            | Ethereum                                                                                                                             |
-| Balancer              | Ethereum, Arbitrum, Polygon, Optimism, Avalanche, Base                                                                               |
-| Curve                 | Ethereum, Optimism, Avalanche (Arbitrum/Polygon only exist on the deprecated hosted service — use `api.curve.fi` instead, not wired) |
-| PancakeSwap_V3        | BSC, Ethereum, Base                                                                                                                  |
-| Sushiswap_V3          | Ethereum, Base, Avalanche                                                                                                            |
-| Sushiswap (legacy V2) | Arbitrum                                                                                                                             |
-| Aerodrome_V3          | Base                                                                                                                                 |
-| Velodrome_V2          | Optimism (subgraph has 881 instruments but zero parquets ever written — see gaps below)                                              |
-| Camelot_V3            | Arbitrum                                                                                                                             |
-| TraderJoe_V2          | Avalanche                                                                                                                            |
-| GMX                   | Arbitrum, Avalanche (Avalanche has ~1 instrument / minimal historical data)                                                          |
+| Protocol              | Chains with a live subgraph ID today                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Uniswap V2            | Ethereum                                                                                                                 |
+| Uniswap V3            | Ethereum, Arbitrum, Base, Optimism, Polygon (Polygon subgraph returns 0 instruments — see gaps below)                    |
+| Uniswap V4            | Ethereum                                                                                                                 |
+| Balancer              | Ethereum, Arbitrum, Polygon, Optimism, Avalanche, Base                                                                   |
+| Curve                 | Ethereum, Avalanche, Optimism, Arbitrum, Polygon, Base, Fantom (via the Curve REST API `api.curve.finance`, no subgraph) |
+| PancakeSwap_V3        | BSC, Ethereum, Base                                                                                                      |
+| Sushiswap_V3          | Ethereum, Base, Avalanche                                                                                                |
+| Sushiswap (legacy V2) | Arbitrum                                                                                                                 |
+| Aerodrome_V3          | Base                                                                                                                     |
+| Velodrome_V2          | Optimism (subgraph has 881 instruments but zero parquets ever written — see gaps below)                                  |
+| Camelot_V3            | Arbitrum                                                                                                                 |
+| TraderJoe_V2          | Avalanche                                                                                                                |
+| GMX                   | Arbitrum, Avalanche (Avalanche has ~1 instrument / minimal historical data)                                              |
 
-### Known gaps (real, tracked in `_defi_coverage.py` — this is the SSOT data-status reads, not a TODO list to
-
-re-derive)
+### Known gaps (real, tracked in `_defi_coverage.py` — this is the SSOT data-status reads, not a TODO list to re-derive)
 
 - **Empty/deprecated subgraphs** (`EMPTY_OR_DEPRECATED_DEFI_VENUES`): `TRADER_JOE_V2-AVALANCHE` (0 instruments),
   `UNISWAP_V3-POLYGON` (subgraph returns 0), `GMX-AVALANCHE` (minimal/no historical parquets).
 - **Subgraph exists, never onboarded** (`DEFI_INSTRUMENTS_NOT_YET_COLLECTED`): `VELODROME_V2-OPTIMISM` (881
   instruments available, zero parquets written), `SPARK-ETHEREUM` (adapter shipped, subgraph has 17 markets, no
-  historical parquets yet), `SANCTUM-SOLANA` / `SOLBLAZE-SOLANA` (out of this doc's scope — Solana LST adapters not
-  built yet). data-status intentionally does not flag these as "missing" until the first real write lands.
+  historical parquets yet). `SANCTUM-SOLANA` / `SOLBLAZE-SOLANA` are also listed here (out of this doc's EVM-centric
+  scope — see the scope section); their instruments-service adapters (`sanctum.py`, `solblaze.py`) exist and are
+  wired into the factory registry, but no historical parquets have been backfilled yet — the registry's own comment
+  describing the adapters as "not yet created" is itself stale. data-status intentionally does not flag these as
+  "missing" until the first real write lands.
 
 ### Fee tiers
 
@@ -395,38 +357,30 @@ Uniswap V3's `feeTier` field is hundredths-of-a-basis-point on the wire (500 = 0
 adapter converts to whole basis points for the canonical symbol. V2-style pools (Uniswap V2, most forks) imply a flat
 0.3% fee with no on-chain fee-tier field.
 
-### Subgraph fetch: TVL-ranked, not exhaustive — real ceiling is ~6,000 pools, not the old docs' "500"
+### Subgraph fetch: TVL-ranked, not exhaustive — real ceiling is ~6,000 pools
 
 DEX pool adapters (Uniswap V2/V3/V4, and the config-variant protocols that reuse `UniswapV3ReferenceDataAdapter`) query
 the subgraph with `orderBy: totalValueLockedUSD, orderDirection: desc`, paginated (`uniswap_v3.py:55,57`:
 `_FETCH_LIMIT = 1000` per page, `_MAX_SKIP = 5000` → up to 6 pages, so up to **~6,000** pools fetched per protocol per
-run, ordered highest-TVL-first). **The old pre-consolidation docs cited a stale "top-500-by-TVL" figure** — that
-number no longer matches the real code. The major-assets whitelist filter (below) then runs on TOP of this
-TVL-ranked fetch, not instead of it — it's a two-stage pipeline: (1) fetch the highest-TVL pools up to the real
-ceiling, (2) keep only the ones where both `base_asset` and `quote_asset` pass the whitelist.
+run, ordered highest-TVL-first). The major-assets whitelist filter (below) runs on top of this TVL-ranked fetch, not
+instead of it — it's a two-stage pipeline: (1) fetch the highest-TVL pools up to the real ceiling, (2) keep only the
+ones where both `base_asset` and `quote_asset` pass the whitelist.
 
-**Coverage gap — PARTIALLY FIXED 2026-07-08 (Uniswap V3 + the 8 shared-class protocols only).** A genuine major-asset
-pool (e.g. a real DAI/USDT pool on a smaller-TVL fork) that ranks below the ~6,000-pool cutoff on a given day was
-never fetched at all, so the whitelist filter never got a chance to keep it — the TVL ceiling was a hard cutoff
-applied _before_ curation, not a fallback safety net for curated pairs. **Fix implemented**: `uniswap_v3.py` now runs
-a supplementary query (`_fetch_major_asset_pools`) that asks the subgraph directly for pools where both `token0` AND
-`token1` are in `DEFI_MAJOR_ASSET_ADDRESS_LIST` (`unified_api_contracts/registry/defi_major_assets.py` — an
-Ethereum-mainnet address list that already existed in the registry for exactly this purpose but had never been wired
-into any adapter), merging any pools the TVL-ranked cascade missed into the result set. **Verified live against the
-production gateway (2026-07-08)**: this query found a real `DAI-USDT` pool
-(`0x3196f48548c3b8c901bc4cc5ad662ba97c9c0b2b`, feeTier 10000) with `totalValueLockedUSD ≈ $0.0004` — many orders of
-magnitude below the ~$2,195 TVL of the pool ranked #6000 in the plain TVL-ranked pagination, proving the old pipeline
-would have silently dropped it; a full live `get_instruments()` run went from 5,958 pools (TVL-ranked only) to 6,169
-(+172 major-asset pools recovered) on Ethereum mainnet. Because this fires on top of (not instead of) the existing
-cascade, it also transitively covers the 8 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug`
-(PancakeSwap*V3, Sushiswap_V3, Sushiswap, Camelot_V3, Aerodrome_V3, Velodrome_V2, TraderJoe_V2, GMX) whenever they run
-on Ethereum. **Known remaining gaps, not fixed in this pass**: (1) `DEFI_MAJOR_ASSET_ADDRESS_LIST` is Ethereum-only —
-the same 9 protocols still have the uncovered TVL-ceiling gap on every other chain (Arbitrum, Base, Optimism, Polygon,
-BSC, Avalanche, zkSync); (2) Uniswap V2, Uniswap V4, Balancer, and Curve (4 separate adapter classes, each with their
-own independent fetch/pagination code) were not touched — they still have the original TVL-rank-then-filter gap on
-every chain. A full fix would need either a per-chain major-asset address registry (doesn't exist today, would need
-real per-chain token address verification before use) or a symbol-based nested-entity query
-(`where: { token0*: { symbol_in: [...] } }`) applied to all 4 remaining adapter files.
+A genuine major-asset pool that ranks below the ~6,000-pool cutoff on a given day is never fetched at all, so the
+whitelist filter never gets a chance to keep it — the TVL ceiling is a hard cutoff applied _before_ curation, not a
+fallback safety net for curated pairs. `uniswap_v3.py` mitigates this with a supplementary query
+(`_fetch_major_asset_pools`) that asks the subgraph directly for pools where both `token0` AND `token1` are in
+`DEFI_MAJOR_ASSET_ADDRESS_LIST` (`unified_api_contracts/registry/defi_major_assets.py`), merging any pools the
+TVL-ranked cascade missed into the result set. Because this fires on top of the existing cascade, it also covers the
+8 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug` whenever they run on Ethereum.
+
+**Known remaining gaps**: (1) `DEFI_MAJOR_ASSET_ADDRESS_LIST` is Ethereum-mainnet-only (every address in it is a
+commented `DERIVED ethereum etherscan` entry) — the same 9 protocols still have the uncovered TVL-ceiling gap on
+every other chain (Arbitrum, Base, Optimism, Polygon, BSC, Avalanche, zkSync); (2) Uniswap V2, Uniswap V4, and
+Balancer (3 separate adapter classes, each with their own independent fetch/pagination code) don't run this
+supplementary query — they still have the original TVL-rank-then-filter gap on every chain. A full fix would need
+either a per-chain major-asset address registry (doesn't exist today) or a symbol-based nested-entity query
+applied to the remaining adapter files.
 
 ---
 
@@ -454,30 +408,47 @@ canonical data source for this one chain is the RPC fallback (14-row daily resol
 not a bug.
 
 **Data-type coverage varies by protocol** — Venus and Benqi's subgraph schemas expose neither a daily-snapshot history
-entity nor a dedicated liquidation/risk-param entity (introspected 2026-06-02), so those two are `lending_indices`
-only. Aave_V3/Morpho additionally collect `liquidation_events`, `flash_loan_events` (Aave_V3 only), and top-position
-`position_data`. **Fluid's `lending_indices` MTDS collector — FIXED 2026-07-08** (previously tracked in
-`defi_lending_atoken_debttoken_instrument_split_2026_07_07.md` as "100% broken on an uncaught `ContractCustomError`,
-not yet fixed"). Root cause confirmed live: `market-tick-data-service/market_tick_data_service/market_interface/
-adapters/defi/fluid_adapter.py` called `totalSupply()`/`totalBorrow()`/`exchangePrice()` directly on the Fluid vault
-contract — an ERC-4626-style ABI shape that doesn't exist on Fluid's real VaultT1 implementation. Calling those
-selectors hits the proxy's fallback dispatcher, which reverts with an unrecognized custom error
-(`0x60121cca...`) that web3.py surfaces as `ContractCustomError` — reproduced live against all 8 curated MVP vaults
-(100% failure rate, confirming the doc's "100% broken" claim exactly). **Fix**: read vault state via Fluid's own
-periphery `FluidVaultResolver` contract (`0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC`, Ethereum mainnet — verified
-against both the official `Instadapp/fluid-contracts-public` deployments manifest and Etherscan's verified contract
-name) and its `getVaultEntireData(vault)` method, which is the resolver Fluid itself provides for exactly this read
-path; also added real per-token ERC-20 `decimals()` lookups (the old code assumed 1e18 for both collateral and debt,
-which was wrong for 6-decimal assets like USDC/USDT) and native-ETH sentinel handling (Fluid vaults can hold native
-ETH directly, which has no ERC-20 contract to query). **Verified with a real on-chain call**: after the fix, the same
-8 vaults return real, sane data — e.g. the ETH-USDC vault now returns `total_supply=0.65 ETH`,
-`total_borrow=131.75 USDC`, `supply_exchange_price=1.089`, `borrow_exchange_price=1.207` at a real historical block,
-through the actual `download_market_data()` production code path (not a standalone probe). **Known remaining gap**:
-`utilization_rate = total_borrow / total_supply` is still a raw cross-asset ratio (Fluid vaults hold DIFFERENT
-collateral and debt assets, unlike Aave's shared-pool model) — this was a pre-existing conceptual issue before this
-fix too; a true utilization metric would need an oracle price conversion to a common unit, not implemented here.
+entity nor a dedicated liquidation/risk-param entity, so those two are `lending_indices` only. Aave_V3/Morpho
+additionally collect `liquidation_events`, `flash_loan_events` (Aave_V3 only), and top-position `position_data`.
+
+**Fluid's `lending_indices` MTDS collector** reads vault state via Fluid's own periphery `FluidVaultResolver`
+contract (`0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC`, Ethereum mainnet) and its `getVaultEntireData(vault)` method —
+not `totalSupply()`/`totalBorrow()`/`exchangePrice()` directly on the vault contract, which don't exist on Fluid's
+VaultT1 implementation (an ERC-4626-style ABI shape Fluid doesn't use). The collector also does per-token ERC-20
+`decimals()` lookups (not a hardcoded 1e18 assumption, which would be wrong for 6-decimal assets like USDC/USDT) and
+native-ETH sentinel handling (Fluid vaults can hold native ETH directly, with no ERC-20 contract to query).
+
+**Known remaining gap**: `utilization_rate = total_borrow / total_supply` is a raw cross-asset ratio (Fluid vaults
+hold DIFFERENT collateral and debt assets, unlike Aave's shared-pool model); a true utilization metric would need an
+oracle price conversion to a common unit, not implemented (confirmed in
+`market_tick_data_service/market_interface/adapters/defi/fluid_adapter.py`).
+
 Gas-fee data is collected once per chain under the synthetic venue `ALCHEMY`, not once per protocol — a lending
 protocol's chain being covered there is sufficient, it doesn't need its own `gas_fees` data type.
+
+### Solana lending — MarginFi, Solend (shipped 2026-07-09)
+
+Two real Solana lending adapters, wired the same way as the 9 EVM lending protocols above (real network fetch, real
+A_TOKEN/DEBT_TOKEN split, real on-chain addresses) — documented here rather than under a separate "Solana DeFi" doc
+since they're lending protocols first, Solana-native second.
+
+| Protocol     | Venue             | Data source (real, live-verified 2026-07-09)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Scope                                                |
+| ------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| **MarginFi** | `MARGINFI-SOLANA` | MarginFi has no dedicated public REST API — bank state lives on-chain as Anchor accounts under the marginfi-v2 program (`MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA`); the officially-documented access path is the TS/Rust SDK reading those accounts directly. `marginfi.py` instead reads the same lightweight public JSON caches MarginFi's own `app.marginfi.com` frontend uses (`storage.googleapis.com/mrgn-public/mrgn-bank-metadata-cache.json` + `mrgn-token-metadata-cache.json`) — no API key, no RPC rate limits. Live-verified: 82 real Banks, 162 A_TOKEN/DEBT_TOKEN instruments (1 bank skipped honestly — its mint has no token-metadata-cache decimals entry, never a fabricated value). | 1 Solana Bank pool (no per-chain axis — Solana only) |
+| **Solend**   | `SOLEND-SOLANA`   | Real public REST API: `api.solend.fi/v1/markets/configs?scope=solend&deployment=production`. Scoped to the primary/flagship market (`isPrimary=true`) — the same curation discipline Kamino (`status=LIVE`) applies, rather than surfacing all 202 raw markets including long-tail permissionless pools. Live-verified: 89 real reserves in the primary market, 178 A_TOKEN/DEBT_TOKEN instruments. Solend Labs rebranded its consumer product to "Save" in 2025; the on-chain program, canonical venue name, and this API host are unchanged.                                                                                                                                                              | 1 Solana primary market                              |
+
+Both protocols' Banks/reserves are, by design, always both depositable AND borrowable (isolated cross-collateral
+pooled lending, unlike Aave's per-reserve `borrowingEnabled` flag) — neither API exposes a per-reserve "borrow
+disabled" signal, so both adapters unconditionally emit both legs per Bank/reserve. `available_from_datetime` resolves
+per-instrument via Solana RPC creation-timestamp lookup (`batch_resolve_creation_timestamps`, same GCS-cached pattern
+Kamino uses), falling back to the protocol's real mainnet launch date (Solend: 2021-08-13; MarginFi v2: 2023-07-01,
+conservative) when RPC resolution is unavailable/rate-limited.
+
+Wired into the venue registry the same way every other DeFi adapter is: `VENUE_TO_ADAPTER_KEY` (UAC,
+`unified_api_contracts/registry/venue_adapter_keys.py`) maps `MARGINFI-SOLANA`/`SOLEND-SOLANA` → `marginfi`/`solend`;
+`instruments-service`'s `factory.py::_ADAPTERS` maps those keys to the adapter classes; both venues were flipped from
+`DEFI_VENUE_PHASE="pipeline"` to `"live"` (`unified_api_contracts/registry/defi_venues.py`) now that they're
+IS-producible (`_build_defi_venues()` includes them via `engine/orchestrator/defi.py::_SOLANA_DEFI_VENUES`).
 
 ---
 
@@ -501,7 +472,7 @@ requires `ETHFI`/`EETH`/`WEETH`).
 
 ## On-chain-perp DEXes
 
-Covered in detail in "On-chain-perp DEXes — PERP-vs-PERPETUAL key/field mismatch" under Current-vs-target above.
+Covered in detail in "On-chain-perp DEXes — instrument key format" under Current-vs-target above.
 Summary of what each venue actually supports today, confirmed in adapter code:
 
 - **Hyperliquid**, **Aster**: perpetuals only — both adapters explicitly reject `OPTION`/`FUTURE` instrument-type
@@ -549,47 +520,75 @@ that chain (`CHAIN_REQUIRED_TOKENS`).
 
 ---
 
-## MVP universe — corrected (the old spec's DeFi section is confirmed stale)
+## MVP universe
 
-`specs/MVP_INSTRUMENTS.md`'s DeFi section describes a **16 position + 4 trading instrument** universe spanning exactly
-6 venues (Wallet, Aave_V3_ETH, EtherFi, Lido, Curve-ETH, Morpho, Uniswap_V3-ETH) with old-style instrument-key
-formatting (`AAVE_V3_ETH:A_TOKEN:AUSDT@ETHEREUM`, underscore-glued venue+chain rather than the current dash-separated
-`AAVE_V3-ETHEREUM` convention). This does not reflect anything close to the real current adapter registry, which spans
-**24 DeFi protocol adapters in this doc's scope alone** (5 DEX + 8 fork-config-variants sharing one class + 9 lending
+**A real, dedicated `MVP_SCOPE["defi"]` rule now exists (shipped 2026-07-09, `DeFiMvpRule` in
+`unified_api_contracts/canonical/crosscutting/mvp_scope.py`, config version 13).** This supersedes the prior state
+this section used to describe (no dedicated DeFi MVP set, distinct only from "every protocol the factory registry
+knows how to instantiate") — that framing was operator-ruled on 2026-07-09
+(`unified-trading-pm/plans/active/issues/defi_perp_funding_mvp_scope_contradiction_2026_06_29.md` §E5: _"DeFi MVP
+framing — define for now, just keep all as MVP though"_).
 
-- 15 yield/LST/restaking, with some protocols like Karak/Renzo/Idle/Yearn/Beefy live on 2+ chains each) plus another
-  ~20+ Solana-native protocols outside this doc's scope. There is no dedicated "DeFi MVP" instrument set today distinct
-  from "every protocol the factory registry knows how to instantiate" — the real governing surface is:
+**The ruling, in one line: DeFi MVP == "everything we capture."** Unlike CeFi/TradFi/Sports/Prediction (each a real,
+deliberately curated/narrowed subset — e.g. CeFi's ~490-asset base universe, TradFi's CME-futures-only scope), DeFi
+MVP is **not** narrowed at all — it is every IS-producible venue, every real instrument_type a live adapter emits,
+and every DeFi data_type the pipeline produces. A deliberate, simple starting point, not a permanent design
+(the config-version docstring notes a future ruling may narrow it the way CeFi/TradFi are narrowed).
 
-* `instruments_service/reference_data/factory.py`'s `_ADAPTERS` dict (which protocol keys have a working adapter
-  class today — 50+ entries spanning CeFi/DeFi/TradFi/prediction/sports).
-* `unified_api_contracts/registry/capability_declarations/_defi.py`'s `PROTOCOL_CAPABILITIES` dict (the real SSOT for
-  which `InstrumentType`s, MTDS data types, and required tokens each protocol produces).
-* `unified_api_contracts/registry/venue_adapter_keys.py`'s `VENUE_TO_ADAPTER_KEY` (the real venue→adapter routing
-  table, including auto-generated multi-chain entries from `SUBGRAPH_IDS`).
+All 3 axes are **derived**, not hand-curated literals, so the rule can never silently drift stale:
 
-Recommend retiring the "MVP instruments" framing for DeFi specifically (it made sense when the universe was 6 venues;
-it doesn't scale to today's registry) in favor of pointing at these 3 registries directly, with the known-gaps list
-above (`EMPTY_OR_DEPRECATED_DEFI_VENUES` / `DEFI_INSTRUMENTS_NOT_YET_COLLECTED`) as the honest "what's expected vs.
-what's actually collected" answer. Historical instrument-count snapshots from the old doc (e.g. "331 instruments,
-2026-03-23") are stale given how much the registry has grown since and should be regenerated from a live query rather
-than carried forward.
+- **Venues** (57, up from a prior curated 11): `DeFiMvpRule.venues` == `VENUES_BY_ASSET_GROUP["defi"]` — the same
+  "P" (IS-producible) set `_build_defi_venues()` computes in this repo, i.e. **exactly the venues this repo's own
+  factory registry actually produces day-to-day**, not the broader `ALL_DEFI_VENUES` declarative UAC registry (which
+  also carries "pipeline"-phase venues UAC has declared but this repo doesn't yet actually walk — e.g.
+  `ROCKETPOOL-ETHEREUM` has a real, wired adapter but stays out of MVP because it isn't in the per-day venue walk;
+  same for `YEARN_V3-*`, `CONVEX-ETHEREUM`, and the other curated-static-registry adapters documented above). This
+  MVP⊆P invariant is deliberate (`instrument_universe_registry_consolidation_2026_06_29.md` Decision D) — MVP
+  membership feeds the honest-coverage reachable denominator, so tagging a not-yet-producible venue MVP=true would
+  mint a phantom expected-but-never-captured cell.
+- **Instrument types** (9, up from a prior curated 4): every real `InstrumentType` value a live adapter actually
+  emits — `POOL`, `LENDING`, `A_TOKEN`, `DEBT_TOKEN`, `LST`, `YIELD_BEARING`, `PERPETUAL`, `SPOT_PAIR`, `STAKING`
+  (verified against live adapter code; drops the never-real `DEX_POOL` placeholder the prior rule carried).
+- **Data types** (25, up from a prior curated 6): the full `DATA_TYPES_BY_ASSET_GROUP["defi"]` list — dex pool
+  state/swaps, lending/utilization indices, LST rates, perp funding, oracle prices, gas fees, rewards/risk params,
+  liquidation/flash-loan/bridge/mev/governance events, vault share price/APY/TVL, native staking rates, and more.
+
+**MarginFi + Solend are in DeFi MVP** (decision #2 of the same operator ruling — "MARGINFI/SOLEND — yeah in MVP, fix
+it") — both were flipped from `DEFI_VENUE_PHASE="pipeline"` to `"live"` in the same pass their real adapters shipped
+(see "Solana lending — MarginFi, Solend" under Lending above), so they're automatically part of the derived 57-venue
+MVP set with no separate hand-edit needed.
+
+**Side effect worth flagging**: this ruling also resolves the previously-open
+`defi_perp_funding_mvp_scope_contradiction_2026_06_29.md` contradiction as its "Option 2" — `PERPETUAL` is now a real
+DeFi MVP `instrument_type`, so `DRIFT-SOLANA PERPETUAL perp_funding` evaluates `is_mvp()=True` (it previously
+evaluated `False` under every prior rule version, the exact contradiction that issue tracked).
+
+The 3 registries this section used to point at as "the real governing surface" (in lieu of a dedicated MVP rule)
+remain real and unchanged — they're now the SOURCE the derived MVP rule reads from, not a substitute for one:
+
+- `instruments_service/reference_data/factory.py`'s `_ADAPTERS` dict (every protocol key with a working adapter
+  class — CeFi/DeFi/TradFi/prediction/sports).
+- `unified_api_contracts/registry/capability_declarations/_defi.py`'s `PROTOCOL_CAPABILITIES` dict (which
+  `InstrumentType`s, MTDS data types, and required tokens each protocol produces).
+- `unified_api_contracts/registry/venue_adapter_keys.py`'s `VENUE_TO_ADAPTER_KEY` (the venue→adapter routing table).
+
+The known-gaps list above (`EMPTY_OR_DEPRECATED_DEFI_VENUES` / `DEFI_INSTRUMENTS_NOT_YET_COLLECTED`) is still the
+honest "what's expected vs. what's actually collected" answer for data STATE (has the backfill actually run), a
+separate question from MVP SCOPE (is this cell supposed to be collected at all) that this section covers.
 
 ---
 
 ## Data sources and API keys
 
-Unchanged in substance from the prior `DEFI_GUIDE.md`:
-
-| Source                                                          | Used by                                                                                | Auth                                                                                                           |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| The Graph (`gateway.thegraph.com`)                              | Uniswap V2/V3/V4 + forks, Aave_V3, Compound_V3, Fluid, Radiant, Venus, Benqi, GMX      | `thegraph-api-key` secret; free tier 100k queries/month, paid $2/100k queries (billed in GRT on Arbitrum)      |
-| Balancer API v3                                                 | Balancer                                                                               | No key required                                                                                                |
-| Curve Registry contract (RPC)                                   | Curve (subgraph deprecated; RPC is the primary fallback, not a fallback-of-a-fallback) | RPC access only                                                                                                |
-| Goldsky                                                         | Euler_V2 (routed via an endpoint override, not the standard Graph gateway)             | —                                                                                                              |
-| `blue-api.morpho.org` GraphQL                                   | Morpho (subgraph is the fallback, not primary)                                         | No key required                                                                                                |
-| Alchemy SDK                                                     | Token metadata / contract resolution for the static yield/LST/restaking adapters       | `alchemy-api-key` secret; free tier 300M compute units/month                                                   |
-| Hyperliquid / Aster / Extended / Pacifica / Lighter native REST | On-chain-perp DEXes                                                                    | Public endpoints, no key needed for instrument discovery (trading credentials are execution-service's concern) |
+| Source                                                          | Used by                                                                           | Auth                                                                                                           |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| The Graph (`gateway.thegraph.com`)                              | Uniswap V2/V3/V4 + forks, Aave_V3, Compound_V3, Fluid, Radiant, Venus, Benqi, GMX | `thegraph-api-key` secret; free tier 100k queries/month, paid $2/100k queries (billed in GRT on Arbitrum)      |
+| Balancer API v3                                                 | Balancer                                                                          | No key required                                                                                                |
+| Curve REST API (`api.curve.finance`)                            | Curve (no subgraph, no RPC — pure REST)                                           | No key required                                                                                                |
+| Goldsky                                                         | Euler_V2 (routed via an endpoint override, not the standard Graph gateway)        | —                                                                                                              |
+| `blue-api.morpho.org` GraphQL                                   | Morpho (subgraph is the fallback, not primary)                                    | No key required                                                                                                |
+| Alchemy SDK                                                     | Token metadata / contract resolution for the static yield/LST/restaking adapters  | `alchemy-api-key` secret; free tier 300M compute units/month                                                   |
+| Hyperliquid / Aster / Extended / Pacifica / Lighter native REST | On-chain-perp DEXes                                                               | Public endpoints, no key needed for instrument discovery (trading credentials are execution-service's concern) |
 
 **Never commit real API keys to `.env`** — configure secret _names_ only (`THEGRAPH_SECRET_NAME`,
 `ALCHEMY_SECRET_NAME`), resolved via GCP Secret Manager at runtime.
@@ -608,17 +607,14 @@ Unchanged in substance from the prior `DEFI_GUIDE.md`:
 - `raw_symbol` carries the real on-chain address (pool, market, or token contract) — this is the field to use for
   execution routing / on-chain lookups, not the instrument key.
 
-### `instrument_type` is a real GCS shard axis today — this is a correction, not a restatement
+### `instrument_type` is a real GCS shard axis
 
-**A pre-consolidation version of this doc claimed `instrument_type` is "display-only, NOT a shard axis" for DeFi
-(only `chain` partitions the data). That claim is stale.** Real current MTDS GCS paths (checked directly, June 2026
-data) always include `instrument_type=` as a partition segment — two real shapes seen:
+MTDS GCS paths always include `instrument_type=` as a partition segment — two real shapes occur:
 `.../venue=X/chain=Y/instrument_type=Z/data_type=W/...` and `.../venue=X/instrument_type=Z/data_type=W/...` (the
 `chain=` segment is present only when it's distinct from `venue`, e.g. cross-chain data like `gas_fees`).
 `instrument_type` is both part of the canonical `instrument_id` string (identity, e.g. the `POOL`/`A_TOKEN`/
 `YIELD_BEARING` segment in `VENUE:TYPE:SYMBOL`) **and** a real physical GCS partition directory — these are two
-separate, compatible facts (one about identity encoding, one about storage layout), not the same claim, and both are
-real today (the identity-encoding part always was; the storage-partition part is the part the old docs got wrong).
+separate, compatible facts (one about identity encoding, one about storage layout), not the same claim.
 
 ## Downstream: MTDS integration
 
@@ -638,8 +634,7 @@ per-swap events and hourly OHLCV as **two independently-fetched data_types today
 - **DEX OHLCV** (e.g. `uniswap_v3_adapter.py:687`, `download_market_data()`) — a _separately fetched_ hourly
   OHLCV/liquidity query straight from the subgraph's own pre-aggregated `poolHourData`-style entity, not computed
   locally from the raw swaps captured above. Whether OHLCV should instead be derived from the already-captured raw
-  swaps (avoiding a second subgraph query for data that's arguably redundant) is a real open architecture question,
-  not resolved in this pass — flagging it here rather than picking a side.
+  swaps (avoiding a second subgraph query for data that's arguably redundant) is an open architecture question.
 - **Live (real-time, per-block) swap streaming does not exist yet** — `live/connectors/dex_swap_scaffold_ws.py` is
   an explicit placeholder (`DexSwapPlaceholderWSFeedConnector`, Phase 3.5 / `wsfeedconnector_phase35_gap_2026_07_06.md`)
   covering 22 real `PROTOCOL-CHAIN` venue keys — it satisfies the live-connector Protocol surface just enough to move
