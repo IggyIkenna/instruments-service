@@ -62,9 +62,12 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import io
 import logging
+import random
 import re
+import time
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -79,6 +82,8 @@ PROJECT_ID = "central-element-323112"
 BUCKET = f"instruments-store-cefi-prd-{PROJECT_ID}"
 CATALOG_PATH = "prod/catalog.parquet"
 BACKUP_PREFIX = "prod/catalog.deribit-marker-migration."
+BY_DATE_PREFIX = "instrument_availability/by_date/"
+_BY_DATE_BACKUP_TAG = "deribit-marker-migration"
 
 _VENUE = "DERIBIT"
 _TARGET_TYPES = ("PERPETUAL", "FUTURE", "OPTION")
@@ -169,6 +174,180 @@ def _select_sample(target: pd.DataFrame, sample_size: int) -> pd.DataFrame:
     return sample.head(sample_size)
 
 
+def _by_date_backup_key(blob_name: str, ts: str) -> str:
+    """Derive a colocated backup blob key for one real per-day snapshot file."""
+    if blob_name.endswith(".parquet"):
+        return f"{blob_name[:-8]}.{_BY_DATE_BACKUP_TAG}.{ts}.bak.parquet"
+    return f"{blob_name}.{_BY_DATE_BACKUP_TAG}.{ts}.bak"
+
+
+def list_by_date_targets(storage_client, bucket: str, limit: int | None = None) -> list[str]:
+    """List every real per-day DERIBIT snapshot blob under ``instrument_availability/by_date/``
+    — both the legacy and the ``pipeline_mode=``-prefixed path shapes are real, distinct blobs
+    and both are in scope.
+    """
+    targets: list[str] = []
+    for b in storage_client.list_blobs(bucket, prefix=BY_DATE_PREFIX):  # pyright: ignore[reportAttributeAccessIssue]
+        if f"venue={_VENUE}/" in b.name and b.name.endswith("instruments.parquet"):
+            targets.append(b.name)
+            if limit is not None and len(targets) >= limit:
+                break
+    return targets
+
+
+def process_one_by_date_file(storage_client, bucket: str, blob_name: str, apply: bool, ts: str) -> dict[str, object]:
+    """Migrate one real per-day DERIBIT snapshot file's ``instrument_key`` column in place.
+
+    Reuses ``build_target_instrument_id`` unchanged — a per-day snapshot row's ``instrument_key``
+    already carries the exact same raw ``VENUE:TYPE:BASE[-QUOTE|_QUOTE][-DDMMMYY[-STRIKE-C|P]]``
+    shape as ``prod/catalog.parquet``'s ``instrument_id`` (verified against real 2019 and 2026
+    samples, incl. USDC-linear futures/options and legacy inverse futures/options), so no
+    separate re-derivation from ``base_asset``/``quote_asset``/``expiry``/``strike`` columns is
+    needed. Never raises — any failure on this file is captured in the returned dict so the
+    caller's concurrent sweep can isolate it (shard-level failure isolation), never abort the
+    rest of the run over one bad file.
+    """
+    result: dict[str, object] = {"blob": blob_name, "rows": 0, "changed": 0, "error": None}
+    raw = storage_client.download_bytes(bucket, blob_name)  # pyright: ignore[reportAttributeAccessIssue]
+    df = pd.read_parquet(io.BytesIO(raw))
+    id_col = "instrument_key" if "instrument_key" in df.columns else "instrument_id"
+    result["rows"] = len(df)
+    if id_col not in df.columns or "margin_type" not in df.columns or "instrument_type" not in df.columns:
+        result["error"] = "missing_columns"
+        return result
+
+    orig = df[id_col].astype(str)
+    new_ids = orig.copy()
+    for idx, row in df.iterrows():
+        itype = str(row["instrument_type"])
+        if itype not in _TARGET_TYPES:
+            continue
+        new_id, _reason = build_target_instrument_id(itype, str(row[id_col]), row["margin_type"])
+        if new_id is not None:
+            new_ids.loc[idx] = new_id
+
+    changed_mask = new_ids != orig
+    changed = int(changed_mask.sum())
+    result["changed"] = changed
+    if changed == 0:
+        return result
+
+    dup_before = int(orig.duplicated().sum())
+    dup_after = int(new_ids.duplicated().sum())
+    if dup_after > dup_before:
+        result["error"] = f"would_introduce_{dup_after - dup_before}_duplicate_id(s)"
+        result["changed"] = 0
+        return result
+
+    if not apply:
+        return result
+
+    out = df.copy()
+    out[id_col] = new_ids
+    backup_key = _by_date_backup_key(blob_name, ts)
+    storage_client.upload_bytes(bucket, backup_key, raw)  # pyright: ignore[reportAttributeAccessIssue]
+    buf = io.BytesIO()
+    out.to_parquet(buf, index=False, coerce_timestamps="us", allow_truncated_timestamps=True)
+    storage_client.upload_bytes(bucket, blob_name, buf.getvalue())  # pyright: ignore[reportAttributeAccessIssue]
+    result["backup"] = backup_key
+    return result
+
+
+def run_by_date(
+    storage_client, bucket: str, apply: bool, ts: str, limit: int | None, workers: int
+) -> dict[str, object]:
+    """Concurrent (thread-pool) sweep over every real per-day DERIBIT snapshot file. Each file is
+    an isolated shard — one file's failure is logged and counted, never raised out of the pool.
+    """
+    targets = list_by_date_targets(storage_client, bucket, limit)
+    logger.info("=== by_date: %d target file(s) (limit=%s, workers=%d) ===", len(targets), limit, workers)
+    total_rows_changed = 0
+    total_files_changed = 0
+    errors: dict[str, int] = {}
+    written: list[str] = []
+    t0 = time.time()
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(process_one_by_date_file, storage_client, bucket, blob, apply, ts): blob for blob in targets
+        }
+        for fut in concurrent.futures.as_completed(futures):
+            blob = futures[fut]
+            done += 1
+            try:
+                result = fut.result()
+            except Exception as exc:  # broad-except-ok: shard-level isolation, one file must never abort the sweep
+                errors[type(exc).__name__] = errors.get(type(exc).__name__, 0) + 1
+                logger.error("[%d/%d] FAILED %s: %s", done, len(targets), blob, exc)
+                continue
+            if result["error"]:
+                errors[str(result["error"])] = errors.get(str(result["error"]), 0) + 1
+                logger.warning("[%d/%d] SKIP %s: %s", done, len(targets), blob, result["error"])
+                continue
+            if result["changed"]:
+                total_files_changed += 1
+                total_rows_changed += int(result["changed"])
+                if apply:
+                    written.append(blob)
+            if done % 250 == 0 or done == len(targets):
+                elapsed = time.time() - t0
+                logger.info(
+                    "progress %d/%d files (%.1f%%), changed_files=%d changed_rows=%d elapsed=%.1fs",
+                    done,
+                    len(targets),
+                    100.0 * done / max(1, len(targets)),
+                    total_files_changed,
+                    total_rows_changed,
+                    elapsed,
+                )
+    elapsed = time.time() - t0
+    per_file = elapsed / len(targets) if targets else 0.0
+    logger.info(
+        "by_date DONE: files=%d files_changed=%d rows_changed=%d errors=%s elapsed=%.1fs (%.3fs/file, %d workers)",
+        len(targets),
+        total_files_changed,
+        total_rows_changed,
+        errors,
+        elapsed,
+        per_file,
+        workers,
+    )
+    return {
+        "targets": targets,
+        "written": written,
+        "files_changed": total_files_changed,
+        "rows_changed": total_rows_changed,
+        "errors": errors,
+        "elapsed": elapsed,
+    }
+
+
+def verify_by_date_sample(storage_client, bucket: str, written: list[str], sample_size: int) -> bool:
+    """Re-download a random real sample of written files and confirm every in-scope row now
+    carries the ``@`` marker — the by-date analogue of the catalog path's full re-download verify
+    (re-downloading all 5,342 files would roughly double the sweep's GCS traffic, so this checks a
+    real random sample instead, per this workspace's "verify a sample after writing" convention).
+    """
+    if not written:
+        logger.info("VERIFY: no files were written — nothing to verify.")
+        return True
+    sample = random.sample(written, min(sample_size, len(written)))
+    ok = True
+    for blob in sample:
+        raw = storage_client.download_bytes(bucket, blob)  # pyright: ignore[reportAttributeAccessIssue]
+        df = pd.read_parquet(io.BytesIO(raw))
+        id_col = "instrument_key" if "instrument_key" in df.columns else "instrument_id"
+        in_scope = df["instrument_type"].isin(_TARGET_TYPES) & df["margin_type"].notna()
+        migrated = df.loc[in_scope, id_col].astype(str).str.contains("@")
+        if not migrated.all():
+            logger.error("VERIFY FAILED %s: %d row(s) still missing @ marker", blob, int((~migrated).sum()))
+            ok = False
+        else:
+            logger.info("VERIFY OK %s (%d target rows all carry @ marker)", blob, int(in_scope.sum()))
+    logger.info("VERIFY sample=%d/%d written file(s): %s", len(sample), len(written), "PASSED" if ok else "FAILED")
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -186,9 +365,48 @@ def main() -> int:
         help="Migrate ALL real target rows, not just a bounded sample. NOT used in the 2026-07-09 shipping pass "
         "(staged-rollout: smoke-test + measure + report; full sweep is a separate go/no-go decision).",
     )
+    parser.add_argument(
+        "--by-date-sample",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Migrate the first N real per-day snapshot files (smoke test) instead of the catalog.",
+    )
+    parser.add_argument(
+        "--by-date-all",
+        action="store_true",
+        help="Migrate ALL real per-day snapshot files (full historical sweep, concurrent).",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=32,
+        help="Thread-pool size for --by-date-sample/--by-date-all (default 32).",
+    )
+    parser.add_argument(
+        "--verify-sample",
+        type=int,
+        default=20,
+        help="Real random sample size to re-download and verify after a by-date --apply (default 20).",
+    )
     args = parser.parse_args()
 
     storage_client = get_storage_client()
+
+    if args.by_date_sample is not None or args.by_date_all:
+        limit = None if args.by_date_all else args.by_date_sample
+        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        sweep = run_by_date(storage_client, BUCKET, args.apply, ts, limit, args.workers)
+        if not args.apply:
+            logger.info(
+                "DRY-RUN (no writes). Re-run with --apply to migrate for real (backs up every changed file first)."
+            )
+            return 0
+        if sweep["errors"]:
+            logger.warning("Sweep completed with per-file errors (shard-isolated, not fatal): %s", sweep["errors"])
+        ok = verify_by_date_sample(storage_client, BUCKET, sweep["written"], args.verify_sample)  # pyright: ignore[reportArgumentType]
+        return 0 if ok else 1
+
     raw = storage_client.download_bytes(BUCKET, CATALOG_PATH)  # pyright: ignore[reportAttributeAccessIssue]
     df = pd.read_parquet(io.BytesIO(raw))
     logger.info("Loaded gs://%s/%s — %d total rows", BUCKET, CATALOG_PATH, len(df))
@@ -242,8 +460,11 @@ def main() -> int:
 
     before_after = [(target.loc[i, "instrument_id"], new_ids[i]) for i in write_idx]
     df = df.copy()
-    for idx in write_idx:
-        df.loc[idx, "instrument_id"] = new_ids[idx]
+    # Vectorized assignment — NOT a per-row `.loc[idx, col] = val` loop. A DataFrame `.loc` scalar
+    # setitem re-checks block consistency on every call, so looping it over a quarter-million rows
+    # is effectively O(n^2) and can hang for many minutes; a single indexed assignment is O(n).
+    write_series = pd.Series(new_ids).loc[write_idx]
+    df.loc[write_series.index, "instrument_id"] = write_series
     out = io.BytesIO()
     df.to_parquet(out, index=False, coerce_timestamps="us", allow_truncated_timestamps=True)
     storage_client.upload_bytes(BUCKET, CATALOG_PATH, out.getvalue())  # pyright: ignore[reportAttributeAccessIssue]
