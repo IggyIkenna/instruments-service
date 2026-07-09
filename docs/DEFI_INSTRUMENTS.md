@@ -299,12 +299,22 @@ passthrough=True)` instead of an ad hoc f-string — part of the same workspace-
   `canonical_id_builder_retrofit_checklist_2026_07_08.md` as the 6-protocol lending split above. `COMPOUND_V3` is
   the one adapter in this batch NOT retrofitted, for the `SUPPLY`/`BORROW` reason above (the builder cannot represent
   those TYPE segments).
-- **Known gap, cross-repo**: `market-tick-data-service` has its own separate adapters for some of these same
-  protocols (`restaking_karak_adapter.py`, `vault_pendle_adapter.py`, `restaking_symbiotic_adapter.py`,
-  `restaking_jito_adapter.py`) — these ARE wired into MTDS's `factory.py` dispatch table (`"karak"`, `"pendle"`,
-  `"jito_restaking"`, `"symbiotic"` entries) and still build `:VAULT:` keys with `instrument_type="RESTAKING_VAULT"`,
-  a live divergence from instruments-service's `YIELD_BEARING`-keyed convention for the equivalent protocols, not
-  dead/orphaned code.
+- **Cross-repo divergence — fixed 2026-07-09** (`instruments_docs_audit_outstanding_items_2026_07_08.md` finding
+  C5): `market-tick-data-service` has its own separate, live/wired adapters for some of these same protocols
+  (`restaking_karak_adapter.py`, `restaking_jito_adapter.py`, `restaking_symbiotic_adapter.py`,
+  `vault_pendle_adapter.py` — wired into MTDS's `factory.py` `VENUE_REGISTRY` under `"karak"`, `"jito_restaking"`,
+  `"symbiotic"`, `"pendle"`) that built `:VAULT:` keys with `instrument_type="RESTAKING_VAULT"` — neither is a real
+  `InstrumentType` enum member, the same class of bug this doc's `VAULT`-keyed-adapter convention above already
+  fixed on the instruments-service side. Reconciled to `:YIELD_BEARING:` + `instrument_type="YIELD_BEARING"` on the
+  MTDS side too. Real before/after: `KARAK-ETHEREUM:VAULT:{pool_id}` → `KARAK-ETHEREUM:YIELD_BEARING:{pool_id}`
+  (same pattern for Jito-Restaking/Symbiotic/Pendle). Pendle's real caveat: instruments-service's `pendle.py`
+  canonically encodes the PT/YT/SY leg role in the key segment instead (e.g.
+  `PENDLE-ETHEREUM:PT:PT-stETH-25JUN2026`) because it discovers markets leg-by-leg from Pendle's own API; MTDS's
+  adapter is DefiLlama-pool-level (no PT/YT/SY split available from that data source), so full reconciliation to
+  the leg-level shape isn't achievable without a data-source change — `YIELD_BEARING` (`pendle.py`'s own module
+  docstring documents it as "the closest UAC `InstrumentType`" for PT/YT/SY, no PT/YT-specific enum exists) is used
+  for both key and field instead, consistent with the Karak/Jito/Symbiotic fix. Shipped
+  `market-tick-data-service@f3ff5ea0`.
 
 ---
 
@@ -390,17 +400,17 @@ applied to the remaining adapter files.
 A_TOKEN/DEBT_TOKEN split" under Current-vs-target above for the real per-protocol current state — this section covers
 data sources and chain coverage instead.
 
-| Protocol    | Data source                                                                        | Chains (real, from `SUBGRAPH_IDS`)                                                                                                           |
-| ----------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Aave_V3     | The Graph (+ AaveScan REST fallback)                                               | Ethereum, Arbitrum, Optimism (RPC-fallback only — subgraph abandoned by the Aave team, see note below), Polygon, Avalanche, Base, Linea, BSC |
-| Spark       | The Graph (MakerDAO fork of Aave V3, same schema)                                  | Ethereum                                                                                                                                     |
-| Compound_V3 | The Graph                                                                          | Ethereum, Arbitrum, Base, Optimism (Polygon explicitly removed — subgraph returns 0 active markets)                                          |
-| Morpho      | `blue-api.morpho.org` GraphQL (not The Graph)                                      | Ethereum, Base (Arbitrum/Optimism/Polygon have 0 major-asset markets as of 2026-03, not queried)                                             |
-| Euler_V2    | Goldsky subgraph (routed via an endpoint override, not the standard Graph gateway) | Ethereum, Arbitrum                                                                                                                           |
-| Fluid       | The Graph                                                                          | Ethereum only (multi-chain subgraph IDs not yet verified)                                                                                    |
-| Radiant     | The Graph (Messari Lending schema)                                                 | Arbitrum, Ethereum                                                                                                                           |
-| Venus       | The Graph (Compound-fork schema)                                                   | BSC (isolated pools), Ethereum                                                                                                               |
-| Benqi       | The Graph (Compound-fork schema)                                                   | Avalanche                                                                                                                                    |
+| Protocol    | Data source                                                                        | Chains (real, from `SUBGRAPH_IDS`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Aave_V3     | The Graph (+ AaveScan REST fallback)                                               | Ethereum, Arbitrum, Optimism (RPC-fallback only — subgraph abandoned by the Aave team, see note below), Polygon, Avalanche, Base, Linea, BSC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Spark       | The Graph (MakerDAO fork of Aave V3, same schema)                                  | Ethereum                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Compound_V3 | The Graph                                                                          | Ethereum, Arbitrum, Base, Optimism (Polygon explicitly removed — subgraph returns 0 active markets)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Morpho      | `blue-api.morpho.org` GraphQL (not The Graph)                                      | Ethereum, Base (Arbitrum/Optimism/Polygon have 0 major-asset markets as of 2026-03, not queried)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Euler_V2    | Goldsky subgraph (routed via an endpoint override, not the standard Graph gateway) | Ethereum, Arbitrum                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Fluid       | On-chain RPC (`FluidVaultResolver` + `FluidLiquidityResolver`), not The Graph      | Ethereum only. UAC's `capability_declarations/_defi.py` still lists a `"fluid": {"ETHEREUM": "fluid-mainnet"}` subgraph-ID entry with a "Multi-chain: Fluid subgraph IDs need verification" comment, but neither instruments-service's `fluid.py` nor MTDS's `fluid_adapter.py` actually queries a Fluid subgraph (both are RPC-only, confirmed by grep) — that entry appears to be unused/orphaned metadata rather than a live gap; real verified multi-chain deployment data exists instead (Fluid's `LiquidityResolver`/`VaultResolver` family: same CREATE2 address `0xca13A15de31235A37134B4717021C35A3CF25C60` on mainnet/arbitrum/base/polygon/plasma/bnb, per Instadapp's official `deployments.md` — 2026-07-09) |
+| Radiant     | The Graph (Messari Lending schema)                                                 | Arbitrum, Ethereum                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Venus       | The Graph (Compound-fork schema)                                                   | BSC (isolated pools), Ethereum                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Benqi       | The Graph (Compound-fork schema)                                                   | Avalanche                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 **AAVE_V3-OPTIMISM data-source note**: the subgraph on Optimism was silently abandoned by the Aave team between
 2026-05-08 and 2026-05-29 (returns empty `reserves`/`reserveParamsHistoryItems` despite reporting no indexing errors);
@@ -418,10 +428,19 @@ VaultT1 implementation (an ERC-4626-style ABI shape Fluid doesn't use). The coll
 `decimals()` lookups (not a hardcoded 1e18 assumption, which would be wrong for 6-decimal assets like USDC/USDT) and
 native-ETH sentinel handling (Fluid vaults can hold native ETH directly, with no ERC-20 contract to query).
 
-**Known remaining gap**: `utilization_rate = total_borrow / total_supply` is a raw cross-asset ratio (Fluid vaults
-hold DIFFERENT collateral and debt assets, unlike Aave's shared-pool model); a true utilization metric would need an
-oracle price conversion to a common unit, not implemented (confirmed in
-`market_tick_data_service/market_interface/adapters/defi/fluid_adapter.py`).
+**`utilization_rate` — fixed 2026-07-09** (`instruments_docs_audit_outstanding_items_2026_07_08.md` finding C7): was
+`total_borrow / total_supply`, a raw cross-asset ratio (Fluid vaults hold DIFFERENT collateral and debt assets,
+unlike Aave's shared-pool model — dividing e.g. raw ETH collateral units by raw USDC debt units is not a real
+utilization rate). Fixed to read Fluid's own protocol-computed, same-asset, per-token utilization directly from the
+Liquidity Layer instead: `FluidLiquidityResolver.getOverallTokenData(borrow_token).lastStoredUtilization` (1e4
+precision; resolver at `0xca13A15de31235A37134B4717021C35A3CF25C60`, verified via Instadapp's official
+`deployments.md` + a live `eth_getCode` bytecode check). Live-verified 2026-07-09 against real Ethereum mainnet
+data: USDC `lastStoredUtilization=8871` (88.71%) cross-checks against an independently-read
+`totalBorrow`/`totalSupply` of ~88.77% (small diff = interest-accrual timing between the two reads, not a decoding
+error); USDT=89.22%, native-ETH-sentinel (the real on-chain `borrowToken` for Fluid's "ETH" MVP vaults)=79.21%,
+WSTETH=34.78%. A failed/untracked Liquidity Layer read now yields `None` (honest-absence), never a fabricated 0.0.
+Shipped `market_tick_data_service/market_interface/adapters/defi/fluid_adapter.py` +
+`fluid_liquidity_resolver.py` (new sibling module) @ `market-tick-data-service@4bb92b28`.
 
 Gas-fee data is collected once per chain under the synthetic venue `ALCHEMY`, not once per protocol — a lending
 protocol's chain being covered there is sufficient, it doesn't need its own `gas_fees` data type.
@@ -635,12 +654,30 @@ per-swap events and hourly OHLCV as **two independently-fetched data_types today
   OHLCV/liquidity query straight from the subgraph's own pre-aggregated `poolHourData`-style entity, not computed
   locally from the raw swaps captured above. Whether OHLCV should instead be derived from the already-captured raw
   swaps (avoiding a second subgraph query for data that's arguably redundant) is an open architecture question.
-- **Live (real-time, per-block) swap streaming does not exist yet** — `live/connectors/dex_swap_scaffold_ws.py` is
-  an explicit placeholder (`DexSwapPlaceholderWSFeedConnector`, Phase 3.5 / `wsfeedconnector_phase35_gap_2026_07_06.md`)
-  covering 22 real `PROTOCOL-CHAIN` venue keys — it satisfies the live-connector Protocol surface just enough to move
-  those venues from `blocked-not-registered` to `schema-only` in the smoke-matrix, it does not actually stream swap
-  data. "Swap rates each block" is the real target architecture but is not shipped; today's real-time DeFi capture is
-  batch/polling-based (subgraph queries on a schedule), not a genuine live feed.
+- **Live (real-time, per-block) swap streaming — one venue shipped 2026-07-09, 21 still placeholder**
+  (`instruments_docs_audit_outstanding_items_2026_07_08.md` finding C8). `live/connectors/dex_swap_scaffold_ws.py`
+  originally covered all 22 real `PROTOCOL-CHAIN` venue keys under an explicit placeholder
+  (`DexSwapPlaceholderWSFeedConnector`, Phase 3.5 / `wsfeedconnector_phase35_gap_2026_07_06.md`) whose `connect()`
+  unconditionally raised `NotImplementedError("BLOCKED-BUILD...")` — it satisfied the live-connector Protocol surface
+  just enough to move those venues from `blocked-not-registered` to `schema-only` in the smoke-matrix, without
+  actually streaming swap data. A new `live/connectors/dex_swap_uniswap_v3_ws.py` now re-registers just the
+  `UNISWAP_V3-ETHEREUM` row with a real connector (per the scaffold module's own documented follow-on mechanism —
+  the other 21 venues are untouched). It polls the real Uniswap V3 Ethereum subgraph every 15s for `dex_pool_swaps`
+  (+ every 30s for `dex_pool_state`), reusing the exact same GraphQL field shape + `SubgraphService` client the
+  batch `uniswap_v3_adapter.py` already relies on — deliberately polling-based rather than a raw `eth_subscribe`
+  Swap-event log decode, so live and batch read the identical data source (this workspace's "Live = batch" hard
+  rule). Instrument IDs match the batch adapter byte-for-byte:
+  `UNISWAP_V3-ETHEREUM:POOL:{base}-{quote}:{fee}@ETHEREUM`. **Known gap, explicit**: a live authenticated
+  round-trip against the real Graph-Network gateway could not be verified in the building agent's sandbox (no
+  Secret-Manager access there for a real `thegraph-api-key`); query-field correctness was instead verified by
+  construction against this repo's own already-shipped batch query + UAC's `GraphPoolHourData` schema. Separately
+  discovered (not fixed, out of this fix's scope): `SubgraphService`'s pre-existing free-tier Studio fallback URL
+  for `uniswap_v3` returns a real HTTP 404 today (The Graph's old hosted service is fully sunset) — the new
+  connector degrades safely against that failure (logged warning, empty tick list, reconnect-flag backoff, no fake
+  ticks), matching every other real DeFi live connector's honest-absence behavior in this repo. "Swap rates each
+  block" for the remaining 21 `PROTOCOL-CHAIN` keys is still the real target architecture but not shipped; today's
+  real-time DeFi capture for those is batch/polling-based (subgraph queries on a schedule), not a genuine live feed.
+  Shipped `market-tick-data-service@d02cf88f`.
 
 ---
 
