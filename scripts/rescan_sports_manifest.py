@@ -33,7 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
-from google.cloud import storage
+from unified_trading_library import get_storage_client
 
 _NOW = datetime.now(UTC).isoformat()
 
@@ -87,7 +87,7 @@ def _parse_day_entity(blob_name: str) -> tuple[str, str] | None:
     return None
 
 
-def _get_row_count_from_metadata(client: storage.Client, blob: storage.Blob) -> int:
+def _get_row_count_from_metadata(client, blob) -> int:
     """Read parquet footer to get row count without downloading the whole file.
 
     Falls back to -1 if metadata can't be read.
@@ -110,7 +110,7 @@ def _get_row_count_from_metadata(client: storage.Client, blob: storage.Blob) -> 
         return -1
 
 
-def scan_date(client: storage.Client, bucket: storage.Bucket, date_str: str) -> list[dict[str, str | int]]:
+def scan_date(client, bucket, date_str: str) -> list[dict[str, str | int]]:
     """Scan a single date partition and return manifest entries."""
     prefix = f"{PREFIX}day={date_str}/entity="
     entries: list[dict[str, str | int]] = []
@@ -148,7 +148,7 @@ def scan_date(client: storage.Client, bucket: storage.Bucket, date_str: str) -> 
     return entries
 
 
-def list_all_dates(bucket: storage.Bucket) -> list[str]:
+def list_all_dates(bucket) -> list[str]:
     """List all day= partitions in the sports reference bucket."""
     dates: list[str] = []
     # Use delimiter to get just the day= prefixes without recursing
@@ -171,7 +171,7 @@ def main() -> None:
     parser.add_argument("--bucket", type=str, default=BUCKET_NAME, help="GCS bucket name")
     args = parser.parse_args()
 
-    client = storage.Client()
+    client = get_storage_client()
     bucket = client.bucket(args.bucket)
 
     if args.date:
