@@ -2,6 +2,11 @@
 
 Discovers Drift perpetual and spot markets on Solana.
 Markets are returned as InstrumentRecord with instrument_type=PERPETUAL or SPOT_PAIR.
+The `instrument_key`'s middle TYPE segment matches (fixed 2026-07-09 — it
+previously said the shorthand `PERP`/`SPOT`, neither of which is a real
+`InstrumentType` enum member (`PERPETUAL`/`SPOT_PAIR` are); same class of fix
+as the on-chain-perp PERP-vs-PERPETUAL canonicalization — see
+`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`).
 
 Data source: Drift SDK TypeScript constants on GitHub (MainnetPerpMarkets / MainnetSpotMarkets).
 The old Data API (https://data.api.drift.trade) is dead (404/CloudFront 403 as of 2026-06).
@@ -14,7 +19,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -250,7 +255,11 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
         )
 
         venue_tag = self.venue
-        instrument_key = f"{venue_tag}:PERP:{symbol.upper()}"
+        # Key/field mismatch fix (2026-07-09, C4) + builder retrofit — TYPE
+        # segment changed PERP -> PERPETUAL to match instrument_type below.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, venue_tag, InstrumentType.PERPETUAL, symbol, passthrough=True
+        )
 
         return InstrumentRecord(
             instrument_key=instrument_key,
@@ -288,7 +297,11 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         venue_tag = self.venue
-        instrument_key = f"{venue_tag}:SPOT:{base_asset}"
+        # Key/field mismatch fix (2026-07-09, C4) + builder retrofit — TYPE
+        # segment changed SPOT -> SPOT_PAIR to match instrument_type below.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, venue_tag, InstrumentType.SPOT_PAIR, base_asset, passthrough=True
+        )
 
         return InstrumentRecord(
             instrument_key=instrument_key,

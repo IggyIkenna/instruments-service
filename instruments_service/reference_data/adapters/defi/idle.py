@@ -24,6 +24,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -127,7 +128,12 @@ class IdleReferenceDataAdapter(BaseReferenceDataAdapter):
 
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:YIELD_BEARING:{symbol}",
+                    # Routed through the shared canonical builder (2026-07-09 retrofit,
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
+                    # no output change.
+                    instrument_key=build_canonical_instrument_id(
+                        AssetGroup.DEFI, venue_tag, InstrumentType.YIELD_BEARING, symbol, passthrough=True
+                    ),
                     venue=venue_tag,
                     raw_symbol=vault_address,
                     instrument_type=InstrumentType.YIELD_BEARING,
