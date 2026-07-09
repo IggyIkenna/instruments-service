@@ -2251,24 +2251,28 @@ class TestDatabentoHelpers:
 
     def test_parse_cme_spread_legs_valid(self) -> None:
         # ES is a registered exchange code (SP500 futures) — legs decompose to
-        # venue-prefixed raw-symbol keys per the live _db._parse_cme_calendar_spread_legs
-        # signature (venue is a required positional; see adapter.py call site).
-        result = _parse_cme_calendar_spread_legs("ESM6-ESU6", "CME")
+        # venue-free, human-readable product-root keys (2026-07-08
+        # canonicalization fix: _parse_cme_calendar_spread_legs dropped its
+        # `venue` parameter — the leg key is `TYPE:SYMBOL` only, venue is
+        # already carried once at the combo's own top-level `VENUE:COMBO:...`
+        # id — and now resolves the human product root via
+        # _resolve_product_root instead of the raw ticker).
+        result = _parse_cme_calendar_spread_legs("ESM6-ESU6")
         assert result is not None
         assert len(result) == 2
         assert result[0].side == "BUY"
         assert result[1].side == "SELL"
-        assert result[0].instrument_key == "CME:FUTURE:ESM6"
-        assert result[1].instrument_key == "CME:FUTURE:ESU6"
+        assert result[0].instrument_key == "FUTURE:SP500"
+        assert result[1].instrument_key == "FUTURE:SP500"
 
     def test_parse_cme_spread_legs_no_dash(self) -> None:
-        assert _parse_cme_calendar_spread_legs("ESM6", "CME") is None
+        assert _parse_cme_calendar_spread_legs("ESM6") is None
 
     def test_parse_cme_spread_legs_empty_parts(self) -> None:
-        assert _parse_cme_calendar_spread_legs("-", "CME") is None
+        assert _parse_cme_calendar_spread_legs("-") is None
 
     def test_parse_cme_spread_legs_three_parts(self) -> None:
-        assert _parse_cme_calendar_spread_legs("A-B-C", "CME") is None
+        assert _parse_cme_calendar_spread_legs("A-B-C") is None
 
     # ── _resolve_trading_status ───────────────────────────────────────────
 
