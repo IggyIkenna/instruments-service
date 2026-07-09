@@ -65,6 +65,8 @@ from unified_api_contracts import (
     is_in_mvp_capture_universe,
     is_mvp,
 )
+from unified_api_contracts.internal import InstrumentRecord, InstrumentType
+from unified_api_contracts.predictions import build_cross_venue_mapping
 from unified_trading_library import (
     StorageClient,
     get_config,
@@ -245,6 +247,17 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # match. Blank for prediction/sports (no exchange-native symbol there).
     "raw_symbol",
     "base_asset",
+    # Per-instance cross-venue identity (prediction_canonical_identity_migration_
+    # 2026_07_08.md todos 2 + 5): the Kalshi<->Polymarket SAME-MARKET join key
+    # (unified_api_contracts.predictions.build_cross_venue_mapping()) for a
+    # matched crypto/macro/index pair, OR the Sports-asset-group-aligned
+    # fixture_id for a Polymarket sports market (build_fixture_id() — see
+    # polymarket/parsing.py::_build_sports_id). Blank (honest absence, never a
+    # false pair) for every other asset_group/row and for an unmatched
+    # prediction instrument. Prediction-only today; other asset groups' own
+    # InstrumentRecord.canonical_instrument_id (TradFi/Databento product roots)
+    # is a SEPARATE, adapter-local mechanism not surfaced through this column.
+    "canonical_instrument_id",
     # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean
     # computed via the UAC ``is_mvp(...)`` predicate over the rolled-up catalogue.
     # Read by deployment-api's ``scope=mvp`` coverage denominator + the data-status
@@ -406,6 +419,26 @@ def _parse_truth_date(raw: str | None) -> date | None:
         return pd.Timestamp(raw).date()
     except (ValueError, TypeError):
         return None
+
+
+def _parse_truth_datetime(raw: str | None) -> datetime | None:
+    """Parse a venue-truth lifecycle timestamp (``_PredLifecycle.settled``) → a
+    UTC :class:`datetime`, or ``None`` for blank/unparseable values.
+
+    Used to build the synthetic :class:`InstrumentRecord` views the cross-venue
+    matcher (:func:`build_cross_venue_mapping`) needs for its
+    ``expiry``-keyed settlement-bucket join (see ``build_prediction_catalogue_dataframe``).
+    """
+    if not raw:
+        return None
+    try:
+        ts = pd.Timestamp(raw)
+    except (ValueError, TypeError):
+        return None
+    if pd.isna(ts):
+        return None
+    py_dt = ts.to_pydatetime()
+    return py_dt.replace(tzinfo=UTC) if py_dt.tzinfo is None else py_dt.astimezone(UTC)
 
 
 #: A venue's latest day counts as a FULL trading day (rather than a thin/partial
@@ -921,6 +954,19 @@ class _PredLifecycle:
     #: per-market value). See ``docs/PREDICTION_INSTRUMENTS.md`` § "Canonical identity model".
     raw_symbol: str = ""
     base_asset: str = ""
+    #: ``InstrumentRecord.underlying`` carried straight through from the per-date
+    #: row (populated by the adapters as of
+    #: ``prediction_canonical_identity_migration_2026_07_08.md`` todo 1 —
+    #: BTC/CPI/TRUMP/… for a classified subject, "" for sports (no scalar
+    #: underlying) or a genuinely-unclassified market). Per-conditionId grain
+    #: only, same reasoning as raw_symbol/base_asset above.
+    underlying: str = ""
+    #: ``InstrumentRecord.canonical_instrument_id`` carried straight through from
+    #: the per-date row when the ADAPTER already populated one (Polymarket sports
+    #: fixture_id — todo 5). The cross-venue join below (todo 2) can also assign
+    #: one post-hoc for a matched crypto/macro pair; ``_emit`` prefers the
+    #: cross-venue match, falling back to this adapter-populated value.
+    canonical_instrument_id: str = ""
 
 
 def _merge_lifecycle(
@@ -933,6 +979,8 @@ def _merge_lifecycle(
     settled: str | None,
     raw_symbol: str = "",
     base_asset: str = "",
+    underlying: str = "",
+    canonical_instrument_id: str = "",
 ) -> None:
     """Fold one (entity, day) observation into the lifecycle accumulator."""
     cur = acc.get(key)
@@ -946,20 +994,27 @@ def _merge_lifecycle(
             settled=settled,
             raw_symbol=raw_symbol,
             base_asset=base_asset,
+            underlying=underlying,
+            canonical_instrument_id=canonical_instrument_id,
         )
         return
     if day < cur.first_day:
         cur.first_day = day
     if day > cur.last_day:
         cur.last_day = day
-        # Metadata (instrument_type / raw_symbol / base_asset) follows the
-        # most-recent observation, same convention as instrument_type below.
+        # Metadata (instrument_type / raw_symbol / base_asset / underlying /
+        # canonical_instrument_id) follows the most-recent observation, same
+        # convention as instrument_type below.
         if instrument_type:
             cur.instrument_type = instrument_type
         if raw_symbol:
             cur.raw_symbol = raw_symbol
         if base_asset:
             cur.base_asset = base_asset
+        if underlying:
+            cur.underlying = underlying
+        if canonical_instrument_id:
+            cur.canonical_instrument_id = canonical_instrument_id
     else:
         # An earlier day's row may be the only one carrying a value (e.g. a market's
         # last snapshot before delisting had a transiently-blank field) — backfill
@@ -968,6 +1023,10 @@ def _merge_lifecycle(
             cur.raw_symbol = raw_symbol
         if not cur.base_asset and base_asset:
             cur.base_asset = base_asset
+        if not cur.underlying and underlying:
+            cur.underlying = underlying
+        if not cur.canonical_instrument_id and canonical_instrument_id:
+            cur.canonical_instrument_id = canonical_instrument_id
     if created and (cur.created is None or created < cur.created):
         cur.created = created
     if settled and (cur.settled is None or settled > cur.settled):
@@ -1062,12 +1121,32 @@ def build_prediction_catalogue_dataframe(
             # grain only (see _PredLifecycle docstring for why the cqg grain skips them).
             raw_symbol = _str_field(row, "raw_symbol")
             base_asset = _str_field(row, "base_asset")
+            # underlying / canonical_instrument_id (prediction_canonical_identity_
+            # migration_2026_07_08.md todos 1 + 5): real, adapter-populated fields as
+            # of the 2026-07-09 underlying/fixture_id fix — "" (honest absence) for
+            # any per-date row captured before that fix, or for a market with no
+            # scalar underlying / no resolvable sports fixture_id. Per-conditionId
+            # grain only, same reasoning as raw_symbol/base_asset above.
+            underlying = _str_field(row, "underlying")
+            canonical_instrument_id = _str_field(row, "canonical_instrument_id")
             cqg_itype = cqg_itype or itype
             if created and (cqg_created is None or created < cqg_created):
                 cqg_created = created
             if settled and (cqg_settled is None or settled > cqg_settled):
                 cqg_settled = settled
-            _merge_lifecycle(cid_acc, (venue_str, cid), day, venue_str, itype, created, settled, raw_symbol, base_asset)
+            _merge_lifecycle(
+                cid_acc,
+                (venue_str, cid),
+                day,
+                venue_str,
+                itype,
+                created,
+                settled,
+                raw_symbol,
+                base_asset,
+                underlying,
+                canonical_instrument_id,
+            )
         # cqg grain only when the writer emits a cqg (249-b, gated on decision
         # 338). Currently always empty → no cqg rows, conditionId grain only.
         if saw_member and cqg_str:
@@ -1076,6 +1155,56 @@ def build_prediction_catalogue_dataframe(
     if not all_days:
         return pd.DataFrame(columns=list(CATALOG_COLUMNS))
     latest_day = max(all_days)
+
+    # Cross-venue Kalshi<->Polymarket same-market join
+    # (prediction_canonical_identity_migration_2026_07_08.md todo 2 /
+    # docs/PREDICTION_INSTRUMENTS.md § "Canonical identity model" §3 item 3): the
+    # existing cross_venue_mapping.build_cross_venue_mapping() matcher wired into
+    # this real, scheduled roll-up step (runs every catalogue regen) rather than
+    # left a pure function with no caller. Builds minimal InstrumentRecord views
+    # from the accumulated per-conditionId lifecycle (instrument_key / venue /
+    # raw_symbol / expiry are all it needs — see cross_venue_mapping.py's own
+    # module docstring on what an InstrumentRecord carries for a prediction
+    # market), runs the matcher, and indexes the result by BOTH venues'
+    # instrument_key so ``_emit`` can look a matched conditionId's
+    # canonical_event_id up below. No ``titles`` map is passed — todo 4's real,
+    # documented decision: no per-instrument title is persisted anywhere the
+    # offline roll-up can reach (InstrumentRecord dropped the ``symbol`` field —
+    # see cross_venue_mapping.py's docstring), so sports pairs are honestly
+    # absent here (matches the matcher's own no-titles-supplied default; the
+    # Polymarket sports canonical_instrument_id set at adapter time (todo 5,
+    # ``polymarket/parsing.py::_build_sports_id``) is preserved below via the
+    # ``lc.canonical_instrument_id`` fallback since this dict has no entry for it).
+    kalshi_recs: list[InstrumentRecord] = []
+    poly_recs: list[InstrumentRecord] = []
+    for (venue_str, cid), lc in cid_acc.items():
+        rec = InstrumentRecord(
+            instrument_key=cid,
+            venue=venue_str,
+            instrument_type=InstrumentType.PREDICTION_MARKET,
+            raw_symbol=lc.raw_symbol,
+            base_asset=lc.base_asset,
+            expiry=_parse_truth_datetime(lc.settled),
+        )
+        if venue_str.upper() == "KALSHI":
+            kalshi_recs.append(rec)
+        elif venue_str.upper() == "POLYMARKET":
+            poly_recs.append(rec)
+
+    canonical_event_id_by_key: dict[str, str] = {}
+    if kalshi_recs and poly_recs:
+        matched_pairs = build_cross_venue_mapping(kalshi_recs, poly_recs)
+        for mapping in matched_pairs:
+            if mapping.kalshi_market_ticker:
+                canonical_event_id_by_key[mapping.kalshi_market_ticker] = mapping.canonical_event_id
+            if mapping.polymarket_condition_id:
+                canonical_event_id_by_key[mapping.polymarket_condition_id] = mapping.canonical_event_id
+        _emit_event(
+            "PREDICTION_CROSS_VENUE_MAPPING_BUILT",
+            kalshi_count=len(kalshi_recs),
+            polymarket_count=len(poly_recs),
+            matched_pairs=len(matched_pairs),
+        )
 
     rows: list[dict[str, str | None]] = []
 
@@ -1116,13 +1245,27 @@ def build_prediction_catalogue_dataframe(
                 # per-market raw_symbol/base_asset (honest absence, not unpopulated).
                 "raw_symbol": lc.raw_symbol,
                 "base_asset": lc.base_asset,
-                # `underlying` is genuinely NOT computed for prediction rows today (no
-                # adapter sets InstrumentRecord.underlying) — "" makes that an explicit,
-                # documented absence rather than an implicit NaN. See
-                # docs/PREDICTION_INSTRUMENTS.md "Canonical identity model" for the
-                # decision + the follow-up plan to populate it from the existing
-                # classify_*_to_canonical_group / underlying_for_group SSOT.
-                "underlying": "",
+                # `underlying` (prediction_canonical_identity_migration_2026_07_08.md
+                # todo 1): real, adapter-populated value threaded straight through
+                # from the per-date row (see _PredLifecycle.underlying) as of the
+                # 2026-07-09 fix — "" (honest absence) for rows captured before that
+                # fix, sports markets (no scalar underlying), or a
+                # genuinely-unclassified market. See docs/PREDICTION_INSTRUMENTS.md
+                # "Canonical identity model" for the full decision.
+                "underlying": lc.underlying,
+                # `canonical_instrument_id` (todo 2 + todo 5): prefer the cross-venue
+                # Kalshi<->Polymarket match computed above (crypto/macro/index same-
+                # market pairs — keyed by this row's own instrument_key, i.e. the
+                # wrapped conditionId/ticker); fall back to the adapter-populated
+                # value (Polymarket sports fixture_id) when no cross-venue match
+                # exists for this instrument. "" (honest absence, never a guessed or
+                # false pair) when neither mechanism resolves one. cqg-grain rows
+                # never get one (a family has no single per-instance identity).
+                "canonical_instrument_id": (
+                    canonical_event_id_by_key.get(entity_id) or lc.canonical_instrument_id
+                    if data_type != _PREDICTION_CQG_DATA_TYPE
+                    else ""
+                ),
                 # Non-DeFi grain → no dual-form pool ids.
                 "glued_pair_id": "",
                 "pool_address": "",

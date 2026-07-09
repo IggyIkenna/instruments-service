@@ -34,6 +34,7 @@ from unified_api_contracts.predictions import (
     CanonicalQuestionGroup,
     MarketLifecycle,
     classify_kalshi_to_canonical_group,
+    underlying_for_group,
 )
 from unified_trading_library import log_event
 
@@ -778,12 +779,18 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         tick_size = Decimal(str(tick_raw)) if tick_raw else Decimal("0.01")
         min_order_raw = getattr(market, "min_order_size", None)
         min_order = Decimal(str(min_order_raw)) if min_order_raw else Decimal("1")
+        # Canonical question group — the SAME classifier classify_lifecycle() uses
+        # for MarketLifecycle.canonical_group (computed on the market-level ticker,
+        # matching classify_lifecycle's own convention). Computed ONCE here and
+        # threaded into classify_lifecycle() (reuse, not reclassify) per
+        # prediction_canonical_identity_migration_2026_07_08.md todo 1.
+        group = classify_kalshi_to_canonical_group(ticker=ticker) or CanonicalQuestionGroup.OTHER
         # Per CLAUDE.md "Prediction market lifecycle timing": carry
         # market_created_at + settlement_time on the InstrumentRecord so
         # MTDS CLOB capture + features-* compute can gate ticks. Full
         # lifecycle row (with canonical_question_group + current_status)
         # rides the MARKET_LIFECYCLE data_type alongside.
-        lifecycle = self.classify_lifecycle(market)
+        lifecycle = self.classify_lifecycle(market, group=group)
         # Universe-membership floor (fixes silent-empty KALSHI universe, 2026-06-22):
         # Kalshi's live `/markets?status=open` snapshot stamps `open_time` as an
         # intraday timestamp on the CURRENT day (e.g. 2026-06-22T13:21Z). The IS
@@ -807,6 +814,18 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_key = build_canonical_instrument_id(
             AssetGroup.PREDICTION, self.venue, InstrumentType.PREDICTION_MARKET, ticker
         )
+        # underlying (prediction_canonical_identity_migration_2026_07_08.md todo 1 /
+        # docs/PREDICTION_INSTRUMENTS.md § "Canonical identity model" §3 item 2): the
+        # SAME classify_kalshi_to_canonical_group() -> underlying_for_group() pipeline
+        # that already runs above for MarketLifecycle.canonical_group, applying
+        # cross_venue_mapping.py::_build_mapping()'s existing convention — sports
+        # fixtures don't have a single scalar underlying (None, "not applicable").
+        # Non-sports groups mostly resolve to a NAMED underlying (BTC, CPI, TRUMP,
+        # GEO_ISRAEL_IRAN, OSCARS, …) — PredictionUnderlying.OTHER.value is the
+        # honest catch-all reserved for genuinely-unclassified markets (cqg OTHER),
+        # not a blanket "politics/geo" bucket.
+        underlying_axis = underlying_for_group(group)
+        underlying = None if underlying_axis.value.startswith("SPORTS_") else underlying_axis.value
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=self.venue,
@@ -827,6 +846,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             updated_at=now,
             available_from_datetime=_afd,
             available_to_datetime=lifecycle.settlement_time if lifecycle else None,
+            underlying=underlying,
         )
 
     def _parse_close_time(self, close_time_raw: str | None) -> datetime | None:
@@ -866,12 +886,23 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             return "settled"
         return "created"
 
-    def classify_lifecycle(self, market: KalshiMarket) -> MarketLifecycle | None:
+    def classify_lifecycle(
+        self, market: KalshiMarket, group: CanonicalQuestionGroup | None = None
+    ) -> MarketLifecycle | None:
         """Build a :class:`MarketLifecycle` for a Kalshi market.
 
         Returns ``None`` when ``ticker`` is missing or ``close_time`` is
         unparseable — without a resolution timestamp the cluster gate
         can't reason about whether the market overlaps a given day.
+
+        ``group`` lets a caller that already classified the market (e.g.
+        ``_parse_market()``, which also needs the group for
+        ``InstrumentRecord.underlying``) pass it in so this method doesn't
+        reclassify — per
+        ``prediction_canonical_identity_migration_2026_07_08.md`` todo 1
+        ("reuse the result, don't reclassify"). Defaults to ``None``, which
+        preserves the original self-contained behaviour for other callers
+        (``get_market_lifecycles()``, direct test invocations).
 
         Lifecycle field derivation:
 
@@ -915,7 +946,8 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
 
             market_created_at = resolution_time - _td(days=30)
 
-        group = classify_kalshi_to_canonical_group(ticker=ticker) or CanonicalQuestionGroup.OTHER
+        if group is None:
+            group = classify_kalshi_to_canonical_group(ticker=ticker) or CanonicalQuestionGroup.OTHER
         settlement_lag = CANONICAL_GROUP_METADATA[group].settlement_lag
         settlement_time = resolution_time + settlement_lag
 
