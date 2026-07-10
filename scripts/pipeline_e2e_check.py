@@ -348,6 +348,12 @@ def _run_leg(
         status="failed",
         vm_name=vm_name,
         attempt_ts=started.isoformat(),
+        # IS's parquet write and manifest write are the SAME bucket under
+        # --test-run (finding #2 — IS is fully test-bucket self-contained,
+        # unlike MTDS) — set both up front so even an early-return failure
+        # path still reports where this leg was actually checking.
+        parquet_bucket=bucket,
+        manifest_bucket=bucket,
     )
 
     fp_before: str | None = None
@@ -390,6 +396,12 @@ def _run_leg(
         return result
     result.write_verified = write_ok
     result.parquet_count = parquet_count
+    if write_ok:
+        try:
+            found_uri = _representative_parquet_uri(bucket, prefix)
+            result.parquet_uri = found_uri or ""
+        except Exception as exc:  # pragma: no cover — storage transport failure
+            logger.warning("parquet_uri lookup failed for %s/%s: %s", cell.asset_group, cell.venue, exc)
 
     try:
         manifest_ok, manifest_status = verify_manifest_row(bucket, match, day)
