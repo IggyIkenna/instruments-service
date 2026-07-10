@@ -149,19 +149,22 @@ def _canon_instrument_type(asset_group: str, venue: str, instrument_type: str) -
 
 # CeFi venue-dialect fold (honest_coverage_uac_writer_matrix_reconciliation
 # Decision 6, implemented as the todo's "check folds suffixes" option): the
-# writer captures under Tardis-grain suffixed venues (OKX-SPOT/-SWAP/-FUTURES
-# from expand_cefi_tardis_endpoints; legacy raw Tardis exchange ids on older
-# rows) while UAC keys those venues at the bare canonical grain (OKX). Fold
-# BOTH sides to the UAC-canonical venue so a suffix dialect can never
-# manufacture a false hole or a false stray. Venues that are themselves
-# UAC-canonical suffixed forms (BYBIT-SPOT, KRAKEN-FUTURES, BITFINEX-*, …) are
-# deliberately NOT folded. COINBASE is the exception: the canonical EXPECTED
-# token for spot Coinbase is COINBASE-SPOT (not bare COINBASE), so that entry
-# folds legacy bare-COINBASE writer/EXPECTED tokens UP instead of down — see
-# the inline comment on that entry.
+# writer captures under Tardis-grain suffixed venues (OKX-SWAP/-FUTURES from
+# expand_cefi_tardis_endpoints; legacy raw Tardis exchange ids on older rows)
+# while UAC keys those venues at the bare canonical grain (OKX). Fold BOTH
+# sides to the UAC-canonical venue so a suffix dialect can never manufacture a
+# false hole or a false stray. Venues that are themselves UAC-canonical
+# suffixed forms (OKX-SPOT, BYBIT-SPOT, KRAKEN-FUTURES, BITFINEX-*, …) are
+# deliberately NOT folded — OKX-SPOT was REMOVED from this table 2026-07-10
+# (Option A follow-through, unified-api-contracts declares OKX-SPOT its own
+# cefi venue with its own EXPECTED entry now; folding it to bare OKX would
+# make real captured OKX-SPOT rows compare against the wrong EXPECTED tuple
+# now that bare-OKX SPOT_PAIR is gone). COINBASE is the exception: the
+# canonical EXPECTED token for spot Coinbase is COINBASE-SPOT (not bare
+# COINBASE), so that entry folds legacy bare-COINBASE writer/EXPECTED tokens
+# UP instead of down — see the inline comment on that entry.
 _CEFI_VENUE_FOLD: dict[str, str] = {
     # Tardis-grain splits emitted by expand_cefi_tardis_endpoints()
-    "OKX-SPOT": "OKX",
     "OKX-SWAP": "OKX",
     "OKX-FUTURES": "OKX",
     # INVERTED (coinbase_bare_name_migration_2026_07_06 S1): COINBASE-SPOT is
