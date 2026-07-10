@@ -13,19 +13,14 @@ judge whether it is an intentional universe change or accidental drift).
 
 Regeneration recipe when the change IS intentional:
 
-    .venv/bin/python -c "
-    import sys, json, importlib.util, pathlib
-    spec = importlib.util.spec_from_file_location('_eu', 'scripts/expected_universe.py')
-    eu = importlib.util.module_from_spec(spec); sys.modules['_eu'] = eu
-    spec.loader.exec_module(eu)
-    out_dir = pathlib.Path('tests/unit/scripts/goldens/expected_universe')
-    for ag in eu.KNOWN_ASSET_GROUPS:
-        r = sorted(eu.build_expected(ag))
-        fixture = {'asset_group': ag, 'captured_at': 'YYYY-MM-DD',
-                   'tuple_count': len(r), 'tuples': [list(t) for t in r]}
-        with open(out_dir / f'{ag}.json', 'w') as f:
-            json.dump(fixture, f, indent=2, sort_keys=False)
-    "
+    .venv/bin/python scripts/regenerate_expected_universe_golden.py
+
+This refuses to write the fixture while UAC (`unified-api-contracts`) or UTL
+(`unified-trading-library`) — both editable path-dependencies that
+`build_expected()` reads live off disk — have uncommitted local changes,
+which would otherwise get silently baked into the checked-in golden (see
+`instruments-service@94512ec3` incident,
+`plans/active/issues/instruments_service_qg_red_golden_drift_2026_07_10.md`).
 
 Plan: plans/active/issues/cefi_layer1_denominator_gaps_2026_07_03.md § 2a
 SSOT: codex/02-data/honest-coverage-model.md § Layer-1 enumeration-completeness matrix
@@ -69,12 +64,7 @@ def _load_check_module() -> ModuleType:
 
 
 def _golden_path(asset_group: str) -> Path:
-    return (
-        Path(__file__).resolve().parent
-        / "goldens"
-        / "expected_universe"
-        / f"{asset_group}.json"
-    )
+    return Path(__file__).resolve().parent / "goldens" / "expected_universe" / f"{asset_group}.json"
 
 
 def _load_golden(asset_group: str) -> list[tuple[str, str, str]]:
@@ -105,9 +95,7 @@ class TestSingleProducer:
         """check_enumeration_completeness re-exports build_expected from the sibling."""
         assert callable(check_mod.build_expected)
 
-    def test_check_enumeration_delegator_matches_build_expected(
-        self, eu: ModuleType, check_mod: ModuleType
-    ) -> None:
+    def test_check_enumeration_delegator_matches_build_expected(self, eu: ModuleType, check_mod: ModuleType) -> None:
         """The _build_expected_tuples delegator MUST return the same set as build_expected."""
         for ag in eu.KNOWN_ASSET_GROUPS:
             direct = eu.build_expected(ag)
