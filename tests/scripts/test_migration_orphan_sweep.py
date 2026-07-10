@@ -303,6 +303,36 @@ class TestR1MatcherRefinements:
         assert _mod._taxonomy_label("configs/svc.yaml") == "configs"
         assert _mod._taxonomy_label("databento-batch-registry/job.json") == "vendor-registry"
 
+    def test_migration_backup_prefixes_labelled_not_unknown(self) -> None:
+        # 2026-07-10 finding: the 2026-07-09 canonicalization migrators' backup-first
+        # pattern writes top-level ``_migration_backup*`` prefixes that must be labelled,
+        # not surfaced as ``unknown`` (the tradfi single-leg product-root migrator's own
+        # ``_migration_backup_2026_07_09/`` + the sibling defi/cefi ``_migration_backups/``
+        # plural form).
+        assert (
+            _mod._taxonomy_label("_migration_backup_2026_07_09/raw_tick_data/by_date/day=2020-01-02/x.parquet")
+            == "migration-backup"
+        )
+        assert (
+            _mod._taxonomy_label("_migration_backups/cefi_dated_perps_margin_marker_2026_07_09/x.parquet")
+            == "migration-backup"
+        )
+
+    def test_needs_attribution_prefix_labelled_not_unknown(self) -> None:
+        # 2026-07-10 finding: the full unlimited tradfi orphan sweep surfaced 71,830
+        # objects under the top-level ``_needs_attribution/`` holding prefix as
+        # ``unknown``. Both ``migrate_tradfi_to_v9_canonical.py`` and the defi walk
+        # migrator write un-path-attributable legacy objects here deliberately
+        # (operator 2026-06-08: preserve, never lose, never guess) — must be labelled,
+        # not surfaced as unknown.
+        assert (
+            _mod._taxonomy_label(
+                "_needs_attribution/raw_tick_data/by_date/day=2020-01-01/category=tradfi/venue=FX/"
+                "data_type=ohlcv_24h/ticks_migrated_20260418T131054Z.parquet"
+            )
+            == "needs-attribution"
+        )
+
     def test_top_level_label_is_startswith_only_never_substring(self) -> None:
         # ``data_type=dex_pools`` deep in a real data path must NOT be swept into the
         # top-level legacy-data label (the startswith-only contract)
