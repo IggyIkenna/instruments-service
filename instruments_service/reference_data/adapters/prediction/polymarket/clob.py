@@ -256,7 +256,15 @@ class PolymarketClobMixin:
                             "retry_safe": retry_safe,
                         },
                     )
-                    raise
+                    # Wrap as RuntimeError (CF-11): a bare ``aiohttp.ClientError`` /
+                    # ``ClientResponseError`` (4xx/429/5xx) is not caught by
+                    # ``_fetch_one_venue`` and would crash the whole multi-venue
+                    # ``asyncio.gather`` batch; RuntimeError IS caught → the cell records
+                    # ``attempted_failed`` (mirrors cefi ``aster.py``).
+                    raise RuntimeError(
+                        f"Polymarket clob/markets fetch failed "
+                        f"(error_code={error_code}, retry_safe={retry_safe}): {exc}"
+                    ) from exc
 
                 raw_markets = data.get("data")
                 if not isinstance(raw_markets, list) or not raw_markets:

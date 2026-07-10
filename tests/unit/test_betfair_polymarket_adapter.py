@@ -267,7 +267,9 @@ class TestPolymarketAdapterExtended:
         mock_session_cm = MagicMock()
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
-        with patch("aiohttp.ClientSession", return_value=mock_session_cm), pytest.raises(_aiohttp.ClientError):
+        # RuntimeError (not bare ClientError): the wrap is what lets _fetch_one_venue catch it
+        # and record attempted_failed instead of crashing the multi-venue asyncio.gather batch.
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm), pytest.raises(RuntimeError):
             await adapter.get_instruments()
 
     @pytest.mark.asyncio
@@ -307,7 +309,7 @@ class TestPolymarketAdapterExtended:
                 "instruments_service.reference_data.adapters.prediction.polymarket.log_event",
                 side_effect=lambda name, **_kw: events.append(name),
             ),
-            pytest.raises(_aiohttp.ClientError),
+            pytest.raises(RuntimeError),  # wrapped ClientError → caught by _fetch_one_venue → attempted_failed
         ):
             await adapter.get_instruments(date="2025-03-14")
         assert "ADAPTER_FETCH_FAILED" in events
@@ -343,7 +345,7 @@ class TestPolymarketAdapterExtended:
                 "instruments_service.reference_data.adapters.prediction.polymarket.log_event",
                 side_effect=lambda name, **_kw: events.append(name),
             ),
-            pytest.raises(_aiohttp.ClientError),
+            pytest.raises(RuntimeError),  # wrapped ClientError → caught by _fetch_one_venue → attempted_failed
         ):
             await adapter.get_instruments(date=None)
         assert "ADAPTER_FETCH_FAILED" in events
