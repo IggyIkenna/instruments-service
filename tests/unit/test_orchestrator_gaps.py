@@ -30,6 +30,7 @@ from instruments_service.engine.orchestrator import (
     _compute_prediction_shards,
     _extract_prediction_canonical_group,
     _get_defi_manifest_high_watermarks,
+    _get_manifest_high_watermarks,
     _should_skip_date_for_per_league,
     _write_market_lifecycle,
     clear_defi_universe_cache,
@@ -158,6 +159,85 @@ class TestGetDefiManifestHighWatermarks:
             result = _get_defi_manifest_high_watermarks()
         assert result["AAVE_V3-ETHEREUM"] == 120
         assert result["UNISWAP_V3-ETHEREUM"] == 50
+
+
+# ---------------------------------------------------------------------------
+# _get_manifest_high_watermarks — the generalized, asset-group-parameterized
+# helper that _get_defi_manifest_high_watermarks now delegates to. Todo 6 of
+# cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md.
+# ---------------------------------------------------------------------------
+
+
+class TestGetManifestHighWatermarksGeneralized:
+    def test_cefi_asset_group_reads_cefi_bucket(self) -> None:
+        """A non-DEFI asset_group resolves via the same bucket-lookup mechanism."""
+        index_df = pd.DataFrame(
+            {
+                "venue": ["LIGHTER-ZKSYNC", "LIGHTER-ZKSYNC", "PACIFICA-SOLANA"],
+                "instrument_count": [213, 18, 10],
+                "date": ["2026-06-25", "2026-06-26", "2026-06-20"],
+            }
+        )
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="cefi-test-bucket",
+            ) as mock_bucket,
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                return_value=index_df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_venue_epoch",
+                return_value=None,
+            ),
+        ):
+            result = _get_manifest_high_watermarks("CEFI")
+        mock_bucket.assert_called_once_with("CEFI")
+        assert result["LIGHTER-ZKSYNC"] == 213  # max across the two rows, not the latest
+        assert result["PACIFICA-SOLANA"] == 10
+
+    def test_exception_returns_empty_dict(self) -> None:
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="test-bucket",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                side_effect=RuntimeError("GCS unavailable"),
+            ),
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+        ):
+            result = _get_manifest_high_watermarks("TRADFI")
+        assert result == {}
+
+    def test_defi_matches_original_wrapper(self) -> None:
+        """asset_group='DEFI' reproduces _get_defi_manifest_high_watermarks() exactly."""
+        index_df = pd.DataFrame(
+            {
+                "venue": ["AAVE_V3-ETHEREUM"],
+                "instrument_count": [100],
+                "date": ["2026-01-01"],
+            }
+        )
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="test-bucket",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                return_value=index_df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_venue_epoch",
+                return_value=None,
+            ),
+        ):
+            generic_result = _get_manifest_high_watermarks("DEFI")
+            wrapper_result = _get_defi_manifest_high_watermarks()
+        assert generic_result == wrapper_result == {"AAVE_V3-ETHEREUM": 100}
 
 
 # ---------------------------------------------------------------------------

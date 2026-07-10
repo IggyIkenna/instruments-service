@@ -184,6 +184,64 @@ class TestProcessInstruments:
             )
         assert isinstance(result, dict)
 
+    @pytest.mark.asyncio
+    async def test_cefi_venue_collapse_is_detected_but_not_blocked(self, caplog) -> None:
+        """A CeFi venue whose count collapsed vs. its manifest HWM is flagged in the
+        logs (the exact LIGHTER/PACIFICA-shape regression from
+        cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md) but the
+        record is STILL WRITTEN — the generalized non-DeFi policy detects, it
+        never blocks (CeFi delistings/TradFi expiries are legitimate decreases,
+        unlike DeFi's immutable-contract invariant)."""
+        records = [_make_record(venue="LIGHTER-ZKSYNC", instrument_key="LIGHTER-ZKSYNC:PERP:1")]
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        # Manifest HWM shows 213 (the venue's real pre-incident steady-state) —
+        # this run only fetched 1 record, an ~99.5% collapse, well under the 50%
+        # thin-collapse ratio.
+        hwm_df = pd.DataFrame(
+            {
+                "venue": ["LIGHTER-ZKSYNC"],
+                "instrument_count": [213],
+                "date": ["2026-06-25"],
+            }
+        )
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
+                return_value=["LIGHTER-ZKSYNC"],
+            ),
+            patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
+            patch(
+                "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
+                AsyncMock(return_value=VenueFetchResult(records=records)),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator.DomainValidationService") as mock_dvs,
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, [], ["LIGHTER-ZKSYNC"]),
+            ),
+            patch("instruments_service.engine.orchestrator.ManifestWriter"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=hwm_df),
+            patch("instruments_service.engine.orchestrator._get_venue_epoch", return_value=None),
+            caplog.at_level("ERROR"),
+        ):
+            mock_dvs.return_value.validate_for_domain = MagicMock()
+            result = await process_instruments("2026-07-10", ["CEFI"])
+
+        # Detected: an ERROR-level collapse log fired for this venue.
+        assert any(
+            "CEFI venue count collapse detected" in r.message and "LIGHTER-ZKSYNC" in r.message for r in caplog.records
+        )
+        # NOT blocked: the record was still written (result carries the venue's count).
+        assert result.get("LIGHTER-ZKSYNC") == 1
+
 
 class TestWriteVenue:
     def test_write_success(self) -> None:
@@ -265,8 +323,7 @@ class TestWriteVenue:
         mock_manifest.record_captured.assert_called_once()
         call_kwargs = mock_manifest.record_captured.call_args.kwargs
         assert call_kwargs["data_type"] == "instruments", (
-            f"cefi manifest emission must stamp data_type='instruments', got "
-            f"{call_kwargs['data_type']!r}"
+            f"cefi manifest emission must stamp data_type='instruments', got {call_kwargs['data_type']!r}"
         )
         assert call_kwargs["asset_group"] == "cefi"
         assert call_kwargs["venue"] == "BINANCE-SPOT"
