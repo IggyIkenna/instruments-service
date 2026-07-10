@@ -50,7 +50,7 @@ venues" and CBOE/CFE as "Disabled." Both are stale as of the 2026-06-18 lockdown
 | CME        | Databento          | `GLBX.MDP3`  | Index/sector/commodity/FX/crypto futures + options + CME event contracts (binary yes/no) |
 | NASDAQ     | Databento          | `DBEQ.BASIC` | Tech-heavy equities, BTC/ETH spot ETFs (IBIT/ETHA), select single-stock hedge legs       |
 | NYSE       | Databento          | `DBEQ.BASIC` | Remaining S&P 500 equities, additional single-stock hedge legs                           |
-| CBOE (CFE) | Databento          | `XCBF.PITCH` | VX (VIX) futures — outright contracts only (class "S" calendar spreads dropped, see §7)  |
+| CBOE (CFE) | Databento          | `XCBF.PITCH` | VX (VIX) futures — outrights + calendar spreads/butterflies (decomposed, see §11)        |
 | FX         | Yahoo Finance      | —            | G10 FX majors + KRW/USD static spot pairs                                                |
 | KRX        | Yahoo Finance      | —            | Korea Exchange single-stock equities + KOSPI/KOSPI200 indices                            |
 | ICE        | Yahoo Finance ONLY | —            | DXY (US Dollar Index) cash series only — every ICE Databento dataset is dropped          |
@@ -130,10 +130,16 @@ Notes:
   stale/zero-volume concerns, since honest-absence handling surfaces freshness downstream.
 - KOSPI/KOSPI200 added 2026-06-27 (operator: "daily KOSPI prices from Yahoo Finance"). These are `INDEX`-type
   (non-tradeable references), distinct from the 3 KRX single-stock `EQUITY` entries above.
-- **Open question**: the exact `instrument_id` construction for `YAHOO_INDICES` / `KRX_EQUITIES` entries (which
-  Yahoo-specific adapter builds the final `instrument_key` string) was not read in this pass — only the UAC
-  registry dataclasses were confirmed. Don't assume a specific string format for these without checking the actual
-  Yahoo TradFi adapter.
+- **Open question RESOLVED 2026-07-08**: there is no separate "Yahoo adapter" file — all 3 Yahoo-sourced static
+  registries are built as static `InstrumentRecord`s directly inside the same
+  `instruments_service/reference_data/adapters/tradfi/databento/adapter.py`
+  (`DatabentoReferenceDataAdapter`), merged into the same `get_instruments()` result list as the real
+  Databento-fetched instruments (steps 3/3b/3c). Confirmed real `instrument_key` shapes, read directly from code:
+  - `FX_SPOT_PAIRS` (`_create_fx_spot_records`): `FX:SPOT_PAIR:{BASE}-{QUOTE}`, e.g. `FX:SPOT_PAIR:EUR-USD`.
+  - `KRX_EQUITIES` (`_create_krx_equity_records`): `KRX:EQUITY:{symbol}` where `symbol` is the bare KRX numeric
+    code (not the `.KS` Yahoo ticker), e.g. `KRX:EQUITY:005930`.
+  - `YAHOO_INDICES` (`_create_yahoo_index_records`): `{venue}:INDEX:{base_asset}-USD`, e.g. `CBOE:INDEX:VIX-USD`
+    (quote is hardcoded `"USD"` regardless of the index's real denomination).
 
 ---
 
@@ -143,21 +149,22 @@ Equities and ETFs are **not** in the Databento registry above — they come from
 `unified_api_contracts/registry/tradfi_ticker_universe.py`, per that file's own docstring ("Equities/ETFs come from
 the tradfi_ticker_universe.py ... instead"). Real counts (2026-07-08):
 
-| List                       | Count |
-| -------------------------- | ----- |
-| `SP500_TICKERS`            | 200   |
-| `NASDAQ_TICKERS`           | 101   |
-| `ETF_TICKERS`              | 78    |
-| `NYSE_TRADFI_PERP_TICKERS` | 18    |
+| List                       | Count                                                                                                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SP500_TICKERS`            | 200 as of 2026-07-08 morning — expanded to the full current S&P 500 membership same day (see below); check the live registry for the current count, don't repeat 200 as current fact |
+| `NASDAQ_TICKERS`           | 101                                                                                                                                                                                  |
+| `ETF_TICKERS`              | 78                                                                                                                                                                                   |
+| `NYSE_TRADFI_PERP_TICKERS` | 18                                                                                                                                                                                   |
 
 `NASDAQ_TICKERS` (a subset of the broader universe) drives equity venue routing — see §7.
 
-**Open question / stale-content flag**: the old `MVP_INSTRUMENTS.md` claimed **~603 total S&P 500 tickers**
-(current + historical 2020-2025 constituents including delisted names like ATVI/CERN/XLNX/FRC). The current
-`SP500_TICKERS` list has only 200 entries — a real discrepancy this pass could not resolve (didn't have time to
-check whether historical constituents live in a different/larger list, a config-reloader override, or whether the
-universe was genuinely pruned since MVP_INSTRUMENTS.md was written). Don't repeat the ~603 number as current fact
-without checking the live list first.
+**RESOLVED 2026-07-08**: the old `MVP_INSTRUMENTS.md`'s claimed **~603 total S&P 500 tickers** (current +
+historical 2020-2025 constituents including delisted names like ATVI/CERN/XLNX/FRC) is explicitly NOT the target —
+operator decision was to restore the full CURRENT S&P 500 membership only (not the historical/delisted angle),
+since the workspace only needs OHLCV for these tickers and a bigger current universe also widens the pool of real
+cash-equity candidates for a future equity-basis-arb strategy against Binance/OKX equity-perps. `SP500_TICKERS`
+was expanded from 200 to the full current membership in `unified-api-contracts` the same day — see that repo's
+shipped commit for the exact before/after count and source citation.
 
 ---
 
@@ -208,12 +215,17 @@ its **full** curated list unfiltered even in MVP mode. Note also: the main adapt
   behavior, per instrument dataset:
   - **`GLBX.MDP3` (CME)**: class "S" → reclassified `InstrumentType.COMBO`, legs parsed via
     `_parse_cme_calendar_spread_legs` — decomposed, not dropped. See §11.
-  - **`XCBF.PITCH` (CBOE/VX)**: class "S" is **dropped entirely** (`inst_class not in ("F","M") → return None`) —
-    a 2026-06-25 fix (tag `G1.c`) explicitly targeting a prior bug where these rows polluted the catalog as
-    mis-typed `SPOT_PAIR` (comment cites "4,216 mis-typed SPOT_PAIR rows"). See §11 for why real historical rows
-    in this shape still exist in production.
-  - **`DBEQ.BASIC` (equities)**: class "S" → reclassified `EQUITY` (not `SPOT_PAIR`) — a separate 2026-06-25 fix
-    (tag `G1.d`) for 318 previously mis-typed NASDAQ/NYSE equity rows.
+  - **`XCBF.PITCH` (CBOE/VX)**: class "S" → reclassified `InstrumentType.COMBO`, legs parsed via
+    `_parse_cboe_spread_legs` (2026-07-08 fix, superseding the 2026-06-25 G1.c drop — see §11). Real Databento
+    `instrument_class` semantics, confirmed via the `databento` SDK's own `InstrumentClass` enum, are ALSO now
+    documented accurately: `"S"` is `FUTURE_SPREAD`, never "FX Spot / Equity spot" as an earlier internal comment
+    claimed.
+  - **`DBEQ.BASIC` (equities)**: class "S" → reclassified `EQUITY` (not `SPOT_PAIR`) — a 2026-06-25 fix (tag
+    `G1.d`) for 318 previously mis-typed NASDAQ/NYSE equity rows. **Separately, class "K" (the real Databento
+    `STOCK` code — confirmed via a live definition-schema call for AAPL/SPY/IBIT, 2026-07-08) was ALSO fixed**:
+    it previously fell through to the default `SPOT_PAIR` (mislabeled "Forex spot" in the class-map comment — FX
+    spot pairs actually come from a wholly separate static builder, never this class map), which was the real,
+    live, ongoing root cause of 100% of fresh NASDAQ/NYSE single-stock captures landing as `SPOT_PAIR`. See §11.
 - **User-defined combos** (e.g. Databento symbols like `"UD:1V:CXT ..."`) come through parent symbology as
   FUTURE/OPTION but have no derivable underlying — these get reclassified `COMBO` too.
 - **Databento API usage**: Streaming API (`timeseries.get_range`), `schema="definition"`, `stype_in="parent"` for
@@ -229,20 +241,70 @@ its **full** curated list unfiltered even in MVP mode. Note also: the main adapt
 Canonical grammar (full spec lives in the shared instrument-ID doc): `VENUE:TYPE:PAYLOAD[@CHAIN]`. TradFi's
 `chain` is always `"off-chain"`.
 
-| Type     | Format                                            | Example                                                                             |
-| -------- | ------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `FUTURE` | `VENUE:FUTURE:BASE-QUOTE-YYMMDD`                  | `CME:FUTURE:ES-USD-241225`                                                          |
-| `OPTION` | `VENUE:OPTION:BASE-QUOTE-YYMMDD-STRIKE-CALL\|PUT` | `CME:OPTION:ES-USD-241225-4500-CALL`                                                |
-| `EQUITY` | `VENUE:EQUITY:SYMBOL`                             | `NASDAQ:EQUITY:AAPL`, `NYSE:EQUITY:SPY`                                             |
-| `INDEX`  | `VENUE:INDEX:SYMBOL`                              | illustrative only — see the open question in §4 for the Yahoo-sourced index entries |
+| Type     | Format                                               | Example                                                            |
+| -------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
+| `FUTURE` | `VENUE:FUTURE:PRODUCT_ROOT@LIN-YYYYMMDD`             | `CME:FUTURE:GOLD@LIN-20260821`                                     |
+| `OPTION` | `VENUE:OPTION:PRODUCT_ROOT@LIN-YYYYMMDD-STRIKE-C\|P` | `CME:OPTION:NASDAQ100@LIN-20260918-32000-C`                        |
+| `EQUITY` | `VENUE:EQUITY:SYMBOL`                                | `NASDAQ:EQUITY:AAPL`, `NYSE:EQUITY:SPY`                            |
+| `INDEX`  | `VENUE:INDEX:SYMBOL`                                 | see §4 for the resolved Yahoo-sourced index `instrument_key` shape |
 
-**Single-leg dated-derivative codes are already fine, real, industry-standard, and terse — this is NOT a
-canonicalization gap.** Confirmed 2026-07-08 while auditing instrument_id divergences workspace-wide: codes like
-`CME:FUTURE:6AF0` are real exchange contract codes, not an uncleaned internal prefix (unlike, say, Kraken's raw
-`FF_XBTUSD_260731` on the CeFi side) — no fix needed here.
+**Single-leg dated-derivative `@LIN`-`YYYYMMDD` extension — SHIPPED 2026-07-09 (write path + historical
+migration, MTDS repo).** The 2026-07-08 assessment above (real exchange contract codes like `CME:FUTURE:6AF0`
+are already fine, no fix needed) was the original call; the operator reversed it 2026-07-09
+(`instrument_id_format_canonicalization_2026_07_08.md` finding 1, "What this is NOT"): "I'd rather adjust
+tradfi... that's the whole point of cross-AG normalisation" — TradFi single-leg dated derivatives (`FUTURE`/
+`OPTION`) are now IN SCOPE for the same target already shipped for CeFi. **Implemented** (this is the
+market-tick-data-service raw-tick write path this doc's §8 table describes — a separate surface from the
+instruments-service reference-data catalog §11 covers):
 
-**Multi-leg spreads/combos ARE a real divergence, not yet fixed.** See §11 — this is the one place TradFi's
-instrument_id format genuinely needs work, and it is explicitly **pending confirmation**, not settled.
+- **Write-path fix** (`market-tick-data-service/market_tick_data_service/market_interface/adapters/tradfi/
+databento_enrichment.py::_classify_row` for Databento CME/CBOE/DBEQ; `tradfi_shared.py::
+derive_tradfi_row_instrument_id` for IBKR, symmetric code-only fix — IBKR has zero real historical rows to
+  migrate, never wired into a live/backfill entrypoint): the raw exchange product root (e.g. `GC`, `NQ`, `VX`)
+  is translated to its human-canonical name (`GOLD`, `NASDAQ100`, `VIX`) via the UAC registry
+  `unified_api_contracts.registry.EXCHANGE_CODE_TO_NAME` (the SAME registry `instruments-service`'s
+  `_resolve_product_root()` already uses for §11's COMBO legs — one shared human-name mapping, not two), and
+  `build_instrument_id(..., margin_marker="LIN")` stamps the settlement suffix. Every real TradFi future/option
+  in this system is USD-settled — no inverse-margined TradFi product exists — so the marker is always `@LIN`,
+  never `@INV` (confirmed, not assumed: the CME/CBOE/ICE product universe in `tradfi_symbology.py` has no
+  crypto/BTC-margined instrument). A companion UAC fix
+  (`unified_api_contracts/external/databento/databento_classifier.py::_derive_cme_option_underlying`) added the
+  6 missing CME commodity-option root mappings (silver/palladium/platinum/copper/heating-oil/gasoline options —
+  `SO`/`PAO`/`PO`/`HXE`/`OH`/`OB`) that previously fell through to the raw option code unresolved. The
+  `underlying=` GCS partition segment (`futures_chain`/`options_chain` bundle files) follows the same DataFrame
+  column automatically — no separate path-builder fix needed, per `partitioned_writer.py`'s existing
+  per-underlying grouping.
+- **Historical migration**: `market-tick-data-service/scripts/migrate_tradfi_single_leg_product_root_lin_2026_07_09.py`
+  (backup-first — server-side copy to `_migration_backup_2026_07_09/` before every rewrite — real GCS
+  concurrency via `ThreadPoolExecutor`, dry-run-by-default, idempotent/resumable). Real scope, enumerated from
+  the existing `availability_index.parquet` manifest (single-walk discipline — no fresh corpus walk, real
+  `row_count>0` captured entries only): **158,812 real shard objects / ~1.19B rows** across CME
+  `futures_chain`+`options_chain` and CBOE `futures_chain` (`ohlcv_1s`/`ohlcv_1m` data_types only — see the
+  excluded-scope note below; ICE dropped out entirely, 0 real captured rows, consistent with §1's ICE-purge).
+  **Status as of 2026-07-09 14:31 UTC (real, in-progress — not yet complete)**: launched at real production
+  concurrency (48 workers); verified correct end-to-end on live samples across CME (6S→CHF, ZS→SOYBEAN,
+  6N→NZD, 6M→MXN, 6B→GBP, GC→GOLD, NQ→NASDAQ100 — real before/after GCS reads, backup+new-path+content all
+  confirmed) and CBOE (VX→VIX, real GCS listing confirmed post-migration); 9,000+ real objects processed (real
+  moves + in-place rewrites + genuinely-absent-shard skips), running continuously in the background at
+  ~6-13 real objects/sec (throughput varies with real shared-host GCS contention from concurrent workspace
+  agents) — real ETA at last measurement ~6-7 hours from launch. The script is idempotent (a shard already in
+  the target `@LIN` shape is a no-op), so it can be safely re-run/resumed to reach full completion:
+  `python scripts/migrate_tradfi_single_leg_product_root_lin_2026_07_09.py --worklist <worklist.parquet> --workers 48 --apply --stamp <new-stamp>`
+  (worklist = the same manifest-derived scope query documented in the script's own module docstring), followed
+  by `--skip-gcs` (manifest-only rewrite) once the GCS pass reaches 100%.
+  **Real gap found and deliberately excluded, not silently dropped**: CME's `data_type=options_chain` axis
+  (120,946 manifest entries, ~187.5M rows) uses a DIFFERENT, unverified legacy per-contract/per-spread flat file
+  layout (confirmed live via GCS listing: filenames like `CC__FMH0025!.parquet` directly under
+  `data_type=options_chain/`, no `underlying=X/` subdirectory at all; the manifest's own `underlying` column for
+  these rows holds per-contract keys like `ESU4_C5675`, not a product root) — this is NOT the
+  `underlying={ROOT}/ticks.parquet` bundled scheme the write-path fix and this migration target. Touching it
+  without first understanding its real physical layout risked silent data loss at ~187M-row scale, so it was
+  excluded from this pass rather than guessed at; flagged here as a real, open follow-up (a dedicated
+  investigation + fix plan, scope TBD) rather than deferred silently.
+
+**Multi-leg spreads/combos — the CODE fix is FIXED 2026-07-08/09; the historical catalog migration is real but
+NOT yet durable.** See §11 for the full picture, including why the historical migration needs re-running after
+every catalog rollup cycle until the upstream by_date corpus is also migrated.
 
 ---
 
@@ -329,81 +391,139 @@ events/~17 min/~21,000 files created.
 
 ---
 
-## 11. Known Non-Canonical Today: Multi-Leg Spreads & Combos
+## 11. Multi-Leg Spreads & Combos — code FIXED 2026-07-08/09; historical catalog migration NOT durable yet
 
-> **Status: current-state documented, target-state proposed, NOT implemented, NOT operator-confirmed as final.**
-> This mirrors the same current-vs-target-state framing already used for the DeFi A_TOKEN/DEBT_TOKEN split
-> decision elsewhere in this consolidation — do not treat anything in this section as shipped.
+> **Status: the CODE fix is real, tested, and shipped — every future capture is correct going forward.**
+> CBOE/VX spreads now decompose through the same `InstrumentLeg`/`InstrumentType.COMBO` pathway already
+> proven for CME; the CME path's 2 pre-existing gaps (raw-ticker legs, redundant per-leg venue) are also
+> closed; a 1-4 leg hard cap was added (operator spec, 2026-07-09 — 5+-leg combos are dropped and logged,
+> never captured). **The historical `prod/catalog.parquet` in-place migration is a separate, NOT-yet-durable
+> story — see "Historical migration: real, but NOT durable yet" below before treating either affected row
+> count as current.** Plan:
+> `unified-trading-pm/plans/active/canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md`.
 
-### Current real state (confirmed against `prod/catalog.parquet`, 2026-07-08)
+### Real pre-fix state (confirmed against `prod/catalog.parquet`, 2026-07-08)
 
-**CBOE/VX calendar spreads bypass structured decomposition entirely.** Real rows reuse the single-leg `SPOT_PAIR`
-type and separate legs with a whitespace-padded dash of raw exchange tickers:
+CBOE/VX calendar spreads bypassed structured decomposition entirely — real rows reused the single-leg `SPOT_PAIR`
+type and separated legs with a whitespace-padded dash of raw exchange tickers, e.g.
+`CBOE:SPOT_PAIR:VX/F1:1:S - VX/G1:1:B`.
 
-```
-CBOE:SPOT_PAIR:VX/F1:1:S - VX/G1:1:B          (2-leg — 34,017 real rows)
-```
+**Real, measured volume — corrected**: the originating finding cited "34,017 (2-leg) + 4,211 (3-leg) + 5 (4-leg) =
+38,233" rows; a direct read of the real catalog found this was wrong. The actual population is **4,211 rows at 2
+legs + 5 rows at 3 legs = 4,216 total** (0 four-leg rows exist) — exactly matching the `databento/adapter.py` G1.c
+fix comment's own "4,216 mis-typed SPOT_PAIR rows" count. The larger number was not reproducible against the real
+data; treat the corrected 4,216 figure as authoritative.
 
-Confirmed volumes: 34,017 rows at 2 legs, 4,211 at 3 legs, 5 at 4 legs — **38,233 total**, with up to 9
-colon-segments for the worst 3-leg butterfly-spread cases (a naive `split(":")` parser cannot make sense of these).
+Mechanism: `databento/adapter.py`'s G1.c fix (2026-06-25) dropped every non-outright `XCBF.PITCH` row
+(`inst_class not in ("F", "M") → return None`) instead of decomposing it — a workaround for the mis-typed-SPOT_PAIR
+pollution, not the real target state.
 
-Likely mechanism (inferred from code in this pass, **not independently re-walked against GCS history** — flagging
-as the honest limit of this investigation): `databento/adapter.py:767-773` (fix tag `G1.c`, 2026-06-25) now drops
-every non-outright `XCBF.PITCH` row outright — `if dataset == "XCBF.PITCH" and inst_class not in ("F", "M"): return
-None`. The same code comment cites this fix as targeting "4,216 mis-typed SPOT_PAIR rows," and shows the actual raw
-symbol shape that triggered it: `"VX/F1:1:S - VX/G1:1:B"`. That fix stops **new** pollution at the
-definition-fetch layer going forward, but it is a drop, not a retroactive backfill — it does not fix rows already
-captured under the pre-fix behavior. The 38,233-row population the 2026-07-08 audit found in the production catalog
-is plausibly that historical residue, though this session did not confirm the exact timeline row-by-row.
+### The fix (shipped)
 
-**CME calendar spreads DO get real structured decomposition** — this part already works:
-`symbology.py::_parse_cme_calendar_spread_legs` (wired at `adapter.py:799-802`) is real, tested, live for
-`GLBX.MDP3`. The combo's own `instrument_key` is `VENUE:COMBO:raw_symbol` (e.g. `CME:COMBO:ESM6-ESU6` — correct
-type, no delimiter ambiguity), and its legs are a real structured `list[InstrumentLeg]` (`instrument_key`/`side`
-`"BUY"`/`"SELL"`/`ratio` fields — a proper `BaseModel`, not a string), serialized to a separate JSON column at
-write time (`process_write.py:184`), not encoded into the instrument_id.
+1. **`symbology.py::_parse_cboe_spread_legs`** (new) parses CBOE's real raw_symbol shape — `TICKER:RATIO:SIDE` per
+   leg, joined by `" - "` (e.g. `VX/F1:1:S - VX/G1:1:B`, or a 3-leg butterfly `VX/H1:1:B - VX/J1:2:S - VX/K1:1:B`)
+   — into real `list[InstrumentLeg]` objects. Unlike CME's format, CBOE's raw_symbol carries an explicit side/ratio
+   per leg, so no leg-count special-casing is needed.
+2. **`symbology.py::_build_leg_key`** (new, shared by both the CME and CBOE parsers) builds every leg's
+   `instrument_key` as `TYPE:SYMBOL` — human product name via `_resolve_product_root()` (`FUTURE:VIX`,
+   `FUTURE:SP500`, not `FUTURE:VX/F1` or `FUTURE:ESM6`), no redundant per-leg `VENUE:` prefix (the combo's own
+   top-level `VENUE:COMBO:...` already carries it once). This also fixes the 2 pre-existing gaps in the CME path.
+   **Deliberate deviation from "route through `unified_api_contracts...canonical_id_builder.build_leg()`"**: the
+   plan's "minimize the change surface" instruction asked for this, but UAC's real `build_leg()` unconditionally
+   embeds `venue` (via `build_instrument_id` → `_venue_token`, which raises if venue is empty) — there is no way to
+   call it and get a venue-less `TYPE:SYMBOL` leg key, which directly conflicts with the just-settled "drop the
+   redundant per-leg venue" decision this same fix implements. Extending UAC's `build_leg()` with an opt-in
+   venue-omission mode would be the fully-DRY answer, but that is a cross-repo change to `unified-api-contracts`
+   (its own quality gates + version bump + dependency re-sync) outside this fix's repo scope — `_build_leg_key`
+   stays a small, real, single, shared local helper instead (still "one implementation, not two independently-
+   evolving ones" within this repo) pending that as a separate, explicitly-tracked follow-up.
+3. **`symbology.py::_sanitize_symbol_for_key`** (new) replaces whitespace in the top-level combo's raw-symbol
+   payload with a single `-` (e.g. `CBOE:COMBO:VX/F1:1:S-VX/G1:1:B`, not `...S - VX/G1...` with the whitespace-
+   padded dash) — applied to EVERY Databento-sourced `instrument_key`, not just combos (see the whitespace finding
+   below).
+4. **`_FUTURES_DATASETS`** now includes `XCBF.PITCH` alongside `GLBX.MDP3`; `_SPREAD_LEG_PARSERS` dispatches the
+   right per-dataset parser. The top-level `instrument_type` is `COMBO` (not `SPOT_PAIR`) for both venues.
+   4b. **1-4 leg hard cap** (operator spec, 2026-07-09): `_parse_cboe_spread_legs` drops (does not truncate) any
+   combo with 5+ real legs, logging the real leg count — no real 5-leg row exists in production today (see the
+   real leg-count distribution below), but the parser must never silently truncate one if it ever appears.
+   `_parse_cme_calendar_spread_legs` is inherently always exactly 2 legs, already within the cap.
+   4c. **Signed weight, no new stored field** (operator spec, 2026-07-09: "the weights tell us that anyway" — no
+   parallel strategy-name taxonomy): a leg's `side` (`"BUY"`/`"SELL"`) + `ratio` (positive int) together already
+   give a consumer a directly-usable signed weight via the documented convention
+   `signed_ratio = ratio if side == "BUY" else -ratio` — no new field was added to `InstrumentLeg` since the
+   operator explicitly allowed "a documented convention derived from side+ratio" as a valid implementation choice.
+5. **Historical migration: real, but NOT durable yet** (`scripts/canonicalize_cboe_vx_combo_catalog_2026_07_08.py`).
+   `--apply` WAS run 2026-07-08 (real: the pre-migration snapshot blob
+   `prod/snapshots/pre_cboe_vx_combo_canon_2026_07_08.parquet` exists in GCS, created 2026-07-08 18:50:17 UTC) and
+   correctly rewrote the then-real 4,216 `SPOT_PAIR`→`COMBO` rows in place. **But `prod/catalog.parquet` is a
+   self-refreshing roll-up** (`scripts/build_instrument_catalogue.py`, "derive the lifecycle instrument catalogue
+   from the per-date definitions... makes the catalogue a derivative of the maintained per-date definitions... on a
+   recurring basis") — it was regenerated FROM SCRATCH from the `instrument_availability/by_date/day=*/venue=CBOE/`
+   per-day corpus at **2026-07-09 01:03:00 UTC** (confirmed via `gsutil stat`, ~6h after the migration), and that
+   per-day corpus was never itself rewritten (explicitly out of scope, see below) — so the regenerated catalog
+   re-derived `SPOT_PAIR` for every historical date the rollup still carries. **Re-verified 2026-07-09 (this fix's
+   completion pass)**: a fresh dry-run (stable across 2 back-to-back runs) shows **91 real CBOE `SPOT_PAIR`
+   spread rows again** — a direct row-level diff against the 2026-07-08 pre-migration snapshot confirms these are
+   NOT new captures (0 raw_symbols not already in the snapshot; all 91 are a subset of the original 4,216 that the
+   rollup's own retention/window logic still carries). **The durable fix is the CODE change above, not the
+   catalog-level migration on its own**: once deployed, every FRESH by_date capture is correct, so future rollup
+   regenerations stop reintroducing new pollution — but any already-captured historical date keeps re-deriving
+   `SPOT_PAIR` on every rollup cycle until that historical per-day corpus is also rewritten (see the honest scope
+   limit below; still deferred). Practically: re-running `--apply` is safe (small, gated, sub-5-second single-file
+   operation against the current 91-row population) but should be treated as **routine tidying after each rollup
+   cycle, not a one-time fix**, until the per-day corpus itself is migrated.
+   **Honest scope limit**: `prod/catalog.parquet`'s schema (`InstrumentCatalogEntry`) carries no `legs` column at
+   all, so this migration only corrects `instrument_type`/`instrument_id` there — the full per-leg structured data
+   (with human names, no venue prefix) only exists for instruments captured by the FIXED code going forward. A full
+   rewrite of the historical `instrument_availability/by_date/day=*/venue=CBOE/instruments.parquet` per-day
+   snapshot corpus (thousands of files, 2015-present) was explicitly NOT attempted in this pass — gated by this
+   workspace's single-walk discipline (a new whole-corpus GCS walk is review-blocking) and left as a separate,
+   larger follow-up; this is now the real blocker to a durable historical fix, not a nice-to-have.
 
-Two real gaps remain even in this working CME path:
+### Adjacent findings from the same 2026-07-08 audit — also FIXED
 
-- **(b) Legs use the raw ticker, not the human product name.** `InstrumentLeg(instrument_key=f"{venue}:FUTURE:
-{front}", ...)` yields `CME:FUTURE:ESM6`, not `CME:FUTURE:SP500` — even though the human-name registry
-  (`_resolve_product_root()` / `unified_api_contracts.registry.tradfi_symbology`, e.g. `ES→SP500`, `GC→GOLD`,
-  `VX→VIX`) already exists and is already used elsewhere for single-leg products.
-- **(c) Legs redundantly repeat the venue.** Each leg's `instrument_key` (`CME:FUTURE:ESM6`) re-states `CME` even
-  though the combo is already scoped to one venue at the top level (`CME:COMBO:...`) — the same "no redundant venue
-  suffix" objection already settled elsewhere in the broader canonicalization decision (against a trailing
-  `@VENUE` margin-marker).
+- **92.7% of TradFi rows carried literal whitespace as an uncontrolled sub-delimiter.** Root-caused: NOT primarily
+  the combo/spread code above (only ~2% of the affected rows) — the dominant source (~98%, 994,808 of 1,015,929
+  affected rows) was CME/ICE `OPTION` raw_symbols, which Databento natively space-separates (e.g. `"OBZ4 C15500"`).
+  A smaller population of `FUTURE`/`SPOT_PAIR` rows also carried embedded whitespace (e.g. a `CL:SA 02M M6`
+  strategy-future raw_symbol, `BRK B` for Berkshire's Class B shares). Fixed via `_sanitize_symbol_for_key()`
+  (symbology.py), applied at every `instrument_key` construction site in the Databento adapter — `raw_symbol`
+  itself is untouched (stays the verbatim vendor code); only the canonical key is sanitized. Verified against
+  every one of the 1,095,837 real unique `raw_symbol` values in `prod/catalog.parquet`: 0 remain whitespace-bearing
+  after sanitization.
+- **224 securities double-keyed as both `EQUITY` and `SPOT_PAIR` — real root cause found, much larger than
+  reported.** The real Databento `instrument_class` for a plain stock is `"K"` (`InstrumentClass.STOCK`, confirmed
+  via the `databento` SDK's own enum AND a live definition-schema call for AAPL/SPY/IBIT on `DBEQ.BASIC`,
+  2026-07-08). `_CLASS_TO_TYPE["K"]` mapped to `SPOT_PAIR` (mislabeled "Forex spot" in the comment — FX spot pairs
+  come from a wholly separate static builder, never this class map). This was a real, LIVE, ONGOING bug: the
+  2026-07-08 `instrument_availability/by_date/day=2026-07-08/venue=NASDAQ/instruments.parquet` snapshot showed
+  100/100 rows typed `SPOT_PAIR`, zero `EQUITY` — far broader than the "224 double-keyed" framing suggested (that
+  number undercounted by only measuring the historical EQUITY/SPOT_PAIR overlap, not the full affected
+  population). Fixed: `_CLASS_TO_TYPE["K"] = InstrumentType.EQUITY`; ETFs are unaffected (the downstream
+  `raw_symbol in KNOWN_ETFS` override still reclassifies them `ETF`). **Historical migration — same
+  not-yet-durable caveat as the CBOE/VX combo migration above**
+  (`scripts/canonicalize_dbeq_stock_class_catalog_2026_07_08.py`): `--apply` WAS run 2026-07-08, correctly
+  rewriting the then-real 318 NASDAQ/NYSE `SPOT_PAIR` rows in `prod/catalog.parquet` in place (317 → `EQUITY`, 1
+  `IBIT` → `ETF`). Re-verified 2026-07-09 (this fix's completion pass, after the same
+  `build_instrument_catalogue.py` rollup regeneration described above): a fresh dry-run shows **312 real
+  NASDAQ/NYSE `SPOT_PAIR` rows again** (stable across 2 back-to-back runs), 0 of which currently match
+  `KNOWN_ETFS` — same root cause (the rollup re-derives from the not-yet-migrated per-day corpus on every
+  regeneration). The 11 genuine FX `SPOT_PAIR` rows (`venue=FX`, static Yahoo builder) are untouched by this
+  migration's `classify()` predicate (venue-filtered to NASDAQ/NYSE only) regardless. Honest gap noted, not
+  fixed: `ETHA` (the other curated BTC/ETH spot-ETF ticker) is not currently in the `KNOWN_ETFS` registry, so it
+  reclassifies to `EQUITY` rather than `ETF` — a separate, smaller, non-blocking registry-completeness gap.
+- **IBKR's adapter built `SYMBOL:RAW_CODE:CCY`** (wrong segment order, no venue token, and collapsed
+  stocks/bonds/FX-cash into one generic `SPOT_PAIR` type). Fixed in
+  `instruments_service/reference_data/adapters/tradfi/ibkr.py`: `instrument_key` is now
+  `VENUE:TYPE:SYMBOL` (`IBKR:EQUITY:AAPL`, `IBKR:FUTURE:ES`), using the canonical `InstrumentType` (not IBKR's raw
+  `secType` code); `_SEC_TYPE_MAP` now maps `STK→EQUITY`, `BOND→BOND`, `CASH→CURRENCY` (previously all 3 collapsed
+  to `SPOT_PAIR`, despite `canonical_id_builder.py` already defining distinct `EQUITY`/`BOND`/`CURRENCY` types for
+  exactly this). `CASH` (FX) contracts fold the quote currency into the payload (`IBKR:CURRENCY:EUR-USD`, matching
+  this workspace's FX convention) rather than losing pair identity to a bare base-currency symbol.
 
-### Proposed fix — pending operator confirmation, NOT implemented
-
-An initial flat-string proposal (`VENUE:SPREAD:LEG-RATIO-SIDE;...` using raw exchange tickers) was **rejected by
-the operator** for using raw exchange jargon instead of real human-readable names. The revised proposal reuses
-real, already-existing infrastructure instead of inventing a new grammar:
-
-1. Route CBOE/VX calendar spreads through the **same** `InstrumentLeg`/`InstrumentType.COMBO` pathway already
-   proven for CME — decompose instead of dropping.
-2. Apply `_resolve_product_root()` to every leg's symbol on **both** venues, so legs read as human names
-   (`FUTURE:VIX`, not `FUTURE:VX/F1` or `FUTURE:VXF1`).
-3. Drop the redundant per-leg `VENUE:` prefix in the existing CME builder too — a leg's `instrument_key` becomes
-   `TYPE:SYMBOL` only (venue is implied by the combo's own top-level `VENUE:COMBO:...`).
-
-This is **not implemented** and **not operator-confirmed as final** — it's recommended to become its own dedicated
-fix plan under the `instruments_master` epic, independently shippable ahead of (and in parallel with) the broader
-instrument_id canonicalization migration and this docs-consolidation effort.
-
-### Adjacent, separately-tracked TradFi canonicalization findings (same 2026-07-08 audit — also not fixed today)
-
-- **~62,650 combo rows workspace-wide with zero leg decomposition** — broader than just the CBOE/VX case above.
-- **224 securities double-keyed** as both `EQUITY` and `SPOT_PAIR`.
-- **92.7% of TradFi rows carry literal whitespace** as an uncontrolled sub-delimiter — operator-flagged as never
-  acceptable, anywhere in the workspace.
-- **IBKR's TradFi adapter builds `SYMBOL:RAW_CODE:CCY`** — wrong segment order (no venue token at all), and
-  collapses stocks/bonds/FX-cash into one generic `SPOT_PAIR` type despite `canonical_id_builder.py` already
-  defining distinct `EQUITY`/`BOND`/`CURRENCY` types for exactly this.
-
-All of the above feed the same pending decision doc
-(`unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md`), tracked under the
-`instruments_master` epic — none are fixed today, and none should be described as settled.
+All of the above are tracked from
+`unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md` (finding 7, and this
+doc's prior "adjacent findings" list), under the `instruments_master` epic.
 
 ### Betfair — not a TradFi finding
 

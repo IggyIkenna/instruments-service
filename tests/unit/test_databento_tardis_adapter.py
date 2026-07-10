@@ -996,7 +996,7 @@ def test_derivatives_only_classifies_kraken_futures() -> None:
     must be classified so unknown-type instruments are skipped, not defaulted to SPOT."""
     from instruments_service.reference_data.adapters.cefi.tardis import _DERIVATIVES_ONLY_EXCHANGES
 
-    for exch in ("cryptofacilities", "okex-futures", "okex-swap", "huobi-dm", "bitfinex-derivatives", "bitget-futures"):
+    for exch in ("cryptofacilities", "okex-futures", "okex-swap", "bitfinex-derivatives", "bitget-futures"):
         assert exch in _DERIVATIVES_ONLY_EXCHANGES, f"derivatives-only Tardis exchange {exch!r} not classified"
 
 
@@ -1284,8 +1284,10 @@ class TestTradfiG1FoundationRegression:
             assert non_billable not in _DATASET_TO_asset_group
         # G1.c: XCBF.PITCH (VX/VIX) is COMMODITY, not EQUITY.
         assert _DATASET_TO_asset_group["XCBF.PITCH"] == AssetClass.COMMODITY
-        # XCBF deliberately NOT a futures-dataset (VX spreads are dropped, not COMBO-kept).
-        assert frozenset({"GLBX.MDP3"}) == _FUTURES_DATASETS
+        # 2026-07-08 canonicalization fix: XCBF.PITCH IS a futures-dataset now — VX class-"S"
+        # calendar spreads are DECOMPOSED via InstrumentLeg/COMBO (see
+        # test_g1c_xcbf_spreads_decompose_to_combo), not dropped.
+        assert frozenset({"GLBX.MDP3", "XCBF.PITCH"}) == _FUTURES_DATASETS
 
     # NB: the UAC VX.FUT asset_group=commodity assertion lives in UAC's own test suite
     # (test_net_profitable_equity_perp_singles.py::test_vx_future_asset_group_is_commodity) —
@@ -1306,14 +1308,48 @@ class TestTradfiG1FoundationRegression:
         kept = [d for d in TRADFI_DATABENTO_INSTRUMENTS if d.asset_group in valid]
         assert all(d.asset_group != "cefi" for d in kept), "cefi-singles must not survive the tradfi filter"
 
-    def test_g1c_xcbf_outright_only_drops_vx_spreads(self) -> None:
-        """XCBF.PITCH class-S VX calendar spreads are dropped; outright VX futures are kept."""
+    def test_g1c_xcbf_spreads_decompose_to_combo(self) -> None:
+        """XCBF.PITCH class-S VX calendar spreads DECOMPOSE to COMBO (2026-07-08 fix,
+        superseding the 2026-06-25 G1.c drop) — real legs, human product names, no
+        redundant per-leg venue, no whitespace ANYWHERE (top-level key included — the
+        whitespace-padded-dash separator collapses to a single "-" via
+        _sanitize_symbol_for_key). Outright VX futures are unaffected."""
         adapter = self._adapter()
         spread = self._row("VX/F1:1:S - VX/G1:1:B", instrument_class="S")
-        assert adapter._parse_row_to_record(spread, dataset="XCBF.PITCH", canonical_venue="CBOE") is None
+        rec = adapter._parse_row_to_record(spread, dataset="XCBF.PITCH", canonical_venue="CBOE")
+        assert rec is not None
+        assert rec.instrument_type == "COMBO"
+        assert rec.instrument_key == "CBOE:COMBO:VX/F1:1:S-VX/G1:1:B"
+        assert " " not in rec.instrument_key
+        assert rec.legs is not None and len(rec.legs) == 2
+        assert rec.legs[0].instrument_key == "FUTURE:VIX"
+        assert rec.legs[0].side == "SELL"
+        assert rec.legs[1].instrument_key == "FUTURE:VIX"
+        assert rec.legs[1].side == "BUY"
+        for leg in rec.legs:
+            assert " " not in leg.instrument_key
+            assert not leg.instrument_key.startswith("CBOE:")
+
+        # 3-leg butterfly — real production shape (ratio=2 on the middle leg).
+        butterfly = self._row("VX/H1:1:B - VX/J1:2:S - VX/K1:1:B", instrument_class="S")
+        rec3 = adapter._parse_row_to_record(butterfly, dataset="XCBF.PITCH", canonical_venue="CBOE")
+        assert rec3 is not None and rec3.instrument_type == "COMBO"
+        assert rec3.legs is not None and len(rec3.legs) == 3
+        assert [leg.ratio for leg in rec3.legs] == [1, 2, 1]
+
+        # A genuinely unparseable non-outright row (not the documented shape) still drops.
+        unparseable = self._row("garbage", instrument_class="S")
+        assert adapter._parse_row_to_record(unparseable, dataset="XCBF.PITCH", canonical_venue="CBOE") is None
+
+        # A real 5-leg combo is DROPPED, not truncated (operator spec 2026-07-09:
+        # 1-4 legs hard cap) — no real 5-leg row exists in production today, but
+        # the parser must still refuse to silently truncate one if it ever shows up.
+        five_leg = self._row("VX/F1:1:B - VX/G1:1:S - VX/H1:1:B - VX/J1:1:S - VX/K1:1:B", instrument_class="S")
+        assert adapter._parse_row_to_record(five_leg, dataset="XCBF.PITCH", canonical_venue="CBOE") is None
+
         outright = self._row("VX/F1", instrument_class="F", expiry="2026-06-18T21:00:00+00:00")
-        rec = adapter._parse_row_to_record(outright, dataset="XCBF.PITCH", canonical_venue="CBOE")
-        assert rec is not None and rec.instrument_type == "FUTURE"
+        rec_outright = adapter._parse_row_to_record(outright, dataset="XCBF.PITCH", canonical_venue="CBOE")
+        assert rec_outright is not None and rec_outright.instrument_type == "FUTURE"
 
     def test_g1d_dbeq_class_s_is_equity_not_spot_pair(self) -> None:
         """DBEQ.BASIC equity-spot (class 'S') maps to EQUITY, not the default SPOT_PAIR."""
@@ -1321,6 +1357,31 @@ class TestTradfiG1FoundationRegression:
         row = self._row("AAPL", instrument_class="S")
         rec = adapter._parse_row_to_record(row, dataset="DBEQ.BASIC", canonical_venue="NASDAQ")
         assert rec is not None and rec.instrument_type == "EQUITY"
+
+    def test_dbeq_class_k_stock_is_equity_not_spot_pair(self) -> None:
+        """2026-07-08 fix: real Databento instrument_class "K" (STOCK, confirmed via
+        both the SDK's own InstrumentClass enum and a live definition-schema call for
+        AAPL/SPY/IBIT) must map to EQUITY. Before this fix, "K" fell through to the
+        default SPOT_PAIR — a real, live bug that mistyped 100% of fresh NASDAQ/NYSE
+        single-stock captures (0 of 100 real rows in the 2026-07-08 snapshot were
+        EQUITY) and was the root cause of the "224 securities double-keyed as EQUITY
+        and SPOT_PAIR" finding."""
+        adapter = self._adapter()
+        for sym, venue in (("AAPL", "NASDAQ"), ("MSFT", "NASDAQ"), ("XOM", "NYSE")):
+            row = self._row(sym, instrument_class="K")
+            rec = adapter._parse_row_to_record(row, dataset="DBEQ.BASIC", canonical_venue=venue)
+            assert rec is not None and rec.instrument_type == "EQUITY", (
+                f"{sym}: expected EQUITY, got {rec.instrument_type if rec else None!r}"
+            )
+
+    def test_dbeq_class_k_known_etf_still_reclassifies_etf(self) -> None:
+        """A class-"K" row whose raw_symbol is a known ETF (e.g. IBIT) still reclassifies
+        to ETF — the KNOWN_ETFS override downstream of _CLASS_TO_TYPE is unaffected by
+        the K->EQUITY fix."""
+        adapter = self._adapter()
+        row = self._row("IBIT", instrument_class="K")
+        rec = adapter._parse_row_to_record(row, dataset="DBEQ.BASIC", canonical_venue="NASDAQ")
+        assert rec is not None and rec.instrument_type == "ETF"
 
     def test_g1e_krx_uses_korean_calendar(self) -> None:
         """KRX is declared with the Korean (XKRX) calendar — not the silent 24/7 default."""

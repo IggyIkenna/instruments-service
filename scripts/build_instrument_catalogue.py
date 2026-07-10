@@ -65,6 +65,8 @@ from unified_api_contracts import (
     is_in_mvp_capture_universe,
     is_mvp,
 )
+from unified_api_contracts.internal import InstrumentRecord, InstrumentType
+from unified_api_contracts.predictions import build_cross_venue_mapping
 from unified_trading_library import (
     StorageClient,
     get_config,
@@ -152,6 +154,39 @@ SPORTS_LEAGUE_INSTRUMENT_TYPE = "league"
 #: re-enter this roll-up.
 SPORTS_LEAGUE_ID_SENTINELS = frozenset({"UNKNOWN"})
 
+#: instrument_type stamped on sports FIXTURE/TEAM/PLAYER-grain catalogue rows
+#: (2026-07-09 operator decision — extends the catalogue past the
+#: league-grain-only scope `sports_catalog_league_grain_only_scope_2026_07_08.md`
+#: documented). See :func:`build_sports_fixture_team_player_catalogue`.
+SPORTS_FIXTURE_INSTRUMENT_TYPE = "fixture"
+SPORTS_TEAM_INSTRUMENT_TYPE = "team"
+SPORTS_PLAYER_INSTRUMENT_TYPE = "player"
+
+#: ``sports_reference/by_date`` ``entity=`` names the fixture/team/player-grain
+#: roll-up reads — ONE combined by_date walk covers all three (single-walk
+#: discipline, codex/02-data/availability-manifest-and-data-status.md: a
+#: separate whole-corpus walk per entity is review-blocking).
+SPORTS_FIXTURE_ENTITY = "fixtures"
+SPORTS_TEAM_ENTITY = "teams"
+#: Real captured per-player source. API-Football ``entity=injuries`` rows carry
+#: a real ``player_id``/``player_name``/``team_id`` (verified against real prod
+#: GCS 2026-07-09). ``entity=fixture_lineups`` was considered first — it is the
+#: full-roster source the SPORTS_INSTRUMENTS.md 11-step pipeline table implies —
+#: but its real per-league parquet on GCS carries ONLY
+#: ``formation``/``fixture_id``/``available_at``: the per-fixture-entity writer's
+#: nested-column-drop guard (``sports_reference_fixtures.py::_write_per_fixture_entities``,
+#: "Dropping N nested columns") strips the ``player_id``/``player_name`` fields
+#: (nested under raw ``startXI``/``substitutes`` blocks) before they ever reach
+#: GCS, so no player identity survives there today — a real, separate
+#: data-completeness gap in the LINEUPS writer, not something this roll-up can
+#: paper over. INJURIES is therefore the honest source: real, but a NARROWER
+#: slice than a full roster (currently-injured players only). See
+#: SPORTS_INSTRUMENTS.md's "Known gaps" section.
+SPORTS_PLAYER_SOURCE_ENTITY = "injuries"
+
+#: The three entities :func:`_iter_sports_ftp_snapshots` walks in one pass.
+_SPORTS_FTP_ENTITIES = frozenset({SPORTS_FIXTURE_ENTITY, SPORTS_TEAM_ENTITY, SPORTS_PLAYER_SOURCE_ENTITY})
+
 #: The canonical catalogue filename the launcher + v2 enumerator read.
 CATALOG_FILENAME = "catalog.parquet"
 
@@ -168,6 +203,21 @@ WINDOW_DAYS_MIN = 21
 #: missed day, so recovery after an outage stays EXACT (true available_from /
 #: available_to for everything that listed/delisted during the gap).
 WINDOW_MARGIN_DAYS = 7
+
+#: Trailing-window size (days) for the sports FIXTURE/TEAM/PLAYER-grain roll-up's
+#: by_date walk (:func:`build_sports_fixture_team_player_catalogue`). UNLIKE
+#: league-grain (a cheap single manifest-index read, no by_date walk at all),
+#: fixtures/teams/injuries are per-fixture/per-day objects with no GCS-side way
+#: to prefix-scope a LISTING to just these three entities (the ``entity=``
+#: segment sits after ``day=``/``pipeline_mode=`` in the path) — an unwindowed
+#: full-history listing measured >180s against real prod GCS 2026-07-09,
+#: BEFORE any downloads even start. A full historical fixture/team/player
+#: backfill is therefore a genuine, separate, larger decision (mirrors the
+#: "needs a decision, not a rushed fix" framing
+#: `sports_catalog_league_grain_only_scope_2026_07_08.md` used) — this roll-up
+#: defaults to a real, current, always-fresh trailing window (~13 months)
+#: instead of silently doing nothing or hanging indefinitely.
+SPORTS_FTP_WINDOW_DAYS = 400
 
 #: Columns the enumerator's ``_catalog_from_dataframe`` consumes. ``instrument_id``
 #: is written as the canonical column (the helper also accepts ``instrument_key``).
@@ -197,6 +247,17 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # match. Blank for prediction/sports (no exchange-native symbol there).
     "raw_symbol",
     "base_asset",
+    # Per-instance cross-venue identity (prediction_canonical_identity_migration_
+    # 2026_07_08.md todos 2 + 5): the Kalshi<->Polymarket SAME-MARKET join key
+    # (unified_api_contracts.predictions.build_cross_venue_mapping()) for a
+    # matched crypto/macro/index pair, OR the Sports-asset-group-aligned
+    # fixture_id for a Polymarket sports market (build_fixture_id() — see
+    # polymarket/parsing.py::_build_sports_id). Blank (honest absence, never a
+    # false pair) for every other asset_group/row and for an unmatched
+    # prediction instrument. Prediction-only today; other asset groups' own
+    # InstrumentRecord.canonical_instrument_id (TradFi/Databento product roots)
+    # is a SEPARATE, adapter-local mechanism not surfaced through this column.
+    "canonical_instrument_id",
     # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean
     # computed via the UAC ``is_mvp(...)`` predicate over the rolled-up catalogue.
     # Read by deployment-api's ``scope=mvp`` coverage denominator + the data-status
@@ -232,6 +293,11 @@ _DAY_RE = re.compile(r"(?:^|/)day=(\d{4}-\d{2}-\d{2})(?:/|$)")
 
 #: Extract the ``entity=`` partition from a sports ``by_date`` blob path.
 _ENTITY_RE = re.compile(r"(?:^|/)entity=([^/]+)(?:/|$)")
+
+#: Extract the ``league=`` partition from a sports ``by_date`` blob path.
+#: fixtures/teams/injuries are written per-league; absent on the rare legacy
+#: unmapped-fallback blobs (callers treat a missing match as ``""``).
+_LEAGUE_RE = re.compile(r"(?:^|/)league=([^/]+)(?:/|$)")
 
 #: Extract the ``venue=`` / ``canonical_question_group=`` partitions (prediction).
 #: The prediction writer (instruments-service ``orchestrator.py``) partitions
@@ -353,6 +419,26 @@ def _parse_truth_date(raw: str | None) -> date | None:
         return pd.Timestamp(raw).date()
     except (ValueError, TypeError):
         return None
+
+
+def _parse_truth_datetime(raw: str | None) -> datetime | None:
+    """Parse a venue-truth lifecycle timestamp (``_PredLifecycle.settled``) → a
+    UTC :class:`datetime`, or ``None`` for blank/unparseable values.
+
+    Used to build the synthetic :class:`InstrumentRecord` views the cross-venue
+    matcher (:func:`build_cross_venue_mapping`) needs for its
+    ``expiry``-keyed settlement-bucket join (see ``build_prediction_catalogue_dataframe``).
+    """
+    if not raw:
+        return None
+    try:
+        ts = pd.Timestamp(raw)
+    except (ValueError, TypeError):
+        return None
+    if pd.isna(ts):
+        return None
+    py_dt = ts.to_pydatetime()
+    return py_dt.replace(tzinfo=UTC) if py_dt.tzinfo is None else py_dt.astimezone(UTC)
 
 
 #: A venue's latest day counts as a FULL trading day (rather than a thin/partial
@@ -868,6 +954,19 @@ class _PredLifecycle:
     #: per-market value). See ``docs/PREDICTION_INSTRUMENTS.md`` § "Canonical identity model".
     raw_symbol: str = ""
     base_asset: str = ""
+    #: ``InstrumentRecord.underlying`` carried straight through from the per-date
+    #: row (populated by the adapters as of
+    #: ``prediction_canonical_identity_migration_2026_07_08.md`` todo 1 —
+    #: BTC/CPI/TRUMP/… for a classified subject, "" for sports (no scalar
+    #: underlying) or a genuinely-unclassified market). Per-conditionId grain
+    #: only, same reasoning as raw_symbol/base_asset above.
+    underlying: str = ""
+    #: ``InstrumentRecord.canonical_instrument_id`` carried straight through from
+    #: the per-date row when the ADAPTER already populated one (Polymarket sports
+    #: fixture_id — todo 5). The cross-venue join below (todo 2) can also assign
+    #: one post-hoc for a matched crypto/macro pair; ``_emit`` prefers the
+    #: cross-venue match, falling back to this adapter-populated value.
+    canonical_instrument_id: str = ""
 
 
 def _merge_lifecycle(
@@ -880,6 +979,8 @@ def _merge_lifecycle(
     settled: str | None,
     raw_symbol: str = "",
     base_asset: str = "",
+    underlying: str = "",
+    canonical_instrument_id: str = "",
 ) -> None:
     """Fold one (entity, day) observation into the lifecycle accumulator."""
     cur = acc.get(key)
@@ -893,20 +994,27 @@ def _merge_lifecycle(
             settled=settled,
             raw_symbol=raw_symbol,
             base_asset=base_asset,
+            underlying=underlying,
+            canonical_instrument_id=canonical_instrument_id,
         )
         return
     if day < cur.first_day:
         cur.first_day = day
     if day > cur.last_day:
         cur.last_day = day
-        # Metadata (instrument_type / raw_symbol / base_asset) follows the
-        # most-recent observation, same convention as instrument_type below.
+        # Metadata (instrument_type / raw_symbol / base_asset / underlying /
+        # canonical_instrument_id) follows the most-recent observation, same
+        # convention as instrument_type below.
         if instrument_type:
             cur.instrument_type = instrument_type
         if raw_symbol:
             cur.raw_symbol = raw_symbol
         if base_asset:
             cur.base_asset = base_asset
+        if underlying:
+            cur.underlying = underlying
+        if canonical_instrument_id:
+            cur.canonical_instrument_id = canonical_instrument_id
     else:
         # An earlier day's row may be the only one carrying a value (e.g. a market's
         # last snapshot before delisting had a transiently-blank field) — backfill
@@ -915,6 +1023,10 @@ def _merge_lifecycle(
             cur.raw_symbol = raw_symbol
         if not cur.base_asset and base_asset:
             cur.base_asset = base_asset
+        if not cur.underlying and underlying:
+            cur.underlying = underlying
+        if not cur.canonical_instrument_id and canonical_instrument_id:
+            cur.canonical_instrument_id = canonical_instrument_id
     if created and (cur.created is None or created < cur.created):
         cur.created = created
     if settled and (cur.settled is None or settled > cur.settled):
@@ -1009,12 +1121,32 @@ def build_prediction_catalogue_dataframe(
             # grain only (see _PredLifecycle docstring for why the cqg grain skips them).
             raw_symbol = _str_field(row, "raw_symbol")
             base_asset = _str_field(row, "base_asset")
+            # underlying / canonical_instrument_id (prediction_canonical_identity_
+            # migration_2026_07_08.md todos 1 + 5): real, adapter-populated fields as
+            # of the 2026-07-09 underlying/fixture_id fix — "" (honest absence) for
+            # any per-date row captured before that fix, or for a market with no
+            # scalar underlying / no resolvable sports fixture_id. Per-conditionId
+            # grain only, same reasoning as raw_symbol/base_asset above.
+            underlying = _str_field(row, "underlying")
+            canonical_instrument_id = _str_field(row, "canonical_instrument_id")
             cqg_itype = cqg_itype or itype
             if created and (cqg_created is None or created < cqg_created):
                 cqg_created = created
             if settled and (cqg_settled is None or settled > cqg_settled):
                 cqg_settled = settled
-            _merge_lifecycle(cid_acc, (venue_str, cid), day, venue_str, itype, created, settled, raw_symbol, base_asset)
+            _merge_lifecycle(
+                cid_acc,
+                (venue_str, cid),
+                day,
+                venue_str,
+                itype,
+                created,
+                settled,
+                raw_symbol,
+                base_asset,
+                underlying,
+                canonical_instrument_id,
+            )
         # cqg grain only when the writer emits a cqg (249-b, gated on decision
         # 338). Currently always empty → no cqg rows, conditionId grain only.
         if saw_member and cqg_str:
@@ -1023,6 +1155,56 @@ def build_prediction_catalogue_dataframe(
     if not all_days:
         return pd.DataFrame(columns=list(CATALOG_COLUMNS))
     latest_day = max(all_days)
+
+    # Cross-venue Kalshi<->Polymarket same-market join
+    # (prediction_canonical_identity_migration_2026_07_08.md todo 2 /
+    # docs/PREDICTION_INSTRUMENTS.md § "Canonical identity model" §3 item 3): the
+    # existing cross_venue_mapping.build_cross_venue_mapping() matcher wired into
+    # this real, scheduled roll-up step (runs every catalogue regen) rather than
+    # left a pure function with no caller. Builds minimal InstrumentRecord views
+    # from the accumulated per-conditionId lifecycle (instrument_key / venue /
+    # raw_symbol / expiry are all it needs — see cross_venue_mapping.py's own
+    # module docstring on what an InstrumentRecord carries for a prediction
+    # market), runs the matcher, and indexes the result by BOTH venues'
+    # instrument_key so ``_emit`` can look a matched conditionId's
+    # canonical_event_id up below. No ``titles`` map is passed — todo 4's real,
+    # documented decision: no per-instrument title is persisted anywhere the
+    # offline roll-up can reach (InstrumentRecord dropped the ``symbol`` field —
+    # see cross_venue_mapping.py's docstring), so sports pairs are honestly
+    # absent here (matches the matcher's own no-titles-supplied default; the
+    # Polymarket sports canonical_instrument_id set at adapter time (todo 5,
+    # ``polymarket/parsing.py::_build_sports_id``) is preserved below via the
+    # ``lc.canonical_instrument_id`` fallback since this dict has no entry for it).
+    kalshi_recs: list[InstrumentRecord] = []
+    poly_recs: list[InstrumentRecord] = []
+    for (venue_str, cid), lc in cid_acc.items():
+        rec = InstrumentRecord(
+            instrument_key=cid,
+            venue=venue_str,
+            instrument_type=InstrumentType.PREDICTION_MARKET,
+            raw_symbol=lc.raw_symbol,
+            base_asset=lc.base_asset,
+            expiry=_parse_truth_datetime(lc.settled),
+        )
+        if venue_str.upper() == "KALSHI":
+            kalshi_recs.append(rec)
+        elif venue_str.upper() == "POLYMARKET":
+            poly_recs.append(rec)
+
+    canonical_event_id_by_key: dict[str, str] = {}
+    if kalshi_recs and poly_recs:
+        matched_pairs = build_cross_venue_mapping(kalshi_recs, poly_recs)
+        for mapping in matched_pairs:
+            if mapping.kalshi_market_ticker:
+                canonical_event_id_by_key[mapping.kalshi_market_ticker] = mapping.canonical_event_id
+            if mapping.polymarket_condition_id:
+                canonical_event_id_by_key[mapping.polymarket_condition_id] = mapping.canonical_event_id
+        _emit_event(
+            "PREDICTION_CROSS_VENUE_MAPPING_BUILT",
+            kalshi_count=len(kalshi_recs),
+            polymarket_count=len(poly_recs),
+            matched_pairs=len(matched_pairs),
+        )
 
     rows: list[dict[str, str | None]] = []
 
@@ -1063,13 +1245,27 @@ def build_prediction_catalogue_dataframe(
                 # per-market raw_symbol/base_asset (honest absence, not unpopulated).
                 "raw_symbol": lc.raw_symbol,
                 "base_asset": lc.base_asset,
-                # `underlying` is genuinely NOT computed for prediction rows today (no
-                # adapter sets InstrumentRecord.underlying) — "" makes that an explicit,
-                # documented absence rather than an implicit NaN. See
-                # docs/PREDICTION_INSTRUMENTS.md "Canonical identity model" for the
-                # decision + the follow-up plan to populate it from the existing
-                # classify_*_to_canonical_group / underlying_for_group SSOT.
-                "underlying": "",
+                # `underlying` (prediction_canonical_identity_migration_2026_07_08.md
+                # todo 1): real, adapter-populated value threaded straight through
+                # from the per-date row (see _PredLifecycle.underlying) as of the
+                # 2026-07-09 fix — "" (honest absence) for rows captured before that
+                # fix, sports markets (no scalar underlying), or a
+                # genuinely-unclassified market. See docs/PREDICTION_INSTRUMENTS.md
+                # "Canonical identity model" for the full decision.
+                "underlying": lc.underlying,
+                # `canonical_instrument_id` (todo 2 + todo 5): prefer the cross-venue
+                # Kalshi<->Polymarket match computed above (crypto/macro/index same-
+                # market pairs — keyed by this row's own instrument_key, i.e. the
+                # wrapped conditionId/ticker); fall back to the adapter-populated
+                # value (Polymarket sports fixture_id) when no cross-venue match
+                # exists for this instrument. "" (honest absence, never a guessed or
+                # false pair) when neither mechanism resolves one. cqg-grain rows
+                # never get one (a family has no single per-instance identity).
+                "canonical_instrument_id": (
+                    canonical_event_id_by_key.get(entity_id) or lc.canonical_instrument_id
+                    if data_type != _PREDICTION_CQG_DATA_TYPE
+                    else ""
+                ),
                 # Non-DeFi grain → no dual-form pool ids.
                 "glued_pair_id": "",
                 "pool_address": "",
@@ -1303,6 +1499,83 @@ def _read_sports_manifest_index(storage: StorageClient, bucket: str) -> pd.DataF
         return pd.DataFrame()
     payload = storage.download_bytes(bucket, blob_path)
     return pd.read_parquet(io.BytesIO(payload), columns=["league_id", "data_type", "date"])
+
+
+# ---------------------------------------------------------------------------
+# Sports FIXTURE/TEAM/PLAYER-GRAIN roll-up — FROM REAL CAPTURED REFERENCE DATA
+#
+# Distinct from the league-grain could-exist system above (which is seeded
+# from the MANIFEST — a theoretical "should exist" universe used to compute
+# expected_unattempted gaps). These three grains are seeded from real OBSERVED
+# captures only (the entity=fixtures / entity=teams / entity=injuries parquets
+# the 11-step pipeline in SPORTS_INSTRUMENTS.md already writes) — a roll-up of
+# what actually got captured, mirroring build_catalogue_dataframe's cefi/defi/
+# tradfi by_date-snapshot pattern, NOT a could-exist projection. They therefore
+# never feed expected_unattempted seeding for fixture/team/player grain — the
+# sports manifest itself is still league-grain-only (2026-07-08 finding), so a
+# could-exist projection at these finer grains would inflate the coverage
+# denominator exactly as `sports_catalog_league_grain_only_scope_2026_07_08.md`
+# warned. `enumerate_expected_universe.py::_enumerate_v2_sports` was updated
+# alongside this change to only process instrument_type="league" catalogue rows
+# for that reason — a fixture/team/player row's ``league_id`` must never be
+# treated as a per-league lifecycle window by that enumerator.
+# ---------------------------------------------------------------------------
+
+
+def _split_full_name(display_name: str) -> tuple[str, str]:
+    """Split a "First Last" display name into ``(last_name, first_name)``.
+
+    Feeds UAC's ``build_player_id(last_name, first_name)``. Whitespace-delimited:
+    the LAST token is the surname, everything before it is the given name(s)
+    (``"Bukayo Saka"`` -> ``("Saka", "Bukayo")``). A single-token name (e.g.
+    ``"Neymar"``) returns ``(name, "")`` so ``build_player_id`` falls back to the
+    bare name, matching its own documented single-name-player convention.
+    """
+    parts = display_name.split()
+    if len(parts) < 2:
+        return display_name.strip(), ""
+    return parts[-1], " ".join(parts[:-1])
+
+
+def _sports_grain_rollup_to_df(
+    first_day: dict[str, date],
+    last_day: dict[str, date],
+    row_league: dict[str, str],
+    all_days: set[date],
+    instrument_type: str,
+) -> pd.DataFrame:
+    """Shared first/last-day lifecycle -> :data:`CATALOG_COLUMNS` row assembly.
+
+    Mirrors :func:`build_sports_catalogue_dataframe`'s lifecycle convention:
+    ``available_to=None`` means "present on the latest scanned day" (still
+    active); otherwise the last day it was observed. Shared by the fixture/
+    team/player-grain folding loop in
+    :func:`build_sports_fixture_team_player_catalogue`.
+    """
+    cols = list(CATALOG_COLUMNS)
+    if not all_days:
+        return pd.DataFrame(columns=cols)
+    latest_day = max(all_days)
+    rows: list[dict[str, str | None]] = []
+    for iid in sorted(first_day):
+        available_to = None if last_day[iid] >= latest_day else last_day[iid].isoformat()
+        rows.append(
+            {
+                "instrument_id": iid,
+                "instrument_type": instrument_type,
+                "venue": "",
+                "chain": "",
+                "league_id": row_league[iid],
+                "available_from": first_day[iid].isoformat(),
+                "available_to": available_to,
+                "market_created_at": None,
+                "settlement_time": None,
+                "data_type": None,
+                "glued_pair_id": "",
+                "pool_address": "",
+            }
+        )
+    return pd.DataFrame(rows, columns=cols)
 
 
 # ---------------------------------------------------------------------------
@@ -1625,6 +1898,226 @@ def _iter_sports_by_date_snapshots(
     # catalogue-regen Cloud Run job. Completion-order yield is correct here (the
     # lifecycle roll-up is order-independent).
     yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
+
+
+def _iter_sports_ftp_snapshots(
+    storage: StorageClient,
+    bucket: str,
+    prefix: str,
+    *,
+    since: date | None = None,
+    max_blobs: int | None = None,
+    max_workers: int = MAX_DOWNLOAD_WORKERS,
+) -> Iterator[tuple[str, date, str, pd.DataFrame]]:
+    """Yield ``(entity, day, league_id, frame)`` for fixture/team/injuries by_date parquets.
+
+    ONE combined prefix walk covers all three :data:`_SPORTS_FTP_ENTITIES`
+    (single-walk discipline — a separate whole-corpus walk per entity is
+    review-blocking per codex/02-data/availability-manifest-and-data-status.md)
+    — mirrors :func:`_iter_sports_by_date_snapshots` (the existing
+    ``entity=leagues`` walk) but additionally parses the ``league={L}``
+    partition segment, which fixtures/teams/injuries all carry (``leagues``
+    does not — that entity is a bare per-day file with ``league_id`` on the
+    FRAME instead, which is why it keeps its own dedicated walk function).
+
+    ``since`` restricts the walk to a DATE-FLOORED PREFIX LIST — one
+    ``day=<D>/`` listing per day from ``since`` through today (UTC), mirroring
+    :func:`_iter_by_date_snapshots`'s ``since`` window read. This is NOT just a
+    download-time optimisation: an UNWINDOWED ``since=None`` walk lists the
+    ENTIRE ``sports_reference/by_date/`` tree (every entity — footystats/
+    understat/transfermarkt/standings/etc., not just fixtures/teams/injuries),
+    because the ``entity=`` segment sits AFTER ``day=``/``pipeline_mode=`` in
+    the path, so GCS cannot prefix-scope the LISTING itself to just these three
+    entities — only client-side filtering AFTER listing. Measured against real
+    prod GCS 2026-07-09: an unwindowed listing of the full multi-year history
+    did not complete in 180s (before any downloads even start). ``since=None``
+    is kept for callers that genuinely want the full history (accepting that
+    cost) — the default caller, :func:`build_sports_fixture_team_player_catalogue`,
+    always passes a bounded ``since``.
+
+    ``league_id`` here is always the PATH value: fixtures carries no canonical
+    ``league_id`` column at all, and injuries' own ``league_id`` column is the
+    RAW numeric api-football id (never overwritten with the canonical value the
+    partition path already carries) — reading the path uniformly for all three
+    entities avoids a silent canonical/raw mismatch between them. Some
+    Reference-tier leagues have no canonical name mapping yet, so this may be a
+    raw numeric string rather than a canonical code — the same narrow
+    :data:`SPORTS_LEAGUE_ID_SENTINELS`-only filtering convention applies (NOT a
+    full-registry membership check, which would wrongly drop real unmapped
+    leagues). Blobs with no ``league=`` segment (the rare legacy
+    unmapped-fallback files) yield ``league_id=""`` — callers skip those (a
+    catalogue row needs a real league to be honest).
+    """
+    walk_prefix = prefix.rstrip("/") + "/"
+
+    def _list_window_blobs() -> Iterator[object]:
+        """Per-day prefix listings for ``day=>=since`` (bounded, not a corpus walk)."""
+        assert since is not None
+        day = since
+        today = datetime.now(UTC).date()
+        while day <= today:
+            yield from storage.list_blobs(bucket, prefix=f"{walk_prefix}day={day.isoformat()}/")
+            day += timedelta(days=1)
+
+    blob_iter = storage.list_blobs(bucket, prefix=walk_prefix) if since is None else _list_window_blobs()
+    targets: list[tuple[str, date, str, str]] = []
+    for blob in blob_iter:
+        name = str(getattr(blob, "name", ""))
+        if not name.endswith(".parquet"):
+            continue
+        entity_m = _ENTITY_RE.search(name)
+        if entity_m is None or entity_m.group(1) not in _SPORTS_FTP_ENTITIES:
+            continue
+        day_m = _DAY_RE.search(name)
+        if day_m is None:
+            logger.warning("Skipping sports %s blob with no day= partition: %s", entity_m.group(1), name)
+            continue
+        league_m = _LEAGUE_RE.search(name)
+        targets.append(
+            (entity_m.group(1), date.fromisoformat(day_m.group(1)), league_m.group(1) if league_m else "", name)
+        )
+
+    targets.sort(key=lambda item: item[3])
+    if max_blobs is not None:
+        targets = targets[:max_blobs]
+    logger.info(
+        "Found %d sports fixture/team/player-source by_date parquet(s) to roll up (workers=%d)",
+        len(targets),
+        max_workers,
+    )
+
+    def _load(item: tuple[str, date, str, str]) -> tuple[str, date, str, pd.DataFrame]:
+        entity, day, league_id, name = item
+        payload = storage.download_bytes(bucket, name)
+        return entity, day, league_id, pd.read_parquet(io.BytesIO(payload))
+
+    # Memory-bounded sliding window — see _bounded_parallel_load. Streamed
+    # straight into build_sports_fixture_team_player_catalogue's accumulator
+    # dicts (never buffered into a list here), so peak memory stays
+    # O(max_workers) frames + O(distinct fixture/team/player count), NOT
+    # O(len(targets)) — the fixture/team/injuries by_date corpus can span
+    # hundreds of thousands of small blobs over the full history.
+    yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
+
+
+def build_sports_fixture_team_player_catalogue(
+    storage: StorageClient,
+    bucket: str,
+    *,
+    by_date_prefix: str = SPORTS_BY_DATE_PREFIX,
+    since: date | None = None,
+    max_blobs: int | None = None,
+) -> pd.DataFrame:
+    """Roll real captured fixture/team/player reference data into catalogue rows.
+
+    Extends the sports could-exist catalogue past league-grain-only (2026-07-09
+    operator decision — supersedes the scoping question left open in
+    `sports_catalog_league_grain_only_scope_2026_07_08.md`). Reads REAL captured
+    fixture/team/injuries reference data already written to
+    ``sports_reference/by_date/`` (the same GCS objects the 11-step pipeline in
+    SPORTS_INSTRUMENTS.md documents) and rolls each up into its own grain —
+    the by_date-snapshot OBSERVED-capture pattern :func:`build_catalogue_dataframe`
+    already uses for cefi/defi/tradfi, deliberately NOT the manifest-derived
+    could-exist pattern :func:`build_sports_catalogue_from_manifest` uses for
+    league-grain (see the module comment above this function for why: the
+    sports manifest is still league-grain-only, so a could-exist projection at
+    finer grain would inflate the coverage denominator).
+
+    Instrument ids: fixtures use UAC's canonical ``LEAGUE:HOME_v_AWAY:DATE``
+    shape (``build_fixture_id``); teams reuse the canonical ``team_id`` the
+    ``entity=teams`` writer already stamps (``build_team_id``); players use
+    ``build_player_id`` over a display-name split (:func:`_split_full_name`).
+    ``venue`` is left blank for all three, same as league-grain — these are
+    reference-data rows with no bookmaker association, the honest empty value
+    (see SPORTS_INSTRUMENTS.md's "``venue`` vs ``source``" note).
+
+    Streams the ONE combined walk (:func:`_iter_sports_ftp_snapshots`) directly
+    into three grains' first/last-day accumulator dicts rather than buffering
+    per-entity snapshot lists first — see that function's docstring on why
+    (avoids reintroducing the O(len(items))-frames-in-memory failure mode
+    :func:`_bounded_parallel_load` exists to prevent).
+
+    ``since`` bounds the walk to a trailing window (default
+    :data:`SPORTS_FTP_WINDOW_DAYS` days back from today when not given) — see
+    that constant's docstring for why an unwindowed full-history walk is
+    impractical here. Pass ``since=`` a fixed early date (or monkeypatch the
+    default) for a deliberate one-off full-history backfill run.
+    """
+    from unified_api_contracts.sports import build_fixture_id, build_player_id, build_team_id
+
+    if since is None:
+        since = datetime.now(UTC).date() - timedelta(days=SPORTS_FTP_WINDOW_DAYS)
+
+    fixture_first: dict[str, date] = {}
+    fixture_last: dict[str, date] = {}
+    fixture_league: dict[str, str] = {}
+    team_first: dict[str, date] = {}
+    team_last: dict[str, date] = {}
+    team_league: dict[str, str] = {}
+    player_first: dict[str, date] = {}
+    player_last: dict[str, date] = {}
+    player_league: dict[str, str] = {}
+    all_days: set[date] = set()
+
+    for entity, day, league_id, frame in _iter_sports_ftp_snapshots(
+        storage, bucket, by_date_prefix, since=since, max_blobs=max_blobs
+    ):
+        all_days.add(day)
+        league_id = league_id.strip()
+        if frame.empty or not league_id or league_id.upper() in SPORTS_LEAGUE_ID_SENTINELS:
+            continue
+        records: list[dict[str, object]] = frame.to_dict("records")  # pyright: ignore[reportAssignmentType]
+
+        if entity == SPORTS_FIXTURE_ENTITY:
+            for row in records:
+                home = str(row.get("af_home_name") or "").strip()
+                away = str(row.get("af_away_name") or "").strip()
+                date_str = str(row.get("date") or "").strip()
+                if not home or not away or not date_str:
+                    continue
+                home_id = build_team_id(home)
+                away_id = build_team_id(away)
+                if not home_id or not away_id:
+                    continue
+                fid = build_fixture_id(league_id, home_id, away_id, date_str)
+                if fid not in fixture_first or day < fixture_first[fid]:
+                    fixture_first[fid] = day
+                if fid not in fixture_last or day > fixture_last[fid]:
+                    fixture_last[fid] = day
+                fixture_league[fid] = league_id
+        elif entity == SPORTS_TEAM_ENTITY:
+            for row in records:
+                tid = str(row.get("team_id") or "").strip()
+                if not tid:
+                    continue
+                if tid not in team_first or day < team_first[tid]:
+                    team_first[tid] = day
+                if tid not in team_last or day > team_last[tid]:
+                    team_last[tid] = day
+                team_league[tid] = league_id
+        else:  # SPORTS_PLAYER_SOURCE_ENTITY ("injuries")
+            for row in records:
+                raw_name = str(row.get("player_name") or "").strip()
+                if not raw_name:
+                    continue
+                last_name, first_name = _split_full_name(raw_name)
+                pid = build_player_id(last_name, first_name)
+                if not pid:
+                    continue
+                if pid not in player_first or day < player_first[pid]:
+                    player_first[pid] = day
+                if pid not in player_last or day > player_last[pid]:
+                    player_last[pid] = day
+                player_league[pid] = league_id
+
+    fixture_df = _sports_grain_rollup_to_df(
+        fixture_first, fixture_last, fixture_league, all_days, SPORTS_FIXTURE_INSTRUMENT_TYPE
+    )
+    team_df = _sports_grain_rollup_to_df(team_first, team_last, team_league, all_days, SPORTS_TEAM_INSTRUMENT_TYPE)
+    player_df = _sports_grain_rollup_to_df(
+        player_first, player_last, player_league, all_days, SPORTS_PLAYER_INSTRUMENT_TYPE
+    )
+    return pd.concat([fixture_df, team_df, player_df], ignore_index=True)
 
 
 def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str) -> int | None:
@@ -2249,7 +2742,16 @@ def run_rollup(
         # NUMERIC api-football league_ids do not match the manifest's canonical
         # namespace → 131/606 coverage + numeric over-seed; slot-4 2026-06-07).
         # The captured manifest atom is per-(league_id, data_type, date).
-        df = build_sports_catalogue_from_manifest(_read_sports_manifest_index(storage, bucket))
+        league_df = build_sports_catalogue_from_manifest(_read_sports_manifest_index(storage, bucket))
+        # Fixture/team/player-grain — real OBSERVED captures rolled up from
+        # sports_reference/by_date (2026-07-09, extends past league-grain-only;
+        # see build_sports_fixture_team_player_catalogue's docstring for why this
+        # is architecturally distinct from the manifest-derived league-grain path
+        # above and safe to concat onto the same catalogue).
+        ftp_df = build_sports_fixture_team_player_catalogue(
+            storage, bucket, by_date_prefix=by_date_prefix, max_blobs=max_blobs
+        )
+        df = pd.concat([league_df, ftp_df], ignore_index=True) if not ftp_df.empty else league_df
     elif mode == "incremental" and prev_catalogue is not None:
         # Trailing-window read (self-widening) + frozen-tail merge — the O(window)
         # replacement for the O(all-history) walk. §7.3 liveness (generic) / the

@@ -355,8 +355,40 @@ class TestTardisHelperFunctions:
     def test_infer_margin_type_spot_returns_none(self) -> None:
         assert _infer_margin_type(InstrumentType.SPOT_PAIR, "USDT", "BTCUSDT", "binance") is None
 
-    def test_infer_margin_type_okx_coin_margined(self) -> None:
-        assert _infer_margin_type(InstrumentType.PERPETUAL, "USD", "BTC-USD_UM-SWAP", "okex") == MarginType.INVERSE
+    def test_infer_margin_type_okx_um_dated_future_is_linear(self) -> None:
+        """Real bug fix 2026-07-09: the ``_UM`` infix means LINEAR (USD-Margined),
+        not INVERSE — verified against the LIVE OKX public API 2026-07-09:
+        BTC-USD_UM-260710 is a real, currently-listed OKX-FUTURES row with
+        ctType=linear (settleCcy="USD" is a synthetic cross-margin unit,
+        ctValCcy=BTC). The old code treated any ``_UM``/``_CM`` infix as
+        "coin-margined" -> INVERSE, which was backwards for every real OKX
+        ``_UM`` instrument.
+        """
+        assert (
+            _infer_margin_type(InstrumentType.FUTURE, "USD", "BTC-USD_UM-260710", "okex-futures") == MarginType.LINEAR
+        )
+
+    def test_infer_margin_type_okx_bare_dated_future_is_inverse(self) -> None:
+        """Real: BTC-USD-260710 (no ``_UM`` infix) is the genuinely coin-margined
+        sibling of the linear BTC-USD_UM-260710 above — live-verified
+        ctType=inverse, settleCcy=BTC. Previously fell through to the generic
+        LINEAR default (no OKX branch existed at all for the bare-USD case) —
+        backwards the other direction.
+        """
+        assert _infer_margin_type(InstrumentType.FUTURE, "USD", "BTC-USD-260710", "okex-futures") == MarginType.INVERSE
+
+    def test_infer_margin_type_okx_swap_bare_usd_is_inverse(self) -> None:
+        """Real: BTC-USD-SWAP (OKX-SWAP) is the live, currently-listed
+        coin-margined perpetual — ctType=inverse, settleCcy=BTC. SWAP instIds
+        never carry ``_UM``/``_CM`` at all (0 of 416 real live rows).
+        """
+        assert _infer_margin_type(InstrumentType.PERPETUAL, "USD", "BTC-USD-SWAP", "okex-swap") == MarginType.INVERSE
+
+    def test_infer_margin_type_okx_swap_usdt_is_linear(self) -> None:
+        """Real: BTC-USDT-SWAP (OKX-SWAP) is the live, currently-listed
+        USDT-margined linear perpetual — ctType=linear, settleCcy=USDT.
+        """
+        assert _infer_margin_type(InstrumentType.PERPETUAL, "USDT", "BTC-USDT-SWAP", "okex-swap") == MarginType.LINEAR
 
     def test_infer_margin_type_binance_coin_margined(self) -> None:
         assert _infer_margin_type(InstrumentType.FUTURE, "USD", "BTCUSD_PERP", "binance-futures") == MarginType.INVERSE
@@ -2218,22 +2250,29 @@ class TestDatabentoHelpers:
     # ── _parse_cme_calendar_spread_legs ───────────────────────────────────
 
     def test_parse_cme_spread_legs_valid(self) -> None:
-        # This may return None if ES isn't in the exchange code registry
-        # Test that the function handles the format correctly
-        result = _parse_cme_calendar_spread_legs("ESM6-ESU6", "CME")
-        if result is not None:
-            assert len(result) == 2
-            assert result[0].side == "BUY"
-            assert result[1].side == "SELL"
+        # ES is a registered exchange code (SP500 futures) — legs decompose to
+        # venue-free, human-readable product-root keys (2026-07-08
+        # canonicalization fix: _parse_cme_calendar_spread_legs dropped its
+        # `venue` parameter — the leg key is `TYPE:SYMBOL` only, venue is
+        # already carried once at the combo's own top-level `VENUE:COMBO:...`
+        # id — and now resolves the human product root via
+        # _resolve_product_root instead of the raw ticker).
+        result = _parse_cme_calendar_spread_legs("ESM6-ESU6")
+        assert result is not None
+        assert len(result) == 2
+        assert result[0].side == "BUY"
+        assert result[1].side == "SELL"
+        assert result[0].instrument_key == "FUTURE:SP500"
+        assert result[1].instrument_key == "FUTURE:SP500"
 
     def test_parse_cme_spread_legs_no_dash(self) -> None:
-        assert _parse_cme_calendar_spread_legs("ESM6", "CME") is None
+        assert _parse_cme_calendar_spread_legs("ESM6") is None
 
     def test_parse_cme_spread_legs_empty_parts(self) -> None:
-        assert _parse_cme_calendar_spread_legs("-", "CME") is None
+        assert _parse_cme_calendar_spread_legs("-") is None
 
     def test_parse_cme_spread_legs_three_parts(self) -> None:
-        assert _parse_cme_calendar_spread_legs("A-B-C", "CME") is None
+        assert _parse_cme_calendar_spread_legs("A-B-C") is None
 
     # ── _resolve_trading_status ───────────────────────────────────────────
 

@@ -558,10 +558,14 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     ratio_den = int(getattr(leg_row, "leg_ratio_qty_denominator", 1) or 1)
                     ratio = max(ratio_num // ratio_den, 1) if ratio_den else ratio_num
                     # Resolve leg instrument_key — the leg is a separate instrument
-                    # in the same venue. Determine its type from instrument_class.
+                    # in the same venue (implied by the combo's own top-level
+                    # VENUE:COMBO:... id, so the leg key itself carries no venue —
+                    # same 2026-07-08 canonicalization decision as
+                    # _parse_cme_calendar_spread_legs / _parse_cboe_spread_legs).
+                    # Determine its type from instrument_class.
                     leg_class = str(getattr(leg_row, "leg_instrument_class", "F") or "F")
                     leg_type = _db._CLASS_TO_TYPE.get(leg_class, InstrumentType.FUTURE)
-                    leg_key = f"{canonical_venue}:{leg_type}:{leg_sym}"
+                    leg_key = _db._build_leg_key(leg_type, leg_sym)
                     legs.append(InstrumentLeg(instrument_key=leg_key, side=side, ratio=ratio))
                 if legs:
                     combo_legs[str(sym)] = legs
@@ -764,12 +768,14 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         # Databento returns CME event contracts (EC* roots) as instrument_class="BAG"
         if inst_class == "BAG" and raw_symbol[:2] == "EC":
             instrument_type = InstrumentType.EVENT_CONTRACT
-        # G1.c (2026-06-25): XCBF.PITCH (VX/VIX) — outright futures ONLY. The VX.FUT parent
-        # symbology also returns calendar-spread definitions (instrument_class "S",
-        # e.g. "VX/F1:1:S - VX/G1:1:B") that are NOT in the MVP universe (the VIX-15m source
-        # is the outright front contract); they were polluting CBOE as 4,216 mis-typed
-        # SPOT_PAIR rows. Keep only outright futures (class "F"/"M"); drop every non-outright.
-        if dataset == "XCBF.PITCH" and inst_class not in ("F", "M"):
+        # G1.c (2026-06-25) kept only outright XCBF.PITCH futures (class "F"/"M") and dropped
+        # every calendar-spread definition (instrument_class "S", e.g. "VX/F1:1:S - VX/G1:1:B")
+        # outright — they were polluting CBOE as 4,216 mis-typed SPOT_PAIR rows (whitespace-
+        # padded-dash leg separator, wrong instrument_type). 2026-07-08 canonicalization fix:
+        # class "S" is no longer dropped — it is DECOMPOSED via the same InstrumentLeg/COMBO
+        # pathway already proven for CME (see the inst_class == "S" branch below), so the drop
+        # here narrows to genuinely unrecognised classes only.
+        if dataset == "XCBF.PITCH" and inst_class not in ("F", "M", "S"):
             return None
         # G1.d (2026-06-25): DBEQ.BASIC class "S" is an EQUITY spot listing, not an FX
         # SPOT_PAIR — the default _CLASS_TO_TYPE["S"]=SPOT_PAIR mis-typed 318 NASDAQ/NYSE
@@ -793,13 +799,15 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         if self._is_filtered_out(dataset, inst_class, expiry):
             return None
 
-        # CME class "S" from futures datasets = exchange-defined calendar spreads.
-        # Parse legs from raw_symbol (e.g. "ESM6-ESU6" → BUY ESM6 + SELL ESU6).
+        # CME/CBOE class "S" from futures datasets = exchange-defined calendar spreads.
+        # Parse legs from raw_symbol via the per-dataset parser (CME: "ESM6-ESU6" →
+        # BUY ESM6 + SELL ESU6; CBOE: "VX/F1:1:S - VX/G1:1:B" → per-leg ratio/side).
         # Class S from equity datasets (DBEQ) remains SPOT_PAIR.
         if inst_class == "S" and dataset in _db._FUTURES_DATASETS:
             instrument_type = InstrumentType.COMBO
             if pre_parsed_legs is None:
-                pre_parsed_legs = _db._parse_cme_calendar_spread_legs(raw_symbol, canonical_venue)
+                leg_parser = _db._SPREAD_LEG_PARSERS.get(dataset)
+                pre_parsed_legs = leg_parser(raw_symbol) if leg_parser else None
 
         # User-defined combos/spreads (e.g. "UD:1V:CXT ...") come through as
         # futures/options from parent symbology but have no derivable underlying.
@@ -861,8 +869,15 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=option_type if not is_combo else None,
         )
 
+        # Whitespace is never an acceptable delimiter inside the canonical key
+        # (operator-decided workspace-wide rule, 2026-07-08) — real Databento
+        # raw_symbols embed a literal space for several shapes (CME/ICE options,
+        # some user-defined strategy futures, a handful of equity share-class
+        # tickers). raw_symbol itself stays untouched below (the verbatim vendor
+        # code); only the key is sanitized.
+        sanitized_symbol = _db._sanitize_symbol_for_key(raw_symbol)
         return InstrumentRecord(
-            instrument_key=f"{canonical_venue}:{instrument_type.upper()}:{raw_symbol}",
+            instrument_key=f"{canonical_venue}:{instrument_type.upper()}:{sanitized_symbol}",
             venue=canonical_venue,
             asset_group=asset_group,
             raw_symbol=raw_symbol,

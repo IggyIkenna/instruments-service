@@ -49,18 +49,126 @@ migrated in production data. Full detail, decision rationale, and open todos:
   (100/500/3000/10000), dash-separated. `pool_address` is its own column, not the entire identity key.
 - **Current adapter code**: all 13 DEX-pool protocols in scope (the 5 native adapter classes — Uniswap V2/V3/V4,
   Balancer, Curve — plus the 8 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug`, see "Adapter
-  architecture" below) build a structured key — `instrument_key = f"{venue_tag}:POOL:{base}-{quote}:{fee_str}"`
+  architecture" below) build a structured key — `instrument_key = f"{venue_tag}:POOL:{base}-{quote}[-{fee_bps}]"`
   (confirmed in `uniswap_v3.py`, and equivalently in `uniswap_v2.py`/`uniswap_v4.py`/`balancer.py`) — with the
   pool/market address kept separately as `raw_symbol`, not as the instrument_id. Curve uses its own REST-API-derived
   key shape (see the Curve row under "Protocol × chain coverage" below).
-- **Known code gap**: the fee-tier segment is colon-separated (`:{fee_str}`) rather than dash-separated, and `fee_str`
-  embeds Uniswap's raw on-wire `feeTier` value (e.g. `3000`) rather than the real basis-points value — a correctly
-  computed bps value (`pool_fee_tier_bps`) already exists on the same record but isn't the one written into the
-  `instrument_key` string (`uniswap_v3.py:590-599`). Since the 8 fork/config-variant protocols share the same
-  `_build_pool_record` code path, this gap applies to all 13 protocols.
-- **Known gap, data state (not verifiable from code)**: whether the persisted production catalog has been
-  regenerated to the target dash/bps format across all 13 protocols is a live-data question, not a code fact — see
-  the migration doc above for current status.
+- **Fee-tier code gap — FIXED 2026-07-09** (`uniswap_v3.py`/`uniswap_v4.py::_build_pool_record`): the fee-tier
+  segment was colon-separated (`:{fee_str}`) rather than dash-separated, and embedded Uniswap's raw on-wire `feeTier`
+  value (e.g. `3000`) rather than the real basis-points value. Since the 8 fork/config-variant protocols share
+  Uniswap V3's `_build_pool_record` code path, fixing it there fixes all 8 too; V4 (separate adapter class) fixed
+  the same way. Now: `symbol = f"{base}-{quote}-{pool_fee_tier_bps}"` when a real fee tier exists, else
+  `f"{base}-{quote}"` (the fee segment is OMITTED, not a fabricated `-0`, matching the target's `[-FEE_TIER]`
+  optional-bracket grammar). Verified via `_build_pool_record` unit tests (264 passed,
+  `tests/unit/test_defi_adapters_comprehensive.py` + `tests/unit/reference_data/adapters/defi/test_dex_metadata_population.py`).
+  This fix affects `instrument_key`/`pool_fee_tier` on freshly-discovered rows and (once regenerated, see below)
+  `glued_pair_id` — it does **not** touch `instrument_id` for POOL rows, which is a separate, deliberately-different
+  field (next bullet).
+
+- **RE-VERIFIED 2026-07-09, finding corrected — this is NOT a simple catalog-regeneration gap.** The
+  2026-07-08 framing ("the persisted catalog predates the current adapter code... the fix is likely a catalog
+  regeneration/backfill against the current adapter code, not a from-scratch code change") is **incomplete**: reading
+  `scripts/build_instrument_catalogue.py::_defi_pool_dual_form()` directly shows the catalogue ROLLUP step (which
+  runs strictly downstream of adapter discovery and is what actually writes `prod/catalog.parquet`) **unconditionally**
+  sets `instrument_id = pool_address.lower()` for every DeFi POOL-typed row, via UAC's
+  `DefiPoolIdentity.canonical_instrument_id` (`unified_api_contracts/canonical/crosscutting/defi.py:299-301`) — by
+  design, not staleness. Re-running instrument discovery against the current (now-fixed) adapter code and re-rolling
+  the catalogue would **still** write the bare pool address into `instrument_id`, because that decision is made in
+  the rollup, not the adapter. This is **load-bearing, live, cross-repo**: `market-tick-data-service`'s
+  `engine/defi_catalog_reader.py` reads `instrument_id` from this exact catalogue expecting `pool_address.lower()`
+  for POOL rows (its own fallback deriver `_canonical_defi_id` independently recomputes the identical value) to
+  build its expected-universe join for DEX swap/pool market data — flipping `instrument_id` to the structured form
+  for POOL rows without a coordinated MTDS-side change would silently break that join for all 13 protocols. This is
+  exactly the class of change the canonicalization doc's already-planned "ground-up migration (UAC →
+  instruments-service → MTDS → strategy-service → deployment, live breakage explicitly authorized)" exists for — it
+  is **not** achievable as an instruments-service-only regen, and needs an explicit operator go-ahead + an MTDS-side
+  companion change shipped in lockstep, not a same-session smoke test. (Independently corroborated by
+  `scripts/balancer_cross_chain_pool_address_collision_backfill_2026_07_08.py`'s own header, which already flagged
+  the bare-`pool_address` `instrument_id` as "a known, already-documented architectural gap... that has not yet
+  shipped as a catalog-wide migration" — this pass adds the root-cause mechanism and the MTDS blocking dependency.)
+
+  **The good news**: the target structured form already exists TODAY, in a separate, already-populated column —
+  `glued_pair_id` (0 nulls across all 6,352 real POOL rows for the 13 protocols, verified live against
+  `prod/catalog.parquet` 2026-07-09) — built by the same `DefiPoolIdentity.glued_pair_id` property, documented as
+  "the human-readable UI form." It has 3 remaining format bugs relative to the operator's exact target grammar,
+  all cosmetic/string-level (no re-fetch needed to fix):
+  1. Ghost/no-underscore venue-chain prefix — `UNISWAPV3-ARBITRUM` instead of `UNISWAP_V3-ARBITRUM` (UAC's
+     `_strip_version_underscore()` deliberately builds this as "the glued-prefix display form"; the catalogue's own
+     `venue` column is already correctly spelled with the underscore, so a rewrite can just use it directly instead
+     of re-deriving from the ghost prefix).
+  2. Colon before the fee-tier segment instead of dash (`:POOL:SOL-WETH:500` vs target `:POOL:SOL-WETH-5`).
+  3. Raw on-wire feeTier units instead of bps for the Uniswap-V3-family + Uniswap V4 protocols (e.g. `10000` should
+     be `100`) — same root cause as the just-fixed adapter bug, further baked in by
+     `build_instrument_catalogue.py::_fee_from_instrument_key()` preferring the (buggy, pre-fix) legacy
+     `instrument_key`'s raw fee token over the already-correct bps `pool_fee_tier` field.
+
+  **WRITTEN BACK FOR REAL 2026-07-09** (was: smoke-tested dry-run only, same day). The dry-run smoke test (a pure
+  in-place string rewrite of `glued_pair_id` using the catalogue's own `venue`/`chain` columns plus the existing
+  `glued_pair_id`'s pair/fee segments) confirmed 100% (6,352/6,352) parse success with 0 grammar mismatches; the real
+  write-back ran the identical transform for real via
+  `scripts/dex_pool_glued_pair_id_canonicalize_2026_07_09.py --apply --confirm`: downloaded live
+  `prod/catalog.parquet` (7,888 total rows, re-verified in-scope POOL count still 6,352 across the 13 protocols — no
+  drift since the smoke test earlier the same day), wrote a full pre-write backup
+  (`prod/catalog.20260709-112522.gluedpairfix.bak.parquet`), rewrote `glued_pair_id` for all 6,352 in-scope rows
+  (6,332 actually changed, 20 already-canonical CURVE rows left byte-identical — idempotent no-op on those), and
+  **independently re-downloaded the written blob from GCS afterward** to verify: row count unchanged (7,888),
+  0 remaining ghost venue-prefixes, 0 remaining colon-before-fee delimiters, 6,352/6,352 in-scope `glued_pair_id`
+  values match the target grammar (`VENUE-CHAIN:POOL:BASE-QUOTE[-FEE_BPS]`), and `instrument_id` confirmed
+  byte-for-byte **unchanged** (still `pool_address.lower()`, 0 rows with a `:` in `instrument_id`) — the MTDS join
+  key was deliberately not touched (see the migration-blocker note below). This is safe to ship independently of the
+  `instrument_id`/MTDS question above — `glued_pair_id` has no external consumers today (grepped the full workspace:
+  only `build_instrument_catalogue.py` and the Balancer collision backfill script read it; no UI or other service
+  joins on it yet). Real per-protocol row counts + write-back results (2026-07-09):
+
+  | Protocol              | Real POOL rows (2026-07-09) | `glued_pair_id` write-back result                                   |
+  | --------------------- | --------------------------- | ------------------------------------------------------------------- |
+  | BALANCER              | 2,423                       | 2,423/2,423 rewritten, verified                                     |
+  | UNISWAP_V3            | 2,192                       | 2,192/2,192 rewritten, verified                                     |
+  | PANCAKESWAP_V3        | 614                         | 614/614 rewritten, verified                                         |
+  | UNISWAP_V4            | 413                         | 413/413 rewritten, verified                                         |
+  | TRADER_JOE_V2         | 304                         | 304/304 rewritten, verified                                         |
+  | SUSHISWAP_V3          | 122                         | 122/122 rewritten, verified                                         |
+  | VELODROME_V2          | 96                          | 96/96 rewritten, verified                                           |
+  | AERODROME_V3          | 76                          | 76/76 rewritten, verified                                           |
+  | CAMELOT_V3            | 63                          | 63/63 rewritten, verified                                           |
+  | UNISWAP_V2            | 24                          | 24/24 rewritten, verified (no fee segment — V2 has none)            |
+  | CURVE                 | 20                          | 20/20 already-canonical, 0 changed (no fee segment — Curve none)    |
+  | SUSHISWAP (legacy V2) | 4                           | 4/4 rewritten, verified                                             |
+  | GMX                   | 1                           | 1/1 rewritten, verified                                             |
+  | **Total**             | **6,352**                   | **6,352/6,352 verified canonical (100%), 6,332 changed / 20 no-op** |
+
+  Example before → after (real rows, spot-checked post-write): `UNISWAPV3-ARBITRUM:POOL:SOL-WETH:500` →
+  `UNISWAP_V3-ARBITRUM:POOL:SOL-WETH-5`; `BALANCER-ARBITRUM:POOL:DAI-USDT:30` (already-bps, colon-only bug) →
+  `BALANCER-ARBITRUM:POOL:DAI-USDT-30`; `CURVE-AVALANCHE:POOL:DAI.E-USDC` unchanged (no fee segment, prefix already
+  canonical). (Row-count history: 6,180 on 2026-07-08 → 6,352 on 2026-07-09, both smoke-test and real write-back —
+  ongoing backfill grew the population between the two dates but it was stable within 2026-07-09 itself between the
+  smoke test and the real write a few hours later.) Idempotent — re-running the script against the now-canonical
+  catalog reports 0 rewrites (dry-run-verified). Script kept in `scripts/` per its own `Delete-when:` marker (delete
+  once a re-run shows 0 remaining mismatches AND the `instrument_id` migration below lands, at which point
+  `glued_pair_id` becomes redundant).
+
+- **`instrument_id` catalogue regeneration — CONFIRMED STILL BLOCKED 2026-07-09, not attempted.** Re-checked both
+  halves of the blocker for real before deciding not to touch `instrument_id`: (1)
+  `market-tick-data-service/market_tick_data_service/engine/defi_catalog_reader.py` still reads `instrument_id`
+  directly off this exact catalogue expecting `pool_address.lower()` for POOL rows (its own fallback deriver
+  `_canonical_defi_id` independently recomputes the identical bare-address value) to build its expected-universe
+  join for DEX swap/pool market data — confirmed live in the current MTDS tree, not stale; (2)
+  `build_instrument_catalogue.py::_defi_pool_dual_form()` still unconditionally sets `instrument_id =
+pool_address.lower()` for every POOL row by design (the catalogue rollup step, not the adapter) — a regen/backfill
+  alone, even against the now-fixed adapter code, would still write the bare address. So this is **not** a bounded,
+  safely-scriptable regeneration the way `glued_pair_id` was: flipping `instrument_id` to the structured
+  `VENUE-CHAIN:POOL:...` form for POOL rows requires a coordinated MTDS-side change shipped in lockstep (MTDS's
+  reader + its `_canonical_defi_id` fallback both need the new shape at the same time `instrument_id` changes, or the
+  live DEX swap/pool market-data join breaks for all 13 protocols simultaneously) plus an explicit operator
+  go-ahead for that cross-repo, live-breakage-authorized migration — exactly the class of change
+  `instrument_id_format_canonicalization_2026_07_08.md`'s already-scoped "ground-up migration (UAC →
+  instruments-service → MTDS → strategy-service → deployment)" exists for. **Not run in this pass** — the real,
+  precise blocker (not a guess) is: no MTDS-side companion change exists yet, and none was authorized for this pass.
+  `glued_pair_id` (now canonical, see above) is the safe interim substitute for any human-readable/UI consumer until
+  that cross-repo migration ships.
+
+- **Known gap, data state**: the `instrument_id`/MTDS cross-repo migration above remains the only unresolved piece
+  of finding 2 — see the migration doc above for current status and the dedicated todo.
 
 ### Lending — A_TOKEN/DEBT_TOKEN split (from `defi_lending_atoken_debttoken_instrument_split_2026_07_07.md`)
 
@@ -130,26 +238,77 @@ follow-up already tracked for every canonical-id migration in this doc, not a co
 All 5 on-chain-perp adapters live under `reference_data/adapters/cefi/` (not `defi/`) organizationally, despite being
 economically on-chain perpetual DEXes — a real filing quirk worth knowing when hunting for the code.
 
-Canonical format: `VENUE:PERPETUAL:BASE-QUOTE` uniformly (no `PERP` shorthand in the key, matching the
-`instrument_type=InstrumentType.PERPETUAL` field), with the real per-venue settlement currency as the quote:
+Canonical format: `VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV` uniformly (no `PERP` shorthand in the key, matching the
+`instrument_type=InstrumentType.PERPETUAL` field), with the real per-venue settlement currency as the quote and a real
+`@LIN`/`@INV` margin marker as a trailing suffix (2026-07-09 scope-expansion of the finding 1 dated-derivative margin
+marker to PERPETUAL — a venue's quote currency alone cannot disclose margin type, e.g. Kraken-Futures has both a
+linear and an inverse PERPETUAL quoted in the same `USD`):
 
-| Venue               | Settlement currency (quote)                                                     |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `HYPERLIQUID`       | USD (notional quote; vault collateral is USDC)                                  |
-| `ASTER`             | Per-symbol real `quoteAsset` (USDT/USD1/"U" depending on symbol, not hardcoded) |
-| `PACIFICA-SOLANA`   | USDC                                                                            |
-| `EXTENDED-STARKNET` | USD (`collateralAssetName="USD"` uniformly across markets)                      |
-| `LIGHTER-ZKSYNC`    | USDC                                                                            |
+| Venue               | Settlement currency (quote)                                                     | Margin type (verification)                                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HYPERLIQUID`       | USD (notional quote; vault collateral is USDC)                                  | `@LIN` — `hyperliquid.gitbook.io/hyperliquid-docs/trading/contract-specifications`: "Instrument type \| Linear perpetual" (venue's own explicit classification).              |
+| `ASTER`             | Per-symbol real `quoteAsset` (USDT/USD1/"U" depending on symbol, not hardcoded) | `@LIN` — `docs.asterdex.com`: perpetuals "fully settled in USDT"; live `exchangeInfo` shows 100% stablecoin `quoteAsset` across all 509 real perps, zero coin-margined pairs. |
+| `PACIFICA-SOLANA`   | USDC                                                                            | `@LIN` — real web research 2026-07-09: "Pacifica's core product is linear perpetual contracts", consistent with the already-confirmed USDC unified margin.                    |
+| `EXTENDED-STARKNET` | USD (`collateralAssetName="USD"` uniformly across markets)                      | `@LIN` — `docs.extended.exchange`: "USDC as the base collateral", uniformly USDC-settled markets, no inverse product offered.                                                 |
+| `LIGHTER-ZKSYNC`    | USDC                                                                            | `@LIN` — `docs.lighter.xyz/trading/multi-asset-margin`: "Portfolio Balance is the USDC value of the account" venue-wide (linear, not coin-margined).                          |
+
+None of the 5 on-chain-perp CLOBs offer an inverse (coin-margined) product — structurally consistent with the
+on-chain-perp DEX category as a whole (USD-stablecoin vault/cross-margin, never margined in the base crypto itself).
+The marker is embedded directly in the `symbol` argument passed to the shared UAC builder
+(`build_instrument_id(venue, InstrumentType.PERPETUAL, f"{base}-{quote}@{marker}")` — `_build_cefi_simple` upper-cases
+the symbol verbatim, so no UAC-side builder change was needed) rather than derived by the builder itself.
 
 `HYPERLIQUID`/`ASTER` carry no chain suffix (each is effectively its own app-chain — `chain="HYPERLIQUID"` lives in
 the instrument's `chain` attribute, not the venue token), while `PACIFICA-SOLANA`/`EXTENDED-STARKNET`/`LIGHTER-ZKSYNC`
 carry an explicit chain suffix in the venue itself. **No trailing `@VENUE`** on top — venue is already the first
 colon-segment.
 
-**Known gap, data state (not verifiable from code)**: a dry-run-scoped migration script
-(`migrate_onchain_perp_perpetual_canonical_2026_07_08.py` in market-tick-data-service, dry-run by default, requires
-`--apply` to mutate) exists to bring historical batch tick-data GCS objects and the availability manifest onto this
-key shape; whether `--apply` has been run against production is a live-data question the code cannot answer. See
+**Historical migration — real, shipped, fully applied (2026-07-09)**:
+`migrate_onchain_perp_perpetual_canonical_2026_07_08.py` in market-tick-data-service (dry-run by default, requires
+`--apply` to mutate) combines the PERP→PERPETUAL rename with the `@LIN` margin marker in one pass so historical rows
+are touched once. The script was extended (same pass) to ALSO recognize an EVEN OLDER bare-symbol GCS filename shape —
+no venue prefix at all, e.g. HL `AAVE-PERP.parquet`, ASTER `AAVEUSDT.parquet` — by parsing the venue from the object's
+GCS **path** (`venue=` partition) rather than requiring it in the filename, mirroring the 2026-06-22 precedent's own
+path-based venue resolution. This was the real, largest remaining gap: the 2026-06-22 migration had NOT actually
+renamed the majority of real HL/ASTER objects to its own `{VENUE}:PERP:{SYMBOL}` intermediate shape, despite the
+manifest's `instrument_id` column already reading that shape for 100% of in-scope rows (a real manifest/GCS-filename
+divergence — the manifest was updated but the backing objects were not).
+
+Real before → after, measured against the production `market-data-tick-cefi-prd-central-element-323112` bucket +
+`_index/availability_index.parquet`:
+
+- **Manifest** (7,219,598 total rows, 498,388 HL/ASTER `batch_hyperliquid`/`batch_aster` rows in scope): 100% of
+  in-scope rows were ALREADY in the `:PERP:` shape (`instrument_ids_transformed_from_venue_perp_shape=498388`,
+  `instrument_ids_transformed_from_bare_legacy_shape=0`) — the manifest-side transform was a real no-op confirmation,
+  not new work; 0 dedup collisions, 0 row-count drift (7,219,598 rows before AND after). Post-apply verification:
+  100% of the 498,388 in-scope rows now read the final `VENUE:PERPETUAL:BASE-QUOTE@LIN` shape with `instrument_type`
+  uniformly `PERPETUAL` — confirmed by re-downloading and re-inspecting the real post-write manifest.
+- **GCS objects — real full-corpus scan, not a narrow sample.** A real listing of the entire
+  `raw_tick_data/by_date/` prefix (4,120,516 objects scanned across ALL CeFi venues; a single, expensive,
+  ~82-minute walk — the pipeline_mode partition sits below `day=` so there is no cheaper prefix) found **136,814**
+  real HL/ASTER objects in scope, split:
+  - **97,138** in the EVEN OLDER bare-symbol shape (the real target of this pass's extension) — e.g.
+    `AAVE-PERP.parquet` (HL) / `AAVEUSDT.parquet` (ASTER), confirmed coexisting ALONGSIDE the 2026-06-22-migrated
+    shape in the same `data_type=` partition on multiple real sampled dates.
+  - **39,202** already in the 2026-06-22-migrated `{VENUE}:PERP:{SYMBOL}` shape.
+  - 471 bundled legacy `ticks.parquet` (multi-symbol, no per-file identity) correctly left untouched; 3 already
+    fully canonical.
+  - **Real `--apply` result**: 134,855 renamed + 1,453 duplicate-old-shape sources cleaned up (cases where both the
+    bare-legacy AND `:PERP:`-shaped source existed for the same symbol/day, both correctly collapsing onto the SAME
+    canonical target) + 32 transient errors (SSL/connection-pool contention under high worker concurrency,
+    0.02% of 136,340) — all 32 resolved via a targeted idempotent retry (16 genuine renames, 11 duplicate-source
+    cleanups, 5 already-resolved), for a **final 0 errors, 0 remaining old-format objects**. Post-apply spot-checks
+    across 15+ real dates spanning 2023-04 through 2026-01 confirm every sampled `data_type=` partition now contains
+    exactly one canonical `VENUE:PERPETUAL:BASE-QUOTE@LIN.parquet` file per symbol — zero trace of the old `-PERP`
+    shorthand, the bare-symbol shape, or the intermediate `:PERP:` shape.
+  - Real backup: `gs://market-data-tick-cefi-prd-central-element-323112/_index/backups/availability_index.pre_perpetual_canonical_20260709T1323Z.parquet`.
+  - Real measured throughput note for future similar migrations: worker concurrency above the underlying HTTP
+    connection pool's default size (`--workers 96` here) causes transient "connection pool is full" churn and a
+    slow initial ramp (~400 renames/min), but throughput self-stabilizes as connections settle (~1,300-1,700
+    renames/min once warm) — net real wall-clock for the ~136K-object rename phase was ~2h20m at that profile
+    (excluding the ~82min discovery walk).
+
+See
 [`canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md`](../../../unified-trading-pm/plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md).
 
 ### AAVE_V3-OPTIMISM venue-token spelling
@@ -315,6 +474,151 @@ passthrough=True)` instead of an ad hoc f-string — part of the same workspace-
   docstring documents it as "the closest UAC `InstrumentType`" for PT/YT/SY, no PT/YT-specific enum exists) is used
   for both key and field instead, consistent with the Karak/Jito/Symbiotic fix. Shipped
   `market-tick-data-service@f3ff5ea0`.
+
+---
+
+## Legacy GCS naming audit — real per-protocol findings and migration (2026-07-09)
+
+Generalizes the on-chain-perp bare-filename finding (operator 2026-07-09: "audit CeFi ... and DeFi ... historical GCS
+data for the same problem") to the 13 DEX-pool protocols + 25 lending/staking/yield/restaking venues. Real, narrow
+(single-venue-prefix) GCS listings against `instrument_availability/by_date/` — not a manifest summary — covering
+BOTH `instruments-store-defi-prd-{pid}` (2,363 real day-partitions, 2020-01-20 .. 2026-07-09) and the legacy env-less
+`instruments-store-defi-{pid}` (2,315 day-partitions, confirmed FROZEN since 2026-05-22 — zero real writes past that
+date, verified via a high-water-mark check; every current reader/writer resolves the `-prd-` bucket via
+`_get_instruments_bucket` → `resolve_bucket_name`).
+
+### Finding 1 — ghost/canonical venue-token duplicate GCS history (28 real venue×chain pairs, ~4 years) — MIGRATED
+
+A real ghost (no-underscore) vs canonical (underscore) venue-token spelling was found written **in parallel** for the
+same real protocol×chain×day, spanning 2022-03-27 .. ~2026-05-11 (then stopped for good — `writers.py`'s
+`canonicalize_defi_venue_combined(venue_str)` call, landed per `defi_coverage_capability_alignment_2026_05_22.md`,
+already fixed this going forward; this audit is the historical backfill that fix never covered). Real per-venue
+ghost-day counts (full real scan, both buckets, 2026-07-09):
+
+| Ghost venue                                               |     Ghost days | Canon days (pre-migration) | Note                                               |
+| --------------------------------------------------------- | -------------: | -------------------------: | -------------------------------------------------- |
+| AAVEV3-ARBITRUM/AVALANCHE/BASE/BSC/ETHEREUM/LINEA/POLYGON | 446–1,514 each |             495–1,572 each |                                                    |
+| AAVEV3-OPTIMISM                                           |          1,514 |                        108 | canon was a MINORITY of real history pre-migration |
+| AERODROMEV3-BASE                                          |            710 |                        792 |                                                    |
+| CAMELOTV3-ARBITRUM                                        |          1,032 |                      1,106 |                                                    |
+| COMPOUNDV3-ARBITRUM/BASE/ETHEREUM/OPTIMISM                | 757–1,359 each |             822–1,422 each |                                                    |
+| PANCAKESWAPV3-BASE/BSC/ETHEREUM                           | 954–1,105 each |           1,032–1,182 each |                                                    |
+| PANCAKESWAPV3-ZKSYNC                                      |            446 |                          0 | 100% orphan pre-migration                          |
+| SUSHISWAPV3-AVALANCHE/BASE/ETHEREUM                       | 245–1,103 each |             883–1,192 each |                                                    |
+| UNISWAPV2-ETHEREUM                                        |          2,189 |                      2,243 |                                                    |
+| UNISWAPV3-ARBITRUM/BASE/ETHEREUM/OPTIMISM/POLYGON         | 974–1,825 each |           1,006–1,883 each |                                                    |
+| UNISWAPV4-ETHEREUM                                        |            459 |                        525 |                                                    |
+| VELODROMEV2-OPTIMISM (legacy env-less bucket ONLY)        |          1,044 |          0 (either bucket) | 100% orphan + wrong bucket                         |
+
+**Total real scope: 33,003 (bucket, ghost_venue, day) triples** — 31,968 in `-prd-` + 1,044 legacy-bucket-only (9
+additional triples were processed during script validation ahead of the full run, for a real grand total of
+**33,012 real ghost objects**).
+
+**Not a byte-identical duplicate — a real content diff mattered.** 81 sampled ghost/canon same-day pairs (both
+parquets read, compared on the `raw_symbol` identity column) showed most pairs are NOT duplicates: each side commonly
+holds real pools the other is missing (e.g. `UNISWAPV3-OPTIMISM` day=2023-11-18: 168 ghost rows vs 282 canonical, 6
+ghost-only + 120 canonical-only; `PANCAKESWAPV3-BSC` day=2024-10-07: 129 ghost vs 86 canonical, 59 ghost-only). The
+canonical schema is also wider (51 real columns vs ghost's 40 — `canonical_instrument_id`/`product_root`/
+`available_at`/etc. were added to the writer after most ghost objects were captured). A blind rename in either
+direction would have destroyed real, non-redundant pool history.
+
+**Migration executed for real** —
+`instruments-service/scripts/legacy_naming_audit_dexpool_ghost_venue_merge_2026_07_09.py`: per-(bucket, day, venue)
+column-union + row-union merge (canonical wins on identity-column conflict, ghost-only rows carried over honestly,
+never fabricated), backup-first (every pre-migration object server-side-copied under
+`_migration_backup/legacy_naming_audit_dexpool_2026_07_09/` before any write), post-write verify-then-delete (ghost
+object only deleted after a re-read confirms the canonical row count ≥ the union floor), real `ThreadPoolExecutor`
+concurrency (48 workers). **Real results, both passes**: 33,003/33,003 succeeded (100%), 0 remaining failures, a
+follow-up idempotent full re-scan of all 29 ghost-venue prefixes across both buckets confirmed **0 real ghost objects
+remain anywhere** — durable, not just catalog-level. Real elapsed time: ~78 minutes wall-clock (main pass 4,568s +
+mop-up 41s + verification listings), real concurrency throughout (measured throughput ramped 4.4 → 7.6 objects/sec as
+the run progressed). Real content recovered: **2,314,285 total real rows read from ghost objects**, merged into
+canonical objects now totaling **2,828,070 rows** (the delta is real, previously-orphaned pool/reserve history now
+visible under the canonical venue name for the first time — most concentrated in `AAVE_V3-OPTIMISM`,
+`PANCAKESWAP_V3-ZKSYNC`, and `VELODROME_V2-OPTIMISM`, the 3 venues where canonical was a minority-or-zero share of
+real history pre-migration).
+
+**Real mid-run finding, fixed in the same pass**: 11 of 33,003 objects (1 transient GCS 503 on a backup-copy call, 10
+`UNISWAPV3-POLYGON` days) initially failed a post-write verify check — safely (ghost object was NOT deleted in either
+case, no data at risk). Root-caused: the verify floor compared the merged row count against the ghost object's RAW
+row count, but a real source file can carry an internal duplicate identity value (`UNISWAPV3-POLYGON` day=2025-01-10's
+real ghost object has 476 raw rows but only 475 unique `raw_symbol` values — a real subgraph-pagination-overlap
+re-listing, not corruption) — the merge already correctly deduped on the identity column, so the raw-row-count floor
+rejected a genuinely correct de-duplicated result as a false-positive "regression." Fixed (floor now uses the unique
+identity-column count) and all 11 re-ran clean (0 failures) in a scoped mop-up pass.
+
+**Real contamination bug found + fixed same day (2026-07-09 adversarial verification), fully remediated**: an
+independent verification pass on the FIRST shipped version of the migration (`instruments-service@11192be2`) found
+`_merge_frames` fixed the GCS _path_ to canonical but never rewrote a surviving ghost-only row's own
+`venue`/`instrument_key` COLUMN VALUES — e.g. `instrument_key='AAVEV3-OPTIMISM:A_TOKEN:ALINK'` (no underscore) lived
+on inside an otherwise-canonical-path parquet, confirmed for real on
+`AAVE_V3-OPTIMISM` day=2022-04-23 (3/15 rows), `UNISWAP_V3-OPTIMISM` day=2023-11-18 (6/288 rows), and
+`PANCAKESWAP_V3-BSC` day=2024-10-07 (59/145 rows). Any downstream reader filtering/joining on the `venue` COLUMN
+(not the GCS path) would have silently missed or mis-bucketed these specific rows.
+
+**Fix**: `legacy_naming_audit_dexpool_ghost_venue_merge_2026_07_09.py`'s `_merge_frames` now calls a new
+`_rewrite_ghost_venue_columns` (generic over every column, not hardcoded to `venue`/`instrument_key`) on the ghost
+frame BEFORE any dedup/concat, so a surviving row can never carry the ghost spelling in its data. Covered by a new
+real unit test suite (`tests/scripts/test_legacy_naming_audit_dexpool_ghost_venue_merge_2026_07_09.py`, 10 cases)
+that asserts the surviving rows' COLUMN VALUES are canonical post-merge, not merely that the row count/identity
+survived — verified to fail against the pre-fix code (10/10 fail with the old 2-arg `_merge_frames` signature) and
+pass against the fix.
+
+**Real, targeted remediation of already-migrated data** (`legacy_naming_audit_dexpool_ghost_venue_contamination_remediation_2026_07_09.py`
+— NOT a fresh full-corpus walk; every row this bug could reach lives under exactly the 29 canonical venue prefixes
+in `GHOST_TO_CANON`, in `-prd-` only, since `_process_one` always wrote the merged frame to the PRD bucket
+regardless of source): a real scoped per-venue-prefix listing found **35,594 real (canon_venue, day) pairs** across
+all 29 venues; **10,823 of them (30.4%) were genuinely contaminated** (390,784 real ghost-spelled cells found and
+rewritten to canonical — backup-first under
+`_migration_backup/legacy_naming_audit_dexpool_contamination_remediation_2026_07_09/`, verify-after on every write:
+row count unchanged, 0 ghost cells remain). 0 failures across all 35,594 pairs. An independent full re-run in
+dry-run mode immediately after confirmed **0 contaminated pairs remain anywhere** (`contaminated_pairs=0` across
+all 35,594). The 3 originally-cited sample files (`AAVE_V3-OPTIMISM` 2022-04-23, `UNISWAP_V3-OPTIMISM` 2023-11-18,
+`PANCAKESWAP_V3-BSC` 2024-10-07) were independently re-downloaded post-fix and confirmed genuinely clean (0
+ghost-spelled cells in any column). Interesting real finding: `VELODROME_V2-OPTIMISM` and the 3 `SUSHISWAP_V3-*`
+venues had **zero** contamination despite being in scope — verified for real (`VELODROME_V2-OPTIMISM`, a 100%
+pre-migration orphan, was independently spot-checked and its row-level `venue`/`instrument_key` values were ALREADY
+canonical-spelled at capture time; only its legacy GCS _path_ was ghost-shaped, a narrower bug than the general
+case).
+
+### Finding 2 — lending/staking/yield venues: 25 requested, only 5 have ANY real object here (not a naming gap)
+
+A full real venue-token inventory (every distinct `venue=` token across the ENTIRE 2020-2026 history, both buckets —
+87 distinct tokens total) was cross-checked against all 25 requested lending/staking venues (Euler_V2, Fluid, Radiant,
+Venus, Benqi, MarginFi, Solend, Lido, EtherFi, Renzo, KelpDAO, Puffer, RocketPool, Sanctum, Solblaze, Yearn, Beefy,
+Karak, Idle, Symbiotic, Convex, plus Aave_V3/Spark/Compound_V3/Morpho already covered above). Only **Aave_V3, Spark,
+Compound_V3, Morpho, and Fluid** have ever written a single real object to `instrument_availability/by_date/`, under
+any spelling — Spark/Morpho/Fluid canonical-only (no ghost variant ever existed for these 3, nothing to migrate).
+The other **18 requested venues have ZERO real objects here, under any naming variant**: Euler_V2, Radiant, Venus,
+Benqi, MarginFi, Solend, Renzo, KelpDAO, Puffer, RocketPool, Sanctum, Solblaze, Yearn(\_V3), Beefy, Karak, Idle,
+Symbiotic, Convex. **This is NOT a naming-convention gap** (there is nothing mis-spelled to rename — these adapters
+have real code (`instruments_service/reference_data/adapters/defi/`) but have never run a real production capture
+against this specific GCS path) — it is a separate, already-tracked "not yet backfilled" state (see
+`DEFI_INSTRUMENTS_NOT_YET_COLLECTED`/`EMPTY_OR_DEPRECATED_DEFI_VENUES` under "Known gaps" above for the venues
+already flagged there; the remainder are simply un-backfilled, out of THIS audit's naming-migration scope). Two bonus
+finds beyond the requested 25 were also present with clean canonical-only real data, no gap: `EIGENLAYER-ETHEREUM`,
+`ETHENA-ETHEREUM`.
+
+### Finding 3 (flagged, NOT executed this pass) — orphaned `pipeline_mode=` duplicate-write tree
+
+While auditing Finding 1's day-partitions, a SECOND, fully distinct real path shape was found:
+`instrument_availability/by_date/day={D}/pipeline_mode=batch_instruments_service/asset_group=defi/venue={V}/instruments.parquet`
+— present in 2,353 of 2,363 real day-partitions in `-prd-` (stopped ~2026-06-30, evidence it's already dead
+going-forward too), mirroring the SAME venue set as the flat `day={D}/venue={V}/...` tree. Real hash comparison
+(CRC32C + MD5) on 2 samples spanning the oldest (`day=2020-01-20`) and a recent (`day=2026-06-10`) date confirmed
+**byte-for-byte identical content** to the flat-shape sibling for the same (day, venue). Crucially: **zero real
+readers consume this shape** — every real consumer (`unified_trading_library/instrument_lifecycle_loader.py`,
+`domain/instruments_client.py`, `domain_client/clients/instruments.py`, `options_cluster_lookup.py`,
+`core/cloud_data_provider.py`) reads only the flat `day=/venue=/instruments.parquet` shape;
+`pipeline_mode=`/`asset_group=` partitioning is a real, documented convention for MTDS's `raw_tick_data` (per
+`codex/02-data/defi-canonical-naming-ssot.md`) but was never wired to an `instrument_availability` reader. This
+represents an estimated ~104K real orphaned duplicate objects in `-prd-` alone (mirrors the flat tree's real
+venue-day objects for 2,353 of 2,363 days) — pure storage waste, not a correctness/migration-blocking gap (nothing
+silently drops data because nothing reads it). Left as a flagged follow-up (real evidence above; a dedicated
+SAFE-TO-DELETE audit + delete-list script, same pattern as MTDS's own
+`e2e-testing/scripts/defi/audit_legacy_gcs_dup_delete_list.py` precedent, is the right next step) rather than executed
+in this pass — out of THIS audit's "naming convention" scope (nothing here is mis-named; it's a write path that was
+never read) and a genuinely separate, large, operator-notify-worthy finding on its own.
 
 ---
 

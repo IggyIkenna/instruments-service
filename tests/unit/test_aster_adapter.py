@@ -90,13 +90,16 @@ class TestAsterAdapter:
 
     @pytest.mark.asyncio
     async def test_get_instruments_instrument_key_is_canonical(self) -> None:
-        """instrument_key is VENUE:PERPETUAL:BASE-QUOTE via the shared builder.
+        """instrument_key is VENUE:PERPETUAL:BASE-QUOTE@LIN via the shared builder.
 
         2026-07-09 DRY retrofit (canonical_id_builder_retrofit_checklist_2026_07_08.md
         todo 4) routed the ad hoc f-string through
-        ``unified_api_contracts.internal.reference.canonical_id_builder.build_instrument_id``
-        — this asserts the real adapter output is byte-identical to the prior
-        f-string construction (no behavior change expected).
+        ``unified_api_contracts.internal.reference.canonical_id_builder.build_instrument_id``.
+        2026-07-09 (same day, later) — PERPETUAL scope-expansion added the real @LIN
+        margin marker (ASTER confirmed linear-margined: docs.asterdex.com states
+        perpetuals are "fully settled in USDT"; live exchangeInfo shows 100%
+        stablecoin quoteAsset distribution across all 509 perps, zero coin-margined
+        pairs).
         """
         adapter = AsterReferenceDataAdapter()
         mock_resp = AsyncMock()
@@ -130,7 +133,7 @@ class TestAsterAdapter:
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
             results = await adapter.get_instruments()
         assert len(results) == 1
-        assert results[0].instrument_key == "ASTER:PERPETUAL:BTC-USDT"
+        assert results[0].instrument_key == "ASTER:PERPETUAL:BTC-USDT@LIN"
 
     @pytest.mark.asyncio
     async def test_get_instruments_filters_non_trading(self) -> None:

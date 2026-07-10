@@ -25,6 +25,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, cast
 
 import aiohttp
+import pydantic
 from unified_api_contracts import VenueMapping
 from unified_api_contracts.internal import InstrumentType, OptionType
 
@@ -103,7 +104,6 @@ _DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset(
         "binance-futures",
         "okex-futures",
         "okex-swap",
-        "huobi-dm",
         "bitfinex-derivatives",
         "bitget-futures",
         "cryptofacilities",  # Kraken Futures (Tardis legacy id) — derivatives only
@@ -746,6 +746,21 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         # Kraken Futures symbol format: FI_XBTUSD_240329 → parse YYMMDD from last underscore segment
         if expiry is None and "_" in raw_id:
             expiry = _tardis._parse_underscore_yymmdd_symbol_expiry(raw_id)
+        # Bybit legacy coin-margined quarterly, no-dash CME-month-code shape:
+        # BTCUSDH22 → last Friday of the contract month (Bybit's real
+        # quarterly settlement day — see _parse_bybit_month_code_expiry's
+        # docstring for the cross-check against the 42 already-resolvable
+        # siblings). The currently-active contracts of this shape (e.g.
+        # BTCUSDU26/Z26, ETHUSDU26/Z26) have no availableTo yet to fall back
+        # to above, so without this branch they resolve expiry=None →
+        # InstrumentRecord(FUTURE) raises pydantic.ValidationError, which
+        # previously took down the ENTIRE Bybit fetch (real regression,
+        # live-verified 2026-07-09; see the per-item try/except added below
+        # around InstrumentRecord construction — the second, independent half
+        # of the fix: shard-level isolation so one bad symbol never again
+        # zeroes a whole venue).
+        if expiry is None and exchange == "bybit":
+            expiry = _tardis._parse_bybit_month_code_expiry(raw_id)
 
         strike, opt_type = _tardis._resolve_option_fields(item, instrument_type, raw_id)
 
@@ -774,8 +789,44 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             else Decimal("1")
         )
 
-        # Canonical instrument_key: VENUE:INSTRUMENT_TYPE:BASE-QUOTE
-        instrument_key = f"{canonical_venue}:{instrument_type}:{symbol}"
+        margin_type: MarginType | None = _tardis._infer_margin_type(instrument_type, quote, raw_id, exchange)
+
+        # Canonical instrument_key — the SINGLE shared construction site for
+        # every CeFi venue Tardis covers (instrument_id_format_canonicalization_
+        # 2026_07_08.md finding 1). Margined PERPETUAL/FUTURE/OPTION route
+        # through the shared @LIN/@INV builders built for Bybit/Kraken-Futures/
+        # OKX/Deribit (parsing.py) so this construction — not a per-venue
+        # duplicate — is what every future capture emits. Falls back to the
+        # legacy VENUE:TYPE:BASE-QUOTE / VENUE:TYPE:RAW_ID shape when the
+        # margin_type/expiry/strike/right inputs the target format needs
+        # aren't resolvable (shard-level isolation: degrade, never raise).
+        # Deribit's real target drops the quote segment for dated derivatives
+        # (FUTURE/OPTION) — quote="" — confirmed by test_deribit_canonical_id.py;
+        # every other margined venue keeps it (Bybit/Kraken-Futures/OKX/Binance).
+        instrument_key: str | None = None
+        if instrument_type is InstrumentType.PERPETUAL and margin_type is not None and base and quote:
+            instrument_key = _tardis._build_canonical_perpetual_key(canonical_venue, base, quote, margin_type)
+        elif instrument_type is InstrumentType.FUTURE and margin_type is not None and expiry is not None and base:
+            dated_quote = "" if exchange == "deribit" else quote
+            instrument_key = _tardis._build_canonical_future_key(
+                canonical_venue, base, dated_quote, margin_type, expiry
+            )
+        elif (
+            instrument_type is InstrumentType.OPTION
+            and margin_type is not None
+            and expiry is not None
+            and strike is not None
+            and opt_type is not None
+            and base
+        ):
+            dated_quote = "" if exchange == "deribit" else quote
+            option_right = "C" if opt_type is OptionType.CALL else "P"
+            instrument_key = _tardis._build_canonical_option_key(
+                canonical_venue, base, dated_quote, margin_type, expiry, strike, option_right
+            )
+        if instrument_key is None:
+            instrument_key = f"{canonical_venue}:{instrument_type}:{symbol}"
+
         is_combo = instrument_type == InstrumentType.COMBO
 
         # COMBO instruments: parse real legs from Deribit symbol encoding.
@@ -786,25 +837,42 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             if not legs:
                 return None
 
-        margin_type: MarginType | None = _tardis._infer_margin_type(instrument_type, quote, raw_id, exchange)
-
-        return _tardis.InstrumentRecord(
-            instrument_key=instrument_key,
-            venue=canonical_venue,
-            raw_symbol=raw_id,
-            instrument_type=instrument_type,
-            base_asset=base,
-            quote_asset=quote,
-            tick_size=tick_size if not is_combo else None,
-            min_size=min_size if not is_combo else None,
-            contract_size=contract_size if not is_combo else None,
-            expiry=expiry,
-            strike=strike if not is_combo else None,
-            option_type=opt_type if not is_combo else None,
-            underlying=underlying,
-            legs=legs,
-            margin_type=margin_type,
-            available_from_datetime=available_since_dt,
-            available_to_datetime=available_to_dt,
-            timezone="UTC",
-        )
+        # Per-item isolation: a single symbol that slips past every guard
+        # above (e.g. a schema edge case the fallback chains don't cover yet)
+        # must never take down the whole venue fetch — pydantic.ValidationError
+        # here is the same class of failure as the empty-quote guard earlier
+        # in this function, just one step later (at construction time instead
+        # of pre-construction). Real regression 2026-07-09: a missing Bybit
+        # expiry-fallback branch let exactly this happen — one bad symbol's
+        # ValidationError propagated unguarded out of this per-item parse and
+        # zeroed the ENTIRE Bybit venue. Skip the one symbol, keep the venue's
+        # universe (shard-level isolation).
+        try:
+            return _tardis.InstrumentRecord(
+                instrument_key=instrument_key,
+                venue=canonical_venue,
+                raw_symbol=raw_id,
+                instrument_type=instrument_type,
+                base_asset=base,
+                quote_asset=quote,
+                tick_size=tick_size if not is_combo else None,
+                min_size=min_size if not is_combo else None,
+                contract_size=contract_size if not is_combo else None,
+                expiry=expiry,
+                strike=strike if not is_combo else None,
+                option_type=opt_type if not is_combo else None,
+                underlying=underlying,
+                legs=legs,
+                margin_type=margin_type,
+                available_from_datetime=available_since_dt,
+                available_to_datetime=available_to_dt,
+                timezone="UTC",
+            )
+        except pydantic.ValidationError as exc:
+            _tardis.logger.warning(
+                "Tardis %s: skipping %r — InstrumentRecord construction failed: %s",
+                exchange,
+                raw_id,
+                exc,
+            )
+            return None

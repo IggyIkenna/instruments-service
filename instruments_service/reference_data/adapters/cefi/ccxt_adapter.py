@@ -1,5 +1,11 @@
 """CCXT generic reference data adapter — wraps ccxt for multi-venue support."""
 
+# Reuses the tardis package's shared @LIN/@INV canonical-key builders (private,
+# underscore-prefixed by convention within that package) so live (CCXT) and
+# batch (Tardis) construct the IDENTICAL instrument_key for the identical
+# instrument — see _build_instrument_key below.
+# pyright: reportPrivateUsage=false
+
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -10,6 +16,12 @@ import ccxt.async_support as ccxta
 from unified_api_contracts import BAR_TIMEFRAMES, BarTimeframe, VenueMapping
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType, OptionType
 from unified_trading_library.availability_stamping import compute_bar_close_boundary  # noqa: qg-deep-import
+
+from instruments_service.reference_data.adapters.cefi.tardis.parsing import (
+    _build_canonical_future_key,
+    _build_canonical_option_key,
+    _build_canonical_perpetual_key,
+)
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -121,6 +133,10 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         base: str,
         quote: str,
         raw_symbol: str,
+        margin_type: MarginType | None,
+        expiry: datetime | None,
+        strike: Decimal | None,
+        option_type: OptionType | None,
     ) -> str:
         """Build the canonical ``instrument_key`` for a live-mode CCXT market.
 
@@ -130,18 +146,44 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         so live and batch converge on an identical id for the identical
         instrument — this is the workspace's ``paper(W) == batch-rerun(W)``
         determinism invariant (canonical_id_p0_ccxt_live_batch_divergence
-        2026-07-08). Deliberately NOT ``canonical_id_builder.build_instrument_id``
-        — that builder reconstructs FUTURE/OPTION ids from expiry/strike/right
-        components, which does not match Tardis's raw-id passthrough below.
+        2026-07-08). Routes through the literal SAME shared @LIN/@INV builders
+        Tardis uses (``instrument_id_format_canonicalization_2026_07_08.md``
+        finding 1, ``tardis/parsing.py``'s ``_build_canonical_perpetual_key``/
+        ``_build_canonical_future_key``/``_build_canonical_option_key``) —
+        identical functions, not a duplicated construction, so live and batch
+        can never drift apart on this again.
 
-        * SPOT_PAIR / PERPETUAL: ``VENUE:TYPE:BASE-QUOTE`` — reconstructed from
-          ccxt's own ``base``/``quote`` market fields, exactly like Tardis's
-          ``f"{base}-{quote}"``.
-        * FUTURE / OPTION (and anything else): ``VENUE:TYPE:RAW_SYMBOL`` — the
-          exchange-native id verbatim, upper-cased, matching Tardis's
-          ``raw_id.upper()`` (both vendors proxy the exchange's own instrument
-          name, so a dated/derivative symbol converges without reconstruction).
+        * PERPETUAL with a resolved ``margin_type``: shared
+          ``_build_canonical_perpetual_key`` → ``VENUE:PERPETUAL:BASE-QUOTE@LIN|INV``.
+        * FUTURE/OPTION with ``margin_type`` + ``expiry`` resolved (OPTION also
+          needs ``strike``/``option_type``): shared ``_build_canonical_future_key``/
+          ``_build_canonical_option_key`` → ``VENUE:TYPE:BASE[-QUOTE]@LIN|INV-
+          YYYYMMDD[-STRIKE-C|P]``. DERIBIT drops the quote segment for dated
+          derivatives (its real target format — matches Tardis's ``exchange ==
+          "deribit"`` special case); every other margined venue keeps it.
+        * Falls back to the legacy ``VENUE:TYPE:BASE-QUOTE`` /
+          ``VENUE:TYPE:RAW_SYMBOL`` shape (unchanged from before this wiring)
+          when the margin/expiry/strike/right inputs the target format needs
+          aren't resolvable — shard-level isolation, never raise.
         """
+        if instrument_type is InstrumentType.PERPETUAL and margin_type is not None and base and quote:
+            return _build_canonical_perpetual_key(canonical_venue, base, quote, margin_type)
+        if instrument_type is InstrumentType.FUTURE and margin_type is not None and expiry is not None and base:
+            dated_quote = "" if canonical_venue == "DERIBIT" else quote
+            return _build_canonical_future_key(canonical_venue, base, dated_quote, margin_type, expiry)
+        if (
+            instrument_type is InstrumentType.OPTION
+            and margin_type is not None
+            and expiry is not None
+            and strike is not None
+            and option_type is not None
+            and base
+        ):
+            dated_quote = "" if canonical_venue == "DERIBIT" else quote
+            option_right = "C" if option_type is OptionType.CALL else "P"
+            return _build_canonical_option_key(
+                canonical_venue, base, dated_quote, margin_type, expiry, strike, option_right
+            )
         if instrument_type in (InstrumentType.SPOT_PAIR, InstrumentType.PERPETUAL) and base and quote:
             symbol = f"{base.upper()}-{quote.upper()}"
         else:
@@ -219,7 +261,17 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         raw_symbol = str(market.get("id") or symbol)
 
         return InstrumentRecord(
-            instrument_key=self._build_instrument_key(self._instrument_key_venue, mapped_type, base, quote, raw_symbol),
+            instrument_key=self._build_instrument_key(
+                self._instrument_key_venue,
+                mapped_type,
+                base,
+                quote,
+                raw_symbol,
+                margin_type,
+                expiry,
+                strike,
+                option_type,
+            ),
             venue=self.venue,
             raw_symbol=raw_symbol,
             instrument_type=mapped_type,
