@@ -159,9 +159,7 @@ class TestAsterCapabilities:
         """liquidations is NOT expected for ASTER — capability present but liquidations not in MVP scope."""
         expected = mod._build_expected_tuples("cefi")
         aster_liq = {(v, it, dt) for (v, it, dt) in expected if v == "ASTER" and dt == "liquidations"}
-        assert len(aster_liq) == 0, (
-            f"ASTER liquidations should NOT be in EXPECTED (not in MVP scope): {aster_liq}"
-        )
+        assert len(aster_liq) == 0, f"ASTER liquidations should NOT be in EXPECTED (not in MVP scope): {aster_liq}"
 
     def test_aster_book_snapshot_5_absent_from_manifest_is_a_hole(self, mod: ModuleType) -> None:
         """A manifest with no ASTER book_snapshot_5 rows now surfaces as a Layer-1 hole (live-wire capability)."""
@@ -559,11 +557,30 @@ class TestCanonNormalisers:
         assert mod._canon_venue("cefi", "OKX-SWAP") == "OKX"
         assert mod._canon_venue("cefi", "OKX-SPOT") == "OKX"
         assert mod._canon_venue("cefi", "okex-futures") == "OKX"
-        assert mod._canon_venue("cefi", "COINBASE-SPOT") == "COINBASE"
         assert mod._canon_venue("cefi", "CRYPTOFACILITIES") == "KRAKEN-FUTURES"
         assert mod._canon_venue("cefi", "BITFINEX-DERIVATIVES") == "BITFINEX-FUTURES"
         assert mod._canon_venue("cefi", "BYBIT-SPOT") == "BYBIT-SPOT"
         assert mod._canon_venue("cefi", "KRAKEN-FUTURES") == "KRAKEN-FUTURES"
+
+    def test_cefi_bare_coinbase_folds_up_to_coinbase_spot(self, mod: ModuleType) -> None:
+        """coinbase_bare_name_migration_2026_07_06 S1 (Option A fold invert):
+        the canonical EXPECTED token for spot Coinbase is COINBASE-SPOT, so
+        legacy bare-COINBASE writer/EXPECTED tokens fold UP to COINBASE-SPOT
+        instead of COINBASE-SPOT folding DOWN to bare COINBASE."""
+        assert mod._canon_venue("cefi", "COINBASE") == "COINBASE-SPOT"
+        assert mod._canon_venue("cefi", "COINBASE-SPOT") == "COINBASE-SPOT"
+
+    def test_legacy_bare_coinbase_and_coinbase_spot_writer_rows_are_equivalent(self, mod: ModuleType) -> None:
+        """Regression guard (plan §3): a manifest row stamped bare COINBASE
+        (legacy pre-2026-06-23 writer rows) and one stamped COINBASE-SPOT (the
+        current writer token) for the same (itype, dt) MUST canonicalise to
+        the identical comparison key. This is the exact D2a-safety property
+        the S1 fold invert exists for — a writer-side dialect difference must
+        never manufacture a spurious stray or a spurious hole, regardless of
+        which token happens to be canonical."""
+        key_bare = mod._canon_key("cefi", "COINBASE", "spot_pair", "trades")
+        key_qualified = mod._canon_key("cefi", "COINBASE-SPOT", "spot_pair", "trades")
+        assert key_bare == key_qualified == ("COINBASE-SPOT", "spot_pair", "trades")
 
     def test_prediction_token_folds_to_prediction_market(self, mod: ModuleType) -> None:
         """Kalshi `prediction` itype folds to the canonical `prediction_market` grain."""
