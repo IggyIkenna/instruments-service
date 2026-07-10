@@ -1,11 +1,13 @@
 """Unit tests — Phase 3.D.4 enumerate_expected_universe.py.
 
-Tests cover the per-asset-group enumerators + the present-set / row-key
-helpers. They exercise real UAC SSOTs (`CHAIN_GENESIS_DATES`,
-`CEFI_VENUE_LAUNCH_DATES`, `PREDICTION_VENUE_LAUNCH_DATES`,
-`SOURCE_COVERAGE_START`, `non_trading_day_reason`) against a small known
-window per asset_group and assert that yielded rows have the right shape
-+ closed-set reasons. They DO NOT touch the network or GCS — pure
+Tests cover the shared present-set / row-key / bucket-resolution / MVP-gate
+helpers. The v1 venue-grain per-asset-group enumerators (`_enumerate_tradfi`
+etc.) were retired 2026-07-09 per
+`plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md`; their
+v2 per-instrument-grain equivalents (`_enumerate_v2_*`) are covered by
+`tests/unit/scripts/test_enumerate_expected_universe_v2.py`, including the
+closed-set-reasons + dispatch-table-completeness invariants this file used to
+assert against `_ENUMERATORS`. They DO NOT touch the network or GCS — pure
 generator-driven inspection.
 
 Plan: writegate_honest_coverage_endtoend_2026_05_06.md § Phase 3.D.4
@@ -22,9 +24,6 @@ from types import ModuleType
 
 import pandas as pd
 import pytest
-from unified_api_contracts.canonical.crosscutting.honest_coverage import (
-    EMPTY_CONFIRMED_REASONS,
-)
 
 # --- Module loader ----------------------------------------------------------
 
@@ -49,208 +48,6 @@ def _load_enumerator_module() -> ModuleType:
 
 enumerator_module = _load_enumerator_module()
 ExpectedRow = enumerator_module.ExpectedRow
-
-
-# --- Per-asset-group enumerator tests ---------------------------------------
-
-
-def test_tradfi_yields_expected_weekend_for_known_saturday() -> None:
-    """2018-01-06 is a Saturday; every TradFi venue x data_type should
-    yield a row with reason=EXPECTED_WEEKEND."""
-    rows = list(enumerator_module._enumerate_tradfi("2018-01-06", "2018-01-06"))
-    assert len(rows) > 0, "expected at least one row for Saturday 2018-01-06"
-    weekend_rows = [r for r in rows if r.reason == "EXPECTED_WEEKEND"]
-    assert len(weekend_rows) > 0, "expected at least one EXPECTED_WEEKEND row"
-    sample = weekend_rows[0]
-    assert sample.asset_group == "tradfi"
-    assert sample.date == "2018-01-06"
-    assert sample.chain == ""  # tradfi has no chain axis
-
-
-def test_tradfi_yields_no_rows_for_known_trading_day() -> None:
-    """Tuesday 2018-01-09 should be a normal trading day across all
-    standard TradFi venues — no EXPECTED_HOLIDAY/WEEKEND rows."""
-    rows = list(enumerator_module._enumerate_tradfi("2018-01-09", "2018-01-09"))
-    # Most TradFi venues open Tuesday Jan-9; a few specialty venues might
-    # have a holiday but the count should be small or zero.
-    saturday_or_holiday = [r for r in rows if r.reason in ("EXPECTED_WEEKEND",)]
-    assert len(saturday_or_holiday) == 0, "Tuesday 2018-01-09 should not yield EXPECTED_WEEKEND rows"
-
-
-def test_tradfi_index_pre_genesis_for_dxy_pre_2019() -> None:
-    """DXY genesis is 2019-01-02; ICE:INDEX:DXY-USD on 2015-06-01 should yield
-    an instrument-grain EXPECTED_INSTRUMENT_NOT_LISTED row."""
-    rows = list(enumerator_module._enumerate_tradfi_indices("2015-06-01", "2015-06-01"))
-    dxy = [r for r in rows if r.instrument_id == "ICE:INDEX:DXY-USD"]
-    assert len(dxy) > 0, "expected DXY pre-genesis row for 2015-06-01 (genesis 2019-01-02)"
-    sample = dxy[0]
-    assert sample.asset_group == "tradfi"
-    assert sample.venue == "ICE"
-    assert sample.instrument_type == "INDEX"
-    assert sample.data_type == "ohlcv_24h"
-    assert sample.reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
-    assert sample.date == "2015-06-01"
-
-
-def test_tradfi_index_pre_genesis_for_treasuries_pre_2000() -> None:
-    """US treasury indices genesis 2000-01-03; on 1999-06-01 every tenor should
-    pre-list under its canonical -USD key."""
-    rows = list(enumerator_module._enumerate_tradfi_indices("1999-06-01", "1999-06-01"))
-    keys = {r.instrument_id for r in rows if r.reason == "EXPECTED_INSTRUMENT_NOT_LISTED"}
-    for tenor in ("US3M", "US5Y", "US10Y", "US30Y"):
-        assert f"CBOE:INDEX:{tenor}-USD" in keys, f"{tenor} pre-genesis row missing"
-
-
-def test_tradfi_index_no_rows_post_all_genesis() -> None:
-    """A date past every Yahoo-index genesis (DXY 2019 is the latest) yields no
-    pre-genesis index rows."""
-    rows = list(enumerator_module._enumerate_tradfi_indices("2020-06-01", "2020-06-01"))
-    assert rows == [], "expected zero index pre-genesis rows for 2020-06-01"
-
-
-def test_tradfi_holiday_excludes_cboe_and_ice_on_new_year() -> None:
-    """P2 regression: 2025-01-01 (New Year) is a holiday for CBOE + ICE — the
-    venue-level tradfi pass must emit EXPECTED_HOLIDAY for both."""
-    rows = list(enumerator_module._enumerate_tradfi("2025-01-01", "2025-01-01"))
-    holiday_venues = {r.venue for r in rows if r.reason == "EXPECTED_HOLIDAY"}
-    assert "CBOE" in holiday_venues, "CBOE should be holiday-excluded on 2025-01-01"
-    assert "ICE" in holiday_venues, "ICE should be holiday-excluded on 2025-01-01"
-
-
-def test_defi_yields_pre_genesis_for_arbitrum_pre_2021() -> None:
-    """Arbitrum genesis is 2021-08-31; AAVE_V3-ARBITRUM on 2018-01-01 should
-    yield EXPECTED_PRE_GENESIS_CHAIN (chain didn't exist yet)."""
-    rows = list(enumerator_module._enumerate_defi("2018-01-01", "2018-01-01"))
-    arbitrum_rows = [r for r in rows if r.chain == "ARBITRUM"]
-    assert len(arbitrum_rows) > 0, "expected ARBITRUM rows for 2018-01-01"
-    pre_genesis = [r for r in arbitrum_rows if r.reason == "EXPECTED_PRE_GENESIS_CHAIN"]
-    assert len(pre_genesis) > 0, "expected EXPECTED_PRE_GENESIS_CHAIN for ARBITRUM 2018-01-01 (genesis 2021-08-31)"
-    sample = pre_genesis[0]
-    assert sample.asset_group == "defi"
-    assert sample.date == "2018-01-01"
-    assert sample.chain == "ARBITRUM"
-
-
-def test_defi_yields_no_rows_for_post_protocol_launch() -> None:
-    """A date well past every chain genesis + protocol launch (e.g.
-    2026-01-01) should yield zero pre-launch rows for the entire window."""
-    rows = list(enumerator_module._enumerate_defi("2026-01-01", "2026-01-01"))
-    assert len(rows) == 0, "expected zero pre-launch rows for 2026-01-01 (all chains + protocols launched)"
-
-
-def test_sports_yields_pre_source_coverage_before_source_start() -> None:
-    """The day BEFORE a source's SOURCE_COVERAGE_START yields
-    EXPECTED_PRE_SOURCE_COVERAGE_START rows for that source.
-
-    Derives the date from the UAC SSOT (``SOURCE_COVERAGE_START``) rather than a
-    hardcoded year so it never goes stale: api_football's start moved 2018-01-01 →
-    2015-01-01, which silently broke the prior literal-"2017-12-31" assertion (2017
-    is now AFTER coverage start, so it correctly yields no pre-source rows)."""
-    import pandas as pd
-    from unified_api_contracts.sports import SOURCE_COVERAGE_START
-
-    af_start = pd.Timestamp(SOURCE_COVERAGE_START["api_football"])
-    pre_day = (af_start - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    rows = list(enumerator_module._enumerate_sports(pre_day, pre_day))
-    af_rows = [r for r in rows if r.venue == "api_football"]
-    assert len(af_rows) > 0, f"expected api_football rows for {pre_day} (day before coverage start)"
-    pre_coverage = [r for r in af_rows if r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"]
-    assert len(pre_coverage) > 0, f"expected EXPECTED_PRE_SOURCE_COVERAGE_START for api_football {pre_day}"
-    sample = pre_coverage[0]
-    assert sample.asset_group == "sports"
-    assert sample.date == pre_day
-
-
-def test_cefi_yields_pre_venue_launch_for_lighter_pre_2024_09() -> None:
-    """LIGHTER-ZKSYNC launched 2024-09-01; 2024-01-01 should yield
-    EXPECTED_PRE_VENUE_LAUNCH rows."""
-    rows = list(enumerator_module._enumerate_cefi("2024-01-01", "2024-01-01"))
-    lighter_rows = [r for r in rows if r.venue == "LIGHTER-ZKSYNC"]
-    assert len(lighter_rows) > 0, "expected LIGHTER-ZKSYNC rows for 2024-01-01"
-    for r in lighter_rows:
-        assert r.reason == "EXPECTED_PRE_VENUE_LAUNCH"
-        assert r.asset_group == "cefi"
-        assert r.date == "2024-01-01"
-
-
-def test_cefi_yields_no_rows_for_post_all_venue_launches() -> None:
-    """A date past every CeFi venue launch (use 2026-07-01, after the latest —
-    KALSHI-PERP launched 2026-05-29, POLYMARKET-PERP 2026-04-21) should yield
-    zero pre-venue-launch rows. NOTE: bump this date whenever a later-launching
-    CeFi venue is added, else newly-added post-date venues yield pre-launch rows."""
-    rows = list(enumerator_module._enumerate_cefi("2026-07-01", "2026-07-01"))
-    assert len(rows) == 0, "expected zero pre-venue-launch rows for 2026-07-01 (every cefi venue launched)"
-
-
-def test_prediction_yields_pre_venue_launch_for_pre_2020_polymarket() -> None:
-    """POLYMARKET launched 2020-09-01; 2020-01-01 should yield
-    EXPECTED_PRE_VENUE_LAUNCH rows."""
-    rows = list(enumerator_module._enumerate_prediction("2020-01-01", "2020-01-01"))
-    polymarket_rows = [r for r in rows if r.venue == "POLYMARKET"]
-    assert len(polymarket_rows) > 0, "expected POLYMARKET rows for 2020-01-01"
-    for r in polymarket_rows:
-        assert r.reason == "EXPECTED_PRE_VENUE_LAUNCH"
-        assert r.asset_group == "prediction"
-        assert r.date == "2020-01-01"
-
-
-def test_prediction_yields_pre_venue_launch_for_pre_2021_kalshi() -> None:
-    """KALSHI launched 2021-07-30; 2021-01-01 should yield EXPECTED_PRE_VENUE_LAUNCH."""
-    rows = list(enumerator_module._enumerate_prediction("2021-01-01", "2021-01-01"))
-    kalshi_rows = [r for r in rows if r.venue == "KALSHI"]
-    assert len(kalshi_rows) > 0, "expected KALSHI rows for 2021-01-01"
-    for r in kalshi_rows:
-        assert r.reason == "EXPECTED_PRE_VENUE_LAUNCH"
-
-
-# --- Cross-asset-group invariants -------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "asset_group,start,end",
-    [
-        ("tradfi", "2018-01-06", "2018-01-06"),  # Saturday
-        ("defi", "2018-01-01", "2018-01-01"),  # pre-genesis
-        ("sports", "2017-12-31", "2017-12-31"),  # pre-source-coverage
-        ("cefi", "2024-01-01", "2024-01-01"),  # pre-venue-launch (LIGHTER)
-        ("prediction", "2020-01-01", "2020-01-01"),  # pre-venue-launch (POLYMARKET)
-    ],
-)
-def test_every_yielded_reason_is_in_closed_set(asset_group: str, start: str, end: str) -> None:
-    """Every reason yielded by the enumerator MUST be in
-    `EMPTY_CONFIRMED_REASONS` (UAC closed-set)."""
-    enumerator_func = enumerator_module._ENUMERATORS[asset_group]
-    rows = list(enumerator_func(start, end))
-    assert len(rows) > 0, f"sanity: expected at least one row for {asset_group} {start}"
-    for r in rows:
-        assert r.reason in EMPTY_CONFIRMED_REASONS, (
-            f"reason {r.reason!r} not in EMPTY_CONFIRMED_REASONS closed-set (asset_group={asset_group}, date={r.date})"
-        )
-        assert r.asset_group == asset_group
-
-
-@pytest.mark.parametrize(
-    "asset_group,start,end",
-    [
-        ("tradfi", "2018-01-06", "2018-01-06"),
-        ("defi", "2018-01-01", "2018-01-01"),
-        ("sports", "2017-12-31", "2017-12-31"),
-        ("cefi", "2024-01-01", "2024-01-01"),
-        ("prediction", "2020-01-01", "2020-01-01"),
-    ],
-)
-def test_every_yielded_row_has_required_fields(asset_group: str, start: str, end: str) -> None:
-    """Every yielded ExpectedRow must have non-empty asset_group, date, and reason."""
-    enumerator_func = enumerator_module._ENUMERATORS[asset_group]
-    rows = list(enumerator_func(start, end))
-    assert len(rows) > 0
-    for r in rows:
-        assert r.asset_group, f"empty asset_group on row {r}"
-        assert r.date, f"empty date on row {r}"
-        assert r.reason, f"empty reason on row {r}"
-        # Either venue or chain (or league_id for sports) must be set so the
-        # manifest row key is unique.
-        assert r.venue or r.chain or r.league_id, f"row has no venue/chain/league_id identifier: {r}"
 
 
 # --- Helper tests -----------------------------------------------------------
@@ -343,20 +140,6 @@ def test_row_key_handles_missing_columns() -> None:
     assert key == ("BARCHART", "ohlcv_1m", "2018-01-06")
 
 
-# --- Enumerator dispatch table ---------------------------------------------
-
-
-def test_all_5_asset_groups_in_enumerator_dispatch() -> None:
-    """The _ENUMERATORS dict must cover all 5 asset_groups."""
-    assert set(enumerator_module._ENUMERATORS.keys()) == {
-        "cefi",
-        "defi",
-        "tradfi",
-        "sports",
-        "prediction",
-    }
-
-
 # --- Canonical bucket resolution (⑦ coverage-denominator readiness) ----------
 
 
@@ -442,7 +225,9 @@ def test_row_data_types_aster_capability_profile() -> None:
 
     cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations", "perp_funding"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("ASTER", "PERPETUAL"), cefi_dts)
-    assert "book_snapshot_5" in row_dts, "ASTER book_snapshot_5 is a live-wire capability (from 2026-06-23) and must be seeded"
+    assert "book_snapshot_5" in row_dts, (
+        "ASTER book_snapshot_5 is a live-wire capability (from 2026-06-23) and must be seeded"
+    )
     assert "liquidations" not in row_dts, "ASTER liquidations is not in MVP scope"
     # What survives is exactly the venue's declared capability ∩ validity ∩ MVP.
     assert set(row_dts) <= set(VENUE_DATA_TYPE_CAPABILITIES["ASTER"]), row_dts
@@ -534,9 +319,7 @@ def test_row_data_types_deribit_options_chain_bundle_survives_mvp_gate() -> None
     # → FUTURE. FUTURE is NOT in instrument_type_data_types → intersection
     # DOES apply. Deribit futures_chain validity → ["trades"] and MVP flat
     # set includes trades → survives as ["trades"] (not emptied).
-    row_dts_futures = enumerator_module._row_data_types(
-        "cefi", _entry("DERIBIT", "futures_chain"), cefi_dts
-    )
+    row_dts_futures = enumerator_module._row_data_types("cefi", _entry("DERIBIT", "futures_chain"), cefi_dts)
     assert row_dts_futures == ["trades"], (
         f"Deribit futures_chain must survive MVP gate as ['trades']; got {row_dts_futures}"
     )

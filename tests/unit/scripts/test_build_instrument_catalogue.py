@@ -607,6 +607,167 @@ def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleTy
 
 
 # ---------------------------------------------------------------------------
+# underlying / canonical_instrument_id threading + cross-venue mapping wiring
+# (prediction_canonical_identity_migration_2026_07_08.md todos 1 + 2 + 5)
+# ---------------------------------------------------------------------------
+
+
+def test_prediction_rollup_threads_underlying_from_per_date_row(rollup: ModuleType) -> None:
+    """A real, adapter-populated ``underlying`` column on the per-date row survives
+    into the catalogue's ``underlying`` column (was hardcoded "" before todo 1)."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "underlying": "BTC",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["underlying"] == "BTC"
+
+
+def test_prediction_rollup_cross_venue_mapping_matches_same_market(rollup: ModuleType) -> None:
+    """A real Kalshi<->Polymarket BTC UP_DOWN pair on the SAME settlement date gets
+    the SAME canonical_instrument_id on BOTH sides (todo 2's cross-venue join,
+    wired into this roll-up as the real, scheduled step)."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXBTCD-26JUN24",
+                        "end_date_iso": "2026-06-24T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xabc123",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "bitcoin-up-or-down-june-24-2026",
+                        "end_date_iso": "2026-06-24T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    trades = {
+        r["instrument_id"]: r["canonical_instrument_id"] for r in df.to_dict("records") if r["data_type"] == "trades"
+    }
+    kalshi_id = trades["KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000"]
+    poly_id = trades["POLYMARKET:PREDICTION_MARKET:0xabc123"]
+    assert kalshi_id  # non-empty — a real match was found
+    assert kalshi_id == poly_id  # SAME canonical_instrument_id on both venues
+
+
+def test_prediction_rollup_unmatched_instrument_keeps_blank_canonical_instrument_id(rollup: ModuleType) -> None:
+    """A Kalshi-only instrument (no Polymarket counterpart present) gets NO
+    canonical_instrument_id — honest absence, never a guessed/false pair."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXWEIRDTHING-26JUL",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXWEIRDTHING-26JUL",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["canonical_instrument_id"] == ""
+
+
+def test_prediction_rollup_preserves_adapter_populated_sports_fixture_id(rollup: ModuleType) -> None:
+    """A Polymarket sports row's adapter-populated canonical_instrument_id (todo 5's
+    Sports-asset-group-aligned fixture_id) survives the roll-up even though the
+    cross-venue matcher (todo 2, no titles supplied) can never produce a sports
+    match on its own — the two mechanisms are complementary, not conflicting."""
+    d1 = date(2026, 3, 22)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xsports1",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "epl-arsenal-vs-chelsea-2026-03-22",
+                        "canonical_instrument_id": "EPL:CHELSEA_v_ARSENAL:20260322",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["canonical_instrument_id"] == "EPL:CHELSEA_v_ARSENAL:20260322"
+
+
+def test_prediction_rollup_cqg_grain_never_gets_canonical_instrument_id(rollup: ModuleType) -> None:
+    """The cqg bundle row (family grain) never carries a per-instance
+    canonical_instrument_id — a family has no single per-market identity."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "BTC_UP_DOWN_DAILY",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "0xaaa",
+                        "venue": "POLYMARKET",
+                        "canonical_instrument_id": "SHOULD_NEVER_LEAK",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    cqg_row = next(r for r in df.to_dict("records") if r["data_type"] == "prediction_canonical_question_group")
+    assert cqg_row["canonical_instrument_id"] == ""
+
+
+# ---------------------------------------------------------------------------
 # Settlement-date convention tests (prediction available_to = settlement day)
 # SSOT: codex/02-data/prediction-settlement-availability-convention.md
 # ---------------------------------------------------------------------------
@@ -1028,6 +1189,154 @@ def test_sports_could_exist_denominator_never_shrinks(rollup: ModuleType) -> Non
     )
     # No expected_unattempted for already-captured cells → denominator == captured (no shrink).
     assert [r for r in rows if r.capture_status == "expected_unattempted"] == []
+
+
+# ---------------------------------------------------------------------------
+# build_sports_fixture_team_player_catalogue — FIXTURE/TEAM/PLAYER-grain
+# roll-up from REAL captured entity=fixtures/teams/injuries by_date data
+# (2026-07-09, extends the sports catalogue past league-grain-only).
+# ---------------------------------------------------------------------------
+
+
+def _sports_blob(day: str, entity: str, league: str, rows: list[dict[str, object]]) -> tuple[str, pd.DataFrame]:
+    """Build a ``(blob_path, frame)`` pair matching the real GCS shape."""
+    path = (
+        f"sports_reference/by_date/day={day}/pipeline_mode=batch_api_football/"
+        f"entity={entity}/league={league}/{entity}.parquet"
+    )
+    return path, pd.DataFrame(rows)
+
+
+def test_split_full_name_two_and_one_token(rollup: ModuleType) -> None:
+    assert rollup._split_full_name("Bukayo Saka") == ("Saka", "Bukayo")
+    assert rollup._split_full_name("Neymar") == ("Neymar", "")
+    assert rollup._split_full_name("Cristiano Ronaldo dos Santos") == ("Santos", "Cristiano Ronaldo dos")
+
+
+def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollup: ModuleType) -> None:
+    """End-to-end via a _FakeStorage populated with real GCS-shaped blob paths.
+
+    Covers: canonical fixture_id construction (LEAGUE:HOME_v_AWAY:DATE), team
+    lifecycle (available_to=None when present on the latest scanned day),
+    player_id construction from a real injuries row's ``player_name``, sentinel
+    league_id exclusion, and that a non-FTP entity (``entity=leagues``) is
+    never picked up by this walk.
+    """
+    d1, d2 = "2026-03-22", "2026-03-23"
+    blobs = dict(
+        [
+            _sports_blob(
+                d1,
+                "fixtures",
+                "ENG_PREMIER_LEAGUE",
+                [{"af_fixture_id": 1, "date": d1, "af_home_name": "Arsenal", "af_away_name": "Chelsea"}],
+            ),
+            _sports_blob(
+                d1,
+                "teams",
+                "ENG_PREMIER_LEAGUE",
+                [
+                    {"team_id": "ARSENAL", "name": "Arsenal", "league_id": "ENG_PREMIER_LEAGUE"},
+                    {"team_id": "CHELSEA", "name": "Chelsea", "league_id": "ENG_PREMIER_LEAGUE"},
+                ],
+            ),
+            _sports_blob(
+                d1,
+                "injuries",
+                "ENG_PREMIER_LEAGUE",
+                [{"player_id": 1, "player_name": "Bukayo Saka", "team_id": 1, "league_id": 39}],
+            ),
+            # Arsenal present on the LATEST scanned day too → still active.
+            _sports_blob(
+                d2,
+                "teams",
+                "ENG_PREMIER_LEAGUE",
+                [{"team_id": "ARSENAL", "name": "Arsenal", "league_id": "ENG_PREMIER_LEAGUE"}],
+            ),
+            # Sentinel league_id must never roll up into a row.
+            _sports_blob(
+                d1, "fixtures", "UNKNOWN", [{"af_fixture_id": 2, "date": d1, "af_home_name": "X", "af_away_name": "Y"}]
+            ),
+            # entity=leagues is NOT one of the three FTP entities — must be ignored by this walk.
+            _sports_blob(d1, "leagues", "", [{"league_id": "39"}]),
+        ]
+    )
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records")) for path, frame in blobs.items()})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(
+        storage, "test-bucket", by_date_prefix=rollup.SPORTS_BY_DATE_PREFIX, since=date(2026, 3, 1)
+    )
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+
+    assert set(by_id) == {
+        "ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322",
+        "ARSENAL",
+        "CHELSEA",
+        "SAKA_B",
+    }
+
+    fixture_row = by_id["ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322"]
+    assert fixture_row["instrument_type"] == rollup.SPORTS_FIXTURE_INSTRUMENT_TYPE
+    assert fixture_row["league_id"] == "ENG_PREMIER_LEAGUE"
+    assert fixture_row["venue"] == ""
+    assert fixture_row["available_from"] == "2026-03-22"
+
+    assert by_id["ARSENAL"]["instrument_type"] == rollup.SPORTS_TEAM_INSTRUMENT_TYPE
+    assert by_id["ARSENAL"]["available_to"] is None  # present on latest scanned day → still active
+    assert by_id["CHELSEA"]["available_to"] == "2026-03-22"  # only seen on d1 → delisted vs the latest day
+
+    assert by_id["SAKA_B"]["instrument_type"] == rollup.SPORTS_PLAYER_INSTRUMENT_TYPE
+    assert by_id["SAKA_B"]["league_id"] == "ENG_PREMIER_LEAGUE"
+
+
+def test_ftp_rollup_empty_walk_returns_catalog_columns(rollup: ModuleType) -> None:
+    storage = _FakeStorage({})
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 1, 1))
+    assert df.empty
+    assert list(df.columns) == list(rollup.CATALOG_COLUMNS)
+
+
+def test_ftp_rollup_rows_never_treated_as_league_by_v2_enumerator(rollup: ModuleType) -> None:
+    """Cross-module regression: a fixture-grain catalogue row concatenated onto
+    league-grain rows must be invisible to enumerate_expected_universe.py's
+    league-grain loop — see that module's own test for the isolated unit
+    version; this proves the REAL producer output (this file's CATALOG_COLUMNS
+    shape) round-trips through _catalog_from_dataframe correctly.
+    """
+    enumerator = _load_script_module("enumerate_expected_universe.py", "_enum_v2_sports_ftp_filter")
+    d1 = "2026-03-22"
+    fixture_blobs = {
+        p: _parquet_bytes(f.to_dict("records"))
+        for p, f in [
+            _sports_blob(
+                d1,
+                "fixtures",
+                "PL",
+                [{"af_fixture_id": 1, "date": d1, "af_home_name": "Arsenal", "af_away_name": "Chelsea"}],
+            )
+        ]
+    }
+    storage = _FakeStorage(fixture_blobs)
+    ftp_df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    manifest = pd.DataFrame([{"league_id": "PL", "data_type": "FIXTURES", "date": "2026-03-01"}])
+    league_df = rollup.build_sports_catalogue_from_manifest(manifest)
+    combined = pd.concat([league_df, ftp_df], ignore_index=True)
+
+    catalog = enumerator._catalog_from_dataframe(combined)
+    rows = list(
+        enumerator.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=[date(2026, 3, 1)],
+            data_types=["FIXTURES"],
+            present_set=set(),
+            present_cols=["data_type", "league_id", "date"],
+        )
+    )
+    # Exactly ONE league-grain expected_unattempted seed (from league_df's "PL"
+    # row) — the fixture-grain row must not ALSO seed one.
+    seeded = [r for r in rows if r.capture_status == "expected_unattempted" and r.league_id == "PL"]
+    assert len(seeded) == 1
 
 
 # ---------------------------------------------------------------------------

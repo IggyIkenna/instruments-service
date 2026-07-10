@@ -587,16 +587,21 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         else:
             base_token, quote_token = token1, token0
 
-        fee_str = str(fee_tier) if fee_tier else "0"
-        symbol = f"{base}-{quote}:{fee_str}"
+        # Uniswap V3 feeTier is in hundredths-of-bps (e.g. 500 = 0.05%, 3000 = 0.3%).
+        # Plan asks for basis points: feeTier / 100 (e.g. 3000 → 30 bps).
+        pool_fee_tier_bps = self._parse_fee_tier_bps(fee_tier)
+        # Canonical DEX-pool key grammar (docs/DEFI_INSTRUMENTS.md "DEX pools" —
+        # instrument_id_format_canonicalization_2026_07_08.md finding 2): fee tier
+        # is DASH-separated (not colon) and a real basis-point value (not the raw
+        # on-wire feeTier), and is OMITTED entirely when no real fee tier exists
+        # (matching the target's "[-FEE_TIER]" optional-bracket grammar) rather
+        # than a fabricated "-0" placeholder.
+        symbol = f"{base}-{quote}-{pool_fee_tier_bps}" if pool_fee_tier_bps is not None else f"{base}-{quote}"
         venue_tag = f"{self._venue_prefix}-{self._chain}"
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
         available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))
 
-        # Uniswap V3 feeTier is in hundredths-of-bps (e.g. 500 = 0.05%, 3000 = 0.3%).
-        # Plan asks for basis points: feeTier / 100 (e.g. 3000 → 30 bps).
-        pool_fee_tier_bps = self._parse_fee_tier_bps(fee_tier)
         base_decimals = self._parse_decimals(base_token.get("decimals"))
         quote_decimals = self._parse_decimals(quote_token.get("decimals"))
         if base_decimals is None or quote_decimals is None:

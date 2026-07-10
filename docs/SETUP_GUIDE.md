@@ -7,8 +7,8 @@ secrets/API keys → cloud config → running tests.
 
 ## 1. Prerequisites
 
-- **Python 3.13** (`requires-python = ">=3.13,<3.14"` in `pyproject.toml`). ~~Python 3.9+~~ is stale — the service
-  pins to the 3.13.x line only; a different interpreter minor version will fail `scripts/setup.sh`'s version check.
+- **Python 3.13** (`requires-python = ">=3.13,<3.14"` in `pyproject.toml`) — the service pins to the 3.13.x line
+  only; a different interpreter minor version will fail `scripts/setup.sh`'s version check.
 - [`uv`](https://github.com/astral-sh/uv) (the only allowed `pip install` in this workspace; `scripts/setup.sh`
   bootstraps it if missing).
 - GCP project access + `gcloud` CLI (for Secret Manager and, if you don't use ADC, service-account credentials).
@@ -38,9 +38,6 @@ python -c "from instruments_service import InstrumentProcessingService; print('I
 python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-24
 ```
 
-> **Corrected from the old guide**: the old Quick Start listed a manual `uv pip install -e ../unified-trading-services`
-> step and a credentials-file auto-detection story. Both are gone — see §3 and §5 for what actually happens now.
-
 ---
 
 ## 3. Detailed Setup
@@ -68,11 +65,8 @@ So the three repos must be cloned as siblings:
 └── unified-api-contracts/        # UAC — shared schemas/contracts
 ```
 
-> **Corrected**: the old guide's sibling repo was `unified-trading-services` (package import
-> `unified_trading_services`). That package no longer exists in this codebase — every current import in
-> `instruments_service/` is `from unified_trading_library import ...` (UTL), plus `unified_api_contracts` (UAC) for
-> shared schema types. If you have an old `unified-trading-services` checkout lying around, it is not used by this
-> repo anymore.
+Every import in `instruments_service/` is `from unified_trading_library import ...` (UTL) or
+`from unified_api_contracts import ...` (UAC) for shared schema types.
 
 ### 3.2 Canonical Setup Script
 
@@ -104,17 +98,14 @@ bash scripts/setup.sh --isolated   # Standalone setup, no workspace sibling deps
 `unified-trading-library`/`unified-api-contracts` from Artifact Registry yourself
 (`uv pip install <dep>`) instead of from local sibling checkouts.
 
-> **Corrected**: the old guide's "manual alternative" (`uv venv` + `uv pip install -e ../unified-trading-services`
->
-> - `uv pip install -e .`, with a separate `--force-reinstall` step) described a flow this repo no longer needs —
->   `scripts/setup.sh` now owns all of that, including the editable re-pinning. Prefer it over any hand-rolled
->   sequence.
+`scripts/setup.sh` owns the entire setup flow, including the editable re-pinning — prefer it over any hand-rolled
+`uv venv` / `uv pip install -e ...` sequence.
 
 ---
 
 ## 4. Environment Configuration
 
-Copy `.env.example` → `.env` (never commit `.env`). The real, current template (`instruments-service/.env.example`):
+Copy `.env.example` → `.env` (never commit `.env`). Key fields from `instruments-service/.env.example`:
 
 ```bash
 ENVIRONMENT=development
@@ -151,15 +142,14 @@ TARDIS_FULL_SECRET_NAME=tardis-api-key-full
 DATABENTO_SECRET_NAME=databento-api-key
 AAVESCAN_SECRET_NAME=aavescan-api-key
 ALCHEMY_SECRET_NAME=alchemy-api-key
-GRAPH_SECRET_NAME=graph-api-key
+GRAPH_SECRET_NAME=thegraph-api-key
+IBKR_CREDENTIALS_SECRET_NAME=ibkr-account-credentials
 
 GH_PAT=
 ```
 
-> **Corrected**: the old guide's example `.env` had a single `INSTRUMENTS_GCS_BUCKET` / `INSTRUMENTS_GCS_BUCKET_TEST`
-> pair and a `GOOGLE_APPLICATION_CREDENTIALS=../{project_id}-....json` line. Buckets are per-asset-group
-> (`_CEFI`/`_TRADFI`/`_DEFI`, each with a `_TEST` variant) — see §6. `GOOGLE_APPLICATION_CREDENTIALS` is not in the
-> real template at all; see §5, ADC is the default local-dev path.
+Buckets are per-asset-group (`_CEFI`/`_TRADFI`/`_DEFI`, each with a `_TEST` variant) — see §6.
+`GOOGLE_APPLICATION_CREDENTIALS` is not in the template; ADC is the default local-dev credentials path (§5).
 
 ---
 
@@ -176,13 +166,9 @@ instruments-service:
   `get_credentials_path()` reads this env var directly and nothing else.
 - **Production**: the VM's attached service account is used; no credentials file involved.
 
-> **Corrected — this is the single biggest change from the old docs**: both the old `SETUP_GUIDE.md` and
-> `SECRETS_SETUP.md` described an "automatic credentials detection" story where the service searches the current
-> directory, parent directory, grandparent directory, and home directory for a
-> `{project_id}-e35fb0ddafe2.json`/`credentials.json`/`gcp-credentials.json`/`service-account.json` file. That
-> multi-location file search **does not exist in the current code** — `unified_trading_library`'s
-> `get_credentials_path()` is a one-line read of `GOOGLE_APPLICATION_CREDENTIALS`. Use ADC for local dev instead of
-> dropping a key file in a parent directory.
+There is no multi-location file search (current directory / parent / grandparent / home) for a credentials file —
+`unified_trading_library`'s `get_credentials_path()` is a one-line read of `GOOGLE_APPLICATION_CREDENTIALS`. Use ADC
+for local dev rather than dropping a key file in a parent directory.
 
 ---
 
@@ -221,10 +207,8 @@ sc = get_secret_client()
 api_key = sc.get_secret(instruments_config.tardis_secret_name)
 ```
 
-> **Corrected**: the old doc's signature —
-> `get_secret_client(project_id=..., secret_name=..., fallback_env_var=...)` returning the key directly — does not
-> match the current function. `get_secret_client()` takes no required args and returns a **client object**; you then
-> call `.get_secret(secret_name)` on it. There is no `fallback_env_var` kwarg in the current API.
+`get_secret_client()` takes no required args and returns a **client object**; call `.get_secret(secret_name)` on it
+to fetch a value. There is no `fallback_env_var` kwarg.
 
 ### 6.3 Config fields (inherited from UTL's `UnifiedCloudConfig`)
 
@@ -241,10 +225,8 @@ point at a differently-named secret, never hardcode the secret name in code:
 | `aavescan_secret_name`         | `AAVESCAN_SECRET_NAME`                        | `aavescan-api-key`         | AAVE fallback       |
 | `ibkr_credentials_secret_name` | `IBKR_CREDENTIALS_SECRET_NAME`                | `ibkr-account-credentials` | TRADFI (IBKR)       |
 
-> **Corrected**: the old doc's field/env-var name was `graph_secret_name` / `GRAPH_SECRET_NAME`. The actual current
-> field is `thegraph_secret_name` (default secret name `thegraph-api-key`); `GRAPH_SECRET_NAME` still works as a
-> back-compat env-var alias, but the canonical name is `THEGRAPH_SECRET_NAME`. IBKR was not documented in the old
-> guide at all — added here since it's a real field on the same base config class.
+`GRAPH_SECRET_NAME` works as a back-compat env-var alias for `thegraph_secret_name`; the canonical env var is
+`THEGRAPH_SECRET_NAME` (both resolve to the same field, default secret name `thegraph-api-key`).
 
 Instruments-service adds no service-specific secret-name overrides beyond these; if you need one, add it to
 `UnifiedCloudConfig` upstream (in `unified-trading-library`), not to `InstrumentsServiceConfig`.
@@ -256,7 +238,7 @@ Instruments-service adds no service-specific secret-name overrides beyond these;
 echo "YOUR_API_KEY" | gcloud secrets create tardis-api-key-full --project=<project-id> --data-file=-
 
 # Add a new version to an existing secret
-echo "NEW_API_KEY" | gcloud secrets versions add graph-api-key --project=<project-id> --data-file=-
+echo "NEW_API_KEY" | gcloud secrets versions add thegraph-api-key --project=<project-id> --data-file=-
 
 # List / inspect
 gcloud secrets list --project=<project-id>
@@ -288,18 +270,25 @@ Balancer, Curve.
 
 ### 6.6 Which mode needs which keys
 
-| Mode / category           | Required                             | Optional             |
-| ------------------------- | ------------------------------------ | -------------------- |
-| CEFI (Tardis/CCXT venues) | Tardis                               | —                    |
-| TRADFI (Databento venues) | Databento                            | IBKR (if using IBKR) |
-| DEFI                      | The Graph                            | Alchemy, AaveScan    |
-| Sports                    | (venue-specific; see adapter config) | —                    |
-| Corporate actions only    | None (yfinance, exchange-calendars)  | —                    |
+| Mode / category           | Required                                                                            | Optional             |
+| ------------------------- | ----------------------------------------------------------------------------------- | -------------------- |
+| CEFI (Tardis/CCXT venues) | Tardis                                                                              | —                    |
+| TRADFI (Databento venues) | Databento                                                                           | IBKR (if using IBKR) |
+| DEFI                      | The Graph                                                                           | Alchemy, AaveScan    |
+| Sports (per venue)        | api_football, footystats, transfermarkt, soccer_football_info, open_meteo (as used) | understat (keyless)  |
+| Corporate actions only    | None (yfinance, exchange-calendars)                                                 | —                    |
 
 Only fetch the keys the requested run actually needs — don't require Tardis for a TRADFI-only or DEFI-only run.
-(The old doc named a `DataSourceMapping.get_required_secrets(venues)` / `validate_required_api_keys(venues)` helper
-for this; neither exists in the current codebase — the principle of lazy, mode-scoped key loading still holds, but
-implement it per-adapter/per-call-site rather than looking for that helper.)
+`DataSourceMapping.get_required_secrets(venues)` (`unified_api_contracts.canonical.canonical_mappings`, a thin
+classmethod wrapper over the module-level `get_required_secrets()`/`DATA_SOURCE_TO_SECRET`) resolves the
+venue→secret-name mapping; UTL's `ApiKeyReloader` (`unified_trading_library/api_key_reloader.py`, backed by
+`validate_api_keys_for_venues()` in `unified_trading_library/startup_validation.py`) calls it to fetch + hot-reload
+only the keys the active venues need. instruments-service wires this up in
+`instruments_service/cli/instruments_handler.py`'s `_start_key_reloader()`. Per-venue Sports secret names (from
+`DATA_SOURCE_TO_SECRET`): `api_football` → `api-football-api-key`, `footystats` → `footystats-api-key`,
+`soccer_football_info` → `soccer-football-info-api-key`, `transfermarkt` → `transfermarkt-api-key`, `open_meteo` →
+`open-meteo-api-key` (the adapter also works keyless against Open-Meteo's free tier — the secret only unlocks the
+Pro-tier customer endpoints); `understat` has no secret entry (`None` in `DATA_SOURCE_TO_SECRET`) — always keyless.
 
 ### 6.7 Adding a new API key
 
@@ -346,12 +335,10 @@ data = storage.download_bytes(bucket, "path/to/file.parquet")
 
 GCS object-level operations (copy/delete/describe) go through UTL helpers
 (`gcs_copy_object` / `gcs_delete_object` / `gcs_describe_object`) — never a subprocess call to `gcloud`/`gsutil`.
-
-> **Corrected**: the old `CLOUD_OPERATIONS.md` documented a `CloudTarget` + `StandardizedDomainCloudService` pattern
-> (`from unified_trading_services.domain import CloudTarget, StandardizedDomainCloudService`) with a mandatory
-> `bigquery_dataset` field on every `CloudTarget`. **Neither `CloudTarget` nor `StandardizedDomainCloudService` is
-> used anywhere in the current `instruments_service/` codebase** — zero references. The real pattern in production
-> code today is `resolve_bucket_name(...)` + `get_storage_client()`, both from `unified_trading_library`.
+`resolve_bucket_name(...)` + `get_storage_client()` (both from `unified_trading_library`) are the only pattern used
+in production `instruments_service/` code. `CloudTarget` (`unified_trading_library.domain_client.cloud_target`)
+still exists but is only used in test fixtures (`tests/conftest.py`) to provision test buckets/datasets, not in
+production code; `StandardizedDomainCloudService` has zero references anywhere in this repo.
 
 ### 7.2 Config anti-pattern
 
@@ -415,12 +402,9 @@ Coverage floor is a **ratcheted, moving target**, not a fixed constant — check
 `pyproject.toml` too). `RUN_INTEGRATION=false` for this repo, so `tests/integration/` is **not** part of the default
 local/CI run by default — run it explicitly with `pytest -m integration` if you need to exercise it.
 
-> **Corrected**: `scripts/run_quality_gates.py` (referenced by the old `SECRETS_SETUP.md`/`TEST_ALIGNMENT.md` as
-> `python scripts/run_quality_gates.py --coverage-threshold 65 [--skip-performance]`) **does not exist in this repo**.
-> The real local entry point is the bash script `scripts/quality-gates.sh`, whose body is
-> `unified-trading-pm/scripts/quality-gates-base/base-service.sh` — a shared harness across all services, not a
-> per-repo Python script. The old `--coverage-threshold 65` value is also stale; the live floor is `88` (and moves
-> over time — read the script, don't hardcode a number in a doc).
+The local entry point is the bash script `scripts/quality-gates.sh`, whose body is
+`unified-trading-pm/scripts/quality-gates-base/base-service.sh` — a shared harness across all services, not a
+per-repo Python script. Read the script for the live coverage floor rather than hardcoding a number in a doc.
 
 ### 8.3 CI / Cloud Build alignment
 
@@ -434,11 +418,8 @@ Local (`scripts/quality-gates.sh`), GitHub Actions, and Cloud Build all invoke t
 - **Cloud Build**: `cloudbuild.yaml` — required steps include `quality-gates` (re-runs the gate inside the built
   image) and `scan-check` (CVE gate) before `push`.
 
-> **Corrected**: the old `TEST_ALIGNMENT.md`'s "3 files to keep in sync" list named `.github/workflows/quality-gates.yml`
-> — that workflow file **no longer exists**; it's `.github/workflows/quality-gates-v2.yml` now. The old doc's
-> explicit `-k "not api and not live and not download"` / per-stage `--timeout=60/120/180` pytest invocation is also
-> gone — marker-based selection (`live`, `integration`, etc.) plus `pytest-socket`'s `--allow-hosts` network
-> isolation replaced it.
+Test selection is marker-based (`live`, `integration`, etc. — see §8.1), with `pytest-socket`'s network isolation
+enforcing that unit tests can't reach the network unless explicitly allow-listed.
 
 ---
 
@@ -457,10 +438,10 @@ changes to the shared templates roll out from `unified-trading-pm`.
 
 - **`GH_PAT`** — used across most of the workflows above (cross-repo dispatch/escalation, cloning private sibling
   repos in CI). GitHub doesn't allow a secret named starting with `GITHUB_`, hence `GH_PAT` not `GH_TOKEN`.
-- ~~`GCP_SERVICE_ACCOUNT_JSON`~~ — **not referenced in any current workflow file in this repo.** The old guide listed
-  it as required for GCP auth in CI; that mechanism isn't present in the current workflow YAMLs (GCP auth for
-  Cloud Build steps is handled by the Cloud Build service account itself, not a GitHub Actions secret). If your org
-  fork still wires this up via a shared/reusable workflow, verify against that workflow directly rather than this doc.
+- `GCP_SERVICE_ACCOUNT_JSON` is **not referenced in any current workflow file in this repo** — GCP auth for Cloud
+  Build steps is handled by the Cloud Build service account itself, not a GitHub Actions secret. This section may
+  not be authoritative for an org fork with a differently-wired shared/reusable workflow — verify against that
+  workflow directly rather than this doc if you're on a fork.
 
 ### 9.3 Publishing a package version
 
