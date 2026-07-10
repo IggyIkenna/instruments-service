@@ -392,6 +392,54 @@ class TestPolymarketAdapterExtended:
         assert len(result) == 2
         assert result[0].venue == "POLYMARKET"
 
+    @pytest.mark.asyncio
+    async def test_fetch_clob_history_network_error_returns_empty_list_pinned(self) -> None:
+        """PIN the current, deliberately-different-from-its-siblings ``_fetch_clob_history``
+        error contract: an ``aiohttp.ClientError`` on the CLOB ``prices-history`` endpoint
+        is caught, classified, logged via ``ADAPTER_FETCH_FAILED`` — then swallowed to
+        ``[]`` (unlike ``_fetch_all_raw_clob_markets`` / the Gamma page fetch, which both
+        RAISE a wrapped ``RuntimeError`` post-CF-11; see
+        ``test_clob_scan_midscan_failure_raises_not_truncates`` /
+        ``test_network_error_raises_not_truncates`` above).
+
+        This asymmetry is intentional per the current code (docstring: "Returns [] on
+        error") because ``_fetch_clob_history`` only feeds ``get_ohlcv`` — a method with
+        zero non-test internal callers (no manifest/attempted_failed accounting depends
+        on it) — unlike the CLOB market-scan / Gamma paths, whose truncation would
+        silently corrupt the cached universe. No test anchored this before; without one,
+        a future refactor could flip this to raise (or vice versa) with zero signal.
+        """
+        import aiohttp as _aiohttp
+
+        adapter = PolymarketReferenceDataAdapter()
+        fail_cm = MagicMock()
+        fail_cm.__aenter__ = AsyncMock(side_effect=_aiohttp.ClientError("prices-history down"))
+        fail_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=fail_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        events: list[str] = []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+            patch(
+                "instruments_service.reference_data.adapters.prediction.polymarket.log_event",
+                side_effect=lambda name, **_kw: events.append(name),
+            ),
+        ):
+            # Must NOT raise — pins the current []-on-error contract.
+            result = await adapter._fetch_clob_history("0xabc123", "1d")
+        assert result == [], f"_fetch_clob_history must return [] on ClientError (pinned contract), got {result!r}"
+        assert "ADAPTER_FETCH_FAILED" in events, "the [] path must still emit ADAPTER_FETCH_FAILED for observability"
+
+        # get_ohlcv (the sole consumer of _fetch_clob_history) must propagate the
+        # empty result as an empty OHLCVRef list, not raise.
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            ohlcv_result = await adapter.get_ohlcv("0xabc123")
+        assert ohlcv_result == []
+
 
 # ---------------------------------------------------------------------------
 # Databento adapter mocked tests
