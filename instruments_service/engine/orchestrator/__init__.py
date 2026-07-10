@@ -598,6 +598,9 @@ from instruments_service.engine.orchestrator.understat import (
     _run_understat_shots_date as _run_understat_shots_date,
 )
 from instruments_service.engine.orchestrator.venue_core import (
+    _CEFI_TRADFI_THIN_COLLAPSE_RATIO as _CEFI_TRADFI_THIN_COLLAPSE_RATIO,
+)
+from instruments_service.engine.orchestrator.venue_core import (
     _SPORTS_PROVIDER_VENUES as _SPORTS_PROVIDER_VENUES,
 )
 from instruments_service.engine.orchestrator.venue_core import (
@@ -605,6 +608,12 @@ from instruments_service.engine.orchestrator.venue_core import (
 )
 from instruments_service.engine.orchestrator.venue_core import (
     _VENUE_ADAPTER_EPOCH as _VENUE_ADAPTER_EPOCH,
+)
+from instruments_service.engine.orchestrator.venue_core import (
+    _enforce_monotonicity as _enforce_monotonicity,
+)
+from instruments_service.engine.orchestrator.venue_core import (
+    _get_manifest_high_watermarks as _get_manifest_high_watermarks,
 )
 from instruments_service.engine.orchestrator.venue_core import (
     _get_venue_epoch as _get_venue_epoch,
@@ -673,6 +682,7 @@ __all__ = [
     "SOCCER_FOOTBALL_INFO_IDS",
     "UTC",
     "_AF_LOGO_RE",
+    "_CEFI_TRADFI_THIN_COLLAPSE_RATIO",
     "_DEFI_VENUES",
     "_ENTITY_NAME_TO_PIPELINE_MODE",
     "_Q5_SCHEDULE_COLUMNS",
@@ -732,6 +742,7 @@ __all__ = [
     "_defi_universe_retryable",
     "_empty_lifecycle_columns",
     "_enforce_defi_monotonicity",
+    "_enforce_monotonicity",
     "_extract_prediction_canonical_group",
     "_fetch_footystats_matches",
     "_fetch_footystats_predictions",
@@ -744,6 +755,7 @@ __all__ = [
     "_gated_sink_write",
     "_get_defi_manifest_high_watermarks",
     "_get_instruments_bucket",
+    "_get_manifest_high_watermarks",
     "_get_or_fetch_defi_universe",
     "_get_venue_epoch",
     "_is_in_canonical_write_universe",

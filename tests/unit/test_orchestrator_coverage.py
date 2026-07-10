@@ -14,8 +14,10 @@ import pytest
 from unified_api_contracts.internal import InstrumentRecord
 
 from instruments_service.engine.orchestrator import (
+    _CEFI_TRADFI_THIN_COLLAPSE_RATIO,
     _count_per_venue,
     _enforce_defi_monotonicity,
+    _enforce_monotonicity,
     _get_venue_epoch,
     _normalize_wrapped_token,
     clear_defi_universe_cache,
@@ -189,6 +191,59 @@ class TestEnforceDefiMonotonicity:
         # B grows (1→2), A regresses (1<5)
         assert len(clean) == 2
         assert all(r.venue == "B" for r in clean)
+
+
+# ---------------------------------------------------------------------------
+# _enforce_monotonicity — the generalized, asset-group-parameterized helper
+# (venue_core.py) that _enforce_defi_monotonicity now delegates to. Todo 6 of
+# cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md.
+# ---------------------------------------------------------------------------
+
+
+class TestEnforceMonotonicityGeneralized:
+    def test_defi_policy_matches_enforce_defi_monotonicity(self) -> None:
+        """block_on_regression=True, min_ratio=1.0 reproduces the DeFi wrapper exactly."""
+        records = [_make_record(venue="A")]
+        hwm = {"A": 5}
+        clean_generic, blocked_generic = _enforce_monotonicity(records, hwm, block_on_regression=True, min_ratio=1.0)
+        clean_wrapper, blocked_wrapper = _enforce_defi_monotonicity(records, hwm)
+        assert blocked_generic == blocked_wrapper == {"A"}
+        assert len(clean_generic) == len(clean_wrapper) == 0
+
+    def test_cefi_tradfi_policy_never_blocks(self) -> None:
+        """block_on_regression=False: a regressed venue is flagged but NOT dropped."""
+        records = [_make_record(venue="LIGHTER-ZKSYNC")]
+        hwm = {"LIGHTER-ZKSYNC": 200}  # collapsed from 200 -> 1 (classic adapter-break shape)
+        clean, flagged = _enforce_monotonicity(
+            records, hwm, block_on_regression=False, min_ratio=_CEFI_TRADFI_THIN_COLLAPSE_RATIO
+        )
+        assert flagged == {"LIGHTER-ZKSYNC"}
+        assert len(clean) == 1  # NOT removed — detect-only policy, write still proceeds
+
+    def test_cefi_tradfi_thin_collapse_ratio_tolerates_legitimate_delisting(self) -> None:
+        """A CeFi delisting (e.g. 100 -> 60, still 60% of HWM) must NOT be flagged.
+
+        This is the exact scenario the DeFi-verbatim rule would have gotten wrong
+        (min_ratio=1.0 blocks ANY decrease); the 0.5 thin-collapse ratio tolerates
+        real, legitimate today's-active-count decreases.
+        """
+        records = [_make_record(venue="BYBIT", instrument_key=f"BYBIT-{i}") for i in range(60)]
+        hwm = {"BYBIT": 100}
+        clean, flagged = _enforce_monotonicity(
+            records, hwm, block_on_regression=False, min_ratio=_CEFI_TRADFI_THIN_COLLAPSE_RATIO
+        )
+        assert flagged == set()
+        assert len(clean) == 60
+
+    def test_cefi_tradfi_below_half_ratio_is_flagged(self) -> None:
+        """Below the 50% thin-collapse ratio IS flagged, even though non-blocking."""
+        records = [_make_record(venue="PACIFICA-SOLANA", instrument_key=f"P-{i}") for i in range(4)]
+        hwm = {"PACIFICA-SOLANA": 10}  # 4/10 = 40% < 50% threshold
+        clean, flagged = _enforce_monotonicity(
+            records, hwm, block_on_regression=False, min_ratio=_CEFI_TRADFI_THIN_COLLAPSE_RATIO
+        )
+        assert flagged == {"PACIFICA-SOLANA"}
+        assert len(clean) == 4  # still not removed
 
 
 # ---------------------------------------------------------------------------

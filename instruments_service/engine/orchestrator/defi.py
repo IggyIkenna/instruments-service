@@ -145,34 +145,14 @@ def _get_defi_manifest_high_watermarks() -> dict[str, int]:
     DeFi instruments are monotonically increasing (immutable smart contracts,
     never deleted). If a fresh API call returns fewer instruments for a venue
     than the manifest's post-epoch maximum, the API gave an incomplete result.
+
+    Thin wrapper over the asset-group-parameterized
+    ``venue_core._get_manifest_high_watermarks`` (extracted 2026-07-10,
+    Todo 6 of cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md)
+    — kept as a zero-arg DeFi-named entry point since callers/tests already
+    reference this exact name.
     """
-    try:
-        bucket = _orch._get_instruments_bucket("DEFI")
-        index_df = _orch.read_availability_index(bucket)
-        if index_df.empty:
-            return {}
-        hwm: dict[str, int] = {}
-        venue_vals: list[object] = list(index_df["venue"])
-        count_vals: list[object] = list(index_df["instrument_count"])
-        date_vals: list[object] = list(index_df["date"])
-        for v_raw, c_raw, d_raw in zip(venue_vals, count_vals, date_vals, strict=True):
-            v = str(v_raw)
-            c = int(str(c_raw))
-            d = str(d_raw)
-            # Skip entries from before the current adapter epoch
-            epoch = _orch._get_venue_epoch(v)
-            if epoch is not None and d < epoch:
-                continue
-            if c > hwm.get(v, 0):
-                hwm[v] = c
-        return hwm
-    except Exception as exc:
-        _orch.classify_and_emit_error(
-            exc,
-            service_name="instruments-service",
-            operation="read_defi_manifest",
-        )
-        return {}
+    return _orch._get_manifest_high_watermarks("DEFI")
 
 
 def _count_per_venue(records: list[_orch.InstrumentRecord]) -> dict[str, int]:
@@ -213,35 +193,21 @@ def _enforce_defi_monotonicity(
     than the manifest max and must NOT be written to GCS (would overwrite better data).
     Only checks venues that are actually present in the records — venues not fetched
     are ignored (they have 0 count but were never requested).
-    """
-    new_counts = _orch._count_per_venue(records)
-    fetched_venues = set(new_counts.keys())
-    blocked: set[str] = set()
-    for venue, old_max in hwm.items():
-        if venue not in fetched_venues:
-            continue
-        new_count = new_counts.get(venue, 0)
-        if new_count < old_max:
-            blocked.add(venue)
-            _orch.logger.error(
-                "DeFi monotonicity BLOCKED: %s has %d instruments (manifest max=%d) — "
-                "will NOT write to GCS (would overwrite better data)",
-                venue,
-                new_count,
-                old_max,
-            )
-        elif new_count > old_max:
-            _orch.logger.info(
-                "DeFi monotonicity OK: %s grew %d → %d (+%d)",
-                venue,
-                old_max,
-                new_count,
-                new_count - old_max,
-            )
 
-    if blocked:
-        records = [r for r in records if r.venue not in blocked]
-    return records, blocked
+    Thin wrapper over the asset-group-parameterized
+    ``venue_core._enforce_monotonicity`` (extracted 2026-07-10, Todo 6 of
+    cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md), with
+    DeFi's original strict policy preserved exactly: ``block_on_regression=True``
+    (any regressed venue is removed from the write) and ``min_ratio=1.0`` (any
+    decrease at all counts — DeFi's immutable smart-contract instruments never
+    shrink under correct adapter behaviour, so any decrease means the API call
+    was incomplete). CeFi/TradFi use a different, non-blocking, thin-collapse
+    policy (see ``process_fetch._fetch_urdi_records`` + ``venue_core``
+    docstring) — never a verbatim copy of this DeFi rule, since CeFi delistings
+    and TradFi contract expiries are legitimate decreases in today's active
+    count.
+    """
+    return _orch._enforce_monotonicity(records, hwm, block_on_regression=True, min_ratio=1.0)
 
 
 async def _get_or_fetch_defi_universe(
