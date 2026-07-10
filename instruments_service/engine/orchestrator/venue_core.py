@@ -94,13 +94,10 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
 # CeFi Tardis grain-adapter
 # ---------------------------------------------------------------------------
 # UAC's VENUES_BY_ASSET_GROUP["cefi"] carries the bare execution-context canonical
-# venue names (e.g. "OKX", "COINBASE"). IS fetches instruments via the Tardis
+# venue names (e.g. "OKX"). IS fetches instruments via the Tardis
 # endpoint API, which exposes SEPARATE endpoints per OKX market type:
 #   OKX → okex (spot), okex-swap (perps/funding), okex-futures (fixed-expiry)
 # Mapping bare OKX to all three ensures IS captures the full OKX universe.
-# Similarly, bare COINBASE (UAC execution alias) maps to COINBASE-SPOT for
-# instrument fetch; COINBASE-FUTURES is already a separate UAC cefi entry
-# and passes through unchanged.
 #
 # Existing comment in the former _CEFI_VENUES:
 #   "OKX: 3 separate Tardis exchanges — okex (spot), okex-swap (perps), okex-futures
@@ -112,7 +109,7 @@ def expand_cefi_tardis_endpoints(canonical_venues: list[str]) -> list[str]:
     """Map UAC canonical CeFi venues to the Tardis-endpoint venues IS fetches.
 
     UAC's ``VENUES_BY_ASSET_GROUP["cefi"]`` carries the bare execution-context
-    canonical venue names (e.g. ``"OKX"``, ``"COINBASE"``).  IS fetches instruments
+    canonical venue names (e.g. ``"OKX"``).  IS fetches instruments
     via the Tardis per-endpoint API, which requires the split forms for multi-endpoint
     venues.  This function encodes the grain mapping so IS no longer maintains a
     parallel hand-edited venue list.
@@ -122,12 +119,8 @@ def expand_cefi_tardis_endpoints(canonical_venues: list[str]) -> list[str]:
       OKX: 3 separate Tardis exchanges (okex/okex-swap/okex-futures).
       Do NOT add bare "OKX" — it maps to the same Tardis exchange as OKX-SPOT
       (duplicate data).
-    - ``"COINBASE"`` → ``["COINBASE-SPOT"]``
-      UAC keeps the bare ``COINBASE`` as an execution-context alias.  IS fetches
-      via the COINBASE-SPOT Tardis endpoint.  ``COINBASE-FUTURES`` is already a
-      separate UAC cefi entry and passes through unchanged.
     - Every other UAC cefi venue → passthrough (already the correct Tardis endpoint
-      name, e.g. ``BINANCE-SPOT``, ``KALSHI-PERP``, ``POLYMARKET-PERP``).
+      name, e.g. ``BINANCE-SPOT``, ``COINBASE-SPOT``, ``KALSHI-PERP``, ``POLYMARKET-PERP``).
 
     Args:
         canonical_venues: A list of UAC canonical cefi venue names
@@ -142,8 +135,6 @@ def expand_cefi_tardis_endpoints(canonical_venues: list[str]) -> list[str]:
     for venue in canonical_venues:
         if venue == "OKX":
             result.extend(["OKX-SPOT", "OKX-SWAP", "OKX-FUTURES"])
-        elif venue == "COINBASE":
-            result.append("COINBASE-SPOT")
         else:
             result.append(venue)
     return result
@@ -314,7 +305,7 @@ def get_venues_for_asset_groups(asset_groups: list[str]) -> list[str]:
     """Return the IS instrument-fetch venue list for the requested asset groups (CEFI, DEFI, …).
 
     CEFI: applies ``expand_cefi_tardis_endpoints`` to ``VENUES_BY_ASSET_GROUP["cefi"]`` so
-        bare UAC canonical aliases (``OKX``, ``COINBASE``) are expanded to the Tardis
+        bare UAC canonical aliases (``OKX``) are expanded to the Tardis
         per-endpoint forms IS actually fetches from.  ``KALSHI-PERP`` and
         ``POLYMARKET-PERP`` are included automatically (they are UAC cefi venues).
 
