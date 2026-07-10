@@ -62,7 +62,12 @@ from datetime import UTC, date, datetime
 
 import pandas as pd
 from unified_api_contracts import canonical_path_templates
-from unified_trading_library import StorageClient, get_storage_client, resolve_bucket_name
+from unified_trading_library import (
+    MANIFEST_ONLY_BUNDLE_DATA_TYPES,
+    StorageClient,
+    get_storage_client,
+    resolve_bucket_name,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -467,6 +472,23 @@ def _audit_generic(
     for idx, plist in prefixes_by_idx.items():
         row = df.loc[idx]
         data_type = str(row.get("data_type", "") or "")  # noqa: qg-empty-fallback — column may be absent (cross-AG report)
+        # Manifest-only bundle atom (e.g. prediction_canonical_question_group):
+        # synthetic cluster instrument_id (a canonical_question_group label like
+        # BTC_UP_DOWN_DAILY), NO on-disk data_type={dt}/ folder — the raw objects
+        # live under a per-object data_type (prediction trades / per-conditionId
+        # parquets). Existence is proven by write-time CLUSTER validation
+        # (ManifestWriter.record_captured_from_counts), not an object at a
+        # canonical path, so the venue-level prefix probe can NEVER match and
+        # would false-flag 100% of these rows (2026-07-10 incident: ~15,769 legit
+        # captured prediction bundle cells wiped). Mark real (never phantom) —
+        # mirrors the it_not_on_disk exemption at the instrument_type level. This
+        # is the STRICT SUBSET of UAC BUNDLED_DATA_TYPES with no on-disk object
+        # (SSOT: unified_trading_library.reconcile.manifest); object-backed
+        # bundles (options_chain/futures_chain/event_contract/sports) stay in
+        # phantom scope — per-object phantom detection for other AGs is unweakened.
+        if data_type in MANIFEST_ONLY_BUNDLE_DATA_TYPES:
+            real_or_phantom[idx] = True
+            continue
         raw_it = str(row.get("instrument_type", "") or "")  # noqa: qg-empty-fallback — schema-4 rows have no instrument_type (see docstring above)
         venue = str(row.get("venue", "") or "")  # noqa: qg-empty-fallback — column may be absent for this asset_group (cross-AG audit)
         chain = str(row.get("chain", "") or "")  # noqa: qg-empty-fallback — chain only applies to DeFi rows; absent elsewhere
