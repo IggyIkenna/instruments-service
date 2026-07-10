@@ -96,6 +96,7 @@ VENUE_CAPABILITY_AGS: frozenset[str] = _EU.VENUE_CAPABILITY_AGS
 #     (the same canonicalisation _enumerate_v2_defi applies)
 # ---------------------------------------------------------------------------
 
+
 def _get_instrument_type_aliases() -> dict[str, str]:
     """Return the UAC SSOT instrument_type alias map (lowercase token → canonical).
 
@@ -148,19 +149,38 @@ def _canon_instrument_type(asset_group: str, venue: str, instrument_type: str) -
 
 # CeFi venue-dialect fold (honest_coverage_uac_writer_matrix_reconciliation
 # Decision 6, implemented as the todo's "check folds suffixes" option): the
-# writer captures under Tardis-grain suffixed venues (OKX-SPOT/-SWAP/-FUTURES
-# from expand_cefi_tardis_endpoints; legacy raw Tardis exchange ids on older
-# rows) while UAC keys those venues at the bare canonical grain (OKX; COINBASE
-# for spot). Fold BOTH sides to the UAC-canonical venue so a suffix dialect can
-# never manufacture a false hole or a false stray. Venues that are themselves
-# UAC-canonical suffixed forms (BYBIT-SPOT, KRAKEN-FUTURES, BITFINEX-*, …) are
-# deliberately NOT folded.
+# writer captures under Tardis-grain suffixed venues (OKX-SWAP/-FUTURES from
+# expand_cefi_tardis_endpoints; legacy raw Tardis exchange ids on older rows)
+# while UAC keys those venues at the bare canonical grain (OKX). Fold BOTH
+# sides to the UAC-canonical venue so a suffix dialect can never manufacture a
+# false hole or a false stray. Venues that are themselves UAC-canonical
+# suffixed forms (OKX-SPOT, BYBIT-SPOT, KRAKEN-FUTURES, BITFINEX-*, …) are
+# deliberately NOT folded — OKX-SPOT was REMOVED from this table 2026-07-10
+# (Option A follow-through, unified-api-contracts declares OKX-SPOT its own
+# cefi venue with its own EXPECTED entry now; folding it to bare OKX would
+# make real captured OKX-SPOT rows compare against the wrong EXPECTED tuple
+# now that bare-OKX SPOT_PAIR is gone). COINBASE is the exception: the
+# canonical EXPECTED token for spot Coinbase is COINBASE-SPOT (not bare
+# COINBASE), so that entry folds legacy bare-COINBASE writer/EXPECTED tokens
+# UP instead of down — see the inline comment on that entry.
 _CEFI_VENUE_FOLD: dict[str, str] = {
     # Tardis-grain splits emitted by expand_cefi_tardis_endpoints()
-    "OKX-SPOT": "OKX",
+    # "OKX-SPOT" REMOVED (Option A, 2026-07-10 operator decision — mirrors
+    # BYBIT-SPOT, which was never folded): OKX-SPOT is now its own declared
+    # cefi venue (VENUES_BY_ASSET_GROUP["cefi"]) with its own EXPECTED
+    # tuples, so real captured OKX-SPOT rows must compare directly against
+    # OKX-SPOT EXPECTED, not get folded up to bare OKX (which no longer
+    # carries SPOT_PAIR capability at all — folding would silently zero
+    # real captured OKX spot data back out of Layer-1/Layer-2 again). See
+    # instruments_service_cefi_qg_red_on_ldr_head_2026_07_08.md.
     "OKX-SWAP": "OKX",
     "OKX-FUTURES": "OKX",
-    "COINBASE-SPOT": "COINBASE",
+    # INVERTED (coinbase_bare_name_migration_2026_07_06 S1): COINBASE-SPOT is
+    # now the canonical EXPECTED token (UAC drops bare COINBASE in S3 of that
+    # plan); legacy manifest rows that stamped bare COINBASE fold UP to
+    # COINBASE-SPOT so they still match EXPECTED instead of landing in the
+    # stray bucket.
+    "COINBASE": "COINBASE-SPOT",
     # Writer-side names for venues UAC keys differently
     "BYBIT-FUTURES": "BYBIT",
     "COINBASE-INTERNATIONAL": "COINBASE-FUTURES",
@@ -638,8 +658,7 @@ def filter_manifest_to_expected(
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         logger.warning(
-            "  filter_manifest_to_expected [%s]: missing columns %s — "
-            "returning df unchanged (gate cannot apply)",
+            "  filter_manifest_to_expected [%s]: missing columns %s — returning df unchanged (gate cannot apply)",
             asset_group,
             sorted(missing_cols),
         )
@@ -673,13 +692,15 @@ def filter_manifest_to_expected(
     # Row-level mask via O(1) set membership.  itertuples-over-3-cols is fast
     # in CPython (list-of-tuples membership check) and avoids the merge-reorder.
     mask = pd.Series(
-        [(v, it, dt) in in_scope for v, it, dt in zip(df["venue"], df["instrument_type"], df["data_type"], strict=False)],
+        [
+            (v, it, dt) in in_scope
+            for v, it, dt in zip(df["venue"], df["instrument_type"], df["data_type"], strict=False)
+        ],
         index=df.index,
     )
     filtered = df.loc[mask].reset_index(drop=True)
     logger.info(
-        "  filter_manifest_to_expected [%s]: kept %d/%d rows (%.1f%%) — "
-        "%d/%d unique triples in EXPECTED",
+        "  filter_manifest_to_expected [%s]: kept %d/%d rows (%.1f%%) — %d/%d unique triples in EXPECTED",
         asset_group,
         len(filtered),
         len(df),

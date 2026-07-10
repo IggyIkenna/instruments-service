@@ -36,10 +36,10 @@ import tempfile
 from datetime import UTC, datetime
 
 import pandas as pd
-from google.cloud import storage
 from unified_api_contracts.sports import (
     SPORTS_DATA_TYPE_TO_FOLDER,
 )
+from unified_trading_library import get_storage_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -70,13 +70,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    client = storage.Client(project="central-element-323112")
-    bucket = client.bucket(BUCKET)
+    client = get_storage_client()
 
     logger.info("Listing per-league parquets under sports_reference/by_date/...")
     per_league_keys: set[tuple[str, str, str]] = set()
     n_blobs = 0
-    for blob in bucket.list_blobs(prefix="sports_reference/by_date/"):
+    for blob in client.list_blobs(BUCKET, prefix="sports_reference/by_date/"):
         n_blobs += 1
         if n_blobs % 50000 == 0:
             logger.info("  scanned %d blobs, %d per-league found", n_blobs, len(per_league_keys))
@@ -94,8 +93,7 @@ def main() -> int:
     logger.info("Per-league parquets discovered: %d unique (data_type, date, league_id)", len(per_league_keys))
 
     logger.info("Reading canonical manifest...")
-    blob = bucket.blob(INDEX_BLOB)
-    blob.download_to_filename(f"{tempfile.gettempdir()}/canon_pre_recon.parquet")
+    client.download_file(BUCKET, INDEX_BLOB, f"{tempfile.gettempdir()}/canon_pre_recon.parquet")
     df = pd.read_parquet(f"{tempfile.gettempdir()}/canon_pre_recon.parquet")
     logger.info("Manifest rows: %d", len(df))
 
@@ -174,7 +172,7 @@ def main() -> int:
     out = io.BytesIO()
     new_df.to_parquet(out, index=False)
     out.seek(0)
-    bucket.blob(PER_VM_SHARD_BLOB).upload_from_file(out, content_type="application/octet-stream")
+    client.upload_from_file_obj(BUCKET, PER_VM_SHARD_BLOB, out, content_type="application/octet-stream")
     logger.info("Per-VM shard written: %d rows at gs://%s/%s", len(new_df), BUCKET, PER_VM_SHARD_BLOB)
 
     # Drop bare rows directly from canonical — these are stale-supersession rows
@@ -188,7 +186,7 @@ def main() -> int:
         out2 = io.BytesIO()
         df_clean.to_parquet(out2, index=False)
         out2.seek(0)
-        blob.upload_from_file(out2, content_type="application/octet-stream")
+        client.upload_from_file_obj(BUCKET, INDEX_BLOB, out2, content_type="application/octet-stream")
         logger.info("Canonical bare-row sweep: dropped %d rows (canonical now %d)", n_drop, len(df_clean))
     return 0
 

@@ -16,6 +16,7 @@ from unified_api_contracts.registry import (
 
 from .adapters.cefi.aster import AsterReferenceDataAdapter
 from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
+from .adapters.cefi.coinbase_cde import CoinbaseCdeReferenceDataAdapter
 from .adapters.cefi.deribit_combo_adapter import DeribitComboReferenceDataAdapter
 from .adapters.cefi.deribit_options_adapter import DeribitOptionsReferenceDataAdapter
 from .adapters.cefi.extended import ExtendedReferenceDataAdapter
@@ -119,6 +120,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aave_v3": AaveV3ReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
     "aster": AsterReferenceDataAdapter,
+    "coinbase_cde": CoinbaseCdeReferenceDataAdapter,
     "deribit_combo": DeribitComboReferenceDataAdapter,
     "deribit_options": DeribitOptionsReferenceDataAdapter,
     "balancer": BalancerReferenceDataAdapter,
@@ -187,6 +189,9 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
 ADAPTER_DATA_SOURCES: dict[str, str] = {
     "hyperliquid": "hyperliquid",
     "aster": "aster",
+    # Coinbase Derivatives Exchange (CDE) — public REST endpoint (Advanced Trade
+    # products?product_type=FUTURE), no API key needed for instrument discovery.
+    "coinbase_cde": "",
     "tardis": "tardis",
     "databento": "databento",
     "massive": "massive",

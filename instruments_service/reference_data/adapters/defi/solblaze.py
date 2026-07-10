@@ -44,7 +44,12 @@ _BSOL_MINT = "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1"
 _BSOL_DECIMALS = 9
 
 # MTDS handlers derive the exchange-rate fetch URL from this field; hardcoding is banned.
-_SOLBLAZE_EXCHANGE_RATE_URL_TEMPLATE = "https://stake.solblaze.org/api/v1/exchange_rate"
+# Fixed 2026-07-10 (mtds_is_full_adapter_smoketest_findings_2026_07_07.md P2/P3):
+# /api/v1/exchange_rate 404s (confirmed live 2026-07-10); /api/v1/stats is the real
+# working endpoint and is the semantically-correct replacement — its
+# stats.conversion.bsol_to_sol field is a genuine exchange rate, unlike /api/v1/apy
+# (also live/working, but APY-only, no exchange-rate field).
+_SOLBLAZE_EXCHANGE_RATE_URL_TEMPLATE = "https://stake.solblaze.org/api/v1/stats"
 
 _LST_TOKENS: list[dict[str, str]] = [
     {

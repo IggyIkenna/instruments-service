@@ -410,6 +410,47 @@ class TestDatabentoFetchFailureStateThreading:
                 await adapter.get_instruments()
 
     @pytest.mark.asyncio
+    async def test_equity_bento_error_raises_not_swallowed(self) -> None:
+        """A genuine (non-subscription) BentoError on the DBEQ.BASIC equity fetch
+        (get_instruments step 2, lines ~157-176) must propagate — NOT be swallowed
+        to ``batch = []`` — so the venue lands in attempted_failed, not a clean
+        empty. The equity branch's own ``except DatabentoSubscriptionError`` only
+        catches the PERMANENT off-allowlist condition (see
+        test_get_instruments_isolates_banned_dataset); it does NOT catch the
+        plain ``RuntimeError`` that ``_fetch_symbols`` re-raises for a transient
+        SDK ``BentoError`` (see test_bento_error_raises_runtime_error_not_returns_empty
+        above — same re-raise mechanism, exercised here at the equity call site).
+
+        Every existing test mocks ``_get_equity_symbols`` to ``[]`` so this branch
+        is never entered — a genuine CF-11 gap before this test. Uses a sentinel
+        equity symbol (absent from the curated TRADFI_DATABENTO_INSTRUMENTS list,
+        which also targets DBEQ.BASIC for NASDAQ/NYSE) so only the step-2 equity
+        call raises; step-1's curated-def group loop returns cleanly.
+        """
+        adapter = DatabentoReferenceDataAdapter(api_key="test-key")
+        sentinel_equity_symbol = "ZZZZ_TEST_EQUITY_SENTINEL"
+
+        def _fetch_side_effect(api_key: str, dataset: str, symbols: list[str], stype_in: str):
+            if dataset == "DBEQ.BASIC" and sentinel_equity_symbol in symbols:
+                # Mirrors the exact re-raise shape _fetch_symbols produces for a
+                # genuine (non-entitlement) BentoError — a plain RuntimeError,
+                # NOT a DatabentoSubscriptionError.
+                raise RuntimeError(
+                    "Databento fetch failed for dataset=DBEQ.BASIC "
+                    "(error_code=RATE_LIMIT, retry_safe=True): 429 rate limit exceeded"
+                )
+            # Step-1 curated-def groups (any dataset/venue) return cleanly —
+            # isolates the failure to the equity call specifically.
+            return []
+
+        with (
+            patch.object(adapter, "_fetch_symbols", side_effect=_fetch_side_effect),
+            patch.object(adapter, "_get_equity_symbols", return_value=[sentinel_equity_symbol]),
+            pytest.raises(RuntimeError, match="Databento fetch failed"),
+        ):
+            await adapter.get_instruments()
+
+    @pytest.mark.asyncio
     async def test_parse_failure_raises_runtime_error_not_returns_empty(self) -> None:
         """data.to_df() parse failure must propagate as RuntimeError, not swallow → [].
 
