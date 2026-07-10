@@ -172,7 +172,40 @@ async def _fetch_urdi_records(
             non_defi_result = await _orch.fetch_instruments_for_all_venues(
                 non_defi_active, api_keys=api_keys, date=date, mode=mode, source=source
             )
-        records.extend(non_defi_result.records)
+        non_defi_records = non_defi_result.records
+
+        # Cross-cutting venue-count-regression DETECTION (non-blocking) for
+        # CeFi/TradFi — generalizes DeFi's _enforce_defi_monotonicity via the
+        # shared venue_core._enforce_monotonicity helper (Todo 6 of
+        # cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md, the
+        # gap that let LIGHTER/PACIFICA's earlier OOM-driven capture failures
+        # go unnoticed at this per-fetch layer). Unlike DeFi's hard block,
+        # this NEVER removes records — CeFi delistings and TradFi contract
+        # expiries are legitimate decreases in today's active count, so a
+        # DeFi-style block would permanently false-block the first legitimate
+        # CeFi delisting. Detection only; the write proceeds either way.
+        for _ag in ("CEFI", "TRADFI"):
+            _ag_venues = {v for v in non_defi_active if VENUE_TO_ASSET_GROUP.get(v) == _ag.lower()}
+            if not _ag_venues:
+                continue
+            _ag_hwm = {v: c for v, c in _orch._get_manifest_high_watermarks(_ag).items() if v in _ag_venues}
+            if not _ag_hwm:
+                continue
+            _, _flagged = _orch._enforce_monotonicity(
+                [r for r in non_defi_records if r.venue in _ag_venues],
+                _ag_hwm,
+                block_on_regression=False,
+                min_ratio=_orch._CEFI_TRADFI_THIN_COLLAPSE_RATIO,
+            )
+            if _flagged:
+                _orch.logger.error(
+                    "%s venue count collapse detected (non-blocking, date=%s): %s",
+                    _ag,
+                    date,
+                    sorted(_flagged),
+                )
+
+        records.extend(non_defi_records)
         _retryable_venues.extend(non_defi_result.retryable_venues)
         _non_error_venues.update(
             v for v in non_defi_active if v not in {e.venue for e in non_defi_result.failed_venues}

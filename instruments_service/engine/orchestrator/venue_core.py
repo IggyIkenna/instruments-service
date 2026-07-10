@@ -28,9 +28,12 @@ else:  # pragma: no cover - runtime namespace indirection
     from instruments_service.engine.orchestrator._pkg_ref import orch_namespace as _orch
 
 __all__ = [
+    "_CEFI_TRADFI_THIN_COLLAPSE_RATIO",
     "_SPORTS_PROVIDER_VENUES",
     "_TRADFI_NON_VENUE_KEYS",
     "_VENUE_ADAPTER_EPOCH",
+    "_enforce_monotonicity",
+    "_get_manifest_high_watermarks",
     "_get_venue_epoch",
     "_should_skip_shard",
     "earliest_venue_date",
@@ -94,13 +97,13 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
 # CeFi Tardis grain-adapter
 # ---------------------------------------------------------------------------
 # UAC's VENUES_BY_ASSET_GROUP["cefi"] carries the bare execution-context canonical
-# venue names (e.g. "OKX", "COINBASE"). IS fetches instruments via the Tardis
+# venue names (e.g. "OKX"). IS fetches instruments via the Tardis
 # endpoint API, which exposes SEPARATE endpoints per OKX market type:
 #   OKX → okex (spot), okex-swap (perps/funding), okex-futures (fixed-expiry)
 # Mapping bare OKX to all three ensures IS captures the full OKX universe.
-# Similarly, bare COINBASE (UAC execution alias) maps to COINBASE-SPOT for
-# instrument fetch; COINBASE-FUTURES is already a separate UAC cefi entry
-# and passes through unchanged.
+# COINBASE-SPOT / COINBASE-FUTURES are already separate UAC cefi entries
+# (coinbase_bare_name_migration_2026_07_06.md S2/S3, 2026-07-10 — bare
+# COINBASE removed from UAC) and pass through unchanged.
 #
 # Existing comment in the former _CEFI_VENUES:
 #   "OKX: 3 separate Tardis exchanges — okex (spot), okex-swap (perps), okex-futures
@@ -112,8 +115,10 @@ def expand_cefi_tardis_endpoints(canonical_venues: list[str]) -> list[str]:
     """Map UAC canonical CeFi venues to the Tardis-endpoint venues IS fetches.
 
     UAC's ``VENUES_BY_ASSET_GROUP["cefi"]`` carries the bare execution-context
-    canonical venue names (e.g. ``"OKX"``, ``"COINBASE"``).  IS fetches instruments
-    via the Tardis per-endpoint API, which requires the split forms for multi-endpoint
+    canonical venue name ``"OKX"`` (bare ``"COINBASE"`` REMOVED,
+    coinbase_bare_name_migration_2026_07_06.md S3, 2026-07-10 — ``COINBASE-SPOT``
+    is the sole canonical cefi spot key now).  IS fetches instruments via the
+    Tardis per-endpoint API, which requires the split forms for multi-endpoint
     venues.  This function encodes the grain mapping so IS no longer maintains a
     parallel hand-edited venue list.
 
@@ -122,12 +127,12 @@ def expand_cefi_tardis_endpoints(canonical_venues: list[str]) -> list[str]:
       OKX: 3 separate Tardis exchanges (okex/okex-swap/okex-futures).
       Do NOT add bare "OKX" — it maps to the same Tardis exchange as OKX-SPOT
       (duplicate data).
-    - ``"COINBASE"`` → ``["COINBASE-SPOT"]``
-      UAC keeps the bare ``COINBASE`` as an execution-context alias.  IS fetches
-      via the COINBASE-SPOT Tardis endpoint.  ``COINBASE-FUTURES`` is already a
-      separate UAC cefi entry and passes through unchanged.
     - Every other UAC cefi venue → passthrough (already the correct Tardis endpoint
-      name, e.g. ``BINANCE-SPOT``, ``KALSHI-PERP``, ``POLYMARKET-PERP``).
+      name, e.g. ``BINANCE-SPOT``, ``COINBASE-SPOT``, ``KALSHI-PERP``,
+      ``POLYMARKET-PERP``).  Bare ``COINBASE`` no longer appears in
+      ``VENUES_BY_ASSET_GROUP["cefi"]`` (coinbase_bare_name_migration_2026_07_06.md
+      S3, 2026-07-10) — ``COINBASE-SPOT`` is the sole canonical cefi spot key and
+      passes through unchanged, same as ``COINBASE-FUTURES``.
 
     Args:
         canonical_venues: A list of UAC canonical cefi venue names
@@ -142,8 +147,6 @@ def expand_cefi_tardis_endpoints(canonical_venues: list[str]) -> list[str]:
     for venue in canonical_venues:
         if venue == "OKX":
             result.extend(["OKX-SPOT", "OKX-SWAP", "OKX-FUTURES"])
-        elif venue == "COINBASE":
-            result.append("COINBASE-SPOT")
         else:
             result.append(venue)
     return result
@@ -181,6 +184,132 @@ def _get_venue_epoch(venue: str) -> str | None:
         if venue.startswith(prefix):
             return epoch
     return None
+
+
+# ---------------------------------------------------------------------------
+# Cross-cutting venue-count-regression detection (generalizes DeFi's
+# ``_enforce_defi_monotonicity`` / ``_get_defi_manifest_high_watermarks`` —
+# defi.py — into an asset-group-parameterized shared helper. Extracted per
+# unified-trading-pm/plans/active/issues/
+# cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md Todo 6.
+# defi.py keeps calling through here (thin wrappers, unchanged behaviour);
+# CeFi/TradFi call this directly from process_fetch.py's shared chokepoint.
+# ---------------------------------------------------------------------------
+
+# Ratio threshold for the CeFi/TradFi (non-DeFi) policy — matches
+# instruments-service/scripts/cefi_cumulative_drawdown_guard_2026_06_27.py's own
+# "thin-day-collapse" convention (<50% of baseline) so "collapse" means the same
+# thing everywhere in this codebase. Applied here as a single-snapshot ratio
+# against the manifest's all-time high-water mark (not a trailing median) so the
+# per-day capture chokepoint stays a single cheap manifest read, not a windowed
+# scan.
+_CEFI_TRADFI_THIN_COLLAPSE_RATIO: float = 0.5
+
+
+def _get_manifest_high_watermarks(asset_group: str) -> dict[str, int]:
+    """Read ``asset_group``'s manifest and return the max instrument_count per venue.
+
+    Generalizes DeFi's ``_get_defi_manifest_high_watermarks`` (defi.py) to any
+    venue-grain asset group (CEFI/TRADFI/DEFI) so CeFi/TradFi can reuse the same
+    epoch-aware high-water-mark computation without a DeFi-specific caller.
+
+    Only considers manifest entries from the current adapter epoch forward
+    (``_VENUE_ADAPTER_EPOCH`` / ``_get_venue_epoch``) — entries from before an
+    adapter-logic change are not comparable to current-adapter counts.
+    """
+    try:
+        bucket = _orch._get_instruments_bucket(asset_group)
+        index_df = _orch.read_availability_index(bucket)
+        if index_df.empty:
+            return {}
+        hwm: dict[str, int] = {}
+        venue_vals: list[object] = list(index_df["venue"])
+        count_vals: list[object] = list(index_df["instrument_count"])
+        date_vals: list[object] = list(index_df["date"])
+        for v_raw, c_raw, d_raw in zip(venue_vals, count_vals, date_vals, strict=True):
+            v = str(v_raw)
+            c = int(str(c_raw))
+            d = str(d_raw)
+            epoch = _orch._get_venue_epoch(v)
+            if epoch is not None and d < epoch:
+                continue
+            if c > hwm.get(v, 0):
+                hwm[v] = c
+        return hwm
+    except Exception as exc:
+        _orch.classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation=f"read_{asset_group.lower()}_manifest",
+        )
+        return {}
+
+
+def _enforce_monotonicity(
+    records: list[_orch.InstrumentRecord],
+    hwm: dict[str, int],
+    *,
+    block_on_regression: bool,
+    min_ratio: float = 1.0,
+) -> tuple[list[_orch.InstrumentRecord], set[str]]:
+    """Generic per-venue count-regression check against a manifest high-water mark.
+
+    Generalizes DeFi's ``_enforce_defi_monotonicity`` (defi.py) with two
+    per-asset-group-parameterized knobs (Todo 6 of the cefi-monotonicity-
+    alerting issue doc — see module docstring above):
+
+    - ``min_ratio``: how far below the HWM triggers a flag. DeFi passes
+      ``1.0`` (any decrease at all — smart-contract instruments are immutable,
+      never delisted, so the manifest max is a true floor). CeFi/TradFi pass
+      ``_CEFI_TRADFI_THIN_COLLAPSE_RATIO`` (0.5) — legitimate delistings
+      (CeFi) and contract expiries (TradFi) are real, expected decreases in
+      *today's active count* (though never in *instruments-ever-seen*), so a
+      DeFi-style "any decrease at all" rule would permanently false-block the
+      first legitimate CeFi delisting.
+    - ``block_on_regression``: DeFi passes ``True`` (regressed venues are
+      REMOVED from the record list — must not overwrite better data with a
+      broken fetch). CeFi/TradFi pass ``False`` (DETECT + log only — the
+      write proceeds; a legitimate delisting must never be silently blocked
+      from ever writing again).
+
+    Returns ``(clean_records, flagged_venues)``. ``clean_records is records``
+    (nothing removed) whenever ``block_on_regression=False`` or nothing was
+    flagged. Only checks venues actually present in ``records`` — venues not
+    fetched this run are ignored (0 count but never requested, not a regression).
+    """
+    new_counts = _orch._count_per_venue(records)
+    fetched_venues = set(new_counts.keys())
+    flagged: set[str] = set()
+    for venue, old_max in hwm.items():
+        if venue not in fetched_venues:
+            continue
+        new_count = new_counts.get(venue, 0)
+        threshold = old_max * min_ratio
+        if new_count < threshold:
+            flagged.add(venue)
+            _orch.logger.error(
+                "Venue count regression%s: %s has %d instruments (manifest max=%d, min_ratio=%.2f) — %s",
+                " BLOCKED" if block_on_regression else " detected",
+                venue,
+                new_count,
+                old_max,
+                min_ratio,
+                "will NOT write to GCS (would overwrite better data)"
+                if block_on_regression
+                else "write proceeds (detect-only policy for this asset group)",
+            )
+        elif new_count > old_max:
+            _orch.logger.info(
+                "Venue count OK: %s grew %d → %d (+%d)",
+                venue,
+                old_max,
+                new_count,
+                new_count - old_max,
+            )
+
+    if block_on_regression and flagged:
+        records = [r for r in records if r.venue not in flagged]
+    return records, flagged
 
 
 def _should_skip_shard(
@@ -314,7 +443,7 @@ def get_venues_for_asset_groups(asset_groups: list[str]) -> list[str]:
     """Return the IS instrument-fetch venue list for the requested asset groups (CEFI, DEFI, …).
 
     CEFI: applies ``expand_cefi_tardis_endpoints`` to ``VENUES_BY_ASSET_GROUP["cefi"]`` so
-        bare UAC canonical aliases (``OKX``, ``COINBASE``) are expanded to the Tardis
+        bare UAC canonical aliases (``OKX``) are expanded to the Tardis
         per-endpoint forms IS actually fetches from.  ``KALSHI-PERP`` and
         ``POLYMARKET-PERP`` are included automatically (they are UAC cefi venues).
 

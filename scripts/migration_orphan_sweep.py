@@ -121,12 +121,27 @@ _DATA_PREFIXES: tuple[str, ...] = ("raw_tick_data/", "day=")
 #   * ``configs/`` — service config artifacts co-located in the AG buckets.
 #   * ``databento-batch-registry/`` — the tradfi Databento batch-job registry
 #     (vendor job metadata, not market data).
+#   * ``_migration_backup`` (2026-07-10, found running the tradfi orphan sweep) — the
+#     backup-first pattern used by the 2026-07-09 canonicalization migrators
+#     (``migrate_tradfi_single_leg_product_root_lin_2026_07_09.py`` writes
+#     ``_migration_backup_2026_07_09/``; the sibling defi/cefi 07-09 migrators write
+#     ``_migration_backups/<effort>/``) — server-side pre-write copies, own lifecycle
+#     (deleted after the owning migration is verified), never raw-tick data.
+#   * ``_needs_attribution`` (2026-07-10, full unlimited tradfi sweep: 71,830 objects
+#     surfaced as ``unknown``) — the deliberate holding prefix both
+#     ``migrate_tradfi_to_v9_canonical.py`` and the defi walk migrator write un-path-
+#     attributable legacy objects to (no ``instrument_type=``, non-chain, bare-symbol
+#     stem) instead of silently dropping them (operator 2026-06-08: "preserve, never
+#     lose; do NOT guess"). PRESERVED holding data, own later content-aware attribution
+#     pass, never raw-tick-deleted by this sweep.
 _NON_DATA_TOP_LEVEL_LABELS: dict[str, str] = {
     "_manifests/": "manifest-infra",
     "configs/": "configs",
     "dex_pools/": "legacy-data",
     "lending_indices/": "legacy-data",
     "databento-batch-registry/": "vendor-registry",
+    "_migration_backup": "migration-backup",
+    "_needs_attribution": "needs-attribution",
 }
 _NON_DATA_PREFIX_LABELS: dict[str, str] = {
     "_index/": "manifest-infra",

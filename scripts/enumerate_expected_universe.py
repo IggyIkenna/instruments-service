@@ -1847,8 +1847,15 @@ def _enumerate_v2_prediction(
         # Prefer market lifecycle fields; fall back to generic available_from/to
         created_str = instr.market_created_at or instr.available_from
         settled_str = instr.settlement_time or instr.available_to
-        af_ts = pd.Timestamp(created_str) if created_str else None
-        at_ts = pd.Timestamp(settled_str) if settled_str else None
+        af_raw = pd.Timestamp(created_str) if created_str else None
+        at_raw = pd.Timestamp(settled_str) if settled_str else None
+        # Normalize to tz-naive for comparison with the (always tz-naive) date axis —
+        # some catalogue rows carry a tz-aware market_created_at/settlement_time
+        # (real, data-dependent: only triggers when the raw string has a tz suffix),
+        # which otherwise raises "Cannot compare tz-naive and tz-aware timestamps"
+        # (matches the pattern already used for cefi/tradfi above in this file).
+        af_ts = af_raw.tz_localize(None) if (af_raw is not None and af_raw.tzinfo is not None) else af_raw
+        at_ts = at_raw.tz_localize(None) if (at_raw is not None and at_raw.tzinfo is not None) else at_raw
         if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
             continue  # fully settled before window started
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
