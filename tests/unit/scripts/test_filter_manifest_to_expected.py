@@ -140,15 +140,15 @@ class TestFilterRemovesOutOfScopeRows:
 class TestFilterCanonicalisation:
     """Filter uses the same canonical grain check_enumeration_completeness uses."""
 
-    def test_cefi_okx_spot_folds_to_okx(self, mod: ModuleType) -> None:
-        """OKX-SPOT venue in manifest folds to OKX canonical — kept if
-        (OKX, spot_pair, trades) is in EXPECTED.
+    def test_cefi_okx_spot_matches_own_expected_entry(self, mod: ModuleType) -> None:
+        """OKX-SPOT venue in manifest matches directly (no fold, 2026-07-10) —
+        kept because (OKX-SPOT, spot_pair, trades) is its own EXPECTED entry.
         """
         df = _make_manifest(
             [
                 {
                     "capture_status": "captured",
-                    "venue": "OKX-SPOT",  # writer-side Tardis split
+                    "venue": "OKX-SPOT",  # its own declared canonical cefi venue
                     "instrument_type": "spot_pair",
                     "data_type": "trades",
                 },
@@ -180,9 +180,7 @@ class TestFilterCanonicalisation:
 class TestFilterDegradesGracefully:
     """Missing columns → return input df unchanged (no gate applied)."""
 
-    def test_missing_instrument_type_column_returns_unchanged(
-        self, mod: ModuleType
-    ) -> None:
+    def test_missing_instrument_type_column_returns_unchanged(self, mod: ModuleType) -> None:
         df = _make_manifest(
             [
                 {
@@ -254,9 +252,7 @@ class TestFilterExplicitExpected:
         )
         # Only the trades tuple in the explicit expected set.
         explicit_expected = {("BINANCE-FUTURES", "perpetual", "trades")}
-        filtered = mod.filter_manifest_to_expected(
-            "cefi", df, expected=explicit_expected
-        )
+        filtered = mod.filter_manifest_to_expected("cefi", df, expected=explicit_expected)
         assert len(filtered) == 1
         assert filtered.iloc[0]["data_type"] == "trades"
 

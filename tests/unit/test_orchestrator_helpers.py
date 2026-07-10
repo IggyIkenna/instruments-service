@@ -17,6 +17,7 @@ from instruments_service.engine.orchestrator import (
     _write_catalogue_record,
     _write_fixture_mapping,
     _write_venue,
+    expand_cefi_tardis_endpoints,
     filter_defi_instruments_by_relevance,
     filter_instruments_by_date,
     get_venues_for_asset_groups,
@@ -215,6 +216,58 @@ class TestGetVenuesForCategories:
         venues_upper = get_venues_for_asset_groups(["CEFI"])
         venues_lower = get_venues_for_asset_groups(["cefi"])
         assert venues_upper == venues_lower
+
+
+class TestExpandCefiTardisEndpoints:
+    """Regression coverage for coinbase_bare_name_migration_2026_07_06.md Step S2.
+
+    Bare ``COINBASE`` no longer appears in UAC's ``VENUES_BY_ASSET_GROUP["cefi"]``
+    input list (``COINBASE-SPOT`` is the canonical cefi spot venue, migrated in Step
+    S3), so the ``elif venue == "COINBASE"`` alias branch was dead code and was
+    deleted.
+    """
+
+    def test_expand_cefi_tardis_endpoints_no_bare_coinbase_input(self) -> None:
+        """A bare-COINBASE-free input list passes COINBASE-SPOT through unchanged."""
+        result = expand_cefi_tardis_endpoints(["COINBASE-SPOT", "BINANCE-SPOT"])
+        assert result == ["COINBASE-SPOT", "BINANCE-SPOT"]
+
+    def test_expand_cefi_tardis_endpoints_okx_still_splits(self) -> None:
+        """OKX splitting is unaffected by the COINBASE alias removal."""
+        result = expand_cefi_tardis_endpoints(["OKX", "COINBASE-SPOT"])
+        assert result == ["OKX-SPOT", "OKX-SWAP", "OKX-FUTURES", "COINBASE-SPOT"]
+
+    def test_expand_cefi_tardis_endpoints_bare_coinbase_no_longer_expanded(self) -> None:
+        """If bare COINBASE is ever fed in (should not happen post-S3), it now
+        passes through unchanged rather than being silently expanded to
+        COINBASE-SPOT — the alias-expansion branch is gone."""
+        result = expand_cefi_tardis_endpoints(["COINBASE"])
+        assert result == ["COINBASE"]
+
+    def test_cefi_coinbase_spot_expected_set_survives_fold_inversion(self) -> None:
+        """COINBASE-SPOT's real EXPECTED set is {(spot_pair, trades)} post-S1/S3.
+
+        ``book_snapshot_5`` is correctly ABSENT — UAC's execution_fidelity
+        trades-only override for CeFi COINBASE drops it (independent of this
+        migration; the override matches on the venue's base-token prefix, so it
+        applies whether the key is bare ``COINBASE`` or ``COINBASE-SPOT``). The
+        D2a itype-gate authority switch must not silently drop this pair after
+        the S1 ``_CEFI_VENUE_FOLD`` anchor inversion.
+        """
+        import importlib.util
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location("_eu", repo_root / "scripts" / "expected_universe.py")
+        assert spec is not None and spec.loader is not None
+        eu = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(eu)
+
+        expected = eu.build_expected("cefi")
+        coinbase_spot = {t for t in expected if t[0] == "COINBASE-SPOT"}
+        assert coinbase_spot == {("COINBASE-SPOT", "spot_pair", "trades")}, (
+            f"COINBASE-SPOT EXPECTED set drifted: {coinbase_spot}"
+        )
 
 
 # ---------------------------------------------------------------------------

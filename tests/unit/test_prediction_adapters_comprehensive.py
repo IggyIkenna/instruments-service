@@ -685,11 +685,16 @@ class TestPolymarketFetchPageErrorPaths:
 
     @pytest.mark.asyncio
     async def test_fetch_page_client_error(self) -> None:
-        """Client error in _fetch_page RAISES (→ attempted_failed), not return [].
+        """Client error in _fetch_page RAISES RuntimeError (→ attempted_failed), not return [].
 
         Updated from the pre-CF-11 return-empty contract (which let a transient
         failure truncate the live universe to a silent-complete empty) per
-        prediction_manifest_canonicalisation_2026_06_01 § CF-11 IS write-path.
+        prediction_manifest_canonicalisation_2026_06_01 § CF-11 IS write-path. The
+        re-raise MUST be a ``RuntimeError`` (wrapping the ``aiohttp.ClientError``): a bare
+        ``ClientError``/``ClientResponseError`` is NOT in ``_fetch_one_venue``'s except-ladder
+        and would propagate uncaught through the caller's ``asyncio.gather`` (no
+        ``return_exceptions=True``), crashing the whole multi-venue batch instead of landing
+        the cell in ``attempted_failed`` (mirrors cefi ``aster.py``).
         """
         adapter = PolymarketReferenceDataAdapter()
         mock_session_obj = MagicMock()
@@ -698,8 +703,37 @@ class TestPolymarketFetchPageErrorPaths:
         mock_cm.__aexit__ = AsyncMock(return_value=None)
         mock_session_obj.get = MagicMock(return_value=mock_cm)
         now = datetime.now(UTC)
-        with pytest.raises(aiohttp.ClientError):
+        with pytest.raises(RuntimeError) as excinfo:
             await adapter._fetch_page(mock_session_obj, 0, now)
+        # chained cause preserved for classification/debugging
+        assert isinstance(excinfo.value.__cause__, aiohttp.ClientError)
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_raw_clob_markets_client_error_raises(self) -> None:
+        """Client error in the CLOB full-scan RAISES RuntimeError (→ attempted_failed).
+
+        ``_fetch_all_raw_clob_markets`` is the historical/backfill CLOB pagination path.
+        A mid-scan ``aiohttp.ClientError`` (4xx/429/5xx) must re-raise as ``RuntimeError``
+        (caught by ``_fetch_one_venue`` → ``attempted_failed``), never truncate the market
+        universe to a silent-complete partial list. Mirrors the ``_fetch_page`` gamma path +
+        cefi ``aster.py``. Was previously UNTESTED (CF-11 audit gap, 2026-07-10).
+        """
+        adapter = PolymarketReferenceDataAdapter()
+        # session.get(...) context manager raises the ClientError on enter.
+        get_cm = MagicMock()
+        get_cm.__aenter__ = AsyncMock(side_effect=aiohttp.ClientError("network error"))
+        get_cm.__aexit__ = AsyncMock(return_value=None)
+        session_obj = MagicMock()
+        session_obj.get = MagicMock(return_value=get_cm)
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session_obj)
+        session_cm.__aexit__ = AsyncMock(return_value=None)
+        with (
+            patch.object(adapter, "_make_session", return_value=session_cm),
+            pytest.raises(RuntimeError) as excinfo,
+        ):
+            await adapter._fetch_all_raw_clob_markets()
+        assert isinstance(excinfo.value.__cause__, aiohttp.ClientError)
 
     @pytest.mark.asyncio
     async def test_fetch_page_validation_error_skipped(self) -> None:
