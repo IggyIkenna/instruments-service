@@ -9,12 +9,6 @@
 > including current-vs-target-canonical comparisons for every open divergence described below —
 > [artifact e2824e52-3a51-43e0-b4b1-933bee469f9d](https://claude.ai/code/artifact/e2824e52-3a51-43e0-b4b1-933bee469f9d),
 > DeFi / CeFi tabs. Not browsable from this doc — open it directly and navigate to the relevant tab.
->
-> **This doc replaces stale architecture claims found in the docs it merges.** The previous `ARCHITECTURE.md` /
-> `COMMAND_FLOW_*` docs described an `app/core/` + `app/venues/` module layout (`InstrumentProcessingService`,
-> `CloudInstrumentStorage`, `InstrumentBatchProcessor`, `TardisAdapter`) and a `--mode instruments` CLI invocation.
-> **None of that exists in the current codebase.** The real module layout, CLI convention, and orchestration pipeline
-> are described below, verified directly against `instruments-service/instruments_service/` as of 2026-07-08.
 
 ---
 
@@ -111,11 +105,6 @@ instruments_service/
 └── triggers/                          # live-mode trigger dispatch (--trigger flag, in-progress per instruments_master)
 ```
 
-There is **no `app/` directory, no `InstrumentProcessingService`, no `CloudInstrumentStorage`, no
-`InstrumentBatchProcessor`, no `TardisAdapter` class, no `venues/` directory** — these were real at some point but
-have since been replaced wholesale by the `reference_data/adapters/` + `engine/orchestrator/` split described here.
-Any other document, runbook, or onboarding note still citing the old names/paths is stale.
-
 ---
 
 ## Command flow
@@ -140,15 +129,13 @@ python -m instruments_service --operation instruments --mode batch \
   `--season` (sports-domain scoping), `--source` (`massive` routes TradFi to the Massive/Polygon.io-compatible
   adapter instead of Databento), `--trigger` (live-mode entity-subset selector, in-progress rollout), `--run-tag`
   (GCS output prefix; `t1-recon` self-defaults the date window to today).
-- The `--mode instruments` form documented previously is **stale** — `--mode` now means batch/live only; the older
-  docs conflated it with today's `--operation`.
 
 ### Orchestration: `process_instruments()` (8 stages)
 
 `InstrumentsHandler.process()` (in `cli/instruments_handler.py`) calls `engine.orchestrator.process_instruments()`
-once per date in the requested range. The function was split (behaviour-preserving extraction) from a former
-~1,931-line monolith into cohesion modules that share mutable state through a package-level `_orch` namespace —
-`unittest.mock.patch("instruments_service.engine.orchestrator.<name>")` still targets correctly across the split.
+once per date in the requested range. Its logic is organized into cohesion modules (see the module map above) that
+share mutable state through a package-level `_orch` namespace —
+`unittest.mock.patch("instruments_service.engine.orchestrator.<name>")` targets correctly across the modules.
 
 ```
 InstrumentsHandler.preflight()
@@ -208,9 +195,8 @@ Every write goes through `engine.orchestrator.catalogue._get_instruments_bucket(
 `instruments-store-{asset_group}-{env}-{project_id}` for `cefi`/`defi`/`tradfi`/`sports`, **except prediction**, which
 resolves via a dedicated flat kind (`instruments-store-prediction` → `instruments-store-pred-{env}-{project_id}`) —
 not a `PREDICTION` entry in the per-asset-group dict. Every consumer of the prediction store must resolve the flat
-kind or it 404s; this bucket-naming split was confirmed still real and live as of the 2026-07-08 audit
-(`instruments-store-pred-prd-central-element-323112` exists; `instruments-store-prediction-prd-central-element-323112`
-404s).
+kind or it 404s (`instruments-store-pred-prd-central-element-323112` exists;
+`instruments-store-prediction-prd-central-element-323112` 404s).
 
 Each write also updates the consolidated `_index/availability_index.parquet` roll-up (`catalogue._write_catalogue_record()`)
 so downstream services can check completeness without listing thousands of GCS blobs, and flushes to the
@@ -223,8 +209,8 @@ per-asset-group MTDS-visible manifest (`ManifestWriter`) at date-loop `cleanup()
 ### Pattern
 
 Every venue/protocol integration subclasses `reference_data.base_adapter.BaseReferenceDataAdapter` (an ABC). The base
-class provides: bounded-timeout `aiohttp` session management (a mandatory `ClientTimeout` — an unbounded session was
-the root cause of a 2026-06-19 silent-stall incident), retry with backoff on `{429,500,502,503,504}`, and the shared
+class provides: bounded-timeout `aiohttp` session management (a mandatory `ClientTimeout`), retry with backoff on
+`{429,500,502,503,504}`, and the shared
 canonical schemas (`CanonicalOptionsChain`, `CanonicalExpiryCalendar`, `OHLCVRef`, `FundingRateRef`). Adapters are
 API-keyless by convention — the service fetches credentials from Secret Manager (via `ApiKeyReloader`) and injects
 them at call time as the `api_key` constructor argument; no adapter reads `os.getenv()` or a secret name directly.
@@ -268,7 +254,7 @@ raise an actionable `DependencyError` naming the exact backfill command to run f
 `kelpdao.py`, `eigenlayer.py`, `mango.py`, `zeta.py`, `flash_trade.py`, `solana_native_staking.py`. Every DeFi adapter
 builds its venue token as `f"{protocol}-{chain}"` (dash-separated — e.g. `AAVE_V3-ARBITRUM`, `UNISWAP_V3-ETHEREUM`;
 confirmed directly in `aave_v3.py`/`uniswap_v3.py` source), not the underscore-joined form (`AAVE_V3_ETH`) some older
-docs and a handful of misspelled real rows (`AAVEV3-OPTIMISM`, `AAVE_V3-OPTIMISM` duplication) still show.
+docs show.
 
 **TradFi** (`reference_data/adapters/tradfi/`): `databento/` (`adapter.py`, `symbology.py`, `sessions.py` — CME/NASDAQ/
 NYSE/CBOE/ICE via Databento, including static VIX/KRW-USD/Bitcoin-ETF definitions), `ibkr.py` (Interactive Brokers),
@@ -285,39 +271,34 @@ root for every enrichment provider), `adapters/betfair.py`, plus the enrichment-
 
 ### Current implementation status
 
-All of the above are real, wired-up adapters as of this writing (registered in `reference_data/factory.py`'s import
-list and `_ADAPTERS` table). There is no meaningful "pending implementation" venue set left over from the old docs —
-Euler/Fluid/Hyperliquid/Aster all shipped since. Check `factory.py` directly for the authoritative, current adapter
-registration table rather than trusting a static list in any doc (this one included) to stay perfectly current.
+All of the above are real, wired-up adapters (registered in `reference_data/factory.py`'s import list and `_ADAPTERS`
+table). Check `factory.py` directly for the authoritative, current adapter registration table rather than trusting a
+static list in any doc (this one included) to stay perfectly current.
 
 ---
 
 ## Canonical Instrument ID Specification
 
-> **Corrections applied in this section relative to the old `INSTRUMENT_SPECIFICATION.md`** — see
-> `unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md` (the operator-decided
-> target-state doc) and `unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md` (the
-> full 7-layer compliance audit) for full evidence. **None of the "target" forms below are live in production today**
-> — this section shows current-real vs target-canonical explicitly, same pattern as the live mockup.
+> See `unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md` (the operator
+> target-state decision doc) and `unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md`
+> (the compliance audit) for full evidence. This section shows current-real vs target-canonical forms explicitly,
+> same pattern as the live mockup — the target forms below (the `@LIN`/`@INV` margin marker, dash-separated DeFi pool
+> fee tiers) are not yet live in production.
 
-### The architecture is now decided: ONE shared builder for every asset group — adoption is still in progress
+### One shared builder for every asset group
 
-**RESOLVED 2026-07-08** (operator, `instrument_id_format_canonicalization_2026_07_08.md`): _"one builder for
-everything would make more sense... every asset group, every instrument type, can get its canonical instrument IDs,
-same with fixtures [sports], just by filling in the right inputs."_ Per-domain builders that each independently
-canonicalize are explicitly **rejected**. This section previously described a real gap ("there is no single enforced
-builder") found by the 2026-07-08 audit, which sampled instruments-service (39+ adapter files), MTDS, deployment-api,
-and strategy-service and found that virtually every adapter built its own `instrument_key` ad hoc (direct f-string
-construction, as shown in the real `aave_v3.py` / `uniswap_v3.py` / `morpho.py` snippets referenced above). That gap
-is now a decided target-state with a real, shipped implementation — but **adoption across the ~40+ existing ad hoc
-call sites is NOT yet complete**; most adapters still build `instrument_key` the old way until retrofitted. Treat this
-section as "the one builder now exists and is the required target for every NEW call site," not "every adapter
-already uses it."
+`unified_api_contracts.build_canonical_instrument_id(asset_group, venue, instrument_type, **kwargs)` is the single
+dispatch entry point for canonical instrument ids across every asset group (CeFi/DeFi/TradFi/Prediction/Sports) —
+per-domain builders that each independently canonicalize are not used. It dispatches to the one real construction
+implementation per asset group — callers never need to know which internal helper to call.
 
-**The one entry point**: `unified_api_contracts.build_canonical_instrument_id(asset_group, venue, instrument_type,
-**kwargs)` (`unified-api-contracts/unified_api_contracts/internal/reference/canonical_id_builder.py`). It dispatches
-to the one real construction implementation per asset group — callers never need to know which internal helper to
-call:
+**Known limitation: adoption is partial (retrofit in progress).** 41 adapters build their ids through the shared
+builder (`build_instrument_id` / `build_leg` / `build_canonical_instrument_id`); roughly 31 adapter files still
+construct `instrument_key` with ad hoc f-strings. The remaining ad-hoc sites — plus MTDS's
+`canonical_write.py`/`tardis_shared.py` — are tracked for retrofit in
+`unified-trading-pm/plans/active/canonical_id_builder_retrofit_checklist_2026_07_08.md`.
+
+Defined in `unified-api-contracts/unified_api_contracts/internal/reference/canonical_id_builder.py`:
 
 ```python
 from unified_api_contracts import AssetGroup, InstrumentType, build_canonical_instrument_id
@@ -344,27 +325,19 @@ build_canonical_instrument_id(
 # → "ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322"
 ```
 
-Two supporting additions ship alongside the entry point, both extending — not duplicating — existing infrastructure:
+Two supporting additions extend — not duplicate — existing infrastructure:
 
 - **`passthrough=True`** on `build_instrument_id()` — wraps an already-fully-formed raw/native symbol verbatim as
-  `VENUE[-CHAIN]:TYPE:SYMBOL` instead of reconstructing it from `expiry_date`/`strike`/`option_right`. This closes the
-  real gap that made the CCXT live-mode fix (`instruments-service@8544273d`,
-  `canonical_id_p0_ccxt_live_batch_divergence_2026_07_08.md`) deliberately NOT route through this module: dated
-  FUTURE/OPTION ids need to pass through the raw exchange-native id (matching Tardis), not get reconstructed from
-  parts. `passthrough=True` is exactly that pass-through path, now available in the shared builder.
+  `VENUE[-CHAIN]:TYPE:SYMBOL` instead of reconstructing it from `expiry_date`/`strike`/`option_right`. Used for dated
+  FUTURE/OPTION ids that need to pass through the raw exchange-native id (matching Tardis) rather than being
+  reconstructed from parts.
 - **`build_leg(venue, instrument_type, symbol, *, side, ratio=1, ...)`** — builds one
   `unified_api_contracts.internal.InstrumentLeg` via the same shared construction, for multi-leg combos. Extends the
-  real existing `InstrumentLeg`/`InstrumentType.COMBO` infrastructure already used by `databento/symbology.py`'s
-  `_parse_cme_calendar_spread_legs` and both Deribit combo builders, each of which today builds a leg's
-  `instrument_key` with its own ad hoc f-string (e.g. `f"{venue}:FUTURE:{front}"`, `f"DERIBIT:{leg_name}"` — the
-  latter missing its `:TYPE:` segment entirely).
+  existing `InstrumentLeg`/`InstrumentType.COMBO` infrastructure also used by `databento/symbology.py`'s
+  `_parse_cme_calendar_spread_legs` and the Deribit combo builders.
 
-**Retrofit status (2026-07-08)**: `deribit_options_adapter.py` now calls `build_instrument_id(..., passthrough=True)`
-for its OPTION `instrument_key` (behavior-preserving — same real output, `DERIBIT:OPTION:<raw_name>`, verified by the
-adapter's existing regression test). The remaining ~40 ad hoc call sites (every DeFi pool/lending/LST adapter, the
-on-chain-perp adapters, Deribit's combo-leg builder, TradFi's Databento/CME path, sports/prediction adapters, and
-MTDS's `canonical_write.py`/`tardis_shared.py`) are tracked as a follow-up retrofit checklist — see
-`unified-trading-pm/plans/active/canonical_id_builder_retrofit_checklist_2026_07_08.md`.
+Multi-leg combo legs (Deribit combos, CME calendar spreads) are built through `build_leg()`, so each leg carries its
+full `VENUE:TYPE:SYMBOL` form.
 
 ### Top-level grammar
 
@@ -391,23 +364,19 @@ carries it. Do not present it as real or in-use; the real, live top-level shape 
 DeFi protocol-on-chain venue tokens are `PROTOCOL-CHAIN`, dash-separated throughout — `AAVE_V3-ARBITRUM`,
 `UNISWAP_V3-ETHEREUM`, `MORPHO-BASE`. (The underscore inside `AAVE_V3` / `UNISWAP_V3` is part of the protocol name
 itself, not a venue/chain joiner.) Real adapter source confirms this — both `aave_v3.py` and `uniswap_v3.py` build
-`venue_tag = f"{self._venue_prefix}-{self._chain}"`. Some older docs and a real, live, misspelled duplicate
-(`AAVEV3-OPTIMISM` alongside the correct `AAVE_V3-OPTIMISM`) show the underscore-joined form
-(`AAVE_V3_ETH`/`AAVE_V3_OPTIMISM`) — that form is not the target and, where it appears as a distinct real venue token
-from the correctly-dashed one, is a bug (a fragmenting duplicate-spelling issue), not an accepted alternate.
+`venue_tag = f"{self._venue_prefix}-{self._chain}"`. The underscore-joined form (`AAVE_V3_ETH`/`AAVE_V3_OPTIMISM`)
+shown in some older docs is not the target and does not appear in current adapter output.
 
 ### Margin marker: `@LIN` / `@INV` suffix, no trailing `@VENUE`
 
-**Decided target**: `@LIN` (linear — quote asset is the margin currency) or `@INV` (inverse — base asset is the
-margin currency), as a suffix on the instrument payload. Matches strategy-service's existing position-ID convention
-(e.g. `HYPERLIQUID:PERPETUAL:ETH-USDC@LIN@HYPERLIQUID` was the old provisional form) — **explicitly decided NOT to
-also append `@VENUE`**, since venue is already the first colon-segment and repeating it there is redundant (operator:
-_"I don't see why you would append the venue suffix to something that already has venue in its canonical name"_).
-`canonical_id_builder.py`'s current real code does **not** yet implement this — it still emits the older
+Target: `@LIN` (linear — quote asset is the margin currency) or `@INV` (inverse — base asset is the margin currency),
+as a suffix on the instrument payload, with no additional trailing `@VENUE` segment (venue is already the first
+colon-segment, so repeating it there is redundant — matches strategy-service's position-ID convention, e.g.
+`HYPERLIQUID:PERPETUAL:ETH-USDC@LIN` rather than the old provisional `...@LIN@HYPERLIQUID` form).
+
+**Known limitation**: `canonical_id_builder.py` does not yet implement this — it still emits the older
 `-inverse-`/`-linear-` lowercase word form embedded between underlying and expiry (e.g.
-`DERIBIT:FUTURE:BTC-USD-inverse-20261226`), which the operator explicitly rejected in favor of the `@LIN`/`@INV`
-suffix form for the reasons above. Both forms coexist as "not the current target" today; treat the code's own
-docstring examples as stale relative to this decided target.
+`DERIBIT:FUTURE:BTC-USD-inverse-20261226`), not the `@LIN`/`@INV` suffix form.
 
 ### Date format: `YYYYMMDD` (8-digit, sortable) — not `YYMMDD`
 
@@ -417,41 +386,36 @@ docstring examples as stale relative to this decided target.
 Bybit uses a real `DDMMMYY` format with no quote segment at all (`BYBIT:FUTURE:BTC-01DEC23`), and Deribit's real
 `DDMMMYY` (`BTC-10JUL26`) — while internally clean — does not match `YYYYMMDD` either. (Kraken's raw `FF_`/`FI_`
 contract-type prefix causing a 5-instrument dated-future symbol collision was a real, structural bug here too — it is
-now **FIXED**, `market-tick-data-service@3d7491b1bcbebc17af0aa31219e90f38478d57cd`, confirmed in
-`CEFI_INSTRUMENTS.md`'s Known-bugs table; the fix restored per-instrument distinctness but did not migrate the format
-to the `@INV`/`YYYYMMDD` target — that remains a separate, still-pending migration.) An older 6-digit `YYMMDD` grammar
-rule that appeared in prior docs was simply wrong; the real decided target has always been the 8-digit sortable form.
+now **FIXED**, `market-tick-data-service@3d7491b1bcbebc17af0aa31219e90f38478d57cd`; the fix restored per-instrument
+distinctness but did not migrate the format to the `@INV`/`YYYYMMDD` target — that remains a separate, still-pending
+migration.) The decided target has always been the 8-digit sortable form, not a 6-digit `YYMMDD` grammar.
 
 ### DeFi pool format: dash-separated fee tier, not colon-separated
 
-**Decided target**: `VENUE-CHAIN:POOL:TOKEN0-TOKEN1-FEE_TIER` (dash before the fee tier), e.g.
-`UNISWAP_V3-ETHEREUM:POOL:USDC-WETH-500`. **Not** `VENUE:POOL:BASE-QUOTE:FEE_TIER@CHAIN` (colon before fee tier) as
-shown in some older docs — colon is the reserved top-level `VENUE:TYPE:SYMBOL` delimiter, so a second colon inside
-the payload is ambiguous to any naive `split(":")` parser. The fee tier (basis points — 100/500/3000/10000 for
-Uniswap V3) must be part of the canonical symbol per operator decision, not dropped. Real production data today is
-further from this than the format question alone suggests: DEX-pool `instrument_id` is, across 6,180+ real rows and
-13 protocols, a **bare on-chain pool address** with zero `VENUE:TYPE:SYMBOL` structure at all (venue/chain/assets
-live in separate columns) — the dash-fee-tier format above is the target once that gap is closed, not a description
-of what exists today.
+Target: `VENUE-CHAIN:POOL:TOKEN0-TOKEN1-FEE_TIER` (dash before the fee tier), e.g.
+`UNISWAP_V3-ETHEREUM:POOL:USDC-WETH-500`. The fee tier (basis points — 100/500/3000/10000 for Uniswap V3) is part of
+the canonical symbol, not dropped.
 
-### Known real, live P0 bugs affecting instrument_id correctness (not just formatting)
+**Known limitation**: current adapter code (`uniswap_v3.py`, `curve.py`) instead builds a second colon before the fee
+tier — `VENUE-CHAIN:POOL:TOKEN0-TOKEN1:FEE_TIER` (e.g. `UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:500`) — which is ambiguous
+to a naive `split(":")` parser since colon is the reserved top-level `VENUE:TYPE:SYMBOL` delimiter.
 
-The 2026-07-08 audit found several **live, currently-wrong** bugs distinct from the format-convention questions
-above, each with its own fix plan (`instruments_master` epic):
+**Known gap (not verifiable from code alone)**: per the 2026-07-08 audit, captured DEX-pool `instrument_id` values in
+production are a bare on-chain pool address with no `VENUE:TYPE:SYMBOL` structure at all (venue/chain/assets tracked
+in separate columns) across 6,180+ real rows and 13 protocols — the dash-fee-tier format above is the target once
+that gap is closed.
+
+### Other known limitations affecting instrument_id correctness
 
 - **Kraken-Futures dated-future symbol collision**: the MTDS Tardis adapter's underlying-extraction regex assumes a
   `TICKER-QUOTE` shape; Kraken's real raw format is `{TYPE_PREFIX}_{PAIR}_{DATE}` (e.g. `FI_XBTUSD_220325`), so BCH/
   ETH/LTC/XBT/XRP quarterly futures with the same expiry all collide onto the byte-identical
   `KRAKEN-FUTURES:FUTURE:FI-USD-inverse-20220325`. Structural — every Kraken dated future hits this.
-- **23 DeFi adapters silently return empty on canonical-form type filters** — 7 lending + 16 yield/LST adapters guard
-  `get_instruments()` against lowercase snake_case literals that never match the real uppercase `InstrumentType`
-  enum values.
-- **Live≠batch instrument_id divergence for 13 major CeFi venues** — the live-mode CCXT adapter path stores the bare
-  unmodified ccxt-native symbol as `instrument_key`, never passed through any canonicalizer, while batch (Tardis)
-  produces a differently-shaped id for the same real instrument.
 
-These are tracked as their own immediately-actionable fix plans, not deferred behind the broader canonicalization
-decision — see the audit doc's `resulting_plan:` list for the current plan filenames.
+Live-mode CCXT `instrument_key` construction (`ccxt_adapter.py::_build_instrument_key`) mirrors the batch Tardis
+construction for the same 13 canonical CeFi venues, so live and batch converge on an identical id for the identical
+instrument. DeFi lending/yield-bearing adapters' `get_instruments(instrument_type=...)` filters compare against the
+real uppercase `InstrumentType` enum members, so canonical-form type filters return the expected instruments.
 
 ### What's explicitly out of scope for this canonicalization
 
@@ -472,7 +436,8 @@ industry-standard terse contract codes, not an uncleaned internal prefix — no 
 - `codex/04-architecture/shard-level-failure-isolation.md` — the per-venue error-classification pattern used
   throughout `process_instruments()`.
 - `codex/06-coding-standards/cli-convention.md` — `--operation`/`--mode`/`--asset-group` CLI convention SSOT.
-- `unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md` — the full operator
-  decision doc for every canonical-id divergence described above, including migration-mechanics todos still open.
+- `unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md` — the operator decision
+  doc for every canonical-id divergence described above; several follow-up todos (schema/backfill script work) remain
+  open.
 - `unified-trading-pm/plans/audit/results/canonical_instrument_id_audit_2026_07_08.md` — the full 7-layer compliance
   audit (instruments-service / MTDS / deployment-api / deployment-ui / strategy-service / GCS parquet / manifest).

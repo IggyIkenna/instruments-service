@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from unified_api_contracts.registry.market_data_categories import VENUES_BY_ASSET_GROUP
+from unified_api_contracts import VENUES_BY_ASSET_GROUP
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch

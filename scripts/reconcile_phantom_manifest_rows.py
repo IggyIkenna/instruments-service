@@ -42,11 +42,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
 import pandas as pd
-from google.cloud import storage
 from unified_api_contracts.sports import (
     SPORTS_DATA_TYPE_TO_FOLDER,
     candidate_parquet_paths,
 )
+from unified_trading_library import StorageClient, get_storage_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -56,7 +56,8 @@ INDEX_BLOB = "_index/availability_index.parquet"
 
 
 def _row_has_parquet(
-    bucket: storage.Bucket,
+    client: StorageClient,
+    bucket: str,
     data_type: str,
     day: str,
     league_id: str,
@@ -69,25 +70,26 @@ def _row_has_parquet(
     paths = candidate_parquet_paths(data_type, day, league_id)
     for p in paths:
         try:
-            if bucket.blob(p).exists():
+            if client.blob_exists(bucket, p):
                 return True
         except Exception:
             continue
     return False
 
 
-def _list_day_parquets(bucket: storage.Bucket, day: str) -> set[str]:
+def _list_day_parquets(client: StorageClient, bucket: str, day: str) -> set[str]:
     """List every parquet under ``sports_reference/by_date/day={day}/``.
 
     Returns the set of blob names (relative to bucket root). One GCS list
     call per day — much faster than per-row exists() probes.
     """
     prefix = f"sports_reference/by_date/day={day}/"
-    return {b.name for b in bucket.list_blobs(prefix=prefix) if b.name.endswith(".parquet")}
+    return {b.name for b in client.list_blobs(bucket, prefix=prefix) if b.name.endswith(".parquet")}
 
 
 def _build_existing_set(
-    bucket: storage.Bucket,
+    client: StorageClient,
+    bucket: str,
     days: list[str],
     workers: int,
     flat_paths: list[str],
@@ -102,7 +104,7 @@ def _build_existing_set(
     # Flat paths (singletons like VENUES)
     for p in flat_paths:
         try:
-            if bucket.blob(p).exists():
+            if client.blob_exists(bucket, p):
                 out.add(p)
         except Exception:
             pass
@@ -111,7 +113,7 @@ def _build_existing_set(
 
     def _list_day(day: str) -> set[str]:
         try:
-            return _list_day_parquets(bucket, day)
+            return _list_day_parquets(client, bucket, day)
         except Exception:
             return set()
 
@@ -162,11 +164,10 @@ def main(argv: list[str]) -> int:
     requested = {dt.strip().upper() for dt in args.data_types.split(",") if dt.strip()}
     target_dts = requested or set(SPORTS_DATA_TYPE_TO_FOLDER.keys())
 
-    client = storage.Client(project="central-element-323112")
-    bucket = client.bucket(BUCKET)
+    client = get_storage_client(provider="gcp", project_id="central-element-323112")
 
     logger.info("Reading canonical manifest…")
-    raw = bucket.blob(INDEX_BLOB).download_as_bytes()
+    raw = client.download_bytes(BUCKET, INDEX_BLOB)
     df = pd.read_parquet(io.BytesIO(raw))
     logger.info("Loaded %d rows / %d cols", len(df), len(df.columns))
 
@@ -182,7 +183,7 @@ def main(argv: list[str]) -> int:
     # against the in-memory set. Dramatically faster than per-row exists().
     distinct_days = sorted(candidates["date"].dropna().astype(str).unique())
     flat_paths = ["sports_reference/venues/venues.parquet"]
-    existing = _build_existing_set(bucket, distinct_days, args.workers, flat_paths)
+    existing = _build_existing_set(client, BUCKET, distinct_days, args.workers, flat_paths)
 
     indices_to_flip: list[int] = []
     by_dt: Counter[str] = Counter()
@@ -237,8 +238,7 @@ def main(argv: list[str]) -> int:
     logger.info("Writing %d rows back to canonical (with %d flipped)…", len(df), len(indices_to_flip))
     buf = io.BytesIO()
     df.to_parquet(buf, index=False)
-    buf.seek(0)
-    bucket.blob(INDEX_BLOB).upload_from_file(buf, content_type="application/octet-stream")
+    client.upload_bytes(BUCKET, INDEX_BLOB, buf.getvalue(), content_type="application/octet-stream")
     logger.info("Wrote canonical manifest: %d rows", len(df))
     logger.info("VMs will pick up flipped rows on next _should_skip_shard check.")
     return 0

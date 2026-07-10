@@ -43,6 +43,16 @@ _PACIFICA_TOP_COINS: tuple[str, ...] = (
 # Pacifica Solana mainnet launch (2025-06-01 per MTDS _PACIFICA_FUNDING_START_MS).
 _PACIFICA_DEPLOY_DATE = datetime(2025, 6, 1, tzinfo=UTC)
 
+# Real margin type (2026-07-09, instrument_id_format_canonicalization_2026_07_08.md
+# finding 1's PERPETUAL scope-expansion) — confirmed via real web research 2026-07-09:
+# "Pacifica's core product is linear perpetual contracts" (industry coverage of
+# Pacifica's own product docs), consistent with the already-confirmed USDC unified
+# margin (docs.pacifica.fi/trading-on-pacifica/unified-margin, 2026-07-08) — margin
+# and PnL are USDC-denominated for every market, not coin-margined. Derives the
+# @LIN/@INV instrument_id marker FROM this field so the two can never drift.
+_MARGIN_TYPE = MarginType.LINEAR
+_MARGIN_MARKER = _MARGIN_TYPE.value[:3].upper()
+
 
 class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
     """Pacifica reference data: curated perpetual instrument list.
@@ -73,28 +83,33 @@ class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
             sym = f"{coin}-PERP"
             results.append(
                 InstrumentRecord(
-                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE (2026-07-08
-                    # canonicalization — dropped the PERP shorthand + the fake
-                    # "-PERP" quote segment in favour of the real settlement currency.
-                    # Confirmed live via docs.pacifica.fi/trading-on-pacifica/
+                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
+                    # (2026-07-08 canonicalization — dropped the PERP shorthand + the
+                    # fake "-PERP" quote segment in favour of the real settlement
+                    # currency. Confirmed live via docs.pacifica.fi/trading-on-pacifica/
                     # unified-margin 2026-07-08: "Pacifica users' account's USDC
                     # balance, unrealized PnL, and spot holdings are margined
                     # together" — perp PnL/margin is USDC-denominated for all
-                    # markets. SSOT:
+                    # markets. 2026-07-09 scope-expansion — added the real @LIN margin
+                    # marker, see _MARGIN_TYPE above for the verification method). SSOT:
                     # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
-                    # finding 3+4;
+                    # finding 1 (2026-07-09 PERPETUAL scope-expansion) + finding 3+4;
                     # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
                     # Routed through the shared UAC builder (2026-07-09 retrofit,
-                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) —
-                    # pure DRY, output is behavior-identical to the prior f-string.
-                    instrument_key=build_instrument_id("PACIFICA-SOLANA", InstrumentType.PERPETUAL, f"{coin}-USDC"),
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) — the
+                    # marker is embedded in the symbol passed to the builder (PERPETUAL's
+                    # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
+                    # convention DeFi POOL fee-tiers already use).
+                    instrument_key=build_instrument_id(
+                        "PACIFICA-SOLANA", InstrumentType.PERPETUAL, f"{coin}-USDC@{_MARGIN_MARKER}"
+                    ),
                     venue=self.venue,
                     raw_symbol=sym,
                     instrument_type=InstrumentType.PERPETUAL,
                     base_asset=coin,
                     quote_asset="USDC",
                     settle_asset="USDC",
-                    margin_type=MarginType.LINEAR,
+                    margin_type=_MARGIN_TYPE,
                     tick_size=Decimal("0.0001"),
                     min_size=Decimal("0.001"),
                     contract_size=Decimal("1"),

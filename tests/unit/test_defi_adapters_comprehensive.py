@@ -338,7 +338,10 @@ class TestUniswapV3Adapter:
             }
         )
         assert result is not None
-        assert ":0" in result.instrument_key
+        # No real fee tier -> the fee segment is omitted entirely (target grammar's
+        # "[-FEE_TIER]" is optional), not a fabricated ":0"/"-0" placeholder.
+        assert result.instrument_key.endswith(":AAVE-ETH")
+        assert result.pool_fee_tier is None
 
     def test_log_fetch_error_classifies(self) -> None:
         from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter

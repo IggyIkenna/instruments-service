@@ -9,6 +9,7 @@ Targets:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -151,7 +152,12 @@ class TestFetchClobMarkets:
 
 
 class TestBuildSportsId:
-    """Valid league series_slug → return (instrument_type, instrument_id)."""
+    """Valid league series_slug → return (instrument_type, instrument_id, canonical_instrument_id).
+
+    Signature gained ``slug`` + ``expiry`` params (prediction_canonical_identity_
+    migration_2026_07_08.md todo 5 — Sports-asset-group-aligned fixture_id via
+    ``build_fixture_id()``), so every call below now passes them positionally.
+    """
 
     def test_valid_league_returns_tuple(self) -> None:
         adapter = _make_adapter()
@@ -184,11 +190,16 @@ class TestBuildSportsId:
                 return_value="FOOTBALL:POLYMARKET:MATCH_ODDS:EPL:2025-26:ARSENAL-CHELSEA::HOME",
             ),
         ):
-            result = adapter._build_sports_id(mock_market, "2026-03-22")  # type: ignore[attr-defined]
+            result = adapter._build_sports_id(  # type: ignore[attr-defined]
+                mock_market, "arsenal-vs-chelsea-2026-03-22", datetime(2026, 3, 22, tzinfo=UTC), "2026-03-22"
+            )
 
         assert result is not None
         assert result[0] == "prediction::sports::EPL"
         assert "ARSENAL" in result[1] or result[1] is not None
+        # canonical_instrument_id: real build_fixture_id() output off the real
+        # "Arsenal vs Chelsea" event_title (not mocked — todo 5's actual mechanism).
+        assert result[2] == "EPL:CHELSEA_v_ARSENAL:20260322"
 
     def test_no_league_returns_none(self) -> None:
         adapter = _make_adapter()
@@ -200,7 +211,7 @@ class TestBuildSportsId:
             "instruments_service.reference_data.adapters.prediction.polymarket.get_canonical_league_for_polymarket_series",
             return_value=None,
         ):
-            result = adapter._build_sports_id(mock_market, "2026-03-22")  # type: ignore[attr-defined]
+            result = adapter._build_sports_id(mock_market, "esports-league", None, "2026-03-22")  # type: ignore[attr-defined]
 
         assert result is None
 
@@ -220,6 +231,6 @@ class TestBuildSportsId:
                 new={"EPL", "LALIGA"},
             ),
         ):
-            result = adapter._build_sports_id(mock_market, "2026-03-22")  # type: ignore[attr-defined]
+            result = adapter._build_sports_id(mock_market, "unknown-league", None, "2026-03-22")  # type: ignore[attr-defined]
 
         assert result is None

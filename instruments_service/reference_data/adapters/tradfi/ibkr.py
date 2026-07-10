@@ -63,14 +63,20 @@ def _parse_ibkr_expiry(s: str | None) -> datetime | None:
         return None
 
 
-# Map IBKR secType → canonical InstrumentType
+# Map IBKR secType → canonical InstrumentType.
+# 2026-07-08 fix: STK/CASH/BOND previously all collapsed to the generic SPOT_PAIR
+# (crypto-style) type even though canonical_id_builder.py's _TRADFI_CASH_TYPES
+# already defines distinct EQUITY/CURRENCY/BOND types for exactly this — real
+# stocks, FX cash, and bonds are 3 different real instrument categories, not one.
+# _resolve_sec_type_and_symbols already accepted "EQUITY" as an alias filter for
+# STK before this fix (it anticipated this exact mapping).
 _SEC_TYPE_MAP: dict[str, InstrumentType] = {
-    "STK": InstrumentType.SPOT_PAIR,
+    "STK": InstrumentType.EQUITY,
     "FUT": InstrumentType.FUTURE,
     "OPT": InstrumentType.OPTION,
-    "CASH": InstrumentType.SPOT_PAIR,
+    "CASH": InstrumentType.CURRENCY,
     "CFD": InstrumentType.PERPETUAL,
-    "BOND": InstrumentType.SPOT_PAIR,
+    "BOND": InstrumentType.BOND,
     "FOP": InstrumentType.OPTION,
     "WAR": InstrumentType.OPTION,
     "IOPT": InstrumentType.OPTION,
@@ -263,6 +269,20 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             "underConid": getattr(details, "underConId", None),
         }
 
+    def _build_key_payload(self, symbol: str, sec_type: str, currency: str) -> str:
+        """Payload segment for the canonical instrument_key.
+
+        A bare ``symbol`` is already unambiguous for equities/futures/options — but
+        IBKR's ``CASH`` contracts (FX pairs) carry only the base currency as
+        ``symbol`` (e.g. ``ib_insync.Forex("EURUSD")`` → ``symbol="EUR"``,
+        ``currency="USD"``), so the quote currency is folded in as ``BASE-QUOTE``
+        (matching this workspace's existing FX convention, e.g.
+        ``FX:SPOT_PAIR:EUR-USD``) to avoid losing real pair identity.
+        """
+        if sec_type == "CASH":
+            return f"{symbol}-{currency}"
+        return symbol
+
     def _build_instrument_from_uac(self, uac: IBKRContractDetails) -> InstrumentRecord | None:
         """Build InstrumentRecord from validated IBKRContractDetails schema."""
         symbol = uac.symbol
@@ -276,8 +296,12 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         expiry = _parse_ibkr_expiry(uac.lastTradeDateOrContractMonth) if sec_type in ("FUT", "OPT", "FOP") else None
         if instrument_type in (InstrumentType.FUTURE, InstrumentType.OPTION) and expiry is None:
             return None
+        # Canonical VENUE:TYPE:SYMBOL order (2026-07-08 fix) — was SYMBOL:RAW_CODE:CCY
+        # (IBKR's raw secType code, no venue token at all), the wrong segment order and
+        # missing the venue this workspace's convention requires everywhere else.
+        payload = self._build_key_payload(symbol, sec_type, currency)
         return InstrumentRecord(
-            instrument_key=f"{symbol}:{sec_type}:{currency}",
+            instrument_key=f"{self.venue.upper()}:{instrument_type.upper()}:{payload}",
             symbol=symbol,
             venue=self.venue,
             asset_group=asset_group,

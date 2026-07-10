@@ -241,8 +241,14 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
         else:
             base_token, quote_token = token1, token0
 
-        fee_str = str(fee_tier) if fee_tier else "0"
-        symbol = f"{base}-{quote}:{fee_str}"
+        # Canonical DEX-pool key grammar (docs/DEFI_INSTRUMENTS.md "DEX pools" —
+        # instrument_id_format_canonicalization_2026_07_08.md finding 2): fee tier
+        # is DASH-separated (not colon) and a real basis-point value (not the raw
+        # on-wire feeTier), and is OMITTED entirely when no real fee tier exists
+        # (matching the target's "[-FEE_TIER]" optional-bracket grammar) rather
+        # than a fabricated "-0" placeholder.
+        pool_fee_tier_bps = _parse_fee_tier_bps(fee_tier)
+        symbol = f"{base}-{quote}-{pool_fee_tier_bps}" if pool_fee_tier_bps is not None else f"{base}-{quote}"
         venue_tag = f"UNISWAP_V4-{self._chain}"
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
@@ -264,7 +270,7 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=available_since,
             pool_address=str(pool_id),
-            pool_fee_tier=_parse_fee_tier_bps(fee_tier),
+            pool_fee_tier=pool_fee_tier_bps,
             base_asset_contract_address=_optional_str(base_token.get("id")),
             base_asset_decimals=_parse_decimals(base_token.get("decimals")),
             base_asset_symbol_onchain=_optional_str(base_token.get("symbol")),
