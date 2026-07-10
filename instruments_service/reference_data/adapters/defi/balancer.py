@@ -216,12 +216,19 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
         if not pool_address or not isinstance(tokens, list) or len(tokens) < 2:
             return None
 
-        token0 = tokens[0] if isinstance(tokens[0], dict) else {}
-        token1 = tokens[1] if isinstance(tokens[1], dict) else {}
+        token_dicts = [t if isinstance(t, dict) else {} for t in tokens]
+        token0 = token_dicts[0]
+        token1 = token_dicts[1]
         sym0 = str(token0.get("symbol", "UNKNOWN")).upper()
         sym1 = str(token1.get("symbol", "UNKNOWN")).upper()
 
-        symbol = f"{sym0}-{sym1}"
+        # Real Balancer pools frequently have 3+ tokens (e.g. weighted 3/4-asset
+        # pools). Encoding only the first 2 tokens collapses genuinely-distinct
+        # pools onto the same symbol/instrument_key (2026-07-07 finding,
+        # mtds_is_full_adapter_smoketest_findings_2026_07_07.md P1) — include
+        # every token; base_asset/quote_asset stay token0/token1 (2-asset
+        # structural fields, unchanged).
+        symbol = "-".join(str(t.get("symbol", "UNKNOWN")).upper() for t in token_dicts)
         venue_tag = f"BALANCER-{self._chain}"
         # Routed through the shared canonical builder (2026-07-09 retrofit,
         # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
