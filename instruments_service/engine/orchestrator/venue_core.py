@@ -98,6 +98,9 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
 # endpoint API, which exposes SEPARATE endpoints per OKX market type:
 #   OKX → okex (spot), okex-swap (perps/funding), okex-futures (fixed-expiry)
 # Mapping bare OKX to all three ensures IS captures the full OKX universe.
+# COINBASE-SPOT / COINBASE-FUTURES are already separate UAC cefi entries
+# (coinbase_bare_name_migration_2026_07_06.md S2/S3, 2026-07-10 — bare
+# COINBASE removed from UAC) and pass through unchanged.
 #
 # Existing comment in the former _CEFI_VENUES:
 #   "OKX: 3 separate Tardis exchanges — okex (spot), okex-swap (perps), okex-futures
@@ -109,8 +112,10 @@ def expand_cefi_tardis_endpoints(canonical_venues: list[str]) -> list[str]:
     """Map UAC canonical CeFi venues to the Tardis-endpoint venues IS fetches.
 
     UAC's ``VENUES_BY_ASSET_GROUP["cefi"]`` carries the bare execution-context
-    canonical venue names (e.g. ``"OKX"``).  IS fetches instruments
-    via the Tardis per-endpoint API, which requires the split forms for multi-endpoint
+    canonical venue name ``"OKX"`` (bare ``"COINBASE"`` REMOVED,
+    coinbase_bare_name_migration_2026_07_06.md S3, 2026-07-10 — ``COINBASE-SPOT``
+    is the sole canonical cefi spot key now).  IS fetches instruments via the
+    Tardis per-endpoint API, which requires the split forms for multi-endpoint
     venues.  This function encodes the grain mapping so IS no longer maintains a
     parallel hand-edited venue list.
 
@@ -120,7 +125,11 @@ def expand_cefi_tardis_endpoints(canonical_venues: list[str]) -> list[str]:
       Do NOT add bare "OKX" — it maps to the same Tardis exchange as OKX-SPOT
       (duplicate data).
     - Every other UAC cefi venue → passthrough (already the correct Tardis endpoint
-      name, e.g. ``BINANCE-SPOT``, ``COINBASE-SPOT``, ``KALSHI-PERP``, ``POLYMARKET-PERP``).
+      name, e.g. ``BINANCE-SPOT``, ``COINBASE-SPOT``, ``KALSHI-PERP``,
+      ``POLYMARKET-PERP``).  Bare ``COINBASE`` no longer appears in
+      ``VENUES_BY_ASSET_GROUP["cefi"]`` (coinbase_bare_name_migration_2026_07_06.md
+      S3, 2026-07-10) — ``COINBASE-SPOT`` is the sole canonical cefi spot key and
+      passes through unchanged, same as ``COINBASE-FUTURES``.
 
     Args:
         canonical_venues: A list of UAC canonical cefi venue names
