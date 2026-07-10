@@ -1,7 +1,7 @@
 {
   "asset_group": "cefi",
   "captured_at": "2026-07-10",
-  "tuple_count": 76,
+  "tuple_count": 80,
   "tuples": [
     ["ASTER", "perpetual", "book_snapshot_5"],
     ["ASTER", "perpetual", "derivative_ticker"],
@@ -36,6 +36,8 @@
     ["BYBIT", "perpetual", "book_snapshot_5"],
     ["BYBIT", "perpetual", "derivative_ticker"],
     ["BYBIT", "perpetual", "trades"],
+    ["BYBIT", "spot_pair", "book_snapshot_5"],
+    ["BYBIT", "spot_pair", "trades"],
     ["BYBIT-SPOT", "spot_pair", "book_snapshot_5"],
     ["BYBIT-SPOT", "spot_pair", "trades"],
     ["COINBASE-CDE", "future", "trades"],
@@ -72,6 +74,8 @@
     ["OKX", "perpetual", "book_snapshot_5"],
     ["OKX", "perpetual", "derivative_ticker"],
     ["OKX", "perpetual", "trades"],
+    ["OKX", "spot_pair", "book_snapshot_5"],
+    ["OKX", "spot_pair", "trades"],
     ["OKX-SPOT", "spot_pair", "book_snapshot_5"],
     ["OKX-SPOT", "spot_pair", "trades"],
     ["PACIFICA-SOLANA", "perpetual", "book_snapshot_5"],
