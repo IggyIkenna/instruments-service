@@ -235,7 +235,7 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
     """
     cfg = ASSET_GROUP_CONFIG[asset_group]
     raw_venue = str(row.get("venue", "") or "")
-    raw_chain = str(row.get("chain", "") or "")
+    raw_chain = str(row.get("chain", "") or "")  # noqa: qg-empty-fallback — chain is DeFi-only; non-DeFi asset_group rows never carry the column
     # DeFi-only: probe BOTH protocol-name spellings (underscored + plain).
     venue_variants = _defi_protocol_variants(raw_venue) if asset_group == "defi" else [raw_venue]
     tpls = cfg["prefix_tpls"]
@@ -316,8 +316,8 @@ def _audit_sports(
     for idx in captured_idx:
         row = df.loc[idx]
         date = str(row["date"])
-        data_type = str(row.get("data_type", "") or "")
-        league_id = str(row.get("league_id", "") or "")
+        data_type = str(row.get("data_type", "") or "")  # noqa: qg-empty-fallback — legacy schema vintages omit this column on some captured rows
+        league_id = str(row.get("league_id", "") or "")  # noqa: qg-empty-fallback — bare/non-league sports rows legitimately have no league_id
         # Axis-9 (sports per-league SSOT + UAC date-range clips, 2026-05-13):
         # Rows before the source's coverage start or inside a known gap are
         # NOT phantoms — the source never had data for that (data_type, date).
@@ -340,7 +340,7 @@ def _audit_sports(
         # non-pipeline_mode fallback after). Omitting it probed ONLY the legacy path →
         # false phantom flip of real captured rows (e.g. PLAYER_VALUES/transfermarkt +
         # FIXTURE_LINEUPS/FIXTURE_STATS, golden-window 2026-06-24 — data was on disk).
-        pipeline_mode = str(row.get("pipeline_mode", "") or "")
+        pipeline_mode = str(row.get("pipeline_mode", "") or "")  # noqa: qg-empty-fallback — pre-Phase-3 rows have no pipeline_mode segment by design (see comment above)
         candidates = candidate_parquet_paths(data_type, date, league_id, pipeline_mode=pipeline_mode or None)
         blobs = day_blobs.get(date, set())
         is_real = False
