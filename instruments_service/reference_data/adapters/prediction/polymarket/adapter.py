@@ -165,9 +165,7 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
             if date:
                 try:
                     await self._fetch_clob_markets(date, now)
-                    _pm.logger.info(
-                        "Polymarket: CLOB token-id supplement completed for date=%s", date
-                    )
+                    _pm.logger.info("Polymarket: CLOB token-id supplement completed for date=%s", date)
                 except Exception as exc:
                     _pm.logger.warning(
                         "Polymarket: CLOB token-id supplement failed for date=%s: %s — "
@@ -264,7 +262,15 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
             # the cell ``attempted_failed`` instead. Single-venue pagination loop (NOT
             # a per-venue/per-shard loop) → raising respects shard-level failure
             # isolation; mirrors ``_fetch_all_raw_clob_markets``.
-            raise
+            # Wrap as RuntimeError (CF-11): the bare ``aiohttp.ClientError`` /
+            # ``ClientResponseError`` (4xx/429/5xx from ``raise_for_status``) is NOT in
+            # ``_fetch_one_venue``'s except-ladder, so a bare re-raise propagates UNCAUGHT
+            # through the caller's ``asyncio.gather`` (no ``return_exceptions=True``) and
+            # crashes the whole multi-venue batch. RuntimeError IS caught there → the cell
+            # records ``attempted_failed`` (mirrors cefi ``aster.py``/``hyperliquid.py``).
+            raise RuntimeError(
+                f"Polymarket gamma/markets fetch failed (error_code={error_code}, retry_safe={retry_safe}): {exc}"
+            ) from exc
 
         raw_list = cast("list[object]", raw_json)
         results: list[InstrumentRecord] = []
