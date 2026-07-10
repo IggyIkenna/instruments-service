@@ -68,11 +68,21 @@ from unified_api_contracts import (
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
 from unified_api_contracts.predictions import build_cross_venue_mapping
 from unified_trading_library import (
+    GcsEventSink,
     StorageClient,
     get_config,
     get_storage_client,
+    log_event,
     resolve_bucket_name,
+    setup_events,
 )
+
+#: Real event-log wiring for CATALOGUE_SHRINK_BLOCKED (cefi_monotonicity_guard_alerting_
+#: and_dark_venues_2026_07_07.md) — mirrors scripts/cross_asset_rescan.py's batch-mode
+#: GcsEventSink pattern. setup_events() is called once in main() (the sole real CLI entry
+#: point; tests call run_rollup()/promote_catalogue() directly and never reach this).
+_EVENTS_PROJECT_ID = "central-element-323112"
+_EVENTS_SERVICE = "instruments-service"
 
 
 def _instruments_store_bucket_for(asset_group: str) -> str:
@@ -2167,13 +2177,20 @@ def promote_catalogue(
     )
 
     if not decision.accept:
-        _emit_event(
+        # Real event-log emission (was best-effort logger.info-only via _emit_event —
+        # cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md). CRITICAL
+        # severity + this event name route through UAC's DP-CATALOG-002 rule to
+        # alerting-service's Slack/PagerDuty/Telegram paging path.
+        log_event(
             "CATALOGUE_SHRINK_BLOCKED",
-            bucket=bucket,
-            env=env,
-            new_count=new_count,
-            current_count=current_count,
-            hint="re-run a complete regeneration, or pass --allow-catalogue-shrink for a corrective shrink",
+            severity="CRITICAL",
+            details={
+                "bucket": bucket,
+                "env": env,
+                "new_count": new_count,
+                "current_count": current_count,
+                "hint": "re-run a complete regeneration, or pass --allow-catalogue-shrink for a corrective shrink",
+            },
         )
         logger.error(
             "CATALOGUE_SHRINK_BLOCKED: new=%d < current=%d — keeping previous good catalogue at gs://%s/%s "
@@ -2891,6 +2908,20 @@ def main(argv: list[str] | None = None) -> int:
     mode: str = args.mode
     by_date_prefix: str = args.by_date_prefix
     max_blobs: int | None = args.max_blobs
+
+    # Real event-log wiring so CATALOGUE_SHRINK_BLOCKED actually leaves the process
+    # (was best-effort logger.info-only — cefi_monotonicity_guard_alerting_and_dark_
+    # venues_2026_07_07.md). setup_events() must run before promote_catalogue()'s
+    # log_event() call or it raises (batch mode requires an explicit sink).
+    setup_events(
+        service_name=_EVENTS_SERVICE,
+        mode="batch",
+        sink=GcsEventSink(
+            project_id=_EVENTS_PROJECT_ID,
+            bucket=f"{_EVENTS_PROJECT_ID}-events",
+            service_name=_EVENTS_SERVICE,
+        ),
+    )
     return run_rollup(
         asset_group,
         allow_shrink=allow_shrink,

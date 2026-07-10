@@ -75,12 +75,16 @@ def main() -> int:
     drop_rows.sort(key=lambda x: -x[1])
     print(f"\nTOTAL venue day-over-day DROP-days: {total_drops}")
     print(f"{'venue':<22}{'#drop-days':>11}{'max-drop':>10}{'cnt0':>8}{'cntN':>8}")
-    for v, n, mx, c0, cn in drop_rows[:40]:
+    for v, n, mx, c0, cn in drop_rows:
         print(f"{v:<22}{n:>11}{mx:>10}{c0:>8}{cn:>8}")
 
-    print(f"\nTHIN-DAY collapses (< {thin_frac:.0%} of trailing median) — route these to attempted_failed:")
+    # total_thin was computed but never surfaced — the catalogue-wide collapse count is
+    # invisible unless re-derived by hand (2026-07-07 audit finding). Print it up front,
+    # unconditionally, before the (still truncated for readability) per-row detail.
+    print(f"\nTOTAL catalogue-wide THIN-DAY collapses (< {thin_frac:.0%} of trailing median): {total_thin}")
+    print(f"THIN-DAY collapses (< {thin_frac:.0%} of trailing median) — route these to attempted_failed:")
     print(f"{'venue':<22}{'date':>12}{'count':>8}{'median':>8}")
-    for v, dt, cnt, med_v in sorted(thin_rows, key=lambda x: x[2] / max(x[3], 1))[:40]:
+    for v, dt, cnt, med_v in sorted(thin_rows, key=lambda x: x[2] / max(x[3], 1)):
         print(f"{v:<22}{dt:>12}{cnt:>8}{med_v:>8}")
     if not thin_rows:
         print("  ✅ no thin-day collapses in scope")
