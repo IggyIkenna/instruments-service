@@ -27,8 +27,19 @@ from ...utils.defi_utils import classify_graph_error
 
 logger = logging.getLogger(__name__)
 
-_CURVE_API_TEMPLATE = "https://api.curve.finance/v1/getPools/{chain_slug}/main"
+_CURVE_API_TEMPLATE = "https://api.curve.finance/v1/getPools/{registry}/{chain_slug}"
 _DEFAULT_CHAIN = "ETHEREUM"
+
+# "main" alone undercounts real pools by ~94-98% (mtds_is_full_adapter_
+# smoketest_findings_2026_07_07.md P1) — factory pools (permissionless-deployed
+# StableSwap/CryptoSwap/tricrypto-ng pools) are the real majority of Curve's
+# current pool count. "all" is Curve's own combined-registry endpoint (already
+# proven live elsewhere in this workspace — market-tick-data-service's
+# curve_adapter.py CURVE_REST_API_POOLS / curve_defi_ws.py _CURVE_REST_URL both
+# use it), confirmed live 2026-07-10: main-only=49 vs all=2372 pools on
+# Ethereum (48x), and "all" resolves on every chain in _CHAIN_SLUG (arbitrum
+# 656, avalanche 172, optimism 229, polygon 1607, base 965, fantom 326).
+_CURVE_REGISTRY = "all"
 
 # Chain name → Curve API slug mapping
 _CHAIN_SLUG: dict[str, str] = {
@@ -92,7 +103,13 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
-        """Fetch active Curve pools as instruments for the configured chain."""
+        """Fetch active Curve pools as instruments for the configured chain.
+
+        Queries Curve's combined "all" registry endpoint (every registry —
+        main + factory + factory-crypto + factory-tricrypto + ... — in one
+        call), not just "main" alone (~94-98% real undercount, see
+        _CURVE_REGISTRY docstring above).
+        """
         if instrument_type not in (None, InstrumentType.POOL):
             return []
 
@@ -101,7 +118,7 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
             logger.warning("Curve: unsupported chain %s, skipping", self._chain)
             return []
 
-        api_url = _CURVE_API_TEMPLATE.format(chain_slug=chain_slug)
+        api_url = _CURVE_API_TEMPLATE.format(registry=_CURVE_REGISTRY, chain_slug=chain_slug)
 
         try:
             async with self._make_session() as session, session.get(api_url) as resp:
@@ -154,12 +171,16 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
             if not pool_address or not isinstance(coins, list) or len(coins) < 2:
                 continue
 
-            coin0 = coins[0] if isinstance(coins[0], dict) else {}
-            coin1 = coins[1] if isinstance(coins[1], dict) else {}
+            coin_dicts = [c if isinstance(c, dict) else {} for c in coins]
+            coin0 = coin_dicts[0]
+            coin1 = coin_dicts[1]
             sym0 = str(coin0.get("symbol", "UNKNOWN")).upper()
             sym1 = str(coin1.get("symbol", "UNKNOWN")).upper()
 
-            symbol = f"{sym0}-{sym1}"
+            # Real Curve pools frequently have 3+ coins (e.g. 3pool = DAI-USDC-USDT).
+            # Encoding only the first 2 coins collapses genuinely-distinct pools onto
+            # the same symbol/instrument_key (2026-07-07 finding) — include every coin.
+            symbol = "-".join(str(c.get("symbol", "UNKNOWN")).upper() for c in coin_dicts)
             venue_tag = f"CURVE-{self._chain}"
             # Routed through the shared canonical builder (2026-07-09 retrofit,
             # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,

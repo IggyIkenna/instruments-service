@@ -87,12 +87,17 @@ def _classify_drift_error(exc: Exception, status: int | None = None) -> str:
 
 
 class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
-    """Drift reference data: perp and spot market discovery via Data API.
+    """Drift reference data: perp and spot market discovery via SDK TypeScript constants.
 
-    Uses the public Data API (https://data.api.drift.trade/stats/markets)
-    which requires no auth and returns all 137 markets (74 perp + 63 spot).
-    Each Drift perp market produces one instrument with instrument_type=PERPETUAL.
-    Drift settles in USDC.
+    Fixed 2026-07-10 (mtds_is_full_adapter_smoketest_findings_2026_07_07.md P2/P3):
+    this docstring previously claimed the public Data API
+    (https://data.api.drift.trade/stats/markets) was used — that endpoint is
+    dead (404/CloudFront 403 as of 2026-06), contradicting the module docstring
+    above. The real source is Drift's SDK TypeScript constants on GitHub
+    (_SDK_PERP_MARKETS_URL / _SDK_SPOT_MARKETS_URL — MainnetPerpMarkets /
+    MainnetSpotMarkets), which requires no auth. Each Drift perp market
+    produces one instrument with instrument_type=PERPETUAL. Drift settles in
+    USDC.
     """
 
     def __init__(
