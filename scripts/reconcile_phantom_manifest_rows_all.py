@@ -234,7 +234,7 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
         shapes are covered by ``ASSET_GROUP_CONFIG[ag]["prefix_tpls"]``.
     """
     cfg = ASSET_GROUP_CONFIG[asset_group]
-    raw_venue = str(row.get("venue", "") or "")
+    raw_venue = str(row.get("venue", "") or "")  # noqa: qg-empty-fallback — column may be absent for this asset_group (cross-AG audit)
     raw_chain = str(row.get("chain", "") or "")  # noqa: qg-empty-fallback — cefi/tradfi/sports rows have no chain column
     # DeFi-only: probe BOTH protocol-name spellings (underscored + plain).
     venue_variants = _defi_protocol_variants(raw_venue) if asset_group == "defi" else [raw_venue]
