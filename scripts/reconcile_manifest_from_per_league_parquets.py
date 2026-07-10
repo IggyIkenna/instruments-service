@@ -36,7 +36,9 @@ import tempfile
 from datetime import UTC, datetime
 
 import pandas as pd
-from google.cloud import storage
+from google.cloud import (
+    storage,
+)
 from unified_api_contracts.sports import (
     SPORTS_DATA_TYPE_TO_FOLDER,
 )
