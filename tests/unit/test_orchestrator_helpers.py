@@ -237,6 +237,13 @@ class TestExpandCefiTardisEndpoints:
         result = expand_cefi_tardis_endpoints(["OKX", "COINBASE-SPOT"])
         assert result == ["OKX-SPOT", "OKX-SWAP", "OKX-FUTURES", "COINBASE-SPOT"]
 
+    def test_expand_cefi_tardis_endpoints_bare_coinbase_no_longer_expanded(self) -> None:
+        """If bare COINBASE is ever fed in (should not happen post-S3), it now
+        passes through unchanged rather than being silently expanded to
+        COINBASE-SPOT — the alias-expansion branch is gone."""
+        result = expand_cefi_tardis_endpoints(["COINBASE"])
+        assert result == ["COINBASE"]
+
     def test_cefi_coinbase_spot_expected_set_survives_fold_inversion(self) -> None:
         """COINBASE-SPOT's real EXPECTED set is {(spot_pair, trades)} post-S1/S3.
 
