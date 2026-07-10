@@ -72,12 +72,27 @@ _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX: dict[str, str] = {
 }
 
 
-# Protocols that don't use subgraphs (Ethereum-only, custom data sources).
+# Protocols that don't use subgraphs (custom data sources — curated markets/
+# registries, not GraphQL discovery). Not all are Ethereum-only: VENUS/RADIANT
+# are multi-chain via a per-chain curated-markets dict (see venus.py/radiant.py
+# _MVP_MARKETS_BY_CHAIN), BENQI is Avalanche-only, EULER_V2 is Ethereum-only.
 _STATIC_DEFI_VENUES: list[str] = [
     "LIDO-ETHEREUM",
     "ETHERFI-ETHEREUM",
     "ETHENA-ETHEREUM",
     "EIGENLAYER-ETHEREUM",
+    # Phase-4 lending protocols (2026-07-07 finding — factory.py/router.py already
+    # wire venus/benqi/radiant/euler_v2 adapters incl. chain parsing via
+    # defi_graph_adapters, but this venue list never requested them, so 0 real
+    # catalogue rows were ever produced despite working code. Chains per adapter's
+    # own _MVP_MARKETS_BY_CHAIN / _DEFAULT_CHAIN.
+    "VENUS-BSC",
+    "VENUS-ETHEREUM",
+    "BENQI-AVALANCHE",
+    "RADIANT-ARBITRUM",
+    "RADIANT-BSC",
+    "RADIANT-ETHEREUM",
+    "EULER_V2-ETHEREUM",
 ]
 
 
