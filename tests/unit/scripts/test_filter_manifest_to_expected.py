@@ -148,7 +148,7 @@ class TestFilterCanonicalisation:
             [
                 {
                     "capture_status": "captured",
-                    "venue": "OKX-SPOT",  # writer-side Tardis split
+                    "venue": "OKX-SPOT",  # its own declared canonical cefi venue
                     "instrument_type": "spot_pair",
                     "data_type": "trades",
                 },

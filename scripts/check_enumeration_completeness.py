@@ -165,6 +165,14 @@ def _canon_instrument_type(asset_group: str, venue: str, instrument_type: str) -
 # UP instead of down — see the inline comment on that entry.
 _CEFI_VENUE_FOLD: dict[str, str] = {
     # Tardis-grain splits emitted by expand_cefi_tardis_endpoints()
+    # "OKX-SPOT" REMOVED (Option A, 2026-07-10 operator decision — mirrors
+    # BYBIT-SPOT, which was never folded): OKX-SPOT is now its own declared
+    # cefi venue (VENUES_BY_ASSET_GROUP["cefi"]) with its own EXPECTED
+    # tuples, so real captured OKX-SPOT rows must compare directly against
+    # OKX-SPOT EXPECTED, not get folded up to bare OKX (which no longer
+    # carries SPOT_PAIR capability at all — folding would silently zero
+    # real captured OKX spot data back out of Layer-1/Layer-2 again). See
+    # instruments_service_cefi_qg_red_on_ldr_head_2026_07_08.md.
     "OKX-SWAP": "OKX",
     "OKX-FUTURES": "OKX",
     # INVERTED (coinbase_bare_name_migration_2026_07_06 S1): COINBASE-SPOT is
