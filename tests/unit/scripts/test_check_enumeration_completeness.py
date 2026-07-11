@@ -584,6 +584,27 @@ class TestCanonNormalisers:
         key_qualified = mod._canon_key("cefi", "COINBASE-SPOT", "spot_pair", "trades")
         assert key_bare == key_qualified == ("COINBASE-SPOT", "spot_pair", "trades")
 
+    def test_cefi_coinbase_spot_expected_set_survives_fold_inversion(self, mod: ModuleType) -> None:
+        """The itype-gate authority switch must not silently zero COINBASE's EXPECTED
+        set after the fold anchor inverts: COINBASE-SPOT's (spot_pair, trades) EXPECTED
+        tuple must be present, matching UAC's DataTypeCapability["COINBASE-SPOT"].
+
+        book_snapshot_5 is intentionally ABSENT here (not a bug) — operator decision #6
+        (instruments_remaining_work_audit_2026_07_10.md, "COINBASE (INTX) should be
+        reduced to trades-only data_type" — book-snapshot-class data is expensive for
+        this venue) scopes COINBASE-SPOT to trades-only via the cefi per-venue MVP
+        override (get_mvp_data_types_for_cefi_venue), landed concurrently in this same
+        session. This test asserts against the real EXPECTED output, not the raw
+        DataTypeCapability declaration, so it stays honest if that scoping changes.
+        """
+        expected = mod._build_expected_tuples("cefi")
+        canon_expected = {
+            (mod._canon_venue("cefi", v), mod._canon_instrument_type("cefi", v, i), mod._canon_data_type("cefi", d))
+            for v, i, d in expected
+        }
+        assert ("COINBASE-SPOT", "spot_pair", "trades") in canon_expected
+        assert ("COINBASE-SPOT", "spot_pair", "book_snapshot_5") not in canon_expected
+
     def test_prediction_token_folds_to_prediction_market(self, mod: ModuleType) -> None:
         """Kalshi `prediction` itype folds to the canonical `prediction_market` grain."""
         assert mod._canon_instrument_type("prediction", "KALSHI", "prediction") == "prediction_market"
