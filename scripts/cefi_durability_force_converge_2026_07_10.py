@@ -214,6 +214,18 @@ def _re_derive_row(venue: str, row: pd.Series[object]) -> tuple[str | None, Marg
 
     expiry_raw = row.get("expiry")
     expiry = expiry_raw.to_pydatetime() if hasattr(expiry_raw, "to_pydatetime") else expiry_raw
+    if venue == "DERIBIT":
+        # Historical capture bug (2019-era; confirmed dead in the current pipeline —
+        # see cefi_durability_deribit_expiry_dup_guard_residual_2026_07_11.md): some
+        # rows have `expiry` stamped to the file's own capture/snapshot day instead of
+        # the instrument's real expiry, silently colliding distinct options/futures
+        # (different real expiry, same strike/right) onto the same re-derived key.
+        # raw_symbol always encodes the true DDMMMYY expiry for Deribit and is the same
+        # fallback the live adapter itself uses when Tardis's item.expiry is absent —
+        # prefer it outright rather than trying to detect the corrupt case.
+        parsed_expiry = tardis_parsing._parse_deribit_symbol_expiry(raw_symbol)
+        if parsed_expiry is not None:
+            expiry = parsed_expiry
     if expiry is None or pd.isna(expiry):
         return None, None, "missing_expiry"
     dated_quote = "" if venue == "DERIBIT" else quote
