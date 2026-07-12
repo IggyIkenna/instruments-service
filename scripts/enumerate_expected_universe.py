@@ -69,18 +69,21 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
+import io
 import logging
 import os
 import sys
 import tempfile
 import time
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import NamedTuple
 
 import pandas as pd
+from google.api_core.exceptions import NotFound
 from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
@@ -1537,6 +1540,70 @@ def _yield_v2_sports_pre_source_coverage_rows(
             )
 
 
+# Bound above which building a per-day matchday-existence index is too expensive
+# to run inline during enumeration (a full-history sports date_axis spans
+# thousands of days -> one GCS read per day). Set generously above the daily
+# forward-poll window (sports-scheduler-vm tier-1 uses lookback=1/lookahead=7,
+# ~9 days) so the check below only fires for genuinely small/bounded runs —
+# see the "Durable writer fix (part (b))" todo in
+# plans/active/issues/sports_is_manifest_eu_regression_overwrite_2026_06_29.md
+# for the single-walk-discipline cost tradeoff this bound encodes.
+_MATCHDAY_INDEX_MAX_DAYS = 30
+
+_UNDERSTAT_FIXTURES_TPL = "sports_reference/by_date/day={day}/entity=fixtures/fixtures.parquet"
+
+
+def _build_understat_fixture_index(days: list[str]) -> set[tuple[str, str]]:
+    """Return ``(canonical_league_upper, day)`` pairs with >=1 captured api_football
+    fixture, for the small ``days`` window only.
+
+    Mirrors ``type_understat_eu_no_provider_coverage.py``'s ``_build_fixture_index``
+    (itself mirroring ``reconcile_sports_blank_empty_reason_2026_06_24.py``). A day
+    with no fixtures parquet contributes nothing -> those (league, day) cells
+    genuinely have no matchday. Caller MUST bound ``days`` to
+    ``_MATCHDAY_INDEX_MAX_DAYS`` or fewer — this does one GCS read per day, so it is
+    NOT single-walk-safe for a full-history window.
+    """
+    from unified_api_contracts.canonical.domain.sports.league_data import get_league_by_api_football_id
+
+    bucket_name = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+    client = storage.Client(project=PROJECT_ID)
+    bucket = client.bucket(bucket_name)
+
+    def _read_day(day: str) -> list[tuple[str, str]]:
+        blob = bucket.blob(_UNDERSTAT_FIXTURES_TPL.format(day=day))
+        try:
+            raw = blob.download_as_bytes(timeout=30)
+        except (NotFound, FileNotFoundError, OSError):
+            return []
+        try:
+            fdf = pd.read_parquet(io.BytesIO(raw), columns=["af_league_id"])
+        except (OSError, ValueError):
+            return []
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for raw_id in fdf["af_league_id"].astype("string").dropna().unique():
+            try:
+                af_id = int(str(raw_id).strip())
+            except (ValueError, TypeError):
+                continue
+            league = get_league_by_api_football_id(af_id)
+            if league is None:
+                continue
+            name = str(league.league_id).upper()
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append((name, day))
+        return out
+
+    index: set[tuple[str, str]] = set()
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        for pairs in pool.map(_read_day, days):
+            index.update(pairs)
+    return index
+
+
 def _enumerate_v2_sports(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
@@ -1615,6 +1682,34 @@ def _enumerate_v2_sports(
         coverage_starts[dt] = pd.Timestamp(cov) if cov is not None else None
         _ec = get_entity_league_coverage(dt)
         entity_coverage[dt] = frozenset(x.upper() for x in _ec) if _ec is not None else None
+
+    # Matchday-aware fixture-existence index for understat only (Root-cause writer
+    # fix, part (b) — plans/active/issues/sports_is_manifest_eu_regression_overwrite_2026_06_29.md).
+    # is_expected_for_source's understat branch is season-aware (fixed league
+    # whitelist + coverage-start) but NOT matchday-aware, so a covered league with
+    # genuinely no fixture on a given day still falls through to a blank-reason
+    # expected_unattempted seed instead of EXPECTED_NO_FIXTURE — the exact bug the
+    # one-off type_understat_eu_no_provider_coverage.py typing script mops up every
+    # ~24h. Bounded to small windows only (see _MATCHDAY_INDEX_MAX_DAYS docstring):
+    # a full-history/backfill run falls back to the pre-existing non-matchday-aware
+    # behaviour and keeps relying on the typing script — extending this to the other
+    # sports data_types (footystats/weather/SFI/TM) is explicitly out of scope here
+    # (their residuals are league-coverage-only masks, not per-date gaps).
+    #
+    # Built LAZILY (only on the first day that actually reaches the in-scope
+    # understat branch below) and memoized for the rest of this call — most calls
+    # (e.g. pure pre-source-coverage windows) never need it at all, so this avoids
+    # a GCS round-trip on every enumeration run that merely happens to include an
+    # understat data_type.
+    _understat_fixture_index_cache: list[set[tuple[str, str]] | None] = [None]
+    _understat_fixture_index_built = [False]
+
+    def _get_understat_fixture_index() -> set[tuple[str, str]] | None:
+        if not _understat_fixture_index_built[0]:
+            _understat_fixture_index_built[0] = True
+            if date_axis and len(date_axis) <= _MATCHDAY_INDEX_MAX_DAYS:
+                _understat_fixture_index_cache[0] = _build_understat_fixture_index([d.isoformat() for d in date_axis])
+        return _understat_fixture_index_cache[0]
 
     for instr in catalog:
         if instr.instrument_type != _SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE:
@@ -1698,6 +1793,24 @@ def _enumerate_v2_sports(
                                 league_id=league_id,
                                 date=iso,
                                 reason=_oos_reason,
+                            )
+                            continue
+                        if (
+                            _in_scope
+                            and _src == "understat"
+                            and (_understat_fixture_index := _get_understat_fixture_index()) is not None
+                            and (league_id.upper(), iso) not in _understat_fixture_index
+                        ):
+                            yield ExpectedRow(
+                                asset_group="sports",
+                                venue="",
+                                chain="",
+                                data_type=dt,
+                                instrument_type="",
+                                instrument_id="",
+                                league_id=league_id,
+                                date=iso,
+                                reason="EXPECTED_NO_FIXTURE",
                             )
                             continue
                     if present_set is None:
