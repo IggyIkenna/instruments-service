@@ -1,6 +1,6 @@
 {
   "asset_group": "prediction",
-  "captured_at": "2026-07-06",
+  "captured_at": "2026-07-12",
   "tuple_count": 8,
   "tuples": [
     ["KALSHI", "prediction_market", "MARKET_LIFECYCLE"],
