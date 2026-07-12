@@ -1,7 +1,7 @@
 {
   "asset_group": "cefi",
   "captured_at": "2026-07-12",
-  "tuple_count": 76,
+  "tuple_count": 73,
   "tuples": [
     ["ASTER", "perpetual", "book_snapshot_5"],
     ["ASTER", "perpetual", "derivative_ticker"],
@@ -14,9 +14,6 @@
     ["BINANCE-FUTURES", "perpetual", "trades"],
     ["BINANCE-SPOT", "spot_pair", "book_snapshot_5"],
     ["BINANCE-SPOT", "spot_pair", "trades"],
-    ["BITFINEX-FUTURES", "future", "book_snapshot_5"],
-    ["BITFINEX-FUTURES", "future", "derivative_ticker"],
-    ["BITFINEX-FUTURES", "future", "trades"],
     ["BITFINEX-FUTURES", "perpetual", "book_snapshot_5"],
     ["BITFINEX-FUTURES", "perpetual", "derivative_ticker"],
     ["BITFINEX-FUTURES", "perpetual", "trades"],
