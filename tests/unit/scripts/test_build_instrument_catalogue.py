@@ -1041,7 +1041,9 @@ def test_sports_catalogue_from_manifest_empty_or_missing_cols(rollup: ModuleType
     assert list(out.columns) == list(rollup.CATALOG_COLUMNS)
 
 
-def test_sports_enumerator_skips_league_outside_entity_coverage(rollup: ModuleType) -> None:
+def test_sports_enumerator_skips_league_outside_entity_coverage(
+    rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """XG (Understat) must NOT seed expected_unattempted for a non-Understat league.
 
     Regression for the entity-coverage gate: get_entity_league_coverage("XG") is the
@@ -1050,6 +1052,11 @@ def test_sports_enumerator_skips_league_outside_entity_coverage(rollup: ModuleTy
     """
     enumerator = _load_script_module("enumerate_expected_universe.py", "_enum_v2_sports_cov")
     d = date(2024, 6, 1)
+    # Stub out the matchday-aware fixture-index build (Root-cause writer fix, part
+    # (b)) so this GCS-free test file stays GCS-free — pretend EPL has a fixture on
+    # this day so the seed falls through to the entity-coverage behaviour under
+    # test, not the (orthogonal) matchday check.
+    monkeypatch.setattr(enumerator, "_build_understat_fixture_index", lambda days: {("EPL", "2024-06-01")})
     # EPL IS in Understat coverage; A_RANDOM_LEAGUE is NOT.
     manifest = pd.DataFrame(
         [
