@@ -154,3 +154,48 @@ def test_write_back_preserves_shard_written_during_audit() -> None:
     # of the audited captured set).
     late_row = final_df.loc[final_df["venue"] == "LATE-SHARD-VENUE"].iloc[0]
     assert late_row["capture_status"] == "captured"
+
+
+def test_chain_level_defi_delete_preserves_shard_landed_before_write() -> None:
+    """Same regression, for the sibling ``_apply_delete_chain_level_defi_phantoms``
+    write path (a separate, previously-unprotected "read once -> mask -> write back"
+    site in the same script, per the reconcile_phantom_manifest_rows_stale_read_
+    overwrite_2026_07_12 todo #2 audit)."""
+    mod = _load_reconciler_module()
+    stub = _StubStorageClient()
+
+    # A genuine chain-level phantom: gas_fees keyed on the wrong (per-protocol)
+    # venue instead of the canonical chain-level venue (ALCHEMY).
+    df = pd.DataFrame(
+        [
+            {
+                "date": "2026-07-12",
+                "venue": "SOME_PROTOCOL",
+                "data_type": "gas_fees",
+                "capture_status": "empty_confirmed",
+                "error_reason": "",
+            }
+        ]
+    )
+    stub.seed_parquet("_index/availability_index.parquet", df)
+
+    real_list_blobs = stub.list_blobs
+    seeded = False
+
+    def _list_blobs_with_late_shard(bucket: str, prefix: str = "") -> list[_Blob]:
+        nonlocal seeded
+        if not seeded and prefix == "_index/per_vm/":
+            seeded = True
+            stub.seed_parquet("_index/per_vm/vm-late.parquet", _late_shard_row())
+        return real_list_blobs(bucket, prefix=prefix)
+
+    stub.list_blobs = _list_blobs_with_late_shard  # type: ignore[method-assign]
+
+    n_deleted = mod._apply_delete_chain_level_defi_phantoms(
+        stub, "test-defi-bucket", "_index/availability_index.parquet", df
+    )
+
+    assert n_deleted == 1
+    final_df = stub.read_parquet("_index/availability_index.parquet")
+    assert "SOME_PROTOCOL" not in set(final_df["venue"])
+    assert "LATE-SHARD-VENUE" in set(final_df["venue"])
