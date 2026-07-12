@@ -850,8 +850,11 @@ def _apply_delete_chain_level_defi_phantoms(
     df: pd.DataFrame,
 ) -> int:
     """APPLY mode: DELETE the chain-level DeFi wrong-key phantom rows from the
-    ``_index`` and write the trimmed index back. Single-walk (reuses the
-    already-loaded ``df``; one index read + one write, no whole-corpus GCS walk).
+    ``_index`` and write the trimmed index back. No whole-corpus GCS walk — the
+    predicate is a cheap boolean mask. Re-fetches fresh via
+    ``merge_canonical_with_outstanding_shards`` immediately before the write-back
+    (staleness guard, reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12
+    todo #2) rather than trusting the ``df`` passed in from the caller's earlier read.
 
     The delete predicate is ``_chain_level_phantom_mask`` (SSOT) — it removes the
     BOTH wrong-key reason classes (NOT_LISTED + PRE_GENESIS_CHAIN) keyed
@@ -864,15 +867,26 @@ def _apply_delete_chain_level_defi_phantoms(
     Asserts captured/attempted_failed totals are preserved before writing back.
     Returns the number of rows deleted.
     """
+    phantom_mask = _chain_level_phantom_mask(df)
+    n_delete = int(phantom_mask.sum())
+    logger.info("APPLY chain-level DeFi phantom DELETE: %d rows match the predicate", n_delete)
+    if n_delete == 0:
+        logger.info("Nothing to delete — chain-level phantom set is empty. No write.")
+        return 0
+
+    # Staleness guard (reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12
+    # todo #2): re-fetch fresh + re-derive the delete predicate immediately before the
+    # write-back so any per-VM shard written since the initial read above isn't
+    # silently discarded by this bulk re-upload.
+    df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, index_blob)
     status_before = df["capture_status"].fillna("").astype(str)
     captured_before = int((status_before == "captured").sum())
     attempted_failed_before = int((status_before == "attempted_failed").sum())
 
     phantom_mask = _chain_level_phantom_mask(df)
     n_delete = int(phantom_mask.sum())
-    logger.info("APPLY chain-level DeFi phantom DELETE: %d rows match the predicate", n_delete)
     if n_delete == 0:
-        logger.info("Nothing to delete — chain-level phantom set is empty. No write.")
+        logger.info("Nothing to delete after fresh re-check — chain-level phantom set is empty. No write.")
         return 0
 
     # Defensive guard: the predicate must never select a captured/failed row.
@@ -974,19 +988,33 @@ def _apply_delete_legacy_combined_venue_defi_phantoms(
     df: pd.DataFrame,
 ) -> int:
     """APPLY mode: DELETE the legacy-combined-venue DeFi phantom rows from the
-    ``_index`` and write the trimmed index back. Single-walk (one index read +
-    one write, no whole-corpus GCS walk). Predicate =
-    ``_legacy_combined_venue_phantom_mask`` (SSOT). Asserts captured/
-    attempted_failed totals are preserved before writing back. Returns rows deleted."""
+    ``_index`` and write the trimmed index back. No whole-corpus GCS walk — the
+    predicate is a cheap boolean mask. Predicate = ``_legacy_combined_venue_phantom_mask``
+    (SSOT). Re-fetches fresh via ``merge_canonical_with_outstanding_shards`` immediately
+    before the write-back (staleness guard,
+    reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12 todo #2). Asserts
+    captured/attempted_failed totals are preserved before writing back. Returns rows
+    deleted."""
+    phantom_mask = _legacy_combined_venue_phantom_mask(df)
+    n_delete = int(phantom_mask.sum())
+    logger.info("APPLY legacy-combined-venue DeFi phantom DELETE: %d rows match the predicate", n_delete)
+    if n_delete == 0:
+        logger.info("Nothing to delete — legacy-combined-venue phantom set is empty. No write.")
+        return 0
+
+    # Staleness guard (reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12
+    # todo #2): re-fetch fresh + re-derive the delete predicate immediately before the
+    # write-back so any per-VM shard written since the initial read above isn't
+    # silently discarded by this bulk re-upload.
+    df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, index_blob)
     status_before = df["capture_status"].fillna("").astype(str)
     captured_before = int((status_before == "captured").sum())
     attempted_failed_before = int((status_before == "attempted_failed").sum())
 
     phantom_mask = _legacy_combined_venue_phantom_mask(df)
     n_delete = int(phantom_mask.sum())
-    logger.info("APPLY legacy-combined-venue DeFi phantom DELETE: %d rows match the predicate", n_delete)
     if n_delete == 0:
-        logger.info("Nothing to delete — legacy-combined-venue phantom set is empty. No write.")
+        logger.info("Nothing to delete after fresh re-check — legacy-combined-venue phantom set is empty. No write.")
         return 0
 
     deleting = df[phantom_mask]
