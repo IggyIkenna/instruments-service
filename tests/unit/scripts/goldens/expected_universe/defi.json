@@ -1,7 +1,7 @@
 {
   "asset_group": "defi",
-  "captured_at": "2026-07-10",
-  "tuple_count": 196,
+  "captured_at": "2026-07-12",
+  "tuple_count": 195,
   "tuples": [
     ["AAVE_V3-ARBITRUM", "lending", "flash_loan_events"],
     ["AAVE_V3-ARBITRUM", "lending", "lending_indices"],
@@ -97,7 +97,6 @@
     ["DRIFT-SOLANA", "perpetual", "oracle_prices"],
     ["DRIFT-SOLANA", "perpetual", "perp_funding"],
     ["DRIFT-SOLANA", "spot_pair", "oracle_prices"],
-    ["DRIFT-SOLANA", "spot_pair", "perp_funding"],
     ["EIGENLAYER-ETHEREUM", "spot_asset", "eigenlayer_rewards"],
     ["EIGENLAYER-ETHEREUM", "spot_asset", "oracle_prices"],
     ["EIGENLAYER-ETHEREUM", "spot_asset", "rewards"],
