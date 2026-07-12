@@ -17,20 +17,36 @@ prefix triple, then check each captured manifest row for membership.
 Idempotent: ``attempted_failed`` rows are skipped, real captures are
 left at ``captured``, only true phantoms get flipped.
 
-**v8 column shape (codified 2026-05-12)**: this reconciler reads the manifest
-via ``pd.read_parquet`` and modifies a small fixed set of columns
-(``capture_status`` / ``error_reason`` / ``attempted_at``) at the specified
-row indices, then writes back via ``df.to_parquet``. By construction this is
-**read-tolerant** to new schema columns (the read accepts whatever columns
-the parquet carries) and **write-preserving** (pandas DataFrame.to_parquet
-preserves every column already on the dataframe). The v8 emission-tracking
-columns added by ``gcs_migration_bundle_pipeline_mode_2026_05_08`` —
-``pipeline_mode`` / ``service_emission_state`` / ``last_emission_decision_at``
-/ ``expected_window_completeness_fraction`` — pass through transparently
+**v8 column shape (codified 2026-05-12)**: this reconciler reads the manifest,
+modifies a small fixed set of columns (``capture_status`` / ``error_reason``
+/ ``attempted_at``) at the specified rows, then writes back via
+``df.to_parquet``. By construction this is **read-tolerant** to new schema
+columns (the read accepts whatever columns the parquet carries) and
+**write-preserving** (pandas DataFrame.to_parquet preserves every column
+already on the dataframe). The v8 emission-tracking columns added by
+``gcs_migration_bundle_pipeline_mode_2026_05_08`` — ``pipeline_mode`` /
+``service_emission_state`` / ``last_emission_decision_at`` /
+``expected_window_completeness_fraction`` — pass through transparently
 without any reconciler-side handling. Rows written by pre-v8 writers (no
 new columns on disk) round-trip with the columns absent; rows written by
 post-v8 writers round-trip with the columns intact. No special-case logic
 needed in this script.
+
+**Staleness guard (codified 2026-07-12,
+reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12)**: the
+audit pass below (a bulk multi-worker GCS listing) can run for minutes on
+large asset_groups. Both the initial read AND the read immediately before
+the bulk write-back go through
+``unified_trading_library.merge_canonical_with_outstanding_shards``, which
+merges the canonical blob with every outstanding ``_index/per_vm/`` shard —
+never a raw ``pd.read_parquet`` of a point-in-time snapshot. This closes the
+lost-update window where a per-VM shard write (e.g. a concurrent backfill VM
+completing) lands between this script's read and its write: without the
+final re-merge, the bulk re-upload of the FIRST snapshot would silently
+revert that shard's already-consolidated-pending progress. The
+phantom/unphantom row sets are relocated onto the freshly re-merged frame by
+identity key (date/venue/data_type/... — see ``_row_identity_cols``) before
+the flip is applied, since positional indices don't survive a re-merge.
 
 Usage::
 
@@ -66,6 +82,7 @@ from unified_trading_library import (
     MANIFEST_ONLY_BUNDLE_DATA_TYPES,
     StorageClient,
     get_storage_client,
+    merge_canonical_with_outstanding_shards,
     resolve_bucket_name,
 )
 
@@ -567,6 +584,93 @@ def _audit_generic(
                 break
         real_or_phantom[idx] = is_real
     return real_or_phantom
+
+
+# Base + optional dedup-identity columns — MIRRORS
+# unified_trading_library.manifest_writer._read_index._merge_shard_frames'
+# dedup key so a row located in the initial audit read can be relocated onto
+# a freshly re-merged frame (see the staleness-guard docstring above).
+_ROW_IDENTITY_BASE_COLS: tuple[str, ...] = ("date", "venue", "data_type", "service_name")
+_ROW_IDENTITY_OPTIONAL_COLS: tuple[str, ...] = (
+    "timeframe",
+    "league_id",
+    "chain",
+    "instrument_type",
+    "underlying",
+    "feature_group",
+    "model_family",
+    "training_period",
+    "strategy_id",
+    "client_id",
+    "instruction_type",
+    "instrument_id",
+)
+
+
+def _row_identity_cols(df: pd.DataFrame) -> list[str]:
+    """Identity columns present in ``df`` to key row lookups across a re-merge.
+
+    Base columns are always included when present; optional dims are included
+    only when at least one row carries a non-empty value (matching
+    ``_merge_shard_frames``' dedup-key construction, so the same rows compare
+    equal across two reads of "the same logical manifest state").
+    """
+    cols = [c for c in _ROW_IDENTITY_BASE_COLS if c in df.columns]
+    for c in _ROW_IDENTITY_OPTIONAL_COLS:
+        if c in df.columns and df[c].fillna("").astype(str).str.len().sum() > 0:
+            cols.append(c)
+    return cols
+
+
+def _relocate_indices_by_identity(
+    original_df: pd.DataFrame,
+    target_idx: list[int],
+    fresh_df: pd.DataFrame,
+) -> list[int]:
+    """Map row indices audited against ``original_df`` onto their matching rows
+    in ``fresh_df`` (a separately-read/merged frame) by identity key.
+
+    Positional indices from the initial audit read do not survive a
+    canonical+shard re-merge (row order and the DataFrame's positional index
+    are not stable across two independent reads). A target row missing from
+    ``fresh_df`` (a per-VM shard superseded it with a newer write in the
+    interim) is logged and skipped rather than force-flipped — the fresher
+    shard's version of that row wins.
+    """
+    if not target_idx:
+        return []
+    id_cols = _row_identity_cols(original_df)
+    if not id_cols:
+        logger.warning("No identity columns available — cannot relocate %d flagged rows", len(target_idx))
+        return []
+    key_df = original_df.loc[target_idx, id_cols].fillna("").astype(str)
+    fresh_key_df = fresh_df[[c for c in id_cols if c in fresh_df.columns]].fillna("").astype(str)
+    if list(fresh_key_df.columns) != id_cols:
+        # Fresh frame is missing an identity column the original had — cannot
+        # safely key-match; caller should treat as "nothing relocatable".
+        logger.warning("Fresh manifest read is missing identity columns %s — skipping relocation", id_cols)
+        return []
+
+    fresh_lookup: dict[tuple[str, ...], list[int]] = {}
+    for pos, key in zip(fresh_df.index, fresh_key_df.itertuples(index=False, name=None), strict=True):
+        fresh_lookup.setdefault(key, []).append(pos)
+
+    relocated: list[int] = []
+    missing = 0
+    for key in key_df.itertuples(index=False, name=None):
+        matches = fresh_lookup.get(key)
+        if matches:
+            relocated.extend(matches)
+        else:
+            missing += 1
+    if missing:
+        logger.warning(
+            "%d of %d flagged rows not found in the freshly re-merged canonical "
+            "(a per-VM shard superseded them with a newer write) — skipping their flip",
+            missing,
+            len(target_idx),
+        )
+    return relocated
 
 
 def _build_triage_records(
@@ -1099,8 +1203,7 @@ def main() -> int:
             logger.warning("Could not tune GCS HTTP pool — falling back to default 10")
 
     logger.info("Loading manifest from %s://%s/%s", args.cloud, bucket_name, cfg["index"])
-    raw_bytes = storage_client.download_bytes(bucket_name, cfg["index"])
-    df = pd.read_parquet(io.BytesIO(raw_bytes))
+    df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, str(cfg["index"]))
     logger.info("Manifest rows: %d", len(df))
 
     # Chain-level DeFi phantom report — DRY-RUN ONLY, single-walk (reuses the
@@ -1223,15 +1326,23 @@ def main() -> int:
         logger.info("DRY RUN — manifest not modified.")
         return 0
 
+    # Staleness guard: re-read + re-merge the canonical immediately before the
+    # write-back (the audit pass above can run for minutes) and relocate the
+    # flagged rows onto the fresh frame by identity key — see the module
+    # docstring's "Staleness guard" section for the full rationale.
+    write_df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, str(cfg["index"]))
+    phantom_write_idx = _relocate_indices_by_identity(df, phantom_idx, write_df)
+    unphantom_write_idx = _relocate_indices_by_identity(df, unphantom_idx, write_df)
+
     now_iso = datetime.now(UTC).isoformat()
-    if phantom_idx:
-        df.loc[phantom_idx, "capture_status"] = "attempted_failed"
-        df.loc[phantom_idx, "error_reason"] = "phantom_captured_no_parquet_at_canonical_path"
-        df.loc[phantom_idx, "attempted_at"] = now_iso
-    if unphantom_idx:
-        df.loc[unphantom_idx, "capture_status"] = "captured"
-        df.loc[unphantom_idx, "error_reason"] = ""
-        df.loc[unphantom_idx, "attempted_at"] = now_iso
+    if phantom_write_idx:
+        write_df.loc[phantom_write_idx, "capture_status"] = "attempted_failed"
+        write_df.loc[phantom_write_idx, "error_reason"] = "phantom_captured_no_parquet_at_canonical_path"
+        write_df.loc[phantom_write_idx, "attempted_at"] = now_iso
+    if unphantom_write_idx:
+        write_df.loc[unphantom_write_idx, "capture_status"] = "captured"
+        write_df.loc[unphantom_write_idx, "error_reason"] = ""
+        write_df.loc[unphantom_write_idx, "attempted_at"] = now_iso
 
     # Write back. v8 columns (pipeline_mode / service_emission_state /
     # last_emission_decision_at / expected_window_completeness_fraction)
@@ -1240,13 +1351,13 @@ def main() -> int:
     # round-trips back unchanged. Pre-v8 manifests (no new columns) also
     # round-trip cleanly because the read-side never invents columns.
     out = io.BytesIO()
-    df.to_parquet(out, index=False)
+    write_df.to_parquet(out, index=False)
     out.seek(0)
     logger.info(
         "Uploading reconciled manifest (%d rows, %d phantoms flipped, %d unphantomed)",
-        len(df),
-        len(phantom_idx),
-        len(unphantom_idx),
+        len(write_df),
+        len(phantom_write_idx),
+        len(unphantom_write_idx),
     )
     storage_client.upload_from_file_obj(bucket_name, cfg["index"], out)
     logger.info("Done.")

@@ -87,7 +87,7 @@ class TestBundleAtomExemption:
         result = mod._audit_generic(
             "prediction",
             client,
-            "market-data-tick-prediction-central-element-323112",
+            "market-data-tick-prediction-test-project",
             df,
             captured_idx,
             workers=2,
