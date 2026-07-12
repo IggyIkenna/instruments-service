@@ -1576,6 +1576,59 @@ def test_sports_v2_legacy_mode_alive_date_skipped() -> None:
     assert rows == []
 
 
+# ---------------------------------------------------------------------------
+# Sports v2 understat matchday-awareness (Root-cause writer fix, part (b)) —
+# plans/active/issues/sports_is_manifest_eu_regression_overwrite_2026_06_29.md
+# ---------------------------------------------------------------------------
+
+
+def test_sports_v2_understat_no_fixture_day_yields_expected_no_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A covered understat league with NO scheduled fixture that day → EXPECTED_NO_FIXTURE,
+    not a blank-reason expected_unattempted seed (the daily-forward-poll regression)."""
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", lambda days: set())
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-06-05")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["XG"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].reason == "EXPECTED_NO_FIXTURE"
+    assert rows[0].league_id == "EPL"
+    assert rows[0].capture_status != "expected_unattempted"
+
+
+def test_sports_v2_understat_fixture_day_falls_through_to_expected_unattempted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A covered understat league WITH a scheduled fixture that day is a real
+    pending_fetch → falls through to the normal expected_unattempted seed, never
+    silently typed."""
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", lambda days: {("EPL", "2024-06-05")})
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-06-05")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["XG"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_understat_matchday_index_skipped_for_large_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Single-walk discipline: a date_axis larger than _MATCHDAY_INDEX_MAX_DAYS must
+    NEVER trigger the per-day fixture-index build (one GCS read per day) — a
+    full-history/backfill run falls back to the pre-existing non-matchday-aware
+    behaviour instead."""
+
+    def _boom(days: list[str]) -> set[tuple[str, str]]:
+        raise AssertionError("_build_understat_fixture_index must not be called for a large date_axis")
+
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", _boom)
+    assert enumerator_module._MATCHDAY_INDEX_MAX_DAYS < 40
+    big_dates = [f"2024-01-{d:02d}" for d in range(1, 32)] + [f"2024-02-{d:02d}" for d in range(1, 10)]
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    date_axis = _date_axis(*big_dates)
+    # Must not raise — confirms the bound gates the expensive index build off.
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["XG"], present_set=set()))
+    assert all(r.capture_status == "expected_unattempted" for r in rows)
+
+
 def test_prediction_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
     """Prediction active market absent from manifest → expected_unattempted."""
     catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
