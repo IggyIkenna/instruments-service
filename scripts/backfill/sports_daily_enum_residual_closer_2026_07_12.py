@@ -125,6 +125,12 @@ async def _close_transfermarkt(date: str, api_key: str) -> None:
     # guard resolve every expected league honestly for THIS historical date
     # (not "today's" trigger set) — the same real per-date capture path the
     # daily driver uses, just without the today-only league restriction.
+    # force=False (not True): _fetch_transfermarkt_data's per-league
+    # transfer-window guard only runs when `not force`, so force=True made
+    # every pass force-refetch all leagues (including out-of-window ones)
+    # instead of letting the guard cheaply resolve those honestly — a ~40x
+    # slowdown against a flaky third-party API, confirmed live 2026-07-12
+    # (1,364 -> 956 pending_fetch across two passes once switched to False).
     await _fetch_transfermarkt_data(
         date=date,
         api_key=api_key,
@@ -132,7 +138,7 @@ async def _close_transfermarkt(date: str, api_key: str) -> None:
         entity_filter="PLAYER_VALUES",
         league_filter=None,
         season=season,
-        force=True,
+        force=False,
     )
 
 
