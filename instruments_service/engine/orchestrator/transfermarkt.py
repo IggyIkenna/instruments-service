@@ -171,6 +171,12 @@ def _write_master_append(
     Errors are non-blocking: classify + emit and return so a master-write
     failure never kills the main by_date/ write.
 
+    Concurrency note: ``master.parquet`` at this path is a SINGLE shared GCS
+    object, not per-VM sharded like the availability manifest — do not run
+    more than one process against the same entity concurrently, or the
+    read-modify-write cycle can race and GCS's per-object mutation rate limit
+    can 429 (see plans/active/issues/transfermarkt_master_table_gcs_429_concurrent_writers_2026_07_12.md).
+
     Args:
         bucket: GCS bucket name (already resolved via resolve_bucket_name).
         entity: Entity label used in the path (``teams``, ``team_mapping``,
