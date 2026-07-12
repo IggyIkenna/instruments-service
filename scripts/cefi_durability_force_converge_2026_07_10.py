@@ -54,6 +54,17 @@ This script does the two things fully within THIS repo's control:
    2026_07_08.md). Backup-first (to the SAME quarantine prefix, never inline),
    verify-after, idempotent, shard-isolated (one file's failure never aborts
    the sweep).
+3. ``--fix-frozen-expiry`` (DERIBIT-only): correct the stored ``expiry``
+   metadata column for rows where it's frozen at a stale last-observed date
+   (the original capture code's ``available_to`` fallback when Tardis's own
+   ``item.expiry`` was unavailable) rather than the real settlement date —
+   the exact root cause of the duplicate-key collisions ``--fix-by-date``
+   already guards against. Deliberately narrow: only rows that collide with
+   another real instrument under the OLD (stored-expiry-trusting) key
+   derivation are touched; the legitimate T+1 settlement-offset majority
+   (e.g. a ``16AUG19`` symbol's real settlement landing on the 17th — stable
+   across every capture day for the same instrument, confirmed 2026-07-12)
+   is left untouched. See ``_detect_frozen_expiry_rows``'s docstring.
 
 Usage::
 
@@ -62,6 +73,8 @@ Usage::
     .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --quarantine-backups --apply
     .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-by-date --dry-run
     .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-by-date --apply --workers 32
+    .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-frozen-expiry --dry-run
+    .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-frozen-expiry --apply --workers 32
 
 SSOT: unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
 """
@@ -307,6 +320,155 @@ def _process_one_file(st, bucket: str, venue: str, blob_name: str, apply: bool) 
     return result
 
 
+def _expiry_group_key(row: pd.Series[object]) -> tuple[str, ...]:
+    """Group key covering everything a canonical key needs EXCEPT expiry — the field
+    under test. Two rows sharing this key but with genuinely different raw_symbols are
+    different real instruments; if they also share the same STORED expiry, that stored
+    value can only be correct for one of them (or neither)."""
+    base = str(row.get("base_asset") or "")
+    quote = str(row.get("quote_asset") or "")
+    margin = str(row.get("margin_type") or "")
+    if str(row.get("instrument_type") or "") == "OPTION":
+        return (base, quote, margin, str(row.get("strike") or ""), str(row.get("option_type") or ""))
+    return (base, quote, margin)
+
+
+def _detect_frozen_expiry_rows(venue: str, df: pd.DataFrame) -> dict[int, datetime]:
+    """Detect rows whose stored ``expiry`` is a stale collision artifact — frozen at
+    the instrument's last-observed date (the original capture code's ``available_to``
+    fallback when Tardis's own ``item.expiry`` was unavailable) rather than its real
+    settlement date — and return ``{row_index: corrected_expiry}`` for ONLY those rows.
+
+    Deliberately narrow: does NOT flag every row whose ``expiry`` differs from a naive
+    ``raw_symbol`` parse — real Deribit settlement timestamps legitimately land one day
+    after the symbol's nominal DDMMMYY date (T+1 convention), confirmed stable across
+    every capture day for the same instrument (2026-07-12 investigation). Only rows
+    that collide — two DIFFERENT real instruments (different raw_symbol) sharing one
+    stored expiry within the same (base, quote, margin, strike, right) group — are
+    flagged, matching the exact set the duplicate-introduction guard already protects
+    against in ``_process_one_file``. See instrument_id_format_canonicalization_
+    2026_07_08.md's frozen-expiry follow-up.
+    """
+    if venue != "DERIBIT":
+        return {}
+    mask = (
+        df["instrument_type"].isin(_DERIVATIVE_TYPES)
+        if "instrument_type" in df.columns
+        else pd.Series(False, index=df.index)
+    )
+    sub_index = df.index[mask]
+    if len(sub_index) == 0:
+        return {}
+    groups: dict[tuple[str, ...], list[int]] = {}
+    for idx in sub_index:
+        groups.setdefault(_expiry_group_key(df.loc[idx]), []).append(idx)
+    corrections: dict[int, datetime] = {}
+    for idxs in groups.values():
+        if len(idxs) < 2:
+            continue
+        by_stored: dict[object, list[int]] = {}
+        for idx in idxs:
+            stored = df.at[idx, "expiry"]
+            if pd.isna(stored):
+                continue
+            key = stored.date() if hasattr(stored, "date") else stored
+            by_stored.setdefault(key, []).append(idx)
+        for stored_key, group_idxs in by_stored.items():
+            raw_symbols = {str(df.at[i, "raw_symbol"] or "") for i in group_idxs}
+            if len(raw_symbols) < 2:
+                continue  # same raw_symbol repeated across rows — not a real collision
+            for idx in group_idxs:
+                raw_symbol = str(df.at[idx, "raw_symbol"] or "")
+                parsed = tardis_parsing._parse_deribit_symbol_expiry(raw_symbol)
+                if parsed is None or parsed.date() == stored_key:
+                    continue
+                corrections[idx] = parsed
+    return corrections
+
+
+def _process_frozen_expiry_file(st, bucket: str, venue: str, blob_name: str, apply: bool) -> dict[str, object]:
+    raw = st.download_bytes(bucket, blob_name)
+    df = pd.read_parquet(io.BytesIO(raw))
+    corrections = _detect_frozen_expiry_rows(venue, df)
+    result: dict[str, object] = {"blob": blob_name, "rows_fixed": len(corrections), "written": 0}
+    if not corrections:
+        return result
+    out = df.copy()
+    for idx, new_expiry in corrections.items():
+        out.at[idx, "expiry"] = pd.Timestamp(new_expiry)
+    # Re-derive instrument_key/margin_type from the corrected expiry so the key stays
+    # consistent with the metadata column (mirrors _fix_frame; never leave the two out
+    # of sync). Duplicate-introduction guard applies identically.
+    fixed_frame, _stats = _fix_frame(venue, out)
+    dup_before = int(df["instrument_key"].astype(str).duplicated().sum())
+    dup_after = int(fixed_frame["instrument_key"].astype(str).duplicated().sum())
+    if dup_after > dup_before:
+        result["error"] = f"would_introduce_{dup_after - dup_before}_dup_ids"
+        return result
+    if not apply:
+        result["written"] = 1
+        return result
+    backup_dest = QUARANTINE_PREFIX + blob_name
+    if not st.blob_exists(bucket, backup_dest):
+        st.upload_bytes(bucket, backup_dest, raw)
+    buf = io.BytesIO()
+    fixed_frame.to_parquet(buf, index=False, coerce_timestamps="us", allow_truncated_timestamps=True)
+    st.upload_bytes(bucket, blob_name, buf.getvalue())
+    result["written"] = 1
+    return result
+
+
+def run_fix_frozen_expiry(
+    st, bucket: str, apply: bool, workers: int, limit: int | None, current_by_venue: dict[str, list[str]]
+) -> None:
+    for venue in _TARGET_VENUES:
+        targets = current_by_venue[venue]
+        if limit is not None:
+            targets = sorted(targets)[:limit]
+        logger.info(
+            "=== fix-frozen-expiry %s: %d current file(s) (mode=%s, workers=%d) ===",
+            venue,
+            len(targets),
+            "APPLY" if apply else "DRY-RUN",
+            workers,
+        )
+        total = {"files": 0, "files_changed": 0, "rows_fixed": 0}
+        errors: dict[str, int] = {}
+        t0 = time.time()
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_process_frozen_expiry_file, st, bucket, venue, blob, apply): blob for blob in targets
+            }
+            for i, fut in enumerate(as_completed(futures), start=1):
+                blob = futures[fut]
+                try:
+                    r = fut.result()
+                except Exception:
+                    logger.exception("FAILED %s", blob)
+                    errors["exception"] = errors.get("exception", 0) + 1
+                    continue
+                if r.get("error"):
+                    errors[str(r["error"])] = errors.get(str(r["error"]), 0) + 1
+                    continue
+                total["files"] += 1
+                if r["written"]:
+                    total["files_changed"] += 1
+                    total["rows_fixed"] += int(r["rows_fixed"])
+                if i % 500 == 0 or i == len(targets):
+                    elapsed = time.time() - t0
+                    logger.info(
+                        "%s [%d/%d] elapsed=%.1fs (%.3fs/file) %s errors=%s",
+                        venue,
+                        i,
+                        len(targets),
+                        elapsed,
+                        elapsed / i,
+                        total,
+                        errors,
+                    )
+        logger.info("%s DONE: %s errors=%s elapsed=%.1fs", venue, total, errors, time.time() - t0)
+
+
 def run_fix_by_date(
     st, bucket: str, apply: bool, workers: int, limit: int | None, current_by_venue: dict[str, list[str]]
 ) -> None:
@@ -362,12 +524,18 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--quarantine-backups", action="store_true", help="Relocate stray .bak.parquet files.")
     ap.add_argument("--fix-by-date", action="store_true", help="Re-derive instrument_key/margin_type on current files.")
+    ap.add_argument(
+        "--fix-frozen-expiry",
+        action="store_true",
+        help="Correct stored expiry for rows frozen at a stale last-observed date (DERIBIT-only; see "
+        "_detect_frozen_expiry_rows). Independent of --fix-by-date.",
+    )
     ap.add_argument("--apply", action="store_true", help="Write changes (default: dry-run/report only).")
     ap.add_argument("--workers", type=int, default=32, help="Thread-pool size (default 32).")
     ap.add_argument("--limit", type=int, default=None, help="Per-venue smoke-test cap for --fix-by-date.")
     args = ap.parse_args(argv)
-    if not (args.quarantine_backups or args.fix_by_date):
-        logger.error("Nothing to do — pass --quarantine-backups and/or --fix-by-date.")
+    if not (args.quarantine_backups or args.fix_by_date or args.fix_frozen_expiry):
+        logger.error("Nothing to do — pass --quarantine-backups and/or --fix-by-date and/or --fix-frozen-expiry.")
         return 1
 
     bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="cefi")
@@ -395,6 +563,8 @@ def main(argv: list[str] | None = None) -> int:
         run_quarantine(st, bucket, args.apply, args.workers, backups_all)
     if args.fix_by_date:
         run_fix_by_date(st, bucket, args.apply, args.workers, args.limit, current_by_venue)
+    if args.fix_frozen_expiry:
+        run_fix_frozen_expiry(st, bucket, args.apply, args.workers, args.limit, current_by_venue)
     return 0
 
 
