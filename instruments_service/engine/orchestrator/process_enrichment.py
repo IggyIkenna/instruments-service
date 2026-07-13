@@ -165,7 +165,26 @@ async def _fetch_sports_reference_block(
     # Write manifest for sports reference entities that did NOT write
     # their own manifest entries inside _fetch_sports_reference_data
     # (injuries and per-fixture entities write per-league entries directly).
-    _self_manifested = {"injuries", "fixture_stats", "fixture_events", "fixture_lineups", "player_stats"}
+    #
+    # "teams"/"standings" 2026-07-13: both self-manifest per-league inside
+    # ``_fetch_teams_and_standings`` (TEAMS gained its own ``record_captured``
+    # call this same day — see that function's docstring). Before this fix
+    # neither was excluded here, so this blanket call ALSO fired for them
+    # every date, writing a spurious blank-league_id "captured" row that
+    # summed all leagues (data_type=TEAMS/STANDINGS) — the confirmed-live
+    # source of the "two sources of truth" blank-vs-per-league split (verified
+    # still growing through 2026-07-13 for STANDINGS, not legacy residue).
+    # Excluding them here makes the per-league rows the sole manifest entry
+    # for both entities going forward.
+    _self_manifested = {
+        "injuries",
+        "fixture_stats",
+        "fixture_events",
+        "fixture_lineups",
+        "player_stats",
+        "teams",
+        "standings",
+    }
     for entity_name, row_count in sports_ref_counts.items():
         if entity_name not in _self_manifested:
             sports_manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable

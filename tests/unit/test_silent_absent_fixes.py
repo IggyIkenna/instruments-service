@@ -278,6 +278,148 @@ class TestEmptyOkVenuesGetSourceReturnedZero:
 
 
 # ---------------------------------------------------------------------------
+# Venue-vs-composite-key fold — real PREDICTION writes must NOT be misread as
+# empty (regression for prediction_universe_capture_dead_since_07_01_2026_07_06.md,
+# 2026-07-13 progress entry: KALSHI/POLYMARKET genuinely wrote real rows under
+# the composite manifest key "{VENUE}/{GROUP}" (e.g. "KALSHI/OTHER") but the
+# shard-completeness stage compared BARE venue names against `counts.keys()`,
+# so `written_venues` never contained bare "KALSHI" and the venue was
+# misclassified as empty_ok → dishonest SOURCE_RETURNED_ZERO.
+# ---------------------------------------------------------------------------
+
+
+class TestFoldWrittenVenues:
+    """`_fold_written_venues` collapses composite counts keys onto bare venues."""
+
+    def test_prediction_composite_keys_fold_to_bare_venue(self) -> None:
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _fold_written_venues,
+        )
+
+        counts = {"KALSHI/OTHER": 1422, "KALSHI/BTC_UP_DOWN_DAILY": 12, "POLYMARKET/OTHER": 7577}
+        folded = _fold_written_venues(counts, {"KALSHI", "POLYMARKET"})
+        assert folded == {"KALSHI", "POLYMARKET"}
+
+    def test_sports_fixtures_composite_keys_are_untouched(self) -> None:
+        """ "FIXTURES/{league_id}" is not a venue-prefixed key — must pass through as-is."""
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _fold_written_venues,
+        )
+
+        counts = {"FIXTURES/39": 10, "FIXTURES/61": 4}
+        folded = _fold_written_venues(counts, {"API_FOOTBALL"})
+        assert folded == {"FIXTURES/39", "FIXTURES/61"}
+
+    def test_bare_cefi_keys_are_noop(self) -> None:
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _fold_written_venues,
+        )
+
+        counts = {"BINANCE-FUTURES": 678}
+        folded = _fold_written_venues(counts, {"BINANCE-FUTURES"})
+        assert folded == {"BINANCE-FUTURES"}
+
+
+class TestPredictionCompositeWriteNotMisreadAsEmpty:
+    """Regression: real KALSHI/POLYMARKET writes under composite manifest keys
+    must NOT trigger the empty_ok / SOURCE_RETURNED_ZERO path."""
+
+    def test_kalshi_real_composite_write_not_stamped_source_returned_zero(self) -> None:
+        import asyncio
+
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _completeness_and_retry,
+        )
+
+        _captured_records: list[dict[str, object]] = []
+        _failed_records: list[dict[str, object]] = []
+
+        class _CapturingManifest:
+            def __init__(self, *_: object, **__: object) -> None:
+                pass
+
+            def record_zero_rows(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                was_expected: bool,
+                fetch_evidence: FetchEvidence | None = None,
+                **_kw: object,
+            ) -> None:
+                if not was_expected:
+                    _captured_records.append({"row_key": dict(row_key), "reason": reason, "evidence": fetch_evidence})
+
+            def record_empty(self, **_kw: object) -> None:
+                pass
+
+            def record_failed(self, *, row_key: Mapping[str, object], **_kw: object) -> None:
+                _failed_records.append(dict(row_key))
+
+            def record_expected_empty(self, **_: object) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=_CapturingManifest,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._check_emission_policy",
+                return_value=MagicMock(
+                    service_emission_state="PUBLISHED",
+                    completeness_fraction=1.0,
+                ),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch(
+                "instruments_service.engine.orchestrator.is_non_trading_day",
+                return_value=False,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                side_effect=Exception("no index in this unit test"),
+            ),
+        ):
+            asyncio.run(
+                _completeness_and_retry(
+                    # KALSHI wrote real rows under the composite manifest key
+                    # ("{VENUE}/{GROUP}") that _write_prediction_venue actually uses.
+                    counts={"KALSHI/OTHER": 1422, "KALSHI/KXNFLGAME": 8},
+                    date="2026-07-09",
+                    date_dt=MagicMock(),
+                    defi_venue_set=None,
+                    asset_groups=["PREDICTION"],
+                    api_keys=None,
+                    mode="batch",
+                    source=None,
+                    bucket="prediction-bucket",
+                    sink=MagicMock(),
+                    sampler=MagicMock(),
+                    active_venues=["KALSHI"],
+                    non_error_venues={"KALSHI"},
+                    validation_failed_venues=set(),
+                    retryable_venues=[],
+                    is_sports_run=False,
+                    sports_entity_filter=None,
+                    recovery_fixture_ids=None,
+                )
+            )
+
+        # KALSHI genuinely wrote 1,430 rows across 2 canonical_question_groups —
+        # must NOT be classified empty_ok, so no dishonest SOURCE_RETURNED_ZERO.
+        src_zero = [r for r in _captured_records if r.get("reason") == EmptyConfirmedReason.SOURCE_RETURNED_ZERO.value]
+        assert not src_zero, f"KALSHI wrote real data — must not get SOURCE_RETURNED_ZERO; got {src_zero}"
+        # Nor should it be treated as a permanently-missing shard (attempted_failed).
+        assert not any(r.get("venue") == "KALSHI" for r in _failed_records), (
+            f"KALSHI wrote real data — must not be in missing_shards/attempted_failed; got {_failed_records}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Fix 3 tests — TradFi non-trading-day in missing_shards → empty_confirmed
 # ---------------------------------------------------------------------------
 
