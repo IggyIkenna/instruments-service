@@ -270,6 +270,47 @@ def _sports_data_types() -> list[str]:
     return sorted(SPORTS_DATA_TYPE_TO_SOURCE.keys())
 
 
+# ``ODDS_HORIZON_BUCKET``'s writer (market-data-processing-service's
+# ``reprocess_sports_odds.py``, ``_MANIFEST_DATA_TYPE``) stamps the manifest
+# ``data_type`` column lower-case (``"odds_horizon_bucket"``) — a DIFFERENT
+# on-disk convention from every other sports source (footystats / api_football /
+# understat / transfermarkt / soccer_football_info / open_meteo all write the
+# UAC ``SPORTS_DATA_TYPE_TO_SOURCE`` key verbatim UPPERCASE — confirmed via a
+# live manifest read 2026-07-13, 0 exceptions across 570k+ captured rows). The
+# v2 sports enumerator (:func:`_enumerate_v2_sports`) iterates the
+# UAC-uppercase ``SPORTS_DATA_TYPE_TO_SOURCE`` axis for every LOOKUP (coverage
+# windows, retired-set membership, per-source rules) — that stays uppercase,
+# those dicts are keyed by the UAC constant. But the OUTPUT/matching
+# ``data_type`` value — the present-set match key AND the ``data_type`` field
+# stamped onto a newly-seeded row — must mirror the writer's REAL on-disk
+# string, or a seeded ``expected_unattempted`` cell can never match (or ever
+# again match) the real captured atom. Confirmed root cause via a live
+# dry-run: 0 identity overlap between the (pre-fix) 209,526
+# ``ODDS_HORIZON_BUCKET``-cased ``expected_unattempted`` rows and the 123,642
+# real ``odds_horizon_bucket``-cased captured rows for
+# ``source=mdps_odds_horizon_bucket``. See
+# ``unified-trading-pm/plans/active/sports_data_sources_canonical_completion_2026_07_13.md``
+# §1 "mdps_odds_horizon_bucket expected-universe grain realignment".
+_SPORTS_MANIFEST_DATA_TYPE_OVERRIDE: dict[str, str] = {
+    "ODDS_HORIZON_BUCKET": "odds_horizon_bucket",
+}
+
+
+def _sports_manifest_data_type(dt: str) -> str:
+    """Translate a UAC sports data_type AXIS key to its real on-disk manifest string.
+
+    Identity for every data_type except the ones in
+    :data:`_SPORTS_MANIFEST_DATA_TYPE_OVERRIDE` above. Apply this ONLY at the
+    point a per-league v2 sports row is emitted or matched (the ``data_type=``
+    field on a yielded :class:`ExpectedRow`, and the present-set match key) —
+    every UAC lookup (``SPORTS_DATA_TYPE_TO_SOURCE``,
+    ``_RETIRED_SPORTS_DATA_TYPES``, ``get_source_coverage_start``,
+    ``get_entity_league_coverage``, ``is_expected_for_source``) stays keyed on
+    the ORIGINAL UAC-uppercase ``dt``.
+    """
+    return _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE.get(dt, dt)
+
+
 # Asset groups this enumerator supports. The canonical MANIFEST bucket per group is
 # resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
 # deployment-service/configs/cloud-providers.yaml) — see ``_default_bucket_for``.
@@ -1537,7 +1578,7 @@ def _yield_v2_sports_pre_source_coverage_rows(
                 asset_group="sports",
                 venue=source,
                 chain="",
-                data_type=dt,
+                data_type=_sports_manifest_data_type(dt),
                 instrument_type="",
                 instrument_id="",
                 league_id="",
@@ -1909,7 +1950,7 @@ def _enumerate_v2_sports(
                         asset_group="sports",
                         venue="",
                         chain="",
-                        data_type=dt,
+                        data_type=_sports_manifest_data_type(dt),
                         instrument_type="",
                         instrument_id="",
                         league_id=league_id,
@@ -1944,7 +1985,7 @@ def _enumerate_v2_sports(
                                 asset_group="sports",
                                 venue="",
                                 chain="",
-                                data_type=dt,
+                                data_type=_sports_manifest_data_type(dt),
                                 instrument_type="",
                                 instrument_id="",
                                 league_id=league_id,
@@ -1962,7 +2003,7 @@ def _enumerate_v2_sports(
                                 asset_group="sports",
                                 venue="",
                                 chain="",
-                                data_type=dt,
+                                data_type=_sports_manifest_data_type(dt),
                                 instrument_type="",
                                 instrument_id="",
                                 league_id=league_id,
@@ -1976,7 +2017,7 @@ def _enumerate_v2_sports(
                         {
                             "venue": "",
                             "chain": "",
-                            "data_type": dt,
+                            "data_type": _sports_manifest_data_type(dt),
                             "instrument_type": "",
                             "instrument_id": "",
                             "league_id": league_id,
@@ -2002,7 +2043,7 @@ def _enumerate_v2_sports(
                                 asset_group="sports",
                                 venue="",
                                 chain="",
-                                data_type=dt,
+                                data_type=_sports_manifest_data_type(dt),
                                 instrument_type="",
                                 instrument_id="",
                                 league_id=league_id,
@@ -2014,7 +2055,7 @@ def _enumerate_v2_sports(
                             asset_group="sports",
                             venue="",
                             chain="",
-                            data_type=dt,
+                            data_type=_sports_manifest_data_type(dt),
                             instrument_type="",
                             instrument_id="",
                             league_id=league_id,
@@ -2027,7 +2068,7 @@ def _enumerate_v2_sports(
                     asset_group="sports",
                     venue="",
                     chain="",
-                    data_type=dt,
+                    data_type=_sports_manifest_data_type(dt),
                     instrument_type="",
                     instrument_id="",
                     league_id=league_id,
