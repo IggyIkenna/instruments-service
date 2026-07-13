@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
 from unified_api_contracts.sports import get_league
 
+from .process_write import _NON_VENUE_GRAIN_VENUE_NAMES
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -88,6 +90,39 @@ async def _completeness_and_retry(
     """
     expected_venues = set(active_venues)
     written_venues = set(counts.keys())
+
+    # Root-cause fix (api_football_write_path_blank_data_type_2026_07_13): sports
+    # ENRICHMENT-ONLY provider names (FOOTYSTATS, UNDERSTAT, TRANSFERMARKT,
+    # SOCCER_FOOTBALL_INFO, OPEN_METEO) are pseudo-venues pulled into
+    # ``active_venues`` for category-config purposes, but they are NOT
+    # venue-grain — they are fetched in stage 7 enrichment (never in this stage's
+    # ``counts``, i.e. the stage-4 URDI fetch) and their honest-absence/failure is
+    # materialised on the (date, data_type[, league_id]) grain by dedicated
+    # per-entity honest-coverage hooks elsewhere (sports_reference_core.py /
+    # footystats.py / weather.py / transfermarkt.py / sfi.py). Left unexcluded,
+    # they permanently land in ``missing_shards`` below and the generic
+    # CeFi/TradFi-shaped corrective write in ``_finalize_completeness``
+    # (``row_key={"date", "venue"}``, no ``data_type``) stamps a blank-``data_type``
+    # ``attempted_failed``/``expected_empty`` row that can never reconcile against
+    # any real sports cell.
+    #
+    # ``API_FOOTBALL`` itself is DELIBERATELY KEPT in ``expected_venues`` (unlike
+    # its 5 enrichment-only siblings) — its top-level FIXTURES fetch DOES run in
+    # THIS stage-4 fetch, so it is genuinely venue-grain here; removing it too
+    # would silently drop the only safety net that catches a total API_FOOTBALL
+    # fetch failure during a combined "ALL"-asset-group run (where
+    # ``_fixtures_fetch_failed``'s zero-records branch never fires because
+    # cefi/tradfi/defi still produced records). ``_finalize_completeness`` below
+    # maps a genuinely-missing ``API_FOOTBALL`` to ``data_type="FIXTURES"`` (same
+    # convention already used by ``process_preflight.py``'s
+    # ``_build_expected_entities``) instead of leaving ``data_type`` blank.
+    #
+    # ``_NON_VENUE_GRAIN_VENUE_NAMES`` is the same SSOT frozenset
+    # ``_write_all_venues`` uses to exclude these names from venue-grain EU
+    # seeding (process_write.py); POLYMARKET/KALSHI (prediction) are excluded
+    # from THIS narrower set deliberately — this fix is scoped to the confirmed
+    # sports bug, not a blanket prediction-venue change.
+    expected_venues -= _NON_VENUE_GRAIN_VENUE_NAMES - {"API_FOOTBALL", "POLYMARKET", "KALSHI"}
 
     # Sports: scope expected venues by league coverage.
     # Understat covers ~6 leagues, FootyStats ~50, SFI varies.
@@ -492,8 +527,20 @@ def _finalize_completeness(
                 )
                 _nt_stamped.append(_failed_venue)
             else:
+                # Root-cause fix (api_football_write_path_blank_data_type_2026_07_13):
+                # API_FOOTBALL is not a real venue — its manifest cell is keyed by
+                # data_type (FIXTURES is its top-level, venue-grain-shaped entity;
+                # same remap convention already used by process_preflight.py's
+                # _build_expected_entities). Writing row_key={"date","venue"} for it
+                # produced a permanently-orphaned blank-data_type attempted_failed
+                # row that could never reconcile against a real sports cell.
+                _failed_row_key: dict[str, str] = (
+                    {"date": date, "data_type": "FIXTURES"}
+                    if _failed_venue == "API_FOOTBALL"
+                    else {"date": date, "venue": _failed_venue}
+                )
                 _failed_manifest.record_failed(
-                    row_key={"date": date, "venue": _failed_venue},
+                    row_key=_failed_row_key,
                     error=_orch.RecordFailedReason.UNCLASSIFIED_ADAPTER_ERROR,
                     attempted_at=_failed_attempt_ts,
                     pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
