@@ -17,6 +17,7 @@ PERP in expiry position → BASE-PERPETUAL instrument name.
 
 from __future__ import annotations
 
+from unified_api_contracts import build_leg
 from unified_api_contracts.internal import InstrumentLeg, InstrumentType
 
 __all__ = [
@@ -138,13 +139,7 @@ def _parse_deribit_combo_legs(raw_id: str, venue: str) -> list[InstrumentLeg]:
             else:
                 leg_name = f"{base}-{exp}"
                 leg_type = InstrumentType.FUTURE
-            legs.append(
-                InstrumentLeg(
-                    instrument_key=f"{venue}:{leg_type}:{leg_name}",
-                    side=side,
-                    ratio=ratio,
-                )
-            )
+            legs.append(build_leg(venue, leg_type, leg_name, side=side, ratio=ratio, passthrough=True))
         return legs
 
     # --- Calendar/diagonal (dual expiry): BASE-CODE-EXP1_EXP2-STRIKES ---
@@ -167,13 +162,8 @@ def _parse_deribit_combo_legs(raw_id: str, venue: str) -> list[InstrumentLeg]:
             strike = strikes[leg_idx % len(strikes)] if strikes else ""
             suffix = f"-{strike}-{opt_type}" if opt_type and strike else ""
             leg_name = f"{base}-{exp}{suffix}"
-            legs.append(
-                InstrumentLeg(
-                    instrument_key=f"{venue}:OPTION:{leg_name}" if opt_type else f"{venue}:FUTURE:{leg_name}",
-                    side=side,
-                    ratio=ratio,
-                )
-            )
+            leg_type = InstrumentType.OPTION if opt_type else InstrumentType.FUTURE
+            legs.append(build_leg(venue, leg_type, leg_name, side=side, ratio=ratio, passthrough=True))
         return legs
 
     # --- Single-expiry option combos: BASE-CODE-EXPIRY-K1_K2[_K3[_K4]] ---
@@ -192,11 +182,6 @@ def _parse_deribit_combo_legs(raw_id: str, venue: str) -> list[InstrumentLeg]:
         strike = strikes[min(i, len(strikes) - 1)] if strikes else ""
         suffix = f"-{strike}-{opt_type}" if opt_type and strike else ""
         leg_name = f"{base}-{expiry}{suffix}"
-        legs.append(
-            InstrumentLeg(
-                instrument_key=f"{venue}:OPTION:{leg_name}" if opt_type else f"{venue}:FUTURE:{leg_name}",
-                side=side,
-                ratio=ratio,
-            )
-        )
+        leg_type = InstrumentType.OPTION if opt_type else InstrumentType.FUTURE
+        legs.append(build_leg(venue, leg_type, leg_name, side=side, ratio=ratio, passthrough=True))
     return legs
