@@ -206,6 +206,7 @@ def _zero_sports_empty_fixture_markers(
                 attempted_at=_empty_attempt_ts,
                 reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                source="api_football",
             )
     _empty_manifest.write()
     if fixtures_fetch_failed:
@@ -301,6 +302,7 @@ async def _zero_sports_reference_fetch(
                         reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-entity-no-fixture-oracle; proven honest absence via fetch_evidence (clean 2xx+0-rows)
                         pipeline_mode=_orch._pipeline_mode_for_sports_data_type(entity_name.upper()),
                         fetch_evidence=_entity_ev,
+                        source=_orch._sports_ref_source(entity_name),
                     )
         # Per-fixture entities on zero-fixture dates: nothing
         # to fetch (no fixtures = no per-fixture data). Write
@@ -320,6 +322,7 @@ async def _zero_sports_reference_fetch(
                     attempted_at=_orch.datetime.now(_orch.UTC),
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source(entity_short),
                 )
         sports_manifest.write()
 
@@ -353,6 +356,15 @@ def _zero_sports_enrichment_markers(
             catalogue_bucket=bucket,
         )
         _enr_attempt_ts = _orch.datetime.now(_orch.UTC)
+        # data_type → sports_reference entity-key, for the explicit source=
+        # stamp below (_sports_ref_source takes the entity key, not the
+        # uppercase data_type these enrichment markers are keyed by).
+        _enr_entity_to_sports_ref_entity = {
+            "PREDICTIONS": "footystats_predictions",
+            "MATCHES": "footystats_matches",
+            "XG": "understat_xg",
+            "WEATHER": "weather",
+        }
         for _enr_entity in _enrichment_zero_entities:
             # Honest-coverage: zero-fixture day → record_empty,
             # NOT add(row_count=0). See CLAUDE.md "4 pillars" #1
@@ -366,6 +378,7 @@ def _zero_sports_enrichment_markers(
                 attempted_at=_enr_attempt_ts,
                 reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=_orch._pipeline_mode_for_sports_data_type(_enr_entity),
+                source=_orch._sports_ref_source(_enr_entity_to_sports_ref_entity[_enr_entity]),
             )
         _enr_manifest.write()
         _orch.logger.info(

@@ -92,6 +92,7 @@ class _AfManifestHooks:
             attempted_at=self.attempt_ts,
             reason=reason,
             pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+            source=_orch._sports_ref_source(data_type.lower()),
         )
 
     def emit_empty_gaps_for_entity(self, data_type: str, captured_league_ids: set[str]) -> None:
@@ -120,6 +121,7 @@ class _AfManifestHooks:
                     attempted_at=self.attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_PROVIDER_COVERAGE,
                     pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source(data_type.lower()),
                 )
                 continue
             if not _orch.get_league_fixture_calendar(_exp_lid, self.date, self.date):
@@ -129,6 +131,7 @@ class _AfManifestHooks:
                 attempted_at=self.attempt_ts,
                 reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                source=_orch._sports_ref_source(data_type.lower()),
             )
 
 
