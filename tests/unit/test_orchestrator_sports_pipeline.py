@@ -162,8 +162,11 @@ class TestFetchSportsReferenceData:
         """Should fetch teams/standings/injuries (LEAGUES write path retired
         2026-05-07 — see commit 93efebf — replaced by UAC ``LeagueDefinition``
         SSOT). The api_football ``/leagues`` endpoint is NOT called from the
-        daily orchestrator path; teams now read ``get_prediction_leagues()``
-        from UAC instead of a freshly-fetched leagues_df.
+        daily orchestrator path; teams now read
+        ``get_expected_leagues_for_source("api_football")`` from UAC instead
+        of a freshly-fetched leagues_df (2026-07-13: widened from the
+        narrower ``get_prediction_leagues()`` to match the enumerator's
+        94-league denominator — see sports_reference_core.py docstring).
         """
         # Mock the sports adapter
         mock_adapter = AsyncMock()
@@ -243,7 +246,7 @@ class TestFetchSportsReferenceData:
 
         mock_sink = MagicMock()
 
-        # Mock get_prediction_leagues to return at least one league with api_football_id
+        # Mock get_expected_leagues_for_source to return at least one league with api_football_id
         mock_league_def = MM()
         mock_league_def.api_football_id = 39
         mock_league_def.league_id = "EPL"
@@ -255,7 +258,7 @@ class TestFetchSportsReferenceData:
             ),
             patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
             patch(
-                "instruments_service.engine.orchestrator.get_prediction_leagues",
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
                 return_value=[mock_league_def],
             ),
             patch("instruments_service.engine.orchestrator._write_team_mapping"),
@@ -291,7 +294,7 @@ class TestFetchSportsReferenceData:
             ),
             patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
             patch(
-                "instruments_service.engine.orchestrator.get_prediction_leagues",
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
                 return_value=[mock_league_def],
             ),
             patch("instruments_service.engine.orchestrator._write_team_mapping"),
@@ -387,7 +390,7 @@ class TestFetchSportsReferenceData:
             ),
             patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
             patch(
-                "instruments_service.engine.orchestrator.get_prediction_leagues",
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
                 return_value=[mock_league_def],
             ),
             patch("instruments_service.engine.orchestrator._write_team_mapping"),
@@ -446,7 +449,7 @@ class TestFetchSportsReferenceData:
             ),
             patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
             patch(
-                "instruments_service.engine.orchestrator.get_prediction_leagues",
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
                 return_value=[mock_league_def],
             ),
             patch("instruments_service.engine.orchestrator._write_team_mapping"),

@@ -268,7 +268,7 @@ class TestFetchSportsReferenceData:
                 return_value=mock_adapter,
             ),
             patch(
-                "instruments_service.engine.orchestrator.get_prediction_leagues",
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
                 return_value=[mock_league_def],
             ),
             patch(
@@ -337,7 +337,7 @@ class TestFetchSportsReferenceData:
                 return_value=mock_adapter,
             ),
             patch(
-                "instruments_service.engine.orchestrator.get_prediction_leagues",
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
                 return_value=[],
             ),
             patch(
