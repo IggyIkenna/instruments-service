@@ -288,6 +288,7 @@ def _write_sports_fixture_venue(
             attempted_at=_fx_attempt_ts,
             reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
             pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+            source="api_football",
         )
 
 
