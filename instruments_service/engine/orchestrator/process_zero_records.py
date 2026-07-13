@@ -29,6 +29,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
+from unified_api_contracts.registry import NO_ADAPTER_YET, VENUE_TO_ADAPTER_KEY
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
@@ -504,11 +505,31 @@ def _zero_records_non_sports(
         )
         return {}
 
+    # NO_ADAPTER_YET sentinel venues (e.g. YAHOO_FINANCE — a legacy source-as-venue
+    # artifact UAC declares adapterless in venue_adapter_keys.py) can never return
+    # records and were never meant to be declared in the tradfi session/calendar SSOT
+    # (sessions.py _EXCHANGE_HOURS/_XCAL_MAPPING) — they are not real, calendar-bound
+    # venues. Routing them into the tradfi calendar check below crashes with
+    # UndeclaredTradfiVenueError (fail-closed by design for a genuine config gap on a
+    # REAL venue) even though "0 records" here is an honest, already-declared absence,
+    # not a fetch failure. Short-circuit before ever reaching that check.
+    _no_adapter_active = [v for v in active_venues if VENUE_TO_ADAPTER_KEY.get(v) == NO_ADAPTER_YET]
+    if _no_adapter_active and set(_no_adapter_active) == set(active_venues):
+        _orch.logger.info(
+            "No records for date=%s: all requested venue(s) %s are declared NO_ADAPTER_YET "
+            "in UAC (venue_adapter_keys.py) — honest absence, not a fetch failure.",
+            date,
+            sorted(_no_adapter_active),
+        )
+        return dict.fromkeys(_no_adapter_active, 0)
+
     # TradFi non-trading day: zero instruments on weekends/holidays is expected.
     # Write 0-count manifest entries per venue so the manifest marks the day as
     # processed and won't re-fetch without --force. This prevents permanent gaps
     # in instrument data for every weekend and exchange holiday.
-    tradfi_active = [v for v in active_venues if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"]
+    tradfi_active = [
+        v for v in active_venues if VENUE_TO_ASSET_GROUP.get(v) == "tradfi" and v not in _no_adapter_active
+    ]
     if tradfi_active:
         target_dt = _orch.date_type.fromisoformat(date)
         non_trading_venues = [v for v in tradfi_active if _orch.is_non_trading_day(v, target_dt)]
