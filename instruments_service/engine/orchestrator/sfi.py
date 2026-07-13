@@ -490,6 +490,7 @@ async def _fetch_sfi_data(
                             attempted_at=attempt_ts,
                             reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                             pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                            source=_orch._sports_ref_source("progressive_stats"),
                         )
                     _orch.logger.info("SFI progressive stats: %d rows written", len(df))
                 else:
@@ -517,6 +518,7 @@ async def _fetch_sfi_data(
                         reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-sfi-stats-latency; proven honest absence via fetch_evidence (clean 2xx+0-rows)
                         pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                         fetch_evidence=_sfi_ev,
+                        source=_orch._sports_ref_source("progressive_stats"),
                     )
                     for _exp_lid in sorted(_expected_sfi_league_ids):
                         manifest.record_empty(
@@ -529,6 +531,7 @@ async def _fetch_sfi_data(
                             reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-sfi-stats-latency; per-league mirror; proven honest absence via fetch_evidence
                             pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                             fetch_evidence=_sfi_ev,
+                            source=_orch._sports_ref_source("progressive_stats"),
                         )
             else:
                 # No completed matches on this date (off-season / rest day).
@@ -538,6 +541,7 @@ async def _fetch_sfi_data(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                    source=_orch._sports_ref_source("progressive_stats"),
                 )
                 for _exp_lid in sorted(_expected_sfi_league_ids):
                     manifest.record_empty(
@@ -549,6 +553,7 @@ async def _fetch_sfi_data(
                         attempted_at=attempt_ts,
                         reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                        source=_orch._sports_ref_source("progressive_stats"),
                     )
         except Exception as exc:
             _orch.classify_and_emit_error(

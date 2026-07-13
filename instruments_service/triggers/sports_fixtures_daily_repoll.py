@@ -343,6 +343,7 @@ async def run_sports_fixtures_daily_repoll(
                     attempted_at=_attempt_ts,
                     pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                     fetch_evidence=_fetch_ev,
+                    source="api_football",
                 )
             logger.info(
                 "sports.fixtures.daily_repoll: empty fixture set for day=%s — recorded per-league typed reasons (%d leagues)",
