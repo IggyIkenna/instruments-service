@@ -558,6 +558,7 @@ async def _fetch_weather_data(
         # Initialise tracking vars so the manifest write block below is safe
         # when no weather rows were captured this run.
         _captured_leagues = set()
+        _w_failed_leagues = set()
         _league_venue_count = {}
 
     # Honest-coverage manifest write — per-league sharding so data-status UI
