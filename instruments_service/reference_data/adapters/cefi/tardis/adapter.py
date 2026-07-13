@@ -99,11 +99,16 @@ _TYPE_MAP: dict[str, InstrumentType] = {
 # base-asset filter like any other venue. The Tardis `deribit` exchange id covers
 # both the derivatives (perp/future/option, carrying explicit `type`) and the spot
 # pairs, so unknown-type defaulting is not a concern here.
+# "okex-options" added 2026-07-13 (cefi_deribit_combo_and_okx_bare_venue_gaps
+# _2026_07_12.md): options-only exchange, first reachable via factory.py's
+# itype-aware OKX exchange-list fix — same unknown-type-defaults-to-SPOT_PAIR
+# risk as the other derivatives-only exchanges above.
 _DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset(
     {
         "binance-futures",
         "okex-futures",
         "okex-swap",
+        "okex-options",
         "bitfinex-derivatives",
         "bitget-futures",
         "cryptofacilities",  # Kraken Futures (Tardis legacy id) — derivatives only
@@ -154,9 +159,19 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         project_id: str | None = None,
         exchanges: list[str] | None = None,
         api_key: str | None = None,
+        canonical_venue_override: str | None = None,
     ) -> None:
         super().__init__(project_id=project_id, api_key=api_key)
         self._exchanges: list[str] = exchanges if exchanges is not None else _DEFAULT_EXCHANGES
+        # When set, every parsed instrument is tagged with this canonical venue
+        # instead of the per-exchange reverse lookup (tardis_to_venue). Required
+        # for venues whose real universe spans MULTIPLE Tardis exchanges (e.g.
+        # OKX: okex/okex-swap/okex-futures/okex-options) — tardis_to_venue is a
+        # 1:1 map and cannot represent "these N exchanges' rows all belong to
+        # one caller-requested venue" (same class of gap as MTDS's
+        # _resolve_canonical_venue collapse for DERIBIT-COMBO; see
+        # cefi_deribit_combo_and_okx_bare_venue_gaps_2026_07_12.md).
+        self._canonical_venue_override: str | None = canonical_venue_override
         # Tardis returns the full historical universe in one REST call —
         # the result is date-independent. Bump cache TTL well past the longest
         # plausible single-process backfill window (default 1h is too short for
@@ -692,8 +707,12 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             # Guard: recognised-as-spot on a derivatives-only venue is also invalid.
             return None
 
-        # Resolve canonical venue name from UAC VenueMapping (e.g. "binance" → "BINANCE-SPOT")
-        canonical_venue = _VENUE_MAPPING.tardis_to_venue.get(exchange, exchange.upper())
+        # Resolve canonical venue name: an explicit override wins (multi-exchange
+        # venues like OKX), else fall back to UAC VenueMapping's per-exchange
+        # reverse lookup (e.g. "binance" → "BINANCE-SPOT").
+        canonical_venue = self._canonical_venue_override or _VENUE_MAPPING.tardis_to_venue.get(
+            exchange, exchange.upper()
+        )
 
         # Parse base/quote — prefer Tardis metadata, fall back to symbol splitting
         base, quote = _tardis._resolve_base_quote(item, raw_id, exchange)
