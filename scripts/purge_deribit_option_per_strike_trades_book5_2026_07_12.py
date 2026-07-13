@@ -22,16 +22,23 @@ a pre-purge copy under `_index/snapshots/` BEFORE any delete, mirroring
 ``purge_prediction_index_final_residuals_2026_07_11.py`` /
 ``delete_aster_overseeded_capability_rows.py``.
 
-Scope: the `-prd` cefi bucket only (measured live 2026-07-12: 1,048 rows,
+Scope: the `-prd` cefi bucket (measured live 2026-07-12: 1,048 rows,
 all `capture_status=captured`, real per-underlying trades/book5 artifacts —
-`trades`=930, `book_snapshot_5`=118). The legacy flat cefi bucket
+`trades`=930, `book_snapshot_5`=118) — DONE, see below.
+
+LEGACY BUCKET FOLLOW-UP (ruling landed): the legacy flat cefi bucket
 (``market-data-tick-cefi-{project}``, no ``-prd``) carries a MUCH larger
-(~6.65M) `empty_confirmed`/`expected_unattempted` skeleton for the same
-(venue, instrument_type, data_type) triple — a 1000x+ scope difference from
-the "~536" the task brief cites. That mismatch is unresolved pending
-operator confirmation (see the Progress Log / blocked-question this task
-filed) and is OUT OF SCOPE for this script; do not extend `--bucket` to the
-legacy bucket without a follow-up ruling.
+(6,650,624 measured live) `empty_confirmed`/`expected_unattempted` skeleton
+for the same (venue, instrument_type, data_type) triple — a 1000x+ scope
+difference from the "~536" the task brief originally cited. Operator
+confirmed via `BLK-cbee81bc` (answered 2026-07-13): proceed, snapshot-first,
+same mechanics as the prd purge. 100% `empty_confirmed`/`expected_unattempted`
+skeleton, 0 `captured` rows at risk (verified via dry-run against
+`--bucket market-data-tick-cefi-central-element-323112`: 6,650,624 /
+35,815,825 rows match in `_index/availability_index.parquet`; both
+`_index/per_vm/*` shards show 0 matches, so no consolidator-resurrection
+risk). `--legacy-scale` widens the STOP-ON-SURPRISE bound to accommodate
+this specific, ruled-on count instead of loosening the guard generally.
 
 Also sweeps the prd bucket's `_index/per_vm/*.parquet` shards (0 hits
 measured 2026-07-12, but a consolidator merge would resurrect the rows if a
@@ -51,6 +58,12 @@ Usage::
     GCP_PROJECT_ID=central-element-323112 DEPLOYMENT_ENV=prd DEPLOYMENT_ENV_SHORT=prd \\
       CLOUD_PROVIDER=gcp CLOUD_MOCK_MODE=false \\
       .venv/bin/python scripts/purge_deribit_option_per_strike_trades_book5_2026_07_12.py --apply
+
+    # legacy-bucket follow-up (BLK-cbee81bc ruled-on scope, dry-run then apply)
+    GCP_PROJECT_ID=central-element-323112 DEPLOYMENT_ENV=prd DEPLOYMENT_ENV_SHORT=prd \\
+      CLOUD_PROVIDER=gcp CLOUD_MOCK_MODE=false \\
+      .venv/bin/python scripts/purge_deribit_option_per_strike_trades_book5_2026_07_12.py \\
+      --bucket market-data-tick-cefi-central-element-323112 --legacy-scale [--apply]
 """
 
 from __future__ import annotations
@@ -81,6 +94,14 @@ _TARGET_DATA_TYPES = frozenset({"trades", "book_snapshot_5"})
 # measured live value, not the stale brief figure.
 _EXPECTED_MIN = 200
 _EXPECTED_MAX = 5_000
+
+# Legacy-bucket follow-up (BLK-cbee81bc, answered 2026-07-13): measured live
+# 2026-07-13 in the legacy (non-`-prd`) cefi bucket = 6,650,624 rows, 100%
+# empty_confirmed/expected_unattempted skeleton. Bound tightly around the
+# measured live value — this is a distinct, separately-ruled-on scope, not a
+# general loosening of the prd guard above.
+_LEGACY_EXPECTED_MIN = 6_000_000
+_LEGACY_EXPECTED_MAX = 7_000_000
 
 
 def _target_mask(df: pd.DataFrame) -> pd.Series:  # type: ignore[type-arg]
@@ -160,12 +181,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--apply", action="store_true", help="Delete matching rows (snapshot first). Default: dry-run.")
     p.add_argument("--bucket", default=None, help="Override bucket (default: resolve_bucket_name prd cefi bucket).")
+    p.add_argument(
+        "--legacy-scale",
+        action="store_true",
+        help=(
+            "Widen the STOP-ON-SURPRISE bound to the legacy-bucket ruled-on scope "
+            "(6.0M-7.0M rows, BLK-cbee81bc) instead of the default prd bound (200-5,000)."
+        ),
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     bucket = args.bucket or resolve_bucket_name(cloud="gcp", kind="market-data", asset_group="cefi")
+    expected_min, expected_max = (
+        (_LEGACY_EXPECTED_MIN, _LEGACY_EXPECTED_MAX) if args.legacy_scale else (_EXPECTED_MIN, _EXPECTED_MAX)
+    )
     storage = get_storage_client()  # pyright: ignore[reportAttributeAccessIssue]
     run_ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
@@ -185,12 +217,12 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.info("TOTAL target rows across %d blob(s): %d", len(blobs), total_target)
 
-    if not (_EXPECTED_MIN <= total_target <= _EXPECTED_MAX):
+    if not (expected_min <= total_target <= expected_max):
         logger.error(
             "STOP-ON-SURPRISE: total target row count %d outside expected range [%d, %d]. Diagnose before --apply.",
             total_target,
-            _EXPECTED_MIN,
-            _EXPECTED_MAX,
+            expected_min,
+            expected_max,
         )
         return 1
 

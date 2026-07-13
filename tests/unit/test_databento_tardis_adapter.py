@@ -687,6 +687,62 @@ class TestTardisAdapterMocked:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_canonical_venue_override_tags_every_exchange(self) -> None:
+        """OKX's real universe spans 4 different Tardis exchanges (okex/okex-
+        swap/okex-futures/okex-options). Without an explicit override, the
+        adapter's per-exchange venue resolution (tardis_to_venue, a 1:1
+        reverse map) tags rows from "okex"/"okex-swap" as OKX-SPOT/OKX-SWAP,
+        never bare "OKX" — silently dropped downstream by
+        urdi_reference_provider._filter_records_to_venue's canonical-match
+        filter. canonical_venue_override fixes this: every row from every
+        passed exchange is tagged with the override venue. Regression guard
+        for cefi_deribit_combo_and_okx_bare_venue_gaps_2026_07_12.md."""
+        adapter = TardisReferenceDataAdapter(
+            exchanges=["okex", "okex-swap"],
+            canonical_venue_override="OKX",
+        )
+
+        def _make_exchange_resp(exchange: str) -> AsyncMock:
+            mock_resp = AsyncMock()
+            mock_resp.status = 200
+            mock_resp.raise_for_status = MagicMock()
+            is_spot = exchange == "okex"
+            mock_resp.json = AsyncMock(
+                return_value={
+                    "id": exchange,
+                    "name": exchange,
+                    "availableSymbols": [
+                        {
+                            "id": "BTC-USDT" if is_spot else "BTC-USDT-SWAP",
+                            "type": "spot" if is_spot else "perpetual",
+                            "baseCurrency": "BTC",
+                            "quoteCurrency": "USDT",
+                            "availableSince": "2020-01-01T00:00:00Z",
+                            "availableTo": None,
+                        }
+                    ],
+                }
+            )
+            return mock_resp
+
+        def _get(url: str) -> MagicMock:
+            exchange = url.rsplit("/", 1)[-1]
+            mock_cm = MagicMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=_make_exchange_resp(exchange))
+            mock_cm.__aexit__ = AsyncMock(return_value=None)
+            return mock_cm
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(side_effect=_get)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+        assert len(results) == 2
+        assert {r.venue for r in results} == {"OKX"}
+
+    @pytest.mark.asyncio
     async def test_exchange_not_found_skips(self) -> None:
         adapter = TardisReferenceDataAdapter(exchanges=["unknown-exchange"])
         mock_resp = AsyncMock()
