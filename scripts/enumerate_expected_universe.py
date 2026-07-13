@@ -1552,6 +1552,128 @@ _MATCHDAY_INDEX_MAX_DAYS = 30
 
 _UNDERSTAT_FIXTURES_TPL = "sports_reference/by_date/day={day}/entity=fixtures/fixtures.parquet"
 
+# api_football season-complete fixture-calendar gate (STEP-4 structural fix,
+# phantom-pending forensics 2026-07-13). ``audit_fixtures_via_api_football.py``
+# persists per-(league, season) truth-sets — the FULL fixture list from
+# ``GET /fixtures?league&season`` — under ``_audits/fixtures_truthset_<ts>.parquet``.
+# Each (canonical_league_id, season) present there is a SEASON-COMPLETE calendar,
+# so an alive (league, day) inside its span with no fixture row is an EVIDENCED
+# no-fixture day: seeding it ``expected_unattempted`` fabricates a pending_fetch
+# cell no fetcher can ever close (the exact ~38k-row phantom class the
+# enum-universe-sports-* runs kept re-seeding). Unlike the per-day understat
+# index above, this is a bounded ``_audits/`` prefix-list + one small parquet
+# read per artifact (single-walk-safe), so it applies on EVERY window incl.
+# full-history runs — no ``_MATCHDAY_INDEX_MAX_DAYS`` bound needed.
+_AF_TRUTHSET_PREFIX = "_audits/fixtures_truthset_"
+_AF_FIXTURES_DATA_TYPE = "FIXTURES"
+
+
+class _AfFixtureCalendar(NamedTuple):
+    """Season-complete api_football fixture calendar built from truthset artifacts.
+
+    ``fixture_days``: ``(canonical_league_upper, iso_day)`` pairs with >=1 fixture.
+    ``coverage``: per canonical_league_upper, merged ``(start_iso, end_iso)``
+    intervals of season-complete calendar evidence (consecutive seasons bridge
+    the inter-season gap — any fixture between them would belong to one of the
+    two complete season queries, so the gap is evidenced no-fixture territory;
+    a season jump, e.g. 2019 → 2021, does NOT bridge).
+    """
+
+    fixture_days: set[tuple[str, str]]
+    coverage: dict[str, tuple[tuple[str, str], ...]]
+
+    def is_no_fixture_day(self, league_upper: str, iso_day: str) -> bool:
+        """True iff calendar evidence COVERS (league, day) and shows NO fixture."""
+        if (league_upper, iso_day) in self.fixture_days:
+            return False
+        return any(start <= iso_day <= end for start, end in self.coverage.get(league_upper, ()))
+
+
+def _af_calendar_from_dataframe(df: pd.DataFrame) -> _AfFixtureCalendar | None:
+    """Pure calendar builder from a truthset-shaped frame (split out for unit tests).
+
+    Expects ``canonical_league_id`` / ``season`` / ``date`` columns (the
+    ``audit_fixtures_via_api_football.py`` truthset schema). Returns ``None``
+    when no usable rows remain — callers MUST treat that as "no evidence" and
+    keep the pre-existing alive-day seeding (never silently shrink the
+    denominator for unaudited leagues — honest-coverage rule).
+    """
+    required = {"canonical_league_id", "season", "date"}
+    if df.empty or not required.issubset(df.columns):
+        return None
+    work = df.dropna(subset=["canonical_league_id", "season", "date"]).copy()
+    work["_lg"] = work["canonical_league_id"].astype(str).str.upper()
+    work["_day"] = work["date"].astype(str).str[:10]
+    work["_season"] = pd.to_numeric(work["season"], errors="coerce")
+    work = work.dropna(subset=["_season"])
+    if work.empty:
+        return None
+    fixture_days: set[tuple[str, str]] = set(
+        zip(work["_lg"].tolist(), work["_day"].tolist(), strict=True),
+    )
+    # Per-(league, season) span, then merge across consecutive seasons.
+    per_league: dict[str, dict[int, tuple[str, str]]] = {}
+    agg = work.groupby(["_lg", "_season"], sort=True)["_day"].agg(["min", "max"]).reset_index()
+    for lg, season, dmin, dmax in agg.itertuples(index=False, name=None):
+        per_league.setdefault(str(lg), {})[int(season)] = (str(dmin), str(dmax))
+    coverage: dict[str, tuple[tuple[str, str], ...]] = {}
+    for lg, season_spans in per_league.items():
+        seasons = sorted(season_spans)
+        intervals: list[tuple[str, str]] = []
+        cur_start, cur_end = season_spans[seasons[0]]
+        prev = seasons[0]
+        for s in seasons[1:]:
+            s_start, s_end = season_spans[s]
+            if s == prev + 1:
+                cur_end = max(cur_end, s_end)  # bridge the evidenced inter-season gap
+            else:
+                intervals.append((cur_start, cur_end))
+                cur_start, cur_end = s_start, s_end
+            prev = s
+        intervals.append((cur_start, cur_end))
+        coverage[lg] = tuple(intervals)
+    return _AfFixtureCalendar(fixture_days=fixture_days, coverage=coverage)
+
+
+def _build_af_fixture_calendar() -> _AfFixtureCalendar | None:
+    """Load + union every persisted truthset artifact into one fixture calendar.
+
+    Best-effort fail-OPEN: any listing/read failure returns ``None`` (callers
+    keep the pre-existing alive-day expected_unattempted seeding — the gate
+    only ever REFINES seeds when evidence is actually available, mirroring the
+    per-VM-shard-augmentation best-effort convention in ``_download_manifest``).
+    """
+    try:
+        bucket_name = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+        client = storage.Client(project=PROJECT_ID)
+        blobs = [b for b in client.list_blobs(bucket_name, prefix=_AF_TRUTHSET_PREFIX) if b.name.endswith(".parquet")]
+        if not blobs:
+            logger.info(
+                "No %s*.parquet truthset artifacts — api_football fixture-calendar gate OFF", _AF_TRUTHSET_PREFIX
+            )
+            return None
+        frames: list[pd.DataFrame] = []
+        for blob in blobs:
+            try:
+                raw = blob.download_as_bytes(timeout=120)
+                frames.append(pd.read_parquet(io.BytesIO(raw), columns=["canonical_league_id", "season", "date"]))
+            except (NotFound, FileNotFoundError, OSError, ValueError) as exc:
+                logger.warning("Skipping truthset artifact %s (best-effort): %s", blob.name, exc)
+        if not frames:
+            return None
+        calendar = _af_calendar_from_dataframe(pd.concat(frames, ignore_index=True))
+        if calendar is not None:
+            logger.info(
+                "api_football fixture-calendar gate ON: %d artifacts, %d fixture-days, %d leagues covered",
+                len(frames),
+                len(calendar.fixture_days),
+                len(calendar.coverage),
+            )
+        return calendar
+    except Exception as exc:
+        logger.warning("api_football fixture-calendar build failed (best-effort, gate OFF): %s", exc)
+        return None
+
 
 def _build_understat_fixture_index(days: list[str]) -> set[tuple[str, str]]:
     """Return ``(canonical_league_upper, day)`` pairs with >=1 captured api_football
@@ -1645,7 +1767,12 @@ def _enumerate_v2_sports(
       expected_unattempted for dates the source could never have covered.
     * date < available_from   → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
     * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
-    * alive AND no manifest row (present_set provided) → expected_unattempted
+    * alive AND no manifest row (present_set provided) → expected_unattempted —
+      EXCEPT api_football FIXTURES cells where a season-complete truthset
+      calendar (``_build_af_fixture_calendar``) covers the (league, day) and
+      shows NO fixture → EXPECTED_NO_FIXTURE (empty_confirmed) instead of a
+      phantom pending_fetch seed; no calendar evidence → seeding unchanged
+      (honest-coverage rule: never silently shrink an unaudited denominator).
     * alive AND present_set not provided → skip (legacy mode)
 
     ``data_types`` is the captured sports data_types axis (``_sports_data_types()``
@@ -1710,6 +1837,21 @@ def _enumerate_v2_sports(
             if date_axis and len(date_axis) <= _MATCHDAY_INDEX_MAX_DAYS:
                 _understat_fixture_index_cache[0] = _build_understat_fixture_index([d.isoformat() for d in date_axis])
         return _understat_fixture_index_cache[0]
+
+    # Season-complete api_football FIXTURES calendar (see _AfFixtureCalendar /
+    # _build_af_fixture_calendar above). Built LAZILY on the first FIXTURES cell
+    # that actually reaches the seeding branch below + memoized — same convention
+    # as the understat index above, but with NO window bound (one prefix-list +
+    # one small parquet read per artifact, not one GCS read per day), so the gate
+    # holds on the wide backfill windows where the phantom seeding happened.
+    _af_calendar_cache: list[_AfFixtureCalendar | None] = [None]
+    _af_calendar_built = [False]
+
+    def _get_af_fixture_calendar() -> _AfFixtureCalendar | None:
+        if not _af_calendar_built[0]:
+            _af_calendar_built[0] = True
+            _af_calendar_cache[0] = _build_af_fixture_calendar()
+        return _af_calendar_cache[0]
 
     for instr in catalog:
         if instr.instrument_type != _SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE:
@@ -1828,6 +1970,31 @@ def _enumerate_v2_sports(
                         for c in _pcols
                     )
                     if row_key not in present_set:
+                        # api_football FIXTURES calendar gate: a season-complete
+                        # truthset calendar covering this (league, day) that shows
+                        # NO fixture → the honest state is empty_confirmed
+                        # (EXPECTED_NO_FIXTURE), NOT a pending_fetch seed no
+                        # fetcher can ever close. No calendar evidence (calendar
+                        # unavailable, league unaudited, or day outside every
+                        # season-complete span) → seeding below stays UNCHANGED.
+                        if (
+                            dt == _AF_FIXTURES_DATA_TYPE
+                            and _src == "api_football"
+                            and (_af_calendar := _get_af_fixture_calendar()) is not None
+                            and _af_calendar.is_no_fixture_day(league_id.upper(), iso)
+                        ):
+                            yield ExpectedRow(
+                                asset_group="sports",
+                                venue="",
+                                chain="",
+                                data_type=dt,
+                                instrument_type="",
+                                instrument_id="",
+                                league_id=league_id,
+                                date=iso,
+                                reason="EXPECTED_NO_FIXTURE",
+                            )
+                            continue
                         yield ExpectedRow(
                             asset_group="sports",
                             venue="",
