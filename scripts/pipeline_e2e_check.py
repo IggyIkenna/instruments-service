@@ -89,10 +89,12 @@ import hashlib
 import logging
 import os
 import re
+import subprocess
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from unified_api_contracts import VenueMapping
 from unified_api_contracts.canonical.crosscutting.mvp_scope import (
     MVP_SCOPE,
     CeFiMvpRule,
@@ -212,6 +214,33 @@ def _manifest_match(cell: SmokeCell) -> dict[str, str]:
     # instrument-catalog path as CEFI/DEFI/TRADFI (writers.py::_write_venue) — venue
     # IS a real, meaningful column for it, so it must NOT take the provider shortcut.
     return {"asset_group": ag, "venue": cell.venue}
+
+
+# ---------------------------------------------------------------------------
+# Benign pre-launch honest-empty detection
+# ---------------------------------------------------------------------------
+
+
+def _benign_pre_launch_start(cell: SmokeCell, day: str, manifest_ok: bool, manifest_status: str) -> str | None:
+    """Return the venue's UAC start date when this shard-leg is a BENIGN pre-launch
+    honest-empty case, else ``None``.
+
+    instruments-service correctly writes an honest ``empty_confirmed`` reference-data
+    row (there is no instrument universe to enumerate for a venue BEFORE its
+    registered launch date) but NO parquet object, so the write-verification leg
+    would otherwise mark a correct honest-absence day as a failure (issue:
+    ``coinbase_cde_mtds_batch_adapter_missing_2026_07_13``, IS-leg section — e.g.
+    COINBASE-CDE has ``venue_start_dates`` entry ``2026-07-10``, so a ``2026-07-09``
+    check is legitimately empty). Only fires when the manifest row itself is a valid
+    ``empty_confirmed`` (``manifest_ok`` True) AND ``day`` predates the venue's UAC
+    start date. Both ``day`` and the start date are ``YYYY-MM-DD`` ISO strings, so a
+    lexical ``<`` comparison matches chronological order."""
+    if not (manifest_ok and manifest_status == "empty_confirmed"):
+        return None
+    start = VenueMapping().get_venue_start_date(cell.venue)
+    if start is not None and day < start:
+        return start
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +459,22 @@ def _run_leg(
     result.manifest_ok = manifest_ok
     result.manifest_status = manifest_status
 
+    benign_start = _benign_pre_launch_start(cell, day, manifest_ok, manifest_status)
+    if benign_start is not None:
+        # Honest pre-launch empty: a correct empty_confirmed manifest row + no parquet
+        # (there is nothing to enumerate before the venue's own start date) is a PASS,
+        # not a write-verification failure (issue:
+        # coinbase_cde_mtds_batch_adapter_missing_2026_07_13, IS-leg section).
+        result.status = "passed"
+        result.reason = (
+            f"benign_empty_pre_launch (day {day} < venue_start_date {benign_start}; "
+            "honest empty_confirmed, no parquet expected)"
+        )
+        if is_skip_leg:
+            result.skip_proof = "not_applicable"
+        result.duration_sec = (datetime.now(UTC) - started).total_seconds()
+        return result
+
     reasons: list[str] = []
     if not write_ok:
         reasons.append(f"no_parquet_at:gs://{bucket}/{prefix}")
@@ -492,6 +537,60 @@ def _skipped_live_leg(cell: SmokeCell, day: str) -> ShardCheckResult:
         reason="not_in_mvp_scope",
         attempt_ts=datetime.now(UTC).isoformat(),
     )
+
+
+def _force_consolidate_test_buckets(buckets: set[str]) -> None:
+    """Phase-0: force a fresh manifest consolidation of each ``-test-`` bucket the
+    legs will read BEFORE Phase 1 runs.
+
+    ``-test-`` buckets have NO standing consolidator cron by design (only ``-prd-``
+    buckets are on the ``*/1`` schedule), so their
+    ``_index/availability_index.parquet`` silently re-freezes between sweeps — a
+    stale index makes the local ``verify_manifest_row`` reads fall back to a slow
+    per-VM-shard scan (or raise ``ManifestConsolidatorStaleError``) and can hide a
+    fresh row behind an older, now-superseded one (issue:
+    ``cefi_manifest_consolidator_14day_stale_recovered_2026_07_13``). Force-
+    consolidating here gives every leg a fresh consolidated index to read against.
+
+    Fail-loud-but-not-fatal: a consolidation error warns and continues (the sweep
+    still runs; it just reads a possibly-stale index). PROD (``-prd-``) buckets are
+    never force-consolidated from here — that is the standing cron's job, and doing
+    it manually risks the consolidator prune-race window (``resolve_test_bucket``
+    only ever yields ``-test-`` names, so this guard is belt-and-braces)."""
+    for bucket in sorted(buckets):
+        if "-test-" not in bucket:
+            logger.warning("Phase-0 consolidation: refusing to force-consolidate non-test bucket %s", bucket)
+            continue
+        # Invoke the consolidator's own sanctioned one-off CLI form (``python -m``)
+        # in a subprocess rather than a deep ``unified_trading_library.*`` import —
+        # the import-patterns gate only permits top-level UTL re-exports.
+        cmd = [
+            sys.executable,
+            "-m",
+            "unified_trading_library.manifest_consolidator",
+            "--bucket",
+            bucket,
+            "--force",
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=False)
+            tail_lines = (proc.stdout or proc.stderr or "").strip().splitlines()
+            tail = tail_lines[-1] if tail_lines else ""
+            if proc.returncode == 0:
+                logger.info("Phase-0 consolidation: %s OK — %s", bucket, tail)
+            else:
+                logger.warning(
+                    "Phase-0 consolidation FAILED for %s (rc=%d): %s — continuing sweep with a possibly-stale index",
+                    bucket,
+                    proc.returncode,
+                    tail,
+                )
+        except Exception as exc:  # shard-level isolation — a stale-index warning must not abort the sweep
+            logger.warning(
+                "Phase-0 consolidation FAILED for %s: %s — continuing sweep with a possibly-stale index",
+                bucket,
+                exc,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -611,6 +710,10 @@ def main(argv: list[str] | None = None) -> int:
         legs,
         day,
     )
+
+    # Phase-0: force-consolidate the -test- bucket(s) these legs will read (they have
+    # no standing consolidator cron and re-freeze between sweeps).
+    _force_consolidate_test_buckets({resolve_test_bucket(cell.asset_group, project_id) for cell in shard_targets})
 
     pipeline_report = PipelineCheckReport(
         service=_REPORT_SERVICE_SLUG,
