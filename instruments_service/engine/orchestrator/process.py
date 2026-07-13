@@ -45,7 +45,11 @@ from instruments_service.engine.orchestrator.process_preflight import (
     _freshness_preflight,
     _promote_redo_all_for_recovery,
 )
-from instruments_service.engine.orchestrator.process_write import _validate_records, _write_all_venues
+from instruments_service.engine.orchestrator.process_write import (
+    _NON_VENUE_GRAIN_VENUE_NAMES,
+    _validate_records,
+    _write_all_venues,
+)
 from instruments_service.engine.orchestrator.process_zero_records import _handle_zero_records
 
 if TYPE_CHECKING:
@@ -70,12 +74,26 @@ def _fixtures_fetch_failed(
     Guard on ``not skip_urdi``: when the URDI fetch was skipped (enrichment-only
     / per-fixture entities) no fixtures fetch was attempted, so an empty
     ``non_error_venues`` is NOT a failure (→ keep the honest-absence path).
+
+    Root-cause fix (api_football_fixtures_fetch_failed_false_positive_2026_07_13):
+    ``active_venues`` for a sports run also carries the ENRICHMENT-ONLY pseudo-
+    venues (FOOTYSTATS/UNDERSTAT/TRANSFERMARKT/SOCCER_FOOTBALL_INFO/OPEN_METEO) —
+    these are fetched later, in stage 7 enrichment, and are NEVER part of this
+    stage-4 URDI instruments fetch, so they can never appear in
+    ``non_error_venues`` regardless of whether the day's fixtures actually
+    fetched cleanly. Checking membership against the raw ``active_venues`` list
+    made EVERY zero-fixture sports day register as a fetch failure the moment
+    the run's venue set included more than just the fixtures-fetching venue
+    (``API_FOOTBALL``) — silently converting legitimate
+    ``empty_confirmed(EXPECTED_NO_FIXTURE)`` days into false
+    ``attempted_failed(FIXTURES_FETCH_FAILED)`` rows for every prediction
+    league in one shot. Only check venues that actually participate in this
+    fetch: exclude ``_NON_VENUE_GRAIN_VENUE_NAMES`` (process_write.py's venue-
+    grain SSOT), keeping ``API_FOOTBALL`` itself in the check since it IS the
+    literal fixtures-fetch venue.
     """
-    return (
-        not skip_urdi
-        and bool(active_venues)
-        and not all(v in non_error_venues for v in active_venues)
-    )
+    _checkable_venues = [v for v in active_venues if v not in (_NON_VENUE_GRAIN_VENUE_NAMES - {"API_FOOTBALL"})]
+    return not skip_urdi and bool(_checkable_venues) and not all(v in non_error_venues for v in _checkable_venues)
 
 
 async def process_instruments(
