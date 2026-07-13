@@ -136,6 +136,31 @@ def test_enumerate_cells_sports_emits_api_football_first(smoke: ModuleType) -> N
     assert providers_in_order[0] == "API_FOOTBALL", f"expected API_FOOTBALL first, got: {providers_in_order[:3]}"
 
 
+def test_enumerate_cells_sports_includes_venue_routed_betfair(smoke: ModuleType) -> None:
+    """Bare BETFAIR is a real, credential-gated instruments-service adapter (unlike
+    ODDS_API/PINNACLE/etc, which are MTDS-owned NO_ADAPTER_YET) — it must be
+    enumerated as a venue-routed cell (sports_provider=None), not silently omitted."""
+    cells = smoke.enumerate_cells(asset_group_filter="SPORTS")
+    betfair_cells = [c for c in cells if c.venue == "BETFAIR"]
+    assert betfair_cells, "expected a venue-routed BETFAIR cell in SPORTS enumeration"
+    assert all(c.sports_provider is None for c in betfair_cells)
+
+
+def test_enumerate_cells_sports_venue_filter_selects_only_betfair(smoke: ModuleType) -> None:
+    cells = smoke.enumerate_cells(asset_group_filter="SPORTS", venue_filter="BETFAIR")
+    assert cells
+    assert all(c.venue == "BETFAIR" and c.sports_provider is None for c in cells)
+
+
+def test_enumerate_cells_sports_mtds_only_venue_returns_zero_cells(smoke: ModuleType) -> None:
+    """ODDS_API/PINNACLE/etc are MTDS-owned (NO_ADAPTER_YET in instruments-service's
+    own venue_adapter_keys.py, registry-consolidation Decision C 2026-06-29) — zero
+    cells here is the honest, correct answer, not a bug to route around."""
+    for venue in ("ODDS_API", "PINNACLE", "DRAFTKINGS", "FANDUEL"):
+        cells = smoke.enumerate_cells(asset_group_filter="SPORTS", venue_filter=venue)
+        assert cells == [], f"expected 0 cells for MTDS-only venue={venue}, got {cells}"
+
+
 # ---------------------------------------------------------------------------
 # Bucket / path resolution
 # ---------------------------------------------------------------------------
@@ -152,7 +177,9 @@ def test_resolve_test_bucket_honours_category(smoke: ModuleType, monkeypatch: py
 
 
 def test_expected_write_prefix_sports_uses_sports_reference(smoke: ModuleType) -> None:
-    cell = smoke.SmokeCell(asset_group="SPORTS", venue="API_FOOTBALL", data_type="odds")
+    # Provider-routed SPORTS cell (as actually emitted by _enumerate_sports_cells —
+    # sports_provider is always set alongside venue for these) -> sports_reference/.
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="API_FOOTBALL", data_type="odds", sports_provider="API_FOOTBALL")
     prefix = smoke.expected_write_prefix(cell, "2026-04-20")
     assert prefix.startswith("sports_reference/by_date/day=2026-04-20/")
 
@@ -161,6 +188,32 @@ def test_expected_write_prefix_non_sports_uses_instrument_availability(smoke: Mo
     cell = smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades")
     prefix = smoke.expected_write_prefix(cell, "2026-04-20")
     assert prefix == "instrument_availability/by_date/day=2026-04-20/venue=BINANCE-FUTURES/"
+
+
+def test_expected_write_prefix_venue_routed_sports_uses_instrument_availability(smoke: ModuleType) -> None:
+    """Bare BETFAIR (sports_provider=None) writes through the generic per-venue
+    instrument-catalog path, NOT sports_reference/ (which is provider-only)."""
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="BETFAIR", data_type="instruments")
+    prefix = smoke.expected_write_prefix(cell, "2026-04-20")
+    assert prefix == "instrument_availability/by_date/day=2026-04-20/venue=BETFAIR/"
+
+
+def test_build_cli_args_venue_routed_sports_uses_venues_flag(smoke: ModuleType) -> None:
+    """A sports_provider=None SPORTS cell (bare BETFAIR) must build --venues BETFAIR,
+    not silently omit any venue selector (which would run the full default SPORTS set)."""
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="BETFAIR", data_type="instruments")
+    argv = smoke.build_cli_args(cell, "2026-04-20")
+    assert "--venues" in argv
+    assert argv[argv.index("--venues") + 1] == "BETFAIR"
+    assert "--sports-provider" not in argv
+
+
+def test_build_cli_args_provider_routed_sports_uses_sports_provider_flag(smoke: ModuleType) -> None:
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="API_FOOTBALL", data_type="odds", sports_provider="API_FOOTBALL")
+    argv = smoke.build_cli_args(cell, "2026-04-20")
+    assert "--sports-provider" in argv
+    assert argv[argv.index("--sports-provider") + 1] == "API_FOOTBALL"
+    assert "--venues" not in argv
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +366,23 @@ def test_run_cell_fails_when_manifest_row_missing(
     )
     assert result.status == "failed"
     assert "no_matching_row" in result.reason or "manifest_status_invalid" in result.reason
+
+
+def test_verify_manifest_row_venue_routed_sports_filters_by_venue(smoke: ModuleType) -> None:
+    """A BETFAIR-style (sports_provider=None) SPORTS cell must filter on venue —
+    unlike a provider-routed cell, its manifest rows carry a real venue column."""
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="BETFAIR", data_type="instruments")
+    # Manifest has a row for a DIFFERENT SPORTS venue on the same date — must NOT
+    # false-match just because asset_group+date agree (that was the pre-fix bug:
+    # SPORTS cells universally skipped the venue filter).
+    other_venue_manifest = _make_manifest_bytes("2026-04-20", "SPORTS", "SOME_OTHER_VENUE", "instruments")
+    client = _FakeStorageClient(
+        parquet_blobs=[_FakeBlob("x.parquet")],
+        manifest_blob=_FakeBlob("_index/availability_index.parquet", exists_flag=True, payload=other_venue_manifest),
+    )
+    ok, status = smoke.verify_manifest_row(bucket="ignored", cell=cell, smoke_date="2026-04-20", storage_client=client)
+    assert not ok
+    assert status == "no_matching_row"
 
 
 def test_run_cell_skips_on_api_football_dependency_error(
