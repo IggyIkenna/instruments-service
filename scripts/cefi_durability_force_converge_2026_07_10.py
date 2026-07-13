@@ -54,17 +54,51 @@ This script does the two things fully within THIS repo's control:
    2026_07_08.md). Backup-first (to the SAME quarantine prefix, never inline),
    verify-after, idempotent, shard-isolated (one file's failure never aborts
    the sweep).
-3. ``--fix-frozen-expiry`` (DERIBIT-only): correct the stored ``expiry``
-   metadata column for rows where it's frozen at a stale last-observed date
-   (the original capture code's ``available_to`` fallback when Tardis's own
-   ``item.expiry`` was unavailable) rather than the real settlement date —
-   the exact root cause of the duplicate-key collisions ``--fix-by-date``
-   already guards against. Deliberately narrow: only rows that collide with
-   another real instrument under the OLD (stored-expiry-trusting) key
-   derivation are touched; the legitimate T+1 settlement-offset majority
-   (e.g. a ``16AUG19`` symbol's real settlement landing on the 17th — stable
-   across every capture day for the same instrument, confirmed 2026-07-12)
-   is left untouched. See ``_detect_frozen_expiry_rows``'s docstring.
+3. ``--fix-expiry-canonical``: correct the stored ``expiry`` metadata column
+   to the CANONICAL, symbol-derived expiry (replaying the live adapter's own
+   tier-3 regex cascade — ``_canonical_regex_expiry``, mirroring
+   ``tardis/adapter.py::_parse_tardis_instrument`` lines ~740-763 — against
+   each row's ``raw_symbol``). This is the THIRD design for this fix, each
+   superseding the last on real evidence:
+     a. ``--fix-frozen-expiry`` (REMOVED): corrected stored expiry to a
+        raw_symbol regex-parse whenever 2+ distinct raw_symbols collided on
+        one stored expiry within a group. Wrong on two counts — a real
+        collision can be a legitimate coincidence (Deribit delists multiple
+        series together), and the regex target ignored a real, valid T+1
+        settlement offset for genuinely-wrong rows. Corrupted 35,410
+        previously-correct rows while fixing only 209 (see damage-assessment
+        history below).
+     b. ``--fix-expiry-ground-truth`` (REMOVED, same-day pivot): corrected
+        stored expiry against Tardis's free ``availableTo`` field directly,
+        treating it as ground truth. Also wrong: a live-data check
+        (2026-07-12) showed ``availableTo`` legitimately differs from the
+        canonical symbol-encoded date by ~1 day for currently-active-at-
+        capture-time instruments (e.g. ``BTC-26JUN26`` stores expiry
+        2026-06-26, matching the symbol exactly, while Tardis's
+        ``availableTo`` for the same instrument is 2026-06-27 — a
+        data-collection artifact in when Tardis marks an instrument's last
+        observed day, not a settlement-time signal; real-world Deribit
+        options/futures settle at 08:00 UTC on the date named in the
+        symbol). Treating ``availableTo`` as the correction target would
+        have rewritten ~266k+ already-correct rows.
+     c. THIS flag (current, 2026-07-12/13 operator ruling): the raw_symbol's
+        own encoding is canonical — matches the venue's real settlement
+        convention and the live adapter's own tier-3 fallback exactly, so it
+        needs no external API dependency to be correct — and is applied
+        UNCONDITIONALLY to every row whose canonical value is parseable and
+        differs from what's stored. Tardis's ``availableTo`` (free, no-auth
+        ``GET /v1/exchanges/{exchange}``, fetched live, cached per venue) is
+        retained ONLY as reporting telemetry: a gap of more than
+        ``_ANOMALY_THRESHOLD_DAYS`` days is logged for post-hoc visibility,
+        never held back or blocked. An initial same-day version of this flag
+        treated any such gap as a shard failure and skipped writing the
+        WHOLE file — but a 2026-07-13 sample of 40 DERIBIT files showed every
+        single gap (215/68,253 rows) was one-directional early delisting
+        (routine for illiquid options ahead of their scheduled expiry, not
+        corruption), and file-level skip at that rate would have discarded
+        corrections for 67% of DERIBIT's files (3,602/5,347) to guard
+        against a pattern that isn't actually dangerous. See
+        ``_detect_expiry_corrections``'s docstring.
 
 Usage::
 
@@ -73,8 +107,8 @@ Usage::
     .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --quarantine-backups --apply
     .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-by-date --dry-run
     .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-by-date --apply --workers 32
-    .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-frozen-expiry --dry-run
-    .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-frozen-expiry --apply --workers 32
+    .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-expiry-canonical --dry-run
+    .venv/bin/python scripts/cefi_durability_force_converge_2026_07_10.py --fix-expiry-canonical --apply --workers 32
 
 SSOT: unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
 """
@@ -90,6 +124,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 import pandas as pd
+import requests
 from google.cloud import storage as _gcs_sdk  # noqa: qg-deep-import — read-only bulk LISTING only (server-side
 
 # match_glob filtering ~28s/venue vs UTL StorageClient.list_blobs's unfiltered full-prefix walk, which
@@ -291,6 +326,24 @@ def _fix_frame(venue: str, df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, in
     return out, stats
 
 
+def _would_introduce_new_collision(orig_keys: pd.Series, new_keys: pd.Series) -> bool:
+    """True if any group of rows sharing a NEW ``instrument_key`` value contains 2+ rows
+    that did NOT already share the same ORIGINAL ``instrument_key`` — i.e. two
+    previously-distinct real instruments would be merged onto one key.
+
+    Stricter than comparing duplicate-row COUNTS before/after
+    (``.duplicated().sum()``): a resolve+introduce pair (one pre-existing collision
+    fixed, one new one introduced elsewhere in the same file) can leave the total
+    duplicate-row count unchanged, silently passing a scalar-count guard while still
+    merging two real instruments (2026-07-13 review finding — the scalar-count version
+    of this guard was confirmed exploitable and is why this function exists).
+    """
+    groups: dict[str, set[str]] = {}
+    for orig, new in zip(orig_keys, new_keys, strict=True):
+        groups.setdefault(new, set()).add(orig)
+    return any(len(origs) > 1 for origs in groups.values())
+
+
 def _process_one_file(st, bucket: str, venue: str, blob_name: str, apply: bool) -> dict[str, object]:
     raw = st.download_bytes(bucket, blob_name)
     df = pd.read_parquet(io.BytesIO(raw))
@@ -302,10 +355,8 @@ def _process_one_file(st, bucket: str, venue: str, blob_name: str, apply: bool) 
     if stats["id_changed"] == 0 and stats["margin_fixed"] == 0:
         return result
     # Duplicate-introduction guard — never silently merge distinct instruments.
-    dup_before = int(df["instrument_key"].astype(str).duplicated().sum())
-    dup_after = int(out["instrument_key"].astype(str).duplicated().sum())
-    if dup_after > dup_before:
-        result["error"] = f"would_introduce_{dup_after - dup_before}_dup_ids"
+    if _would_introduce_new_collision(df["instrument_key"].astype(str), out["instrument_key"].astype(str)):
+        result["error"] = "would_introduce_new_collision"
         return result
     if not apply:
         result["written"] = 1
@@ -320,90 +371,182 @@ def _process_one_file(st, bucket: str, venue: str, blob_name: str, apply: bool) 
     return result
 
 
-def _expiry_group_key(row: pd.Series[object]) -> tuple[str, ...]:
-    """Group key covering everything a canonical key needs EXCEPT expiry — the field
-    under test. Two rows sharing this key but with genuinely different raw_symbols are
-    different real instruments; if they also share the same STORED expiry, that stored
-    value can only be correct for one of them (or neither)."""
-    base = str(row.get("base_asset") or "")
-    quote = str(row.get("quote_asset") or "")
-    margin = str(row.get("margin_type") or "")
-    if str(row.get("instrument_type") or "") == "OPTION":
-        return (base, quote, margin, str(row.get("strike") or ""), str(row.get("option_type") or ""))
-    return (base, quote, margin)
+# --------------------------------------------------------------------------
+# Step 3: correct stored `expiry` against REAL Tardis ground truth (the free,
+# no-auth /v1/exchanges/{exchange} endpoint) — see module docstring for why
+# this supersedes the earlier same-day regex-collision-based attempt.
+# --------------------------------------------------------------------------
+
+_EXPIRING_TYPES = frozenset({"FUTURE", "OPTION"})
+_ANOMALY_THRESHOLD_DAYS = 2
 
 
-def _detect_frozen_expiry_rows(venue: str, df: pd.DataFrame) -> dict[int, datetime]:
-    """Detect rows whose stored ``expiry`` is a stale collision artifact — frozen at
-    the instrument's last-observed date (the original capture code's ``available_to``
-    fallback when Tardis's own ``item.expiry`` was unavailable) rather than its real
-    settlement date — and return ``{row_index: corrected_expiry}`` for ONLY those rows.
+def _fetch_tardis_ground_truth(exchange: str) -> dict[str, datetime | None]:
+    """Fetch ``GET /v1/exchanges/{exchange}`` (free, no-auth — the same endpoint the
+    live adapter already calls in production, per its own module comment) and build a
+    ``{raw_symbol: availableTo}`` SAFEGUARD lookup for one exchange — NOT a correction
+    target (see ``_detect_expiry_corrections``'s docstring for why).
 
-    Deliberately narrow: does NOT flag every row whose ``expiry`` differs from a naive
-    ``raw_symbol`` parse — real Deribit settlement timestamps legitimately land one day
-    after the symbol's nominal DDMMMYY date (T+1 convention), confirmed stable across
-    every capture day for the same instrument (2026-07-12 investigation). Only rows
-    that collide — two DIFFERENT real instruments (different raw_symbol) sharing one
-    stored expiry within the same (base, quote, margin, strike, right) group — are
-    flagged, matching the exact set the duplicate-introduction guard already protects
-    against in ``_process_one_file``. See instrument_id_format_canonicalization_
-    2026_07_08.md's frozen-expiry follow-up.
+    Each ``availableSymbols[]`` entry's ``id`` is the exact ``raw_symbol`` this repo
+    stores. A raw_symbol appearing more than once with disagreeing ``availableTo``
+    values is dropped as ambiguous rather than guessed.
     """
-    if venue != "DERIBIT":
-        return {}
+    url = f"https://api.tardis.dev/v1/exchanges/{exchange}"
+    resp = requests.get(url, timeout=120)
+    resp.raise_for_status()
+    payload = resp.json()
+    lookup: dict[str, datetime | None] = {}
+    ambiguous: set[str] = set()
+    for item in payload.get("availableSymbols", []):
+        raw_id = str(item.get("id") or "")
+        if not raw_id:
+            continue
+        available_to_raw = item.get("availableTo")
+        available_to = (
+            datetime.fromisoformat(str(available_to_raw).replace("Z", "+00:00")) if available_to_raw else None
+        )
+        if raw_id in lookup and lookup[raw_id] != available_to:
+            ambiguous.add(raw_id)
+            continue
+        lookup[raw_id] = available_to
+    for raw_id in ambiguous:
+        lookup.pop(raw_id, None)
+    return lookup
+
+
+def _canonical_regex_expiry(raw_id: str, exchange: str) -> datetime | None:
+    """Symbol-derived CANONICAL expiry — replays the exact fallback cascade the live
+    adapter uses for its tier-3 case (``tardis/adapter.py::_parse_tardis_instrument``,
+    lines ~740-763) against a bare raw_symbol. Per 2026-07-12 operator ruling, the
+    symbol encoding IS the canonical expiry: it matches the venue's real settlement
+    convention (e.g. Deribit options/futures settle at 08:00 UTC on the date named in
+    the symbol) and needs no external API dependency to be correct.
+    """
+    expiry: datetime | None = None
+    if "-" in raw_id:
+        expiry = tardis_parsing._parse_deribit_symbol_expiry(raw_id)
+    if expiry is None and "-" in raw_id:
+        expiry = tardis_parsing._parse_yymmdd_symbol_expiry(raw_id)
+    if expiry is None and "_" in raw_id:
+        expiry = tardis_parsing._parse_underscore_yymmdd_symbol_expiry(raw_id)
+    if expiry is None and exchange == "bybit":
+        expiry = tardis_parsing._parse_bybit_month_code_expiry(raw_id)
+    return expiry
+
+
+def _detect_expiry_corrections(
+    venue: str, df: pd.DataFrame, gt_lookup: dict[str, datetime | None]
+) -> tuple[dict[int, datetime], list[dict[str, object]]]:
+    """Detect FUTURE/OPTION rows whose stored ``expiry`` disagrees with the CANONICAL,
+    symbol-derived expiry (``_canonical_regex_expiry``) and return
+    ``({row_index: corrected_expiry}, [anomaly, ...])``.
+
+    EVERY row whose canonical expiry is parseable and differs from the stored value is
+    corrected — unconditionally. Tardis's ``availableTo`` (free
+    ``/v1/exchanges/{exchange}``) is retained ONLY as reporting telemetry: a row whose
+    gap against canonical exceeds ``_ANOMALY_THRESHOLD_DAYS`` is appended to the
+    returned anomaly list for post-hoc visibility, but is corrected exactly like any
+    other row — it is NEVER held back and never blocks the rest of the file.
+    2026-07-13 operator ruling, after a 40-file DERIBIT sample showed anomalies are
+    common (215/68,253 rows, ~0.3%) but ENTIRELY one-directional (``availableTo``
+    always BEFORE canonical, never after) — i.e. routine early delisting of illiquid
+    options ahead of their scheduled expiry, not corruption. An earlier same-day
+    version of this function treated any gap as a shard failure and skipped writing
+    the WHOLE file, which — at DERIBIT's real anomaly-per-file rate — discarded
+    corrections for 67% of files (3,602/5,347) to guard against a pattern that turned
+    out to be normal, not dangerous. Supersedes ``_detect_frozen_expiry_rows`` and
+    ``_detect_ground_truth_mismatches`` (both removed 2026-07-12 — see the module
+    docstring for their full failure histories). A row whose canonical expiry can't be
+    parsed at all is left untouched rather than guessed.
+    """
+    exchange = _EXCHANGE_FOR_VENUE[venue]
     mask = (
-        df["instrument_type"].isin(_DERIVATIVE_TYPES)
+        df["instrument_type"].isin(_EXPIRING_TYPES)
         if "instrument_type" in df.columns
         else pd.Series(False, index=df.index)
     )
-    sub_index = df.index[mask]
-    if len(sub_index) == 0:
-        return {}
-    groups: dict[tuple[str, ...], list[int]] = {}
-    for idx in sub_index:
-        groups.setdefault(_expiry_group_key(df.loc[idx]), []).append(idx)
     corrections: dict[int, datetime] = {}
-    for idxs in groups.values():
-        if len(idxs) < 2:
+    anomalies: list[dict[str, object]] = []
+    for idx in df.index[mask]:
+        raw_symbol = str(df.at[idx, "raw_symbol"] or "")
+        canonical = _canonical_regex_expiry(raw_symbol, exchange)
+        if canonical is None:
             continue
-        by_stored: dict[object, list[int]] = {}
-        for idx in idxs:
-            stored = df.at[idx, "expiry"]
-            if pd.isna(stored):
-                continue
-            key = stored.date() if hasattr(stored, "date") else stored
-            by_stored.setdefault(key, []).append(idx)
-        for stored_key, group_idxs in by_stored.items():
-            raw_symbols = {str(df.at[i, "raw_symbol"] or "") for i in group_idxs}
-            if len(raw_symbols) < 2:
-                continue  # same raw_symbol repeated across rows — not a real collision
-            for idx in group_idxs:
-                raw_symbol = str(df.at[idx, "raw_symbol"] or "")
-                parsed = tardis_parsing._parse_deribit_symbol_expiry(raw_symbol)
-                if parsed is None or parsed.date() == stored_key:
-                    continue
-                corrections[idx] = parsed
-    return corrections
+        gt_available_to = gt_lookup.get(raw_symbol)
+        if gt_available_to is not None:
+            gap_days = (gt_available_to.date() - canonical.date()).days
+            if abs(gap_days) > _ANOMALY_THRESHOLD_DAYS:
+                anomalies.append(
+                    {
+                        "row": idx,
+                        "raw_symbol": raw_symbol,
+                        "canonical": canonical.date().isoformat(),
+                        "available_to": gt_available_to.date().isoformat(),
+                        "gap_days": gap_days,
+                    }
+                )
+        stored = df.at[idx, "expiry"]
+        if pd.isna(stored):
+            corrections[idx] = canonical
+            continue
+        stored_dt = stored.to_pydatetime() if hasattr(stored, "to_pydatetime") else stored
+        if stored_dt.date() != canonical.date():
+            corrections[idx] = canonical
+    return corrections, anomalies
 
 
-def _process_frozen_expiry_file(st, bucket: str, venue: str, blob_name: str, apply: bool) -> dict[str, object]:
+def _process_expiry_canonical_file(
+    st, bucket: str, venue: str, blob_name: str, apply: bool, gt_lookup: dict[str, datetime | None]
+) -> dict[str, object]:
     raw = st.download_bytes(bucket, blob_name)
     df = pd.read_parquet(io.BytesIO(raw))
-    corrections = _detect_frozen_expiry_rows(venue, df)
-    result: dict[str, object] = {"blob": blob_name, "rows_fixed": len(corrections), "written": 0}
+    corrections, anomalies = _detect_expiry_corrections(venue, df, gt_lookup)
+    result: dict[str, object] = {
+        "blob": blob_name,
+        "rows_fixed": len(corrections),
+        "written": 0,
+        "anomalies": anomalies,
+    }
     if not corrections:
         return result
     out = df.copy()
     for idx, new_expiry in corrections.items():
         out.at[idx, "expiry"] = pd.Timestamp(new_expiry)
     # Re-derive instrument_key/margin_type from the corrected expiry so the key stays
-    # consistent with the metadata column (mirrors _fix_frame; never leave the two out
-    # of sync). Duplicate-introduction guard applies identically.
-    fixed_frame, _stats = _fix_frame(venue, out)
-    dup_before = int(df["instrument_key"].astype(str).duplicated().sum())
-    dup_after = int(fixed_frame["instrument_key"].astype(str).duplicated().sum())
-    if dup_after > dup_before:
-        result["error"] = f"would_introduce_{dup_after - dup_before}_dup_ids"
+    # consistent with the metadata column — but ONLY for the rows THIS flag actually
+    # corrected, never the whole file: _fix_frame's mask (FUTURE/OPTION/PERPETUAL) is
+    # broader than the rows this flag touches (FUTURE/OPTION with a corrected expiry),
+    # so its output is applied here only at `corrections`' own row indices, leaving
+    # every other row's instrument_key/margin_type exactly as it already was — a no-op
+    # for DERIBIT, whose key already ignores the expiry column in favor of raw_symbol's
+    # own regex-derived date (see _re_derive_row); load-bearing for BYBIT/
+    # KRAKEN-FUTURES, whose key IS built directly from the expiry column. Keeping this
+    # scoped is what makes "Independent of --fix-by-date" (main()'s --help text)
+    # actually true, and keeps rows_fixed/id_changed/margin_fixed telemetry honest
+    # (2026-07-13 review finding: an earlier version applied the full re-derivation —
+    # and its accompanying dup-guard — to the WHOLE file, silently rewriting rows this
+    # flag was never meant to touch and under-reporting the real blast radius).
+    rederived, _stats = _fix_frame(venue, out)
+    fixed_frame = out.copy()
+    orig_id = df["instrument_key"].astype(str)
+    orig_margin = df["margin_type"].astype(str) if "margin_type" in df.columns else pd.Series("", index=df.index)
+    id_changed = 0
+    margin_fixed = 0
+    for idx in corrections:
+        new_id = str(rederived.at[idx, "instrument_key"])
+        fixed_frame.at[idx, "instrument_key"] = new_id
+        if new_id != orig_id.at[idx]:
+            id_changed += 1
+        if "margin_type" in rederived.columns:
+            new_margin = rederived.at[idx, "margin_type"]
+            fixed_frame.at[idx, "margin_type"] = new_margin
+            if str(new_margin) != orig_margin.at[idx]:
+                margin_fixed += 1
+    result["id_changed"] = id_changed
+    result["margin_fixed"] = margin_fixed
+    # Duplicate-introduction guard — never silently merge distinct instruments.
+    if _would_introduce_new_collision(orig_id, fixed_frame["instrument_key"].astype(str)):
+        result["error"] = "would_introduce_new_collision"
         return result
     if not apply:
         result["written"] = 1
@@ -418,26 +561,46 @@ def _process_frozen_expiry_file(st, bucket: str, venue: str, blob_name: str, app
     return result
 
 
-def run_fix_frozen_expiry(
+def run_fix_expiry_canonical(
     st, bucket: str, apply: bool, workers: int, limit: int | None, current_by_venue: dict[str, list[str]]
 ) -> None:
     for venue in _TARGET_VENUES:
+        exchange = _EXCHANGE_FOR_VENUE[venue]
+        logger.info("=== fix-expiry-canonical %s: fetching Tardis safeguard data (%s) ===", venue, exchange)
+        # Non-fatal: this lookup is telemetry-only (_detect_expiry_corrections never
+        # gates the correction on it — see its docstring), so a transient network
+        # failure must never abort venues that haven't run yet (2026-07-13 review
+        # finding: an earlier version let this exception propagate out of main()).
+        try:
+            gt_lookup = _fetch_tardis_ground_truth(exchange)
+        except Exception:
+            logger.exception(
+                "%s: Tardis safeguard fetch failed — proceeding WITHOUT anomaly telemetry for this venue "
+                "(corrections are unaffected, they don't depend on this data)",
+                venue,
+            )
+            gt_lookup = {}
+        logger.info("%s: %d raw_symbol(s) with known availableTo (telemetry only)", venue, len(gt_lookup))
+
         targets = current_by_venue[venue]
         if limit is not None:
             targets = sorted(targets)[:limit]
         logger.info(
-            "=== fix-frozen-expiry %s: %d current file(s) (mode=%s, workers=%d) ===",
+            "=== fix-expiry-canonical %s: %d current file(s) (mode=%s, workers=%d) ===",
             venue,
             len(targets),
             "APPLY" if apply else "DRY-RUN",
             workers,
         )
-        total = {"files": 0, "files_changed": 0, "rows_fixed": 0}
+        total = {"files": 0, "files_changed": 0, "rows_fixed": 0, "id_changed": 0, "margin_fixed": 0}
         errors: dict[str, int] = {}
+        anomaly_rows_total = 0
+        anomaly_examples: list[dict[str, object]] = []
         t0 = time.time()
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(_process_frozen_expiry_file, st, bucket, venue, blob, apply): blob for blob in targets
+                pool.submit(_process_expiry_canonical_file, st, bucket, venue, blob, apply, gt_lookup): blob
+                for blob in targets
             }
             for i, fut in enumerate(as_completed(futures), start=1):
                 blob = futures[fut]
@@ -451,13 +614,19 @@ def run_fix_frozen_expiry(
                     errors[str(r["error"])] = errors.get(str(r["error"]), 0) + 1
                     continue
                 total["files"] += 1
+                anomalies = r.get("anomalies") or []
+                anomaly_rows_total += len(anomalies)
+                if anomalies and len(anomaly_examples) < 20:
+                    anomaly_examples.extend(anomalies[: 20 - len(anomaly_examples)])
                 if r["written"]:
                     total["files_changed"] += 1
                     total["rows_fixed"] += int(r["rows_fixed"])
+                    total["id_changed"] += int(r.get("id_changed", 0))
+                    total["margin_fixed"] += int(r.get("margin_fixed", 0))
                 if i % 500 == 0 or i == len(targets):
                     elapsed = time.time() - t0
                     logger.info(
-                        "%s [%d/%d] elapsed=%.1fs (%.3fs/file) %s errors=%s",
+                        "%s [%d/%d] elapsed=%.1fs (%.3fs/file) %s errors=%s anomaly_rows_seen=%d",
                         venue,
                         i,
                         len(targets),
@@ -465,8 +634,18 @@ def run_fix_frozen_expiry(
                         elapsed / i,
                         total,
                         errors,
+                        anomaly_rows_total,
                     )
         logger.info("%s DONE: %s errors=%s elapsed=%.1fs", venue, total, errors, time.time() - t0)
+        if anomaly_rows_total:
+            logger.warning(
+                "%s: %d row(s) had a canonical/availableTo gap > %d days — still corrected (telemetry only, "
+                "for post-hoc review, never blocking). Examples: %s",
+                venue,
+                anomaly_rows_total,
+                _ANOMALY_THRESHOLD_DAYS,
+                anomaly_examples,
+            )
 
 
 def run_fix_by_date(
@@ -525,17 +704,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--quarantine-backups", action="store_true", help="Relocate stray .bak.parquet files.")
     ap.add_argument("--fix-by-date", action="store_true", help="Re-derive instrument_key/margin_type on current files.")
     ap.add_argument(
-        "--fix-frozen-expiry",
+        "--fix-expiry-canonical",
         action="store_true",
-        help="Correct stored expiry for rows frozen at a stale last-observed date (DERIBIT-only; see "
-        "_detect_frozen_expiry_rows). Independent of --fix-by-date.",
+        help="Correct stored expiry to the canonical symbol-parsed value, with live Tardis "
+        "availableTo as an anomaly safeguard only (see _detect_expiry_corrections). "
+        "Independent of --fix-by-date.",
     )
     ap.add_argument("--apply", action="store_true", help="Write changes (default: dry-run/report only).")
     ap.add_argument("--workers", type=int, default=32, help="Thread-pool size (default 32).")
     ap.add_argument("--limit", type=int, default=None, help="Per-venue smoke-test cap for --fix-by-date.")
     args = ap.parse_args(argv)
-    if not (args.quarantine_backups or args.fix_by_date or args.fix_frozen_expiry):
-        logger.error("Nothing to do — pass --quarantine-backups and/or --fix-by-date and/or --fix-frozen-expiry.")
+    if not (args.quarantine_backups or args.fix_by_date or args.fix_expiry_canonical):
+        logger.error("Nothing to do — pass --quarantine-backups and/or --fix-by-date and/or --fix-expiry-canonical.")
         return 1
 
     bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="cefi")
@@ -563,8 +743,8 @@ def main(argv: list[str] | None = None) -> int:
         run_quarantine(st, bucket, args.apply, args.workers, backups_all)
     if args.fix_by_date:
         run_fix_by_date(st, bucket, args.apply, args.workers, args.limit, current_by_venue)
-    if args.fix_frozen_expiry:
-        run_fix_frozen_expiry(st, bucket, args.apply, args.workers, args.limit, current_by_venue)
+    if args.fix_expiry_canonical:
+        run_fix_expiry_canonical(st, bucket, args.apply, args.workers, args.limit, current_by_venue)
     return 0
 
 

@@ -6,11 +6,11 @@ follows the **Messari standardized lending schema** (entity ``Market``)
 rather than the Aave-V3 ``Reserve`` schema. Field names and scaling differ
 materially from ``aave_v3.py`` so Spark needs its own adapter.
 
-Each Spark market produces two ``InstrumentRecord`` entries with
-``instrument_type=InstrumentType.LENDING``:
+Each Spark market produces two ``InstrumentRecord`` entries:
 
-- ``A_TOKEN`` (the spToken / supply position)
-- ``DEBT_TOKEN`` (the variable-debt position) — only when borrowing is enabled
+- ``instrument_type=InstrumentType.A_TOKEN`` (the spToken / supply position)
+- ``instrument_type=InstrumentType.DEBT_TOKEN`` (the variable-debt position) —
+  only when borrowing is enabled
 
 DeFi metadata fields are populated to mirror the aave_v3 adapter's Phase 2a
 behaviour:
@@ -133,7 +133,7 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Spark lending markets as instruments."""
-        if instrument_type not in (None, InstrumentType.LENDING):
+        if instrument_type not in (None, InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN):
             return []
 
         url = self._resolve_api_url()
@@ -291,7 +291,6 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": underlying_str,
-            "instrument_type": InstrumentType.LENDING,
             "base_asset": sym_upper,
             "quote_asset": "",
             "tick_size": Decimal("0.000001"),
@@ -316,6 +315,7 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
         results: list[InstrumentRecord] = [
             InstrumentRecord(
                 instrument_key=f"{venue_tag}:A_TOKEN:{a_symbol}",
+                instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             )
         ]
@@ -325,6 +325,7 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
             results.append(
                 InstrumentRecord(
                     instrument_key=f"{venue_tag}:DEBT_TOKEN:{debt_symbol}",
+                    instrument_type=InstrumentType.DEBT_TOKEN,
                     **base_kwargs,
                 )
             )
