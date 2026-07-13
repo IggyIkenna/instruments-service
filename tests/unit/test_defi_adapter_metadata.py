@@ -170,7 +170,7 @@ class TestCompoundV3MetadataRoundTrip:
         ):
             results = await adapter.get_instruments()
 
-        assert len(results) == 2  # SUPPLY + BORROW
+        assert len(results) == 2  # A_TOKEN (supply) + DEBT_TOKEN (borrow)
         for record in results:
             assert record.pool_address == "0xc3d688b66703497daa19211eedff47f25384cdc3"
             assert record.base_asset_contract_address == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"

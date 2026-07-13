@@ -1159,7 +1159,7 @@ class TestAaveV3Adapter:
 
         adapter = AaveV3ReferenceDataAdapter(chain="OPTIMISM")
         results = adapter._get_optimism_reserves_static()
-        assert all(r.instrument_type == InstrumentType.LENDING for r in results)
+        assert all(r.instrument_type in (InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN) for r in results)
         # base_asset (not raw_symbol which is the contract address) carries the token symbol
         assets = {r.base_asset for r in results}
         assert "USDC" in assets
@@ -1377,10 +1377,12 @@ class TestCompoundV3Adapter:
             ),
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 2  # SUPPLY + BORROW
+        assert len(results) == 2  # A_TOKEN (supply) + DEBT_TOKEN (borrow)
         keys = [r.instrument_key for r in results]
-        assert any("SUPPLY" in k for k in keys)
-        assert any("BORROW" in k for k in keys)
+        assert any(":A_TOKEN:" in k for k in keys)
+        assert any(":DEBT_TOKEN:" in k for k in keys)
+        types = {r.instrument_type for r in results}
+        assert types == {InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN}
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
