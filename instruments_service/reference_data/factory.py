@@ -355,6 +355,39 @@ def _build_date_aware_tradfi_adapter(
     )
 
 
+def _resolve_tardis_exchanges_for_venue(
+    canonical_venue: str,
+    venue_instrument_type_to_tardis: dict[tuple[str, str], str],
+    tardis_to_venue: dict[str, str],
+    direct_or_suffixed_exchange: str | None,
+) -> list[str]:
+    """Resolve ALL Tardis exchanges backing a canonical venue for IS enumeration.
+
+    Itype-aware FIRST: some venues (e.g. OKX) span MULTIPLE real Tardis
+    exchanges depending on instrument_type (okex/okex-swap/okex-futures/
+    okex-options) — the venue-only lookup (``direct_or_suffixed_exchange``,
+    from ``VenueMapping.get_tardis_exchange_for_venue``) can return at most
+    ONE exchange, silently dropping every other instrument type's universe.
+    Falls back to the venue-only lookup (then a direct lowercase-conversion
+    candidate) for venues with a single 1:1 exchange. Mirrors MTDS's
+    itype-aware ``_resolve_tardis_exchange`` fix — see
+    cefi_deribit_combo_and_okx_bare_venue_gaps_2026_07_12.md.
+    """
+    itype_exchanges = sorted(
+        {exch for (venue, _itype), exch in venue_instrument_type_to_tardis.items() if venue == canonical_venue}
+    )
+    if itype_exchanges:
+        return itype_exchanges
+    tardis_exchange = direct_or_suffixed_exchange
+    if tardis_exchange is None:
+        # Fallback: try direct lowercase conversion (BYBIT → bybit, DERIBIT → deribit)
+        # Only valid if the result exists as a key in tardis_to_venue
+        candidate = canonical_venue.lower()
+        if candidate in tardis_to_venue:
+            tardis_exchange = candidate
+    return [tardis_exchange] if tardis_exchange else []
+
+
 def get_adapter_for_canonical_venue(
     canonical_venue: str,
     api_key: str | None = None,
@@ -503,27 +536,36 @@ def get_adapter_for_canonical_venue(
             kwargs["protocol_slug"] = resolved_protocol
         adapter = adapter_class(**kwargs)
     elif adapter_key == "tardis":
-        # Tardis: pass ONLY the specific exchange for this venue (not all defaults)
+        # Tardis: pass ONLY the specific exchange(s) for this venue (not all
+        # defaults) — see _resolve_tardis_exchanges_for_venue for the
+        # itype-aware multi-exchange resolution (e.g. bare "OKX").
         from unified_api_contracts import VenueMapping as _VM_cls
 
         _vm = _VM_cls()
-        tardis_exchange = _vm.get_tardis_exchange_for_venue(canonical_venue)
-        if tardis_exchange is None:
-            # Fallback: try direct lowercase conversion (BYBIT → bybit, DERIBIT → deribit)
-            # Only valid if the result exists as a key in tardis_to_venue
-            candidate = canonical_venue.lower()
-            if candidate in _vm.tardis_to_venue:
-                tardis_exchange = candidate
-        if not tardis_exchange:
+        tardis_exchanges = _resolve_tardis_exchanges_for_venue(
+            canonical_venue,
+            _vm.venue_instrument_type_to_tardis,
+            _vm.tardis_to_venue,
+            _vm.get_tardis_exchange_for_venue(canonical_venue),
+        )
+        if not tardis_exchanges:
             # FAIL LOUD — do not silently fetch all exchanges
             raise ValueError(
                 f"No Tardis exchange mapping for canonical venue {canonical_venue!r}. "
                 f"Add a mapping in VenueMapping.tardis_to_venue or "
                 f"venue_instrument_type_to_tardis for this venue."
             )
-        _logger.debug("Tardis: %s → exchange=%s", canonical_venue, tardis_exchange)
+        _logger.debug("Tardis: %s → exchanges=%s", canonical_venue, tardis_exchanges)
         # NO api_key — IS enumeration uses the free no-auth /v1/exchanges path (operator 2026-06-23).
-        adapter = TardisReferenceDataAdapter(project_id=project_id, exchanges=[tardis_exchange])
+        # canonical_venue_override tags every parsed instrument as canonical_venue
+        # explicitly — required because the adapter's per-exchange venue
+        # resolution (tardis_to_venue, a 1:1 reverse map) cannot represent
+        # "these N exchanges' rows all belong to this ONE requested venue".
+        adapter = TardisReferenceDataAdapter(
+            project_id=project_id,
+            exchanges=tardis_exchanges,
+            canonical_venue_override=canonical_venue,
+        )
     elif adapter_key in _DATE_AWARE_TRADFI_ADAPTER_KEYS:
         adapter = _build_date_aware_tradfi_adapter(
             adapter_key,
