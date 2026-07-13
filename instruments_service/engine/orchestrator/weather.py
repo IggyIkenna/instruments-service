@@ -460,6 +460,7 @@ async def _fetch_weather_data(
         # date, we duplicate the row into each league's parquet — downstream
         # readers join on (date, league_id) so duplication is correct.
         _captured_leagues: set[str] = set()
+        _w_failed_leagues: set[str] = set()
         _league_venue_count: dict[str, int] = {}
         _orphan_count = 0
 
@@ -486,16 +487,53 @@ async def _fetch_weather_data(
 
             for _lid_v, _frames in _per_league_frames.items():
                 _w_lid_df = _orch.pd.concat(_frames, ignore_index=True)
-                _captured_leagues.add(_lid_v)
-                _league_venue_count[_lid_v] = _league_venue_count.get(_lid_v, 0) + len(_w_lid_df)
-                _orch._gated_sink_write(
-                    sink,
-                    data=_orch.stamp_available_at_explicit(_w_lid_df, when=_orch.datetime.now(_orch.UTC)),
-                    partition={"entity": "weather", "league": _orch._canonical_league_id(_lid_v)},
-                    filename="weather.parquet",
-                    venue="open_meteo",
-                    entity="weather",
-                )
+                # Shard-level isolation (codex/04-architecture/shard-level-
+                # failure-isolation.md — sports shard atom is per-league): a
+                # write failure for ONE league must not abort the loop over
+                # the OTHER leagues for this date, and must not mark the
+                # league captured (_captured_leagues / _league_venue_count)
+                # before its write is confirmed — doing so ahead of the write
+                # (the prior ordering) risked a captured manifest row with no
+                # corresponding durable write (the
+                # phantom_captured_no_parquet_at_canonical_path class,
+                # root-caused 2026-07-13) once the later per-league
+                # record_captured_from_counts loop ran off these dicts.
+                try:
+                    _orch._gated_sink_write(
+                        sink,
+                        data=_orch.stamp_available_at_explicit(_w_lid_df, when=_orch.datetime.now(_orch.UTC)),
+                        partition={"entity": "weather", "league": _orch._canonical_league_id(_lid_v)},
+                        filename="weather.parquet",
+                        venue="open_meteo",
+                        entity="weather",
+                    )
+                    _captured_leagues.add(_lid_v)
+                    _league_venue_count[_lid_v] = _league_venue_count.get(_lid_v, 0) + len(_w_lid_df)
+                except Exception as _w_league_exc:
+                    _w_league_err = _orch._classify_adapter_failure(_w_league_exc, "open_meteo")
+                    _orch.log_event(
+                        "ADAPTER_FETCH_FAILED",
+                        details={
+                            "venue": "open_meteo",
+                            "endpoint": "weather_sink_write",
+                            "date": date,
+                            "league_id": _orch._canonical_league_id(_lid_v),
+                            "error": str(_w_league_exc),
+                            "error_code": _w_league_err,
+                        },
+                    )
+                    manifest.record_failed(
+                        row_key={
+                            "date": date,
+                            "data_type": "WEATHER",
+                            "league_id": _orch._canonical_league_id(_lid_v),
+                        },
+                        error=_w_league_err,
+                        attempted_at=attempt_ts,
+                        pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+                        source="open_meteo",
+                    )
+                    _w_failed_leagues.add(_lid_v)
 
             if _orphan_count > 0:
                 _orch.logger.warning(
@@ -542,8 +580,11 @@ async def _fetch_weather_data(
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
                 service_emission_state=None,
             )
-        # Per-league empty_confirmed for in-season leagues with no captured weather
-        for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues):
+        # Per-league empty_confirmed for in-season leagues with no captured weather.
+        # Leagues whose write raised (_w_failed_leagues) already carry an honest
+        # record_failed row from the per-league write loop above — excluding them
+        # here prevents a same-run record_empty from masking that failure.
+        for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues - _w_failed_leagues):
             manifest.record_empty(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 attempted_at=attempt_ts,
