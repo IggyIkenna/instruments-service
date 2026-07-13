@@ -505,12 +505,18 @@ class TestApiFootballAdapterHttp:
         assert len(injuries) == 1
 
     @pytest.mark.asyncio
-    async def test_get_injuries_error_returns_empty(self) -> None:
+    async def test_get_injuries_error_propagates(self) -> None:
+        """Root-cause fix (api_football_injuries_silent_empty_swallow_2026_07_13):
+        get_injuries is DATE-WIDE (not per-fixture) — a fetch failure must
+        propagate to attempted_failed, not silently masquerade as 0 injuries.
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
         mock_session = _make_aiohttp_mock({}, status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            injuries = await adapter.get_injuries("2026-03-22")
-        assert injuries == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="HTTP 500"),
+        ):
+            await adapter.get_injuries("2026-03-22")
 
     @pytest.mark.asyncio
     async def test_get_fixture_statistics(self) -> None:
@@ -912,7 +918,13 @@ class TestApiFootballRateLimitRetry:
 
     @pytest.mark.asyncio
     async def test_hard_api_error_not_retried(self) -> None:
-        """A hard plan/token error is NOT retried — propagates to _emit_fetch_failed."""
+        """A hard plan/token error is NOT retried — emits, then propagates.
+
+        Root-cause fix (api_football_injuries_silent_empty_swallow_2026_07_13):
+        get_injuries is DATE-WIDE — a hard envelope error must surface as
+        attempted_failed (via propagation to the caller), never a silent
+        empty-list "0 injuries" honest-absence.
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
 
         hard_error_body = {
@@ -951,11 +963,11 @@ class TestApiFootballRateLimitRetry:
                 new_callable=AsyncMock,
             ),
             patch.object(adapter, "_emit_fetch_failed", side_effect=_capture_emit),
+            pytest.raises(ApiFootballResponseError),
         ):
-            result = await adapter.get_injuries("2026-06-21")
+            await adapter.get_injuries("2026-06-21")
 
-        # Hard error → returned empty list + _emit_fetch_failed called once
-        assert result == []
+        # Hard error → emitted once, then propagated (NOT swallowed to [])
         assert len(emit_calls) == 1
         # Only 1 HTTP call made — no retry
         assert mock_resp.json.call_count == 1
