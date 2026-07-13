@@ -217,6 +217,18 @@ class CoinbaseCdeReferenceDataAdapter(BaseReferenceDataAdapter):
                     raw_symbol=product_id,
                     instrument_type=InstrumentType.FUTURE,
                     base_asset=base_asset,
+                    # CDE's Advanced Trade endpoint returns ONLY FUTURE product_type
+                    # (no SPOT_PAIR/PERPETUAL/OPTION — see class docstring), so every
+                    # record here is a derivative and `underlying` is REQUIRED by
+                    # instrument_validation.py's CeFi-derivatives check (`underlying
+                    # is required for {asset_group} derivatives`). Pre-fix this field
+                    # was never set (defaults to None), so ALL 99 real live CDE
+                    # instruments were silently rejected at validation — zero rows
+                    # ever reached the catalogue/manifest regardless of fetch success.
+                    # base_asset (Coinbase's contract_root_unit, e.g. "BTC") IS the
+                    # underlying for a dated/nano-perpetual future — same convention
+                    # ccxt_adapter.py uses (`underlying = base if is_derivative else None`).
+                    underlying=base_asset,
                     quote_asset=quote_asset,
                     settle_asset=quote_asset,
                     margin_type=_MARGIN_TYPE,
