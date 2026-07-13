@@ -2,10 +2,12 @@
 # Epic: instruments_master
 # Lifecycle: oneoff
 # Delete-when: after prod/catalog.parquet is confirmed durably converged for
-#   BYBIT/KRAKEN-FUTURES/DERIBIT across a real --mode incremental regen cycle
-#   AND instrument_id_format_canonicalization_2026_07_08.md's CeFi-durability
-#   follow-up items are marked resolved.
-"""Force-converge CeFi by_date + catalog durability for BYBIT/KRAKEN-FUTURES/DERIBIT.
+#   BYBIT/KRAKEN-FUTURES/DERIBIT/OKX-SWAP/OKX-FUTURES across a real --mode
+#   incremental regen cycle AND instrument_id_format_canonicalization_2026_07_08.md's
+#   CeFi-durability follow-up items are marked resolved. (OKX-SWAP/OKX-FUTURES added
+#   2026-07-13 — same durability gap, discovered later via a full-epic status check.)
+"""Force-converge CeFi by_date + catalog durability for BYBIT/KRAKEN-FUTURES/DERIBIT/
+OKX-SWAP/OKX-FUTURES.
 
 Real root cause (diagnosed 2026-07-10, live GCS + Cloud Build/Run evidence, not
 re-run blind): the two prior one-off migration scripts
@@ -143,11 +145,18 @@ logger = logging.getLogger(__name__)
 
 BY_DATE_PREFIX = "instrument_availability/by_date/"
 QUARANTINE_PREFIX = "_migration_backup/cefi_by_date_bak_relocation_2026_07_10/"
-_TARGET_VENUES: tuple[str, ...] = ("BYBIT", "KRAKEN-FUTURES", "DERIBIT")
+_TARGET_VENUES: tuple[str, ...] = ("BYBIT", "KRAKEN-FUTURES", "DERIBIT", "OKX-SWAP", "OKX-FUTURES")
 _EXCHANGE_FOR_VENUE: dict[str, str] = {
     "BYBIT": "bybit",
     "KRAKEN-FUTURES": "cryptofacilities",
     "DERIBIT": "deribit",
+    # Added 2026-07-13: OKX-SWAP/OKX-FUTURES' per-day corpus was never force-converged
+    # (excluded from the original 3-venue scope) — the live adapter code was already
+    # canonical for OKX (routes through the same shared builders), but its by_date
+    # historical corpus showed 0% canonical every day from 2020-01-01 through
+    # 2026-07-08, confirmed via a direct GCS trace.
+    "OKX-SWAP": "okex-swap",
+    "OKX-FUTURES": "okex-futures",
 }
 _DERIVATIVE_TYPES = frozenset({"FUTURE", "OPTION", "PERPETUAL"})
 
