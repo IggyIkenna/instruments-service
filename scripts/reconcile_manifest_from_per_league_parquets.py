@@ -73,7 +73,13 @@ def main() -> int:
     client = get_storage_client()
 
     logger.info("Listing per-league parquets under sports_reference/by_date/...")
-    per_league_keys: set[tuple[str, str, str]] = set()
+    # Maps (data_type, date, league_id) -> blob name. Keeping the real blob path (not just
+    # the key tuple) lets the write loop below open the file and read its TRUE row count
+    # instead of hardcoding instrument_count=0 (root-caused 2026-07-13,
+    # sports_manifest_canonicalisation_2026_06_01.md IS 60-cell instrument_count=0 anomaly —
+    # this script's own hardcoded 0 was the confirmed root cause for the 33-row
+    # "reconciled_from_existing_per_league_parquet" subset of that anomaly).
+    per_league_keys: dict[tuple[str, str, str], str] = {}
     n_blobs = 0
     for blob in client.list_blobs(BUCKET, prefix="sports_reference/by_date/"):
         n_blobs += 1
@@ -88,7 +94,7 @@ def main() -> int:
         data_type = FOLDER_TO_DATA_TYPE.get(entity)
         if data_type is None:
             continue
-        per_league_keys.add((data_type, date, lid))
+        per_league_keys[(data_type, date, lid)] = blob.name
     logger.info("Total blobs scanned: %d", n_blobs)
     logger.info("Per-league parquets discovered: %d unique (data_type, date, league_id)", len(per_league_keys))
 
@@ -109,7 +115,7 @@ def main() -> int:
     )
     logger.info("Existing per-league captured manifest rows: %d", len(existing_keys))
 
-    missing = per_league_keys - existing_keys
+    missing = set(per_league_keys.keys()) - existing_keys
     logger.info("Missing manifest rows (parquet exists on disk, no captured row): %d", len(missing))
 
     if not missing:
@@ -118,14 +124,33 @@ def main() -> int:
 
     now_iso = datetime.now(UTC).isoformat()
     new_rows: list[dict[str, object]] = []
+    n_read_errors = 0
     for data_type, date, lid in sorted(missing):
+        blob_name = per_league_keys[(data_type, date, lid)]
+        try:
+            data = client.download_bytes(BUCKET, blob_name)
+            true_count = len(pd.read_parquet(io.BytesIO(data)))
+        except Exception as exc:
+            # Fail-honest, not fail-silent-to-0: an unreadable file is a REAL unknown, not a
+            # confirmed-empty one. Skip adding a row for it rather than re-introducing the
+            # exact hardcoded-0 bug this fix closes; log loudly so it's visible, not swallowed.
+            n_read_errors += 1
+            logger.warning(
+                "could not read %s (%s/%s/%s) to count real rows: %s — skipping (no phantom 0 written)",
+                blob_name,
+                data_type,
+                date,
+                lid,
+                exc,
+            )
+            continue
         new_rows.append(
             {
                 "date": date,
                 "venue": "",
                 "data_type": data_type,
                 "service_name": "instruments-service",
-                "instrument_count": 0,
+                "instrument_count": true_count,
                 "written_at": now_iso,
                 "schema_version": 8,
                 "timeframe": "",
@@ -147,7 +172,7 @@ def main() -> int:
                 "instrument_id": "",
             }
         )
-    logger.info("Will add %d per-league captured rows", len(new_rows))
+    logger.info("Will add %d per-league captured rows (%d skipped on read error)", len(new_rows), n_read_errors)
 
     n_drop = 0
     if args.drop_bare:
@@ -162,6 +187,10 @@ def main() -> int:
 
     if args.dry_run:
         logger.info("DRY RUN — no manifest changes")
+        return 0
+
+    if not new_rows:
+        logger.warning("All %d missing rows failed to read — nothing to write (see warnings above)", len(missing))
         return 0
 
     # Write the new per-league captured rows to a per-vm shard (NOT directly to
