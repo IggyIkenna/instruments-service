@@ -137,9 +137,7 @@ class TestPreLaunchStampingInSeeder:
 
     def test_existing_captured_row_not_overwritten_by_pre_launch(self) -> None:
         """An existing captured row is NEVER overwritten, even when date is pre-launch."""
-        manifest = _FakeManifest(
-            prior={("2020-01-01", "HYPERLIQUID", ""): (CaptureStatus.CAPTURED.value, "")}
-        )
+        manifest = _FakeManifest(prior={("2020-01-01", "HYPERLIQUID", ""): (CaptureStatus.CAPTURED.value, "")})
         _seed_expected_unattempted_for_target_universe(
             manifest=manifest,  # pyright: ignore[reportArgumentType]
             date="2020-01-01",
@@ -152,9 +150,7 @@ class TestPreLaunchStampingInSeeder:
 
     def test_existing_attempted_failed_not_overwritten(self) -> None:
         """An existing attempted_failed row is NEVER overwritten by a pre-launch stamp."""
-        manifest = _FakeManifest(
-            prior={("2020-01-01", "BYBIT", ""): (CaptureStatus.ATTEMPTED_FAILED.value, "")}
-        )
+        manifest = _FakeManifest(prior={("2020-01-01", "BYBIT", ""): (CaptureStatus.ATTEMPTED_FAILED.value, "")})
         _seed_expected_unattempted_for_target_universe(
             manifest=manifest,  # pyright: ignore[reportArgumentType]
             date="2020-01-01",
@@ -218,9 +214,7 @@ class TestEmptyOkVenuesGetSourceReturnedZero:
             ) -> None:
                 # Fix 2 routes through record_zero_rows(was_expected=False).
                 if not was_expected:
-                    _captured_records.append(
-                        {"row_key": dict(row_key), "reason": reason, "evidence": fetch_evidence}
-                    )
+                    _captured_records.append({"row_key": dict(row_key), "reason": reason, "evidence": fetch_evidence})
 
             def record_empty(self, **_kw: object) -> None:
                 pass
@@ -660,3 +654,83 @@ class TestZeroRecordsNonSportsFixedForFX:
                     active_venues=["BYBIT", "DERIBIT"],
                     mode="batch",
                 )
+
+
+class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
+    """Fix for a real production crash: an explicitly-requested (``--venue``
+    override) TradFi venue that is UAC-declared ``NO_ADAPTER_YET`` (e.g.
+    YAHOO_FINANCE — a legacy source-as-venue artifact, deliberately
+    adapterless) must resolve as an honest 0-result absence, never crash.
+
+    Root cause: ``get_venues_for_asset_groups`` already excludes YAHOO_FINANCE
+    from the asset-group default venue list via ``_TRADFI_NON_VENUE_KEYS``, but
+    an explicit ``--venue YAHOO_FINANCE`` override bypasses that filter
+    entirely, so it reaches ``_zero_records_non_sports`` as a lone
+    "tradfi_active" venue.  The old code fed every tradfi_active venue straight
+    into ``is_non_trading_day``, which fail-closed raises
+    ``UndeclaredTradfiVenueError`` for any venue absent from the session/
+    calendar SSOT — correct for a genuine config gap on a REAL venue, but wrong
+    for a venue UAC has already declared adapterless.
+    """
+
+    def test_sole_no_adapter_yet_venue_returns_zero_counts_cleanly(self) -> None:
+        """YAHOO_FINANCE alone in active_venues must return {"YAHOO_FINANCE": 0}."""
+        from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
+
+        # No patches needed: NO_ADAPTER_YET / VENUE_TO_ADAPTER_KEY come straight from
+        # the real UAC registry, and the short-circuit returns before ever calling
+        # is_non_trading_day (which has no YAHOO_FINANCE entry and would raise).
+        result = _zero_records_non_sports(
+            date="2026-07-09",
+            asset_groups=["TRADFI"],
+            active_venues=["YAHOO_FINANCE"],
+            mode="batch",
+        )
+
+        assert result == {"YAHOO_FINANCE": 0}, f"Expected clean zero-count dict; got {result}"
+
+    def test_no_adapter_yet_venue_mixed_with_real_tradfi_venue_excluded_from_calendar_check(
+        self,
+    ) -> None:
+        """YAHOO_FINANCE mixed with a real tradfi venue is excluded from tradfi_active
+        (never passed to is_non_trading_day) while the real venue still gets the
+        normal calendar treatment.
+        """
+        from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
+
+        _checked_venues: list[str] = []
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.is_non_trading_day",
+                side_effect=lambda v, _d: (_checked_venues.append(v), True)[1],
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.non_trading_day_reason",
+                return_value="EXPECTED_WEEKEND",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=lambda *_a, **_k: SimpleNamespace(
+                    record_expected_empty=lambda **_kw: None, write=lambda: None
+                ),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="tradfi-bucket",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = _zero_records_non_sports(
+                date="2026-06-21",
+                asset_groups=["TRADFI"],
+                active_venues=["CME", "YAHOO_FINANCE"],
+                mode="batch",
+            )
+
+        # is_non_trading_day must never have been called with YAHOO_FINANCE — only CME.
+        assert "YAHOO_FINANCE" not in _checked_venues, (
+            f"YAHOO_FINANCE must never reach is_non_trading_day; checked={_checked_venues}"
+        )
+        assert "CME" in _checked_venues
+        assert result == {"CME": 0}, f"Expected only CME stamped as non-trading; got {result}"
