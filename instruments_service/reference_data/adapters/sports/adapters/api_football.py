@@ -275,8 +275,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         )
         if not self._api_key:
             logger.warning(
-                "api_football /status: no API key available — using registry fallback "
-                "(per_minute=%d daily=%d)",
+                "api_football /status: no API key available — using registry fallback (per_minute=%d daily=%d)",
                 fallback_per_minute,
                 fallback_daily,
             )
@@ -417,9 +416,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             for lid in league_ids:
                 season_year = _effective_season_for_league(lid, reference_date=ref_date)
                 season_pairs = await self._fetch_season_fixtures_with_raw(lid, season_year)
-                fixtures.extend(
-                    fx for fx, _ in season_pairs if fx.kickoff_utc.date().isoformat() == date
-                )
+                fixtures.extend(fx for fx, _ in season_pairs if fx.kickoff_utc.date().isoformat() == date)
             logger.info("Fetched %d fixtures for date=%s (season cache)", len(fixtures), date)
             return fixtures
 
@@ -469,9 +466,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             for lid in league_ids:
                 season_year = _effective_season_for_league(lid, reference_date=ref_date)
                 season_pairs = await self._fetch_season_fixtures_with_raw(lid, season_year)
-                paired.extend(
-                    (fx, raw) for fx, raw in season_pairs if fx.kickoff_utc.date().isoformat() == date
-                )
+                paired.extend((fx, raw) for fx, raw in season_pairs if fx.kickoff_utc.date().isoformat() == date)
             logger.info("Fetched %d fixtures (with raw) for date=%s (season cache)", len(paired), date)
             return paired
 
@@ -787,8 +782,21 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         try:
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
+            # Root-cause fix (api_football_injuries_silent_empty_swallow_2026_07_13):
+            # unlike the OTHER 4 "per-fixture" methods sharing this docstring/shape
+            # (get_fixture_statistics/get_fixture_lineups/get_fixture_events/
+            # get_fixture_player_stats), ``get_injuries`` is DATE-WIDE, not
+            # per-fixture — there is no per-shard granularity to protect by
+            # swallowing a hard failure to ``[]``. Swallowing here silently
+            # converted a genuine hard API error (bad plan/token/params — see
+            # ``ApiFootballResponseError``) into a false "0 injuries returned,
+            # honest absence" (``empty_confirmed``) for the WHOLE date — exactly
+            # the "silent-empty manifest bug" ``0db24503`` fixed for the venue
+            # fetch path, left unfixed here. Emit for observability, then
+            # re-raise so the caller's ``except`` records ``attempted_failed``
+            # (mirrors ``get_teams``'s ``raise`` after ``_emit_fetch_failed``).
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         # INJURIES — single dict per row; no chain.from_iterable needed.
         results = [normalize_api_football_injury(row) for row in raw_rows]
@@ -921,11 +929,22 @@ class ApiFootballResponseError(RuntimeError):
     ``is_rate_limit`` is set to ``True`` when the errors dict contains a
     ``rateLimit`` key — so callers can distinguish transient quota exhaustion
     (retryable via minute-boundary sleep) from hard API errors (plan/token/params).
+
+    ``error_key`` (root-cause fix, api_football_injuries_error_misclassification_
+    2026_07_13) carries the RAW envelope error dict's key (``"plan"`` /
+    ``"token"`` / ``"requests"`` / ``"dates"`` / etc — whichever populated) so
+    ``_classify_adapter_failure`` can pass a real UAC-matchable code to
+    ``classify_venue_error`` instead of falling back to this exception's class
+    name (``"ApiFootballResponseError"``, which never matches any
+    ``VENUE_ERRORS_SPORTS["api_football"]`` entry — those are keyed by HTTP
+    status / domain codes, not Python class names). Blank when ``errors`` was
+    a list (no dict key available) or absent.
     """
 
-    def __init__(self, message: str, *, is_rate_limit: bool = False) -> None:
+    def __init__(self, message: str, *, is_rate_limit: bool = False, error_key: str = "") -> None:
         super().__init__(message)
         self.is_rate_limit = is_rate_limit
+        self.error_key = error_key
 
 
 def _raise_on_api_errors(raw: object) -> None:
@@ -939,15 +958,19 @@ def _raise_on_api_errors(raw: object) -> None:
     Sets ``is_rate_limit=True`` when the error key is ``rateLimit`` — callers
     use this to distinguish transient quota exhaustion (retryable after sleeping
     to the next UTC minute) from hard plan/token/param errors (not retryable).
+    Sets ``error_key`` to the dict's own key (e.g. ``"plan"``) so hard failures
+    carry real UAC-classifiable provenance instead of a generic class name.
     """
     if not isinstance(raw, dict):
         return
     errors = raw.get("errors")
     if isinstance(errors, dict) and errors:
         is_rate_limit = "rateLimit" in errors
+        _error_key = next(iter(errors)) if not is_rate_limit else "rateLimit"
         raise ApiFootballResponseError(
             f"API-Football returned errors: {errors!r}",
             is_rate_limit=is_rate_limit,
+            error_key=_error_key,
         )
     if isinstance(errors, list) and errors:
         raise ApiFootballResponseError(f"API-Football returned errors: {errors!r}")
