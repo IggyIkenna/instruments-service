@@ -101,6 +101,89 @@ def test_targeted_refetch_excludes_non_shortfall_league() -> None:
     assert all(r["league_id"] != "BUNDESLIGA" for r in refetch)
 
 
+def _raw_pending_frame() -> pd.DataFrame:
+    """Index-shaped FIXTURES slice for ``_count_raw_pending_fetch``.
+
+    Atom A appears twice — an older blank-reason expected_unattempted row that a
+    NEWER empty_confirmed(EXPECTED_NO_FIXTURE) write superseded (consolidator
+    latest-``written_at`` convention) → must NOT count. Atom B is a live blank
+    pending row → counts. Atom C is a typed EXPECTED_* expected_unattempted row
+    (honest absence, not pending) → must NOT count. Atom D is captured → no.
+    """
+    base = {
+        "data_type": "FIXTURES",
+        "source": "api_football",
+        "pipeline_mode": "batch_api_football",
+        "venue": "",
+        "asset_group": "sports",
+    }
+    return pd.DataFrame(
+        [
+            # Atom A — superseded pending row (older written_at).
+            {
+                **base,
+                "league_id": "EPL",
+                "_date_str": "2025-09-01",
+                "capture_status": "expected_unattempted",
+                "error_reason": "",
+                "written_at": "2026-06-28T21:31:49Z",
+            },
+            # Atom A — newer typed empty_confirmed write wins the dedup.
+            {
+                **base,
+                "league_id": "EPL",
+                "_date_str": "2025-09-01",
+                "capture_status": "empty_confirmed",
+                "error_reason": "EXPECTED_NO_FIXTURE",
+                "written_at": "2026-07-10T01:30:00Z",
+            },
+            # Atom B — live blank pending row (counts).
+            {
+                **base,
+                "league_id": "EPL",
+                "_date_str": "2025-09-02",
+                "capture_status": "expected_unattempted",
+                "error_reason": "",
+                "written_at": "2026-07-10T01:30:00Z",
+            },
+            # Atom C — typed EXPECTED_* expected_unattempted (not pending).
+            {
+                **base,
+                "league_id": "BUNDESLIGA",
+                "_date_str": "2025-09-01",
+                "capture_status": "expected_unattempted",
+                "error_reason": "EXPECTED_NO_FIXTURE",
+                "written_at": "2026-07-10T01:30:00Z",
+            },
+            # Atom D — captured.
+            {
+                **base,
+                "league_id": "EPL",
+                "_date_str": "2025-09-03",
+                "capture_status": "captured",
+                "error_reason": "",
+                "written_at": "2026-07-10T01:30:00Z",
+            },
+        ]
+    )
+
+
+def test_count_raw_pending_fetch_dedups_and_filters_expected_reasons() -> None:
+    """Only atom B survives: dedup keeps the latest ``written_at`` per shard atom
+    (A's newer empty_confirmed supersedes its older pending row) and EXPECTED_*
+    typed reasons are honest absence, not pending fetch."""
+    assert MOD._count_raw_pending_fetch(_raw_pending_frame()) == 1
+
+
+def test_count_raw_pending_fetch_counts_blank_pending_without_written_at() -> None:
+    """No ``written_at`` column → no dedup ordering available; raw rows still counted
+    (never silently zero the metric on a schema-lean frame)."""
+    df = _raw_pending_frame().drop(columns=["written_at"])
+    # Without written_at ordering, drop_duplicates keeps the last occurrence per
+    # atom — atom A's typed row (listed after the pending row) still wins here.
+    assert MOD._count_raw_pending_fetch(df) == 1
+
+
 def test_targeted_refetch_missing_capture_status_column_fails_fast() -> None:
     """capture_status is guaranteed present on real manifest rows (schema v9, already
     accessed unconditionally elsewhere in this script) — a row missing it entirely

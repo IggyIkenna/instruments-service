@@ -1629,6 +1629,129 @@ def test_sports_v2_understat_matchday_index_skipped_for_large_window(monkeypatch
     assert all(r.capture_status == "expected_unattempted" for r in rows)
 
 
+# ---------------------------------------------------------------------------
+# Sports v2 api_football FIXTURES season-complete calendar gate (STEP-4
+# structural fix, phantom-pending forensics 2026-07-13): a truthset-evidenced
+# no-fixture day must seed EXPECTED_NO_FIXTURE (empty_confirmed), never a
+# phantom expected_unattempted; NO calendar evidence → seeding unchanged.
+# ---------------------------------------------------------------------------
+
+
+def _af_calendar(
+    fixture_days: set[tuple[str, str]] | None = None,
+    coverage: dict[str, tuple[tuple[str, str], ...]] | None = None,
+) -> object:
+    return enumerator_module._AfFixtureCalendar(
+        fixture_days=fixture_days or set(),
+        coverage=coverage if coverage is not None else {"EPL": (("2024-01-01", "2024-12-31"),)},
+    )
+
+
+def test_sports_v2_af_fixtures_no_fixture_day_yields_expected_no_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calendar covers the (league, day) and shows NO fixture → EXPECTED_NO_FIXTURE
+    (empty_confirmed), not a blank-reason expected_unattempted phantom seed."""
+    monkeypatch.setattr(enumerator_module, "_build_af_fixture_calendar", lambda: _af_calendar())
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == "EXPECTED_NO_FIXTURE"
+    assert rows[0].capture_status == "empty_confirmed"
+    assert rows[0].league_id == "EPL"
+
+
+def test_sports_v2_af_fixtures_match_day_falls_through_to_expected_unattempted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calendar covers the day AND shows a fixture → real pending fetch: the
+    expected_unattempted seed is kept (never silently typed away)."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "_build_af_fixture_calendar",
+        lambda: _af_calendar(fixture_days={("EPL", "2024-06-05")}),
+    )
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_af_fixtures_no_calendar_evidence_keeps_seeding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No calendar available at all (build returns None) → pre-existing alive-day
+    expected_unattempted seeding UNCHANGED (honest-coverage rule: never silently
+    shrink the denominator for unaudited leagues)."""
+    monkeypatch.setattr(enumerator_module, "_build_af_fixture_calendar", lambda: None)
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_af_fixtures_day_outside_coverage_keeps_seeding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calendar exists but the day is OUTSIDE every season-complete span for the
+    league → no evidence for that cell → seeding unchanged."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "_build_af_fixture_calendar",
+        lambda: _af_calendar(coverage={"EPL": (("2023-08-01", "2024-05-31"),)}),
+    )
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_af_calendar_from_dataframe_bridges_consecutive_seasons_only() -> None:
+    """Pure builder: consecutive seasons bridge the inter-season gap (evidenced
+    no-fixture territory); a season JUMP (2019 → 2021) does NOT cover the gap."""
+    df = pd.DataFrame(
+        [
+            {"canonical_league_id": "EPL", "season": 2023, "date": "2023-08-12"},
+            {"canonical_league_id": "EPL", "season": 2023, "date": "2024-05-19"},
+            {"canonical_league_id": "EPL", "season": 2024, "date": "2024-08-16"},
+            {"canonical_league_id": "EPL", "season": 2024, "date": "2025-05-25"},
+            {"canonical_league_id": "LIGA_X", "season": 2019, "date": "2019-08-01"},
+            {"canonical_league_id": "LIGA_X", "season": 2019, "date": "2020-05-01"},
+            {"canonical_league_id": "LIGA_X", "season": 2021, "date": "2021-08-01"},
+            {"canonical_league_id": "LIGA_X", "season": 2021, "date": "2022-05-01"},
+        ]
+    )
+    cal = enumerator_module._af_calendar_from_dataframe(df)
+    assert cal is not None
+    # Consecutive EPL seasons merge into ONE bridged interval.
+    assert cal.coverage["EPL"] == (("2023-08-12", "2025-05-25"),)
+    # Inter-season gap day (no fixture, bridged) → evidenced no-fixture day.
+    assert cal.is_no_fixture_day("EPL", "2024-06-05") is True
+    # A fixture day is never a no-fixture day.
+    assert cal.is_no_fixture_day("EPL", "2023-08-12") is False
+    # Outside every span → no evidence.
+    assert cal.is_no_fixture_day("EPL", "2025-06-01") is False
+    # Season jump: 2020 gap NOT covered.
+    assert cal.coverage["LIGA_X"] == (("2019-08-01", "2020-05-01"), ("2021-08-01", "2022-05-01"))
+    assert cal.is_no_fixture_day("LIGA_X", "2020-09-15") is False
+
+
+def test_af_calendar_from_dataframe_empty_or_missing_columns_returns_none() -> None:
+    """No usable truthset rows → None → callers keep the pre-existing seeding."""
+    assert enumerator_module._af_calendar_from_dataframe(pd.DataFrame()) is None
+    assert enumerator_module._af_calendar_from_dataframe(pd.DataFrame([{"league_id": "EPL"}])) is None
+
+
 def test_prediction_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
     """Prediction active market absent from manifest → expected_unattempted."""
     catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
