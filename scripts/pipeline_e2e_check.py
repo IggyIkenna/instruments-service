@@ -56,13 +56,22 @@ flagged for the launcher-diff / setup-script owners):
   * The launcher-diff scope (plan section 2) adds ``--venues``/``--vm-name``/``--test-run``
     to ``launch-instruments-backfill-vm.sh`` but does not mention a ``--sports-provider``
     passthrough (-> ``VM_SPORTS_PROVIDER`` metadata, which ``setup-data-pipeline-vm.sh``
-    already reads). SPORTS shards are driven via ``--sports-provider`` here (never
-    ``--venues`` — confirmed via ``smoke_matrix.py``'s own ``build_cli_args``), so the
-    launcher needs that additional flag before a SPORTS shard can actually be checked
-    end-to-end; until then, SPORTS force/skip/live legs will fail at the CLI-arg-building
-    step on the launcher side (VM_SPORTS_PROVIDER never gets set), which surfaces here as
-    a normal per-shard ``failed`` outcome (shard-level isolation — the matrix still
-    completes and reports every other asset_group).
+    already reads). Most SPORTS shards (instruments-service's own reference-data
+    providers — API_FOOTBALL + T1 enrichment) are driven via ``--sports-provider``, not
+    ``--venues`` (confirmed via ``smoke_matrix.py``'s own ``build_cli_args``); ONE SPORTS
+    cell (bare ``BETFAIR`` — see ``smoke_matrix.py::_enumerate_sports_cells``) is
+    venue-routed via ``--venues`` like any CEFI/DEFI/TRADFI venue (``cell.sports_provider``
+    is the discriminator — see ``_build_launcher_argv`` below). The launcher needs the
+    ``--sports-provider`` passthrough before a provider-routed SPORTS shard can actually be
+    checked end-to-end; until then, those legs will fail at the CLI-arg-building step on the
+    launcher side (VM_SPORTS_PROVIDER never gets set), which surfaces here as a normal
+    per-shard ``failed`` outcome (shard-level isolation — the matrix still completes and
+    reports every other asset_group). The REMAINING UAC-registry sports venues (ODDS_API,
+    PINNACLE, BETFAIR_SB_UK, BETFAIR_EX_UK, BETFAIR_EX_EU, DRAFTKINGS, FANDUEL) are
+    MTDS-owned (``NO_ADAPTER_YET`` in instruments-service's own
+    ``venue_adapter_keys.py`` — registry-consolidation Decision C, 2026-06-29) and
+    correctly enumerate ZERO cells here; see market-tick-data-service's own pipeline
+    checker for those venues instead.
 
 Usage::
 
@@ -186,10 +195,11 @@ def _dedupe_shard_targets(cells: list[SmokeCell]) -> list[SmokeCell]:
 def _manifest_match(cell: SmokeCell) -> dict[str, str]:
     """Build the availability-index column-filter dict for this shard."""
     ag = cell.asset_group.upper()
-    if ag == "SPORTS":
-        # The writer keys sports rows on a data_type derived from the provider name
-        # (venue="" always) — smoke_matrix.py's own verify_manifest_row also skips the
-        # venue/data_type filter for SPORTS and matches on asset_group + date alone;
+    if ag == "SPORTS" and cell.sports_provider:
+        # Provider-routed SPORTS cells (API_FOOTBALL + T1 enrichment): the writer
+        # keys these rows on a data_type derived from the provider name (venue=""
+        # always) — smoke_matrix.py's own verify_manifest_row also skips the
+        # venue/data_type filter for these and matches on asset_group + date alone;
         # mirrored here for the same reason (deriving the exact per-provider data_type
         # would duplicate _write_catalogue_record's private parsing without adding a
         # meaningful narrowing for this smoke check's purpose).
@@ -198,6 +208,9 @@ def _manifest_match(cell: SmokeCell) -> dict[str, str]:
         protocol, chain = parse_defi_venue(cell.venue)
         if chain in KNOWN_CHAINS:
             return {"asset_group": ag, "venue": protocol.upper(), "chain": chain}
+    # Venue-routed SPORTS (bare BETFAIR) writes through the SAME generic per-venue
+    # instrument-catalog path as CEFI/DEFI/TRADFI (writers.py::_write_venue) — venue
+    # IS a real, meaningful column for it, so it must NOT take the provider shortcut.
     return {"asset_group": ag, "venue": cell.venue}
 
 
@@ -269,11 +282,16 @@ def _build_launcher_argv(cell: SmokeCell, day: str, vm_name: str, project_id: st
     """Build the launch-instruments-backfill-vm.sh argv for one shard-leg.
 
     Per the plan: ``--asset-group {ag} --venues {venue} --start {day} --end {day}
-    --vm-name instr-backfill-{ag}-pipelinecheck-{run_ts} --test-run [--force]``. SPORTS
-    is driven via ``--sports-provider`` instead of ``--venues`` (confirmed via
-    smoke_matrix.py's own ``build_cli_args`` — IS's CLI never accepts ``--venues`` for
-    SPORTS) — see the module docstring's "known infra gaps" for the launcher-side flag
-    this currently requires but does not yet implement.
+    --vm-name instr-backfill-{ag}-pipelinecheck-{run_ts} --test-run [--force]``.
+    Provider-routed SPORTS cells (``cell.sports_provider`` set — API_FOOTBALL + T1
+    enrichment) are driven via ``--sports-provider`` instead of ``--venues``
+    (confirmed via smoke_matrix.py's own ``build_cli_args``) — see the module
+    docstring's "known infra gaps" for the launcher-side flag this currently
+    requires but does not yet implement. Every other cell — including venue-routed
+    SPORTS (bare BETFAIR, ``cell.sports_provider is None``) — uses ``--venues`` like
+    CEFI/DEFI/TRADFI; gating on ``asset_group == "SPORTS"`` alone (the pre-fix
+    behaviour) incorrectly sent BETFAIR through ``--sports-provider BETFAIR``, which
+    the real CLI does not recognise as a valid provider value.
     """
     argv = [
         "--asset-group",
@@ -288,7 +306,7 @@ def _build_launcher_argv(cell: SmokeCell, day: str, vm_name: str, project_id: st
         "--project",
         project_id,
     ]
-    if cell.asset_group.upper() == "SPORTS":
+    if cell.sports_provider:
         argv.extend(["--sports-provider", cell.venue])
     else:
         argv.extend(["--venues", cell.venue])

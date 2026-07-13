@@ -154,6 +154,7 @@ def _get_completeness_module() -> _CompletenessModuleProto:
         _completeness_module = _load_completeness_module()
     return _completeness_module
 
+
 PROJECT_ID = "central-element-323112"
 
 # Manifest bucket candidates per asset_group (scripts/ excluded from inline-URI QG ratchet).
@@ -336,12 +337,8 @@ def _merge_manifests(
     # Add priority column so sort-then-drop_duplicates keeps the best status per shard.
     df_primary = df_primary.copy()
     df_secondary = df_secondary.copy()
-    df_primary["_priority"] = df_primary["capture_status"].map(
-        lambda s: _STATUS_PRIORITY.get(s, 99)
-    )
-    df_secondary["_priority"] = df_secondary["capture_status"].map(
-        lambda s: _STATUS_PRIORITY.get(s, 99)
-    )
+    df_primary["_priority"] = df_primary["capture_status"].map(lambda s: _STATUS_PRIORITY.get(s, 99))
+    df_secondary["_priority"] = df_secondary["capture_status"].map(lambda s: _STATUS_PRIORITY.get(s, 99))
 
     combined = pd.concat([df_primary, df_secondary], ignore_index=True)
     # Sort ascending by priority so drop_duplicates(keep='first') keeps the best status.
@@ -473,6 +470,14 @@ def _read_manifest(
     if not accessible:
         logger.warning("  SKIP %s — no candidate manifest accessible", asset_group)
         return None
+    if merge and len(accessible) < len(candidates):
+        unreachable = [name for name in candidates if name not in {a[0] for a in accessible}]
+        logger.warning(
+            "  MERGE DISABLED for %s: legacy bucket(s) unreachable (%s), "
+            "expected_unattempted skeleton may be incomplete",
+            asset_group,
+            ", ".join(unreachable),
+        )
 
     # Step 3: pinned-primary selection (override wins, else tuple-order first).
     primary_idx = _select_primary_index(
@@ -624,9 +629,7 @@ def _compute_coverage(
         if "instrument_type" in df_l2.columns:
             for (venue, itype, dt), vitdtdf in df_l2.groupby(["venue", "instrument_type", "data_type"]):
                 vitdt_group[str(venue)][str(itype)][str(dt)] = _count_statuses(vitdtdf)
-        by_venue_instrument_type_data_type[ag] = {
-            v: dict(it_map) for v, it_map in vitdt_group.items()
-        }
+        by_venue_instrument_type_data_type[ag] = {v: dict(it_map) for v, it_map in vitdt_group.items()}
 
         # level 6 — per (ag, date) [v2]
         day_group: dict[str, object] = {}
@@ -653,14 +656,12 @@ def _compute_coverage(
             ag_cell["instrument_gates_download"] = not l1_result.denominator_complete
             if l1_result.denominator_status == "UNDEFINED":
                 logger.error(
-                    "  [%s] Layer-1 UNDEFINED (EXPECTED==0) — denominator not wired. "
-                    "CK3 cannot certify this AG.",
+                    "  [%s] Layer-1 UNDEFINED (EXPECTED==0) — denominator not wired. CK3 cannot certify this AG.",
                     ag,
                 )
             elif not l1_result.denominator_complete:
                 logger.warning(
-                    "  [%s] Layer-1 INCOMPLETE (%.1f%%) — Layer-2 coverage is a LOWER BOUND. "
-                    "Missing tuples: %d",
+                    "  [%s] Layer-1 INCOMPLETE (%.1f%%) — Layer-2 coverage is a LOWER BOUND. Missing tuples: %d",
                     ag,
                     l1_result.completeness_pct,
                     len(l1_result.missing_tuples),
