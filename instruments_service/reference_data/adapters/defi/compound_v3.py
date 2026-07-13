@@ -4,7 +4,8 @@ Discovers Compound V3 lending markets across Ethereum, Arbitrum, Base, Polygon,
 Optimism, and Scroll. Each Comet market has a single base asset (e.g. USDC) that
 can be supplied and borrowed, with multiple collateral assets.
 
-Markets are returned as InstrumentRecord with instrument_type="LENDING".
+Markets are returned as two InstrumentRecords per market: instrument_type=A_TOKEN
+(supply side) and instrument_type=DEBT_TOKEN (borrow side).
 
 Data source: The Graph (Messari Compound V3 subgraph).
 Reference: https://docs.compound.finance/
@@ -109,7 +110,7 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Compound V3 lending markets as instruments."""
-        if instrument_type not in (None, InstrumentType.LENDING):
+        if instrument_type not in (None, InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN):
             return []
 
         url = self._resolve_api_url()
@@ -237,7 +238,6 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": market_name or str(market_id),
-            "instrument_type": InstrumentType.LENDING,
             "base_asset": sym_upper,
             "quote_asset": "",
             "tick_size": Decimal("0.000001"),
@@ -256,36 +256,18 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             "base_asset_symbol_onchain": symbol or None,
         }
 
-        # Supply instrument (lend base asset)
-        # NOTE (2026-07-09 audit, C4 / B1 review): the `:SUPPLY:`/`:BORROW:` key
-        # segments below don't match the uniform `instrument_type=LENDING` field
-        # (base_kwargs), which fits the general key-vs-field mismatch pattern —
-        # but this pair is INTENTIONALLY left as an ad hoc f-string, not routed
-        # through build_canonical_instrument_id / collapsed to LENDING:
-        #   - SUPPLY vs BORROW is real, load-bearing information (two distinct
-        #     economic legs of a Comet market), unlike the VAULT/PERP/SPOT
-        #     shorthands fixed elsewhere — collapsing both to one `:LENDING:`
-        #     segment would erase that distinction from the key (symbol still
-        #     disambiguates via supply_symbol/borrow_symbol, but the type axis
-        #     would not).
-        #   - `build_canonical_instrument_id` cannot represent SUPPLY/BORROW as
-        #     a TYPE segment today — neither is a real `InstrumentType` member.
-        #   - Explicitly flagged as a "do not blindly map" case in
-        #     canonical_id_builder_retrofit_checklist_2026_07_08.md todo 2, and
-        #     already verified NOT a real bug (field is consistently LENDING,
-        #     no crash) per
-        #     instruments_docs_audit_outstanding_items_2026_07_08.md §G.
-        #   - test_defi_adapters_comprehensive.py::TestCompoundV3Adapter asserts
-        #     "SUPPLY"/"BORROW" literally appear in instrument_key — collapsing
-        #     to LENDING would also be a live test-contract change, not a
-        #     no-op.
-        # Left as-is pending an explicit A_TOKEN/DEBT_TOKEN-style enum decision
-        # (out of scope for this pass — see defi_lending_atoken_debttoken_
-        # instrument_split_2026_07_07.md for the sibling protocols' real split).
+        # Supply instrument (lend base asset). Key segment + instrument_type both
+        # canonicalized to A_TOKEN/DEBT_TOKEN (2026-07-13, defi_lending_atoken_
+        # debttoken_instrument_split_2026_07_07.md) — previously the key used an
+        # ad hoc `:SUPPLY:`/`:BORROW:` segment (not a real InstrumentType member,
+        # a real UnknownInstrumentTypeError risk had the key ever reached
+        # InstrumentKey.from_string()) while the field was the unrelated, shared
+        # `LENDING` value. Both now agree, matching the AAVE_V3/SPARK pattern.
         supply_symbol = f"C{sym_upper}"
         results = [
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:SUPPLY:{supply_symbol}",
+                instrument_key=f"{venue_tag}:A_TOKEN:{supply_symbol}",
+                instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             )
         ]
@@ -294,7 +276,8 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         borrow_symbol = f"BORROW{sym_upper}"
         results.append(
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:BORROW:{borrow_symbol}",
+                instrument_key=f"{venue_tag}:DEBT_TOKEN:{borrow_symbol}",
+                instrument_type=InstrumentType.DEBT_TOKEN,
                 **base_kwargs,
             )
         )
