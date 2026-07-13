@@ -166,7 +166,7 @@ def _make_sports_entry(
     # lifecycle test below relies on this default matching that filter.
     instrument_type: str = enumerator_module._SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE,
     venue: str = "api_football",
-    league_id: str = "PL",
+    league_id: str = "EPL",
     available_from: str | None = "2024-01-10",
     available_to: str | None = "2024-01-15",
 ) -> InstrumentCatalogEntry:
@@ -830,7 +830,7 @@ def test_sports_v2_pre_fixture_start_yields_not_listed() -> None:
     rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-05", "2024-01-12"), ["lineups"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
-    assert rows[0].league_id == "PL"
+    assert rows[0].league_id == "EPL"
     assert rows[0].asset_group == "sports"
 
 
@@ -874,12 +874,35 @@ def test_sports_v2_sentinel_league_id_never_emits_rows() -> None:
     phantom = _make_sports_entry(
         instrument_id="UNKNOWN", league_id="UNKNOWN", available_from="2025-12-15", available_to=None
     )
-    real = _make_sports_entry(league_id="PL", available_from="2024-01-10", available_to="2024-01-15")
+    real = _make_sports_entry(league_id="EPL", available_from="2024-01-10", available_to="2024-01-15")
     rows = list(
         enumerator_module._enumerate_v2_sports([phantom, real], _date_axis("2024-01-05", "2024-01-12"), ["lineups"])
     )
     assert all(r.league_id != "UNKNOWN" for r in rows)
-    assert any(r.league_id == "PL" for r in rows)
+    assert any(r.league_id == "EPL" for r in rows)
+
+
+def test_sports_v2_deregistered_league_ids_never_emit_rows() -> None:
+    """2026-07-13 24-league de-registration ruling: a (stale) catalog entry whose
+    league_id is outside UAC ``LEAGUE_REGISTRY`` — a raw numeric api-football
+    long-tail id ("110") or an alias string ("RFPL"/"LA_LIGA_2") — must yield
+    ZERO per-league rows, even though the primary fix
+    (build_instrument_catalogue's registry-membership roll-up gate) should mean
+    such an entry never reaches this enumerator's catalog in the first place.
+    A registered sibling league in the same call must be unaffected.
+    """
+    dereg_entries = [
+        _make_sports_entry(instrument_id=lid, league_id=lid, available_from="2024-01-01", available_to=None)
+        for lid in ("110", "RFPL", "LA_LIGA_2")
+    ]
+    real = _make_sports_entry(league_id="EPL", available_from="2024-01-10", available_to="2024-01-15")
+    rows = list(
+        enumerator_module._enumerate_v2_sports(
+            [*dereg_entries, real], _date_axis("2024-01-05", "2024-01-12"), ["lineups"]
+        )
+    )
+    assert all(r.league_id not in {"110", "RFPL", "LA_LIGA_2"} for r in rows)
+    assert any(r.league_id == "EPL" for r in rows)
 
 
 def test_sports_v2_fixture_team_player_grain_rows_never_treated_as_leagues() -> None:
@@ -899,7 +922,7 @@ def test_sports_v2_fixture_team_player_grain_rows_never_treated_as_leagues() -> 
     inflation `sports_catalog_league_grain_only_scope_2026_07_08.md` warned
     about. A real sibling LEAGUE row in the same call must still emit normally.
     """
-    # All four entries share league_id="PL" and an available_from on/after
+    # All four entries share league_id="EPL" and an available_from on/after
     # 2024-01-10 — each, if leaked through as if it were a league, would
     # independently emit an EXPECTED_INSTRUMENT_NOT_LISTED row for the
     # 2024-01-05 pre-listing date (available_from > 2024-01-05). Only
@@ -909,25 +932,25 @@ def test_sports_v2_fixture_team_player_grain_rows_never_treated_as_leagues() -> 
     fixture = _make_sports_entry(
         instrument_id="ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20240111",
         instrument_type="fixture",
-        league_id="PL",
+        league_id="EPL",
         available_from="2024-01-11",
         available_to="2024-01-11",
     )
     team = _make_sports_entry(
         instrument_id="ARSENAL",
         instrument_type="team",
-        league_id="PL",
+        league_id="EPL",
         available_from="2024-01-11",
         available_to=None,
     )
     player = _make_sports_entry(
         instrument_id="SAKA_B",
         instrument_type="player",
-        league_id="PL",
+        league_id="EPL",
         available_from="2024-01-11",
         available_to=None,
     )
-    real_league = _make_sports_entry(league_id="PL", available_from="2024-01-10", available_to="2024-01-15")
+    real_league = _make_sports_entry(league_id="EPL", available_from="2024-01-10", available_to="2024-01-15")
     rows = list(
         enumerator_module._enumerate_v2_sports(
             [fixture, team, player, real_league], _date_axis("2024-01-05", "2024-01-12"), ["lineups"]
@@ -935,7 +958,7 @@ def test_sports_v2_fixture_team_player_grain_rows_never_treated_as_leagues() -> 
     )
     not_listed = [r for r in rows if r.reason == "EXPECTED_INSTRUMENT_NOT_LISTED"]
     assert len(not_listed) == 1, f"fixture/team/player rows leaked into league-grain enumeration: {rows!r}"
-    assert not_listed[0].league_id == "PL"
+    assert not_listed[0].league_id == "EPL"
     assert not_listed[0].date == "2024-01-05"
 
 
@@ -1540,26 +1563,26 @@ def test_tradfi_v2_denominator_is_could_exist_universe_not_just_manifest() -> No
 
 def test_sports_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
     """Sports alive fixture absent from manifest → expected_unattempted (league_id propagated)."""
-    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="PL")]
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
     date_axis = _date_axis("2024-01-12")
     rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["lineups"], present_set=set()))
     assert len(rows) == 1
     r = rows[0]
     assert r.capture_status == "expected_unattempted"
     assert r.reason == ""
-    assert r.league_id == "PL"
+    assert r.league_id == "EPL"
     assert r.asset_group == "sports"
 
 
 def test_sports_v2_alive_date_in_present_set_skipped() -> None:
     """League-grain present match: the captured atom is (data_type, league_id, date) —
     venue / instrument_id / instrument_type are blank-tolerant (excluded from the key)."""
-    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="PL")]
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
     date_axis = _date_axis("2024-01-12")
     present_cols = ["data_type", "league_id", "date"]
     # Captured row carries blank venue/instrument_id (the real sports manifest atom),
     # yet the league-grain key still matches the catalogue league.
-    key = tuple({"data_type": "lineups", "league_id": "PL", "date": "2024-01-12"}[c] for c in present_cols)
+    key = tuple({"data_type": "lineups", "league_id": "EPL", "date": "2024-01-12"}[c] for c in present_cols)
     rows = list(
         enumerator_module._enumerate_v2_sports(
             catalog, date_axis, ["lineups"], present_set={key}, present_cols=present_cols
