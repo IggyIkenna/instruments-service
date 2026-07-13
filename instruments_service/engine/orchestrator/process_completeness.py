@@ -34,6 +34,7 @@ else:  # pragma: no cover - runtime namespace indirection
 __all__ = [
     "_completeness_and_retry",
     "_detect_thin_day_venues",
+    "_fold_written_venues",
 ]
 
 # G1.2 — thin-day partial-capture detection constants.
@@ -44,6 +45,36 @@ _THIN_DAY_FRACTION: float = 0.5
 _THIN_DAY_WINDOW: int = 14
 _THIN_DAY_MIN_HISTORY: int = 2
 _THIN_DAY_ABS_FLOOR: int = 20  # counts below this are never CeFi (sports days, etc.)
+
+
+def _fold_written_venues(counts: dict[str, int], expected_venues: set[str]) -> set[str]:
+    """Fold composite ``counts`` keys back to their bare venue name for completeness comparison.
+
+    ``counts`` keys are not always bare venue names: PREDICTION's per-venue write
+    stage (``_write_prediction_venue``) buckets by canonical_question_group and
+    keys ``counts`` with the composite ``"{VENUE}/{GROUP}"`` (e.g. ``"KALSHI/OTHER"``),
+    so a real KALSHI/POLYMARKET write never produces a bare ``"KALSHI"``/``"POLYMARKET"``
+    entry in ``counts.keys()``. Comparing that raw key set against ``expected_venues``
+    (bare names from ``active_venues``) then classifies a venue that wrote thousands of
+    real rows as "fetched OK but 0 records after filtering" and stamps a dishonest
+    ``SOURCE_RETURNED_ZERO`` empty_confirmed row instead of crediting the real capture —
+    see
+    ``plans/active/issues/prediction_universe_capture_dead_since_07_01_2026_07_06.md``
+    (2026-07-13 progress entry).
+
+    Fold each composite key to its bare venue whenever the prefix (before the first
+    ``"/"``) is itself a configured venue for this run — every canonical_question_group
+    under one venue collapses onto that one venue, matching ``expected_venues``'s
+    granularity 1:1 (so completeness counts/percentages stay meaningful). Sports'
+    ``"FIXTURES/{league_id}"`` composite keys are unaffected — ``"FIXTURES"`` is never a
+    venue name so is never a member of ``expected_venues``. Bare CEFI/DEFI/TRADFI keys
+    (no ``"/"``) fold to themselves (no-op).
+    """
+    folded: set[str] = set()
+    for key in counts:
+        prefix = key.split("/", 1)[0]
+        folded.add(prefix if prefix in expected_venues else key)
+    return folded
 
 
 async def _completeness_and_retry(
@@ -89,7 +120,7 @@ async def _completeness_and_retry(
     failing.
     """
     expected_venues = set(active_venues)
-    written_venues = set(counts.keys())
+    written_venues = _fold_written_venues(counts, expected_venues)
 
     # Root-cause fix (api_football_write_path_blank_data_type_2026_07_13): sports
     # ENRICHMENT-ONLY provider names (FOOTYSTATS, UNDERSTAT, TRANSFERMARKT,
@@ -368,8 +399,9 @@ async def _retry_missing_venues(
                         )
                     retry_manifest.close()
 
-        # Recalculate missing
-        written_venues = set(counts.keys())
+        # Recalculate missing (same composite-key fold as the initial computation —
+        # see _fold_written_venues docstring).
+        written_venues = _fold_written_venues(counts, expected_venues)
         missing_shards = expected_venues - written_venues
         recovered = len(retry_venues) - len(missing_shards & set(retry_venues))
         if recovered:
