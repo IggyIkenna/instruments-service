@@ -411,6 +411,7 @@ async def _fetch_sfi_data(
                         )
                     # Per-league partitioned write — single SSOT, no bare write.
                     _sfi_pp_captured: set[str] = set()
+                    _sfi_pp_failed: set[str] = set()
                     if "league_id" in df.columns:
                         _has_league = df["league_id"].notna() & (df["league_id"].astype(str).str.strip() != "")
                         _with_league = df[_has_league]
@@ -420,7 +421,7 @@ async def _fetch_sfi_data(
                             _pp_lid_str = str(_pp_lid)
                             if not _orch._is_in_canonical_write_universe(_pp_lid_str):
                                 continue
-                            _sfi_pp_captured.add(_pp_lid_str)
+                            _pp_canonical = _orch._canonical_league_id(_pp_lid_str)
                             # C.6: use report_time (match_end + SFI_DATA_LAG_P95_SECONDS) as available_at for
                             # completed matches — more accurate than timer_seconds approximation. For in-progress
                             # rows where report_time is absent, fall back to wall-clock (live write-time).
@@ -433,32 +434,67 @@ async def _fetch_sfi_data(
                             else:
                                 _pp_copy["available_at"] = _orch.pd.Timestamp(_orch.datetime.now(_orch.UTC))
                             _stamped_pp_df = _pp_copy
-                            _orch._gated_sink_write(
-                                sink,
-                                data=_stamped_pp_df,
-                                partition={
-                                    "entity": "progressive_stats",
-                                    "league": _pp_lid_str,
-                                },
-                                filename="progressive_stats.parquet",
-                                venue="soccer_football_info",
-                                entity="progressive_stats",
-                            )
-                            manifest.record_captured(  # QG-allow: emission-policy-not-applicable
-                                row_key={
-                                    "date": date,
-                                    "data_type": "SFI_PROGRESSIVE_STATS",
-                                    "league_id": _orch._canonical_league_id(_pp_lid_str),
-                                },
-                                df=_stamped_pp_df,
-                                asset_group="sports",
-                                instrument_type="",
-                                data_type="SFI_PROGRESSIVE_STATS",
-                                league_id=_orch._canonical_league_id(_pp_lid_str),
-                                pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
-                                source=_orch._sports_ref_source("progressive_stats"),
-                                service_emission_state=None,
-                            )
+                            # Shard-level isolation (codex/04-architecture/
+                            # shard-level-failure-isolation.md — sports shard
+                            # atom is per-league): a write/record failure for
+                            # ONE league must not abort the loop over the
+                            # OTHER matched leagues for this date, and must not
+                            # leave a captured manifest row with no
+                            # corresponding durable write (the
+                            # phantom_captured_no_parquet_at_canonical_path
+                            # class, root-caused 2026-07-13).
+                            try:
+                                _orch._gated_sink_write(
+                                    sink,
+                                    data=_stamped_pp_df,
+                                    partition={
+                                        "entity": "progressive_stats",
+                                        "league": _pp_lid_str,
+                                    },
+                                    filename="progressive_stats.parquet",
+                                    venue="soccer_football_info",
+                                    entity="progressive_stats",
+                                )
+                                manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                                    row_key={
+                                        "date": date,
+                                        "data_type": "SFI_PROGRESSIVE_STATS",
+                                        "league_id": _pp_canonical,
+                                    },
+                                    df=_stamped_pp_df,
+                                    asset_group="sports",
+                                    instrument_type="",
+                                    data_type="SFI_PROGRESSIVE_STATS",
+                                    league_id=_pp_canonical,
+                                    pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                                    source=_orch._sports_ref_source("progressive_stats"),
+                                    service_emission_state=None,
+                                )
+                                _sfi_pp_captured.add(_pp_lid_str)
+                            except Exception as _pp_league_exc:
+                                _pp_league_err = _orch._classify_adapter_failure(_pp_league_exc, "soccer_football_info")
+                                _orch.log_event(
+                                    "ADAPTER_FETCH_FAILED",
+                                    details={
+                                        "venue": "soccer_football_info",
+                                        "endpoint": "get_progressive_stats",
+                                        "date": date,
+                                        "league_id": _pp_canonical,
+                                        "error": str(_pp_league_exc),
+                                        "error_code": _pp_league_err,
+                                    },
+                                )
+                                manifest.record_failed(
+                                    row_key={
+                                        "date": date,
+                                        "data_type": "SFI_PROGRESSIVE_STATS",
+                                        "league_id": _pp_canonical,
+                                    },
+                                    error=_pp_league_err,
+                                    attempted_at=attempt_ts,
+                                    pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                                )
+                                _sfi_pp_failed.add(_pp_lid_str)
 
                         if not _without_league.empty:
                             _orch.logger.warning(
@@ -479,8 +515,12 @@ async def _fetch_sfi_data(
                     counts["progressive_stats"] = len(df)
                     # Per-league empty_confirmed for in-season leagues that
                     # had no captured rows (mirrors WEATHER / per-fixture
-                    # honest-coverage pattern).
-                    for _exp_lid in sorted(_expected_sfi_league_ids - _sfi_pp_captured):
+                    # honest-coverage pattern). Leagues whose write raised
+                    # (_sfi_pp_failed) already carry an honest record_failed
+                    # row from the per-league write loop above — excluding
+                    # them here prevents a same-run record_empty from masking
+                    # that failure.
+                    for _exp_lid in sorted(_expected_sfi_league_ids - _sfi_pp_captured - _sfi_pp_failed):
                         manifest.record_empty(
                             row_key={
                                 "date": date,

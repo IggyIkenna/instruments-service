@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
 from unified_api_contracts.sports import get_league
 
+from .process_write import _NON_VENUE_GRAIN_VENUE_NAMES
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -32,6 +34,7 @@ else:  # pragma: no cover - runtime namespace indirection
 __all__ = [
     "_completeness_and_retry",
     "_detect_thin_day_venues",
+    "_fold_written_venues",
 ]
 
 # G1.2 — thin-day partial-capture detection constants.
@@ -42,6 +45,36 @@ _THIN_DAY_FRACTION: float = 0.5
 _THIN_DAY_WINDOW: int = 14
 _THIN_DAY_MIN_HISTORY: int = 2
 _THIN_DAY_ABS_FLOOR: int = 20  # counts below this are never CeFi (sports days, etc.)
+
+
+def _fold_written_venues(counts: dict[str, int], expected_venues: set[str]) -> set[str]:
+    """Fold composite ``counts`` keys back to their bare venue name for completeness comparison.
+
+    ``counts`` keys are not always bare venue names: PREDICTION's per-venue write
+    stage (``_write_prediction_venue``) buckets by canonical_question_group and
+    keys ``counts`` with the composite ``"{VENUE}/{GROUP}"`` (e.g. ``"KALSHI/OTHER"``),
+    so a real KALSHI/POLYMARKET write never produces a bare ``"KALSHI"``/``"POLYMARKET"``
+    entry in ``counts.keys()``. Comparing that raw key set against ``expected_venues``
+    (bare names from ``active_venues``) then classifies a venue that wrote thousands of
+    real rows as "fetched OK but 0 records after filtering" and stamps a dishonest
+    ``SOURCE_RETURNED_ZERO`` empty_confirmed row instead of crediting the real capture —
+    see
+    ``plans/active/issues/prediction_universe_capture_dead_since_07_01_2026_07_06.md``
+    (2026-07-13 progress entry).
+
+    Fold each composite key to its bare venue whenever the prefix (before the first
+    ``"/"``) is itself a configured venue for this run — every canonical_question_group
+    under one venue collapses onto that one venue, matching ``expected_venues``'s
+    granularity 1:1 (so completeness counts/percentages stay meaningful). Sports'
+    ``"FIXTURES/{league_id}"`` composite keys are unaffected — ``"FIXTURES"`` is never a
+    venue name so is never a member of ``expected_venues``. Bare CEFI/DEFI/TRADFI keys
+    (no ``"/"``) fold to themselves (no-op).
+    """
+    folded: set[str] = set()
+    for key in counts:
+        prefix = key.split("/", 1)[0]
+        folded.add(prefix if prefix in expected_venues else key)
+    return folded
 
 
 async def _completeness_and_retry(
@@ -87,7 +120,40 @@ async def _completeness_and_retry(
     failing.
     """
     expected_venues = set(active_venues)
-    written_venues = set(counts.keys())
+    written_venues = _fold_written_venues(counts, expected_venues)
+
+    # Root-cause fix (api_football_write_path_blank_data_type_2026_07_13): sports
+    # ENRICHMENT-ONLY provider names (FOOTYSTATS, UNDERSTAT, TRANSFERMARKT,
+    # SOCCER_FOOTBALL_INFO, OPEN_METEO) are pseudo-venues pulled into
+    # ``active_venues`` for category-config purposes, but they are NOT
+    # venue-grain — they are fetched in stage 7 enrichment (never in this stage's
+    # ``counts``, i.e. the stage-4 URDI fetch) and their honest-absence/failure is
+    # materialised on the (date, data_type[, league_id]) grain by dedicated
+    # per-entity honest-coverage hooks elsewhere (sports_reference_core.py /
+    # footystats.py / weather.py / transfermarkt.py / sfi.py). Left unexcluded,
+    # they permanently land in ``missing_shards`` below and the generic
+    # CeFi/TradFi-shaped corrective write in ``_finalize_completeness``
+    # (``row_key={"date", "venue"}``, no ``data_type``) stamps a blank-``data_type``
+    # ``attempted_failed``/``expected_empty`` row that can never reconcile against
+    # any real sports cell.
+    #
+    # ``API_FOOTBALL`` itself is DELIBERATELY KEPT in ``expected_venues`` (unlike
+    # its 5 enrichment-only siblings) — its top-level FIXTURES fetch DOES run in
+    # THIS stage-4 fetch, so it is genuinely venue-grain here; removing it too
+    # would silently drop the only safety net that catches a total API_FOOTBALL
+    # fetch failure during a combined "ALL"-asset-group run (where
+    # ``_fixtures_fetch_failed``'s zero-records branch never fires because
+    # cefi/tradfi/defi still produced records). ``_finalize_completeness`` below
+    # maps a genuinely-missing ``API_FOOTBALL`` to ``data_type="FIXTURES"`` (same
+    # convention already used by ``process_preflight.py``'s
+    # ``_build_expected_entities``) instead of leaving ``data_type`` blank.
+    #
+    # ``_NON_VENUE_GRAIN_VENUE_NAMES`` is the same SSOT frozenset
+    # ``_write_all_venues`` uses to exclude these names from venue-grain EU
+    # seeding (process_write.py); POLYMARKET/KALSHI (prediction) are excluded
+    # from THIS narrower set deliberately — this fix is scoped to the confirmed
+    # sports bug, not a blanket prediction-venue change.
+    expected_venues -= _NON_VENUE_GRAIN_VENUE_NAMES - {"API_FOOTBALL", "POLYMARKET", "KALSHI"}
 
     # Sports: scope expected venues by league coverage.
     # Understat covers ~6 leagues, FootyStats ~50, SFI varies.
@@ -333,8 +399,9 @@ async def _retry_missing_venues(
                         )
                     retry_manifest.close()
 
-        # Recalculate missing
-        written_venues = set(counts.keys())
+        # Recalculate missing (same composite-key fold as the initial computation —
+        # see _fold_written_venues docstring).
+        written_venues = _fold_written_venues(counts, expected_venues)
         missing_shards = expected_venues - written_venues
         recovered = len(retry_venues) - len(missing_shards & set(retry_venues))
         if recovered:
@@ -492,8 +559,20 @@ def _finalize_completeness(
                 )
                 _nt_stamped.append(_failed_venue)
             else:
+                # Root-cause fix (api_football_write_path_blank_data_type_2026_07_13):
+                # API_FOOTBALL is not a real venue — its manifest cell is keyed by
+                # data_type (FIXTURES is its top-level, venue-grain-shaped entity;
+                # same remap convention already used by process_preflight.py's
+                # _build_expected_entities). Writing row_key={"date","venue"} for it
+                # produced a permanently-orphaned blank-data_type attempted_failed
+                # row that could never reconcile against a real sports cell.
+                _failed_row_key: dict[str, str] = (
+                    {"date": date, "data_type": "FIXTURES"}
+                    if _failed_venue == "API_FOOTBALL"
+                    else {"date": date, "venue": _failed_venue}
+                )
                 _failed_manifest.record_failed(
-                    row_key={"date": date, "venue": _failed_venue},
+                    row_key=_failed_row_key,
                     error=_orch.RecordFailedReason.UNCLASSIFIED_ADAPTER_ERROR,
                     attempted_at=_failed_attempt_ts,
                     pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,

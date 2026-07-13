@@ -2397,6 +2397,7 @@ def enumerate_v2(
     data_types: list[str] | None = None,
     present_set: set[tuple[str, ...]] | None = None,
     present_cols: list[str] | None = None,
+    captured_set: set[tuple[str, ...]] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-instrument-grain enumerator (v2).
 
@@ -2424,6 +2425,16 @@ def enumerate_v2(
             match the order used in :func:`_build_present_set`). Defaults to
             ``["venue", "chain", "data_type", "instrument_type",
             "instrument_id", "league_id", "date"]``.
+        captured_set: Set of CAPTURED manifest row-key tuples (built via
+            :func:`_build_captured_set`, same ``present_cols`` keying).
+            **Oscillation guard (2026-07-13 HARD RULE)**: when provided, any
+            ``empty_confirmed`` row whose row-key is in ``captured_set`` is
+            DROPPED at this boundary — the enumerator must never re-stamp
+            ``empty_confirmed`` over an atom with existing capture evidence
+            (a later uniform-``written_at`` seed shard would otherwise mask /
+            erase the captured row through recency-based dedup downstream).
+            Requires ``present_cols`` (the key grain); guard is inert without
+            both.
 
     Yields:
         :class:`ExpectedRow` instances with ``reason`` drawn from the
@@ -2481,13 +2492,34 @@ def enumerate_v2(
     else:
         resolved_data_types = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
     enumerator_func = _V2_ENUMERATORS[asset_group]
-    yield from enumerator_func(
+    rows = enumerator_func(
         catalog,
         date_axis,
         resolved_data_types,
         present_set=present_set,
         present_cols=present_cols,
     )
+    if captured_set is None or present_cols is None:
+        yield from rows
+        return
+    # Oscillation guard: never emit empty_confirmed over a captured atom.
+    # Single choke point so every per-AG emission branch (lifecycle
+    # NOT_LISTED/DELISTED, per-day source-rule gates such as
+    # EXPECTED_PRE_SEASON/EXPECTED_POST_SEASON, EXPECTED_NO_PROVIDER_COVERAGE,
+    # matchday EXPECTED_NO_FIXTURE, ...) is covered without per-branch checks.
+    skipped = 0
+    for row in rows:
+        if row.capture_status == "empty_confirmed" and _row_key(row, present_cols) in captured_set:
+            skipped += 1
+            continue
+        yield row
+    if skipped:
+        logger.warning(
+            "enumerate_v2 oscillation guard: dropped %d empty_confirmed row(s) whose atom already "
+            "has a captured manifest row (asset_group=%s) — a seeder never overrides capture evidence.",
+            skipped,
+            asset_group,
+        )
 
 
 def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
@@ -2670,6 +2702,29 @@ def _build_present_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ...
         return set()
     available = _present_cols_for(asset_group, list(df.columns))
     df_subset = df[available].fillna("").astype(str)
+    return {tuple(row) for row in df_subset.itertuples(index=False, name=None)}
+
+
+def _build_captured_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ...]]:
+    """Build the set of CAPTURED manifest row-key tuples at the per-asset_group grain.
+
+    Same keying as :func:`_build_present_set` but restricted to
+    ``capture_status == "captured"`` rows. Used by the oscillation guard in
+    :func:`enumerate_v2`: the enumerator must NEVER emit an ``empty_confirmed``
+    row for an atom that already carries capture evidence — a seeder writes
+    denominator facts, it never overrides a numerator fact
+    (captured→empty_confirmed oscillation, 2026-07-13; consolidator-side twin
+    rule: the 2026-07-12 captured-outranks-recency dedup tie-break in
+    ``unified_trading_library.manifest_consolidator``).
+    SSOT: ``codex/02-data/availability-manifest-and-data-status.md``.
+    """
+    if df.empty or "date" not in df.columns or "capture_status" not in df.columns:
+        return set()
+    captured = df[df["capture_status"].fillna("").astype(str) == "captured"]
+    if captured.empty:
+        return set()
+    available = _present_cols_for(asset_group, list(captured.columns))
+    df_subset = captured[available].fillna("").astype(str)
     return {tuple(row) for row in df_subset.itertuples(index=False, name=None)}
 
 
@@ -3299,6 +3354,8 @@ def main() -> int:
     try:
         v2_present_set = _build_present_set(v2_manifest_df, asset_group)
         logger.info("v2 manifest present-set size: %d", len(v2_present_set))
+        v2_captured_set = _build_captured_set(v2_manifest_df, asset_group)
+        logger.info("v2 manifest captured-set size: %d (oscillation guard)", len(v2_captured_set))
         # Column order used in _build_present_set (must match present_set tuples).
         v2_present_cols = _present_cols_for(asset_group, list(v2_manifest_df.columns))
         # Build date_axis as list[date]
@@ -3332,6 +3389,7 @@ def main() -> int:
             data_types=data_types_list,
             present_set=v2_present_set,
             present_cols=v2_present_cols,
+            captured_set=v2_captured_set,
         ):
             v2_absent.append(expected_row)
             if len(v2_absent) > max_writes_per_run:

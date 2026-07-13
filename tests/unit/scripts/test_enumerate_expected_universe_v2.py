@@ -2900,3 +2900,129 @@ def test_tradfi_v2_nyse_etf_pre_listing_still_yields_not_listed() -> None:
     in_window = [r for r in rows if r.date >= "2026-06-01"]
     assert all(r.reason == "EXPECTED_INSTRUMENT_NOT_LISTED" for r in pre_listing)
     assert all(r.reason == "EXPECTED_SOURCE_DELIVERY_LAG" for r in in_window)
+
+
+# ---------------------------------------------------------------------------
+# Oscillation guard (2026-07-13): a seeder never emits empty_confirmed over a
+# captured atom. Regression for the captured->empty_confirmed oscillation where
+# the nightly expected-universe-v2-sports run re-stamped EXPECTED_PRE_SEASON /
+# EXPECTED_POST_SEASON empty_confirmed rows over atoms whose data was captured
+# and verified on disk (SEGUNDA_DIVISION/BRASILEIRAO footystats
+# MATCHES/ODDS/PREDICTIONS, 21 atoms flipped on 2026-07-13).
+# ---------------------------------------------------------------------------
+
+_SPORTS_KEY_COLS: list[str] = ["data_type", "league_id", "date"]
+
+
+def test_build_captured_set_restricts_to_captured_rows() -> None:
+    """_build_captured_set keys ONLY capture_status=='captured' rows at present-cols grain."""
+    df = pd.DataFrame(
+        {
+            "data_type": ["MATCHES", "MATCHES", "ODDS"],
+            "league_id": ["SEGUNDA_DIVISION", "SEGUNDA_DIVISION", "BRASILEIRAO"],
+            "date": ["2026-06-06", "2026-06-07", "2026-03-18"],
+            "capture_status": ["captured", "empty_confirmed", "captured"],
+        }
+    )
+    got = enumerator_module._build_captured_set(df, "sports")
+    assert got == {
+        ("MATCHES", "SEGUNDA_DIVISION", "2026-06-06"),
+        ("ODDS", "BRASILEIRAO", "2026-03-18"),
+    }
+
+
+def test_build_captured_set_missing_capture_status_column_is_empty() -> None:
+    df = pd.DataFrame({"data_type": ["MATCHES"], "league_id": ["EPL"], "date": ["2026-06-06"]})
+    assert enumerator_module._build_captured_set(df, "sports") == set()
+
+
+def test_oscillation_guard_drops_lifecycle_empty_over_captured_atom() -> None:
+    """A pre-listing EXPECTED_INSTRUMENT_NOT_LISTED cell is suppressed when the
+    SAME (data_type, league_id, date) atom already has a captured manifest row."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to="2024-01-15")]
+    kwargs = {
+        "asset_group": "sports",
+        "catalog": catalog,
+        "date_axis": _date_axis("2024-01-05", "2024-01-12"),
+        "data_types": ["lineups"],
+        "present_set": {("lineups", "EPL", "2024-01-12")},
+        "present_cols": list(_SPORTS_KEY_COLS),
+    }
+    without_guard = list(enumerator_module.enumerate_v2(**kwargs))
+    assert [r.reason for r in without_guard] == ["EXPECTED_INSTRUMENT_NOT_LISTED"]
+
+    with_guard = list(enumerator_module.enumerate_v2(**kwargs, captured_set={("lineups", "EPL", "2024-01-05")}))
+    assert with_guard == []
+
+
+def test_oscillation_guard_drops_season_gate_empty_over_captured_atom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-day source-rule gate (EXPECTED_POST_SEASON et al) must not emit
+    empty_confirmed for an atom with capture evidence — the exact 2026-07-13
+    prod flip (SEGUNDA_DIVISION footystats MATCHES 2026-06-06)."""
+    import unified_api_contracts.registry.sports_per_source_rules as rules_mod
+
+    def _fake_is_expected_for_source(
+        source: str, league_id: str, day: object, *, data_type: str = ""
+    ) -> tuple[bool, str | None]:
+        return (False, "EXPECTED_POST_SEASON")
+
+    monkeypatch.setattr(rules_mod, "is_expected_for_source", _fake_is_expected_for_source)
+    catalog = [_make_sports_entry(league_id="SEGUNDA_DIVISION", available_from="2018-01-01", available_to=None)]
+    kwargs = {
+        "asset_group": "sports",
+        "catalog": catalog,
+        "date_axis": _date_axis("2026-06-06"),
+        "data_types": ["MATCHES"],
+        "present_set": {("MATCHES", "SEGUNDA_DIVISION", "2026-06-06")},
+        "present_cols": list(_SPORTS_KEY_COLS),
+    }
+    without_guard = [r for r in enumerator_module.enumerate_v2(**kwargs) if r.league_id == "SEGUNDA_DIVISION"]
+    assert len(without_guard) == 1
+    assert without_guard[0].capture_status == "empty_confirmed"
+    assert without_guard[0].reason == "EXPECTED_POST_SEASON"
+
+    with_guard = [
+        r
+        for r in enumerator_module.enumerate_v2(**kwargs, captured_set={("MATCHES", "SEGUNDA_DIVISION", "2026-06-06")})
+        if r.league_id == "SEGUNDA_DIVISION"
+    ]
+    assert with_guard == []
+
+
+def test_oscillation_guard_leaves_non_captured_atoms_untouched() -> None:
+    """The guard only drops empty_confirmed rows whose OWN atom is captured —
+    sibling dates/atoms keep their rows, and expected_unattempted seeding is
+    never affected (that stays present_set-gated as before)."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to="2024-01-15")]
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=_date_axis("2024-01-05", "2024-01-06", "2024-01-12"),
+            data_types=["lineups"],
+            present_set=set(),
+            present_cols=list(_SPORTS_KEY_COLS),
+            captured_set={("lineups", "EPL", "2024-01-05")},
+        )
+    )
+    by_date = {r.date: r for r in rows}
+    assert "2024-01-05" not in by_date  # captured atom: empty_confirmed suppressed
+    assert by_date["2024-01-06"].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"  # sibling kept
+    assert by_date["2024-01-12"].capture_status == "expected_unattempted"  # seeding kept
+
+
+def test_oscillation_guard_inert_without_present_cols() -> None:
+    """captured_set without present_cols cannot key rows — guard must be inert."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to="2024-01-15")]
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=_date_axis("2024-01-05", "2024-01-12"),
+            data_types=["lineups"],
+            captured_set={("lineups", "EPL", "2024-01-05")},
+        )
+    )
+    assert [r.reason for r in rows] == ["EXPECTED_INSTRUMENT_NOT_LISTED"]
