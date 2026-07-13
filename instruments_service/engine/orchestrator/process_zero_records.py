@@ -521,6 +521,30 @@ def _zero_records_non_sports(
             date,
             sorted(_no_adapter_active),
         )
+        # Stamp an honest empty_confirmed manifest row per venue — without this,
+        # a NO_ADAPTER_YET venue would look like a permanent, never-attempted gap
+        # in the data-status view forever (the exact "silent absence" this
+        # workspace's honest-coverage model exists to prevent), even though the
+        # 0-count outcome above is fully accounted for. Mirrors the TradFi
+        # non-trading-day stamp below; reason matches UAC's
+        # EmptyConfirmedReason.EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE ("the
+        # source structurally does not offer this data_type/venue at all").
+        _primary_asset_group = asset_groups[0] if asset_groups else None
+        _na_bucket = _orch._get_instruments_bucket(_primary_asset_group)
+        _na_manifest = _orch.ManifestWriter(
+            service_name="instruments-service",
+            catalogue_bucket=_na_bucket,
+        )
+        _na_attempt_ts = _orch.datetime.now(_orch.UTC)
+        for _na_venue in sorted(_no_adapter_active):
+            _na_manifest.record_expected_empty(
+                row_key={"date": date, "venue": _na_venue},
+                reason="EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE",
+                attempted_at=_na_attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+            )
+        _na_manifest.write()
         return dict.fromkeys(_no_adapter_active, 0)
 
     # TradFi non-trading day: zero instruments on weekends/holidays is expected.
