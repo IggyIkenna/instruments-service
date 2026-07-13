@@ -76,16 +76,22 @@ class TestPinnedPrimarySelection:
     """
 
     def test_prd_wins_over_legacy_by_tuple_order(self, mod: ModuleType) -> None:
-        """prd (5M rows, first in tuple) beats legacy (35M rows) — row count irrelevant."""
+        """prd (5K rows, first in tuple) beats legacy (35K rows) — row count irrelevant.
+
+        Row counts are 1000x smaller than the property being tested requires (any prd <
+        legacy split proves the tuple-order pin) — the original 5M/35M sizes made this
+        test's ``pd.DataFrame(rows)`` construction slow enough to blow the 60s
+        pytest-timeout under CI's `-n auto` xdist contention (2026-07-13 LDR QG red).
+        """
         prd_updated = _utc(2026, 6, 28)
         legacy_updated = _utc(2026, 6, 8)
 
         prd_df = _make_df_with_day([
             {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
-        ] * 5_000_000)
+        ] * 5_000)
         legacy_df = _make_df_with_day([
             {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-01"},
-        ] * 35_000_000)
+        ] * 35_000)
 
         def fake_get_blob_updated(
             client: object, bucket_name: str
@@ -107,7 +113,7 @@ class TestPinnedPrimarySelection:
             result = mod._read_manifest("cefi", merge=False)
 
         assert result is not None
-        assert len(result) == 5_000_000
+        assert len(result) == 5_000
         assert (result["capture_status"] == "captured").all()
 
     def test_pinned_primary_wins_when_secondary_mtime_is_newer(
