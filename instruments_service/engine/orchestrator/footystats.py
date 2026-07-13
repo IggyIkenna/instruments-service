@@ -314,6 +314,7 @@ async def _fetch_footystats_predictions(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
+                    source=_orch._sports_ref_source("footystats_predictions"),
                 )
             pred_manifest.write()
 
@@ -334,6 +335,7 @@ async def _fetch_footystats_predictions(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
+                    source=_orch._sports_ref_source("footystats_predictions"),
                 )
             pred_manifest.write()
     except Exception as exc:
@@ -646,6 +648,7 @@ async def _fetch_footystats_matches(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch._pipeline_mode_for_sports_data_type("MATCHES"),
+                    source=_orch._sports_ref_source("footystats_matches"),
                 )
             _ft_manifest.write()
             _orch.logger.info("FootyStats matches: %d rows written for date=%s", len(df), date)
@@ -660,6 +663,7 @@ async def _fetch_footystats_matches(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch._pipeline_mode_for_sports_data_type("MATCHES"),
+                    source=_orch._sports_ref_source("footystats_matches"),
                 )
             _ft_manifest.write()
     except Exception as exc:
@@ -1003,6 +1007,7 @@ async def _fetch_footystats_odds(
                         attempted_at=attempt_ts,
                         reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+                        source=_orch._sports_ref_source("footystats_odds"),
                     )
             else:
                 _stamped_odds_df = _orch.stamp_available_at_explicit(df, when=_orch.datetime.now(_orch.UTC))
@@ -1042,6 +1047,7 @@ async def _fetch_footystats_odds(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+                    source=_orch._sports_ref_source("footystats_odds"),
                 )
             odds_manifest.write()
     except Exception as exc:

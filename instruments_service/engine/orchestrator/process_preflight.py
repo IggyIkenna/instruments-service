@@ -315,9 +315,7 @@ async def _sports_provider_short_circuit(
             )
             result.update(match_result)
         if not _ef or _ef == "ODDS":
-            odds_result = await _orch._fetch_footystats_odds(
-                date=date, api_key=fs_key, bucket=bucket, force=redo_all
-            )
+            odds_result = await _orch._fetch_footystats_odds(date=date, api_key=fs_key, bucket=bucket, force=redo_all)
             result.update(odds_result)
     elif sports_provider == "TRANSFERMARKT":
         tm_key = _keys.get("transfermarkt")
@@ -506,9 +504,7 @@ def _freshness_preflight(
     #     defer to per-league handlers (check_shard_freshness is never reached),
     #     so the bucket choice does not affect non-sports freshness.
     _raw_primary = asset_groups[0] if asset_groups else None
-    primary_asset_group = (
-        "sports" if (_raw_primary is None or _raw_primary.upper() == "ALL") else _raw_primary
-    )
+    primary_asset_group = "sports" if (_raw_primary is None or _raw_primary.upper() == "ALL") else _raw_primary
     bucket = _orch._get_instruments_bucket(primary_asset_group)
 
     expected, core_entities, per_fixture_entities = _build_expected_entities(
@@ -708,6 +704,7 @@ async def _enrichment_only_fast_path(
                     attempted_at=_enr_attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source(entity_short),
                 )
     sports_manifest.write()
     _orch.logger.info(
