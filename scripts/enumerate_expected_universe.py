@@ -171,6 +171,12 @@ _RETIRED_SPORTS_DATA_TYPES: frozenset[str] = frozenset(
 # catalogue (e.g. a stale/un-migrated catalogue snapshot). Duplicated (not
 # imported) — these are standalone ``scripts/`` entry points, not an importable
 # package, so a tiny local frozenset is simpler than a cross-script dependency.
+# 2026-07-13 (24-league de-registration ruling): _enumerate_v2_sports ALSO
+# skips any league_id outside UAC ``LEAGUE_REGISTRY`` (imported — UAC is the
+# registry SSOT, not a script-local copy), mirroring the catalogue roll-up's
+# ``_sports_league_registered`` gate, so a stale catalog.parquet that still
+# carries a de-registered league (e.g. ``RFPL``/``LA_LIGA_2``/raw numeric ids)
+# can never re-seed manifest expected/empty rows for it.
 _SPORTS_LEAGUE_ID_SENTINELS: frozenset[str] = frozenset({"UNKNOWN"})
 
 # instrument_type stamped on sports LEAGUE-grain catalogue rows (mirrors
@@ -1783,10 +1789,14 @@ def _enumerate_v2_sports(
     yield from _yield_v2_sports_pre_source_coverage_rows(date_axis, data_types)
     from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
     from unified_api_contracts.sports import (
+        LEAGUE_REGISTRY,
         SPORTS_DATA_TYPE_TO_SOURCE,
         get_entity_league_coverage,
         get_source_coverage_start,
     )
+
+    # 2026-07-13 de-registration gate — see _SPORTS_LEAGUE_ID_SENTINELS's comment.
+    registered_leagues = frozenset(LEAGUE_REGISTRY)
 
     _pcols = present_cols or list(_SPORTS_PRESENT_COLS)
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
@@ -1868,6 +1878,11 @@ def _enumerate_v2_sports(
         league_id = instr.league_id or instr.instrument_id
         if league_id.upper() in _SPORTS_LEAGUE_ID_SENTINELS:
             continue  # phantom/sentinel league (e.g. "UNKNOWN") — never emit expected rows for it
+        if league_id not in registered_leagues:
+            # De-registered / non-registry league (2026-07-13 operator ruling:
+            # 24-league de-registration) — a stale catalogue row must never
+            # re-seed manifest expected/empty rows for it.
+            continue
         # G1-ENUM: filter data_types to those valid for this league instrument's shape.
         row_dts = _row_data_types("sports", instr, data_types)
         if not row_dts:
