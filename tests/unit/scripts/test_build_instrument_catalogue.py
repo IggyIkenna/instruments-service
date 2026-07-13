@@ -983,9 +983,9 @@ def test_sports_catalogue_from_manifest_superset_and_excludes_retired(rollup: Mo
     """
     manifest = pd.DataFrame(
         [
-            {"league_id": "ENG_PREMIER", "data_type": "FIXTURES", "date": "2024-01-05"},
-            {"league_id": "ENG_PREMIER", "data_type": "XG", "date": "2024-02-01"},
-            {"league_id": "ITA_SERIE_A", "data_type": "MATCHES", "date": "2023-08-01"},
+            {"league_id": "EPL", "data_type": "FIXTURES", "date": "2024-01-05"},
+            {"league_id": "EPL", "data_type": "XG", "date": "2024-02-01"},
+            {"league_id": "SERIE_A", "data_type": "MATCHES", "date": "2023-08-01"},
             {"league_id": "99", "data_type": "LEAGUES", "date": "2020-01-01"},  # RETIRED data_type
             {"league_id": "", "data_type": "FIXTURES", "date": "2024-01-01"},  # blank league
         ]
@@ -993,41 +993,45 @@ def test_sports_catalogue_from_manifest_superset_and_excludes_retired(rollup: Mo
     df = rollup.build_sports_catalogue_from_manifest(manifest)
     by_id = {row["league_id"]: row for row in df.to_dict("records")}
     # ⊇ manifest CURRENT leagues; retired-only numeric league + blank dropped.
-    assert set(by_id) == {"ENG_PREMIER", "ITA_SERIE_A"}
-    assert by_id["ENG_PREMIER"]["instrument_type"] == rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE
-    assert by_id["ENG_PREMIER"]["venue"] == ""
-    assert by_id["ENG_PREMIER"]["data_type"] is None
+    assert set(by_id) == {"EPL", "SERIE_A"}
+    assert by_id["EPL"]["instrument_type"] == rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE
+    assert by_id["EPL"]["venue"] == ""
+    assert by_id["EPL"]["data_type"] is None
     # available_from = earliest captured date across that league's current data_types.
-    assert by_id["ENG_PREMIER"]["available_from"] == "2024-01-05"
-    assert by_id["ENG_PREMIER"]["available_to"] is None  # active (enumerator applies coverage window)
+    assert by_id["EPL"]["available_from"] == "2024-01-05"
+    assert by_id["EPL"]["available_to"] is None  # active (enumerator applies coverage window)
 
 
-def test_sports_catalogue_from_manifest_excludes_sentinel_league_ids(rollup: ModuleType) -> None:
-    """Sentinel league_ids (e.g. "UNKNOWN") never roll up into a catalogue row.
+def test_sports_catalogue_from_manifest_excludes_sentinel_and_unregistered_league_ids(rollup: ModuleType) -> None:
+    """Sentinel AND non-LEAGUE_REGISTRY league_ids never roll up into a catalogue row.
 
     Regression for A1 (2026-07-08/09): an unguarded roll-up minted a real,
     persisted ``instrument_id="UNKNOWN"/league_id="UNKNOWN"`` catalogue row that
     the v2 enumerator then amplified into thousands of manifest
     expected_unattempted/empty_confirmed rows. A case-variant is also excluded
     (defensive — the known writer only ever emits the exact uppercase literal,
-    but the filter is a case-insensitive compare). Real leagues outside UAC
-    LEAGUE_REGISTRY (raw numeric long-tail ids, ``LA_LIGA_2``, ``RFPL``, ...)
-    must NOT be swept up by this filter — this stays a narrow sentinel check,
-    not a full canonical-registry membership check (verified against the real
-    prod catalogue 2026-07-09: 22 real leagues fail LEAGUE_REGISTRY membership).
+    but the filter is a case-insensitive compare).
+
+    2026-07-13 (24-league de-registration ruling — supersedes the 2026-07-09
+    keep-the-long-tail convention): league_ids outside UAC ``LEAGUE_REGISTRY``
+    (raw numeric long-tail ids like ``15066``, alias strings like ``LA_LIGA_2``/
+    ``RFPL``) are de-registered and must ALSO be excluded — their surviving GCS
+    data must never re-mint a catalogue row the enumerator would re-amplify.
     """
     manifest = pd.DataFrame(
         [
-            {"league_id": "ENG_PREMIER", "data_type": "FIXTURES", "date": "2024-01-05"},
+            {"league_id": "EPL", "data_type": "FIXTURES", "date": "2024-01-05"},
             {"league_id": "UNKNOWN", "data_type": "FIXTURES", "date": "2025-12-15"},
             {"league_id": "unknown", "data_type": "XG", "date": "2025-12-16"},
-            # Real long-tail league outside LEAGUE_REGISTRY — must survive the filter.
+            # De-registered long-tail / alias league_ids (2026-07-13 ruling) — excluded.
             {"league_id": "15066", "data_type": "MATCHES", "date": "2024-03-01"},
+            {"league_id": "LA_LIGA_2", "data_type": "ODDS", "date": "2024-03-02"},
+            {"league_id": "RFPL", "data_type": "XG", "date": "2024-03-03"},
         ]
     )
     df = rollup.build_sports_catalogue_from_manifest(manifest)
     by_id = {row["league_id"]: row for row in df.to_dict("records")}
-    assert set(by_id) == {"ENG_PREMIER", "15066"}
+    assert set(by_id) == {"EPL"}
     assert "UNKNOWN" not in by_id
     assert "unknown" not in by_id
 
@@ -1035,7 +1039,7 @@ def test_sports_catalogue_from_manifest_excludes_sentinel_league_ids(rollup: Mod
 def test_sports_catalogue_from_manifest_empty_or_missing_cols(rollup: ModuleType) -> None:
     assert rollup.build_sports_catalogue_from_manifest(pd.DataFrame()).empty
     # missing required columns → empty (never a crash)
-    bad = pd.DataFrame([{"league_id": "ENG_PREMIER"}])
+    bad = pd.DataFrame([{"league_id": "EPL"}])
     out = rollup.build_sports_catalogue_from_manifest(bad)
     assert out.empty
     assert list(out.columns) == list(rollup.CATALOG_COLUMNS)
@@ -1088,21 +1092,23 @@ def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted
     """
     enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_v2_sports_verify")
     # api_football FIXTURES source coverage starts 2018-01-01 → use 2024 dates (in-coverage).
+    # league_id must be a UAC LEAGUE_REGISTRY member (2026-07-13 de-registration
+    # gate: non-registry leagues never seed expected rows).
     d1, d2, d3 = date(2024, 6, 1), date(2024, 6, 2), date(2024, 6, 3)
     df = rollup.build_sports_catalogue_dataframe(
         [
-            (d1, _league_snap([{"league_id": "39", "name": "PL"}])),
-            (d2, _league_snap([{"league_id": "39", "name": "PL"}])),
-            (d3, _league_snap([{"league_id": "39", "name": "PL"}])),
+            (d1, _league_snap([{"league_id": "EPL", "name": "PL"}])),
+            (d2, _league_snap([{"league_id": "EPL", "name": "PL"}])),
+            (d3, _league_snap([{"league_id": "EPL", "name": "PL"}])),
         ]
     )
     catalog = enumerator._catalog_from_dataframe(df)
     assert len(catalog) == 1
-    assert catalog[0].league_id == "39"
+    assert catalog[0].league_id == "EPL"
 
-    # League-grain present_set: league 39 FIXTURES captured on d2 only.
+    # League-grain present_set: league EPL FIXTURES captured on d2 only.
     present_cols = ["data_type", "league_id", "date"]
-    present_set = {("FIXTURES", "39", "2024-06-02")}
+    present_set = {("FIXTURES", "EPL", "2024-06-02")}
 
     rows = list(
         enumerator.enumerate_v2(
@@ -1118,7 +1124,7 @@ def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted
     # d2 captured → NOT emitted; d1 + d3 alive + missing → expected_unattempted, league-grain blanks.
     assert "2024-06-02" not in by_date
     assert by_date["2024-06-01"].capture_status == "expected_unattempted"
-    assert by_date["2024-06-01"].league_id == "39"
+    assert by_date["2024-06-01"].league_id == "EPL"
     assert by_date["2024-06-01"].instrument_id == ""  # blanked → matches captured atom grain
     assert by_date["2024-06-01"].venue == ""
     assert by_date["2024-06-03"].capture_status == "expected_unattempted"
@@ -1235,34 +1241,47 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
             _sports_blob(
                 d1,
                 "fixtures",
-                "ENG_PREMIER_LEAGUE",
+                "EPL",
                 [{"af_fixture_id": 1, "date": d1, "af_home_name": "Arsenal", "af_away_name": "Chelsea"}],
             ),
             _sports_blob(
                 d1,
                 "teams",
-                "ENG_PREMIER_LEAGUE",
+                "EPL",
                 [
-                    {"team_id": "ARSENAL", "name": "Arsenal", "league_id": "ENG_PREMIER_LEAGUE"},
-                    {"team_id": "CHELSEA", "name": "Chelsea", "league_id": "ENG_PREMIER_LEAGUE"},
+                    {"team_id": "ARSENAL", "name": "Arsenal", "league_id": "EPL"},
+                    {"team_id": "CHELSEA", "name": "Chelsea", "league_id": "EPL"},
                 ],
             ),
             _sports_blob(
                 d1,
                 "injuries",
-                "ENG_PREMIER_LEAGUE",
+                "EPL",
                 [{"player_id": 1, "player_name": "Bukayo Saka", "team_id": 1, "league_id": 39}],
             ),
             # Arsenal present on the LATEST scanned day too → still active.
             _sports_blob(
                 d2,
                 "teams",
-                "ENG_PREMIER_LEAGUE",
-                [{"team_id": "ARSENAL", "name": "Arsenal", "league_id": "ENG_PREMIER_LEAGUE"}],
+                "EPL",
+                [{"team_id": "ARSENAL", "name": "Arsenal", "league_id": "EPL"}],
             ),
             # Sentinel league_id must never roll up into a row.
             _sports_blob(
                 d1, "fixtures", "UNKNOWN", [{"af_fixture_id": 2, "date": d1, "af_home_name": "X", "af_away_name": "Y"}]
+            ),
+            # De-registered / non-LEAGUE_REGISTRY league_ids (2026-07-13 ruling):
+            # their GCS data objects remain in place, but the FTP walk must not
+            # re-mint catalogue rows for them — raw numeric long-tail id + the
+            # SCOTTISH_LEAGUE_CUP_185 alias both excluded.
+            _sports_blob(
+                d1, "fixtures", "110", [{"af_fixture_id": 3, "date": d1, "af_home_name": "A", "af_away_name": "B"}]
+            ),
+            _sports_blob(
+                d1,
+                "injuries",
+                "SCOTTISH_LEAGUE_CUP_185",
+                [{"player_id": 9, "player_name": "Some Player", "team_id": 9, "league_id": 185}],
             ),
             # entity=leagues is NOT one of the three FTP entities — must be ignored by this walk.
             _sports_blob(d1, "leagues", "", [{"league_id": "39"}]),
@@ -1276,15 +1295,15 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
     by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
 
     assert set(by_id) == {
-        "ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322",
+        "EPL:ARSENAL_v_CHELSEA:20260322",
         "ARSENAL",
         "CHELSEA",
         "SAKA_B",
     }
 
-    fixture_row = by_id["ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322"]
+    fixture_row = by_id["EPL:ARSENAL_v_CHELSEA:20260322"]
     assert fixture_row["instrument_type"] == rollup.SPORTS_FIXTURE_INSTRUMENT_TYPE
-    assert fixture_row["league_id"] == "ENG_PREMIER_LEAGUE"
+    assert fixture_row["league_id"] == "EPL"
     assert fixture_row["venue"] == ""
     assert fixture_row["available_from"] == "2026-03-22"
 
@@ -1293,7 +1312,7 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
     assert by_id["CHELSEA"]["available_to"] == "2026-03-22"  # only seen on d1 → delisted vs the latest day
 
     assert by_id["SAKA_B"]["instrument_type"] == rollup.SPORTS_PLAYER_INSTRUMENT_TYPE
-    assert by_id["SAKA_B"]["league_id"] == "ENG_PREMIER_LEAGUE"
+    assert by_id["SAKA_B"]["league_id"] == "EPL"
 
 
 def test_ftp_rollup_empty_walk_returns_catalog_columns(rollup: ModuleType) -> None:
@@ -1318,14 +1337,14 @@ def test_ftp_rollup_rows_never_treated_as_league_by_v2_enumerator(rollup: Module
             _sports_blob(
                 d1,
                 "fixtures",
-                "PL",
+                "EPL",
                 [{"af_fixture_id": 1, "date": d1, "af_home_name": "Arsenal", "af_away_name": "Chelsea"}],
             )
         ]
     }
     storage = _FakeStorage(fixture_blobs)
     ftp_df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
-    manifest = pd.DataFrame([{"league_id": "PL", "data_type": "FIXTURES", "date": "2026-03-01"}])
+    manifest = pd.DataFrame([{"league_id": "EPL", "data_type": "FIXTURES", "date": "2026-03-01"}])
     league_df = rollup.build_sports_catalogue_from_manifest(manifest)
     combined = pd.concat([league_df, ftp_df], ignore_index=True)
 
@@ -1340,9 +1359,9 @@ def test_ftp_rollup_rows_never_treated_as_league_by_v2_enumerator(rollup: Module
             present_cols=["data_type", "league_id", "date"],
         )
     )
-    # Exactly ONE league-grain expected_unattempted seed (from league_df's "PL"
+    # Exactly ONE league-grain expected_unattempted seed (from league_df's "EPL"
     # row) — the fixture-grain row must not ALSO seed one.
-    seeded = [r for r in rows if r.capture_status == "expected_unattempted" and r.league_id == "PL"]
+    seeded = [r for r in rows if r.capture_status == "expected_unattempted" and r.league_id == "EPL"]
     assert len(seeded) == 1
 
 

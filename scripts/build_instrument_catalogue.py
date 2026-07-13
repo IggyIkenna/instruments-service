@@ -150,19 +150,44 @@ SPORTS_LEAGUE_INSTRUMENT_TYPE = "league"
 
 #: Sentinel ``league_id`` values that must NEVER be rolled up into a catalogue
 #: row (2026-07-08/09 phantom-league fix, `A1` in
-#: `instruments_docs_audit_outstanding_items_2026_07_08.md`). Real, currently
-#: legitimate manifest ``league_id`` values include 22 raw numeric leagues
-#: (long-tail, not yet in UAC ``LEAGUE_REGISTRY`` — see `sports.py:57`
-#: ``_canonical_league_id()`` docstring) plus non-registry strings like
-#: ``LA_LIGA_2``/``RFPL``/``SCOTTISH_LEAGUE_CUP_185`` (verified against the
-#: real prod catalogue 2026-07-09), so filtering must stay a narrow sentinel
-#: check — NOT a full ``LEAGUE_REGISTRY`` membership check, which would wrongly
-#: drop all 22 of those real leagues. ``api_football_reference.py:165`` is the
-#: only known writer of the literal ``"UNKNOWN"`` value (frozen since the
-#: 2026-06-24 write-universe gate — no new captures land under it), but the
-#: uppercase compare below also catches any case-variant that might otherwise
-#: re-enter this roll-up.
+#: `instruments_docs_audit_outstanding_items_2026_07_08.md`).
+#: ``api_football_reference.py:165`` is the only known writer of the literal
+#: ``"UNKNOWN"`` value (frozen since the 2026-06-24 write-universe gate — no new
+#: captures land under it), but the uppercase compare below also catches any
+#: case-variant that might otherwise re-enter this roll-up.
+#:
+#: HISTORY NOTE (2026-07-13): until the 24-league de-registration ruling this
+#: deliberately stayed a NARROW sentinel check because 22 raw numeric long-tail
+#: league_ids plus ``LA_LIGA_2``/``RFPL``/``SCOTTISH_LEAGUE_CUP_185`` were
+#: legitimate manifest leagues outside UAC ``LEAGUE_REGISTRY``. The operator
+#: ruling de-registered all 24 (captured rows re-keyed or parked to
+#: ``_audits/parked_league_rows_20260713.parquet``, index purged), so the
+#: roll-ups now ALSO require :func:`_sports_league_registered` — sentinels stay
+#: as a distinct, case-insensitive first-line guard.
 SPORTS_LEAGUE_ID_SENTINELS = frozenset({"UNKNOWN"})
+
+
+def _sports_league_registered(league_id: str) -> bool:
+    """True when ``league_id`` is a UAC ``LEAGUE_REGISTRY`` member.
+
+    2026-07-13 operator ruling (24-league de-registration): the sports universe
+    is EXACTLY the registered-league set — the 94-league api_football trading
+    universe plus the 7 non-football registry leagues (ATP/WTA/NBA/NFL/NHL/MLB/
+    EUROLEAGUE). League_ids outside ``LEAGUE_REGISTRY`` (raw numeric
+    api-football long-tail ids, alias strings like ``LA_LIGA_2``/``RFPL``/
+    ``SCOTTISH_LEAGUE_CUP_185``) are de-registered: their index rows were
+    re-keyed/parked+purged, but their GCS data objects remain in place by
+    design — so BOTH sports roll-ups (league-grain manifest roll-up AND the
+    fixture/team/player by_date walk) must gate on this or the catalogue would
+    re-mint rows for de-registered leagues from the surviving objects, and the
+    v2 enumerator would re-amplify them into manifest expected/empty rows.
+    New captured writes are separately blocked by
+    ``orchestrator/sports.py::_is_in_canonical_write_universe``.
+    """
+    from unified_api_contracts.sports import LEAGUE_REGISTRY
+
+    return league_id in LEAGUE_REGISTRY
+
 
 #: instrument_type stamped on sports FIXTURE/TEAM/PLAYER-grain catalogue rows
 #: (2026-07-09 operator decision — extends the catalogue past the
@@ -1440,9 +1465,10 @@ def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFr
     pseudo-league) BEFORE the roll-up — this was previously unguarded and minted
     a real, persisted ``instrument_id="UNKNOWN"/league_id="UNKNOWN"`` catalogue
     row that a downstream v2-enumerator bug then amplified into thousands of
-    manifest rows (root-caused + fixed 2026-07-09; see
-    :data:`SPORTS_LEAGUE_ID_SENTINELS` for why this stays a narrow sentinel
-    check rather than a full canonical-registry membership check).
+    manifest rows (root-caused + fixed 2026-07-09). Since the 2026-07-13
+    24-league de-registration ruling it ALSO excludes any league_id outside UAC
+    ``LEAGUE_REGISTRY`` (see :func:`_sports_league_registered`) — the registered
+    universe is now exactly the could-exist universe.
 
     Args:
         manifest_df: the canonical sports ``_index`` (needs ``league_id`` /
@@ -1468,6 +1494,7 @@ def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFr
     df = df[
         (df["league_id"] != "")
         & (~df["league_id"].str.upper().isin(SPORTS_LEAGUE_ID_SENTINELS))
+        & (df["league_id"].map(_sports_league_registered))
         & (df["data_type"].isin(current))
     ]
     if df.empty:
@@ -1949,14 +1976,15 @@ def _iter_sports_ftp_snapshots(
     ``league_id`` column at all, and injuries' own ``league_id`` column is the
     RAW numeric api-football id (never overwritten with the canonical value the
     partition path already carries) — reading the path uniformly for all three
-    entities avoids a silent canonical/raw mismatch between them. Some
-    Reference-tier leagues have no canonical name mapping yet, so this may be a
-    raw numeric string rather than a canonical code — the same narrow
-    :data:`SPORTS_LEAGUE_ID_SENTINELS`-only filtering convention applies (NOT a
-    full-registry membership check, which would wrongly drop real unmapped
-    leagues). Blobs with no ``league=`` segment (the rare legacy
-    unmapped-fallback files) yield ``league_id=""`` — callers skip those (a
-    catalogue row needs a real league to be honest).
+    entities avoids a silent canonical/raw mismatch between them. A raw numeric
+    path value (no canonical name mapping) is a DE-REGISTERED league since the
+    2026-07-13 ruling — the caller drops it via
+    :func:`_sports_league_registered` alongside the
+    :data:`SPORTS_LEAGUE_ID_SENTINELS` check (the pre-ruling convention of
+    keeping unmapped leagues no longer applies; their data objects stay on GCS
+    but must not re-mint catalogue rows). Blobs with no ``league=`` segment
+    (the rare legacy unmapped-fallback files) yield ``league_id=""`` — callers
+    skip those (a catalogue row needs a real league to be honest).
     """
     walk_prefix = prefix.rstrip("/") + "/"
 
@@ -2074,7 +2102,12 @@ def build_sports_fixture_team_player_catalogue(
     ):
         all_days.add(day)
         league_id = league_id.strip()
-        if frame.empty or not league_id or league_id.upper() in SPORTS_LEAGUE_ID_SENTINELS:
+        if (
+            frame.empty
+            or not league_id
+            or league_id.upper() in SPORTS_LEAGUE_ID_SENTINELS
+            or not _sports_league_registered(league_id)
+        ):
             continue
         records: list[dict[str, object]] = frame.to_dict("records")  # pyright: ignore[reportAssignmentType]
 
