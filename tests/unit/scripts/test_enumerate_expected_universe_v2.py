@@ -1600,6 +1600,70 @@ def test_sports_v2_legacy_mode_alive_date_skipped() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sports v2 mdps_odds_horizon_bucket expected-universe grain realignment
+# (2026-07-13) — plans/active/sports_data_sources_canonical_completion_2026_07_13.md
+# §1 "mdps_odds_horizon_bucket expected-universe grain realignment". MDPS's
+# real writer (market-data-processing-service/scripts/reprocess_sports_odds.py,
+# ``_MANIFEST_DATA_TYPE``) stamps the manifest ``data_type`` column lower-case
+# (``"odds_horizon_bucket"``) — a live manifest read confirmed 0 exceptions to
+# this across 123,642 real captured rows, vs every other sports source writing
+# the UAC ``SPORTS_DATA_TYPE_TO_SOURCE`` key verbatim UPPERCASE. Pre-fix, the
+# enumerator's present-set match + newly-seeded rows used the UAC-uppercase
+# ``ODDS_HORIZON_BUCKET`` unconditionally, so a genuinely captured atom could
+# never match (0 identity overlap, confirmed live) — this section proves the
+# ``_sports_manifest_data_type`` translation closes that gap.
+# ---------------------------------------------------------------------------
+
+
+def test_sports_v2_odds_horizon_bucket_present_set_matches_writer_lowercase_data_type() -> None:
+    """Present-set match key must use MDPS's real lower-case data_type string,
+    not the UAC-uppercase axis key — otherwise a genuinely captured atom is
+    perpetually reseeded as expected_unattempted (the pre-fix disjoint-cells bug)."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-01-12")
+    present_cols = ["data_type", "league_id", "date"]
+    key = tuple({"data_type": "odds_horizon_bucket", "league_id": "EPL", "date": "2024-01-12"}[c] for c in present_cols)
+    rows = list(
+        enumerator_module._enumerate_v2_sports(
+            catalog, date_axis, ["ODDS_HORIZON_BUCKET"], present_set={key}, present_cols=present_cols
+        )
+    )
+    assert rows == []
+
+
+def test_sports_v2_odds_horizon_bucket_seeds_lowercase_data_type_when_uncaptured() -> None:
+    """When genuinely uncaptured, the seeded expected_unattempted row must carry
+    the SAME lower-case data_type MDPS actually writes, so a future enumeration
+    pass's present-set match stays self-consistent with this run's own seed."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-01-12")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["ODDS_HORIZON_BUCKET"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].data_type == "odds_horizon_bucket"
+    assert rows[0].league_id == "EPL"
+
+
+def test_sports_v2_non_overridden_data_type_stays_uppercase(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every other sports data_type (no override entry) keeps its UAC-uppercase
+    string verbatim — the override map is narrowly scoped to
+    ODDS_HORIZON_BUCKET, not a blanket lower-casing of the whole sports
+    data_type axis."""
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", lambda days: {("EPL", "2024-06-05")})
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["XG"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].data_type == "XG"
+
+
+def test_sports_manifest_data_type_helper_identity_except_odds_horizon_bucket() -> None:
+    """Direct unit coverage of the translation helper itself."""
+    assert enumerator_module._sports_manifest_data_type("ODDS_HORIZON_BUCKET") == "odds_horizon_bucket"
+    for dt in ("FIXTURES", "MATCHES", "XG", "PLAYER_VALUES", "WEATHER", "SFI_PROGRESSIVE_STATS", "lineups"):
+        assert enumerator_module._sports_manifest_data_type(dt) == dt
+
+
+# ---------------------------------------------------------------------------
 # Sports v2 understat matchday-awareness (Root-cause writer fix, part (b)) —
 # plans/active/issues/sports_is_manifest_eu_regression_overwrite_2026_06_29.md
 # ---------------------------------------------------------------------------
