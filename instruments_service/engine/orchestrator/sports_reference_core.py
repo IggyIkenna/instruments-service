@@ -196,21 +196,62 @@ async def _fetch_teams_and_standings(
         prediction_league_ids = _orch._cached_prediction_league_ids
         _orch.logger.info("Sports reference: %d teams from cache (0 API calls)", len(teams_df))
     if teams_df is not None:
-        # Write per-league partitioned team files. The bare-path fallback
-        # was retired in sports_manifest_single_ssot_2026_04_30 — TEAMS is
-        # a league-axis data type and MUST always carry league_id.
+        # Write per-league partitioned team files + per-league manifest rows.
+        # The bare-path fallback was retired in sports_manifest_single_ssot_2026_04_30
+        # — TEAMS is a league-axis data type and MUST always carry league_id.
+        #
+        # 2026-07-13 root-cause addendum: this loop always wrote the correct
+        # per-league GCS parquet, but until now NEVER called
+        # ``manifest.record_captured`` itself — the only manifest bookkeeping
+        # for TEAMS came from ``process_enrichment.py``'s blanket
+        # ``record_captured_from_counts(row_key={"date": date, "data_type":
+        # "TEAMS"})`` fallback (fires because "teams" was absent from that
+        # call's ``_self_manifested`` exclusion set), which writes ONE
+        # blank-league_id "captured" row per date summing all leagues. That
+        # blanket call is the CONFIRMED LIVE source of the blank-league_id
+        # bulk bundle (verified still growing through 2026-07-13, not legacy
+        # residue as an earlier pass guessed) — mirrored by an identical bug
+        # for STANDINGS (which already self-manifests per-league below but
+        # was never excluded from the blanket call either). Fixed here (own
+        # per-league record_captured, matching STANDINGS) + in
+        # ``process_enrichment.py`` (added "teams"/"standings" to
+        # ``_self_manifested`` so the blanket call stops firing for both) —
+        # together these make per-league TEAMS/STANDINGS manifest rows the
+        # sole, canonical source of truth going forward.
         if "league_id" in teams_df.columns:
+            _teams_captured: set[str] = set()
             for _t_lid, _t_league_df in teams_df.groupby("league_id"):
                 _t_lid_str = str(_t_lid)
+                _t_canon = _orch._canonical_league_id(_t_lid_str)
+                # WRITE-UNIVERSE gate (incident 2026-06-24, mirrored from the
+                # STANDINGS write below): never write a captured teams row for
+                # a league outside our tracked api_football set.
+                if not _orch._is_in_canonical_write_universe(_t_canon):
+                    continue
+                _teams_captured.add(_t_canon)
                 _t_stamped = _orch.stamp_available_at_explicit(_t_league_df, when=_orch.datetime.now(_orch.UTC))
                 _orch._gated_sink_write(
                     _orch._sports_ref_sink_for(bucket, date, "teams"),
                     data=_t_stamped,
-                    partition={"entity": "teams", "league": _orch._canonical_league_id(_t_lid_str)},
+                    partition={"entity": "teams", "league": _t_canon},
                     filename="teams.parquet",
                     venue="api_football",
                     entity="teams",
                 )
+                if manifest is not None:
+                    manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                        row_key={"date": date, "data_type": "TEAMS", "league_id": _t_canon},
+                        df=_t_stamped,
+                        asset_group="sports",
+                        instrument_type="",
+                        data_type="TEAMS",
+                        league_id=_t_canon,
+                        pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                        source=_orch._sports_ref_source("teams"),
+                        service_emission_state=None,
+                    )
+            if manifest is not None:
+                hooks.emit_empty_gaps_for_entity("TEAMS", _teams_captured)
         else:
             _orch.logger.warning(
                 "TEAMS bare-path fallback triggered for date=%s — data shape regression: "
