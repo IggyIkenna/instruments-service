@@ -82,6 +82,20 @@ _AUDITS_PREFIX = "_audits"
 _DT_FIXTURES = "FIXTURES"
 _CAP_CAPTURED = "captured"
 _CAP_FAILED = "attempted_failed"
+_CAP_EXPECTED_UNATTEMPTED = "expected_unattempted"
+
+# Dedup atom for the raw pending-fetch metric — the manifest shard atom
+# (latest ``written_at`` per atom wins, matching the consolidator convention).
+# ``_date_str`` stands in for ``date`` (normalised by ``_build_fixtures_index``).
+_RAW_PENDING_ATOM_COLS = (
+    "league_id",
+    "data_type",
+    "_date_str",
+    "source",
+    "pipeline_mode",
+    "venue",
+    "asset_group",
+)
 
 # Seasons covered by the UAC registry — pre-2019 have no expected counts.
 _REGISTRY_START_YEAR = 2019
@@ -200,6 +214,35 @@ def _compute_season_summary(
             }
         )
     return rows
+
+
+def _count_raw_pending_fetch(filt: pd.DataFrame) -> int:
+    """Count deduped FIXTURES ``expected_unattempted`` (pending_fetch) index rows.
+
+    The depth metric below (captured vs registry expected counts) is BLIND to raw
+    ``expected_unattempted`` rows — 2026-07-13 forensics found 38,255 deduped
+    phantom pending FIXTURES rows in the index while the depth-based summary read
+    as a clean gate pass ("Targeted re-fetch shards: 0"). This surfaces the raw
+    number in the SAME report so a gate pass can never again read as "0 pending"
+    while raw EU rows exist.
+
+    Dedup = latest ``written_at`` per shard atom (``_RAW_PENDING_ATOM_COLS``,
+    consolidator convention). pending_fetch = ``capture_status ==
+    expected_unattempted`` with a blank / non-``EXPECTED_``-prefixed
+    ``error_reason`` (an ``EXPECTED_*`` reason is a typed honest-absence row,
+    not a pending fetch).
+    """
+    df = filt
+    if "written_at" in df.columns:
+        df = df.sort_values("written_at")
+    atom_cols = [c for c in _RAW_PENDING_ATOM_COLS if c in df.columns]
+    if atom_cols:
+        df = df.drop_duplicates(subset=atom_cols, keep="last")
+    pending = df[df["capture_status"] == _CAP_EXPECTED_UNATTEMPTED]
+    if "error_reason" in pending.columns:
+        reasons = pending["error_reason"].fillna("").astype(str).str.strip()
+        pending = pending[~reasons.str.startswith("EXPECTED_")]
+    return len(pending)
 
 
 def _compute_targeted_refetch(
@@ -336,6 +379,10 @@ def main(argv: list[str] | None = None) -> int:
     # Compute targeted re-fetch list.
     refetch = _compute_targeted_refetch(filt, summary)
 
+    # Raw pending-fetch metric — deduped expected_unattempted rows the
+    # depth-based numbers above cannot see (2026-07-13 phantom-pending class).
+    raw_pending = _count_raw_pending_fetch(filt)
+
     # --- Print summary to stdout ---
     total_shortfall_rows = sum(1 for r in summary if r.get("shortfall") and r["shortfall"] > 0)
     registered_rows = [r for r in summary if r["in_registry"]]
@@ -357,7 +404,12 @@ def main(argv: list[str] | None = None) -> int:
         else "  Overall depth coverage: N/A\n",
         end="",
     )
-    print(f"  Targeted re-fetch shards:         {len(refetch)}\n{'=' * 72}\n")
+    print(f"  Targeted re-fetch shards:         {len(refetch)}")
+    print(f"  Raw pending-fetch EU rows (deduped index): {raw_pending:,}")
+    # Both-numbers summary line — a depth-based gate pass MUST NOT read as
+    # "0 pending" while raw expected_unattempted rows exist in the index.
+    _depth_str = f"{overall_depth:.4%}" if overall_depth is not None else "N/A"
+    print(f"  SUMMARY: depth {_depth_str} | raw pending-fetch rows: {raw_pending}\n{'=' * 72}\n")
 
     # Print per-season rows with shortfalls.
     if total_shortfall_rows > 0:
@@ -376,7 +428,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
         print()
     else:
-        print("  No shortfalls found — all registered leagues/seasons are complete.\n")
+        print(
+            "  No depth shortfalls found — all registered leagues/seasons are complete "
+            f"(depth {_depth_str} | raw pending-fetch rows: {raw_pending}).\n"
+        )
 
     # Write CSV outputs.
     out_dir = args.out_dir or tempfile.gettempdir()
