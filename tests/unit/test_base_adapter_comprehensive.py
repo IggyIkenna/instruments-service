@@ -2,8 +2,7 @@
 
 Extends the existing test_base_adapter.py with coverage for:
 - get_instruments_cached() cache hit/miss and TTL expiry
-- _get_with_retry() exponential backoff and error handling
-- _handle_retryable_response() for various HTTP status codes
+- _get_with_retry() exponential backoff and error handling (via the UTL retry helper)
 - clear_cache()
 - get_exchange_fee_schedule() default implementation
 """
@@ -19,7 +18,6 @@ import pytest
 from unified_api_contracts.internal import InstrumentRecord
 
 from instruments_service.reference_data.base_adapter import (
-    _RETRY_ATTEMPTS,
     _RETRYABLE_STATUS_CODES,
     BaseReferenceDataAdapter,
 )
@@ -169,48 +167,6 @@ class TestClearCache:
 
 
 # ---------------------------------------------------------------------------
-# _handle_retryable_response
-# ---------------------------------------------------------------------------
-
-
-class TestHandleRetryableResponse:
-    @pytest.mark.asyncio
-    async def test_retryable_status_returns_none_on_non_last_attempt(self) -> None:
-        adapter = _TestAdapter()
-        mock_resp = MagicMock()
-        mock_resp.status = 429
-        result = await adapter._handle_retryable_response(mock_resp, "https://test", attempt=0, delay=0.0)
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_retryable_status_raises_on_last_attempt(self) -> None:
-        adapter = _TestAdapter()
-        mock_resp = MagicMock()
-        mock_resp.status = 503
-        with pytest.raises(RuntimeError, match="HTTP 503"):
-            await adapter._handle_retryable_response(mock_resp, "https://test", attempt=_RETRY_ATTEMPTS - 1, delay=0.0)
-
-    @pytest.mark.asyncio
-    async def test_success_returns_json(self) -> None:
-        adapter = _TestAdapter()
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={"data": "value"})
-        mock_resp.raise_for_status = MagicMock()
-        result = await adapter._handle_retryable_response(mock_resp, "https://test", attempt=0, delay=0.0)
-        assert result == {"data": "value"}
-
-    @pytest.mark.asyncio
-    async def test_all_retryable_status_codes(self) -> None:
-        adapter = _TestAdapter()
-        for status in _RETRYABLE_STATUS_CODES:
-            mock_resp = MagicMock()
-            mock_resp.status = status
-            result = await adapter._handle_retryable_response(mock_resp, "https://test", attempt=0, delay=0.0)
-            assert result is None
-
-
-# ---------------------------------------------------------------------------
 # _get_with_retry
 # ---------------------------------------------------------------------------
 
@@ -244,7 +200,7 @@ class TestGetWithRetry:
     @pytest.mark.asyncio
     async def test_retry_on_429_then_success(self) -> None:
         adapter = _TestAdapter()
-        # First call: 429, second call: 200
+        # First call: 429 (retryable status, raised before raise_for_status), second call: 200
         mock_resp_429 = MagicMock()
         mock_resp_429.status = 429
         mock_cm_429 = MagicMock()
@@ -264,6 +220,22 @@ class TestGetWithRetry:
 
         result = await adapter._get_with_retry(mock_session, "https://test")
         assert result == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_all_retryable_status_codes_eventually_raise(self) -> None:
+        """Every status in _RETRYABLE_STATUS_CODES is retried then raises RuntimeError on exhaustion."""
+        for status in _RETRYABLE_STATUS_CODES:
+            adapter = _TestAdapter()
+            mock_resp = MagicMock()
+            mock_resp.status = status
+            mock_cm = MagicMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+            mock_cm.__aexit__ = AsyncMock(return_value=None)
+            mock_session = MagicMock()
+            mock_session.get.return_value = mock_cm
+
+            with pytest.raises(RuntimeError, match="All 3 attempts failed"):
+                await adapter._get_with_retry(mock_session, "https://test")
 
     @pytest.mark.asyncio
     async def test_passes_params_and_headers(self) -> None:

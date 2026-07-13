@@ -4,7 +4,6 @@ Convention: interfaces are API-keyless. Services fetch credentials from
 Secret Manager and inject them at runtime via the ``api_key`` parameter.
 """
 
-import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -24,7 +23,7 @@ from unified_api_contracts.internal import (
     FeeScheduleEntry,
     InstrumentRecord,
 )
-from unified_trading_library import log_event
+from unified_trading_library import log_event, with_retry_async
 
 from .schemas import (
     CanonicalCorporateAction,
@@ -55,6 +54,10 @@ _HTTP_SOCK_READ_TIMEOUT: float = 60.0  # max idle gap between received chunks
 _HTTP_TOTAL_TIMEOUT: float = 120.0  # absolute ceiling for one request
 
 T = TypeVar("T", bound=BaseModel)
+
+
+class _RetryableStatusError(aiohttp.ClientError):
+    """Internal signal: HTTP status is in _RETRYABLE_STATUS_CODES — retried via with_retry_async."""
 
 
 class BaseReferenceDataAdapter(ABC):
@@ -121,29 +124,6 @@ class BaseReferenceDataAdapter(ABC):
         """
         return self._api_key
 
-    async def _handle_retryable_response(
-        self,
-        resp: aiohttp.ClientResponse,
-        url: str,
-        attempt: int,
-        delay: float,
-    ) -> object | None:
-        """Handle a retryable HTTP status. Returns None to continue retrying, or parsed JSON."""
-        if resp.status in _RETRYABLE_STATUS_CODES:
-            logger.warning(
-                "Retryable HTTP %d from %s (attempt %d/%d)",
-                resp.status,
-                url,
-                attempt + 1,
-                _RETRY_ATTEMPTS,
-            )
-            if attempt < _RETRY_ATTEMPTS - 1:
-                await asyncio.sleep(delay)
-                return None
-            raise RuntimeError(f"HTTP {resp.status} from {url} after {_RETRY_ATTEMPTS} attempts")
-        resp.raise_for_status()
-        return cast(object, await resp.json())
-
     async def _get_with_retry(
         self,
         session: aiohttp.ClientSession,
@@ -151,10 +131,12 @@ class BaseReferenceDataAdapter(ABC):
         params: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
     ) -> object:
-        """GET request with exponential backoff retry on transient errors.
+        """GET request with exponential backoff retry on transient errors, via the UTL retry helper.
 
         Retries up to _RETRY_ATTEMPTS times on HTTP 429/5xx and aiohttp
-        connection errors.  On final failure raises the last exception.
+        connection errors.  On final failure raises RuntimeError (chained from
+        the last aiohttp error) — matches the prior behaviour so existing
+        ``except (aiohttp.ClientError, RuntimeError)`` call sites keep working.
 
         Args:
             session: Active aiohttp ClientSession.
@@ -168,26 +150,25 @@ class BaseReferenceDataAdapter(ABC):
         Raises:
             RuntimeError: If all retry attempts fail.
         """
-        last_exc: Exception | None = None
-        for attempt in range(_RETRY_ATTEMPTS):
-            delay: float = _RETRY_BASE_DELAY * (1.0 * (1 << attempt))
-            try:
-                async with session.get(url, params=params, headers=headers) as resp:
-                    result = await self._handle_retryable_response(resp, url, attempt, delay)
-                    if result is not None:
-                        return result
-            except aiohttp.ClientError as exc:
-                last_exc = exc
-                logger.warning(
-                    "aiohttp error fetching %s (attempt %d/%d): %s",
-                    url,
-                    attempt + 1,
-                    _RETRY_ATTEMPTS,
-                    exc,
-                )
-                if attempt < _RETRY_ATTEMPTS - 1:
-                    await asyncio.sleep(delay)
-        raise RuntimeError(f"All {_RETRY_ATTEMPTS} attempts failed for {url}: {last_exc}") from last_exc
+
+        async def _do_get() -> object:
+            async with session.get(url, params=params, headers=headers) as resp:
+                if resp.status in _RETRYABLE_STATUS_CODES:
+                    logger.warning("Retryable HTTP %d from %s", resp.status, url)
+                    raise _RetryableStatusError(f"HTTP {resp.status} from {url}")
+                resp.raise_for_status()
+                return cast(object, await resp.json())
+
+        try:
+            return await with_retry_async(
+                _do_get,
+                max_attempts=_RETRY_ATTEMPTS,
+                base_delay=_RETRY_BASE_DELAY,
+                jitter=False,
+                retryable_exceptions=(aiohttp.ClientError,),
+            )
+        except aiohttp.ClientError as exc:
+            raise RuntimeError(f"All {_RETRY_ATTEMPTS} attempts failed for {url}: {exc}") from exc
 
     def _parse_raw(self, raw: dict[str, object], schema_class: type[T]) -> T:
         """Parse raw venue response into a validated schema instance.
