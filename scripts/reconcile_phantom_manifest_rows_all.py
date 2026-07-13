@@ -766,6 +766,49 @@ def _write_triage_jsonl_gcs(
     )
 
 
+# Stable per-AG phantom-audit summary, written next to the availability index in the AG's
+# manifest bucket (the SAME bucket the consolidator card for that AG reads). The cockpit
+# consolidator page reads this to show "last phantom audit: N phantoms (Xd ago)". Overwritten
+# every canonical (non --manifest-bucket) audit run so the age is always the last audit; schema
+# v1 mirrors the consolidator's own `_index/latest.json` convention (an absent object = "no
+# phantom audit yet", never a fabricated all-clear). See consolidator_throughput_backlog_monitor
+# plan WS-3 (phantom/reprobe visibility). The timestamped triage JSONL stays the drill-down; this
+# is the stable pointer the UI reads.
+_PHANTOM_AUDIT_LATEST_BLOB = "_index/phantom_audit_latest.json"
+_PHANTOM_AUDIT_SCHEMA_VERSION = 1
+
+
+def _write_phantom_audit_latest(
+    storage_client: StorageClient,
+    bucket: str,
+    asset_group: str,
+    phantom_count: int,
+    triage_link: str | None,
+) -> None:
+    """Best-effort: publish the AG's last phantom-audit summary to `_index/phantom_audit_latest.json`.
+
+    Never raises — a summary-write hiccup must not fail the reconcile (it is an observability
+    side-channel, not the manifest mutation). Called on the canonical AG audit only.
+    """
+    payload = {
+        "schema_version": _PHANTOM_AUDIT_SCHEMA_VERSION,
+        "audit": "phantom",
+        "asset_group": asset_group,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "phantom_count": phantom_count,
+        "triage_jsonl": triage_link,
+    }
+    try:
+        storage_client.upload_from_file_obj(
+            bucket, _PHANTOM_AUDIT_LATEST_BLOB, io.BytesIO(json.dumps(payload).encode("utf-8"))
+        )
+        logger.info(
+            "Phantom-audit summary written: gs://%s/%s (%d phantoms)", bucket, _PHANTOM_AUDIT_LATEST_BLOB, phantom_count
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        logger.warning("phantom-audit: latest.json write skipped for %s (%s): %s", asset_group, bucket, exc)
+
+
 # Chain-/source-level DeFi data_types -> canonical chain-level venue. Fetched
 # once per chain (or relay) at a synthetic infra venue, NEVER per protocol. The
 # IS enumerator used to emit FALSE empty_confirmed cells keyed venue=<PROTOCOL>
@@ -1291,6 +1334,11 @@ def main() -> int:
         logger.info("  Real captures:    %d", real_count)
         logger.info("  Phantom captures: %d  ← will flip to attempted_failed", len(phantom_idx))
         logger.info("=" * 60)
+        # Publish the stable per-AG summary the cockpit consolidator page reads (best-effort). Only
+        # on the canonical AG audit (a --manifest-bucket override is a per-data-type slice, not the
+        # AG-level count). Baseline link=None; the dry-run branch below overwrites with the triage link.
+        if not args.manifest_bucket:
+            _write_phantom_audit_latest(storage_client, bucket_name, args.asset_group, len(phantom_idx), None)
 
     # Reverse pass: re-validate previously phantom-flagged rows. The forward
     # audit can only ADD phantoms — it never UN-flags rows that earlier audit
@@ -1351,6 +1399,10 @@ def main() -> int:
             snapshot_time = args.manifest_snapshot_time or datetime.now(UTC).isoformat()
             triage_records = _build_triage_records(args.asset_group, df.loc[phantom_idx], snapshot_time)
             _write_triage_jsonl_gcs(storage_client, triage_gcs, triage_records)
+            # Re-publish the summary WITH the triage-JSONL drill-down link now that we have it
+            # (the baseline write above carried link=None). Canonical AG audit only.
+            if not args.manifest_bucket:
+                _write_phantom_audit_latest(storage_client, bucket_name, args.asset_group, len(phantom_idx), triage_gcs)
         logger.info("DRY RUN — manifest not modified.")
         return 0
 
