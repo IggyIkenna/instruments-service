@@ -307,9 +307,15 @@ from unified_api_contracts import AssetGroup, InstrumentType, build_canonical_in
 build_canonical_instrument_id(AssetGroup.CEFI, "bybit", InstrumentType.PERPETUAL, "BTCUSDT")
 # → "BYBIT:PERPETUAL:BTCUSDT"
 
-# DeFi (VENUE-CHAIN composition)
-build_canonical_instrument_id(AssetGroup.DEFI, "aave_v3", InstrumentType.LENDING, "USDC", chain="arbitrum")
-# → "AAVE_V3-ARBITRUM:LENDING:USDC"
+# DeFi (VENUE-CHAIN composition) — lending protocols emit two InstrumentRecords
+# per position-bearing reserve/market: supply side (A_TOKEN) + borrow side
+# (DEBT_TOKEN). LENDING is not a real InstrumentType member (see the grammar
+# below) — the shared builder is passed the already on-chain-cased supply/debt
+# symbol verbatim, matching aave_v3.py's real a_symbol/debt_symbol construction.
+build_canonical_instrument_id(AssetGroup.DEFI, "aave_v3", InstrumentType.A_TOKEN, "AUSDC", chain="arbitrum")
+# → "AAVE_V3-ARBITRUM:A_TOKEN:AUSDC"
+build_canonical_instrument_id(AssetGroup.DEFI, "aave_v3", InstrumentType.DEBT_TOKEN, "DEBTUSDC", chain="arbitrum")
+# → "AAVE_V3-ARBITRUM:DEBT_TOKEN:DEBTUSDC"
 
 # TradFi (dated derivative, structured expiry)
 build_canonical_instrument_id(AssetGroup.TRADFI, "cme", InstrumentType.FUTURE, "ES", expiry_date=date(2026, 6, 20))

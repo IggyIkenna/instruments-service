@@ -174,17 +174,17 @@ pool_address.lower()` for every POOL row by design (the catalogue rollup step, n
 
 Real per-protocol current state, verified directly against adapter code:
 
-| Protocol        | Current key shape                                                                                                                             | Current `instrument_type`                                                                           | Status                                                                                                           |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **AAVE_V3**     | `{venue}:A_TOKEN:{a_symbol}` / `{venue}:DEBT_TOKEN:{debt_symbol}` (`aave_v3.py:424,433`)                                                      | `LENDING` (hardcoded, `aave_v3.py:400`)                                                             | Split correct, field mislabeled (cheap fix — downstream ledger resolution already parses the key, not the field) |
-| **SPARK**       | Same pattern (`spark.py:318,327`)                                                                                                             | `LENDING`                                                                                           | Same mislabel as AAVE_V3                                                                                         |
-| **COMPOUND_V3** | `{venue}:SUPPLY:{symbol}` / `{venue}:BORROW:{symbol}` (`compound_v3.py:263,272`)                                                              | `LENDING` (both records; `SUPPLY`/`BORROW` appear only inside the key string, `compound_v3.py:240`) | No supply/borrow split at the `instrument_type` field level (the split lives only in the key text)               |
-| **MORPHO**      | `{venue}:A_TOKEN:A{collateral}-{loan}-{market_key[:8]}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{loan}-{market_key[:8]}` (`morpho.py:259-283`) | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two `InstrumentRecord`s per isolated market, correct field + key                           |
-| **EULER_V2**    | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`euler_v2.py:79-137`)                              | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated vault                                                              |
-| **FLUID**       | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`fluid.py:88-149`)                                 | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated vault                                                              |
-| **RADIANT**     | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`radiant.py:94-159`)                               | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated rToken market                                                      |
-| **VENUS**       | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`venus.py:78-142`)                                 | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated vToken market                                                      |
-| **BENQI**       | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`benqi.py:75-140`)                                 | `A_TOKEN` / `DEBT_TOKEN`                                                                            | **Done 2026-07-09** — two records per curated qiToken market                                                     |
+| Protocol        | Current key shape                                                                                                                             | Current `instrument_type` | Status                                                                                                                                                                                                                                                          |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **AAVE_V3**     | `{venue}:A_TOKEN:{a_symbol}` / `{venue}:DEBT_TOKEN:{debt_symbol}` (`aave_v3.py:424,434`)                                                      | `A_TOKEN` / `DEBT_TOKEN`  | **Done 2026-07-13** — field relabeled from the shared `LENDING` mislabel to match the already-correct key (`instruments-service@72e0113`)                                                                                                                       |
+| **SPARK**       | Same pattern (`spark.py:317,327`)                                                                                                             | `A_TOKEN` / `DEBT_TOKEN`  | **Done 2026-07-13** — same field-only fix as AAVE_V3                                                                                                                                                                                                            |
+| **COMPOUND_V3** | `{venue}:A_TOKEN:{supply_symbol}` / `{venue}:DEBT_TOKEN:{borrow_symbol}` (`compound_v3.py:269,279`)                                           | `A_TOKEN` / `DEBT_TOKEN`  | **Done 2026-07-13** — key segment renamed from the invalid `SUPPLY`/`BORROW` (real `UnknownInstrumentTypeError` crash risk) to `A_TOKEN`/`DEBT_TOKEN`, field updated to match; historical catalogue rows migrated too (`instruments-service@72e0113`+`5226818`) |
+| **MORPHO**      | `{venue}:A_TOKEN:A{collateral}-{loan}-{market_key[:8]}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{loan}-{market_key[:8]}` (`morpho.py:259-283`) | `A_TOKEN` / `DEBT_TOKEN`  | **Done 2026-07-09** — two `InstrumentRecord`s per isolated market, correct field + key                                                                                                                                                                          |
+| **EULER_V2**    | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`euler_v2.py:79-137`)                              | `A_TOKEN` / `DEBT_TOKEN`  | **Done 2026-07-09** — two records per curated vault                                                                                                                                                                                                             |
+| **FLUID**       | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`fluid.py:88-149`)                                 | `A_TOKEN` / `DEBT_TOKEN`  | **Done 2026-07-09** — two records per curated vault                                                                                                                                                                                                             |
+| **RADIANT**     | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`radiant.py:94-159`)                               | `A_TOKEN` / `DEBT_TOKEN`  | **Done 2026-07-09** — two records per curated rToken market                                                                                                                                                                                                     |
+| **VENUS**       | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`venus.py:78-142`)                                 | `A_TOKEN` / `DEBT_TOKEN`  | **Done 2026-07-09** — two records per curated vToken market                                                                                                                                                                                                     |
+| **BENQI**       | `{venue}:A_TOKEN:A{collateral}-{borrow}` / `{venue}:DEBT_TOKEN:DEBT{collateral}-{borrow}` (`benqi.py:75-140`)                                 | `A_TOKEN` / `DEBT_TOKEN`  | **Done 2026-07-09** — two records per curated qiToken market                                                                                                                                                                                                    |
 
 Real before/after example (Morpho, one WETH/USDC market, `marketId="0xmarketkey123456789"`, disambiguator
 `marketId[:8]`):
@@ -204,9 +204,11 @@ this doc's scope. The strategy/execution layer already assumes this split exists
 (`unified_api_contracts/internal/domain/execution_service/defi_position.py:97-109`'s `is_supply`/`is_borrow`;
 `PositionPortfolio.net_value = total_supply_value - total_borrow_value`) — this is a reference-data-layer catch-up,
 not a new architectural decision. Fixing is staged per-protocol, not a single PR (operator: "fixing will be in stages
-ofc"). **6 of 9 protocols now emit the correct A_TOKEN/DEBT_TOKEN split** (Morpho/Euler_V2/Fluid/Radiant/Venus/Benqi,
-2026-07-09) — remaining: AAVE_V3/SPARK's `instrument_type` field mislabel (key already correct) and COMPOUND_V3's
-`SUPPLY`/`BORROW` → `A_TOKEN`/`DEBT_TOKEN` key-segment rename (needs a GCS partition migration, tracked separately).
+ofc"). **All 9 protocols now emit the correct A_TOKEN/DEBT_TOKEN split**: Morpho/Euler_V2/Fluid/Radiant/Venus/Benqi
+shipped 2026-07-09; AAVE_V3/SPARK's `instrument_type` field mislabel and COMPOUND_V3's `SUPPLY`/`BORROW` →
+`A_TOKEN`/`DEBT_TOKEN` key-segment rename — including a full historical-catalogue migration, not just a forward-fix —
+shipped 2026-07-13 (`instruments-service@72e0113`+`5226818`, see
+`unified-trading-pm/plans/active/issues/defi_lending_atoken_debttoken_instrument_split_2026_07_07.md`).
 MARGINFI/SOLEND (Solana lending, out of this doc's EVM-centric scope) **now have real instruments-service adapters**
 (`marginfi.py`, `solend.py`, shipped 2026-07-09) — both emit the same A_TOKEN/DEBT_TOKEN split from day one (no
 flat-`LENDING`-record legacy phase to migrate through). See "Solana lending — MarginFi, Solend" below.
@@ -217,8 +219,11 @@ symbol, chain=..., passthrough=True)` instead of an ad hoc f-string — part of 
 `canonical_id_builder_retrofit_checklist_2026_07_08.md`. `passthrough=True` preserves DeFi's on-chain symbol case
 (the builder dispatches DeFi passthrough calls to the same `VENUE-CHAIN:TYPE:SYMBOL` construction as the structured
 path) while still centralising venue-token composition + validation. AAVE_V3's existing `_build_reserve_records` is
-NOT yet on the shared builder either (still an ad hoc f-string, `aave_v3.py:424,433`) — out of this round's scope,
-tracked in the same retrofit checklist.
+NOT yet on the shared builder either (still an ad hoc f-string, `aave_v3.py:424,434`) — out of this round's scope,
+tracked in the same retrofit checklist. COMPOUND_V3's key construction (`compound_v3.py:269,279`) is in the same
+not-yet-retrofitted state: its `A_TOKEN`/`DEBT_TOKEN` key segments (migrated 2026-07-13, see the lending table above)
+are now real enum members the shared builder CAN represent — unlike its pre-migration `SUPPLY`/`BORROW` shape — but
+the ad hoc f-string hasn't been swapped over yet; also tracked in the retrofit checklist, not a new gap.
 
 **Downstream consumer check (2026-07-09, before shipping the 6-protocol split)**: grepped the full workspace for the
 old flat `LENDING_MARKET` key/type. Zero live consumers read instruments-service's reference-data catalog output for
@@ -438,14 +443,17 @@ per group:
   `InstrumentType.SPOT_PAIR` too (plus the legacy strings, back-compat). Real before/after:
   `EIGENLAYER-ETHEREUM:GOVERNANCE_TOKEN:EIGEN` → `EIGENLAYER-ETHEREUM:SPOT_PAIR:EIGEN`,
   `ETHERFI-GOV-ETHEREUM:GOVERNANCE_TOKEN:ETHFI` → `ETHERFI-GOV-ETHEREUM:SPOT_PAIR:ETHFI`.
-- **COMPOUND_V3's `SUPPLY`/`BORROW` key segments reviewed 2026-07-09, deliberately left as-is** — unlike the shorthand
-  tokens above, `SUPPLY`/`BORROW` carry real, load-bearing information (distinct supply-side vs borrow-side legs of
-  one Comet market) that a bare `LENDING` TYPE segment would erase; `build_canonical_instrument_id` also cannot
-  represent them today (neither is a real `InstrumentType`). This is the same key-segment rename this doc's lending
-  table above already tracks as a separate, GCS-partition-migration-gated follow-up
-  (`SUPPLY`/`BORROW` → `A_TOKEN`/`DEBT_TOKEN`), not a quick key/field alignment — left untouched pending that
-  migration, per `canonical_id_builder_retrofit_checklist_2026_07_08.md` todo 2's explicit caution against blindly
-  collapsing a load-bearing distinction.
+- **COMPOUND_V3's `SUPPLY`/`BORROW` key segments — migrated 2026-07-13** (supersedes the 2026-07-09 "deliberately
+  left as-is" review this bullet originally described): the real crash-risk key segments (`SUPPLY`/`BORROW`, neither
+  a valid `InstrumentType` — a real `UnknownInstrumentTypeError` risk had either ever reached
+  `InstrumentKey.from_string()`) were renamed to `A_TOKEN`/`DEBT_TOKEN`, with the `instrument_type` field updated to
+  match (previously the shared `LENDING` value). This is the same key-segment rename this doc's lending table above
+  tracked as a GCS-partition-migration-gated follow-up — now shipped for both live writes and the historical
+  catalogue (`instruments-service@72e0113`+`5226818`, see
+  `unified-trading-pm/plans/active/issues/defi_lending_atoken_debttoken_instrument_split_2026_07_07.md`).
+  `build_canonical_instrument_id` can now represent both real enum members, but `compound_v3.py`'s `instrument_key`
+  construction has not yet been retrofitted to route through it (still an ad hoc f-string) — that remains open,
+  tracked in `canonical_id_builder_retrofit_checklist_2026_07_08.md`.
 - **Remaining known limitation** — 7 more Solana/DeFi venues (mango, zeta, meteora, phoenix, lifinity, kamino,
   marinade) still share the `PERP`/`SPOT`-vs-`PERPETUAL`/`SPOT_PAIR` shorthand mismatch class (e.g. `mango.py` keys
   `:PERP:` against `instrument_type=InstrumentType.PERPETUAL`) — out of this pass's scope, a known follow-up for
@@ -456,8 +464,9 @@ per group:
   `unified_api_contracts.build_canonical_instrument_id(AssetGroup.DEFI, venue, InstrumentType.X, symbol,
 passthrough=True)` instead of an ad hoc f-string — part of the same workspace-wide retrofit tracked in
   `canonical_id_builder_retrofit_checklist_2026_07_08.md` as the 6-protocol lending split above. `COMPOUND_V3` is
-  the one adapter in this batch NOT retrofitted, for the `SUPPLY`/`BORROW` reason above (the builder cannot represent
-  those TYPE segments).
+  the one adapter in this batch NOT retrofitted — as of the 2026-07-13 `A_TOKEN`/`DEBT_TOKEN` key-segment migration
+  above, its key IS now representable by the shared builder (unlike its pre-migration `SUPPLY`/`BORROW` shape), the
+  retrofit itself just hasn't happened yet — tracked as an open item in the same checklist, not a builder limitation.
 - **Cross-repo divergence — fixed 2026-07-09** (`instruments_docs_audit_outstanding_items_2026_07_08.md` finding
   C5): `market-tick-data-service` has its own separate, live/wired adapters for some of these same protocols
   (`restaking_karak_adapter.py`, `restaking_jito_adapter.py`, `restaking_symbiotic_adapter.py`,
