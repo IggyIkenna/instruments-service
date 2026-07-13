@@ -21,7 +21,7 @@ from unified_api_contracts.internal import (
     InstrumentStatus,
     InstrumentType,
 )
-from unified_api_contracts.internal.reference.canonical_id_builder import build_leg
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id, build_leg
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -402,7 +402,10 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         return InstrumentRecord(
-            instrument_key=f"DERIBIT:COMBO:{combo_id}",
+            # Bare "DERIBIT" venue (NOT self.venue == "DERIBIT-COMBO", see this class's
+            # `venue` property docstring) — a combo's instrument_key groups under the
+            # same DERIBIT: namespace as its own legs (also bare-DERIBIT-keyed).
+            instrument_key=build_instrument_id("DERIBIT", InstrumentType.COMBO, combo_id),
             venue=self.venue,
             raw_symbol=combo_id,
             instrument_type=InstrumentType.COMBO,
