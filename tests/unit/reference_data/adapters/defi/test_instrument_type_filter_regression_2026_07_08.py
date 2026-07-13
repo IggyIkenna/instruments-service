@@ -322,9 +322,14 @@ def _morpho_case() -> _Case:
     )
 
 
+# aave_v3/spark/compound_v3/morpho excluded from ALL_CASES/the single-type loop below:
+# post-canonicalization (2026-07-13, defi_lending_atoken_debttoken_instrument_split_
+# 2026_07_07.md) they emit TWO types (A_TOKEN + DEBT_TOKEN) per reserve/market, not a
+# single LENDING type — see test_get_instruments_dual_type_atoken_debttoken_split below
+# for their equivalent canonical-value-accepted regression coverage.
 _NETWORK_CASES = [_aave_v3_case(), _spark_case(), _compound_v3_case(), _morpho_case()]
 
-ALL_CASES = [*_LENDING_CASES, *_YIELD_CASES, *_NETWORK_CASES]
+ALL_CASES = [*_LENDING_CASES, *_YIELD_CASES]
 
 
 @pytest.mark.asyncio
@@ -368,3 +373,41 @@ async def test_get_instruments_rejects_non_matching_instrument_type(case: _Case)
             stack.enter_context(build_patch())
         result = await adapter.get_instruments(instrument_type=InstrumentType.PERPETUAL)
     assert result == [], f"{case.label}: unrelated instrument_type=PERPETUAL should filter to []"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", _NETWORK_CASES, ids=[c.label for c in _NETWORK_CASES])
+async def test_get_instruments_dual_type_atoken_debttoken_split(case: _Case) -> None:
+    """aave_v3/spark/compound_v3/morpho each emit A_TOKEN (supply) + DEBT_TOKEN (borrow)
+    records per reserve/market — the dual-type equivalent of the canonical-value-accepted
+    regression above. ``instrument_type`` is a call-level GUARD on these adapters (accept
+    the whole fetch or reject it with ``[]``), not a per-record filter — a canonical
+    A_TOKEN or DEBT_TOKEN value must be ACCEPTED (the exact P0 casing-mismatch bug class)
+    rather than rejected, and the output must genuinely contain both types. An unrelated
+    type (PERPETUAL) is covered by test_get_instruments_rejects_non_matching_instrument_
+    type above for these same 4 adapters.
+    """
+    adapter = case.factory()
+    with ExitStack() as stack:
+        for build_patch in case.patch_builders:
+            stack.enter_context(build_patch())
+        unfiltered = await adapter.get_instruments()
+    assert unfiltered, f"{case.label}: unfiltered get_instruments() returned no instruments — fixture is broken"
+    types_present = {r.instrument_type for r in unfiltered}
+    assert types_present == {InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN}, (
+        f"{case.label}: expected both A_TOKEN and DEBT_TOKEN in the unfiltered output, got {types_present}"
+    )
+
+    adapter = case.factory()
+    with ExitStack() as stack:
+        for build_patch in case.patch_builders:
+            stack.enter_context(build_patch())
+        a_tokens = await adapter.get_instruments(instrument_type=InstrumentType.A_TOKEN)
+    assert a_tokens, f"{case.label}: instrument_type=A_TOKEN returned [] — canonical value rejected"
+
+    adapter = case.factory()
+    with ExitStack() as stack:
+        for build_patch in case.patch_builders:
+            stack.enter_context(build_patch())
+        debt_tokens = await adapter.get_instruments(instrument_type=InstrumentType.DEBT_TOKEN)
+    assert debt_tokens, f"{case.label}: instrument_type=DEBT_TOKEN returned [] — canonical value rejected"

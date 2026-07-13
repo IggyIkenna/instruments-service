@@ -1,7 +1,8 @@
 """Aave V3 reference data adapter — instrument discovery via Aave subgraph.
 
 Discovers Aave V3 lending markets (aToken and debtToken instruments) on Ethereum.
-Markets are returned as InstrumentRecord with instrument_type=InstrumentType.LENDING.
+Markets are returned as two InstrumentRecords per reserve: instrument_type=A_TOKEN
+(supply side) and instrument_type=DEBT_TOKEN (borrow side, when borrowingEnabled).
 
 Data source: The Graph (Aave V3 subgraph).
 Reference: https://aave.com/
@@ -249,7 +250,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         For OPTIMISM: routes to static reserve registry (abandoned subgraph).
         """
-        if instrument_type not in (None, InstrumentType.LENDING):
+        if instrument_type not in (None, InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN):
             return []
 
         if self._chain == "OPTIMISM":
@@ -397,7 +398,6 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": underlying,
-            "instrument_type": InstrumentType.LENDING,
             "base_asset": sym_upper,
             "quote_asset": "",
             "tick_size": Decimal("0.000001"),
@@ -422,6 +422,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         results = [
             InstrumentRecord(
                 instrument_key=f"{venue_tag}:A_TOKEN:{a_symbol}",
+                instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             )
         ]
@@ -431,6 +432,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             results.append(
                 InstrumentRecord(
                     instrument_key=f"{venue_tag}:DEBT_TOKEN:{debt_symbol}",
+                    instrument_type=InstrumentType.DEBT_TOKEN,
                     **base_kwargs,
                 )
             )
