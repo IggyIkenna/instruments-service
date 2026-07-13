@@ -674,20 +674,54 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
     """
 
     def test_sole_no_adapter_yet_venue_returns_zero_counts_cleanly(self) -> None:
-        """YAHOO_FINANCE alone in active_venues must return {"YAHOO_FINANCE": 0}."""
+        """YAHOO_FINANCE alone in active_venues must return {"YAHOO_FINANCE": 0}
+        AND stamp an honest empty_confirmed manifest row (no silent absence)."""
         from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
 
-        # No patches needed: NO_ADAPTER_YET / VENUE_TO_ADAPTER_KEY come straight from
-        # the real UAC registry, and the short-circuit returns before ever calling
+        _expected_empty_calls: list[dict[str, object]] = []
+
+        class _CapManifest:
+            def __init__(self, *_: object, **__: object) -> None:
+                pass
+
+            def record_expected_empty(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                **_kw: object,
+            ) -> None:
+                _expected_empty_calls.append({"row_key": dict(row_key), "reason": reason})
+
+            def write(self) -> None:
+                pass
+
+        # NO_ADAPTER_YET / VENUE_TO_ADAPTER_KEY come straight from the real UAC
+        # registry, and the short-circuit returns before ever calling
         # is_non_trading_day (which has no YAHOO_FINANCE entry and would raise).
-        result = _zero_records_non_sports(
-            date="2026-07-09",
-            asset_groups=["TRADFI"],
-            active_venues=["YAHOO_FINANCE"],
-            mode="batch",
-        )
+        # ManifestWriter/_get_instruments_bucket ARE patched here (new manifest-
+        # stamp behavior needs a real bucket/writer in production, not in a unit test).
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=_CapManifest,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="tradfi-bucket",
+            ),
+        ):
+            result = _zero_records_non_sports(
+                date="2026-07-09",
+                asset_groups=["TRADFI"],
+                active_venues=["YAHOO_FINANCE"],
+                mode="batch",
+            )
 
         assert result == {"YAHOO_FINANCE": 0}, f"Expected clean zero-count dict; got {result}"
+        assert len(_expected_empty_calls) == 1
+        assert _expected_empty_calls[0]["row_key"] == {"date": "2026-07-09", "venue": "YAHOO_FINANCE"}
+        assert _expected_empty_calls[0]["reason"] == "EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE"
 
     def test_no_adapter_yet_venue_mixed_with_real_tradfi_venue_excluded_from_calendar_check(
         self,

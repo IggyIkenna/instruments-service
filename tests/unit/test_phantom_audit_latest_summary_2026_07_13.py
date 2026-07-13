@@ -46,10 +46,10 @@ def test_write_phantom_audit_latest_publishes_stable_summary() -> None:
     stub = _StubStorageClient()
     mod._write_phantom_audit_latest(
         stub,
-        "market-data-tick-cefi-prd-central-element-323112",
+        "market-data-tick-cefi-prd-test-project",
         "cefi",
         3,
-        "gs://central-element-323112-phantom-triage/triage_cefi_20260713_101010.jsonl",
+        "gs://test-project-phantom-triage/triage_cefi_20260713_101010.jsonl",
     )
     blob = "_index/phantom_audit_latest.json"
     assert blob in stub._storage
