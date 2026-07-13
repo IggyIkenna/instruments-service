@@ -143,14 +143,26 @@ async def _fetch_teams_and_standings(
     hooks: _AfManifestHooks,
     counts: dict[str, int],
 ) -> None:
-    """Teams + standings — for each prediction league (cached across dates)."""
+    """Teams + standings — for every api_football-covered league (cached across dates).
+
+    UAC ``SPORTS_ENTITY_LEAGUE_COVERAGE["TEAMS"]`` / ``["STANDINGS"]`` are both
+    ``None`` ("expected on all fixture dates" — i.e. all leagues, not just
+    Prediction-tier). The league source here MUST match the enumerator's
+    denominator (``get_expected_leagues_for_source("api_football")``, the
+    same call ``hooks.emit_empty_gaps_for_entity`` already uses for the
+    STANDINGS honest-absence emission below) — looping the narrower
+    Prediction-tier ``get_prediction_leagues()`` here silently starved 61 of
+    94 expected leagues of any per-league TEAMS/STANDINGS capture ever
+    (2026-07-13 root-cause: a classification-filter mismatch between this
+    writer and the enumerator, not a real per-league data gap).
+    """
     manifest = hooks.manifest
     teams_df = _orch._cached_teams_df
     prediction_league_ids: list[int] = []
     if teams_df is None:
         all_teams: list[dict[str, object]] = []
         try:
-            for league_def in _orch.get_prediction_leagues():
+            for league_def in _orch.get_expected_leagues_for_source("api_football"):
                 if league_def.api_football_id is None:
                     continue
                 prediction_league_ids.append(league_def.api_football_id)
