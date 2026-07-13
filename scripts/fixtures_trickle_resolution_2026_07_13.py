@@ -39,6 +39,10 @@ Usage::
 ``--pairs`` parquet columns: league_id, date (the deterministic flip set, recomputed
 from the fresh index snapshot x fresh-truthset join, dates <= 2026-07-12).
 ``--cells`` csv columns: league_id, date, af_league_id, season.
+
+The fetch mode is cells-driven (no date bounds), so it is also reused for the
+PRE-window pending backlog (cells dated < 2026-06-29 that the truthset proves have
+fixtures) — pass ``--vm-name`` to keep each sweep's per-VM shard distinct.
 """
 
 from __future__ import annotations
@@ -73,6 +77,7 @@ def _args() -> argparse.Namespace:
     p.add_argument("--pairs", help="flip: parquet of (league_id, date) pairs to flip")
     p.add_argument("--cells", help="fetch: csv of (league_id, date, af_league_id, season) cells")
     p.add_argument("--truthset-run-id", help="flip: run_ts of the fresh truthset that evidences the flips")
+    p.add_argument("--vm-name", help="override the per-VM shard tag (default: the per-operation built-in)")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--project", default="central-element-323112")
     return p.parse_args()
@@ -83,7 +88,7 @@ os.environ["GCP_PROJECT_ID"] = ARGS.project
 os.environ["GOOGLE_CLOUD_PROJECT"] = ARGS.project
 os.environ["DEPLOYMENT_ENV"] = "prod"
 os.environ["MANIFEST_PER_VM_SHARDS"] = "true"
-os.environ["VM_NAME"] = _VM_NAME_BY_OP[ARGS.operation]
+os.environ["VM_NAME"] = ARGS.vm_name or _VM_NAME_BY_OP[ARGS.operation]
 os.environ.pop("CLOUD_MOCK_MODE", None)
 
 from unified_trading_library import setup_events
