@@ -124,10 +124,14 @@ async def _fetch_sports_reference_data(
     # schema-only declarations (features-sports LEAGUES_COLUMNS) — no actual feature
     # consumed `logo_url` or other fields beyond what UAC already provides.
     # The api_football `/leagues` endpoint is no longer called from the daily
-    # orchestrator path; teams fetch reads `get_prediction_leagues()` from UAC
-    # instead of the freshly-fetched leagues_df.
+    # orchestrator path; teams fetch reads
+    # `get_expected_leagues_for_source("api_football")` from UAC instead of the
+    # freshly-fetched leagues_df (2026-07-13: widened from the narrower
+    # `get_prediction_leagues()`, which silently starved 61 of 94 expected
+    # leagues of any per-league TEAMS/STANDINGS capture — see
+    # sports_reference_core.py::_fetch_teams_and_standings docstring).
 
-    # Teams + standings — for each prediction league (cached across dates).
+    # Teams + standings — for every api_football-covered league (cached across dates).
     # Guard accepts "leagues" (legacy umbrella), "teams", or "standings" so that
     # entity-scoped VM runs (e.g. --entity STANDINGS) still invoke the combined
     # fetcher.  DP-VM-002 root-cause: only "leagues" was checked, so a

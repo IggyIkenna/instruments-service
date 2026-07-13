@@ -74,18 +74,15 @@ References:
 from __future__ import annotations
 
 import argparse
-import contextlib
 import io
 import logging
-import os
 import sys
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
 import pandas as pd
-from google.cloud import storage
+from unified_trading_library import StorageClient, get_storage_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -127,9 +124,9 @@ def _shard_prefix(protocol: str, chain: str, date_str: str) -> str:
     return _GCS_PREFIX_TPL.format(protocol=protocol, chain=chain, date=date_str)
 
 
-def _has_parquet(bucket: storage.Bucket, prefix: str) -> bool:
+def _has_parquet(client: StorageClient, bucket_name: str, prefix: str) -> bool:
     """Return True if at least one ``.parquet`` blob exists under *prefix*."""
-    return any(blob.name.endswith(".parquet") for blob in bucket.list_blobs(prefix=prefix, max_results=1))
+    return any(meta.name.endswith(".parquet") for meta in client.list_blobs(bucket_name, prefix=prefix, max_results=1))
 
 
 def _classify_phantom(
@@ -157,7 +154,8 @@ def _classify_phantom(
 
 
 def _audit_captured_rows(
-    bucket: storage.Bucket,
+    client: StorageClient,
+    bucket_name: str,
     df: pd.DataFrame,
     captured_idx: pd.Index[int],
     workers: int,
@@ -204,7 +202,7 @@ def _audit_captured_rows(
 
     def _check(prefix: str) -> tuple[str, bool]:
         try:
-            return prefix, _has_parquet(bucket, prefix)
+            return prefix, _has_parquet(client, bucket_name, prefix)
         except Exception as exc:
             logger.warning("list error for %s: %s", prefix, exc)
             return prefix, False
@@ -341,25 +339,12 @@ def main() -> int:
     if args.chains:
         wanted_chains = frozenset(c.strip().upper() for c in args.chains.split(",") if c.strip())
 
-    # GCS client.
-    client = storage.Client(project=project_id)
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(MANIFEST_BLOB)
+    # Cloud-agnostic storage client (UTL cloud_interface — never google.cloud/boto3 direct).
+    client = get_storage_client(project_id=project_id)
 
     logger.info("Loading manifest from gs://%s/%s", bucket_name, MANIFEST_BLOB)
-    with tempfile.NamedTemporaryFile(
-        prefix="recon-lending-indices-",
-        suffix=".parquet",
-        delete=False,
-        dir=tempfile.gettempdir(),
-    ) as _tf:
-        manifest_path = _tf.name
-    try:
-        blob.download_to_filename(manifest_path)
-        df = pd.read_parquet(manifest_path)
-    finally:
-        with contextlib.suppress(OSError):
-            os.unlink(manifest_path)
+    manifest_bytes = client.download_bytes(bucket_name, MANIFEST_BLOB)
+    df = pd.read_parquet(io.BytesIO(manifest_bytes))
 
     logger.info("Manifest rows: %d", len(df))
 
@@ -396,7 +381,7 @@ def main() -> int:
         logger.info("Nothing to audit. Manifest is clean (or already fully reconciled).")
         return 0
 
-    audit_results = _audit_captured_rows(bucket, df, captured_idx, args.workers)
+    audit_results = _audit_captured_rows(client, bucket_name, df, captured_idx, args.workers)
 
     phantom_idx = [i for i, (real, _) in audit_results.items() if not real]
     real_count = sum(1 for real, _ in audit_results.values() if real)
@@ -471,7 +456,7 @@ def main() -> int:
         len(df),
         len(phantom_idx),
     )
-    blob.upload_from_file(out, content_type="application/octet-stream")
+    client.upload_from_file_obj(bucket_name, MANIFEST_BLOB, out, content_type="application/octet-stream")
     logger.info("Done.")
     return 0
 
