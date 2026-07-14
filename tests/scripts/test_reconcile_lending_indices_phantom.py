@@ -76,15 +76,15 @@ def _make_blob(
 
 
 def _mock_bucket_with_blobs(blobs_per_prefix: dict[str, list[str]]) -> MagicMock:
-    """Return a mock GCS bucket whose list_blobs yields blobs by prefix."""
+    """Return a mock ``StorageClient`` whose ``list_blobs(bucket_name, prefix=...)`` yields blobs by prefix."""
 
-    def _list_blobs(prefix: str = "", max_results: int | None = None) -> list[MagicMock]:
+    def _list_blobs(bucket_name: str, prefix: str = "", max_results: int | None = None) -> list[MagicMock]:
         names = blobs_per_prefix.get(prefix, [])
         return [_make_blob(n) for n in names]
 
-    bucket = MagicMock()
-    bucket.list_blobs.side_effect = _list_blobs
-    return bucket
+    client = MagicMock()
+    client.list_blobs.side_effect = _list_blobs
+    return client
 
 
 # ---------------------------------------------------------------------------
@@ -105,9 +105,9 @@ def test_phantom_detection_dry_run_no_writes() -> None:
         ]
     )
     # Bucket has NO parquets at the shard prefix → phantom.
-    bucket = _mock_bucket_with_blobs({})
+    client = _mock_bucket_with_blobs({})
 
-    audit = _mod._audit_captured_rows(bucket, df, df.index, workers=1)
+    audit = _mod._audit_captured_rows(client, "test-bucket", df, df.index, workers=1)
 
     is_real, reason = audit[0]
     assert not is_real, "Row with no GCS blob should be phantom"
@@ -131,11 +131,11 @@ def test_real_capture_left_alone() -> None:
         ]
     )
     prefix = "lending_indices/aave_v3/ETHEREUM/date=2026-05-07/"
-    bucket = _mock_bucket_with_blobs(
+    client = _mock_bucket_with_blobs(
         {prefix: ["lending_indices/aave_v3/ETHEREUM/date=2026-05-07/aave_v3_ETHEREUM_20260507.parquet"]}
     )
 
-    audit = _mod._audit_captured_rows(bucket, df, df.index, workers=1)
+    audit = _mod._audit_captured_rows(client, "test-bucket", df, df.index, workers=1)
 
     is_real, reason = audit[0]
     assert is_real, "Row with existing parquet should be real"
@@ -334,9 +334,9 @@ def test_audit_translates_uppercase_venue_to_lowercase_slug_for_gcs_prefix() -> 
     )
     # Mock bucket has the parquet at LOWERCASE slug path (the real GCS layout).
     slug_prefix = "lending_indices/aave_v3/ETHEREUM/date=2026-05-07/"
-    bucket = _mock_bucket_with_blobs({slug_prefix: [f"{slug_prefix}aave_v3_ETHEREUM_20260507.parquet"]})
+    client = _mock_bucket_with_blobs({slug_prefix: [f"{slug_prefix}aave_v3_ETHEREUM_20260507.parquet"]})
 
-    audit = _mod._audit_captured_rows(bucket, df, df.index, workers=1)
+    audit = _mod._audit_captured_rows(client, "test-bucket", df, df.index, workers=1)
 
     is_real, reason = audit[0]
     assert is_real, (
