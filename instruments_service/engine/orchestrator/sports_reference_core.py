@@ -125,6 +125,20 @@ class _AfManifestHooks:
                 )
                 continue
             if not _orch.get_league_fixture_calendar(_exp_lid, self.date, self.date):
+                # Off-season for this league (SEASON_BY_COUNTRY) — a real,
+                # typed absence, NOT "nothing to say". Previously this
+                # silently skipped the cell (no manifest write at all),
+                # leaving it permanently blank-reason expected_unattempted
+                # (2026-07-14 GW verification: A_LEAGUE's Oct-Apr season
+                # left every September date off-season, producing 30
+                # blank INJURIES cells that never resolved on re-fetch).
+                self.manifest.record_empty(
+                    row_key={"date": self.date, "data_type": data_type, "league_id": _exp_lid},
+                    attempted_at=self.attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_PAUSED_LEAGUE,
+                    pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source(data_type.lower()),
+                )
                 continue
             self.manifest.record_empty(
                 row_key={"date": self.date, "data_type": data_type, "league_id": _exp_lid},
