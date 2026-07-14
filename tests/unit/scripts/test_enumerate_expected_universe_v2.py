@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import ClassVar
@@ -1724,13 +1724,27 @@ def test_sports_v2_understat_matchday_index_skipped_for_large_window(monkeypatch
 # ---------------------------------------------------------------------------
 
 
+_AF_FRESH_EVIDENCE = datetime(2026, 1, 1, tzinfo=UTC)
+"""Evidence clock that postdates the end of every 2024/2025 test day (fresh)."""
+
+
+def _af_span(
+    start: str,
+    end: str,
+    *,
+    season: int = 2024,
+    evidence_built_at: datetime | None = _AF_FRESH_EVIDENCE,
+) -> object:
+    return enumerator_module._AfSeasonSpan(season=season, start=start, end=end, evidence_built_at=evidence_built_at)
+
+
 def _af_calendar(
     fixture_days: set[tuple[str, str]] | None = None,
-    coverage: dict[str, tuple[tuple[str, str], ...]] | None = None,
+    coverage: dict[str, tuple[object, ...]] | None = None,
 ) -> object:
     return enumerator_module._AfFixtureCalendar(
         fixture_days=fixture_days or set(),
-        coverage=coverage if coverage is not None else {"EPL": (("2024-01-01", "2024-12-31"),)},
+        coverage=coverage if coverage is not None else {"EPL": (_af_span("2024-01-01", "2024-12-31"),)},
     )
 
 
@@ -1793,7 +1807,7 @@ def test_sports_v2_af_fixtures_day_outside_coverage_keeps_seeding(
     monkeypatch.setattr(
         enumerator_module,
         "_build_af_fixture_calendar",
-        lambda: _af_calendar(coverage={"EPL": (("2023-08-01", "2024-05-31"),)}),
+        lambda: _af_calendar(coverage={"EPL": (_af_span("2023-08-01", "2024-05-31"),)}),
     )
     catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
     rows = list(
@@ -1818,18 +1832,25 @@ def test_af_calendar_from_dataframe_bridges_consecutive_seasons_only() -> None:
             {"canonical_league_id": "LIGA_X", "season": 2021, "date": "2022-05-01"},
         ]
     )
+    df["evidence_built_at"] = pd.Timestamp(_AF_FRESH_EVIDENCE)  # postdates every day below
     cal = enumerator_module._af_calendar_from_dataframe(df)
     assert cal is not None
-    # Consecutive EPL seasons merge into ONE bridged interval.
-    assert cal.coverage["EPL"] == (("2023-08-12", "2025-05-25"),)
-    # Inter-season gap day (no fixture, bridged) → evidenced no-fixture day.
+    # Consecutive EPL seasons kept as season-ordered spans (bridging happens at query time).
+    assert [(sp.start, sp.end) for sp in cal.coverage["EPL"]] == [
+        ("2023-08-12", "2024-05-19"),
+        ("2024-08-16", "2025-05-25"),
+    ]
+    # Inter-season gap day (no fixture, bridged consecutive seasons) → evidenced no-fixture day.
     assert cal.is_no_fixture_day("EPL", "2024-06-05") is True
     # A fixture day is never a no-fixture day.
     assert cal.is_no_fixture_day("EPL", "2023-08-12") is False
     # Outside every span → no evidence.
     assert cal.is_no_fixture_day("EPL", "2025-06-01") is False
     # Season jump: 2020 gap NOT covered.
-    assert cal.coverage["LIGA_X"] == (("2019-08-01", "2020-05-01"), ("2021-08-01", "2022-05-01"))
+    assert [(sp.start, sp.end) for sp in cal.coverage["LIGA_X"]] == [
+        ("2019-08-01", "2020-05-01"),
+        ("2021-08-01", "2022-05-01"),
+    ]
     assert cal.is_no_fixture_day("LIGA_X", "2020-09-15") is False
 
 
@@ -1837,6 +1858,154 @@ def test_af_calendar_from_dataframe_empty_or_missing_columns_returns_none() -> N
     """No usable truthset rows → None → callers keep the pre-existing seeding."""
     assert enumerator_module._af_calendar_from_dataframe(pd.DataFrame()) is None
     assert enumerator_module._af_calendar_from_dataframe(pd.DataFrame([{"league_id": "EPL"}])) is None
+
+
+# ---------------------------------------------------------------------------
+# Evidence-freshness rule (fixture day-boundary staleness class, 2026-07-14
+# closeout of sports_fixtures_pending_eu_phantom_denominator_2026_07_13): an
+# EXPECTED_NO_FIXTURE verdict requires evidence built AFTER the stamped day
+# ended (UTC). Stale-covered days stay pending — never a stale absence stamp.
+# ---------------------------------------------------------------------------
+
+
+def test_af_truthset_built_at_parses_artifact_name_utc() -> None:
+    """Producer run_ts in the artifact NAME is the evidence clock (UTC);
+    unparseable names → None (can contribute fixture-days, never absences)."""
+    built = enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_20260713-172514.parquet")
+    assert built == datetime(2026, 7, 13, 17, 25, 14, tzinfo=UTC)
+    assert enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_partial.parquet") is None
+    assert enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_20261399-999999.parquet") is None
+
+
+def test_af_calendar_no_fixture_verdict_requires_post_day_end_evidence() -> None:
+    """Day covered + evidence postdates day-end → no-fixture verdict True;
+    same coverage but evidence predates day-end (or missing) → False."""
+    fresh = _af_calendar(
+        coverage={
+            "EPL": (_af_span("2024-01-01", "2024-12-31", evidence_built_at=datetime(2024, 6, 6, 0, 1, tzinfo=UTC)),)
+        }
+    )
+    assert fresh.is_no_fixture_day("EPL", "2024-06-05") is True
+    # Evidence built mid-day on the day itself (before 2024-06-06T00:00Z day end) → stale.
+    stale = _af_calendar(
+        coverage={
+            "EPL": (_af_span("2024-01-01", "2024-12-31", evidence_built_at=datetime(2024, 6, 5, 17, 25, tzinfo=UTC)),)
+        }
+    )
+    assert stale.is_no_fixture_day("EPL", "2024-06-05") is False
+    # No evidence clock at all (unparseable artifact name) → never an absence.
+    unclocked = _af_calendar(coverage={"EPL": (_af_span("2024-01-01", "2024-12-31", evidence_built_at=None),)})
+    assert unclocked.is_no_fixture_day("EPL", "2024-06-05") is False
+
+
+def test_af_calendar_bridged_gap_requires_both_adjacent_seasons_fresh() -> None:
+    """A bridged inter-season-gap day needs BOTH adjacent complete season
+    queries to postdate the day's end — a gap fixture would belong to one of
+    the two queries, but we cannot know which."""
+    both_fresh = _af_calendar(
+        coverage={
+            "EPL": (
+                _af_span("2023-08-12", "2024-05-19", season=2023),
+                _af_span("2024-08-16", "2025-05-25", season=2024),
+            )
+        }
+    )
+    assert both_fresh.is_no_fixture_day("EPL", "2024-06-05") is True
+    one_stale = _af_calendar(
+        coverage={
+            "EPL": (
+                _af_span("2023-08-12", "2024-05-19", season=2023, evidence_built_at=datetime(2024, 5, 20, tzinfo=UTC)),
+                _af_span("2024-08-16", "2025-05-25", season=2024),
+            )
+        }
+    )
+    assert one_stale.is_no_fixture_day("EPL", "2024-06-05") is False
+
+
+def test_sports_v2_af_fixtures_stale_evidence_keeps_pending_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enumerator branch: day covered by the calendar but the evidence PREDATES
+    the day's end → the pending (expected_unattempted) seed is kept — never a
+    stale EXPECTED_NO_FIXTURE stamp."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "_build_af_fixture_calendar",
+        lambda: _af_calendar(
+            coverage={
+                "EPL": (
+                    _af_span("2024-01-01", "2024-12-31", evidence_built_at=datetime(2024, 6, 5, 12, 0, tzinfo=UTC)),
+                )
+            }
+        ),
+    )
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_af_fixtures_allsvenskan_2026_07_13_day_boundary_regression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact ALLSVENSKAN 2026-07-13 scenario (issue doc 2026-07-14 closeout):
+    the 00:02Z 07-14 daily run built its calendar from the
+    ``fixtures_truthset_20260713-172514.parquet`` artifact (evidence built
+    17:25Z ON 2026-07-13 — BEFORE the day ended at 07-14T00:00Z) which had no
+    ALLSVENSKAN row for 07-13, and stamped EXPECTED_NO_FIXTURE while 3 real
+    matches existed (one captured mid-game, status=1H). With the freshness
+    rule the stale-covered day stays pending; only the fresh post-day-end
+    truthset (20260714-001053) may stamp absences for 07-13."""
+    stale_truthset = pd.DataFrame(
+        [
+            # Season-complete 2026 span straddling 2026-07-13, built 17:25Z 07-13
+            # — the query could not see the matches added/played that evening.
+            {"canonical_league_id": "ALLSVENSKAN", "season": 2026, "date": "2026-03-29"},
+            {"canonical_league_id": "ALLSVENSKAN", "season": 2026, "date": "2026-07-12"},
+            {"canonical_league_id": "ALLSVENSKAN", "season": 2026, "date": "2026-11-01"},
+        ]
+    )
+    stale_truthset["evidence_built_at"] = pd.Timestamp(
+        enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_20260713-172514.parquet")
+    )
+    stale_cal = enumerator_module._af_calendar_from_dataframe(stale_truthset)
+    assert stale_cal is not None
+    # The stale calendar covers 2026-07-13 but must NOT prove absence for it...
+    assert stale_cal.is_no_fixture_day("ALLSVENSKAN", "2026-07-13") is False
+    # ...while a fully-ended earlier day in the same span is still stampable.
+    assert stale_cal.is_no_fixture_day("ALLSVENSKAN", "2026-07-11") is True
+
+    monkeypatch.setattr(enumerator_module, "_build_af_fixture_calendar", lambda: stale_cal)
+    catalog = [_make_sports_entry(available_from="2026-03-01", available_to=None, league_id="ALLSVENSKAN")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2026-07-13"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""  # pending — NOT a stale EXPECTED_NO_FIXTURE
+    assert rows[0].capture_status == "expected_unattempted"
+
+    # The fresh post-day-end truthset (built 00:10Z 07-14 > day end 00:00Z) may
+    # stamp a genuinely-empty 07-13; a day WITH a fixture row falls through.
+    fresh_truthset = stale_truthset.copy()
+    fresh_truthset["evidence_built_at"] = pd.Timestamp(
+        enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_20260714-001053.parquet")
+    )
+    fresh_cal = enumerator_module._af_calendar_from_dataframe(fresh_truthset)
+    assert fresh_cal is not None
+    assert fresh_cal.is_no_fixture_day("ALLSVENSKAN", "2026-07-13") is True
+    with_fixture = pd.concat(
+        [
+            fresh_truthset,
+            pd.DataFrame([{"canonical_league_id": "ALLSVENSKAN", "season": 2026, "date": "2026-07-13"}]),
+        ],
+        ignore_index=True,
+    )
+    fresh_cal_with_fixture = enumerator_module._af_calendar_from_dataframe(with_fixture)
+    assert fresh_cal_with_fixture is not None
+    assert fresh_cal_with_fixture.is_no_fixture_day("ALLSVENSKAN", "2026-07-13") is False
 
 
 def test_prediction_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
