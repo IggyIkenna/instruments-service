@@ -1,7 +1,8 @@
 # Epic: instruments_master
 # Lifecycle: one-off
 # Delete-when: after the 2026-07-13 FIXTURES post-cutoff trickle backlog (2026-06-29..
-#   2026-07-12) is consolidated + verified (proven no-fixture cells == 0 in that window)
+#   2026-07-12) AND the 2026-07-13 day-closeout sweep are consolidated + verified
+#   (proven no-fixture pending cells == 0 for all dates <= 2026-07-13)
 """Resolve the post-cutoff FIXTURES expected_unattempted trickle backlog (2026-07-13).
 
 Context: after the 2026-07-13 phantom-denominator remediation (issue doc
@@ -17,9 +18,10 @@ seasons 2025-2026, run id passed via ``--truthset-run-id``):
   api_football, write the canonical parquet, then ``record_captured`` via the
   per-VM-shard ManifestWriter path (``VM_NAME=trickle-fetch-20260713``).
 * ``--operation flip`` — cells the truthset proves have ZERO fixtures, dates
-  <= 2026-07-12 ONLY (today 2026-07-13 is left to the daily pipeline): flip to
-  ``empty_confirmed`` with ``error_reason=EXPECTED_NO_FIXTURE__truthset_<runid>``
-  via a direct per-VM shard write (``VM_NAME=trickle-flip-20260713``).
+  <= ``--flip-cutoff-date`` ONLY (default 2026-07-12; a non-final day is always
+  left to the daily pipeline): flip to ``empty_confirmed`` with
+  ``error_reason=EXPECTED_NO_FIXTURE__truthset_<runid>`` via a direct per-VM
+  shard write (``VM_NAME=trickle-flip-20260713``).
 
 Mirrors ``fixtures_eu_truthset_flip_2026_07_13.py`` (same per-VM-shard pattern):
 NEVER hand-edits the consolidated index — rows land in ``_index/per_vm/`` shards
@@ -43,6 +45,13 @@ from the fresh index snapshot x fresh-truthset join, dates <= 2026-07-12).
 The fetch mode is cells-driven (no date bounds), so it is also reused for the
 PRE-window pending backlog (cells dated < 2026-06-29 that the truthset proves have
 fixtures) — pass ``--vm-name`` to keep each sweep's per-VM shard distinct.
+
+The flip window is parametrizable (``--backlog-lo-date`` / ``--flip-cutoff-date``,
+defaults preserve the original 2026-06-29..2026-07-12 one-off window) so the same
+evidenced pattern serves the day-closeout sweeps: once a day is final (past 00:00
+UTC of the next day) a FRESH truthset re-evidences that day's leftover pending
+cells and the cutoff advances to include it (e.g. the 2026-07-13 closeout runs
+with ``--flip-cutoff-date 2026-07-13`` and a truthset built on 2026-07-14).
 """
 
 from __future__ import annotations
@@ -61,7 +70,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("fixtures_trickle_resolution")
 
 _RUN_TS = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-_FLIP_CUTOFF_DATE = "2026-07-12"  # today (2026-07-13) is not final — left to the daily pipeline
+# Defaults preserve the original one-off window; day-closeout sweeps override via CLI
+# (--flip-cutoff-date advances only once that day is final, evidenced by a truthset
+# built AFTER the day ended).
+_FLIP_CUTOFF_DATE = "2026-07-12"  # at authoring time 2026-07-13 was not final — left to the daily pipeline
 _BACKLOG_LO_DATE = "2026-06-29"  # the prior remediation's truthset cutoff (exclusive backlog start)
 _VM_NAME_BY_OP = {"flip": "trickle-flip-20260713", "fetch": "trickle-fetch-20260713"}
 _FIXTURES_BLOB_TPL = (
@@ -78,6 +90,17 @@ def _args() -> argparse.Namespace:
     p.add_argument("--cells", help="fetch: csv of (league_id, date, af_league_id, season) cells")
     p.add_argument("--truthset-run-id", help="flip: run_ts of the fresh truthset that evidences the flips")
     p.add_argument("--vm-name", help="override the per-VM shard tag (default: the per-operation built-in)")
+    p.add_argument(
+        "--flip-cutoff-date",
+        default=_FLIP_CUTOFF_DATE,
+        help="flip: refuse pairs dated after this; only advance past the default once that "
+        "day is final AND the truthset postdates it (default: %(default)s)",
+    )
+    p.add_argument(
+        "--backlog-lo-date",
+        default=_BACKLOG_LO_DATE,
+        help="flip: lower bound of the pending backlog window (default: %(default)s)",
+    )
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--project", default="central-element-323112")
     return p.parse_args()
@@ -118,8 +141,8 @@ def _deduped_pending_fixtures(df: pd.DataFrame) -> pd.DataFrame:
         & (fx["source"].astype(str) == "api_football")
         & (fx["pipeline_mode"].astype(str) == "batch_api_football")
         & ~reason.str.startswith("EXPECTED_")
-        & (fx["date"] >= _BACKLOG_LO_DATE)
-        & (fx["date"] <= _FLIP_CUTOFF_DATE)
+        & (fx["date"] >= ARGS.backlog_lo_date)
+        & (fx["date"] <= ARGS.flip_cutoff_date)
     )
     return fx[mask]
 
@@ -128,9 +151,11 @@ def run_flip(pairs_path: str, truthset_run_id: str, dry_run: bool) -> int:
     flip_reason = f"EXPECTED_NO_FIXTURE__truthset_{truthset_run_id}"
     pairs_df = pd.read_parquet(pairs_path)
     target = set(zip(pairs_df["league_id"].astype(str), pairs_df["date"].astype(str).str[:10], strict=True))
-    over_cutoff = {(lg, d) for lg, d in target if d > _FLIP_CUTOFF_DATE}
+    over_cutoff = {(lg, d) for lg, d in target if d > ARGS.flip_cutoff_date}
     if over_cutoff:
-        logger.error("REFUSING: %d target pairs dated after %s: %s", len(over_cutoff), _FLIP_CUTOFF_DATE, over_cutoff)
+        logger.error(
+            "REFUSING: %d target pairs dated after %s: %s", len(over_cutoff), ARGS.flip_cutoff_date, over_cutoff
+        )
         return 2
     logger.info("Target (league, date) pairs to flip: %d (reason=%s)", len(target), flip_reason)
 
@@ -139,7 +164,7 @@ def run_flip(pairs_path: str, truthset_run_id: str, dry_run: bool) -> int:
     logger.info("Live availability index rows: %d", len(idx))
 
     pend = _deduped_pending_fixtures(idx)
-    logger.info("Deduped pending FIXTURES cells (%s..%s): %d", _BACKLOG_LO_DATE, _FLIP_CUTOFF_DATE, len(pend))
+    logger.info("Deduped pending FIXTURES cells (%s..%s): %d", ARGS.backlog_lo_date, ARGS.flip_cutoff_date, len(pend))
 
     cells = list(zip(pend["league_id"].astype(str), pend["date"], strict=True))
     in_target = pd.Series([c in target for c in cells], index=pend.index)
