@@ -79,7 +79,7 @@ from pathlib import Path
 
 import pandas as pd
 from unified_api_contracts.canonical.domain.sports.league_data import LEAGUE_REGISTRY
-from unified_trading_library import get_storage_client, validate_api_keys_for_venues
+from unified_trading_library import get_storage_client, resolve_bucket_name, validate_api_keys_for_venues
 
 from instruments_service.reference_data.adapters.sports.adapters.api_football import (
     ApiFootballAdapter,
@@ -100,8 +100,23 @@ _TRUTH_SET_DATA_TYPE = "FIXTURES"
 # which api_football never returns. So we count every row.
 
 
-def _bucket_for_project(project_id: str) -> str:
-    return f"instruments-store-sports-{project_id}"
+def _default_bucket() -> str:
+    """Resolve the canonical sports instruments-store bucket via the bucket-name SSOT.
+
+    MUST be the same bucket the enumerator's fixture-calendar gate reads
+    (``scripts/enumerate_expected_universe.py::_build_af_fixture_calendar``
+    unions ``_audits/fixtures_truthset_*.parquet`` from
+    ``resolve_bucket_name(cloud="gcp", kind="instruments-store",
+    asset_group="sports")``). The old hand-rolled default
+    (``instruments-store-sports-{project_id}``) lacked the ``-prd-`` segment,
+    so truthset artifacts landed in a bucket the gate never lists — the
+    2026-07-14 day-closeout had to server-side copy the artifact into the prd
+    ``_audits/`` (issue doc
+    ``sports_fixtures_pending_eu_phantom_denominator_2026_07_13``). Resolving
+    through the SSOT keeps the write prefix and the gate's union prefix on the
+    SAME bucket by construction; ``--bucket`` remains the explicit override.
+    """
+    return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
 
 
 def _audit_uri(bucket: str, name: str, run_ts: str, suffix: str) -> str:
@@ -341,7 +356,7 @@ def _checkpoint_truth_set(
 
 async def _run(args: argparse.Namespace) -> int:
     project_id = args.project_id
-    bucket = args.bucket if args.bucket else _bucket_for_project(project_id)
+    bucket = args.bucket if args.bucket else _default_bucket()
     run_ts = args.resume or datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     season_start, season_end = args.season_start, args.season_end
     seasons = list(range(season_start, season_end + 1))
@@ -594,7 +609,11 @@ def main() -> int:
     parser.add_argument(
         "--bucket",
         default=None,
-        help="Override the GCS bucket (default: instruments-store-sports-{project-id}).",
+        help=(
+            "Override the GCS bucket (default: the canonical sports instruments-store "
+            "bucket via resolve_bucket_name — the SAME bucket the enumerator "
+            "fixture-calendar gate unions truthset artifacts from)."
+        ),
     )
     parser.add_argument(
         "--season-start",
