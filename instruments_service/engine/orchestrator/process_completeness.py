@@ -65,15 +65,42 @@ def _fold_written_venues(counts: dict[str, int], expected_venues: set[str]) -> s
     Fold each composite key to its bare venue whenever the prefix (before the first
     ``"/"``) is itself a configured venue for this run — every canonical_question_group
     under one venue collapses onto that one venue, matching ``expected_venues``'s
-    granularity 1:1 (so completeness counts/percentages stay meaningful). Sports'
-    ``"FIXTURES/{league_id}"`` composite keys are unaffected — ``"FIXTURES"`` is never a
-    venue name so is never a member of ``expected_venues``. Bare CEFI/DEFI/TRADFI keys
-    (no ``"/"``) fold to themselves (no-op).
+    granularity 1:1 (so completeness counts/percentages stay meaningful). Bare
+    CEFI/DEFI/TRADFI keys (no ``"/"``) fold to themselves (no-op).
+
+    Sports' ``"FIXTURES/{league_id}"`` composite keys get the SAME treatment,
+    folded to ``API_FOOTBALL`` (the venue that owns the FIXTURES stage-6 write)
+    when it's in ``expected_venues`` — ``"FIXTURES"`` itself is a data_type, never
+    a venue name, so the generic prefix-in-expected_venues check above never
+    matches it on its own.
+
+    Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15, see
+    plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
+    without this, a league-scoped FIXTURES run whose target league legitimately
+    had zero fixtures that day (the common case — off-season, mid-week rest day,
+    etc; ``_write_sports_fixture_venue`` now always stamps
+    ``counts["FIXTURES/{league}"] = 0`` for such leagues) left ``written_venues``
+    without an ``API_FOOTBALL`` entry, so this function misclassified the whole
+    venue as ``SOURCE_RETURNED_ZERO`` (0 records after filtering) and stamped a
+    REDUNDANT blanket ``{date, venue}`` row — live-verified to collide with
+    (and drop) the correct per-league honest-absence row in the same per-VM
+    manifest-shard flush, permanently orphaning any pre-existing stale
+    ``attempted_failed`` row for that (date, league) FIXTURES cell (612 such
+    rows found stuck, all with real per-league keys, genuinely re-fetched
+    clean on every re-attempt yet never cleared). Folding ``FIXTURES/*`` to
+    ``API_FOOTBALL`` here makes ``written_venues`` correctly reflect ANY
+    per-league write (captured OR honest-empty), so the wrong blanket stamp
+    no longer fires at all.
     """
     folded: set[str] = set()
     for key in counts:
         prefix = key.split("/", 1)[0]
-        folded.add(prefix if prefix in expected_venues else key)
+        if prefix == "FIXTURES" and "API_FOOTBALL" in expected_venues:
+            folded.add("API_FOOTBALL")
+        elif prefix in expected_venues:
+            folded.add(prefix)
+        else:
+            folded.add(key)
     return folded
 
 

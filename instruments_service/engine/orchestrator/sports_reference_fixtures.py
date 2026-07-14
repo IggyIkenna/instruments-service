@@ -683,6 +683,21 @@ def _write_per_fixture_entities(
             # falsely claiming "we know there's nothing" and freezing the
             # gap forever.  Correct rule: ANY failure → record_failed so
             # the shard is flagged for backfill, not silently confirmed-empty.
+            #
+            # Root-cause fix (api_football_per_fixture_blank_league_orphan_
+            # 2026_07_15, see plans/active/sports_data_sources_canonical_
+            # completion_2026_07_13.md): this branch previously wrote ONE
+            # blank-league_id date-aggregate ``record_failed`` row
+            # (``row_key={"date","data_type"}``, no ``league_id``) — a
+            # row_key no per-league success path
+            # (``record_captured``/``emit_empty_gaps_for_entity``, both
+            # keyed on a real canonical ``league_id``) can ever supersede,
+            # so it sat ``attempted_failed`` forever even after a later
+            # clean re-fetch. Live-verified 2026-07-15: 15 such blank rows
+            # across PLAYER_STATS/FIXTURE_STATS/FIXTURE_EVENTS/FIXTURE_LINEUPS.
+            # Write per-league instead, using ``af_fid_to_league`` (every
+            # league with a completed fixture this date — the exact
+            # denominator this entity's fetch was attempted against).
             _fail_count, _err_code = entity_failures.get(entity_name, (0, ""))
             if _fail_count > 0 and _err_code:
                 # At least one fixture call raised → treat the entity as
@@ -690,12 +705,30 @@ def _write_per_fixture_entities(
                 # from the first failure is representative; per-fixture
                 # errors are already emitted individually by _fetch_one.
                 if manifest is not None:
-                    manifest.record_failed(
-                        row_key={"date": date, "data_type": _af_entity_dt},
-                        error=_err_code,
-                        attempted_at=hooks.attempt_ts,
-                        pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-                    )
+                    _affected_leagues = {
+                        _orch._canonical_league_id(str(_lid)) for _lid in af_fid_to_league.values() if _lid
+                    }
+                    if _affected_leagues:
+                        for _lid in sorted(_affected_leagues):
+                            manifest.record_failed(
+                                row_key={"date": date, "data_type": _af_entity_dt, "league_id": _lid},
+                                error=_err_code,
+                                attempted_at=hooks.attempt_ts,
+                                pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                            )
+                    else:
+                        # No league mapping at all this date (implies FIXTURES
+                        # resolution itself failed) — extremely rare, since
+                        # _fail_count>0 requires at least one queued per-fixture
+                        # task, which requires a non-empty af_fid_to_league.
+                        # Fall back to the date-aggregate row rather than lose
+                        # the failure signal entirely.
+                        manifest.record_failed(
+                            row_key={"date": date, "data_type": _af_entity_dt},
+                            error=_err_code,
+                            attempted_at=hooks.attempt_ts,
+                            pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                        )
             else:
                 # All calls succeeded but returned zero rows (e.g.
                 # post-match stats not yet published, lineups not
