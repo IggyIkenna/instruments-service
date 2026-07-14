@@ -347,7 +347,19 @@ def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str
     # PERPETUAL ids (``BTCUSDT``/``BTCUSD`` — no dash, no month-code) fall
     # through unchanged to the existing generic path below (already correct).
     # Real evidence 2026-07-09 (api.tardis.dev/v1/exchanges/bybit).
-    if exchange == "bybit":
+    #
+    # Bitget Futures' 16 dated quarterlies (e.g. ``BTCUSDH25``, verified
+    # 2026-07-14 via api.tardis.dev/v1/exchanges/bitget-futures) use the
+    # IDENTICAL no-dash CME-month-code shape as Bybit's legacy quarterlies —
+    # ``_split_bybit_symbol`` already handles it generically (its dash-based
+    # branches never match here since Bitget's futures carry no dash), so it
+    # is reused rather than duplicated. Real bug this fixes: with no branch
+    # for "bitget-futures", every FUTURE symbol here failed the generic
+    # suffix matcher (falls through to quote="", base="BTCUSDH25") and was
+    # silently dropped by the empty-quote guard in adapter.py — 0/16 real
+    # dated futures ever reached the catalogue (all 714 rows for
+    # BITGET-FUTURES were PERPETUAL only).
+    if exchange in ("bybit", "bitget-futures"):
         bybit_base, bybit_quote = _split_bybit_symbol(upper_id)
         if bybit_base:
             return bybit_base, bybit_quote
