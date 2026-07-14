@@ -101,9 +101,13 @@ class SolanaNativeStakingAdapter(BaseReferenceDataAdapter):
             symbol = inst["symbol"]
             mint = inst["mint_address"]
 
+            instrument_key = f"{venue_tag}:STAKING:{symbol}"
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:STAKING:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=mint,
                     instrument_type=InstrumentType.STAKING,

@@ -141,8 +141,12 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
         venue_tag: str,
     ) -> InstrumentRecord:
         """Build InstrumentRecord for mSOL liquid staking."""
+        instrument_key = f"{venue_tag}:STAKE:MSOL"
         return InstrumentRecord(
-            instrument_key=f"{venue_tag}:STAKE:MSOL",
+            instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol="mSo1iD7sSuqGMvkKPzYGBAjJrpF9VRdrByciFizSJhc",
             base_asset_contract_address="mSo1iD7sSuqGMvkKPzYGBAjJrpF9VRdrByciFizSJhc",
@@ -169,8 +173,12 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
         venue_tag: str,
     ) -> InstrumentRecord:
         """Build InstrumentRecord for Marinade native staking."""
+        instrument_key = f"{venue_tag}:STAKE:NATIVE-SOL"
         return InstrumentRecord(
-            instrument_key=f"{venue_tag}:STAKE:NATIVE-SOL",
+            instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol="MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD",
             pool_address="MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD",

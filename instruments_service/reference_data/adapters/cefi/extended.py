@@ -144,26 +144,31 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
         results: list[InstrumentRecord] = []
         for sym in symbols:
             base_asset = sym.split("-")[0].upper() if "-" in sym else sym.upper()
+            # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
+            # (2026-07-08 canonicalization — dropped the PERP shorthand only;
+            # this venue was already dash-normalized with a real settlement
+            # currency (``sym`` is e.g. "BTC-USD", confirmed live:
+            # collateralAssetName="USD" uniformly across markets. 2026-07-09
+            # scope-expansion — added the real @LIN margin marker, see
+            # _MARGIN_TYPE above for the verification method). SSOT:
+            # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
+            # finding 1 (2026-07-09 PERPETUAL scope-expansion) + finding 3+4;
+            # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
+            # Routed through the shared UAC builder (2026-07-09 retrofit,
+            # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) — the
+            # marker is embedded in the symbol passed to the builder (PERPETUAL's
+            # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
+            # convention DeFi POOL fee-tiers already use).
+            perp_instrument_key = build_instrument_id(
+                "EXTENDED-STARKNET", InstrumentType.PERPETUAL, f"{sym}@{_MARGIN_MARKER}"
+            )
             results.append(
                 InstrumentRecord(
-                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
-                    # (2026-07-08 canonicalization — dropped the PERP shorthand only;
-                    # this venue was already dash-normalized with a real settlement
-                    # currency (``sym`` is e.g. "BTC-USD", confirmed live:
-                    # collateralAssetName="USD" uniformly across markets. 2026-07-09
-                    # scope-expansion — added the real @LIN margin marker, see
-                    # _MARGIN_TYPE above for the verification method). SSOT:
-                    # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
-                    # finding 1 (2026-07-09 PERPETUAL scope-expansion) + finding 3+4;
-                    # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
-                    # Routed through the shared UAC builder (2026-07-09 retrofit,
-                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) — the
-                    # marker is embedded in the symbol passed to the builder (PERPETUAL's
-                    # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
-                    # convention DeFi POOL fee-tiers already use).
-                    instrument_key=build_instrument_id(
-                        "EXTENDED-STARKNET", InstrumentType.PERPETUAL, f"{sym}@{_MARGIN_MARKER}"
-                    ),
+                    instrument_key=perp_instrument_key,
+                    # No CeFi raw-code-to-human-name translation gap (see other CeFi
+                    # adapters' identical comment) — canonical_instrument_id mirrors
+                    # instrument_key.
+                    canonical_instrument_id=perp_instrument_key,
                     venue=self.venue,
                     raw_symbol=sym,
                     instrument_type=InstrumentType.PERPETUAL,
