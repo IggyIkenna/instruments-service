@@ -2,8 +2,11 @@
 
 Targets:
 - get_market_metadata_df (341-365): non-empty _last_markets
-- _fetch_clob_markets (716-717): date mismatch → continue
-- _fetch_clob_markets (721-723): ValidationError → continue
+- _fetch_clob_markets active-window filter (2026-07-14, contingent P1 of
+  prediction_lifecycle_prefetch_gate_and_resolution_day_catalogue_2026_07_14.md):
+  active-but-not-resolving inclusion, pre-created/post-resolution exclusion,
+  resolution-day-unchanged, creation-date fail-open vs settlement-date
+  fail-closed, and the ValidationError → continue branch.
 - _build_sports_id (958-987): valid league → return tuple
 """
 
@@ -90,21 +93,209 @@ class TestGetMarketMetadataDf:
 
 
 # ===========================================================================
-# _fetch_clob_markets (lines 716-717, 721-723)
+# _fetch_clob_markets — active-window filter (2026-07-14, contingent P1)
 # ===========================================================================
 
 
 class TestFetchClobMarkets:
-    """Date mismatch skip + ValidationError continue."""
+    """Active-window widening: a market's ``[created, resolved)`` window, not
+    just its resolution day, determines per-day catalogue membership.
 
-    async def test_date_mismatch_skips_market(self) -> None:
-        """Line 717: end_date doesn't start with target_prefix → continue."""
-        from datetime import UTC, datetime
+    Volume is bounded by the MTDS pre-fetch gate
+    (market-tick-data-service@abe0904d,
+    ``base_prediction_adapter.prefilter_ids_by_lifecycle_window``), shipped in
+    the same issue and landed BEFORE this widening per the issue doc's
+    ordering rationale — this widening only grows IS's ``cid_to_shard``
+    candidate list; MTDS's pre-fetch gate still bounds actual fetch attempts
+    to markets truly in-window for that day.
+    """
 
+    async def test_active_non_resolving_market_included(self) -> None:
+        """A market created well before day D and resolving well after day D
+        (active-but-not-resolving) now appears in day D's catalogue — the
+        exact widening this fix targets (previously dropped entirely)."""
         adapter = _make_adapter()
 
         raw_markets = [
-            {"end_date_iso": "2026-07-01T00:00:00Z"},  # different date
+            {
+                "condition_id": "0xactive",
+                "market_slug": "long-lived-market",
+                "question": "Will X happen eventually?",
+                "active": True,
+                "closed": False,
+                "created_at": "2026-06-01T00:00:00Z",  # created before day D
+                "end_date_iso": "2026-12-31T23:59:00Z",  # resolves well after day D
+            },
+        ]
+
+        with patch.object(
+            adapter,
+            "_get_raw_clob_markets_cached",
+            new_callable=AsyncMock,
+            return_value=raw_markets,
+        ):
+            results = await adapter._fetch_clob_markets("2026-06-15", datetime.now(UTC))  # type: ignore[attr-defined]
+
+        assert len(results) == 1
+
+    async def test_pre_created_market_excluded(self) -> None:
+        """A market whose known creation date is AFTER day D is excluded —
+        day D is entirely before the market existed (fail CLOSED once the
+        creation date IS known, per the day_end_ts <= pre_creation_ts bound)."""
+        adapter = _make_adapter()
+
+        raw_markets = [
+            {
+                "condition_id": "0xfuture",
+                "market_slug": "not-yet-created",
+                "question": "Future market?",
+                "active": True,
+                "closed": False,
+                "created_at": "2026-06-20T00:00:00Z",  # created AFTER day D
+                "end_date_iso": "2026-12-31T23:59:00Z",
+            },
+        ]
+
+        with patch.object(
+            adapter,
+            "_get_raw_clob_markets_cached",
+            new_callable=AsyncMock,
+            return_value=raw_markets,
+        ):
+            results = await adapter._fetch_clob_markets("2026-06-15", datetime.now(UTC))  # type: ignore[attr-defined]
+
+        assert results == []
+
+    async def test_post_resolution_market_excluded(self) -> None:
+        """A market that already resolved BEFORE day D is excluded — day D is
+        entirely after settlement."""
+        adapter = _make_adapter()
+
+        raw_markets = [
+            {
+                "condition_id": "0xresolved",
+                "market_slug": "already-resolved",
+                "question": "Already resolved?",
+                "active": False,
+                "closed": True,
+                "created_at": "2026-01-01T00:00:00Z",
+                "end_date_iso": "2026-03-01T00:00:00Z",  # resolved well before day D
+            },
+        ]
+
+        with patch.object(
+            adapter,
+            "_get_raw_clob_markets_cached",
+            new_callable=AsyncMock,
+            return_value=raw_markets,
+        ):
+            results = await adapter._fetch_clob_markets("2026-06-15", datetime.now(UTC))  # type: ignore[attr-defined]
+
+        assert results == []
+
+    async def test_resolution_day_behavior_unchanged(self) -> None:
+        """A market resolving exactly ON day D is still included — the
+        original resolution-day filter's core case is preserved by the
+        widened active-window overlap check (a market always overlaps its
+        own resolution day)."""
+        adapter = _make_adapter()
+
+        raw_markets = [
+            {
+                "condition_id": "0xresolving-today",
+                "market_slug": "resolves-today",
+                "question": "Resolves today?",
+                "active": False,
+                "closed": True,
+                "created_at": "2026-05-01T00:00:00Z",
+                "end_date_iso": "2026-06-15T18:00:00Z",  # resolves ON day D
+            },
+        ]
+
+        with patch.object(
+            adapter,
+            "_get_raw_clob_markets_cached",
+            new_callable=AsyncMock,
+            return_value=raw_markets,
+        ):
+            results = await adapter._fetch_clob_markets("2026-06-15", datetime.now(UTC))  # type: ignore[attr-defined]
+
+        assert len(results) == 1
+
+    async def test_unknown_creation_date_fails_open_include(self) -> None:
+        """No creation-date field at all (neither primary nor fallback
+        candidates) → fail OPEN, include — per the task's explicit
+        instruction that an unknown creation date must never masquerade as
+        "not yet listed"."""
+        adapter = _make_adapter()
+
+        raw_markets = [
+            {
+                "condition_id": "0xunknown-created",
+                "market_slug": "unknown-creation",
+                "question": "Unknown creation date?",
+                "active": True,
+                "closed": False,
+                "end_date_iso": "2026-12-31T23:59:00Z",  # resolves well after day D; no creation field at all
+            },
+        ]
+
+        with patch.object(
+            adapter,
+            "_get_raw_clob_markets_cached",
+            new_callable=AsyncMock,
+            return_value=raw_markets,
+        ):
+            results = await adapter._fetch_clob_markets("2026-06-15", datetime.now(UTC))  # type: ignore[attr-defined]
+
+        assert len(results) == 1
+
+    async def test_missing_end_date_excluded_fail_closed(self) -> None:
+        """No ``end_date_iso`` at all → excluded — fail CLOSED on the
+        settlement side (asymmetric with the creation side by design): an
+        unbounded/unknown resolution date must not let a market appear in
+        EVERY day's catalogue forever."""
+        adapter = _make_adapter()
+
+        raw_markets = [
+            {
+                "condition_id": "0xno-end-date",
+                "market_slug": "no-end-date",
+                "question": "No end date?",
+                "active": True,
+                "closed": False,
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        ]
+
+        with patch.object(
+            adapter,
+            "_get_raw_clob_markets_cached",
+            new_callable=AsyncMock,
+            return_value=raw_markets,
+        ):
+            results = await adapter._fetch_clob_markets("2026-06-15", datetime.now(UTC))  # type: ignore[attr-defined]
+
+        assert results == []
+
+    async def test_fallback_creation_field_game_start_time_used(self) -> None:
+        """When the primary creation fields are absent, ``game_start_time``
+        (a CLOB-native best-effort proxy, per ``markets.py::
+        _enrich_clob_lifecycle_lower_bound``'s 43a note) is used as the
+        creation-date signal — a market whose ``game_start_time`` is AFTER
+        day D is excluded, proving the fallback field is actually consulted."""
+        adapter = _make_adapter()
+
+        raw_markets = [
+            {
+                "condition_id": "0xgame-start",
+                "market_slug": "game-not-started",
+                "question": "Game not started?",
+                "active": True,
+                "closed": False,
+                "game_start_time": "2026-06-20T00:00:00Z",  # AFTER day D
+                "end_date_iso": "2026-12-31T23:59:00Z",
+            },
         ]
 
         with patch.object(
@@ -118,7 +309,10 @@ class TestFetchClobMarkets:
         assert results == []
 
     async def test_validation_error_continues(self) -> None:
-        """Lines 721-723: PolymarketGammaMarket.model_validate raises → continue."""
+        """PolymarketGammaMarket.model_validate raises → continue (the
+        market passes the active-window filter — it resolves on day D — but
+        fails pydantic validation, so it's dropped without crashing the
+        scan)."""
         from datetime import UTC, datetime
 
         adapter = _make_adapter()
