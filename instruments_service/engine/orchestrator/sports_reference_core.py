@@ -553,4 +553,19 @@ async def _fetch_injuries(
             operation="sports_reference_injuries_fetch",
             shard=date,
         )
-        hooks.note_failed("INJURIES", exc)
+        # Root-cause fix (api_football_injuries_blank_league_orphan_2026_07_15,
+        # see plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
+        # ``get_injuries(date)`` is a single DATE-WIDE call — a top-level
+        # exception here previously fell through to ``hooks.note_failed`` with
+        # NO ``league_id``, writing one blank-league_id date-aggregate
+        # ``attempted_failed`` row. That row_key can never be superseded by
+        # this function's per-league ``record_captured``/``emit_empty_gaps_
+        # for_entity`` success paths (they always key on a real canonical
+        # ``league_id``), so it sat stuck forever even after a LATER retry
+        # genuinely captured every league for that date — live-verified
+        # 2026-07-15: 1,923 such rows, 100% blank league_id, frozen across a
+        # 12+-hour active re-attempt window. Mirrors the footystats
+        # ``_fetch_footystats_predictions``/``_matches``/``_odds`` fix
+        # (instruments-service@ed3e75b8) — write per-league instead.
+        for _exp_lid in sorted({lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")}):
+            hooks.note_failed("INJURIES", exc, league_id=_exp_lid)

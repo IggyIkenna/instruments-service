@@ -272,12 +272,52 @@ def _write_sports_fixture_venue(
     # returned zero for that league. Season window comes from UAC
     # get_league_fixture_calendar — only leagues whose season
     # actually covers this date are claimed empty.
+    #
+    # Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15,
+    # see plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
+    # TWO bugs previously left a pre-existing stale FIXTURES attempted_failed
+    # row permanently un-superseded even on a genuinely clean re-fetch:
+    #   1. Off-season leagues (``get_league_fixture_calendar`` returns []) hit
+    #      a bare ``continue`` — NEITHER captured NOR empty was ever written
+    #      for that (date, league) cell, so a stale row from before this
+    #      off-season check existed (or from any other bug) could never be
+    #      cleared. Now write a terminal ``record_empty`` with
+    #      ``EXPECTED_PAUSED_LEAGUE`` (the existing off-season reason used by
+    #      ``sports_reference_core.py`` for INJURIES/TEAMS/STANDINGS) instead
+    #      of silently skipping.
+    #   2. Neither this loop's ``record_empty`` calls NOR the off-season skip
+    #      touched ``counts``, which is the ONLY per-league write signal
+    #      ``process_completeness.py`` reads (via ``_fold_written_venues``) to
+    #      decide whether ``API_FOOTBALL`` is a real "0 records" venue. A
+    #      league-scoped run whose target league had zero fixtures (the
+    #      common, correct case) always left ``counts`` FIXTURES-empty, so
+    #      completeness misclassified the whole venue as
+    #      ``SOURCE_RETURNED_ZERO`` and stamped a REDUNDANT blanket
+    #      ``{date, venue}`` row — live-verified (2026-07-15) to interfere
+    #      with the correct per-league row landing in the same per-VM shard
+    #      flush. Stamping ``counts[f"FIXTURES/{league}"] = 0`` for every
+    #      league this loop handles (mirrors the captured branch's
+    #      ``counts[...] = len(...)``) makes ``written_venues`` correctly
+    #      include ``API_FOOTBALL`` whenever ANY per-league write (captured OR
+    #      honest-empty) happened, so the wrong blanket stamp no longer fires.
     _fx_attempt_ts = _orch.datetime.now(_orch.UTC)
     _expected_af_lids = {league.league_id for league in _orch.get_expected_leagues_for_source("api_football")}
     if league_filter:
         _expected_af_lids &= set(league_filter)
     for _exp_lid in sorted(_expected_af_lids - _captured_lids):
         if not _orch.get_league_fixture_calendar(_exp_lid, date, date):
+            manifest.record_empty(
+                row_key={
+                    "date": date,
+                    "data_type": "FIXTURES",
+                    "league_id": _exp_lid,
+                },
+                attempted_at=_fx_attempt_ts,
+                reason=_orch.EmptyConfirmedReason.EXPECTED_PAUSED_LEAGUE,
+                pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                source="api_football",
+            )
+            counts[f"FIXTURES/{_exp_lid}"] = 0
             continue
         manifest.record_empty(
             row_key={
@@ -290,6 +330,7 @@ def _write_sports_fixture_venue(
             pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
             source="api_football",
         )
+        counts[f"FIXTURES/{_exp_lid}"] = 0
 
 
 def _write_prediction_venue(
