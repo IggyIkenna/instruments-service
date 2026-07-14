@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from datetime import date as date_type
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pandas as pd
@@ -295,8 +296,8 @@ class TestOrchestratorSportsLeaguePartitioning:
             ),
             patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
             patch(
-                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
-                return_value=["EPL", "BUNDESLIGA"],
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[SimpleNamespace(league_id="EPL"), SimpleNamespace(league_id="BUNDESLIGA")],
             ),
         ):
             result = await process_instruments("2026-04-12", ["SPORTS"])
@@ -368,8 +369,8 @@ class TestOrchestratorSportsLeaguePartitioning:
         with (
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_cls),
             patch(
-                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
-                return_value=["EPL", "BUNDESLIGA"],
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[SimpleNamespace(league_id="EPL"), SimpleNamespace(league_id="BUNDESLIGA")],
             ),
         ):
             _zero_sports_empty_fixture_markers(
@@ -400,8 +401,8 @@ class TestOrchestratorSportsLeaguePartitioning:
         with (
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_cls),
             patch(
-                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
-                return_value=["EPL", "BUNDESLIGA"],
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[SimpleNamespace(league_id="EPL"), SimpleNamespace(league_id="BUNDESLIGA")],
             ),
         ):
             _zero_sports_empty_fixture_markers(

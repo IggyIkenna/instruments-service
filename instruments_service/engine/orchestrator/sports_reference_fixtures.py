@@ -293,7 +293,7 @@ async def _run_per_fixture_enrichment(
                 [n for n, _ in _per_fixture_entities],
             )
 
-    entity_rows, entity_failures = await _gather_per_fixture_rows(
+    entity_rows, entity_failures, captured_per_entity_league = await _gather_per_fixture_rows(
         per_fixture_entities=_per_fixture_entities,
         date=date,
         bucket=bucket,
@@ -312,6 +312,7 @@ async def _run_per_fixture_enrichment(
         entity_failures=entity_failures,
         af_fid_to_league=af_fid_to_league,
         recovery_fixture_ids=recovery_fixture_ids,
+        captured_per_entity_league=captured_per_entity_league,
     )
 
 
@@ -323,7 +324,11 @@ async def _gather_per_fixture_rows(
     fixture_ids: list[int],
     af_fid_to_league: dict[str, str],
     redo_all: bool,
-) -> tuple[dict[str, list[dict[str, object]]], dict[str, tuple[int, str]]]:
+) -> tuple[
+    dict[str, list[dict[str, object]]],
+    dict[str, tuple[int, str]],
+    dict[tuple[str, str], frozenset[int]],
+]:
     """Concurrent per-fixture fetching with rate-limit semaphore.
 
     API Football Mega plan: 900 req/min shared across the fleet. The
@@ -348,6 +353,13 @@ async def _gather_per_fixture_rows(
     ``{"errors": {"rateLimit": "..."}}```) with minute-boundary back-off
     + retry, so transient fleet-level quota exhaustion no longer records
     every fixture as ``attempted_failed``.
+
+    Returns the third element ``captured_per_entity_league`` — the pre-fetch
+    skip map of ``(entity_name, canonical_league_id) -> already-captured
+    af_fixture_ids`` read from existing per-league parquets — so the caller
+    (``_write_per_fixture_entities``) can reaffirm those skip-as-present
+    leagues as ``captured`` instead of letting a no-op run's empty-gap pass
+    demote them to ``empty_confirmed``.
     """
     concurrency = 10
     sem = _orch.asyncio.Semaphore(concurrency)
@@ -480,7 +492,55 @@ async def _gather_per_fixture_rows(
     )
     await _orch.asyncio.gather(*tasks)
 
-    return entity_rows, entity_failures
+    return entity_rows, entity_failures, captured_per_entity_league
+
+
+def _reaffirm_already_present_leagues(
+    *,
+    manifest: _orch.ManifestWriter | None,
+    bucket: str,
+    date: str,
+    entity_name: str,
+    af_entity_dt: str,
+    leagues: set[str],
+) -> set[str]:
+    """Reaffirm skip-as-already-present leagues as ``captured`` from parquet.
+
+    A pre-fetch-skip run (``_gather_per_fixture_rows``) fetches zero NEW rows
+    for a league whose fixtures are already fully captured on disk, so that
+    league would otherwise be absent from this run's captured-league set and
+    fall into ``emit_empty_gaps_for_entity``'s empty-gap loop — DEMOTING an
+    already-captured cell to ``empty_confirmed`` (the 2026-07-14 GW fleet
+    false-empty incident: 3,720 cells, see
+    ``sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14.md``).
+    Re-derive a fresh ``captured`` manifest row directly from the existing
+    parquet (parquet-derived counts) instead of re-writing the parquet itself
+    (the data is already correct on disk — only the manifest needs refreshing).
+
+    Returns the subset of ``leagues`` actually reaffirmed (existing parquet
+    still readable) — the caller unions this into its captured-league set so
+    ``emit_empty_gaps_for_entity`` skips them too.
+    """
+    reaffirmed: set[str] = set()
+    if manifest is None:
+        return reaffirmed
+    for _lid in sorted(leagues):
+        _existing_df = _orch._read_existing_per_league_entity_df(bucket, date, entity_name, _lid)
+        if _existing_df is None or _existing_df.empty:
+            continue
+        manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+            row_key={"date": date, "data_type": af_entity_dt, "league_id": _lid},
+            df=_existing_df,
+            asset_group="sports",
+            instrument_type="",
+            data_type=af_entity_dt,
+            league_id=_lid,
+            pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+            source=_orch._sports_ref_source(entity_name),
+            service_emission_state=None,
+        )
+        reaffirmed.add(_lid)
+    return reaffirmed
 
 
 def _write_per_fixture_entities(
@@ -494,12 +554,16 @@ def _write_per_fixture_entities(
     entity_failures: dict[str, tuple[int, str]],
     af_fid_to_league: dict[str, str],
     recovery_fixture_ids: frozenset[int] | None,
+    captured_per_entity_league: dict[tuple[str, str], frozenset[int]],
 ) -> None:
     """Write per-league partitioned per-fixture entity files + manifest rows."""
     manifest = hooks.manifest
 
     for entity_name in entity_names:
         _af_entity_dt = _entity_dt_for_short(entity_name)
+        _already_present_leagues = {
+            _lid for (_ent, _lid), _fids in captured_per_entity_league.items() if _ent == entity_name and _fids
+        }
         all_rows = entity_rows[entity_name]
         if all_rows:
             df = _orch.pd.DataFrame(all_rows)
@@ -599,8 +663,10 @@ def _write_per_fixture_entities(
 
                 # Drop unmapped rows — single-SSOT means bare writes are
                 # forbidden for league-axis data types. Surface as a
-                # warning so we can spot upstream league-mapping
-                # regressions in logs.
+                # warning AND record_failed so dropped rows can never be
+                # silent (2026-07-14 GW fleet: 225,854 rows fetched then
+                # dropped here with only a log line — quota paid, data lost,
+                # no manifest trace).
                 if not _without_league.empty:
                     _orch.logger.warning(
                         "%s bare-path fallback triggered for date=%s — data shape regression: "
@@ -609,13 +675,32 @@ def _write_per_fixture_entities(
                         date,
                         len(_without_league),
                     )
+                    if manifest is not None:
+                        manifest.record_failed(
+                            row_key={"date": date, "data_type": _af_entity_dt},
+                            error="UNMAPPED_LEAGUE_ROWS_DROPPED",
+                            attempted_at=hooks.attempt_ts,
+                            pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                        )
+                # Skip-as-already-present leagues that yielded no NEW rows
+                # this run must not be demoted to empty_confirmed below —
+                # reaffirm them as captured from the existing parquet first.
+                _pf_captured |= _reaffirm_already_present_leagues(
+                    manifest=manifest,
+                    bucket=bucket,
+                    date=date,
+                    entity_name=entity_name,
+                    af_entity_dt=_af_entity_dt,
+                    leagues=_already_present_leagues - _pf_captured,
+                )
                 if manifest is not None:
                     hooks.emit_empty_gaps_for_entity(_af_entity_dt, _pf_captured)
             else:
                 # Single-SSOT: bare manifest row + bare parquet write are
                 # both suppressed; writing one would create a phantom
                 # captured shard with no parquet on disk.  Surface the
-                # upstream regression in logs so it can be diagnosed.
+                # upstream regression in logs AND record_failed so the
+                # drop can never be silent.
                 _orch.logger.warning(
                     "%s bare-path fallback triggered for date=%s — data shape regression: "
                     "no fixture-id column or empty af_fid->league map (rows=%d). "
@@ -624,6 +709,13 @@ def _write_per_fixture_entities(
                     date,
                     len(df),
                 )
+                if manifest is not None:
+                    manifest.record_failed(
+                        row_key={"date": date, "data_type": _af_entity_dt},
+                        error="UNMAPPED_LEAGUE_ROWS_DROPPED",
+                        attempted_at=hooks.attempt_ts,
+                        pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    )
 
             _orch.logger.info("Sports reference: %d %s rows written", len(df), entity_name)
         else:
@@ -653,7 +745,22 @@ def _write_per_fixture_entities(
                         pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
                     )
             else:
-                # All calls succeeded but returned zero rows
-                # (e.g. post-match stats not yet published, lineups not
-                # disclosed for low-profile fixture) — legitimate empty.
-                hooks.emit_empty_gaps_for_entity(_af_entity_dt, set())
+                # All calls succeeded but returned zero rows (e.g. post-match
+                # stats not yet published, lineups not disclosed for
+                # low-profile fixture) — legitimate empty EXCEPT for leagues
+                # that were skip-as-already-present (fully cached, so zero
+                # NEW rows this run is expected, not a real absence). This
+                # branch is the dominant false-empty source (2026-07-14 GW
+                # fleet: 943/975/986/816 cells for EVENTS/LINEUPS/STATS/
+                # PLAYER_STATS) — an entity can be 100% skip-as-present
+                # across every fixture, so ``all_rows`` is empty even though
+                # real data exists on disk for those leagues.
+                _reaffirmed = _reaffirm_already_present_leagues(
+                    manifest=manifest,
+                    bucket=bucket,
+                    date=date,
+                    entity_name=entity_name,
+                    af_entity_dt=_af_entity_dt,
+                    leagues=_already_present_leagues,
+                )
+                hooks.emit_empty_gaps_for_entity(_af_entity_dt, _reaffirmed)

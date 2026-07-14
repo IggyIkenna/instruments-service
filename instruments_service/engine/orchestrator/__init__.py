@@ -523,6 +523,9 @@ from instruments_service.engine.orchestrator.sports_fixtures import (
     _per_league_fixtures_data_unchanged as _per_league_fixtures_data_unchanged,
 )
 from instruments_service.engine.orchestrator.sports_fixtures import (
+    _read_existing_per_league_entity_df as _read_existing_per_league_entity_df,
+)
+from instruments_service.engine.orchestrator.sports_fixtures import (
     _read_existing_per_league_fixture_ids as _read_existing_per_league_fixture_ids,
 )
 from instruments_service.engine.orchestrator.sports_fixtures import (
@@ -766,6 +769,7 @@ __all__ = [
     "_normalize_wrapped_token",
     "_per_league_fixtures_data_unchanged",
     "_pipeline_mode_for_sports_data_type",
+    "_read_existing_per_league_entity_df",
     "_read_existing_per_league_fixture_ids",
     "_read_fixture_ids_from_gcs",
     "_read_per_league_entity_df",

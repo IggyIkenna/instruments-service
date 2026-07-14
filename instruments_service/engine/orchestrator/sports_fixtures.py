@@ -30,6 +30,7 @@ __all__ = [
     "_build_fixture_league_map_from_gcs",
     "_merge_with_existing_per_league_parquet",
     "_per_league_fixtures_data_unchanged",
+    "_read_existing_per_league_entity_df",
     "_read_existing_per_league_fixture_ids",
     "_read_fixture_ids_from_gcs",
     "_read_per_league_entity_df",
@@ -276,8 +277,11 @@ def _write_fixtures_per_league(
         _stringified = fixture_df["league_id"].astype(str)
         _league_series = _stringified.mask(_stringified.str.strip() == "")
     elif "af_league_id" in fixture_df.columns and fixture_df["af_league_id"].notna().any():
+        # 94-league api_football-expected set, not the 33-league Prediction
+        # tier — same classification-filter mismatch class fixed for
+        # TEAMS/STANDINGS 2026-07-13 (sports_reference_core.py::_fetch_teams_and_standings).
         _af_to_canonical: dict[int, str] = {}
-        for _league_def in _orch.get_prediction_leagues():
+        for _league_def in _orch.get_expected_leagues_for_source("api_football"):
             if _league_def.api_football_id is not None:
                 _af_to_canonical[_league_def.api_football_id] = _league_def.league_id
         # af_league_id may be float-typed in pandas after read_parquet; coerce.
@@ -393,22 +397,22 @@ def _write_fixtures_per_league(
         )
 
 
-def _read_existing_per_league_fixture_ids(
+def _read_existing_per_league_entity_df(
     bucket: str,
     date: str,
     entity_name: str,
     canonical_league_id: str,
-) -> frozenset[int]:
-    """Return the set of af_fixture_ids already captured in a per-league parquet.
+) -> _orch.pd.DataFrame | None:
+    """Return the existing per-league parquet DataFrame for (date, entity, league).
 
     Reads ``sports_reference/by_date/day={date}/entity={entity}/league={L}/{entity}.parquet``
-    and returns ``frozenset({af_fixture_id, ...})`` of rows present. Used by the
-    per-fixture pre-fetch skip path to avoid wasting api_football calls on
-    fixtures whose data is already on disk.
+    (canonical-then-legacy prefix). Returns ``None`` on any miss / read failure.
+    Logs at debug level so operators can confirm the read path engaged.
 
-    Returns empty frozenset on any miss / read failure (the caller treats that
-    as "no captured fixtures known, fetch everything in scope"). Logs at debug
-    level so operators can confirm the skip path engaged.
+    Split out from ``_read_existing_per_league_fixture_ids`` (2026-07-14) so the
+    per-fixture-entity write path can reaffirm a fresh ``record_captured`` row
+    from parquet-derived counts for skip-as-already-present leagues without a
+    second GCS read (see ``sports_reference_fixtures.py::_write_per_fixture_entities``).
     """
     _canon_path = _orch._sports_ref_canonical_blob_path(
         date, entity_name, league=canonical_league_id, filename=f"{entity_name}.parquet"
@@ -421,15 +425,34 @@ def _read_existing_per_league_fixture_ids(
         blob_path = _orch._resolve_sports_ref_blob(storage_client, bucket, _canon_path, _legacy_path)
         blob = storage_client.bucket(bucket).blob(blob_path)
         if not blob.exists():
-            return frozenset()
+            return None
         existing_bytes = storage_client.download_bytes(bucket=bucket, blob_path=blob_path)
-        existing = _orch.pd.read_parquet(_orch.io.BytesIO(existing_bytes))
+        return _orch.pd.read_parquet(_orch.io.BytesIO(existing_bytes))
     except Exception as exc:
         _orch.logger.debug(
-            "Pre-fetch skip read failed for gs://%s — proceeding without skip: %s",
+            "Existing per-league parquet read failed for gs://%s — proceeding without it: %s",
             bucket,
             exc,
         )
+        return None
+
+
+def _read_existing_per_league_fixture_ids(
+    bucket: str,
+    date: str,
+    entity_name: str,
+    canonical_league_id: str,
+) -> frozenset[int]:
+    """Return the set of af_fixture_ids already captured in a per-league parquet.
+
+    Used by the per-fixture pre-fetch skip path to avoid wasting api_football
+    calls on fixtures whose data is already on disk.
+
+    Returns empty frozenset on any miss / read failure (the caller treats that
+    as "no captured fixtures known, fetch everything in scope").
+    """
+    existing = _read_existing_per_league_entity_df(bucket, date, entity_name, canonical_league_id)
+    if existing is None:
         return frozenset()
     fid_col = "af_fixture_id" if "af_fixture_id" in existing.columns else "fixture_id"
     if fid_col not in existing.columns:
@@ -594,31 +617,48 @@ def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]
     ``entity=fixtures/fixtures.parquet`` blob that no writer has populated
     since the per-league migration, so this always silently returned ``{}``
     for any post-migration date.
+
+    Bug fix (2026-07-14 — sports_gw_enrichment_false_empty_manifest_and_dropped_rows):
+    this previously built the af_league_id -> canonical fallback map from the
+    narrow 33-league ``get_prediction_leagues()`` (the SAME classification-filter
+    mismatch already fixed for TEAMS/STANDINGS on 2026-07-13, see
+    ``sports_reference_core.py::_fetch_teams_and_standings``) and read the
+    per-league fixtures parquets with the default ``max_results=100`` cap —
+    together these silently truncated/starved the map for the 61 non-Prediction-tier
+    leagues, so their per-fixture enrichment rows fell through to the bare-path
+    drop in ``_write_per_fixture_entities`` (225,854 rows fetched-then-dropped in
+    the 2026-07-14 GW fleet run).
     """
     # Build reverse mapping from UAC: af_league_id -> canonical league_id
+    # (94-league api_football-expected set, not the 33-league Prediction tier).
     _af_league_to_canonical: dict[int, str] = {}
-    for league_def in _orch.get_prediction_leagues():
+    for league_def in _orch.get_expected_leagues_for_source("api_football"):
         if league_def.api_football_id is not None:
             _af_league_to_canonical[league_def.api_football_id] = league_def.league_id
 
     try:
-        df = _orch._read_per_league_entity_df(bucket, date, "fixtures")
+        # max_results=None: unbounded listing — the default cap of 100 blobs
+        # silently truncates on dates with >100 per-league fixtures blobs.
+        df = _orch._read_per_league_entity_df(bucket, date, "fixtures", max_results=None)
         if df is None:
             _orch.logger.debug("No fixtures parquets found for date=%s for league mapping", date)
             return {}
+        # Column-name drift: per-fixture enrichment frames carry af_fixture_id;
+        # some fixtures frames carry the bare fixture_id instead.
+        _fid_col = "af_fixture_id" if "af_fixture_id" in df.columns else "fixture_id"
         result: dict[str, str] = {}
-        if "af_fixture_id" in df.columns:
+        if _fid_col in df.columns:
             # Prefer league_id column if present
             if "league_id" in df.columns:
-                for _, row in df[["af_fixture_id", "league_id"]].dropna().iterrows():
-                    result[str(int(row["af_fixture_id"]))] = str(row["league_id"])
+                for _, row in df[[_fid_col, "league_id"]].dropna().iterrows():
+                    result[str(int(row[_fid_col]))] = str(row["league_id"])
             # Fallback: use af_league_id -> canonical mapping
             elif "af_league_id" in df.columns:
-                for _, row in df[["af_fixture_id", "af_league_id"]].dropna().iterrows():
+                for _, row in df[[_fid_col, "af_league_id"]].dropna().iterrows():
                     af_lid = int(row["af_league_id"])
                     canonical = _af_league_to_canonical.get(af_lid)
                     if canonical:
-                        result[str(int(row["af_fixture_id"]))] = canonical
+                        result[str(int(row[_fid_col]))] = canonical
         _orch.logger.info("Fixture league map: %d mappings built from GCS for date=%s", len(result), date)
         return result
     except Exception as exc:
