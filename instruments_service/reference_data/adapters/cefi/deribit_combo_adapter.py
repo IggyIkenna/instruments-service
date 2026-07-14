@@ -401,11 +401,15 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         if not legs:
             return None
 
+        combo_instrument_key = build_instrument_id("DERIBIT", InstrumentType.COMBO, combo_id)
         return InstrumentRecord(
             # Bare "DERIBIT" venue (NOT self.venue == "DERIBIT-COMBO", see this class's
             # `venue` property docstring) — a combo's instrument_key groups under the
             # same DERIBIT: namespace as its own legs (also bare-DERIBIT-keyed).
-            instrument_key=build_instrument_id("DERIBIT", InstrumentType.COMBO, combo_id),
+            instrument_key=combo_instrument_key,
+            # No CeFi raw-code-to-human-name translation gap (see other CeFi adapters'
+            # identical comment) — canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=combo_instrument_key,
             venue=self.venue,
             raw_symbol=combo_id,
             instrument_type=InstrumentType.COMBO,

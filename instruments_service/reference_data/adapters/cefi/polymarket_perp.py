@@ -327,6 +327,9 @@ class PolymarketPerpReferenceDataAdapter(BaseReferenceDataAdapter):
 
         return InstrumentRecord(
             instrument_key=market_id,
+            # No CeFi raw-code-to-human-name translation gap (see other CeFi adapters'
+            # identical comment) — canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=market_id,
             venue=self.venue,
             raw_symbol=market_id,
             instrument_type=InstrumentType.PERPETUAL,

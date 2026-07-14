@@ -117,6 +117,9 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
             if not sym:
                 continue
             base_asset = sym.split("-")[0] if "-" in sym else sym
+            lighter_instrument_key = build_instrument_id(
+                "LIGHTER-ZKSYNC", InstrumentType.PERPETUAL, f"{base_asset}-USDC@{_MARGIN_MARKER}"
+            )
             results.append(
                 InstrumentRecord(
                     # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
@@ -136,9 +139,11 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
                     # marker is embedded in the symbol passed to the builder (PERPETUAL's
                     # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
                     # convention DeFi POOL fee-tiers already use).
-                    instrument_key=build_instrument_id(
-                        "LIGHTER-ZKSYNC", InstrumentType.PERPETUAL, f"{base_asset}-USDC@{_MARGIN_MARKER}"
-                    ),
+                    instrument_key=lighter_instrument_key,
+                    # No CeFi raw-code-to-human-name translation gap (see other CeFi
+                    # adapters' identical comment) — canonical_instrument_id mirrors
+                    # instrument_key.
+                    canonical_instrument_id=lighter_instrument_key,
                     venue=self.venue,
                     raw_symbol=sym,
                     instrument_type=InstrumentType.PERPETUAL,

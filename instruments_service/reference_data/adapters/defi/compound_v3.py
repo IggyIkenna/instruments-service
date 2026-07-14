@@ -264,9 +264,13 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         # InstrumentKey.from_string()) while the field was the unrelated, shared
         # `LENDING` value. Both now agree, matching the AAVE_V3/SPARK pattern.
         supply_symbol = f"C{sym_upper}"
+        supply_instrument_key = f"{venue_tag}:A_TOKEN:{supply_symbol}"
         results = [
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:A_TOKEN:{supply_symbol}",
+                instrument_key=supply_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=supply_instrument_key,
                 instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             )
@@ -274,9 +278,13 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # Borrow instrument (borrow base asset against collateral)
         borrow_symbol = f"BORROW{sym_upper}"
+        borrow_instrument_key = f"{venue_tag}:DEBT_TOKEN:{borrow_symbol}"
         results.append(
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:DEBT_TOKEN:{borrow_symbol}",
+                instrument_key=borrow_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=borrow_instrument_key,
                 instrument_type=InstrumentType.DEBT_TOKEN,
                 **base_kwargs,
             )

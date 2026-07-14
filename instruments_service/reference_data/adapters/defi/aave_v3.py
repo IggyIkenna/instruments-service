@@ -419,9 +419,13 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         }
 
         a_symbol = f"A{sym_upper}"
+        a_token_instrument_key = f"{venue_tag}:A_TOKEN:{a_symbol}"
         results = [
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:A_TOKEN:{a_symbol}",
+                instrument_key=a_token_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=a_token_instrument_key,
                 instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             )
@@ -429,9 +433,13 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         if reserve.get("borrowingEnabled", False):
             debt_symbol = f"DEBT{sym_upper}"
+            debt_token_instrument_key = f"{venue_tag}:DEBT_TOKEN:{debt_symbol}"
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:DEBT_TOKEN:{debt_symbol}",
+                    instrument_key=debt_token_instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=debt_token_instrument_key,
                     instrument_type=InstrumentType.DEBT_TOKEN,
                     **base_kwargs,
                 )

@@ -106,11 +106,15 @@ class EigenLayerReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
+            instrument_key = build_canonical_instrument_id(
+                AssetGroup.DEFI, venue_tag, InstrumentType.SPOT_PAIR, symbol, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=build_canonical_instrument_id(
-                        AssetGroup.DEFI, venue_tag, InstrumentType.SPOT_PAIR, symbol, passthrough=True
-                    ),
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
                     instrument_type=InstrumentType.SPOT_PAIR,

@@ -259,19 +259,25 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         raw_symbol = str(market.get("id") or symbol)
+        instrument_key = self._build_instrument_key(
+            self._instrument_key_venue,
+            mapped_type,
+            base,
+            quote,
+            raw_symbol,
+            margin_type,
+            expiry,
+            strike,
+            option_type,
+        )
 
         return InstrumentRecord(
-            instrument_key=self._build_instrument_key(
-                self._instrument_key_venue,
-                mapped_type,
-                base,
-                quote,
-                raw_symbol,
-                margin_type,
-                expiry,
-                strike,
-                option_type,
-            ),
+            instrument_key=instrument_key,
+            # CeFi has no raw-exchange-code-to-human-name translation gap the way
+            # TradFi does (base is already human-readable, e.g. "BTC") — so
+            # canonical_instrument_id is just the already-canonical instrument_key.
+            # SSOT: unified-trading-pm/plans/active/canonical_instrument_id_cefi_defi_backfill_2026_07_14.md
+            canonical_instrument_id=instrument_key,
             venue=self.venue,
             raw_symbol=raw_symbol,
             instrument_type=mapped_type,

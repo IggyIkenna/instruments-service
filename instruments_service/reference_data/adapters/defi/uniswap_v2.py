@@ -223,6 +223,9 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
         # Surface it explicitly so downstream consumers don't special-case V2.
         return InstrumentRecord(
             instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=str(pair_id),
             instrument_type=InstrumentType.POOL,

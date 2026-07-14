@@ -81,6 +81,9 @@ class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
         results: list[InstrumentRecord] = []
         for coin in _PACIFICA_TOP_COINS:
             sym = f"{coin}-PERP"
+            pacifica_instrument_key = build_instrument_id(
+                "PACIFICA-SOLANA", InstrumentType.PERPETUAL, f"{coin}-USDC@{_MARGIN_MARKER}"
+            )
             results.append(
                 InstrumentRecord(
                     # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
@@ -100,9 +103,11 @@ class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
                     # marker is embedded in the symbol passed to the builder (PERPETUAL's
                     # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
                     # convention DeFi POOL fee-tiers already use).
-                    instrument_key=build_instrument_id(
-                        "PACIFICA-SOLANA", InstrumentType.PERPETUAL, f"{coin}-USDC@{_MARGIN_MARKER}"
-                    ),
+                    instrument_key=pacifica_instrument_key,
+                    # No CeFi raw-code-to-human-name translation gap (see other CeFi
+                    # adapters' identical comment) — canonical_instrument_id mirrors
+                    # instrument_key.
+                    canonical_instrument_id=pacifica_instrument_key,
                     venue=self.venue,
                     raw_symbol=sym,
                     instrument_type=InstrumentType.PERPETUAL,
