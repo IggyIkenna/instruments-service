@@ -1664,6 +1664,59 @@ def test_sports_manifest_data_type_helper_identity_except_odds_horizon_bucket() 
 
 
 # ---------------------------------------------------------------------------
+# Sports v2 mdps_odds_horizon_bucket expected-universe VENUE grain realignment
+# (2026-07-14 follow-up) —
+# plans/active/sports_data_sources_canonical_completion_2026_07_13.md §1
+# (venue-grain follow-up). A SECOND, different grain mismatch on the SAME
+# source, found after the data_type fix above landed: MDPS's real writer
+# (reprocess_sports_odds.py, ``_MANIFEST_VENUE = "ODDS_API"``) stamps a real,
+# non-blank ``venue="ODDS_API"`` on every captured row for this source — the
+# ONE sports source whose captured atom does NOT carry a blank venue. Pre-fix,
+# the enumerator seeded expected_unattempted rows with ``venue=""``
+# unconditionally (correct for every OTHER sports source), so a genuinely
+# captured atom for THIS source could never retire its seed (0 identity
+# overlap on venue, confirmed live 2026-07-14: 200,259 blank-venue EU rows vs
+# 143,594 ``venue="ODDS_API"`` captured rows). This section proves the
+# ``_sports_manifest_venue`` translation closes that gap, mirroring the
+# data_type section above exactly.
+# ---------------------------------------------------------------------------
+
+
+def test_sports_v2_odds_horizon_bucket_seeds_odds_api_venue_when_uncaptured() -> None:
+    """When genuinely uncaptured, the seeded expected_unattempted row must carry
+    the SAME ``venue="ODDS_API"`` MDPS's real writer stamps on a captured row,
+    so a future full-key-based supersession (captured outranks
+    expected_unattempted) can actually retire this seed once the real capture
+    lands."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-01-12")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["ODDS_HORIZON_BUCKET"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].venue == "ODDS_API"
+    assert rows[0].data_type == "odds_horizon_bucket"
+
+
+def test_sports_v2_non_overridden_data_type_stays_blank_venue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every other sports data_type (no venue override entry) keeps its blank
+    ``venue=""`` — the venue override map is narrowly scoped to
+    ODDS_HORIZON_BUCKET only, not a blanket change to the whole sports venue
+    seeding convention."""
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", lambda days: {("EPL", "2024-06-05")})
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["XG"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].venue == ""
+
+
+def test_sports_manifest_venue_helper_identity_except_odds_horizon_bucket() -> None:
+    """Direct unit coverage of the venue translation helper itself."""
+    assert enumerator_module._sports_manifest_venue("ODDS_HORIZON_BUCKET") == "ODDS_API"
+    for dt in ("FIXTURES", "MATCHES", "XG", "PLAYER_VALUES", "WEATHER", "SFI_PROGRESSIVE_STATS", "lineups"):
+        assert enumerator_module._sports_manifest_venue(dt) == ""
+
+
+# ---------------------------------------------------------------------------
 # Sports v2 understat matchday-awareness (Root-cause writer fix, part (b)) —
 # plans/active/issues/sports_is_manifest_eu_regression_overwrite_2026_06_29.md
 # ---------------------------------------------------------------------------
