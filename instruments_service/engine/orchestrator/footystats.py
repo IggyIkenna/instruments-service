@@ -75,7 +75,6 @@ async def _fetch_footystats_predictions(
         service_name="instruments-service",
         catalogue_bucket=bucket,
     )
-    _row_key: dict[str, str] = {"date": date, "data_type": "PREDICTIONS"}
     # Per-league skip: only skip the date when every expected canonical
     # footystats league has a (captured | empty_confirmed) row for it.
     # See ``_should_skip_date_for_per_league`` for the bug this fixes.
@@ -394,13 +393,25 @@ async def _fetch_footystats_predictions(
                 "error_code": _err_code,
             },
         )
-        # Shard isolation: do not raise; record the failed attempt.
-        pred_manifest.record_failed(
-            row_key=_row_key,
-            error=_err_code,
-            attempted_at=attempt_ts,
-            pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
-        )
+        # Shard isolation: do not raise; record the failed attempt PER EXPECTED
+        # LEAGUE, not a single blank-``league_id`` date-aggregate row. A
+        # date-aggregate failed row can never be superseded by the per-league
+        # ``record_captured``/``record_empty`` writes elsewhere in this
+        # function (they always key on a real canonical ``league_id``), so it
+        # would sit ``attempted_failed`` forever even after a LATER re-attempt
+        # genuinely captures every league for this date — root-caused
+        # 2026-07-14 as the reason the footystats PREDICTIONS TimeoutError
+        # residual never cleared across repeated residual-closer re-attempts
+        # (mirrors the ``_record_weather_failed`` per-league pattern in
+        # ``weather.py``). See
+        # plans/active/sports_data_sources_canonical_completion_2026_07_13.md.
+        for _exp_lid in sorted(set(_ft_expected)):
+            pred_manifest.record_failed(
+                row_key={"date": date, "data_type": "PREDICTIONS", "league_id": _exp_lid},
+                error=_err_code,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
+            )
         with _orch.contextlib.suppress(Exception):
             pred_manifest.write()
 
@@ -480,7 +491,6 @@ async def _fetch_footystats_matches(
 
     # Honest-coverage pre-flight + attempt-stamp.
     _ft_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-    _row_key: dict[str, str] = {"date": date, "data_type": "MATCHES"}
     from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
@@ -755,13 +765,18 @@ async def _fetch_footystats_matches(
                 "error_code": _err_code,
             },
         )
-        # Shard isolation: do not raise; record the failed attempt.
-        _ft_manifest.record_failed(
-            row_key=_row_key,
-            error=_err_code,
-            attempted_at=attempt_ts,
-            pipeline_mode=_orch._pipeline_mode_for_sports_data_type("MATCHES"),
-        )
+        # Shard isolation: do not raise; record the failed attempt PER EXPECTED
+        # LEAGUE, not a single blank-``league_id`` date-aggregate row — see the
+        # matching comment in ``_fetch_footystats_predictions`` for why a
+        # date-aggregate failed row can never be superseded by this function's
+        # per-league writes (root-caused 2026-07-14).
+        for _exp_lid in sorted(set(_ft_expected)):
+            _ft_manifest.record_failed(
+                row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
+                error=_err_code,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("MATCHES"),
+            )
         with _orch.contextlib.suppress(Exception):
             _ft_manifest.write()
 
@@ -877,7 +892,6 @@ async def _fetch_footystats_odds(
         service_name="instruments-service",
         catalogue_bucket=bucket,
     )
-    _row_key: dict[str, str] = {"date": date, "data_type": "ODDS"}
     from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
@@ -1179,12 +1193,16 @@ async def _fetch_footystats_odds(
                 "error_code": _err_code,
             },
         )
-        odds_manifest.record_failed(
-            row_key=_row_key,
-            error=_err_code,
-            attempted_at=attempt_ts,
-            pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
-        )
+        # Per-league (not a blank-``league_id`` date-aggregate row) — see the
+        # matching comment in ``_fetch_footystats_predictions`` (root-caused
+        # 2026-07-14).
+        for _exp_lid in sorted(set(_ft_expected)):
+            odds_manifest.record_failed(
+                row_key={"date": date, "data_type": "ODDS", "league_id": _exp_lid},
+                error=_err_code,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+            )
         with _orch.contextlib.suppress(Exception):
             odds_manifest.write()
 
