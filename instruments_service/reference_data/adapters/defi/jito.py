@@ -125,10 +125,14 @@ class JitoReferenceDataAdapter(BaseReferenceDataAdapter):
         # Routed through the shared canonical builder (2026-07-09 retrofit,
         # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
         # no output change.
+        jitosol_instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, venue_tag, InstrumentType.STAKING, "JITOSOL", passthrough=True
+        )
         record = InstrumentRecord(
-            instrument_key=build_canonical_instrument_id(
-                AssetGroup.DEFI, venue_tag, InstrumentType.STAKING, "JITOSOL", passthrough=True
-            ),
+            instrument_key=jitosol_instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=jitosol_instrument_key,
             venue=venue_tag,
             raw_symbol=_JITOSOL_MINT,
             base_asset_contract_address=_JITOSOL_MINT,
@@ -149,10 +153,14 @@ class JitoReferenceDataAdapter(BaseReferenceDataAdapter):
             source_archive_url_template=_JITO_STAKE_POOL_API_TEMPLATE,
         )
 
+        mev_instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, venue_tag, InstrumentType.STAKING, "JITO-MEV-AGGREGATE", passthrough=True
+        )
         mev_record = InstrumentRecord(
-            instrument_key=build_canonical_instrument_id(
-                AssetGroup.DEFI, venue_tag, InstrumentType.STAKING, "JITO-MEV-AGGREGATE", passthrough=True
-            ),
+            instrument_key=mev_instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=mev_instrument_key,
             venue=venue_tag,
             raw_symbol="JITO-MEV-AGGREGATE",
             base_asset_contract_address=_JITOSOL_MINT,

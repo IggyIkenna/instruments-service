@@ -152,13 +152,17 @@ def _parse_option(item: object) -> InstrumentRecord | None:
     # _build_deribit_option_symbol only computes the marker-embedded symbol
     # string, matching the sibling Bybit/Kraken-Futures/OKX convention
     # (tardis/parsing.py::_build_dated_derivative_canonical_symbol).
+    option_instrument_key = build_instrument_id(
+        "DERIBIT",
+        InstrumentType.OPTION,
+        _build_deribit_option_symbol(base, margin_type, expiry, strike, option_right),
+        passthrough=True,
+    )
     return InstrumentRecord(
-        instrument_key=build_instrument_id(
-            "DERIBIT",
-            InstrumentType.OPTION,
-            _build_deribit_option_symbol(base, margin_type, expiry, strike, option_right),
-            passthrough=True,
-        ),
+        instrument_key=option_instrument_key,
+        # No CeFi raw-code-to-human-name translation gap (see other CeFi adapters'
+        # identical comment) — canonical_instrument_id mirrors instrument_key.
+        canonical_instrument_id=option_instrument_key,
         venue="DERIBIT",
         raw_symbol=name,
         instrument_type=InstrumentType.OPTION,

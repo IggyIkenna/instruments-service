@@ -119,14 +119,18 @@ class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
             mint = token["mint_address"]
             underlying = token["underlying"]
 
+            instrument_key = build_canonical_instrument_id(
+                AssetGroup.DEFI, venue_tag, InstrumentType.LST, symbol, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
                     # Routed through the shared canonical builder (2026-07-09 retrofit,
                     # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
                     # no output change.
-                    instrument_key=build_canonical_instrument_id(
-                        AssetGroup.DEFI, venue_tag, InstrumentType.LST, symbol, passthrough=True
-                    ),
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=mint,
                     instrument_type=InstrumentType.LST,

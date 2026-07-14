@@ -208,11 +208,16 @@ class CoinbaseCdeReferenceDataAdapter(BaseReferenceDataAdapter):
             # not-yet-adopted target format here would silently break the live
             # WS connector's subscribe path (it derives the wire product_id
             # directly from this id's 3rd segment) for no real benefit.
+            cde_instrument_key = build_instrument_id(
+                "COINBASE-CDE", InstrumentType.FUTURE, product_id, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=build_instrument_id(
-                        "COINBASE-CDE", InstrumentType.FUTURE, product_id, passthrough=True
-                    ),
+                    instrument_key=cde_instrument_key,
+                    # No CeFi raw-code-to-human-name translation gap (see other CeFi
+                    # adapters' identical comment) — canonical_instrument_id mirrors
+                    # instrument_key.
+                    canonical_instrument_id=cde_instrument_key,
                     venue="COINBASE-CDE",
                     raw_symbol=product_id,
                     instrument_type=InstrumentType.FUTURE,

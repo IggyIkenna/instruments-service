@@ -213,28 +213,37 @@ class SolendReferenceDataAdapter(BaseReferenceDataAdapter):
             "base_asset_symbol_onchain": raw_symbol_field,
         }
 
+        a_token_key = build_canonical_instrument_id(
+            AssetGroup.DEFI,
+            "solend",
+            InstrumentType.A_TOKEN,
+            f"A{symbol}",
+            chain="SOLANA",
+            passthrough=True,
+        )
+        debt_token_key = build_canonical_instrument_id(
+            AssetGroup.DEFI,
+            "solend",
+            InstrumentType.DEBT_TOKEN,
+            f"DEBT{symbol}",
+            chain="SOLANA",
+            passthrough=True,
+        )
+
         return [
             InstrumentRecord(
-                instrument_key=build_canonical_instrument_id(
-                    AssetGroup.DEFI,
-                    "solend",
-                    InstrumentType.A_TOKEN,
-                    f"A{symbol}",
-                    chain="SOLANA",
-                    passthrough=True,
-                ),
+                instrument_key=a_token_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=a_token_key,
                 instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             ),
             InstrumentRecord(
-                instrument_key=build_canonical_instrument_id(
-                    AssetGroup.DEFI,
-                    "solend",
-                    InstrumentType.DEBT_TOKEN,
-                    f"DEBT{symbol}",
-                    chain="SOLANA",
-                    passthrough=True,
-                ),
+                instrument_key=debt_token_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=debt_token_key,
                 instrument_type=InstrumentType.DEBT_TOKEN,
                 **base_kwargs,
             ),

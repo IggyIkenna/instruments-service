@@ -112,9 +112,13 @@ class SymbioticReferenceDataAdapter(BaseReferenceDataAdapter):
             vault_address = vault["vault_address"]
             underlying = vault["underlying"]
 
+            instrument_key = f"{venue_tag}:YIELD_BEARING:{symbol}"
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:YIELD_BEARING:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=vault_address,
                     instrument_type=InstrumentType.YIELD_BEARING,
