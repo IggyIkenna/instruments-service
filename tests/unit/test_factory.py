@@ -80,6 +80,26 @@ class TestGetAdapterForCanonicalVenue:
         adapter = get_adapter_for_canonical_venue("API_FOOTBALL", date="2026-03-22")
         assert adapter is not None
 
+    def test_api_football_not_pooled_across_dates(self) -> None:
+        """2026-07-14 regression: the api_football URDI adapter bakes its
+        target date in at construction (``self._date``). Pooling it WITHOUT
+        the date in the pool key made every later date of a multi-date batch
+        run reuse the FIRST date's fixture universe → per-date filter saw 0
+        active instruments → the zero-record path stamped false
+        EXPECTED_NO_FIXTURE markers over real fixture days (GW enrichment
+        content-verification RED, issue
+        sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14).
+        """
+        clear_adapter_pool()
+        a1 = get_adapter_for_canonical_venue("API_FOOTBALL", date="2026-03-22")
+        a2 = get_adapter_for_canonical_venue("API_FOOTBALL", date="2026-03-23")
+        assert a1 is not a2, "api_football adapter must not be pooled across dates"
+        assert a1._date == "2026-03-22"
+        assert a2._date == "2026-03-23"
+        # Same date → pool hit is still fine.
+        a3 = get_adapter_for_canonical_venue("API_FOOTBALL", date="2026-03-22")
+        assert a3 is a1
+
 
 class TestClearAdapterPool:
     def test_clear_empties_pool(self) -> None:

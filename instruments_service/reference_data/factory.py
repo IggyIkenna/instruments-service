@@ -537,8 +537,15 @@ def get_adapter_for_canonical_venue(
 
     # Check pool — reuse existing adapter if same key + credentials + venue + date
     # Include canonical_venue in pool key so AAVE_V3-ARBITRUM != AAVE_V3-ETHEREUM
-    # Include date for Databento (target_date baked into adapter at init time)
-    pool_date = date if adapter_key in ("databento", "massive") else None
+    # Include date for adapters whose target date is baked in at init time:
+    # Databento, Massive, AND api_football (2026-07-14: the api_football URDI
+    # adapter pins ``self._date`` at construction; pooling it WITHOUT the date
+    # made every later date of a multi-date batch run reuse the FIRST date's
+    # fixture universe — the per-date filter then saw 0 active instruments and
+    # the zero-record path stamped false EXPECTED_NO_FIXTURE markers over real
+    # fixture days. GW enrichment RED, issue
+    # sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14).
+    pool_date = date if adapter_key in ("databento", "massive", "api_football") else None
     pool_key = (adapter_key, api_key, canonical_venue, pool_date)
     if pool_key in _adapter_pool:
         return _adapter_pool[pool_key]
