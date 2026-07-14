@@ -893,3 +893,306 @@ class TestCanonicalLeagueIdCF7:
 
         assert _canonical_league_id("  EPL  ") == "EPL"
         assert _canonical_league_id("  EPL_39  ") == "EPL"
+
+
+# ---------------------------------------------------------------------------
+# 2026-07-14 GW enrichment false-empty / dropped-row write-path regressions
+# (issue: sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14)
+# ---------------------------------------------------------------------------
+
+
+class TestGwFalseEmptyWritePath20260714:
+    """Regressions for the three-leg GW enrichment manifest write-path fix.
+
+    Leg 1: a league whose every fixture is skip-as-already-present (pre-fetch
+    skip found the per-league parquet complete) must NEVER be demoted to
+    ``empty_confirmed`` by a no-op re-run.
+    Leg 2: ``_build_fixture_league_map_from_gcs`` must cover the full
+    94-league api_football write universe (not the 33-league Prediction tier)
+    and must list blobs unbounded (``max_results=None`` — the old default of
+    100 truncated busy days).
+    Leg 3: absence emission is PRESENCE-based — an existing per-league parquet
+    always wins over any this-run captured-set computation, including on the
+    ``redo_all`` / zero-fixture-day paths where the pre-fetch skip tracker is
+    bypassed; off-season leagues get a typed ``EXPECTED_PAUSED_LEAGUE`` row,
+    never a silent skip; the zero-fixture-day FIXTURES markers iterate the
+    94-league universe, presence-guarded.
+    """
+
+    @staticmethod
+    def _leagues_subset(*league_ids: str) -> list[object]:
+        from instruments_service.engine.orchestrator import get_expected_leagues_for_source
+
+        wanted = set(league_ids)
+        subset = [lg for lg in get_expected_leagues_for_source("api_football") if lg.league_id in wanted]
+        assert {lg.league_id for lg in subset} == wanted, f"missing league defs for {wanted}"
+        return subset
+
+    @pytest.mark.asyncio
+    async def test_skip_as_present_league_not_demoted_to_empty(self) -> None:
+        """Leg 1: all fixtures for LA_LIGA already on disk → zero fetches this
+        run → the cell must NOT be stamped empty_confirmed (the exact 3,720
+        false-empty mechanism), while a genuinely-uncaptured league (EPL, no
+        fixtures mapped to it today) still gets its honest EXPECTED_NO_FIXTURE.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.get_fixture_events.return_value = []
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch(
+                "instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs",
+                return_value={"1001": "LA_LIGA"},
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._read_existing_per_league_fixture_ids",
+                return_value=frozenset({1001}),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=self._leagues_subset("LA_LIGA", "EPL"),
+            ),
+            patch("instruments_service.engine.orchestrator.is_league_entity_covered", return_value=True),
+            patch("instruments_service.engine.orchestrator.get_league_fixture_calendar", return_value=["match"]),
+            patch("instruments_service.engine.orchestrator._list_present_parquet_leagues", return_value=set()),
+        ):
+            await _fetch_sports_reference_data(
+                "2025-11-08",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                entities_to_fetch=["FIXTURE_EVENTS"],
+                fixture_ids_override=[1001],
+            )
+
+        # The pre-fetch skip must have prevented the api call entirely.
+        assert mock_adapter.get_fixture_events.await_count == 0, (
+            "fixture 1001 is already captured on disk — the pre-fetch skip should have skipped the API call"
+        )
+        la_liga_empty = [
+            c
+            for c in mock_manifest.record_empty.call_args_list
+            if c.kwargs.get("row_key", {}).get("league_id") == "LA_LIGA"
+            and c.kwargs.get("row_key", {}).get("data_type") == "FIXTURE_EVENTS"
+        ]
+        assert not la_liga_empty, (
+            f"skip-as-present LA_LIGA was demoted to empty_confirmed: {la_liga_empty} — "
+            "this is the 2026-07-14 false-empty regression"
+        )
+        epl_empty = [
+            c
+            for c in mock_manifest.record_empty.call_args_list
+            if c.kwargs.get("row_key", {}).get("league_id") == "EPL"
+            and c.kwargs.get("row_key", {}).get("data_type") == "FIXTURE_EVENTS"
+        ]
+        assert epl_empty, "genuinely-uncaptured EPL must still get its honest empty_confirmed row"
+
+    @pytest.mark.asyncio
+    async def test_presence_guard_protects_present_parquet_under_redo_all(self) -> None:
+        """Leg 3 presence guard: with ``redo_all=True`` the pre-fetch skip
+        tracker is bypassed and the league map is empty — but a league whose
+        per-league parquet EXISTS must still not be stamped empty_confirmed.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.get_fixture_events.return_value = []
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=self._leagues_subset("LA_LIGA", "EPL"),
+            ),
+            patch("instruments_service.engine.orchestrator.is_league_entity_covered", return_value=True),
+            patch("instruments_service.engine.orchestrator.get_league_fixture_calendar", return_value=["match"]),
+            patch(
+                "instruments_service.engine.orchestrator._list_present_parquet_leagues",
+                return_value={"LA_LIGA"},
+            ) as mock_present,
+        ):
+            await _fetch_sports_reference_data(
+                "2025-11-08",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                entities_to_fetch=["FIXTURE_EVENTS"],
+                fixture_ids_override=[1001],
+                redo_all=True,
+            )
+
+        assert mock_present.call_count >= 1, "presence guard was never consulted"
+        la_liga_empty = [
+            c
+            for c in mock_manifest.record_empty.call_args_list
+            if c.kwargs.get("row_key", {}).get("league_id") == "LA_LIGA"
+            and c.kwargs.get("row_key", {}).get("data_type") == "FIXTURE_EVENTS"
+        ]
+        assert not la_liga_empty, (
+            "LA_LIGA has an existing per-league parquet — the presence guard must prevent the "
+            f"empty_confirmed stamp even under redo_all: {la_liga_empty}"
+        )
+
+    def test_league_map_covers_full_universe_and_lists_unbounded(self) -> None:
+        """Leg 2: the af_league_id fallback must map leagues from the FULL
+        api_football write universe (not just the 33 Prediction-tier leagues),
+        and a >100-fixture day must map completely (``max_results=None``).
+        """
+        from instruments_service.engine.orchestrator import (
+            _build_fixture_league_map_from_gcs,
+            get_expected_leagues_for_source,
+            get_prediction_leagues,
+        )
+
+        prediction_ids = {lg.league_id for lg in get_prediction_leagues()}
+        non_prediction = [
+            lg
+            for lg in get_expected_leagues_for_source("api_football")
+            if lg.league_id not in prediction_ids and lg.api_football_id is not None
+        ]
+        assert non_prediction, "expected-universe minus prediction-tier is empty — universe regression"
+        target = non_prediction[0]
+
+        n_fixtures = 150  # > the old max_results=100 truncation point
+        fixtures_df = pd.DataFrame(
+            {
+                "af_fixture_id": list(range(1, n_fixtures + 1)),
+                "af_league_id": [target.api_football_id] * n_fixtures,
+            }
+        )
+        with patch(
+            "instruments_service.engine.orchestrator._read_per_league_entity_df",
+            return_value=fixtures_df,
+        ) as mock_read:
+            result = _build_fixture_league_map_from_gcs("test-bucket", "2025-11-29")
+
+        assert mock_read.call_args.kwargs.get("max_results", "MISSING") is None, (
+            "the fixtures listing must be unbounded — max_results=100 truncated busy days"
+        )
+        assert len(result) == n_fixtures, (
+            f"league map covered {len(result)}/{n_fixtures} fixtures — "
+            "a non-prediction-tier league fell out of the af_league_id fallback (33-vs-94 regression)"
+        )
+        assert set(result.values()) == {target.league_id}
+
+    def test_offseason_league_gets_typed_paused_row_not_silent_skip(self) -> None:
+        """Leg 3: an off-season league (empty fixture calendar) must get a
+        typed EXPECTED_PAUSED_LEAGUE row — the old silent ``continue`` left
+        the cell permanently blank-reason (the 30 A_LEAGUE September INJURIES
+        cells).
+        """
+        from datetime import UTC, datetime
+
+        from unified_api_contracts import EmptyConfirmedReason
+
+        from instruments_service.engine.orchestrator.sports_reference_core import _AfManifestHooks
+
+        mock_manifest = MagicMock()
+        hooks = _AfManifestHooks(
+            date="2025-09-15",
+            manifest=mock_manifest,
+            attempt_ts=datetime.now(UTC),
+            bucket="",  # presence guard disabled — this test isolates the calendar leg
+        )
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=self._leagues_subset("A_LEAGUE"),
+            ),
+            patch("instruments_service.engine.orchestrator.is_league_entity_covered", return_value=True),
+            patch("instruments_service.engine.orchestrator.get_league_fixture_calendar", return_value=[]),
+        ):
+            hooks.emit_empty_gaps_for_entity("INJURIES", set())
+
+        paused = [
+            c
+            for c in mock_manifest.record_empty.call_args_list
+            if c.kwargs.get("reason") == EmptyConfirmedReason.EXPECTED_PAUSED_LEAGUE
+            and c.kwargs.get("row_key", {}).get("league_id") == "A_LEAGUE"
+        ]
+        assert paused, (
+            "off-season A_LEAGUE got no typed row — the silent-skip regression leaves the cell "
+            "permanently blank-reason expected_unattempted"
+        )
+        no_fixture = [
+            c
+            for c in mock_manifest.record_empty.call_args_list
+            if c.kwargs.get("reason") == EmptyConfirmedReason.EXPECTED_NO_FIXTURE
+        ]
+        assert not no_fixture, "off-season absence must be EXPECTED_PAUSED_LEAGUE, not EXPECTED_NO_FIXTURE"
+
+    def test_zero_fixture_markers_iterate_full_universe_with_presence_guard(self) -> None:
+        """Leg 3 / zero-day markers: ``_zero_sports_empty_fixture_markers``
+        must stamp the FULL api_football expected-league universe (94, not the
+        33 Prediction-tier leagues) and must skip presence-guarded leagues
+        whose FIXTURES parquet exists for the date.
+        """
+        from instruments_service.engine.orchestrator import (
+            _canonical_league_id,
+            get_expected_leagues_for_source,
+        )
+        from instruments_service.engine.orchestrator.process_zero_records import (
+            _zero_sports_empty_fixture_markers,
+        )
+
+        mock_writer = MagicMock()
+        with (
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=mock_writer),
+            patch(
+                "instruments_service.engine.orchestrator._list_present_parquet_leagues",
+                return_value={"LA_LIGA"},
+            ),
+        ):
+            _zero_sports_empty_fixture_markers(
+                date="2025-09-02",
+                bucket="test-bucket",
+                league_filter=None,
+            )
+
+        stamped = {c.kwargs["row_key"]["league_id"] for c in mock_writer.record_empty.call_args_list}
+        expected_universe = {
+            _canonical_league_id(lg.league_id) for lg in get_expected_leagues_for_source("api_football")
+        }
+        assert stamped == expected_universe - {"LA_LIGA"}, (
+            "zero-fixture markers must cover the expected universe minus presence-guarded leagues"
+        )
+        assert len(stamped) > 33, (
+            f"only {len(stamped)} leagues stamped — looks like the 33-league Prediction-tier regression"
+        )
+        assert "LA_LIGA" not in stamped, "presence-guarded league must not be stamped empty_confirmed"
+        assert mock_writer.write.called, "marker writer must flush"
+
+    def test_presence_probe_failure_skips_empty_emission_fail_safe(self) -> None:
+        """FAIL-SAFE: when the presence probe raises (GCS transport error),
+        emit_empty_gaps_for_entity must skip empty emission entirely — never
+        stamp empty_confirmed over data it could not see — and must not raise.
+        """
+        from datetime import UTC, datetime
+
+        from instruments_service.engine.orchestrator.sports_reference_core import _AfManifestHooks
+
+        mock_manifest = MagicMock()
+        hooks = _AfManifestHooks(
+            date="2025-11-08",
+            manifest=mock_manifest,
+            attempt_ts=datetime.now(UTC),
+            bucket="some-bucket",
+        )
+        with patch(
+            "instruments_service.engine.orchestrator._list_present_parquet_leagues",
+            side_effect=OSError("GCS transport error"),
+        ):
+            hooks.emit_empty_gaps_for_entity("FIXTURE_EVENTS", set())
+
+        assert mock_manifest.record_empty.call_count == 0, (
+            "presence probe failed — no empty_confirmed rows may be stamped (fail-safe)"
+        )
