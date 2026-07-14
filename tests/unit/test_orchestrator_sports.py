@@ -470,6 +470,11 @@ class TestFetchFootystatsPredictions:
 
     @pytest.mark.asyncio
     async def test_exception_records_failed_shard(self) -> None:
+        """Per-league (not a blank-``league_id`` date-aggregate row) — a
+        date-aggregate failed row can never be superseded by this function's
+        per-league ``record_captured``/``record_empty`` writes, so it would
+        sit ``attempted_failed`` forever even after a later re-attempt
+        genuinely captures every league (root-caused 2026-07-14)."""
         mock_adapter = MagicMock()
         mock_adapter.get_fixture_predictions = AsyncMock(side_effect=RuntimeError("api down"))
         mock_mw = MagicMock()
@@ -479,7 +484,7 @@ class TestFetchFootystatsPredictions:
             patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
-            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[]),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_make_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
             patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="RuntimeError"),
@@ -488,6 +493,8 @@ class TestFetchFootystatsPredictions:
             result = await _fetch_footystats_predictions(date=_DATE, api_key="key", bucket=_BUCKET)
         assert result == {}
         mock_mw.record_failed.assert_called_once()
+        _failed_row_key = mock_mw.record_failed.call_args.kwargs["row_key"]
+        assert _failed_row_key["league_id"] == "EPL"
 
     @pytest.mark.asyncio
     async def test_out_of_subscription_league_dropped_not_captured(self) -> None:
@@ -608,6 +615,9 @@ class TestFetchFootystatsMatches:
 
     @pytest.mark.asyncio
     async def test_exception_records_failed_shard(self) -> None:
+        """Per-league (not a blank-``league_id`` date-aggregate row) — see
+        the matching ``TestFetchFootystatsPredictions`` test (root-caused
+        2026-07-14)."""
         mock_adapter = MagicMock()
         mock_adapter.get_fixtures = AsyncMock(side_effect=RuntimeError("timeout"))
         mock_mw = MagicMock()
@@ -617,7 +627,7 @@ class TestFetchFootystatsMatches:
             patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
-            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[]),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_make_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
             patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="RuntimeError"),
@@ -626,6 +636,8 @@ class TestFetchFootystatsMatches:
             result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
         assert result == {}
         mock_mw.record_failed.assert_called_once()
+        _failed_row_key = mock_mw.record_failed.call_args.kwargs["row_key"]
+        assert _failed_row_key["league_id"] == "EPL"
 
     @pytest.mark.asyncio
     async def test_out_of_subscription_league_dropped_not_captured(self) -> None:
@@ -825,6 +837,9 @@ class TestFetchFootystatsOdds:
 
     @pytest.mark.asyncio
     async def test_exception_records_failed_shard(self) -> None:
+        """Per-league (not a blank-``league_id`` date-aggregate row) — see
+        the matching ``TestFetchFootystatsPredictions`` test (root-caused
+        2026-07-14)."""
         mock_adapter = MagicMock()
         mock_adapter.get_fixture_odds_snapshot = AsyncMock(side_effect=RuntimeError("timeout"))
         mock_mw = MagicMock()
@@ -834,7 +849,7 @@ class TestFetchFootystatsOdds:
             patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
-            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[]),
+            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_make_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._load_scheduled_footystats_fixture_map", return_value={}),
             patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
@@ -844,6 +859,8 @@ class TestFetchFootystatsOdds:
             result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
         assert result == {}
         mock_mw.record_failed.assert_called_once()
+        _failed_row_key = mock_mw.record_failed.call_args.kwargs["row_key"]
+        assert _failed_row_key["league_id"] == "EPL"
 
     @pytest.mark.asyncio
     async def test_out_of_subscription_league_dropped_not_captured(self) -> None:
