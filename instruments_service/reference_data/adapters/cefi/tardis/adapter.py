@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, cast
@@ -56,6 +57,7 @@ __all__ = [
     "_VENUE_MAPPING",
     "TardisReferenceDataAdapter",
     "_classify_tardis_error",
+    "_disambiguate_colliding_dated_derivatives",
 ]
 
 _TARDIS_BASE = "https://api.tardis.dev/v1"
@@ -137,6 +139,61 @@ def _classify_tardis_error(exc: Exception, status: int | None = None) -> str:
     return "UNKNOWN"
 
 
+def _disambiguate_colliding_dated_derivatives(results: list[InstrumentRecord]) -> None:
+    """Repair FUTURE canonical-key collisions between DISTINCT raw symbols, in place.
+
+    Real finding 2026-07-14: ``_build_canonical_future_key``'s only disambiguator
+    beyond venue/base/quote/margin_type is ``expiry``, which for the no-dash
+    CME-month-code raw_id shape (``BTCUSDM26`` = Jun-2026, ``BTCUSDU26`` =
+    Sep-2026 — see ``_BYBIT_MONTH_CODE_RE``) falls back to Tardis's own
+    ``availableTo`` metadata whenever the exchange isn't ``"bybit"`` (the only
+    exchange wired to ``_parse_bybit_month_code_expiry``). BITGET-FUTURES's
+    ``availableTo`` happens to coincide for some real Jun/Sep sibling pairs
+    (live-verified against ``api.tardis.dev/v1/exchanges/bitget-futures``), so
+    two genuinely distinct contracts collapse onto one ``instrument_key`` — a
+    data-loss risk shared by every CeFi venue whose dated futures can hit this
+    shape, not just BITGET-FUTURES.
+
+    Two-step repair, scoped to groups that actually collide (leaves every
+    already-correct, non-colliding record byte-identical):
+      1. If every colliding raw_symbol's own CME month-code letter parses to a
+         genuinely distinct expiry, prefer that real, symbol-encoded date over
+         the coincidentally-colliding ``availableTo`` fallback and rebuild the
+         canonical key from it.
+      2. Otherwise (no month-code shape, or it still collides), fall back to
+         embedding the always-unique ``raw_symbol`` — the same legacy
+         ``VENUE:TYPE:RAW_ID`` shape this module already uses whenever the
+         target ``@LIN/@INV-YYYYMMDD`` format's inputs aren't resolvable.
+    """
+    groups: dict[str, list[InstrumentRecord]] = defaultdict(list)
+    for record in results:
+        if record.instrument_type is InstrumentType.FUTURE:
+            groups[record.instrument_key].append(record)
+
+    for group in groups.values():
+        distinct_raw_symbols = {record.raw_symbol for record in group}
+        if len(distinct_raw_symbols) < 2:
+            continue  # no real collision (single symbol, possibly duplicated)
+
+        month_code_expiries = {
+            record.raw_symbol: _tardis._parse_bybit_month_code_expiry(record.raw_symbol) for record in group
+        }
+        expiries_resolved = all(expiry is not None for expiry in month_code_expiries.values())
+        expiries_distinct = len(set(month_code_expiries.values())) == len(group)
+
+        for record in group:
+            if expiries_resolved and expiries_distinct:
+                resolved_expiry = month_code_expiries[record.raw_symbol]
+                new_key = _tardis._build_canonical_future_key(
+                    record.venue, record.base_asset, record.quote_asset, record.margin_type, resolved_expiry
+                )
+                record.expiry = resolved_expiry
+            else:
+                new_key = f"{record.venue}:{record.instrument_type}:{record.raw_symbol.upper()}"
+            record.instrument_key = new_key
+            record.canonical_instrument_id = new_key
+
+
 class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
     """Tardis reference data adapter.
 
@@ -197,6 +254,13 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         reference-data universe (the authenticated ``datasets.tardis.dev`` /
         ``/data-feeds`` tick-data path is MTDS's job, not IS). Operator decision
         2026-06-23: "IS doesn't need auth for tardis; don't waste API limits".
+
+        DERIBIT-COMBO self-filter: when ``canonical_venue_override`` is
+        "DERIBIT-COMBO", every row is ALSO restricted to ``type=='combo'`` —
+        the "deribit" Tardis exchange slug is shared with bare DERIBIT
+        (option/future/perpetual/spot), and ``canonical_venue_override`` alone
+        would otherwise tag that entire universe as DERIBIT-COMBO. See
+        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14).
         """
         results: list[InstrumentRecord] = []
         failures: list[str] = []
@@ -216,6 +280,8 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                     continue
                 if instrument_type is not None:
                     batch = [r for r in batch if r.instrument_type == instrument_type]
+                if self._canonical_venue_override == "DERIBIT-COMBO":
+                    batch = [r for r in batch if r.instrument_type == InstrumentType.COMBO]
                 results.extend(batch)
         if not results and failures:
             raise RuntimeError(f"Tardis: all requested exchange(s) failed ({failures}); no instruments fetched")
@@ -675,6 +741,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                 results.append(record)
             else:
                 filtered_count += 1
+        _disambiguate_colliding_dated_derivatives(results)
         _tardis.logger.info(
             "Tardis %s: API /exchanges (no-auth) returned %d symbols, parsed %d instruments, filtered %d",
             exchange,
@@ -869,6 +936,11 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         try:
             return _tardis.InstrumentRecord(
                 instrument_key=instrument_key,
+                # CeFi has no raw-exchange-code-to-human-name translation gap the way
+                # TradFi does (base_asset is already human-readable, e.g. "BTC") — so
+                # canonical_instrument_id is just the already-canonical instrument_key.
+                # SSOT: unified-trading-pm/plans/active/canonical_instrument_id_cefi_defi_backfill_2026_07_14.md
+                canonical_instrument_id=instrument_key,
                 venue=canonical_venue,
                 raw_symbol=raw_id,
                 instrument_type=instrument_type,

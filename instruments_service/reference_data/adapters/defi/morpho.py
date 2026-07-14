@@ -256,28 +256,36 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
             "quote_asset_symbol_onchain": loan_symbol or None,
         }
 
+        a_token_instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI,
+            "morpho",
+            InstrumentType.A_TOKEN,
+            f"A{pair_key}",
+            chain=chain,
+            passthrough=True,
+        )
+        debt_token_instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI,
+            "morpho",
+            InstrumentType.DEBT_TOKEN,
+            f"DEBT{pair_key}",
+            chain=chain,
+            passthrough=True,
+        )
         return [
             InstrumentRecord(
-                instrument_key=build_canonical_instrument_id(
-                    AssetGroup.DEFI,
-                    "morpho",
-                    InstrumentType.A_TOKEN,
-                    f"A{pair_key}",
-                    chain=chain,
-                    passthrough=True,
-                ),
+                instrument_key=a_token_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=a_token_instrument_key,
                 instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             ),
             InstrumentRecord(
-                instrument_key=build_canonical_instrument_id(
-                    AssetGroup.DEFI,
-                    "morpho",
-                    InstrumentType.DEBT_TOKEN,
-                    f"DEBT{pair_key}",
-                    chain=chain,
-                    passthrough=True,
-                ),
+                instrument_key=debt_token_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=debt_token_instrument_key,
                 instrument_type=InstrumentType.DEBT_TOKEN,
                 **base_kwargs,
             ),

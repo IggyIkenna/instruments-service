@@ -332,6 +332,9 @@ class KalshiPerpReferenceDataAdapter(BaseReferenceDataAdapter):
         # we do NOT treat that as an instrument expiry.
         return InstrumentRecord(
             instrument_key=ticker,
+            # No CeFi raw-code-to-human-name translation gap (see other CeFi adapters'
+            # identical comment) — canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=ticker,
             venue=self.venue,
             raw_symbol=ticker,
             instrument_type=InstrumentType.PERPETUAL,

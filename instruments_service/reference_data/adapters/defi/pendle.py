@@ -264,9 +264,13 @@ class PendleReferenceDataAdapter(BaseReferenceDataAdapter):
                 # maturity. PT/YT redeem/decay at the market's expiry.
                 expiry: datetime | None = None if role == "SY" else maturity
 
+                instrument_key = f"{venue_tag}:{role}:{role}-{symbol}"
                 results.append(
                     InstrumentRecord(
-                        instrument_key=f"{venue_tag}:{role}:{role}-{symbol}",
+                        instrument_key=instrument_key,
+                        # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                        # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                        canonical_instrument_id=instrument_key,
                         venue=venue_tag,
                         raw_symbol=token_address,
                         instrument_type=InstrumentType.YIELD_BEARING,

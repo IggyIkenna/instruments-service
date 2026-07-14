@@ -204,6 +204,9 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
         # available_from is the true listing date (history-accurate universe).
         listing_dates = await self._probe_earliest_funding_dates([e[0] for e in eligible])
         for raw_symbol, base_asset, quote_asset, tick_size, lot_size in eligible:
+            aster_instrument_key = build_instrument_id(
+                "ASTER", InstrumentType.PERPETUAL, f"{base_asset}-{quote_asset}@{_MARGIN_MARKER}"
+            )
             results.append(
                 InstrumentRecord(
                     # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
@@ -223,9 +226,11 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
                     # marker is embedded in the symbol passed to the builder (PERPETUAL's
                     # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
                     # convention DeFi POOL fee-tiers already use).
-                    instrument_key=build_instrument_id(
-                        "ASTER", InstrumentType.PERPETUAL, f"{base_asset}-{quote_asset}@{_MARGIN_MARKER}"
-                    ),
+                    instrument_key=aster_instrument_key,
+                    # No CeFi raw-code-to-human-name translation gap (see other CeFi
+                    # adapters' identical comment) — canonical_instrument_id mirrors
+                    # instrument_key.
+                    canonical_instrument_id=aster_instrument_key,
                     venue="ASTER",
                     raw_symbol=raw_symbol,
                     instrument_type=InstrumentType.PERPETUAL,
