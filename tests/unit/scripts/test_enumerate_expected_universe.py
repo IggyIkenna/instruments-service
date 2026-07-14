@@ -361,3 +361,86 @@ def test_row_data_types_non_mvp_venue_skips_intersection() -> None:
     assert row_dts == ["trades", "book_snapshot_5"], (
         f"MVP gate must NOT blanket-block a non-MVP-scoped cefi venue; got {row_dts}"
     )
+
+
+# --- MVP data_type gate (TRADFI) — tradfi_eu_not_draining_source_axis_drift_
+# 2026_06_24.md #2 root-cause fix (2026-07-14): tradfi never had the
+# cefi-style MVP data_type-narrowing gate above, so an MVP-scoped CME OPTION
+# bundle emitted its FULL raw capability set (trades + ohlcv_1m +
+# options_chain) instead of the MVP-declared {ohlcv_1m} only — a 3x over-fan
+# that (combined with the per-underlying bundle grain) pushed a full-history
+# CME OPTION scan-only dry-run past the 1,000,000-candidate safety cap. -----
+
+
+def _tradfi_entry(
+    venue: str,
+    instrument_type: str,
+    *,
+    underlying: str = "",
+    base_asset: str = "",
+    mvp: bool | None = None,
+) -> object:
+    """Minimal tradfi catalogue entry for ``_row_data_types`` tests."""
+    return enumerator_module.InstrumentCatalogEntry(
+        instrument_id=f"{venue}:{instrument_type}:TEST",
+        instrument_type=instrument_type,
+        venue=venue,
+        chain="",
+        league_id="",
+        available_from=None,
+        available_to=None,
+        market_created_at=None,
+        settlement_time=None,
+        underlying=underlying,
+        base_asset=base_asset,
+        mvp=mvp,
+    )
+
+
+def test_row_data_types_cme_options_chain_mvp_narrows_to_ohlcv_1m() -> None:
+    """An MVP-scoped CME OPTION bundle (options_chain, underlier=GC — gold, a
+    real TradFiMvpRule underlier) admits {trades, ohlcv_1m, options_chain}
+    from the raw validity matrix (options_chain the non-canonical snapshot
+    data_type is filtered separately, never reaches this list), but MVP_SCOPE
+    narrows tradfi to {ohlcv_1m} ONLY (operator 2026-06-27 decision #7 — no
+    trades in tradfi MVP). This is the exact root-cause cell class from the
+    2026-07-14 >1M candidate-cap trip."""
+    tradfi_dts = ["trades", "ohlcv_1m"]
+    entry = _tradfi_entry("CME", "options_chain", underlying="GC", base_asset="GC", mvp=True)
+    row_dts = enumerator_module._row_data_types("tradfi", entry, tradfi_dts)
+    assert row_dts == ["ohlcv_1m"], f"MVP gate must narrow CME options_chain to ['ohlcv_1m']; got {row_dts}"
+
+
+def test_row_data_types_cme_futures_chain_mvp_narrows_to_ohlcv_1m() -> None:
+    """An MVP-scoped CME futures_chain bundle (underlier=ES) narrows the same
+    way — the MVP data_type set is not OPTION-specific."""
+    tradfi_dts = ["trades", "ohlcv_1s", "ohlcv_1m", "tbbo"]
+    entry = _tradfi_entry("CME", "futures_chain", underlying="ES", base_asset="ES", mvp=True)
+    row_dts = enumerator_module._row_data_types("tradfi", entry, tradfi_dts)
+    assert row_dts == ["ohlcv_1m"], f"MVP gate must narrow CME futures_chain to ['ohlcv_1m']; got {row_dts}"
+
+
+def test_row_data_types_krx_equity_mvp_narrows_to_ohlcv_24h() -> None:
+    """The KRX equity-basis carve-out (operator 2026-07-12) is narrower still
+    — {ohlcv_24h} only, NOT {ohlcv_1m} (Yahoo-sourced KRX has no reliable
+    intraday backfill). The gate must select the KRX-specific set, not the
+    flat CME futures/options complex set."""
+    equity_dts = ["trades", "ohlcv_1m", "ohlcv_24h"]
+    entry = _tradfi_entry("KRX", "EQUITY", base_asset="005930", mvp=True)
+    row_dts = enumerator_module._row_data_types("tradfi", entry, equity_dts)
+    assert row_dts == ["ohlcv_24h"], f"MVP gate must narrow KRX EQUITY to ['ohlcv_24h']; got {row_dts}"
+
+
+def test_row_data_types_tradfi_non_mvp_instrument_skips_narrowing() -> None:
+    """A tradfi instrument NOT within MVP scope (``mvp=False``, e.g. a
+    non-MVP-underlier CME future) must be left UNCHANGED by this gate — it
+    mirrors the cefi ``if mvp_dts:`` guard: narrow only, never blanket-empty
+    a cell this function did not itself determine to be out of MVP scope.
+    (In production ``_enumerate_v2_tradfi``'s own instrument-level MVP gate
+    already excludes non-MVP instruments before they reach this function;
+    this test exercises the function directly, in isolation, as its own
+    defense-in-depth guard.)"""
+    tradfi_dts = ["trades", "ohlcv_1s", "ohlcv_1m", "tbbo"]
+    entry = _tradfi_entry("CME", "futures_chain", underlying="ZC", base_asset="ZC", mvp=False)
+    row_dts = enumerator_module._row_data_types("tradfi", entry, tradfi_dts)
+    assert row_dts == tradfi_dts, f"non-MVP tradfi cell must be unchanged by the MVP-narrowing gate; got {row_dts}"
