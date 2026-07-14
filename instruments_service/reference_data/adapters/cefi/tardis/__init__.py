@@ -80,6 +80,7 @@ from instruments_service.reference_data.adapters.cefi.tardis.adapter import (
     _VENUE_MAPPING,
     TardisReferenceDataAdapter,
     _classify_tardis_error,
+    _disambiguate_colliding_dated_derivatives,
 )
 from instruments_service.reference_data.adapters.cefi.tardis.combos import (
     _DERIBIT_COMBO_STRUCTURES,
@@ -154,6 +155,7 @@ __all__ = [
     "TardisReferenceDataAdapter",
     "VenueMapping",
     "_classify_tardis_error",
+    "_disambiguate_colliding_dated_derivatives",
     "_infer_derivative_quote",
     "_infer_margin_type",
     "_normalize_option_type",
