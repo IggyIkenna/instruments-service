@@ -992,7 +992,19 @@ class TestFetchSfiData:
 
     @pytest.mark.asyncio
     async def test_match_descriptors_exception_writes_record_failed(self) -> None:
-        """Exception in get_match_descriptors_for_date → record_failed per league."""
+        """Exception in get_match_descriptors_for_date → record_failed PER LEAGUE.
+
+        Regression (sports_data_sources_canonical_completion, 2026-07-14): the
+        top-level failure handler must write ONLY per-expected-league
+        ``record_failed`` rows (each carrying a real ``league_id``), NEVER a
+        blank-``league_id`` date-aggregate row. A date-aggregate failed row can
+        never be superseded by the per-league success writes (the success path
+        keys on a real canonical ``league_id`` and writes no blank date-level
+        row), so it would sit ``attempted_failed`` forever even after a later
+        re-attempt genuinely captures every league — the exact class that left
+        the 10 SFI_PROGRESSIVE_STATS orphans un-closeable across residual-closer
+        re-runs (mirrors the footystats PREDICTIONS + weather WEATHER fixes).
+        """
         mock_mw = MagicMock()
         mock_mw_cls = MagicMock(return_value=mock_mw)
         mock_adapter = MagicMock()
@@ -1003,7 +1015,10 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
-            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL"), _mk_league("LA_LIGA")],
+            ),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
@@ -1015,6 +1030,14 @@ class TestFetchSfiData:
         ):
             result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET)
         mock_mw.record_failed.assert_called()
+        # Every record_failed row_key MUST carry a real league_id — no blank
+        # date-aggregate row.
+        failed_league_ids = {c.kwargs["row_key"].get("league_id") for c in mock_mw.record_failed.call_args_list}
+        assert None not in failed_league_ids, (
+            "top-level SFI failure handler wrote a blank-league_id date-aggregate "
+            f"record_failed row (unsupersedable orphan); row_keys={failed_league_ids}"
+        )
+        assert failed_league_ids == {"EPL", "LA_LIGA"}
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
