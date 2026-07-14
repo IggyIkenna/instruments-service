@@ -178,6 +178,33 @@ def test_resolve_base_quote_bybit_end_to_end(raw_id: str, expected_base: str, ex
 
 
 # ---------------------------------------------------------------------------
+# Bitget Futures dated quarterlies — real bug (2026-07-14): no "bitget-futures"
+# branch in _resolve_base_quote, so all 16 real FUTURE symbols on this venue
+# (identical no-dash CME-month-code shape as Bybit's legacy quarterlies —
+# live-verified api.tardis.dev/v1/exchanges/bitget-futures) resolved quote=""
+# and were silently dropped by adapter.py's empty-quote guard. Result: the
+# instruments-service catalogue carried ZERO FUTURE rows for BITGET-FUTURES
+# (only its 714 PERPETUAL rows), a genuine Layer-1 completeness hole for
+# mvp_backfill_cefi_tick_v10_2026_06_27.md's G4 gate.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw_id", "expected_base", "expected_quote"),
+    [
+        ("BTCUSDH25", "BTC", "USD"),
+        ("BTCUSDU26", "BTC", "USD"),
+        ("ETHUSDH25", "ETH", "USD"),
+        # PERPETUALs (already-working path) stay unaffected by the new branch.
+        ("0GUSDT", "0G", "USDT"),
+    ],
+)
+def test_resolve_base_quote_bitget_futures_end_to_end(raw_id: str, expected_base: str, expected_quote: str) -> None:
+    base, quote = _resolve_base_quote(_item(raw_id), raw_id, "bitget-futures")
+    assert (base, quote) == (expected_base, expected_quote)
+
+
+# ---------------------------------------------------------------------------
 # Canonical @LIN/@INV symbol + full VENUE:TYPE:SYMBOL key builders
 # ---------------------------------------------------------------------------
 
