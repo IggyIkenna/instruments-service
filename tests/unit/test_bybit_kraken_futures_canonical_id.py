@@ -90,6 +90,26 @@ class TestInferMarginTypeBybit:
         assert _infer_margin_type(InstrumentType.SPOT_PAIR, "USDT", "BTCUSDT", "bybit") is None
 
 
+class TestInferMarginTypeBitgetFutures:
+    """Real bug (2026-07-14): no bitget-futures branch existed → every inverse
+    instrument → LINEAR. Live-verified via Bitget's own public REST
+    (api.bitget.com/api/v2/mix/market/contracts?productType=coin-futures):
+    USD-quoted BTCUSD/ETHUSD perpetuals + their dated-quarterly siblings
+    (BTCUSDH25 etc) list coin collateral (supportMarginCoins=["BTC","ETH",...]),
+    i.e. genuinely coin-margined, same shape as Bybit/Deribit/Binance-futures."""
+
+    def test_bare_usd_month_code_future_is_inverse(self) -> None:
+        """Real: BTCUSDH25 (dated quarterly, coin-margined)."""
+        assert _infer_margin_type(InstrumentType.FUTURE, "USD", "BTCUSDH25", "bitget-futures") == MarginType.INVERSE
+
+    def test_usdt_perpetual_is_linear(self) -> None:
+        """Real: 0GUSDT is a real Bitget USDT-margined perpetual (captured today)."""
+        assert _infer_margin_type(InstrumentType.PERPETUAL, "USDT", "0GUSDT", "bitget-futures") == MarginType.LINEAR
+
+    def test_spot_returns_none_unaffected(self) -> None:
+        assert _infer_margin_type(InstrumentType.SPOT_PAIR, "USDT", "BTCUSDT", "bitget-futures") is None
+
+
 class TestInferMarginTypeKrakenFutures:
     """Real bug: no cryptofacilities branch existed → every inverse instrument → LINEAR.
 
