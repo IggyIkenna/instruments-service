@@ -20,7 +20,7 @@ targets behave exactly as they did before the split.
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, ClassVar, cast
 
@@ -64,6 +64,25 @@ class PolymarketClobMixin:
     _CLOB_PAGE_LIMIT = 1000
     _CLOB_MAX_PAGES = 10000  # safety cap against runaway loop; CLOB exits naturally via "LTE=" cursor sentinel
     _CLOB_RAW_CACHE_TTL: ClassVar[float] = 86400.0  # 24 h — CLOB history is immutable; matches Tardis TTL
+
+    # Active-window creation-date field priority for a raw (pre-validation) CLOB
+    # market dict (2026-07-14, prediction_lifecycle_prefetch_gate_and_resolution_
+    # day_catalogue_2026_07_14.md, contingent P1). Primary: the gamma-shaped
+    # creation fields, present when an item was already enriched or came from a
+    # gamma-shaped raw dict. Fallback: per ``markets.py::
+    # _enrich_clob_lifecycle_lower_bound``'s 43a note, the raw CLOB ``/markets``
+    # shape usually carries NEITHER of the primary fields at all, only these two
+    # best-effort listing-date proxies.
+    _CLOB_CREATION_FIELD_CANDIDATES: ClassVar[tuple[str, ...]] = (
+        "start_date",
+        "startDate",
+        "created_at",
+        "createdAt",
+    )
+    _CLOB_CREATION_FALLBACK_FIELD_CANDIDATES: ClassVar[tuple[str, ...]] = (
+        "accepting_order_timestamp",
+        "game_start_time",
+    )
 
     def _parse_clob_point(
         self: PolymarketReferenceDataAdapter, point_raw: object, symbol: str, interval: str
@@ -316,29 +335,114 @@ class PolymarketClobMixin:
         _pm.logger.info("CLOB raw cache populated: %d markets", len(raw))
         return raw
 
+    def _clob_market_window_ts(
+        self: PolymarketReferenceDataAdapter, raw_item: dict[str, object]
+    ) -> tuple[int | None, int | None]:
+        """Best-effort ``(pre_creation_ts, post_settlement_ts)`` epoch-second window
+        bounds for a raw (pre-validation) CLOB market dict — the active-window
+        companion to the resolution-day-only filter ``_fetch_clob_markets`` used
+        before 2026-07-14
+        (prediction_lifecycle_prefetch_gate_and_resolution_day_catalogue_2026_07_14.md,
+        contingent P1).
+
+        Mirrors market-tick-data-service's
+        ``base_prediction_adapter.compute_lifecycle_window_ts`` bounds comparison
+        bit-for-bit (a date-only settlement is extended to end-of-day, since a
+        market resolving on day D trades THROUGH day D) so IS's per-day catalogue
+        and MTDS's pre-fetch gate agree on "what counts as active that day".
+        REIMPLEMENTED locally rather than imported: instruments-service and
+        market-tick-data-service are separate T4 services with no
+        service->service dependency
+        (codex/04-architecture/tier-and-import-architecture.md) — this is a
+        mirror of the comparison, not a shared call.
+
+        Creation-date field priority is :data:`_CLOB_CREATION_FIELD_CANDIDATES`
+        then :data:`_CLOB_CREATION_FALLBACK_FIELD_CANDIDATES` (see their
+        docstrings). Returns ``pre_creation_ts=None`` when nothing parses —
+        callers MUST fail OPEN on that (include, never exclude) per this task's
+        explicit instruction: an unknown creation date must never masquerade as
+        "not yet listed".
+
+        ``post_settlement_ts`` requires a parseable ``end_date_iso`` (checked
+        raw-key first — the native CLOB shape — then the gamma alias for
+        robustness). Unlike the creation side this is NOT fail-open: the old
+        resolution-day filter already required ``end_date_iso`` to exist and
+        parse, and making the settlement bound fail-open too would let markets
+        with an unknown resolution date appear in EVERY day's catalogue forever
+        — unbounded, not "widened".
+        """
+        created_raw: object = None
+        for key in self._CLOB_CREATION_FIELD_CANDIDATES:
+            created_raw = raw_item.get(key)
+            if created_raw:
+                break
+        if not created_raw:
+            for key in self._CLOB_CREATION_FALLBACK_FIELD_CANDIDATES:
+                created_raw = raw_item.get(key)
+                if created_raw:
+                    break
+        created_at = self._parse_end_date(str(created_raw)) if isinstance(created_raw, str) else None
+
+        end_raw = raw_item.get("end_date_iso") or raw_item.get("endDateIso")
+        settlement_time = self._parse_end_date(str(end_raw)) if isinstance(end_raw, str) else None
+
+        pre_creation_ts = int(created_at.timestamp()) if created_at is not None else None
+        post_settlement_ts: int | None = None
+        if settlement_time is not None:
+            settle = settlement_time
+            if settle.hour == 0 and settle.minute == 0 and settle.second == 0 and settle.microsecond == 0:
+                settle = settle + timedelta(days=1)
+            post_settlement_ts = int(settle.timestamp())
+        return pre_creation_ts, post_settlement_ts
+
     async def _fetch_clob_markets(
         self: PolymarketReferenceDataAdapter,
         date: str,
         now: datetime,
     ) -> list[InstrumentRecord]:
-        """Filter the cached CLOB market list to a single target date.
+        """Filter the cached CLOB market list to markets ACTIVE on a target date.
+
+        Widened 2026-07-14
+        (prediction_lifecycle_prefetch_gate_and_resolution_day_catalogue_2026_07_14.md,
+        contingent P1) from a resolution-day-only filter
+        (``end_date_iso.startswith(date)``) to an ACTIVE-WINDOW overlap: a market
+        is included when its ``[created, resolved)`` lifecycle window overlaps the
+        target day, not only when it resolves ON that day (see
+        :meth:`_clob_market_window_ts`). A market whose creation date is unknown
+        is included (fail-open); a market whose resolution date is unknown is
+        excluded (fail-closed — see that method's docstring for why the two sides
+        are asymmetric). Resolution-day inclusion is unchanged: a market ending on
+        the target day still overlaps its own window by construction.
+
+        Volume note: this widening on its own would explode per-day attempt
+        counts (EVERY active-window market becomes a fetch candidate for EVERY
+        day it's alive, not just its resolution day). It is safe to ship because
+        the MTDS pre-fetch gate (market-tick-data-service@abe0904d,
+        ``base_prediction_adapter.prefilter_ids_by_lifecycle_window``) already
+        landed and re-applies the SAME bounds comparison before any network call
+        — the wider catalogue only grows ``cid_to_shard``, the gate still bounds
+        actual fetch attempts to markets truly in-window for that day.
 
         The full CLOB scan is performed once and cached (_get_raw_clob_markets_cached).
-        Each per-date call filters the ~900K-market in-memory list by end_date_iso,
-        so a multi-date backfill pays the download cost exactly once.
+        Each per-date call filters the ~1.8M-market in-memory list (1,801,017
+        measured 2026-07-14) by the active-window bounds check, so a multi-date
+        backfill pays the download cost exactly once.
 
         Cursor sharding via env vars (optional, for parallel backfill):
             POLYMARKET_START_CURSOR — base64-encoded offset to start at
             POLYMARKET_END_CURSOR   — base64-encoded offset to stop at
         Both default unset → full scan from offset 0.
         """
-        target_prefix = f"{date}T"
+        day_start_ts = int(datetime.fromisoformat(f"{date}T00:00:00+00:00").timestamp())
+        day_end_ts = day_start_ts + 86400
         results: list[InstrumentRecord] = []
         raw_markets = await self._get_raw_clob_markets_cached()
         for raw_item in raw_markets:
-            end_date = str(raw_item.get("end_date_iso", ""))
-            if not end_date.startswith(target_prefix):
-                continue
+            pre_creation_ts, post_settlement_ts = self._clob_market_window_ts(raw_item)
+            if post_settlement_ts is None or day_start_ts >= post_settlement_ts:
+                continue  # resolution date unknown, or day is entirely after settlement
+            if pre_creation_ts is not None and day_end_ts <= pre_creation_ts:
+                continue  # day is entirely before the market existed
             self._enrich_clob_outcomes(raw_item)
             _pm._enrich_raw_event_fields(raw_item)
             try:
@@ -350,7 +454,7 @@ class PolymarketClobMixin:
             if record is not None:
                 results.append(record)
         _pm.logger.info(
-            "CLOB: %d instruments for date=%s (from %d cached markets)",
+            "CLOB: %d instruments for date=%s (active-window; from %d cached markets)",
             len(results),
             date,
             len(raw_markets),
