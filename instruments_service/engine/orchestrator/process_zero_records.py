@@ -160,7 +160,7 @@ def _zero_sports_empty_fixture_markers(
     league_filter: list[str] | None,
     fixtures_fetch_failed: bool = False,
 ) -> None:
-    """Write one marker per prediction league for a zero-fixture day.
+    """Write one marker per api_football-expected league for a zero-fixture day.
 
     When ``fixtures_fetch_failed`` is True the fixtures venue's adapter ERRORED
     (e.g. API-Football plan/quota/auth error → ``response: []``); the day's
@@ -180,8 +180,20 @@ def _zero_sports_empty_fixture_markers(
     look populated are worse than missing data because they evade detection.
     If a date has no fixtures, no parquet should exist; the manifest's
     ``empty_confirmed`` row is the single honest marker.
+
+    Bug fix (2026-07-14 — sports_gw_enrichment_false_empty_manifest_and_dropped_rows):
+    the denominator was ``get_all_prediction_league_ids()`` (the 33-league
+    Prediction tier) — the same classification-filter mismatch already fixed
+    for TEAMS/STANDINGS 2026-07-13. On a zero-fixture day, the other 61
+    api_football-expected leagues never got a marker at all, leaving their
+    FIXTURES cell ``expected_unattempted`` (blank-reason) until a later day
+    with real fixtures happened to cover them.
     """
-    _empty_league_ids = league_filter if league_filter else _orch.get_all_prediction_league_ids()
+    _empty_league_ids = (
+        league_filter
+        if league_filter
+        else [lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")]
+    )
     _empty_attempt_ts = _orch.datetime.now(_orch.UTC)
     _empty_manifest = _orch.ManifestWriter(
         service_name="instruments-service",

@@ -276,8 +276,11 @@ def _write_fixtures_per_league(
         _stringified = fixture_df["league_id"].astype(str)
         _league_series = _stringified.mask(_stringified.str.strip() == "")
     elif "af_league_id" in fixture_df.columns and fixture_df["af_league_id"].notna().any():
+        # 94-league api_football-expected set, not the 33-league Prediction
+        # tier — same classification-filter mismatch class already fixed for
+        # _build_fixture_league_map_from_gcs below (2026-07-14 GW verification).
         _af_to_canonical: dict[int, str] = {}
-        for _league_def in _orch.get_prediction_leagues():
+        for _league_def in _orch.get_expected_leagues_for_source("api_football"):
             if _league_def.api_football_id is not None:
                 _af_to_canonical[_league_def.api_football_id] = _league_def.league_id
         # af_league_id may be float-typed in pandas after read_parquet; coerce.

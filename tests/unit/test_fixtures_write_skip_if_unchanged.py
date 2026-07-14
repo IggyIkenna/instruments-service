@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -142,3 +143,32 @@ def test_writer_writes_when_skip_disabled() -> None:
         orchestrator._write_fixtures_per_league(MagicMock(), fixture_df, "2026-06-10", source_label="test")
     mock_guard.assert_not_called()
     mock_write.assert_called_once()
+
+
+def test_writer_af_league_id_fallback_uses_expected_leagues_denominator() -> None:
+    """af_league_id fallback map is built from the 94-league api_football-expected
+    set (``get_expected_leagues_for_source``), not the 33-league Prediction tier
+    (``get_prediction_leagues``) — same classification-filter mismatch class
+    fixed for TEAMS/STANDINGS 2026-07-13 (2026-07-14 GW verification).
+
+    A league present only in the wider set must still resolve to its canonical
+    league_id via the fallback map, proving the map no longer depends on the
+    narrower enumerator.
+    """
+    fixture_df = pd.DataFrame(
+        [{"af_fixture_id": 1, "af_league_id": 39.0, "home_team": "Arsenal", "away_team": "Chelsea"}]
+    )
+    _league_def = SimpleNamespace(api_football_id=39, league_id="EPL")
+    with (
+        patch.object(orchestrator, "get_prediction_leagues", return_value=[]),
+        patch.object(orchestrator, "get_expected_leagues_for_source", return_value=[_league_def]),
+        patch.object(orchestrator, "_is_in_canonical_write_universe", return_value=True),
+        patch.object(orchestrator, "_canonical_league_id", side_effect=lambda lid: lid),
+        patch.object(orchestrator, "_gated_sink_write") as mock_write,
+    ):
+        orchestrator._write_fixtures_per_league(MagicMock(), fixture_df, "2026-06-10", source_label="test")
+    # get_prediction_leagues is mocked to return [] — resolution only succeeds
+    # if the fallback map was built from get_expected_leagues_for_source.
+    assert mock_write.call_count == 1
+    _, _kwargs = mock_write.call_args
+    assert _kwargs["partition"]["league"] == "EPL"
