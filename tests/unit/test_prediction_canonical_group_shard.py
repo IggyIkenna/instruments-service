@@ -534,12 +534,14 @@ class TestWriteMarketLifecycle:
 
     def test_gcs_path_matches_mtds_reader_expectation(self) -> None:
         """Partition key + filename together construct the path
-        ``market_lifecycle/by_canonical_group/group={g}/day={d}/market_lifecycle.parquet``
-        that ``_load_market_lifecycle_for_date`` searches for.
+        ``market_lifecycle/by_canonical_group/day={d}/group={g}/venue={V}/market_lifecycle.parquet``
+        (alphabetical key ordering) that ``_load_market_lifecycle_for_date`` searches for.
 
-        The sink prefix ``market_lifecycle/by_canonical_group`` is set in the orchestrator's
-        ``lifecycle_sink = get_data_sink(..., prefix="market_lifecycle/by_canonical_group")``.
-        Here we verify the partition dict and filename that compose the full object key.
+        The venue level (2026-07-14, Root Cause #5) prevents the second venue's write for
+        the same (day, group) from clobbering the first — POLYMARKET wiped KALSHI's
+        1,365 lifecycle rows on day=2026-07-09 before this. The MTDS reader
+        suffix-matches market_lifecycle.parquet under a day-scoped prefix, so the
+        extra level stays compatible.
         """
         created = datetime(2026, 3, 25, 9, 0, 0, tzinfo=UTC)
         settlement = datetime(2026, 3, 26, 13, 0, 0, tzinfo=UTC)
@@ -548,7 +550,7 @@ class TestWriteMarketLifecycle:
         assert len(sink.writes) == 1
         write = sink.writes[0]
         # Partition produces path segments group={g}/day={d}
-        assert write["partition"] == {"group": self._GROUP, "day": self._DATE}
+        assert write["partition"] == {"group": self._GROUP, "day": self._DATE, "venue": self._VENUE}
         assert write["filename"] == "market_lifecycle.parquet"
 
     def test_output_columns_superset_of_mtds_reader_required_cols(self) -> None:
