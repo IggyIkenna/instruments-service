@@ -675,6 +675,14 @@ def test_tradfi_v2_bundle_capture_suppresses_via_full_enumerate_v2() -> None:
     """End-to-end (enumerate_v2 → rollup → tradfi): captured futures_chain/combo/options_chain
     cells with ``instrument_id=""`` + ``underlying=<U>`` SUPPRESS their seeds; the
     un-captured ones seed with a blank instrument_id. Covers all three bundle types.
+
+    Probes at ``data_type=ohlcv_1m`` (not ``trades``) — all three fixtures use MVP
+    underliers (ES, CL are real ``TradFiMvpRule`` underliers) and the tradfi MVP
+    data_type-narrowing gate (2026-07-14 fix,
+    tradfi_eu_not_draining_source_axis_drift_2026_06_24.md #2) narrows an
+    MVP-scoped bundle to ``{ohlcv_1m}`` only — ``trades`` would no longer survive
+    to be suppressed/seeded, which is orthogonal to what this test actually
+    verifies (bundle de-dup + present-set suppression mechanics).
     """
     catalog = [
         # futures_chain: CME outright future leaf → rolls up to futures_chain on underlying ES.
@@ -699,15 +707,15 @@ def test_tradfi_v2_bundle_capture_suppresses_via_full_enumerate_v2() -> None:
     # and ES combo only — CL options_chain stays UN-captured so it must seed.
     cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "underlying", "league_id", "date"]
     present = {
-        ("CME", "", "trades", "futures_chain", "", "ES", "", "2024-06-03"),
-        ("CME", "", "trades", "combo", "", "ES", "", "2024-06-03"),
+        ("CME", "", "ohlcv_1m", "futures_chain", "", "ES", "", "2024-06-03"),
+        ("CME", "", "ohlcv_1m", "combo", "", "ES", "", "2024-06-03"),
     }
     rows = list(
         enumerator_module.enumerate_v2(
             asset_group="tradfi",
             catalog=catalog,
             date_axis=axis,
-            data_types=["trades"],
+            data_types=["ohlcv_1m"],
             present_set=present,
             present_cols=cols,
         )
@@ -2316,7 +2324,20 @@ class TestG1EnumDefiFilter:
 
 
 class TestG1EnumTradfiFilter:
-    """tradfi enumerator must respect the validity matrix."""
+    """tradfi enumerator must respect the validity matrix.
+
+    Probes ``_row_data_types`` DIRECTLY (not the full ``_enumerate_v2_tradfi``
+    pipeline) with ``mvp=False`` fixtures — this decouples the assertions from
+    BOTH tradfi MVP gates: the per-instrument EXISTENCE gate
+    (``_enumerate_v2_tradfi``'s own ``if not _tradfi_entry_in_mvp_universe(instr):
+    continue``, which would exclude a ``mvp=False`` instrument entirely before
+    ``_row_data_types`` even runs) and the data_type-NARROWING gate added
+    2026-07-14 (tradfi_eu_not_draining_source_axis_drift_2026_06_24.md #2),
+    which — for an MVP-scoped instrument — would narrow every instrument_type
+    here down to ``{ohlcv_1m}`` (or ``{ohlcv_24h}`` for KRX), making
+    ``"trades" in data_types_emitted`` false for reasons unrelated to what this
+    class actually tests (the RAW validity matrix, an orthogonal axis).
+    """
 
     _ALL_TRADFI_DTS: ClassVar[list[str]] = [
         "trades",
@@ -2330,37 +2351,22 @@ class TestG1EnumTradfiFilter:
         "macro_result",
     ]
 
-    def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
-        catalog = [_make_tradfi_entry(instrument_type=instrument_type)]
-        # G1 filter tests assert per-instrument validity-matrix behavior; drop the
-        # venue-grain non-trading-day pass so its universal data_type fan doesn't
-        # leak into "data_types_emitted" (2024-01-15 is MLK Day → holiday).
-        return _drop_v2_venue_grain(
-            list(
-                enumerator_module._enumerate_v2_tradfi(
-                    catalog,
-                    _date_axis("2024-01-15"),
-                    data_types or self._ALL_TRADFI_DTS,
-                    present_set=set(),
-                )
-            )
-        )
+    def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list[str]:
+        entry = _make_tradfi_entry(instrument_type=instrument_type, mvp=False)
+        return enumerator_module._row_data_types("tradfi", entry, data_types or self._ALL_TRADFI_DTS)
 
     def test_etf_has_no_earnings_result(self) -> None:
-        rows = self._run("ETF")
-        data_types_emitted = {r.data_type for r in rows}
+        data_types_emitted = set(self._run("ETF"))
         assert "trades" in data_types_emitted
         assert "earnings_result" not in data_types_emitted
 
     def test_equity_has_earnings_result(self) -> None:
-        rows = self._run("EQUITY")
-        data_types_emitted = {r.data_type for r in rows}
+        data_types_emitted = set(self._run("EQUITY"))
         assert "earnings_result" in data_types_emitted
         assert "corporate_action_confirmed" in data_types_emitted
 
     def test_index_only_ohlcv(self) -> None:
-        rows = self._run("INDEX")
-        data_types_emitted = {r.data_type for r in rows}
+        data_types_emitted = set(self._run("INDEX"))
         assert "trades" not in data_types_emitted
         # at least one ohlcv must be present
         assert any("ohlcv" in dt for dt in data_types_emitted)
@@ -2543,23 +2549,24 @@ def test_enumerate_v2_perpetual_does_not_produce_options_chain() -> None:
 
 
 def test_enumerate_v2_tradfi_option_leaves_roll_up() -> None:
-    """tradfi option leaves roll up to the per-underlying options_chain bundle, which
-    admits the chain's OWN captured market-data data_types — NOT cefi-parity
-    trades-only.
+    """tradfi option leaves roll up to the per-underlying options_chain bundle.
 
     The grain mechanism is identical to cefi (option/combo leaves → one synthetic
-    per-underlying options_chain entry), but the bundle's emitted data_types come
-    from the operator-ratified tradfi validity matrix (T-OLD-2b, slot-6 verified vs
-    the market-data-tick-tradfi present-set): ``("tradfi","options_chain")`` admits
-    ``{trades, ohlcv_1m}`` of the canonical tradfi data_types (the databento chain
-    captures). The matrix also carries the non-canonical ``options_chain`` snapshot
-    data_type (mark_iv/greeks), but the enumerator cross-joins only the canonical
-    ``DATA_TYPES_BY_ASSET_GROUP["tradfi"]`` (where ``options_chain`` is an
-    instrument_type, not a data_type) so it is correctly NOT emitted here — that
-    snapshot cell is materialised by the per-AG v8→v9 migrator relabel, not the
-    could-exist enumerator. cefi's clean ``{trades}`` is the cefi slice; tradfi's
-    broader admit-set is deliberate (a trades-only tradfi slice marked ~12K real
-    captured chain cells "impossible").
+    per-underlying options_chain entry). The RAW operator-ratified tradfi validity
+    matrix (T-OLD-2b, slot-6 verified vs the market-data-tick-tradfi present-set)
+    admits ``("tradfi","options_chain") -> {trades, ohlcv_1m}`` of the canonical
+    tradfi data_types (the databento chain captures) — cefi's clean ``{trades}``
+    is the cefi slice; tradfi's broader raw admit-set is deliberate (a trades-only
+    tradfi slice marked ~12K real captured chain cells "impossible").
+
+    ES is a real ``TradFiMvpRule`` underlier, so this bundle is ALSO MVP-scoped —
+    the tradfi MVP data_type-narrowing gate (2026-07-14 fix,
+    tradfi_eu_not_draining_source_axis_drift_2026_06_24.md #2) narrows the raw
+    admit-set FURTHER, down to ``{ohlcv_1m}`` only (operator 2026-06-27 decision
+    #7 — no ``trades`` in tradfi MVP; see
+    ``test_row_data_types_cme_options_chain_mvp_narrows_to_ohlcv_1m`` for the
+    ``_row_data_types``-level unit test of this gate in isolation). ``trades`` is
+    therefore correctly ABSENT here despite being in the raw validity matrix.
     """
     catalog = [
         _opt_entry("ES-OPT-1", "ES", instrument_type="OPTION", venue="CME"),
@@ -2572,12 +2579,11 @@ def test_enumerate_v2_tradfi_option_leaves_roll_up() -> None:
     rows = _drop_v2_venue_grain(
         list(enumerator_module.enumerate_v2(asset_group="tradfi", catalog=catalog, date_axis=dates))
     )
-    # Era-B: instrument_type=options_chain bundle; tradfi admits trades + ohlcv_1m
-    # (the captured chain market-data data_types — UAC validity matrix T-OLD-2b).
+    # Era-B: instrument_type=options_chain bundle. MVP-narrowed to ohlcv_1m only
+    # (ES is a real TradFiMvpRule underlier — see docstring).
     # axis-3 (2026-06-22): a tradfi BUNDLE cell carries instrument_id="" + underlying=<U>
     # (the MTDS writer grain), NOT instrument_id=<underlying>.
     assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
-        ("", "ES", "options_chain", "trades"),
         ("", "ES", "options_chain", "ohlcv_1m"),
     }
 
