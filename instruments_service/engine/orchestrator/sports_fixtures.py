@@ -594,15 +594,28 @@ def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]
     ``entity=fixtures/fixtures.parquet`` blob that no writer has populated
     since the per-league migration, so this always silently returned ``{}``
     for any post-migration date.
+
+    2026-07-14 root-cause addendum (GW content-verification RED): the
+    ``af_league_id`` fallback mapping was built from ``get_prediction_leagues()``
+    (33 leagues) instead of the full 94-league api_football write universe —
+    the SAME classification-filter mismatch class fixed for TEAMS/STANDINGS
+    on 2026-07-13. On a busy date this map covered only ~35% of fixtures,
+    and per-fixture enrichment rows for the other ~65% fell through the
+    bare-path drop in ``_write_per_fixture_entities``. Also lifted the
+    ``max_results=100`` cap on the underlying blob listing (``None`` =
+    unbounded/paginated) — a 94-league day's fixtures parquets can approach
+    that default cap.
     """
-    # Build reverse mapping from UAC: af_league_id -> canonical league_id
+    # Build reverse mapping from UAC: af_league_id -> canonical league_id.
+    # MUST match the enumerator's denominator (get_expected_leagues_for_source),
+    # not the narrower Prediction-tier list — see addendum above.
     _af_league_to_canonical: dict[int, str] = {}
-    for league_def in _orch.get_prediction_leagues():
+    for league_def in _orch.get_expected_leagues_for_source("api_football"):
         if league_def.api_football_id is not None:
             _af_league_to_canonical[league_def.api_football_id] = league_def.league_id
 
     try:
-        df = _orch._read_per_league_entity_df(bucket, date, "fixtures")
+        df = _orch._read_per_league_entity_df(bucket, date, "fixtures", max_results=None)
         if df is None:
             _orch.logger.debug("No fixtures parquets found for date=%s for league mapping", date)
             return {}
