@@ -2,7 +2,7 @@
 
 Phase B.1 of ``plans/epics/instruments_master.md``: a
 live-mode trigger that pulls fixtures from api-football for the rolling
-window ``[today, today + 8d]``, upserts to the canonical sports GCS
+window ``[today - 1d, today + 8d]``, upserts to the canonical sports GCS
 path (per UAC ``candidate_parquet_paths(SPORTS_FIXTURES, day,
 league_id)``), and records the shard via
 ``ManifestWriter.record_captured`` with the canonical sports row_key
@@ -10,13 +10,21 @@ shape.
 
 Behaviour contract:
 
-* **Window**: 9 days = today + 8 days lookahead. Each day is a separate
-  api-football ``/fixtures?date=YYYY-MM-DD`` call (same call shape as
-  the batch fixture loop in ``orchestrator._fetch_sports_reference``).
-  Per league fan-out happens inside the API call via
-  ``league_ids=[<af_id>]`` so we cover the full Prediction +
-  Reference + Features classification per UAC
-  ``get_leagues_by_classification``.
+* **Window**: 10 days = 1 day lookback + today + 8 days lookahead. Each
+  day is a separate api-football ``/fixtures?date=YYYY-MM-DD`` call
+  (same call shape as the batch fixture loop in
+  ``orchestrator._fetch_sports_reference``). Per league fan-out happens
+  inside the API call via ``league_ids=[<af_id>]`` so we cover the full
+  Prediction + Reference + Features classification per UAC
+  ``get_leagues_by_classification``. The 1-day lookback is the **T+1
+  closing re-poll**: the day that just ended gets one final
+  post-day-end upsert so fixtures that finished overnight carry their
+  FT results and late reschedules/cancellations land on the closed day
+  (fixture day-boundary staleness class — see
+  ``plans/active/issues/sports_fixtures_pending_eu_phantom_denominator_2026_07_13.md``,
+  2026-07-14 closeout: ALLSVENSKAN + BRASILEIRAO_SERIE_B were
+  mis-stamped EXPECTED_NO_FIXTURE off stale calendar evidence while
+  real matches existed, one captured mid-game with status=1H).
 * **Inserts vs upserts**: every fire treats new fixtures as inserts and
   existing fixtures as upserts. Status changes (``scheduled`` →
   ``cancelled`` / ``postponed`` / ``in-play`` / ``finished``) propagate
@@ -115,10 +123,19 @@ SPORTS_FIXTURES_DAILY_REPOLL_TRIGGER: str = "sports.fixtures.daily_repoll"
 """Closed-set trigger name routed to :func:`run_sports_fixtures_daily_repoll`."""
 
 _DEFAULT_LOOKAHEAD_DAYS: int = 8
-"""Default rolling-window lookahead. ``[today, today + LOOKAHEAD_DAYS]`` inclusive
-covers the full 9-day fixture announcement horizon — api-football publishes
+"""Default rolling-window lookahead. ``[today - LOOKBACK_DAYS, today + LOOKAHEAD_DAYS]``
+inclusive covers the full fixture announcement horizon — api-football publishes
 fixture metadata ~1 week before kickoff, so today + 8 days catches the entire
 upcoming-fixture surface in one fire."""
+
+_DEFAULT_LOOKBACK_DAYS: int = 1
+"""Default rolling-window lookback — the T+1 closing re-poll. The day that just
+ended gets one final post-day-end upsert so finished-overnight fixtures carry
+their FT results and late reschedules/cancellations land on the closed day.
+Without it, a fixture polled mid-game on its last fire (e.g. status=1H at the
+23:xx poll) stays stale forever (fixture day-boundary staleness class,
+``plans/active/issues/sports_fixtures_pending_eu_phantom_denominator_2026_07_13.md``
+2026-07-14 closeout)."""
 
 _ANNOUNCED_AT_LEAD_DAYS: int = 7
 """Days before kickoff at which a scheduled fixture is announced. Mirrors the
@@ -136,9 +153,13 @@ def _resolve_today(today: _date | str | None) -> _date:
     return _date.fromisoformat(today)
 
 
-def _date_window(today: _date, lookahead_days: int) -> list[_date]:
-    """Return the inclusive list ``[today, today + lookahead_days]``."""
-    return [today + timedelta(days=i) for i in range(lookahead_days + 1)]
+def _date_window(
+    today: _date,
+    lookahead_days: int,
+    lookback_days: int = _DEFAULT_LOOKBACK_DAYS,
+) -> list[_date]:
+    """Return the inclusive list ``[today - lookback_days, today + lookahead_days]``."""
+    return [today + timedelta(days=i) for i in range(-lookback_days, lookahead_days + 1)]
 
 
 def _league_ids_for_repoll(league_filter: Iterable[str | int] | None) -> list[int]:
@@ -182,16 +203,18 @@ async def run_sports_fixtures_daily_repoll(
     api_key: str,
     bucket: str | None = None,
     lookahead_days: int = _DEFAULT_LOOKAHEAD_DAYS,
+    lookback_days: int = _DEFAULT_LOOKBACK_DAYS,
     league_filter: Iterable[str | int] | None = None,
     correlation_id: str | None = None,
 ) -> dict[str, int]:
     """Run the ``sports.fixtures.daily_repoll`` trigger — live mode B.1.
 
-    Pulls fixtures from api-football for ``[today, today + lookahead_days]``
-    and upserts each (day, league) parquet at the canonical sports GCS path,
-    recording the shard in the availability manifest with the canonical row
-    shape. Safe to invoke repeatedly on the same UTC day — see module
-    docstring for the idempotency contract.
+    Pulls fixtures from api-football for
+    ``[today - lookback_days, today + lookahead_days]`` and upserts each
+    (day, league) parquet at the canonical sports GCS path, recording the
+    shard in the availability manifest with the canonical row shape. Safe to
+    invoke repeatedly on the same UTC day — see module docstring for the
+    idempotency contract.
 
     Args:
         today: Anchor date for the rolling window. ``None`` = ``datetime.now(UTC).date()``;
@@ -202,8 +225,13 @@ async def run_sports_fixtures_daily_repoll(
             mid-run; this trigger does NOT call Secret Manager itself.
         bucket: Sports instruments-store GCS bucket. ``None`` = resolved
             via :func:`_get_instruments_bucket("SPORTS")`.
-        lookahead_days: Window size — total dates fetched =
-            ``lookahead_days + 1`` (today inclusive). Default 8.
+        lookahead_days: Forward window size — total dates fetched =
+            ``lookback_days + lookahead_days + 1`` (today inclusive).
+            Default 8.
+        lookback_days: Trailing window size — days BEFORE ``today``
+            re-polled for the T+1 closing re-poll (post-day-end FT
+            results + late reschedules on the day just ended). Default 1;
+            pass 0 to restore the forward-only window.
         league_filter: Optional iterable of canonical league_ids or raw
             api_football_ids. ``None`` = full Prediction + Features +
             Reference set from UAC.
@@ -228,7 +256,7 @@ async def run_sports_fixtures_daily_repoll(
         )
 
     anchor = _resolve_today(today)
-    window = _date_window(anchor, lookahead_days)
+    window = _date_window(anchor, lookahead_days, lookback_days)
     af_league_ids = _league_ids_for_repoll(league_filter)
     if not af_league_ids:
         logger.warning(
@@ -265,7 +293,7 @@ async def run_sports_fixtures_daily_repoll(
     for day in window:
         day_str = day.isoformat()
         # api-football allows passing multiple league_ids per call but the
-        # adapter loops internally if >1. Our window is 9 days x ~20-30
+        # adapter loops internally if >1. Our window is 10 days x ~20-30
         # leagues = ~200-300 calls; well within the 900 req/min mega-tier
         # quota the adapter throttles to. No fan-out needed here.
         try:

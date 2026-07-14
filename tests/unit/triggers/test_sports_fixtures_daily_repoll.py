@@ -3,8 +3,9 @@
 Covers Phase B.1 of ``instruments_master.md``:
 
 1. Adapter mocked → run_sports_fixtures_daily_repoll iterates the
-   9-day window, calls ``get_fixtures`` per day, flattens via the same
-   helper as batch, and writes per-(day, league) parquets via the
+   10-day window (1-day lookback = the T+1 closing re-poll + today +
+   8-day lookahead), calls ``get_fixtures`` per day, flattens via the
+   same helper as batch, and writes per-(day, league) parquets via the
    canonical ``_write_fixtures_per_league`` sink.
 2. ``available_at`` is stamped per-row at write time as
    ``announced_at = kickoff_utc - 7d`` (UAC SPORTS FIXTURES rule).
@@ -123,7 +124,7 @@ async def test_run_sports_fixtures_daily_repoll_iterates_window(
     mock_adapter: MagicMock,
     patch_factory: Any,
 ) -> None:
-    """Trigger iterates today + 8 days (9 total) and calls get_fixtures per day."""
+    """Trigger iterates yesterday + today + 8 days (10 total) and calls get_fixtures per day."""
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
         run_sports_fixtures_daily_repoll,
     )
@@ -141,16 +142,62 @@ async def test_run_sports_fixtures_daily_repoll_iterates_window(
             bucket="test-sports-bucket",
             league_filter=["EPL"],
         )
-    # 9 days x 1 league = 9 calls. The trigger fetches via get_fixtures_with_raw
+    # 10 days x 1 league = 10 calls. The trigger fetches via get_fixtures_with_raw
     # (paired raw response) for the Q5/Q6 lifecycle overlay.
-    assert mock_adapter.get_fixtures_with_raw.call_count == 9
-    # 9 (day, league) shards written, 1 fixture each
-    assert len(result) == 9
+    assert mock_adapter.get_fixtures_with_raw.call_count == 10
+    # 10 (day, league) shards written, 1 fixture each
+    assert len(result) == 10
     assert all(v == 1 for v in result.values())
-    # Keys = "<day>/EPL" for the 9 days
-    expected_days = [(date(2026, 5, 9) + timedelta(days=i)).isoformat() for i in range(9)]
+    # Keys = "<day>/EPL" for [today - 1, today + 8] inclusive
+    expected_days = [(date(2026, 5, 9) + timedelta(days=i)).isoformat() for i in range(-1, 9)]
     expected_keys = {f"{d}/EPL" for d in expected_days}
     assert set(result.keys()) == expected_keys
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_t_plus_1_closing_repoll(
+    mock_adapter: MagicMock,
+    patch_factory: Any,
+) -> None:
+    """The day that just ended (today - 1) is re-polled once post-day-end so
+    finished-overnight matches get their FT results and late reschedules land
+    — the T+1 closing re-poll (fixture day-boundary staleness class,
+    sports_fixtures_pending_eu_phantom_denominator_2026_07_13 closeout).
+    ``lookback_days=0`` restores the forward-only window."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        run_sports_fixtures_daily_repoll,
+    )
+
+    with (
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink") as _sink,
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter") as _mw,
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
+    ):
+        _sink.return_value = MagicMock()
+        _mw.return_value = MagicMock()
+        default_window = await run_sports_fixtures_daily_repoll(
+            today=date(2026, 7, 14),
+            api_key="test-key",
+            bucket="test-sports-bucket",
+            league_filter=["EPL"],
+        )
+        forward_only = await run_sports_fixtures_daily_repoll(
+            today=date(2026, 7, 14),
+            api_key="test-key",
+            bucket="test-sports-bucket",
+            league_filter=["EPL"],
+            lookback_days=0,
+        )
+    # Default window upserts the day that just ended...
+    assert "2026-07-13/EPL" in default_window
+    # ...and still covers today + the full 8-day lookahead.
+    assert "2026-07-14/EPL" in default_window
+    assert "2026-07-22/EPL" in default_window
+    assert len(default_window) == 10
+    # lookback_days=0 → the pre-fix forward-only 9-day window.
+    assert "2026-07-13/EPL" not in forward_only
+    assert len(forward_only) == 9
 
 
 @pytest.mark.asyncio
@@ -185,6 +232,7 @@ async def test_run_sports_fixtures_daily_repoll_stamps_available_at(
             bucket="test-sports-bucket",
             league_filter=["EPL"],
             lookahead_days=0,  # just today
+            lookback_days=0,
         )
 
     assert len(captured_dfs) == 1
@@ -226,6 +274,7 @@ async def test_run_sports_fixtures_daily_repoll_record_captured_shape(
             bucket="test-sports-bucket",
             league_filter=["EPL"],
             lookahead_days=0,  # just today, single shard
+            lookback_days=0,
         )
 
     assert manifest_mock.record_captured.call_count == 1
@@ -363,6 +412,7 @@ async def test_run_sports_fixtures_daily_repoll_empty_records_per_league_typed_r
             bucket="test-sports-bucket",
             league_filter=["EPL"],
             lookahead_days=0,
+            lookback_days=0,  # single-day window: this test is not about the T+1 re-poll
         )
 
     assert result == {}
@@ -421,6 +471,7 @@ async def test_run_sports_fixtures_daily_repoll_empty_pre_coverage_start_reason(
             bucket="test-sports-bucket",
             league_filter=["EPL"],
             lookahead_days=0,
+            lookback_days=0,  # single-day window: this test is not about the T+1 re-poll
         )
 
     assert result == {}
@@ -482,6 +533,7 @@ async def test_run_sports_fixtures_daily_repoll_empty_source_returned_zero_when_
             bucket="test-sports-bucket",
             league_filter=["EPL"],
             lookahead_days=0,
+            lookback_days=0,  # single-day window: this test is not about the T+1 re-poll
         )
 
     assert result == {}
@@ -496,7 +548,7 @@ async def test_run_sports_fixtures_daily_repoll_empty_source_returned_zero_when_
 async def test_run_sports_fixtures_daily_repoll_per_day_isolation_on_fetch_error(
     patch_factory: Any,
 ) -> None:
-    """Adapter raises on day 1 → record_failed for day 1; days 2..9 still execute."""
+    """Adapter raises on day 1 → record_failed for day 1; days 2..10 still execute."""
     erratic_adapter = MagicMock()
     kickoff = datetime(2026, 5, 9, 15, 0, tzinfo=UTC)
     good_fixture = [
@@ -508,11 +560,12 @@ async def test_run_sports_fixtures_daily_repoll_per_day_isolation_on_fetch_error
             kickoff=kickoff,
         )
     ]
-    erratic_adapter.get_fixtures = AsyncMock(side_effect=[RuntimeError("boom")] + [good_fixture] * 8)
+    erratic_adapter.get_fixtures = AsyncMock(side_effect=[RuntimeError("boom")] + [good_fixture] * 9)
     # Trigger calls get_fixtures_with_raw — mirror the per-day error isolation:
-    # day 1 raises, days 2..9 return the good fixture paired with an empty raw dict.
+    # day 1 (= today - 1, the T+1 closing re-poll day) raises, days 2..10
+    # return the good fixture paired with an empty raw dict.
     _good_pairs = [(fx, {}) for fx in good_fixture]
-    erratic_adapter.get_fixtures_with_raw = AsyncMock(side_effect=[RuntimeError("boom")] + [_good_pairs] * 8)
+    erratic_adapter.get_fixtures_with_raw = AsyncMock(side_effect=[RuntimeError("boom")] + [_good_pairs] * 9)
     manifest_mock = MagicMock()
 
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
@@ -541,14 +594,14 @@ async def test_run_sports_fixtures_daily_repoll_per_day_isolation_on_fetch_error
             league_filter=["EPL"],
         )
 
-    # 8 successful (day, league) shards + 1 failed day → 8 captured shards in result.
-    assert len(result) == 8
-    # day 1 (2026-05-09) had failed fetch → not in result.
-    assert "2026-05-09/EPL" not in result
+    # 9 successful (day, league) shards + 1 failed day → 9 captured shards in result.
+    assert len(result) == 9
+    # day 1 (2026-05-08 = today - 1, the trailing re-poll day) had failed fetch → not in result.
+    assert "2026-05-08/EPL" not in result
     # record_failed called once for the failed day.
     assert manifest_mock.record_failed.call_count == 1
     failed_call = manifest_mock.record_failed.call_args
-    assert failed_call.kwargs["row_key"] == {"date": "2026-05-09", "data_type": "FIXTURES"}
+    assert failed_call.kwargs["row_key"] == {"date": "2026-05-08", "data_type": "FIXTURES"}
 
 
 @pytest.mark.asyncio
@@ -610,17 +663,23 @@ def test_resolve_today_string() -> None:
 
 @pytest.mark.unit
 def test_date_window_correct() -> None:
-    """_date_window returns inclusive [today, today+N] list."""
+    """_date_window returns inclusive [today - lookback, today + lookahead] list."""
     from datetime import date
 
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
         _date_window,
     )
 
+    # Default lookback (1) → window starts at today - 1 (the T+1 closing re-poll day).
     window = _date_window(date(2026, 5, 9), 2)
-    assert len(window) == 3
-    assert window[0] == date(2026, 5, 9)
+    assert len(window) == 4
+    assert window[0] == date(2026, 5, 8)
     assert window[-1] == date(2026, 5, 11)
+    # Explicit lookback_days=0 restores the forward-only window.
+    forward_only = _date_window(date(2026, 5, 9), 2, 0)
+    assert len(forward_only) == 3
+    assert forward_only[0] == date(2026, 5, 9)
+    assert forward_only[-1] == date(2026, 5, 11)
 
 
 @pytest.mark.unit
@@ -736,6 +795,7 @@ async def test_run_sports_fixtures_daily_repoll_string_today(
             bucket="test-bucket",
             league_filter=["EPL"],
             lookahead_days=0,
+            lookback_days=0,  # single-day window: this test is not about the T+1 re-poll
         )
     assert len(result) == 1
 
@@ -769,6 +829,7 @@ async def test_run_sports_fixtures_daily_repoll_record_captured_exception(
             bucket="test-bucket",
             league_filter=["EPL"],
             lookahead_days=0,
+            lookback_days=0,  # single-day window: this test is not about the T+1 re-poll
         )
     # record_captured failed so count is NOT added to result
     assert result == {}
@@ -853,6 +914,7 @@ async def test_run_sports_fixtures_daily_repoll_league_not_found_skipped(
             bucket="test-bucket",
             league_filter=["39"],
             lookahead_days=0,
+            lookback_days=0,  # single-day window: this test is not about the T+1 re-poll
         )
 
     # No record_empty calls since _ld is None and we skip
@@ -903,6 +965,7 @@ async def test_run_sports_fixtures_daily_repoll_league_none_attribute_no_timesta
             bucket="test-bucket",
             league_filter=["39"],
             lookahead_days=0,
+            lookback_days=0,  # single-day window: this test is not about the T+1 re-poll
         )
 
     # Verify the fixture was processed without crashing
@@ -944,6 +1007,7 @@ async def test_run_sports_fixtures_daily_repoll_af_league_id_fallback_empty_skip
             bucket="test-bucket",
             league_filter=["39"],
             lookahead_days=0,
+            lookback_days=0,  # single-day window: this test is not about the T+1 re-poll
         )
 
     # All lid_str resolved to "" → skipped → empty counts dict
