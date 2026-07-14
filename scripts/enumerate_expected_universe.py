@@ -314,6 +314,56 @@ def _sports_manifest_data_type(dt: str) -> str:
     return _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE.get(dt, dt)
 
 
+# Second, DIFFERENT grain mismatch on the same ``mdps_odds_horizon_bucket``
+# source, found AFTER the ``_SPORTS_MANIFEST_DATA_TYPE_OVERRIDE`` fix above
+# landed and was fully reconciled (``reconcile_mdps_odds_horizon_bucket_eu_grain_
+# 2026_07_13.py``) but the live canonical manifest's ``expected_unattempted``
+# count for this source still never dropped despite a full historical backfill
+# genuinely capturing the data (confirmed via
+# ``launch-mdps-sports-bucket-vm.sh``, 2026-07-14: 1,930 succeeded + 293
+# legitimately empty of 2,230 backlog dates). Root cause, confirmed via a live
+# manifest read 2026-07-14: every OTHER per-league v2 sports row (every OTHER
+# ``dt`` in ``_enumerate_v2_sports`` below) is correctly seeded with
+# ``venue=""`` because every OTHER sports source's real captured atom ALSO
+# carries a blank ``venue`` (the "sports is league-grain, venue is blank"
+# convention this module documents throughout — see ``_SPORTS_PRESENT_COLS``).
+# ``mdps_odds_horizon_bucket`` is the ONE exception: its writer
+# (``market-data-processing-service/scripts/reprocess_sports_odds.py``,
+# ``_MANIFEST_VENUE = "ODDS_API"``) stamps a real, non-blank ``venue="ODDS_API"``
+# on every captured row for this source (a deliberate fixed source-label — the
+# script aggregates raw per-bookmaker odds into one per-(date, league_id,
+# timeframe) view and reuses ``ODDS_API`` as a source token, not a real venue).
+# So a blank-venue ``expected_unattempted`` seed for THIS source's cell never
+# lines up with the real captured atom's ``venue="ODDS_API"`` — two disjoint
+# grain-keys for what should be the same logical cell, the exact ``data_type``
+# bug class above but on the ``venue`` dimension instead. Confirmed via a live
+# manifest read 2026-07-14: 200,259 ``expected_unattempted`` rows for this
+# source, 100% ``venue=""``, alongside 143,594 ``captured`` rows, 100%
+# ``venue="ODDS_API"`` — 0 overlap. See
+# ``unified-trading-pm/plans/active/sports_data_sources_canonical_completion_2026_07_13.md``
+# §1 (venue-grain follow-up) for the full diagnosis + before/after counts.
+_SPORTS_MANIFEST_VENUE_OVERRIDE: dict[str, str] = {
+    "ODDS_HORIZON_BUCKET": "ODDS_API",
+}
+
+
+def _sports_manifest_venue(dt: str) -> str:
+    """Translate a UAC sports data_type AXIS key to its real on-disk manifest ``venue``.
+
+    Blank (``""``) for every data_type except the ones in
+    :data:`_SPORTS_MANIFEST_VENUE_OVERRIDE` above — mirrors
+    :func:`_sports_manifest_data_type`'s design exactly, scoped to the SAME
+    narrow override map so no OTHER sports source's blank-venue seeding
+    changes. Apply this ONLY at the point a per-league v2 sports row's
+    ``venue=`` field is emitted (the per-league lifecycle/gap rows in
+    :func:`_enumerate_v2_sports` — NOT the per-source pre-coverage pass in
+    :func:`_yield_v2_sports_pre_source_coverage_rows`, which deliberately
+    carries the source key in ``venue`` for a documented, unrelated reason and
+    is untouched by this override).
+    """
+    return _SPORTS_MANIFEST_VENUE_OVERRIDE.get(dt, "")
+
+
 # Asset groups this enumerator supports. The canonical MANIFEST bucket per group is
 # resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
 # deployment-service/configs/cloud-providers.yaml) — see ``_default_bucket_for``.
@@ -2041,7 +2091,7 @@ def _enumerate_v2_sports(
                         continue
                     yield ExpectedRow(
                         asset_group="sports",
-                        venue="",
+                        venue=_sports_manifest_venue(dt),
                         chain="",
                         data_type=_sports_manifest_data_type(dt),
                         instrument_type="",
@@ -2076,7 +2126,7 @@ def _enumerate_v2_sports(
                         if not _in_scope and _oos_reason is not None:
                             yield ExpectedRow(
                                 asset_group="sports",
-                                venue="",
+                                venue=_sports_manifest_venue(dt),
                                 chain="",
                                 data_type=_sports_manifest_data_type(dt),
                                 instrument_type="",
@@ -2094,7 +2144,7 @@ def _enumerate_v2_sports(
                         ):
                             yield ExpectedRow(
                                 asset_group="sports",
-                                venue="",
+                                venue=_sports_manifest_venue(dt),
                                 chain="",
                                 data_type=_sports_manifest_data_type(dt),
                                 instrument_type="",
@@ -2108,7 +2158,7 @@ def _enumerate_v2_sports(
                         continue  # legacy mode: alive on this day — skip
                     row_key = tuple(
                         {
-                            "venue": "",
+                            "venue": _sports_manifest_venue(dt),
                             "chain": "",
                             "data_type": _sports_manifest_data_type(dt),
                             "instrument_type": "",
@@ -2136,7 +2186,7 @@ def _enumerate_v2_sports(
                         ):
                             yield ExpectedRow(
                                 asset_group="sports",
-                                venue="",
+                                venue=_sports_manifest_venue(dt),
                                 chain="",
                                 data_type=_sports_manifest_data_type(dt),
                                 instrument_type="",
@@ -2148,7 +2198,7 @@ def _enumerate_v2_sports(
                             continue
                         yield ExpectedRow(
                             asset_group="sports",
-                            venue="",
+                            venue=_sports_manifest_venue(dt),
                             chain="",
                             data_type=_sports_manifest_data_type(dt),
                             instrument_type="",
@@ -2161,7 +2211,7 @@ def _enumerate_v2_sports(
                     continue
                 yield ExpectedRow(
                     asset_group="sports",
-                    venue="",
+                    venue=_sports_manifest_venue(dt),
                     chain="",
                     data_type=_sports_manifest_data_type(dt),
                     instrument_type="",
