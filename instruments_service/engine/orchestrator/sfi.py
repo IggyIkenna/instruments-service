@@ -613,12 +613,20 @@ async def _fetch_sfi_data(
                     "error_code": _err_code,
                 },
             )
-            manifest.record_failed(
-                row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
-                error=_err_code,
-                attempted_at=attempt_ts,
-                pipeline_mode=_orch.PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
-            )
+            # Shard isolation: record the failed attempt PER EXPECTED LEAGUE,
+            # not a single blank-``league_id`` date-aggregate row. A
+            # date-aggregate failed row can never be superseded by the
+            # per-league ``record_captured``/``record_empty`` writes elsewhere
+            # in this function (the success path keys on a real canonical
+            # ``league_id`` and writes NO blank date-level row), so it would sit
+            # ``attempted_failed`` forever even after a LATER re-attempt
+            # genuinely captures every league for this date — root-caused
+            # 2026-07-14 as the reason the SFI_PROGRESSIVE_STATS
+            # phantom/TimeoutError residual never cleared across repeated
+            # residual-closer re-attempts (mirrors the footystats PREDICTIONS
+            # per-league fix in ``footystats.py`` + the WEATHER per-league
+            # pattern in ``weather.py``). See
+            # plans/active/sports_data_sources_canonical_completion_2026_07_13.md.
             for _exp_lid in sorted(_expected_sfi_league_ids):
                 manifest.record_failed(
                     row_key={
