@@ -6,7 +6,9 @@
 #   verified green — every restamped cell reads captured in the consolidated
 #   sports index and the parquet-presence cross over the 1,848 GW
 #   fixture-day shards reports 0 false-empty (--verify green after >=1
-#   consolidator cycle)
+#   consolidator cycle) — AND the routed pre-GW residual (the same repair
+#   over 2020-01-01..2025-08-31 via --start-date/--end-date) is verified
+#   green the same way
 """gw_false_empty_repair_2026_07_14.py — repair the golden-window FALSE-EMPTY
 manifest cells stamped by the 2026-07-14 api-football enrichment fleet.
 
@@ -39,6 +41,12 @@ Scope = the session-31 GW verification scoping: the deduped captured-FIXTURES
 ``(date, league)`` cells of 2025-09-01..2025-11-30 (1,848 expected), crossed
 with the 4 per-fixture entities.
 
+The window, entity set, and per-VM shard name default to the GW run but are
+parameterizable (``--start-date/--end-date/--entities/--vm-name``) for the
+routed pre-GW residual sweep (issue progress log: the same false-empty class
+plausibly exists on enrichment cells dated before 2025-09-01 from earlier
+runs of the broken write path — object probes + restamps only, no quota).
+
 Usage::
 
     GCP_PROJECT_ID=central-element-323112 DEPLOYMENT_ENV_SHORT=prd \
@@ -46,6 +54,9 @@ Usage::
     ... --scan --adjudicate     # + object probes, classification CSV (dry-run)
     ... --apply                 # snapshot + record_captured + shard .write()
     ... --verify                # post-consolidation content check
+    ... --start-date 2020-01-01 --end-date 2025-08-31 \
+        --entities FIXTURE_EVENTS,FIXTURE_LINEUPS,FIXTURE_STATS,PLAYER_STATS,INJURIES \
+        --vm-name hist-false-empty-repair-20260714 --scan   # pre-GW residual
 """
 
 from __future__ import annotations
@@ -63,12 +74,12 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout, force=True)
 logger = logging.getLogger("gw_false_empty_repair")
 
-_VM_NAME = "gw-false-empty-repair-20260714"
+_DEFAULT_VM_NAME = "gw-false-empty-repair-20260714"
 _SNAPSHOT_PREFIX = "_index/snapshots/availability_index"
 _INDEX_PATH = "_index/availability_index.parquet"
-_WINDOW_START = "2025-09-01"
-_WINDOW_END = "2025-11-30"
-_ENTITIES = ("FIXTURE_EVENTS", "FIXTURE_LINEUPS", "FIXTURE_STATS", "PLAYER_STATS")
+_DEFAULT_WINDOW_START = "2025-09-01"
+_DEFAULT_WINDOW_END = "2025-11-30"
+_DEFAULT_ENTITIES = "FIXTURE_EVENTS,FIXTURE_LINEUPS,FIXTURE_STATS,PLAYER_STATS"
 _PIPELINE_MODE = "batch_api_football"
 _SOURCE = "api_football"
 #: dedup precedence at cell grain — the session-31 verification methodology.
@@ -89,10 +100,26 @@ def _args() -> argparse.Namespace:
     )
     p.add_argument("--project", default="central-element-323112")
     p.add_argument("--report-dir", default="", help="dir for CSV evidence reports (default: CWD)")
+    p.add_argument("--start-date", default=_DEFAULT_WINDOW_START, help="window start YYYY-MM-DD (default: GW start)")
+    p.add_argument("--end-date", default=_DEFAULT_WINDOW_END, help="window end YYYY-MM-DD (default: GW end)")
+    p.add_argument(
+        "--entities",
+        default=_DEFAULT_ENTITIES,
+        help="comma-separated data_types to adjudicate (default: the 4 GW per-fixture entities)",
+    )
+    p.add_argument(
+        "--vm-name",
+        default=_DEFAULT_VM_NAME,
+        help="per-VM manifest shard name the --apply restamps write under (default: the GW repair shard)",
+    )
     return p.parse_args()
 
 
 ARGS = _args()
+_VM_NAME = ARGS.vm_name
+_WINDOW_START = ARGS.start_date
+_WINDOW_END = ARGS.end_date
+_ENTITIES = tuple(e.strip() for e in str(ARGS.entities).split(",") if e.strip())
 os.environ["GCP_PROJECT_ID"] = ARGS.project
 os.environ["GOOGLE_CLOUD_PROJECT"] = ARGS.project
 os.environ["DEPLOYMENT_ENV"] = "prod"
@@ -223,8 +250,10 @@ def run_scan(storage: object) -> pd.DataFrame:
     scope = fixtures_winners[fixtures_winners["_status"] == "captured"][["_date", "_league"]]
     scope_cells = set(zip(scope["_date"], scope["_league"], strict=True))
     logger.info(
-        "GW scope: %d captured-FIXTURES (date, league) cells across %d leagues, %d days "
-        "(session-31 scoping expected 1,848 / 86 / 91)",
+        "scope %s..%s: %d captured-FIXTURES (date, league) cells across %d leagues, %d days "
+        "(GW-default session-31 scoping expected 1,848 / 86 / 91)",
+        _WINDOW_START,
+        _WINDOW_END,
         len(scope_cells),
         scope["_league"].nunique(),
         scope["_date"].nunique(),
