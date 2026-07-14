@@ -20,6 +20,7 @@ split, and mutable caches remain package-level attributes.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -33,7 +34,43 @@ __all__ = [
     "_AfManifestHooks",
     "_fetch_injuries",
     "_fetch_teams_and_standings",
+    "_list_present_parquet_leagues",
 ]
+
+
+def _list_present_parquet_leagues(bucket: str, date: str, entity_name: str) -> set[str]:
+    """League ids with an existing per-league parquet for ``(date, entity)``.
+
+    List-only presence probe (one GCS prefix list, no object downloads) —
+    mirrors ``_read_per_league_entity_df``'s canonical-then-legacy prefix
+    pattern. Used by the honest-absence emitters as a hard PRESENCE guard:
+    a cell whose per-league parquet EXISTS at the canonical path must NEVER
+    be stamped ``empty_confirmed``, no matter how the caller's captured-league
+    set was built (this-run rows, the pre-fetch skip tracker, or nothing at
+    all on the zero-fixture-day / ``redo_all`` paths where the pre-fetch probe
+    is bypassed). 2026-07-14 GW verification RED: 3,720 false-empty cells were
+    stamped over existing parquets by a this-run-only captured set. Issue:
+    ``sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14``.
+
+    GCS transport errors propagate to the caller (same contract as
+    ``_read_per_league_entity_df``) — a failed presence probe must not be
+    silently treated as "nothing present".
+    """
+    pm = _orch._sports_ref_pm(entity_name)
+    canonical_prefix = f"sports_reference/by_date/day={date}/pipeline_mode={pm}/entity={entity_name}/"
+    legacy_prefix = f"sports_reference/by_date/day={date}/entity={entity_name}/"
+    storage_client = _orch.get_storage_client()
+    blobs = list(storage_client.list_blobs(bucket=bucket, prefix=canonical_prefix, max_results=None))
+    if not blobs:
+        blobs = list(storage_client.list_blobs(bucket=bucket, prefix=legacy_prefix, max_results=None))
+    present: set[str] = set()
+    for blob_meta in blobs:
+        if not blob_meta.name.endswith(".parquet"):
+            continue
+        league_match = re.search(r"/league=([^/]+)/", blob_meta.name)
+        if league_match:
+            present.add(_orch._canonical_league_id(league_match.group(1)))
+    return present
 
 
 @dataclass
@@ -55,6 +92,10 @@ class _AfManifestHooks:
     date: str
     manifest: _orch.ManifestWriter | None
     attempt_ts: _orch.datetime
+    # Sports instruments-store bucket for the PRESENCE guard in
+    # ``emit_empty_gaps_for_entity``. Empty string = guard disabled (legacy
+    # constructions that predate the guard; production call sites wire it).
+    bucket: str = ""
 
     def note_failed(self, data_type: str, exc: Exception, league_id: str = "") -> None:
         if self.manifest is None:
@@ -107,9 +148,46 @@ class _AfManifestHooks:
         out-of-coverage league is emitted even with a fixture on the calendar
         (the fixture exists but the entity is uncollectable there). SSOT:
         ``unified_api_contracts.registry.sports_league_entity_coverage``.
+
+        PRESENCE guard (2026-07-14 GW verification RED): before stamping ANY
+        empty reason, leagues whose per-league parquet already EXISTS for
+        ``(date, entity)`` are unioned into ``captured_league_ids`` — absence
+        classification is presence-based, never this-run-only. This protects
+        every caller path, including the zero-fixture-day and ``redo_all``
+        paths where the pre-fetch skip tracker is bypassed. Issue:
+        ``sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14``.
         """
         if self.manifest is None:
             return
+        if self.bucket:
+            try:
+                _present = _orch._list_present_parquet_leagues(self.bucket, self.date, data_type.lower())
+            except Exception as exc:
+                # FAIL-SAFE: if presence cannot be verified, absence cannot be
+                # honestly stamped — skip the empty emission entirely (cells
+                # stay pending and are re-attempted later) rather than risk
+                # stamping empty_confirmed over data we could not see.
+                _orch.logger.warning(
+                    "%s presence probe failed for date=%s (%s) — skipping empty-gap emission "
+                    "(cannot prove absence without presence)",
+                    data_type,
+                    self.date,
+                    exc,
+                )
+                return
+            _rescued = _present - captured_league_ids
+            if _rescued:
+                _orch.logger.warning(
+                    "%s presence-guard: %d league(s) have an existing per-league parquet for "
+                    "date=%s but no captured rows this run (%s%s) — NOT stamping empty_confirmed "
+                    "over present data",
+                    data_type,
+                    len(_rescued),
+                    self.date,
+                    ", ".join(sorted(_rescued)[:10]),
+                    ", ..." if len(_rescued) > 10 else "",
+                )
+            captured_league_ids = captured_league_ids | _present
         _expected = {lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")}
         for _exp_lid in sorted(_expected - captured_league_ids):
             _canon_lid = _orch._canonical_league_id(_exp_lid)

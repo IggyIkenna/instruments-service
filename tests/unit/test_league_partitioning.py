@@ -4,7 +4,7 @@ Phase 2A: Verifies that:
   - Sports fixtures are grouped by league_id and written per-league
   - ManifestWriter.add() is called with league_id for sports fixtures
   - League filter (--league CLI arg) restricts processing to specified leagues
-  - Empty fixture markers are written per prediction league
+  - Empty fixture markers are written per expected api_football league
   - Reference data (teams, standings) is partitioned by league
   - process_instruments wires league_filter for sports zero-fixture path
 """
@@ -22,6 +22,20 @@ from unified_api_contracts.internal import InstrumentRecord
 
 from instruments_service.engine.orchestrator import process_instruments
 from instruments_service.engine.urdi_reference_provider import VenueFetchResult
+
+
+def _league_defs(*league_ids: str) -> list[object]:
+    """Real UAC league definitions for the given ids (2026-07-14: the
+    zero-fixture marker denominator is ``get_expected_leagues_for_source``,
+    the full api_football write universe — not the retired
+    ``get_all_prediction_league_ids`` 33-league Prediction tier)."""
+    from unified_api_contracts import get_expected_leagues_for_source
+
+    wanted = set(league_ids)
+    subset = [lg for lg in get_expected_leagues_for_source("api_football") if lg.league_id in wanted]
+    assert {lg.league_id for lg in subset} == wanted, f"missing league defs for {wanted}"
+    return subset
+
 
 # ---------------------------------------------------------------------------
 # Fixture write: groupby league_id extracted from instrument_key
@@ -262,7 +276,7 @@ class TestOrchestratorSportsLeaguePartitioning:
 
     @pytest.mark.asyncio
     async def test_zero_fixtures_writes_per_league_empty_markers(self) -> None:
-        """Sports zero-fixture path writes ``record_empty`` per prediction league.
+        """Sports zero-fixture path writes ``record_empty`` per expected league.
 
         Honest-coverage rule (CLAUDE.md "4 pillars" #1): zero-fixture days
         emit ``record_empty`` markers, NOT ``add(row_count=0)`` and NOT a
@@ -295,8 +309,12 @@ class TestOrchestratorSportsLeaguePartitioning:
             ),
             patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
             patch(
-                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
-                return_value=["EPL", "BUNDESLIGA"],
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=_league_defs("EPL", "BUNDESLIGA"),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._list_present_parquet_leagues",
+                return_value=set(),
             ),
         ):
             result = await process_instruments("2026-04-12", ["SPORTS"])
@@ -339,6 +357,10 @@ class TestOrchestratorSportsLeaguePartitioning:
                 return_value=(False, [], ["API_FOOTBALL"]),
             ),
             patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
+            patch(
+                "instruments_service.engine.orchestrator._list_present_parquet_leagues",
+                return_value=set(),
+            ),
         ):
             # Pass league_filter=["EPL"] — should only emit 1 record_empty
             result = await process_instruments("2026-04-12", ["SPORTS"], league_filter=["EPL"])
@@ -368,8 +390,8 @@ class TestOrchestratorSportsLeaguePartitioning:
         with (
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_cls),
             patch(
-                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
-                return_value=["EPL", "BUNDESLIGA"],
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=_league_defs("EPL", "BUNDESLIGA"),
             ),
         ):
             _zero_sports_empty_fixture_markers(
@@ -400,8 +422,12 @@ class TestOrchestratorSportsLeaguePartitioning:
         with (
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_cls),
             patch(
-                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
-                return_value=["EPL", "BUNDESLIGA"],
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=_league_defs("EPL", "BUNDESLIGA"),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._list_present_parquet_leagues",
+                return_value=set(),
             ),
         ):
             _zero_sports_empty_fixture_markers(
