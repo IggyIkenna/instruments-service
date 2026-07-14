@@ -426,6 +426,56 @@ class TestFetchSportsReferenceData:
         assert "injuries" not in counts
 
     @pytest.mark.asyncio
+    async def test_injuries_fetch_error_records_per_league_failed(self) -> None:
+        """Root-cause regression (api_football_injuries_blank_league_orphan_2026_07_15):
+        a top-level ``get_injuries`` exception must record_failed PER EXPECTED
+        LEAGUE (real ``league_id`` in every ``row_key``) — never a single
+        blank-``league_id`` date-aggregate row, which can never be superseded
+        by the per-league success paths and sits ``attempted_failed`` forever.
+        """
+        from unittest.mock import MagicMock as MM
+
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.side_effect = Exception("injuries error")
+
+        mock_sink = MagicMock()
+        mock_manifest = MagicMock()
+
+        mock_epl = MM()
+        mock_epl.league_id = "EPL"
+        mock_bun = MM()
+        mock_bun.league_id = "BUNDESLIGA"
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.create_sports_reference_adapter",
+                return_value=mock_adapter,
+            ),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[mock_epl, mock_bun],
+            ),
+        ):
+            await _fetch_sports_reference_data("2026-03-22", "test-key", "test-bucket", manifest=mock_manifest)
+
+        injuries_calls = [
+            call
+            for call in mock_manifest.record_failed.call_args_list
+            if call.kwargs.get("row_key", {}).get("data_type") == "INJURIES"
+        ]
+        assert len(injuries_calls) == 2, "Expected one record_failed per expected league"
+        league_ids = {call.kwargs["row_key"].get("league_id") for call in injuries_calls}
+        assert league_ids == {"EPL", "BUNDESLIGA"}
+        assert "" not in league_ids
+        assert None not in league_ids
+
+    @pytest.mark.asyncio
     async def test_skips_leagues_without_api_football_id(self) -> None:
         """Leagues without api_football_id should be skipped."""
         from unittest.mock import MagicMock as MM
@@ -742,6 +792,63 @@ class TestCF11PerFixtureEntityFailurePath:
             assert dt not in stat_entity_data_types, (
                 f"CF-11 regression: record_empty({dt}) called when fetch partially failed "
                 "— should be record_failed (attempted_failed)"
+            )
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_with_league_map_produces_per_league_record_failed(self) -> None:
+        """Root-cause regression (api_football_per_fixture_blank_league_orphan_
+        2026_07_15): when ``af_fid_to_league`` resolves real leagues for the
+        failing fixtures, record_failed must be called PER LEAGUE (real
+        ``league_id`` in every ``row_key``) — never one blank-``league_id``
+        date-aggregate row, which can never be superseded by the per-league
+        success paths (record_captured / emit_empty_gaps_for_entity) and sits
+        ``attempted_failed`` forever.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.return_value = []
+        # Fixture 1001 (EPL) fails, fixture 1002 (BUNDESLIGA) returns empty.
+        mock_adapter.get_fixture_statistics.side_effect = [Exception("timeout"), []]
+        mock_adapter.get_fixture_events.side_effect = [Exception("timeout"), []]
+        mock_adapter.get_fixture_lineups.side_effect = [Exception("timeout"), []]
+        mock_adapter.get_fixture_player_stats.side_effect = [Exception("timeout"), []]
+
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch(
+                "instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs",
+                return_value={"1001": "EPL", "1002": "BUNDESLIGA"},
+            ),
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+        ):
+            await _fetch_sports_reference_data(
+                "2026-03-22",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                fixture_ids_override=[1001, 1002],
+            )
+
+        stat_entity_data_types = {"FIXTURE_STATS", "FIXTURE_EVENTS", "FIXTURE_LINEUPS", "PLAYER_STATS"}
+        stat_failed_calls = [
+            call
+            for call in mock_manifest.record_failed.call_args_list
+            if call.kwargs.get("row_key", {}).get("data_type") in stat_entity_data_types
+        ]
+        assert stat_failed_calls, "Expected record_failed for the per-fixture stat entities"
+        for call in stat_failed_calls:
+            league_id = call.kwargs["row_key"].get("league_id")
+            assert league_id in {"EPL", "BUNDESLIGA"}, (
+                f"record_failed row_key missing/blank league_id ({league_id!r}) — "
+                "regresses to the permanently-orphaned blank-league_id date-aggregate row"
             )
 
     @pytest.mark.asyncio

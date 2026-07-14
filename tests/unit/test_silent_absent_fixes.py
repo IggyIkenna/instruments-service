@@ -300,15 +300,44 @@ class TestFoldWrittenVenues:
         folded = _fold_written_venues(counts, {"KALSHI", "POLYMARKET"})
         assert folded == {"KALSHI", "POLYMARKET"}
 
-    def test_sports_fixtures_composite_keys_are_untouched(self) -> None:
-        """ "FIXTURES/{league_id}" is not a venue-prefixed key — must pass through as-is."""
+    def test_sports_fixtures_composite_keys_fold_to_api_football(self) -> None:
+        """``"FIXTURES/{league_id}"`` folds to ``API_FOOTBALL`` when it's expected.
+
+        Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15,
+        see plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
+        previously this composite key was left UNFOLDED (``"FIXTURES"`` is a
+        data_type, never a venue name, so the generic prefix-in-expected_venues
+        check never matched it) — a league-scoped FIXTURES run whose target
+        league legitimately had zero fixtures that day (off-season, rest day,
+        etc — the common case) always left ``written_venues`` without
+        ``API_FOOTBALL``, so completeness misclassified the whole venue as
+        ``SOURCE_RETURNED_ZERO`` and stamped a REDUNDANT blanket
+        ``{date, venue}`` row that live-verified to collide with (and drop)
+        the correct per-league honest-absence row in the same per-VM manifest
+        shard flush — permanently orphaning any pre-existing stale
+        ``attempted_failed`` row for that (date, league) FIXTURES cell.
+        """
         from instruments_service.engine.orchestrator.process_completeness import (
             _fold_written_venues,
         )
 
         counts = {"FIXTURES/39": 10, "FIXTURES/61": 4}
         folded = _fold_written_venues(counts, {"API_FOOTBALL"})
-        assert folded == {"FIXTURES/39", "FIXTURES/61"}
+        assert folded == {"API_FOOTBALL"}
+
+    def test_sports_fixtures_composite_keys_untouched_when_api_football_not_expected(self) -> None:
+        """When ``API_FOOTBALL`` isn't in ``expected_venues`` (out of scope for
+        this run), a ``"FIXTURES/*"`` key must pass through unfolded — the
+        API_FOOTBALL-specific fold only applies when that venue is actually
+        expected this run.
+        """
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _fold_written_venues,
+        )
+
+        counts = {"FIXTURES/39": 10}
+        folded = _fold_written_venues(counts, {"SOME_OTHER_VENUE"})
+        assert folded == {"FIXTURES/39"}
 
     def test_bare_cefi_keys_are_noop(self) -> None:
         from instruments_service.engine.orchestrator.process_completeness import (
