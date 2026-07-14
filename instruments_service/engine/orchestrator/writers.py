@@ -419,7 +419,14 @@ def _write_market_lifecycle(
 ) -> None:
     """Write MARKET_LIFECYCLE parquet alongside instruments.parquet for a prediction group.
 
-    Output: market_lifecycle/by_canonical_group/group={g}/day={d}/market_lifecycle.parquet
+    Output: market_lifecycle/by_canonical_group/day={d}/group={g}/venue={V}/market_lifecycle.parquet
+    (partition keys are path-ordered alphabetically by the sink). The venue level was
+    added 2026-07-14 — without it BOTH prediction venues wrote the SAME (day, group)
+    object and the second writer clobbered the first (POLYMARKET wiped KALSHI's 1,365
+    lifecycle rows on day=2026-07-09, verified live — Root Cause #5,
+    prediction_universe_capture_dead_since_07_01_2026_07_06.md). The MTDS reader
+    lists the day-scoped prefix and suffix-matches market_lifecycle.parquet, so both
+    the old venue-less objects and the new venue-partitioned ones resolve.
     Shard-level isolation: errors are logged but do not abort the instruments write.
     Plan: predictions_master.md Phase 3 L618.
     """
@@ -438,7 +445,7 @@ def _write_market_lifecycle(
         _orch._gated_sink_write(
             sink,
             data=out_df,
-            partition={"group": canonical_group_str, "day": date},
+            partition={"group": canonical_group_str, "day": date, "venue": manifest_venue},
             filename="market_lifecycle.parquet",
             venue=manifest_venue,
             entity="market_lifecycle",
