@@ -160,13 +160,28 @@ def _zero_sports_empty_fixture_markers(
     league_filter: list[str] | None,
     fixtures_fetch_failed: bool = False,
 ) -> None:
-    """Write one marker per prediction league for a zero-fixture day.
+    """Write one marker per expected api_football league for a zero-fixture day.
 
     When ``fixtures_fetch_failed`` is True the fixtures venue's adapter ERRORED
     (e.g. API-Football plan/quota/auth error → ``response: []``); the day's
     "zero fixtures" is NOT honest absence, so write ``attempted_failed`` via
     ``record_failed`` so the gap stays visible + is backfilled. Only a clean
     fetch that genuinely returned zero fixtures writes ``empty_confirmed``.
+
+    League denominator (2026-07-14): the full 94-league api_football write
+    universe (``get_expected_leagues_for_source("api_football")``) — NOT the
+    33-league Prediction tier (``get_all_prediction_league_ids``), which is the
+    same classification-filter mismatch class fixed for TEAMS/STANDINGS on
+    2026-07-13. The marker set must match the enumerator's denominator or 61
+    of 94 leagues stay permanently blank-reason on zero-fixture days.
+
+    PRESENCE guard (2026-07-14 GW verification RED): a league whose per-league
+    FIXTURES parquet already EXISTS for this date is NEVER stamped
+    ``empty_confirmed`` — a zero-fixture verdict contradicted by on-disk
+    presence is a stale/erroneous universe fetch (e.g. the pooled URDI adapter
+    pinning its first date's fixtures onto every later date — see
+    ``reference_data/factory.py`` pool-key note), not honest absence. Issue:
+    ``sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14``.
 
     Honest-coverage (CLAUDE.md "4 pillars" #1): we use ``record_empty`` here,
     NOT ``add(row_count=0)``. Marking zero-fixture days as ``captured`` with
@@ -181,17 +196,50 @@ def _zero_sports_empty_fixture_markers(
     If a date has no fixtures, no parquet should exist; the manifest's
     ``empty_confirmed`` row is the single honest marker.
     """
-    _empty_league_ids = league_filter if league_filter else _orch.get_all_prediction_league_ids()
+    _empty_league_ids = (
+        league_filter
+        if league_filter
+        else [lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")]
+    )
     _empty_attempt_ts = _orch.datetime.now(_orch.UTC)
     _empty_manifest = _orch.ManifestWriter(
         service_name="instruments-service",
         catalogue_bucket=bucket,
     )
+    # PRESENCE guard — see docstring. Only consulted for the empty_confirmed
+    # branch: attempted_failed rows are an honest attempt trace and never
+    # claim absence.
+    _present_fixture_leagues: set[str] = set()
+    if not fixtures_fetch_failed:
+        try:
+            _present_fixture_leagues = _orch._list_present_parquet_leagues(bucket, date, "fixtures")
+        except Exception as exc:
+            # FAIL-SAFE: if presence cannot be verified, absence cannot be
+            # honestly stamped — skip the empty markers this run (cells stay
+            # pending and are re-attempted later) rather than risk stamping
+            # empty_confirmed over data we could not see.
+            _orch.logger.warning(
+                "SPORTS zero-fixture presence probe failed for date=%s (%s) — skipping "
+                "empty_confirmed FIXTURES markers this run (cannot prove absence without presence)",
+                date,
+                exc,
+            )
+            return
+        if _present_fixture_leagues:
+            _orch.logger.warning(
+                "SPORTS zero-fixture verdict for date=%s is contradicted by %d existing per-league "
+                "FIXTURES parquet(s) (%s%s) — presence-guard: NOT stamping empty_confirmed over them",
+                date,
+                len(_present_fixture_leagues),
+                ", ".join(sorted(_present_fixture_leagues)[:10]),
+                ", ..." if len(_present_fixture_leagues) > 10 else "",
+            )
     for _league_id in _empty_league_ids:
+        _canon_league_id = _orch._canonical_league_id(_league_id)
         _row_key = {
             "date": date,
             "data_type": "FIXTURES",
-            "league_id": _orch._canonical_league_id(_league_id),
+            "league_id": _canon_league_id,
         }
         if fixtures_fetch_failed:
             # Fetch ERRORED (plan/quota/auth/etc.) — NOT honest absence.
@@ -201,6 +249,9 @@ def _zero_sports_empty_fixture_markers(
                 attempted_at=_empty_attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
             )
+        elif _canon_league_id in _present_fixture_leagues:
+            # Parquet exists for (date, league) — presence wins, no empty stamp.
+            continue
         else:
             _empty_manifest.record_empty(
                 row_key=_row_key,
@@ -217,10 +268,13 @@ def _zero_sports_empty_fixture_markers(
             len(_empty_league_ids),
         )
     else:
+        _stamped = len({_orch._canonical_league_id(lid) for lid in _empty_league_ids} - _present_fixture_leagues)
         _orch.logger.info(
-            "SPORTS: No fixtures for date=%s — wrote empty_confirmed markers for %d leagues",
+            "SPORTS: No fixtures for date=%s — wrote empty_confirmed markers for %d leagues "
+            "(%d presence-guarded league(s) skipped)",
             date,
-            len(_empty_league_ids),
+            _stamped,
+            len(_present_fixture_leagues),
         )
 
 

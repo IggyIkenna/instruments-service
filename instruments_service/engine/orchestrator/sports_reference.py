@@ -106,7 +106,7 @@ async def _fetch_sports_reference_data(
     # Honest-coverage hooks: only record when an external manifest is wired
     # in by the caller (existing call-sites always pass one, but the default
     # signature keeps it optional for legacy use).
-    hooks = _AfManifestHooks(date=date, manifest=manifest, attempt_ts=_orch.datetime.now(_orch.UTC))
+    hooks = _AfManifestHooks(date=date, manifest=manifest, attempt_ts=_orch.datetime.now(_orch.UTC), bucket=bucket)
 
     def _should_fetch(entity_short: str) -> bool:
         """Check if this entity should be fetched (not in _fetch_set or _fetch_set is None)."""
