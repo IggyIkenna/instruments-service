@@ -99,6 +99,7 @@ from unified_api_contracts import (
     VENUES_BY_ASSET_GROUP,
     CeFiMvpRule,
     Mode,
+    TradFiMvpRule,
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
@@ -727,6 +728,59 @@ def _row_data_types(
                 if mvp_dts:
                     row_dts = [dt for dt in row_dts if dt in mvp_dts or dt not in known_ag_dts]
 
+    # MVP data_type-narrowing gate (TRADFI) — closes the gap the
+    # "TRADFI IS DELIBERATELY NOT GATED" comment above documents (that
+    # comment is about the VENUE_DATA_TYPE_CAPABILITIES carve-out, which
+    # correctly stays off for tradfi; this is a SEPARATE, missing gate: the
+    # MVP-cut narrowing cefi gets above). Added 2026-07-14
+    # (tradfi_eu_not_draining_source_axis_drift_2026_06_24.md #2 root-cause
+    # fix): tradfi's MVP_SCOPE data_types is {ohlcv_1m} for the CME
+    # futures/options complex (operator 2026-06-27 decision #7) and
+    # {ohlcv_24h} for the KRX equity-basis carve-out — never the full raw
+    # capability set. Before this gate, an MVP-scoped CME OPTION bundle
+    # (options_chain, valid_data_types={trades, ohlcv_1m, options_chain} per
+    # VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE) emitted all 3 data_types —
+    # a 3x over-fan on top of the per-underlying bundle grain (one
+    # candidate-row generator per historical expiry-month contract, e.g.
+    # "NGZ26", not the commodity root — a separate, already-tracked MTDS
+    # shard-atom canonicalization; market-tick-data-service
+    # migrate_tradfi_single_leg_product_root_lin_2026_07_09.py /
+    # canonicalize_cme_options_chain_legacy_flat_2026_07_14.py). The
+    # un-narrowed 3x data_type fan alone pushed a full-history CME OPTION
+    # scan-only dry-run past 1.6M candidate rows (measured root cause of the
+    # 2026-07-14 >1,000,000 --max-writes-per-run safety-cap trip).
+    #
+    # Reuses the real ``is_mvp`` predicate per-candidate data_type (rather
+    # than a hand-rolled ``TradFiMvpRule.data_types`` lookup) so the
+    # KRX/equity-basis carve-out's narrower ohlcv_24h set is honoured
+    # automatically instead of duplicating ``is_mvp``'s branch logic here.
+    # Gated on ``_tradfi_entry_in_mvp_universe(instr)`` so a (hypothetical)
+    # future caller that reaches this function with a NON-MVP tradfi
+    # instrument is left unchanged (mirrors the cefi ``if mvp_dts:`` guard —
+    # narrow only, never blanket-empty a cell this function did not itself
+    # determine to be out of MVP scope). Today's only caller
+    # (``_enumerate_v2_tradfi``) already pre-filters to MVP-only instruments,
+    # so the venue/instrument_type/underlier axes are already known True —
+    # this gate only needs to pick WHICH data_type set applies.
+    #
+    # Deliberately does NOT re-run ``is_mvp()`` with a ``base_ccy`` arg here:
+    # ``_tradfi_entry_in_mvp_universe`` prefers the catalogue's pre-tagged
+    # ``mvp`` column (short-circuits the underlier/base_ccy check entirely —
+    # every real catalogue row + every existing unit-test fixture carries
+    # this pre-tag), so a SEPARATE ``is_mvp(..., base_ccy=...)`` call here
+    # would re-litigate an axis the pre-tag already resolved and could
+    # wrongly return False whenever ``base_asset``/``underlying`` is blank
+    # (e.g. ticker-only fixtures) — collapsing ``row_dts`` to empty for a
+    # confirmed-MVP instrument. ``_tradfi_mvp_data_types`` instead mirrors
+    # only the (instrument_type, venue) branch-selection half of
+    # ``is_mvp``'s ``TradFiMvpRule`` handling (equity-basis KRX/US carve-out
+    # vs. the flat CME futures/options complex), which is independent of
+    # base_ccy.
+    elif asset_group.lower() == "tradfi" and _tradfi_entry_in_mvp_universe(instr):
+        mvp_dts = _tradfi_mvp_data_types(instr)
+        if mvp_dts:
+            row_dts = [dt for dt in row_dts if dt in mvp_dts or dt not in known_ag_dts]
+
     return row_dts
 
 
@@ -822,6 +876,47 @@ def _tradfi_entry_in_mvp_universe(instr: InstrumentCatalogEntry) -> bool:
         data_type=None,
         base_ccy=base_ccy,
     )
+
+
+# TradFi equity-basis venues — the SAME set ``is_mvp``'s ``TradFiMvpRule``
+# branch checks (unified_api_contracts _mvp_scope_predicate.py). Duplicated
+# here (rather than imported) because it is a tiny, stable literal and the
+# predicate module does not export it as a standalone constant; keep in sync
+# if that set ever changes.
+_TRADFI_EQUITY_BASIS_VENUE_ROOTS: frozenset[str] = frozenset({"NASDAQ", "NYSE", "ARCA", "AMEX", "BATS", "KRX"})
+
+
+def _tradfi_mvp_data_types(instr: InstrumentCatalogEntry) -> frozenset[str]:
+    """Return the MVP-narrowed data_type set for a tradfi catalogue entry.
+
+    ONLY call this for an entry already confirmed within MVP scope (i.e.
+    :func:`_tradfi_entry_in_mvp_universe` returned ``True``) — mirrors the
+    (instrument_type, venue) branch-selection half of ``is_mvp()``'s
+    ``TradFiMvpRule`` handling:
+
+      * EQUITY/ETF at a basis-universe venue (NASDAQ/NYSE/ARCA/AMEX/BATS) →
+        the flat MVP set (``{ohlcv_1m}``); at KRX → the narrower
+        ``{ohlcv_24h}`` carve-out (operator 2026-07-12, Yahoo-sourced KRX has
+        no reliable intraday backfill).
+      * Everything else (the CME/CBOE futures/options complex) → the flat
+        MVP set (``{ohlcv_1m}``, operator 2026-06-27 decision #7).
+
+    Deliberately does NOT re-check ``base_ccy``/underlier — that axis is
+    already resolved by the caller's :func:`_tradfi_entry_in_mvp_universe`
+    check, which prefers the catalogue's pre-tagged ``mvp`` column and can
+    therefore be ``True`` even when ``base_asset``/``underlying`` alone
+    would not re-derive it (a fresh ``is_mvp(..., base_ccy=...)`` call here
+    would wrongly return ``False`` for those rows and collapse ``row_dts``
+    to empty for a confirmed-MVP instrument).
+    """
+    rule = MVP_SCOPE.get("tradfi")
+    if not isinstance(rule, TradFiMvpRule):
+        return frozenset()
+    itype = _mvp_capture_itype(instr.instrument_type).strip().upper()
+    venue_root = _base_exchange(instr.venue)
+    if itype in ("EQUITY", "ETF") and venue_root in _TRADFI_EQUITY_BASIS_VENUE_ROOTS:
+        return frozenset({"ohlcv_24h"}) if venue_root == "KRX" else rule.data_types
+    return rule.data_types
 
 
 def _yield_v2_cefi_pre_venue_launch_rows(
