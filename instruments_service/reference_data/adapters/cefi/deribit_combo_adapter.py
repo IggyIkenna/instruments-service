@@ -97,9 +97,11 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
     def venue(self) -> str:
         """Return the venue identifier.
 
-        MUST be the registered venue id ``DERIBIT-COMBO`` (factory.py
-        ``VENUE_TO_ADAPTER["DERIBIT-COMBO"]="deribit_combo"``), NOT the bare
-        exchange ``DERIBIT`` — the URDI venue-tag filter
+        MUST be the registered venue id ``DERIBIT-COMBO`` (factory.py's
+        ``get_adapter_for_canonical_venue`` routes ``mode="live"`` DERIBIT-COMBO
+        to this adapter; ``VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"]="tardis"`` is
+        the batch/default), NOT the bare exchange ``DERIBIT`` — the URDI
+        venue-tag filter
         (``_filter_records_to_venue``) keeps only records whose ``venue`` equals
         the BATCH canonical venue, so tagging combos ``DERIBIT`` dropped every
         fetched row as an "unknown venue" (the venue had 0 captured days since it
@@ -223,27 +225,29 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         caller's shard-isolation routes it to attempted_failed (CF-11). SSOT:
         https://docs.deribit.com/#public-get_combos.
 
-        SOURCE LIMITATION — DERIBIT-COMBO HISTORICAL DATA IS UNBACKFILLABLE:
-        ``public/get_combos`` returns ONLY currently-live (active) combo
-        instruments.  Deribit does NOT retain or expose the state of historical /
-        expired combos — once a combo expires it disappears from the endpoint
-        permanently.  Consequently:
+        SOURCE LIMITATION (THIS ADAPTER ONLY) — ``public/get_combos`` returns
+        ONLY currently-live (active) combo instruments.  Deribit does NOT
+        retain or expose the state of historical / expired combos via REST —
+        once a combo expires it disappears from this endpoint permanently.
+        This is why the URDI factory routes THIS adapter for ``mode="live"``
+        only; historical/batch DERIBIT-COMBO catalogue population routes to
+        the Tardis adapter instead (``VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"]
+        = "tardis"``, ``canonical_venue_override="DERIBIT-COMBO"``) — Tardis
+        archives the market feed in real time and its no-auth metadata
+        endpoint (``api.tardis.dev/v1/exchanges/deribit``) genuinely carries
+        68,847 ``type=='combo'`` symbols back to 2022-08-23 (live-verified
+        2026-07-14), independent of what Deribit's own REST API currently
+        lists.  Fixed 2026-07-14 — see
+        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14):
 
-        * Instrument-history cells for DERIBIT-COMBO prior to the live-capture
-          window (i.e., dates before the adapter was deployed and running) are
-          **structurally unbackfillable via REST** — this is a genuine upstream
-          source limitation, NOT a pipeline gap or missing credential.
-        * The manifest must represent those historical cells as
-          ``empty_confirmed[EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE]`` (the
-          source has no historical endpoint for this data, ever).  A
-          ``SOURCE_RETURNED_ZERO`` would be incorrect (no fetch was made);
-          ``attempted_failed`` is incorrect (no retry will succeed).
-        * **DO NOT re-attempt a historical DERIBIT-COMBO backfill.**  The cefi
-          8-venue backfill correctly could not fill it.  Any future audit that
-          sees DERIBIT-COMBO historical cells as empty should classify them as
-          expected typed-empty, not a fillable gap.
-        * For live / forward capture the adapter works correctly: combos active
-          today are returned and written as ``captured``.
+        * This REST adapter (``get_combos``) still cannot backfill history —
+          do not re-attempt a historical DERIBIT-COMBO fetch through THIS
+          adapter/endpoint specifically.
+        * For live / forward capture this adapter works correctly: combos
+          active today are returned and written as ``captured``.
+        * Historical DERIBIT-COMBO cells are fillable via the Tardis-routed
+          batch path (see factory.py ``get_adapter_for_canonical_venue``) —
+          they are NOT permanently ``empty_confirmed``.
 
         SSOT: ``codex/02-data/honest-absence-downstream-handling.md``
         § "DERIBIT-COMBO historical unavailability".

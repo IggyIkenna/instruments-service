@@ -300,6 +300,51 @@ def clear_adapter_pool() -> None:
 #: — the sanctioned alt to Databento whose re-runs are billing-blocked 2026-06).
 _DATE_AWARE_TRADFI_ADAPTER_KEYS: frozenset[str] = frozenset({"databento", "massive"})
 
+# DeFi adapters that accept a chain parameter (EVM + Solana). Membership here =
+# factory parses the chain segment from "<VENUE>-<CHAIN>" and passes it as
+# `chain=` to the adapter ctor. Adapters NOT in this set default to ETHEREUM
+# regardless of canonical-venue suffix — fine for true single-chain adapters;
+# latent bug for multi-chain ones (see 2026-05-12 additions: renzo / karak /
+# idle / yearn / beefy / pendle / jito_restaking).
+_DEFI_GRAPH_ADAPTERS: frozenset[str] = frozenset(
+    {
+        "uniswap_v2",
+        "uniswap_v3",
+        "uniswap_v4",
+        "aave_v3",
+        "compound_v3",
+        "morpho",
+        "fluid",
+        "balancer",
+        "curve",
+        "spark",
+        # Phase-4 lending protocols (multi-chain via curated registries).
+        "euler_v2",
+        "radiant",
+        "venus",
+        "benqi",
+        # Solana adapters
+        "drift",
+        "kamino",
+        "raydium",
+        "orca",
+        "marinade",
+        "jito",
+        # Multi-chain LST/LRT/restaking adapters (2026-05-12 latent fix —
+        # these were registered for multiple canonical venues earlier in the
+        # session but were missing from this set, so non-Ethereum venues
+        # silently used the ETHEREUM default chain).
+        "renzo",
+        "karak",
+        "idle",
+        "yearn",
+        # Phase-2 deferred adapters shipped 2026-05-12.
+        "beefy",
+        "pendle",
+        "jito_restaking",
+    }
+)
+
 
 def _resolve_uac_adapter_key(canonical_venue: str) -> str:
     """UAC venue → adapter key. Raises loudly for unknown or sentinel venues."""
@@ -353,6 +398,30 @@ def _build_date_aware_tradfi_adapter(
         target_date=target,
         venue_filter=canonical_venue,
     )
+
+
+def _build_deribit_combo_live_adapter(
+    canonical_venue: str,
+    *,
+    project_id: str | None,
+    api_key: str | None,
+) -> BaseReferenceDataAdapter:
+    """Live mode: DERIBIT-COMBO routes to its own live-native REST adapter
+    (deribit_combo, public/get_combos) instead of Tardis — Deribit's REST
+    endpoint only exposes currently-active combos (no historical retention),
+    so live/forward capture needs the real-time source while batch mode
+    (VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"]="tardis", the default) uses
+    Tardis's archived feed for the full historical combo universe. Inverse
+    of the CCXT-live pattern above: DERIBIT-COMBO's live-native adapter is
+    deribit_combo, not CCXT. See cefi_layer1_denominator_gaps_2026_07_03.md
+    (NEW FINDING 2026-07-14)."""
+    pool_key = ("deribit_combo", None, canonical_venue, None)
+    if pool_key in _adapter_pool:
+        return _adapter_pool[pool_key]
+    _logger.info("Live mode: %s → deribit_combo REST adapter instead of Tardis", canonical_venue)
+    adapter = DeribitComboReferenceDataAdapter(project_id=project_id, api_key=api_key)
+    _adapter_pool[pool_key] = adapter
+    return adapter
 
 
 def _resolve_tardis_exchanges_for_venue(
@@ -442,6 +511,11 @@ def get_adapter_for_canonical_venue(
         _adapter_pool[pool_key] = adapter
         return adapter
 
+    # Live mode: DERIBIT-COMBO routes to its own live-native REST adapter
+    # instead of Tardis — see _build_deribit_combo_live_adapter docstring.
+    if mode == "live" and adapter_key == "tardis" and canonical_venue == "DERIBIT-COMBO":  # noqa: L2-mode-seam — adapter source-routing (different source per mode is the one allowed L2 seam)
+        return _build_deribit_combo_live_adapter(canonical_venue, project_id=project_id, api_key=api_key)
+
     # Live mode: route TradFi Databento venues to GCS-first adapter.
     # Reads the most recent GCS snapshot, filters expired instruments,
     # falls back to Databento (T-3 days) if no GCS data.
@@ -469,54 +543,11 @@ def get_adapter_for_canonical_venue(
     if pool_key in _adapter_pool:
         return _adapter_pool[pool_key]
 
-    # DeFi adapters that accept chain parameter (EVM + Solana).
-    # Membership here = factory parses the chain segment from "<VENUE>-<CHAIN>"
-    # and passes it as `chain=` to the adapter ctor. Adapters NOT in this set
-    # default to ETHEREUM regardless of canonical-venue suffix — fine for true
-    # single-chain adapters; latent bug for multi-chain ones (see 2026-05-12
-    # additions: renzo / karak / idle / yearn / beefy / pendle / jito_restaking).
-    defi_graph_adapters = {
-        "uniswap_v2",
-        "uniswap_v3",
-        "uniswap_v4",
-        "aave_v3",
-        "compound_v3",
-        "morpho",
-        "fluid",
-        "balancer",
-        "curve",
-        "spark",
-        # Phase-4 lending protocols (multi-chain via curated registries).
-        "euler_v2",
-        "radiant",
-        "venus",
-        "benqi",
-        # Solana adapters
-        "drift",
-        "kamino",
-        "raydium",
-        "orca",
-        "marinade",
-        "jito",
-        # Multi-chain LST/LRT/restaking adapters (2026-05-12 latent fix —
-        # these were registered for multiple canonical venues earlier in the
-        # session but were missing from this set, so non-Ethereum venues
-        # silently used the ETHEREUM default chain).
-        "renzo",
-        "karak",
-        "idle",
-        "yearn",
-        # Phase-2 deferred adapters shipped 2026-05-12.
-        "beefy",
-        "pendle",
-        "jito_restaking",
-    }
-
     # Some adapters need extra constructor parameters derived from the canonical venue name.
     adapter: BaseReferenceDataAdapter
     if adapter_key == "api_football" and date is not None:
         adapter = ApiFootballReferenceDataAdapter(api_key=api_key, project_id=project_id, date=date)
-    elif adapter_key in defi_graph_adapters:
+    elif adapter_key in _DEFI_GRAPH_ADAPTERS:
         # DeFi adapters: parse chain from venue name, pass chain + optional date
         parts = canonical_venue.split("-", 1)
         chain = parts[1] if len(parts) == 2 else "ETHEREUM"
