@@ -168,7 +168,8 @@ def test_default_bucket_for_resolves_canonical_env_tiered_per_asset_group(
     _tier = r"(?:prd|stg|dev|test|ci)"
 
     # Prediction: the canonical env-tiered ``pred-<tier>`` bucket, NOT the legacy
-    # long-form ``market-data-tick-prediction-<pid>`` slated for L6 delete.
+    # long-form ``market-data-tick-prediction-<pid>`` — deleted 2026-07-12 (404 now;
+    # see mdps_prediction_tick_bucket_uac_ssot_404_2026_07_14.md), pred-prd is the sole live SSOT.
     pred = enumerator_module._default_bucket_for("prediction")
     assert re.fullmatch(rf"market-data-tick-pred-{_tier}-test-project", pred), pred
     assert pred != "market-data-tick-prediction-test-project"
