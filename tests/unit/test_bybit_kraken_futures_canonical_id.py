@@ -30,13 +30,14 @@ from decimal import Decimal
 
 import pytest
 from unified_api_contracts import TardisInstrumentDetail
-from unified_api_contracts.internal import InstrumentType, MarginType
+from unified_api_contracts.internal import InstrumentRecord, InstrumentType, MarginType
 
 from instruments_service.reference_data.adapters.cefi.tardis import (
     _build_canonical_future_key,
     _build_canonical_perpetual_key,
     _build_dated_derivative_canonical_symbol,
     _build_perpetual_canonical_symbol,
+    _disambiguate_colliding_dated_derivatives,
     _infer_margin_type,
     _parse_bybit_month_code_expiry,
     _resolve_base_quote,
@@ -222,6 +223,144 @@ def test_resolve_base_quote_bybit_end_to_end(raw_id: str, expected_base: str, ex
 def test_resolve_base_quote_bitget_futures_end_to_end(raw_id: str, expected_base: str, expected_quote: str) -> None:
     base, quote = _resolve_base_quote(_item(raw_id), raw_id, "bitget-futures")
     assert (base, quote) == (expected_base, expected_quote)
+
+
+# ---------------------------------------------------------------------------
+# Real regression fix (2026-07-14, cefi_layer1_denominator_gaps_2026_07_03.md
+# "NEW FINDING ... shared _build_canonical_future_key can collide"): BITGET-
+# FUTURES's BTCUSDM26 (real Jun-2026 quarterly) and BTCUSDU26 (real Sep-2026
+# quarterly) both report availableTo=2026-04-28 in Tardis's own metadata
+# (live-verified 2026-07-14 via api.tardis.dev/v1/exchanges/bitget-futures;
+# same for ETHUSDM26/ETHUSDU26) — since the month-code expiry fallback
+# (_parse_bybit_month_code_expiry) was only wired for exchange=="bybit",
+# BITGET-FUTURES fell through to that coincidentally-shared availableTo, so
+# two genuinely distinct real contracts collapsed onto ONE canonical
+# instrument_key. _disambiguate_colliding_dated_derivatives repairs this as a
+# post-pass over one exchange's parsed batch (no extra API calls).
+# ---------------------------------------------------------------------------
+
+
+def _future_item(raw_id: str, available_to: str | None) -> TardisInstrumentDetail:
+    """A FUTURE item with no ``expiry`` field, forcing the ``availableTo``
+    fallback branch — matches the real Tardis ``/v1/exchanges`` response
+    shape (no auth → no explicit ``expiry`` field), and reproduces the exact
+    coincidental-collision precondition from the finding.
+    """
+    return TardisInstrumentDetail(id=raw_id, type="future", availableTo=available_to)
+
+
+class TestDisambiguateCollidingDatedDerivatives:
+    def test_bitget_futures_btc_quarterlies_collide_before_fix(self) -> None:
+        """Sanity precondition: without the repair pass, two distinct real
+        BITGET-FUTURES contracts really do collide on instrument_key when
+        Tardis's availableTo coincides — proves the bug this test guards
+        against is real, not hypothetical.
+        """
+        adapter = TardisReferenceDataAdapter()
+        btc_m26 = adapter._parse_tardis_instrument(
+            _future_item("BTCUSDM26", "2026-04-28T00:00:00.000Z"), "bitget-futures"
+        )
+        btc_u26 = adapter._parse_tardis_instrument(
+            _future_item("BTCUSDU26", "2026-04-28T00:00:00.000Z"), "bitget-futures"
+        )
+        assert btc_m26 is not None
+        assert btc_u26 is not None
+        assert btc_m26.raw_symbol != btc_u26.raw_symbol
+        assert btc_m26.instrument_key == btc_u26.instrument_key  # the real collision
+
+    def test_bitget_futures_btc_eth_quarterlies_resolve_distinct_ids(self) -> None:
+        """After the repair pass: the exact 4-row scenario from the finding
+        (2 BTC + 2 ETH siblings, same coincidental availableTo) each resolve
+        to a distinct canonical id, keyed off the real CME month-code letter
+        the raw_id itself encodes (M=Jun, U=Sep) rather than the
+        coincidentally-shared availableTo.
+        """
+        adapter = TardisReferenceDataAdapter()
+        raw_ids = ["BTCUSDM26", "BTCUSDU26", "ETHUSDM26", "ETHUSDU26"]
+        records = [
+            adapter._parse_tardis_instrument(_future_item(raw_id, "2026-04-28T00:00:00.000Z"), "bitget-futures")
+            for raw_id in raw_ids
+        ]
+        assert all(record is not None for record in records)
+
+        _disambiguate_colliding_dated_derivatives(records)  # type: ignore[arg-type]
+
+        keys = [record.instrument_key for record in records if record is not None]
+        assert len(keys) == len(set(keys)), f"expected 4 distinct ids, got {keys}"
+        for record in records:
+            assert record is not None
+            assert record.instrument_key == record.canonical_instrument_id
+        # Real expiries: month-code M (Jun) and U (Sep) genuinely differ —
+        # the symbol-encoded date wins over the coincidentally-equal
+        # availableTo fallback.
+        btc_m26, btc_u26, eth_m26, eth_u26 = records
+        assert btc_m26 is not None and btc_u26 is not None
+        assert btc_m26.expiry is not None
+        assert btc_u26.expiry is not None
+        assert btc_m26.expiry.month == 6
+        assert btc_u26.expiry.month == 9
+        assert btc_m26.expiry != btc_u26.expiry
+        assert eth_m26 is not None and eth_u26 is not None
+        assert eth_m26.instrument_key == "BITGET-FUTURES:FUTURE:ETH-USD@INV-" + btc_m26.expiry.strftime("%Y%m%d")
+        assert eth_u26.instrument_key == "BITGET-FUTURES:FUTURE:ETH-USD@INV-" + btc_u26.expiry.strftime("%Y%m%d")
+
+    def test_non_colliding_records_are_left_byte_identical(self) -> None:
+        """The repair pass must be a no-op for the 12/16 already-correct
+        BITGET-FUTURES rows this same recapture shipped — only groups that
+        actually collide may be touched (stop-on-surprise: no blast radius
+        beyond the real defect).
+        """
+        adapter = TardisReferenceDataAdapter()
+        record = adapter._parse_tardis_instrument(
+            _future_item("BTCUSDH25", "2025-03-28T00:00:00.000Z"), "bitget-futures"
+        )
+        assert record is not None
+        original_key = record.instrument_key
+        original_expiry = record.expiry
+
+        _disambiguate_colliding_dated_derivatives([record])
+
+        assert record.instrument_key == original_key
+        assert record.expiry == original_expiry
+
+    def test_fallback_embeds_raw_symbol_when_no_month_code_disambiguator_exists(self) -> None:
+        """When a collision can't be resolved via the CME month-code (e.g. two
+        dash-shaped raw_ids sharing an expiry, a different real shape), the
+        repair falls back to the legacy VENUE:TYPE:RAW_ID embedding instead of
+        leaving the collision in place or fabricating a wrong date.
+        """
+        expiry = datetime(2026, 4, 28, tzinfo=UTC)
+        first = InstrumentRecord(
+            instrument_key="BITGET-FUTURES:FUTURE:BTC-USD@INV-20260428",
+            canonical_instrument_id="BITGET-FUTURES:FUTURE:BTC-USD@INV-20260428",
+            venue="BITGET-FUTURES",
+            instrument_type=InstrumentType.FUTURE,
+            raw_symbol="BTC-28APR26-A",
+            base_asset="BTC",
+            quote_asset="USD",
+            margin_type=MarginType.INVERSE,
+            expiry=expiry,
+        )
+        second = InstrumentRecord(
+            instrument_key="BITGET-FUTURES:FUTURE:BTC-USD@INV-20260428",
+            canonical_instrument_id="BITGET-FUTURES:FUTURE:BTC-USD@INV-20260428",
+            venue="BITGET-FUTURES",
+            instrument_type=InstrumentType.FUTURE,
+            raw_symbol="BTC-28APR26-B",
+            base_asset="BTC",
+            quote_asset="USD",
+            margin_type=MarginType.INVERSE,
+            expiry=expiry,
+        )
+        records = [first, second]
+
+        _disambiguate_colliding_dated_derivatives(records)
+
+        assert first.instrument_key == "BITGET-FUTURES:FUTURE:BTC-28APR26-A"
+        assert second.instrument_key == "BITGET-FUTURES:FUTURE:BTC-28APR26-B"
+        assert first.instrument_key != second.instrument_key
+        assert first.canonical_instrument_id == first.instrument_key
+        assert second.canonical_instrument_id == second.instrument_key
 
 
 # ---------------------------------------------------------------------------
