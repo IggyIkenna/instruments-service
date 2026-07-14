@@ -164,6 +164,39 @@ class TestFactoryTardisRouting:
         ]
         assert adapter._canonical_venue_override == "OKX"
 
+    def test_deribit_combo_batch_routes_to_tardis(self) -> None:
+        """Historical/batch DERIBIT-COMBO catalogue population routes through
+        the Tardis adapter (exchange "deribit", combo-type self-filtered),
+        NOT the live-only deribit_combo REST adapter. Regression guard for
+        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14):
+        the instrument catalogue was permanently live-only because
+        VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"] was hardcoded to "deribit_combo"
+        regardless of mode."""
+        clear_adapter_pool()
+        adapter = get_adapter_for_canonical_venue("DERIBIT-COMBO", mode="batch")
+        assert adapter.venue == "tardis"
+        assert adapter._exchanges == ["deribit"]
+        assert adapter._canonical_venue_override == "DERIBIT-COMBO"
+
+    def test_deribit_combo_live_routes_to_rest_adapter(self) -> None:
+        """Live/forward DERIBIT-COMBO capture keeps using the Deribit public
+        REST adapter (public/get_combos) — that endpoint only exposes
+        currently-active combos, which is exactly what live mode needs."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        clear_adapter_pool()
+        adapter = get_adapter_for_canonical_venue("DERIBIT-COMBO", mode="live")
+        assert isinstance(adapter, DeribitComboReferenceDataAdapter)
+        assert adapter.venue == "DERIBIT-COMBO"
+
+    def test_deribit_combo_live_pool_reuse(self) -> None:
+        clear_adapter_pool()
+        a1 = get_adapter_for_canonical_venue("DERIBIT-COMBO", mode="live")
+        a2 = get_adapter_for_canonical_venue("DERIBIT-COMBO", mode="live")
+        assert a1 is a2
+
     def test_resolve_tardis_exchanges_itype_aware_multi_exchange(self) -> None:
         """Pure-function unit test for the extracted helper: a venue with
         multiple itype-scoped Tardis exchanges (OKX-shaped) returns ALL of

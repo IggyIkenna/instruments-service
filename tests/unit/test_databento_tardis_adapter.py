@@ -5,7 +5,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentLeg, InstrumentRecord
 
 from instruments_service.reference_data.adapters.cefi.tardis import TardisReferenceDataAdapter
 from instruments_service.reference_data.adapters.tradfi.databento import DatabentoReferenceDataAdapter
@@ -758,6 +758,44 @@ class TestTardisAdapterMocked:
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
             results = await adapter.get_instruments()
         assert results == []
+
+    @pytest.mark.asyncio
+    async def test_deribit_combo_override_filters_to_combo_type_only(self) -> None:
+        """canonical_venue_override="DERIBIT-COMBO" shares the "deribit" Tardis
+        exchange slug with bare DERIBIT (option/future/perpetual/spot) — without
+        a self-filter, every row from that exchange would be mistagged venue=
+        DERIBIT-COMBO. Regression guard for
+        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14):
+        only type=='combo' rows may survive when this override is set."""
+        adapter = TardisReferenceDataAdapter(
+            exchanges=["deribit"],
+            canonical_venue_override="DERIBIT-COMBO",
+        )
+        combo_leg = InstrumentLeg(instrument_key="DERIBIT:PERPETUAL:BTC-PERPETUAL", side="BUY", ratio=1)
+        mixed_batch = [
+            _make_record(
+                key="DERIBIT-COMBO:COMBO:BTC-FS-25APR26_PERP",
+                venue="DERIBIT-COMBO",
+                instrument_type="COMBO",
+                raw_symbol="BTC-FS-25APR26_PERP",
+                base_asset="BTC",
+                quote_asset="USD",
+                legs=[combo_leg],
+            ),
+            _make_record(
+                key="DERIBIT-COMBO:PERPETUAL:BTC-PERPETUAL",
+                venue="DERIBIT-COMBO",
+                instrument_type="PERPETUAL",
+                raw_symbol="BTC-PERPETUAL",
+                base_asset="BTC",
+                quote_asset="USD",
+            ),
+        ]
+        with patch.object(adapter, "_fetch_exchange_instruments", AsyncMock(return_value=mixed_batch)):
+            results = await adapter.get_instruments()
+        assert len(results) == 1
+        assert results[0].instrument_type == "COMBO"
+        assert results[0].raw_symbol == "BTC-FS-25APR26_PERP"
 
     @pytest.mark.asyncio
     async def test_enumeration_is_no_auth_free_metadata_endpoint(self) -> None:

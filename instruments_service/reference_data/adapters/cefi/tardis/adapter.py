@@ -197,6 +197,13 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         reference-data universe (the authenticated ``datasets.tardis.dev`` /
         ``/data-feeds`` tick-data path is MTDS's job, not IS). Operator decision
         2026-06-23: "IS doesn't need auth for tardis; don't waste API limits".
+
+        DERIBIT-COMBO self-filter: when ``canonical_venue_override`` is
+        "DERIBIT-COMBO", every row is ALSO restricted to ``type=='combo'`` —
+        the "deribit" Tardis exchange slug is shared with bare DERIBIT
+        (option/future/perpetual/spot), and ``canonical_venue_override`` alone
+        would otherwise tag that entire universe as DERIBIT-COMBO. See
+        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14).
         """
         results: list[InstrumentRecord] = []
         failures: list[str] = []
@@ -216,6 +223,8 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                     continue
                 if instrument_type is not None:
                     batch = [r for r in batch if r.instrument_type == instrument_type]
+                if self._canonical_venue_override == "DERIBIT-COMBO":
+                    batch = [r for r in batch if r.instrument_type == InstrumentType.COMBO]
                 results.extend(batch)
         if not results and failures:
             raise RuntimeError(f"Tardis: all requested exchange(s) failed ({failures}); no instruments fetched")
