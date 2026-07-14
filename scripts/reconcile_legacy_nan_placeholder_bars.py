@@ -314,9 +314,9 @@ def main() -> int:
                 [
                     orig_idx,
                     row.get("asset_group", ""),
-                    row.get("venue", ""),
-                    row.get("data_type", ""),
-                    row.get("date", ""),
+                    row.get("venue", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
+                    row.get("data_type", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
+                    row.get("date", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
                     gcs_path,
                     f"{nan_ratio:.4f}" if nan_ratio is not None else "n/a",
                     action,

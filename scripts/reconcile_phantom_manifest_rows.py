@@ -194,7 +194,7 @@ def main(argv: list[str]) -> int:
         ok = _row_has_parquet_in_set(
             data_type=str(row["data_type"]),
             day=str(row["date"]),
-            league_id=str(row.get("league_id", "") or ""),
+            league_id=str(row.get("league_id", "") or ""),  # noqa: qg-empty-fallback — league_id is absent for non-sports rows; "" is the correct absent-sentinel _row_has_parquet_in_set expects
             existing=existing,
         )
         dt = str(row["data_type"])

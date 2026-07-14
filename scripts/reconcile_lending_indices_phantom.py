@@ -172,9 +172,9 @@ def _audit_captured_rows(
     venue_to_protocol_warnings: set[str] = set()
     for idx in captured_idx:
         row = df.loc[idx]
-        venue = str(row.get("venue", "") or "")
-        chain = str(row.get("chain", "") or "")
-        date_str = str(row.get("date", "") or "")[:10]
+        venue = str(row.get("venue", "") or "")  # noqa: qg-empty-fallback — absent field handled by the explicit skip below
+        chain = str(row.get("chain", "") or "")  # noqa: qg-empty-fallback — absent field handled by the explicit skip below
+        date_str = str(row.get("date", "") or "")[:10]  # noqa: qg-empty-fallback — absent field handled by the explicit skip below
         if not venue or not chain or not date_str:
             logger.warning("Row %d missing venue/chain/date — skipping", idx)
             continue
@@ -227,9 +227,9 @@ def _audit_captured_rows(
     results: dict[int, tuple[bool, str]] = {}
     for idx, prefix in prefixes_by_idx.items():
         row = df.loc[idx]
-        venue = str(row.get("venue", "") or "")
-        chain = str(row.get("chain", "") or "")
-        date_str = str(row.get("date", "") or "")[:10]
+        venue = str(row.get("venue", "") or "")  # noqa: qg-empty-fallback — _classify_phantom grouping key; blank groups under the empty bucket visibly
+        chain = str(row.get("chain", "") or "")  # noqa: qg-empty-fallback — _classify_phantom grouping key; blank groups under the empty bucket visibly
+        date_str = str(row.get("date", "") or "")[:10]  # noqa: qg-empty-fallback — date is a genuinely optional row field; "" is the correct absent-sentinel for _classify_phantom below
         is_real = prefix_exists.get(prefix, False)
         if is_real:
             results[idx] = (True, "")

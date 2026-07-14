@@ -162,6 +162,9 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
             name = cast(str, asset.name)
             sz_decimals: int = asset.szDecimals or 3
             lot = Decimal(10) ** -sz_decimals
+            hl_instrument_key = build_instrument_id(
+                "HYPERLIQUID", InstrumentType.PERPETUAL, f"{name}-USD@{_MARGIN_MARKER}"
+            )
             results.append(
                 InstrumentRecord(
                     # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
@@ -179,9 +182,11 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
                     # marker is embedded in the symbol passed to the builder (PERPETUAL's
                     # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
                     # convention DeFi POOL fee-tiers already use).
-                    instrument_key=build_instrument_id(
-                        "HYPERLIQUID", InstrumentType.PERPETUAL, f"{name}-USD@{_MARGIN_MARKER}"
-                    ),
+                    instrument_key=hl_instrument_key,
+                    # No CeFi raw-code-to-human-name translation gap (see other CeFi
+                    # adapters' identical comment) — canonical_instrument_id mirrors
+                    # instrument_key.
+                    canonical_instrument_id=hl_instrument_key,
                     venue=self.venue,
                     raw_symbol=name,
                     instrument_type=InstrumentType.PERPETUAL,
