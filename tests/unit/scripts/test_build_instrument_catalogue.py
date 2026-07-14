@@ -295,7 +295,7 @@ def test_rollup_defi_pool_emits_dual_form_ids(rollup: ModuleType) -> None:
     assert row["instrument_id"] == "0x45dda9cb7c25131df268515131f647d726f50608"
     assert row["venue"] == "UNISWAP_V3"
     assert row["chain"] == "POLYGON"
-    assert row["glued_pair_id"] == "UNISWAPV3-POLYGON:POOL:USDC-WETH:500"
+    assert row["glued_pair_id"] == "UNISWAP_V3-POLYGON:POOL:USDC-WETH:500"
     assert row["pool_address"] == "0x45dda9cb7c25131df268515131f647d726f50608"
 
 
@@ -399,6 +399,92 @@ def test_rollup_non_pool_row_has_blank_dual_form(rollup: ModuleType) -> None:
     assert row["instrument_id"] == "BINANCE-FUTURES:PERPETUAL:ADA-USDT"
     assert row["glued_pair_id"] == ""
     assert row["pool_address"] == ""
+
+
+def test_rollup_cefi_row_carries_through_adapter_populated_canonical_instrument_id(rollup: ModuleType) -> None:
+    """A CeFi row captured AFTER the adapter fix (canonical_instrument_id_cefi_defi_
+    backfill_2026_07_14.md) carries its own value through unchanged."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "DERIBIT:OPTION:BTC@INV-20260713-56000-C",
+                            "canonical_instrument_id": "DERIBIT:OPTION:BTC@INV-20260713-56000-C",
+                            "venue": "DERIBIT",
+                            "instrument_type": "OPTION",
+                            "raw_symbol": "BTC-13JUL26-56000-C",
+                            "base_asset": "BTC",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["canonical_instrument_id"] == "DERIBIT:OPTION:BTC@INV-20260713-56000-C"
+
+
+def test_rollup_cefi_row_backfills_canonical_instrument_id_from_instrument_key(rollup: ModuleType) -> None:
+    """A historical CeFi row captured BEFORE the adapter fix (no canonical_instrument_id
+    in the source) is backfilled from instrument_key -- the exact value a fresh capture
+    would have produced, since CeFi has no raw-code-to-human-name translation gap."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-FUTURES:PERPETUAL:ADA-USDT",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "raw_symbol": "ADA-PERP",
+                            "base_asset": "ADA",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["canonical_instrument_id"] == "BINANCE-FUTURES:PERPETUAL:ADA-USDT"
+
+
+def test_rollup_defi_pool_row_backfills_canonical_instrument_id_from_instrument_key(rollup: ModuleType) -> None:
+    """A DeFi POOL row backfills canonical_instrument_id from instrument_key -- NOT
+    from the pool_address-based DefiPoolIdentity.canonical_instrument_id concept,
+    which is a separate, unrelated field."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "UNISWAP_V3-ARBITRUM:POOL:USDC-WETH:3000",
+                            "venue": "UNISWAP_V3-ARBITRUM",
+                            "instrument_type": "POOL",
+                            "pool_address": "0x88E6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
+                            "base_asset": "USDC",
+                            "quote_asset": "WETH",
+                            "pool_fee_tier": "3000",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    # instrument_id is re-keyed to the pool address (DUAL-FORM) -- canonical_instrument_id
+    # is NOT that; it mirrors instrument_key instead, per the operator-approved policy.
+    assert row["instrument_id"] == "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640"
+    assert row["canonical_instrument_id"] == "UNISWAP_V3-ARBITRUM:POOL:USDC-WETH:3000"
 
 
 def test_rollup_supports_instrument_id_column(rollup: ModuleType) -> None:

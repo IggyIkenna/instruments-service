@@ -289,6 +289,9 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
 
         return InstrumentRecord(
             instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=pool_id,
             pool_address=pool_id,
@@ -355,6 +358,9 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
 
         return InstrumentRecord(
             instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=str(pool_id),
             pool_address=str(pool_id),

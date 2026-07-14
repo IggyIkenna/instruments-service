@@ -196,6 +196,9 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
 
         return InstrumentRecord(
             instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=str(address),
             pool_address=str(address),

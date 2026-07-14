@@ -70,19 +70,22 @@ import argparse
 import contextlib
 import csv
 import io
+import itertools
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 
 import pandas as pd
+import pyarrow.parquet as pq
 from google.api_core.exceptions import NotFound
 from google.cloud import storage
 from unified_api_contracts import (
@@ -1614,36 +1617,115 @@ _UNDERSTAT_FIXTURES_TPL = "sports_reference/by_date/day={day}/entity=fixtures/fi
 _AF_TRUTHSET_PREFIX = "_audits/fixtures_truthset_"
 _AF_FIXTURES_DATA_TYPE = "FIXTURES"
 
+# Producer-stamped run timestamp embedded in every truthset artifact name
+# (``audit_fixtures_via_api_football.py``: ``run_ts =
+# datetime.now(UTC).strftime("%Y%m%d-%H%M%S")``). See ``_af_truthset_built_at``
+# for why the NAME — not the GCS object create time — is the evidence clock.
+_AF_TRUTHSET_TS_RE = re.compile(r"fixtures_truthset_(\d{8}-\d{6})\.parquet$")
+
+
+def _af_truthset_built_at(blob_name: str) -> datetime | None:
+    """Evidence build time (UTC) parsed from the truthset artifact NAME.
+
+    Why the name and not the GCS object create time: the producer stamps
+    ``run_ts`` ONCE at run start, so the parsed value is a conservative lower
+    bound on when every season query in the artifact was answered, and it is
+    IMMUTABLE under server-side copies / re-uploads / bucket moves. The GCS
+    ``timeCreated`` is reset by exactly those operations — e.g. the 2026-07-14
+    day-closeout truthset was server-side copied into the prd ``_audits/``, so
+    its object create time would fabricate freshness the evidence does not
+    have (a stale artifact copied today would pass a create-time freshness
+    check for every day it predates — the precise bug class this guards).
+    Unparseable names return ``None`` → the artifact still contributes
+    positive fixture-days but can never prove an absence.
+    """
+    m = _AF_TRUTHSET_TS_RE.search(blob_name)
+    if m is None:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+class _AfSeasonSpan(NamedTuple):
+    """One season-complete calendar span for a league, with its evidence clock.
+
+    ``evidence_built_at`` = the freshest producer run timestamp across every
+    truthset artifact containing this (league, season) — ``None`` when no
+    artifact name parsed (absence is then never provable from this span).
+    """
+
+    season: int
+    start: str
+    end: str
+    evidence_built_at: datetime | None
+
 
 class _AfFixtureCalendar(NamedTuple):
     """Season-complete api_football fixture calendar built from truthset artifacts.
 
     ``fixture_days``: ``(canonical_league_upper, iso_day)`` pairs with >=1 fixture.
-    ``coverage``: per canonical_league_upper, merged ``(start_iso, end_iso)``
-    intervals of season-complete calendar evidence (consecutive seasons bridge
-    the inter-season gap — any fixture between them would belong to one of the
-    two complete season queries, so the gap is evidenced no-fixture territory;
-    a season jump, e.g. 2019 → 2021, does NOT bridge).
+    ``coverage``: per canonical_league_upper, season-ordered ``_AfSeasonSpan``s of
+    season-complete calendar evidence. Consecutive seasons bridge the
+    inter-season gap — any fixture between them would belong to one of the two
+    complete season queries, so the gap is evidenced no-fixture territory; a
+    season jump (e.g. 2019 → 2021) does NOT bridge.
     """
 
     fixture_days: set[tuple[str, str]]
-    coverage: dict[str, tuple[tuple[str, str], ...]]
+    coverage: dict[str, tuple[_AfSeasonSpan, ...]]
 
     def is_no_fixture_day(self, league_upper: str, iso_day: str) -> bool:
-        """True iff calendar evidence COVERS (league, day) and shows NO fixture."""
+        """True iff FRESH calendar evidence covers (league, day) and shows NO fixture.
+
+        Evidence-freshness rule (fixture day-boundary staleness class,
+        ``plans/active/issues/sports_fixtures_pending_eu_phantom_denominator_2026_07_13.md``
+        2026-07-14 closeout): an absence verdict requires
+        ``evidence_built_at > end of iso_day (UTC)`` — a season query answered
+        mid-day cannot see fixtures added, rescheduled in, or played later
+        that day (ALLSVENSKAN + BRASILEIRAO_SERIE_B 2026-07-13 were mis-stamped
+        EXPECTED_NO_FIXTURE by the 00:02Z daily run off the 07-13T17:25Z
+        truthset while 3 real matches existed). Days covered only by STALE
+        evidence fall through to the pending (``expected_unattempted``) seed —
+        never a stale absence stamp. A bridged inter-season-gap day needs BOTH
+        adjacent season queries fresh (the fixture would belong to one of the
+        two, but we cannot know which).
+        """
         if (league_upper, iso_day) in self.fixture_days:
             return False
-        return any(start <= iso_day <= end for start, end in self.coverage.get(league_upper, ()))
+        try:
+            day_end = datetime.fromisoformat(iso_day).replace(tzinfo=UTC) + timedelta(days=1)
+        except ValueError:
+            return False
+        spans = self.coverage.get(league_upper, ())
+        for sp in spans:
+            if sp.start <= iso_day <= sp.end and sp.evidence_built_at is not None and sp.evidence_built_at > day_end:
+                return True
+        for prev, nxt in itertools.pairwise(spans):
+            if (
+                nxt.season == prev.season + 1
+                and prev.end < iso_day < nxt.start
+                and prev.evidence_built_at is not None
+                and nxt.evidence_built_at is not None
+                and min(prev.evidence_built_at, nxt.evidence_built_at) > day_end
+            ):
+                return True
+        return False
 
 
 def _af_calendar_from_dataframe(df: pd.DataFrame) -> _AfFixtureCalendar | None:
     """Pure calendar builder from a truthset-shaped frame (split out for unit tests).
 
     Expects ``canonical_league_id`` / ``season`` / ``date`` columns (the
-    ``audit_fixtures_via_api_football.py`` truthset schema). Returns ``None``
-    when no usable rows remain — callers MUST treat that as "no evidence" and
-    keep the pre-existing alive-day seeding (never silently shrink the
-    denominator for unaudited leagues — honest-coverage rule).
+    ``audit_fixtures_via_api_football.py`` truthset schema) plus an optional
+    tz-aware ``evidence_built_at`` column stamped per source artifact by
+    ``_build_af_fixture_calendar`` (missing column / NaT rows → the affected
+    (league, season) spans carry ``evidence_built_at=None`` and can never
+    prove an absence — only post-day-end evidence may stamp a no-fixture day).
+    Returns ``None`` when no usable rows remain — callers MUST treat that as
+    "no evidence" and keep the pre-existing alive-day seeding (never silently
+    shrink the denominator for unaudited leagues — honest-coverage rule).
     """
     required = {"canonical_league_id", "season", "date"}
     if df.empty or not required.issubset(df.columns):
@@ -1658,32 +1740,37 @@ def _af_calendar_from_dataframe(df: pd.DataFrame) -> _AfFixtureCalendar | None:
     fixture_days: set[tuple[str, str]] = set(
         zip(work["_lg"].tolist(), work["_day"].tolist(), strict=True),
     )
-    # Per-(league, season) span, then merge across consecutive seasons.
-    per_league: dict[str, dict[int, tuple[str, str]]] = {}
-    agg = work.groupby(["_lg", "_season"], sort=True)["_day"].agg(["min", "max"]).reset_index()
-    for lg, season, dmin, dmax in agg.itertuples(index=False, name=None):
-        per_league.setdefault(str(lg), {})[int(season)] = (str(dmin), str(dmax))
-    coverage: dict[str, tuple[tuple[str, str], ...]] = {}
-    for lg, season_spans in per_league.items():
-        seasons = sorted(season_spans)
-        intervals: list[tuple[str, str]] = []
-        cur_start, cur_end = season_spans[seasons[0]]
-        prev = seasons[0]
-        for s in seasons[1:]:
-            s_start, s_end = season_spans[s]
-            if s == prev + 1:
-                cur_end = max(cur_end, s_end)  # bridge the evidenced inter-season gap
-            else:
-                intervals.append((cur_start, cur_end))
-                cur_start, cur_end = s_start, s_end
-            prev = s
-        intervals.append((cur_start, cur_end))
-        coverage[lg] = tuple(intervals)
+    if "evidence_built_at" in work.columns:
+        work["_built"] = pd.to_datetime(work["evidence_built_at"], utc=True, errors="coerce")
+    else:
+        work["_built"] = pd.NaT
+    # Per-(league, season) span + freshest evidence clock (max across the
+    # union'd artifacts — the freshest season-complete query is the one that
+    # proves/refutes absence).
+    per_league: dict[str, dict[int, _AfSeasonSpan]] = {}
+    agg = (
+        work.groupby(["_lg", "_season"], sort=True)
+        .agg(_dmin=("_day", "min"), _dmax=("_day", "max"), _bmax=("_built", "max"))
+        .reset_index()
+    )
+    for lg, season, dmin, dmax, bmax in agg.itertuples(index=False, name=None):
+        built = None if pd.isna(bmax) else bmax.to_pydatetime()
+        per_league.setdefault(str(lg), {})[int(season)] = _AfSeasonSpan(
+            season=int(season), start=str(dmin), end=str(dmax), evidence_built_at=built
+        )
+    coverage: dict[str, tuple[_AfSeasonSpan, ...]] = {
+        lg: tuple(spans[s] for s in sorted(spans)) for lg, spans in per_league.items()
+    }
     return _AfFixtureCalendar(fixture_days=fixture_days, coverage=coverage)
 
 
 def _build_af_fixture_calendar() -> _AfFixtureCalendar | None:
     """Load + union every persisted truthset artifact into one fixture calendar.
+
+    Each artifact's frame is stamped with its ``evidence_built_at`` (parsed
+    from the artifact NAME — see ``_af_truthset_built_at`` for why the name,
+    not the GCS object create time, is the evidence clock) so the no-fixture
+    verdict can enforce the post-day-end freshness rule.
 
     Best-effort fail-OPEN: any listing/read failure returns ``None`` (callers
     keep the pre-existing alive-day expected_unattempted seeding — the gate
@@ -1703,9 +1790,13 @@ def _build_af_fixture_calendar() -> _AfFixtureCalendar | None:
         for blob in blobs:
             try:
                 raw = blob.download_as_bytes(timeout=120)
-                frames.append(pd.read_parquet(io.BytesIO(raw), columns=["canonical_league_id", "season", "date"]))
+                frame = pd.read_parquet(io.BytesIO(raw), columns=["canonical_league_id", "season", "date"])
             except (NotFound, FileNotFoundError, OSError, ValueError) as exc:
                 logger.warning("Skipping truthset artifact %s (best-effort): %s", blob.name, exc)
+                continue
+            built_at = _af_truthset_built_at(blob.name)
+            frame["evidence_built_at"] = pd.Timestamp(built_at) if built_at is not None else pd.NaT
+            frames.append(frame)
         if not frames:
             return None
         calendar = _af_calendar_from_dataframe(pd.concat(frames, ignore_index=True))
@@ -1816,10 +1907,12 @@ def _enumerate_v2_sports(
     * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
     * alive AND no manifest row (present_set provided) → expected_unattempted —
       EXCEPT api_football FIXTURES cells where a season-complete truthset
-      calendar (``_build_af_fixture_calendar``) covers the (league, day) and
-      shows NO fixture → EXPECTED_NO_FIXTURE (empty_confirmed) instead of a
-      phantom pending_fetch seed; no calendar evidence → seeding unchanged
-      (honest-coverage rule: never silently shrink an unaudited denominator).
+      calendar (``_build_af_fixture_calendar``) covers the (league, day) with
+      evidence built AFTER the day ended (UTC) and shows NO fixture →
+      EXPECTED_NO_FIXTURE (empty_confirmed) instead of a phantom pending_fetch
+      seed; no calendar evidence OR evidence predating the day's end →
+      seeding unchanged (honest-coverage rule: never silently shrink an
+      unaudited denominator, never stamp absence off stale evidence).
     * alive AND present_set not provided → skip (legacy mode)
 
     ``data_types`` is the captured sports data_types axis (``_sports_data_types()``
@@ -2027,12 +2120,14 @@ def _enumerate_v2_sports(
                     )
                     if row_key not in present_set:
                         # api_football FIXTURES calendar gate: a season-complete
-                        # truthset calendar covering this (league, day) that shows
-                        # NO fixture → the honest state is empty_confirmed
-                        # (EXPECTED_NO_FIXTURE), NOT a pending_fetch seed no
-                        # fetcher can ever close. No calendar evidence (calendar
-                        # unavailable, league unaudited, or day outside every
-                        # season-complete span) → seeding below stays UNCHANGED.
+                        # truthset calendar covering this (league, day) with
+                        # POST-DAY-END evidence that shows NO fixture → the honest
+                        # state is empty_confirmed (EXPECTED_NO_FIXTURE), NOT a
+                        # pending_fetch seed no fetcher can ever close. No calendar
+                        # evidence (calendar unavailable, league unaudited, day
+                        # outside every season-complete span, or evidence built
+                        # BEFORE the day ended — the day-boundary staleness class)
+                        # → seeding below stays UNCHANGED.
                         if (
                             dt == _AF_FIXTURES_DATA_TYPE
                             and _src == "api_football"
@@ -2641,6 +2736,43 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
 # ---------------------------------------------------------------------------
 
 
+def _needed_manifest_columns(asset_group: str, schema_names: list[str]) -> list[str]:
+    """Manifest columns the v2 enumerator actually consumes for ``asset_group``.
+
+    The load path only ever feeds :func:`_build_present_set` /
+    :func:`_build_captured_set` (present-set key grain + ``capture_status``) —
+    nothing downstream reads any other manifest column. Intersected with the
+    parquet's actual ``schema_names`` so a manifest missing a key column keeps
+    the exact legacy present-cols behaviour (``_present_cols_for`` drops it).
+
+    Memory-frugality HARD RULE (sports OOM 2026-07-14): the sports availability
+    index is ~5.75M rows x 42 columns — ~5.6GB full-width in pandas, peaking
+    ~6GB at the per-VM ``pd.concat`` — which SIGKILLed the 8Gi nightly
+    expected-universe-v2-sports job. Column-project at READ time (never load
+    the full-width index); with the sports grain this is 4 columns (~0.5GB).
+    """
+    needed = _present_cols_for(asset_group, schema_names)
+    if "capture_status" in schema_names:
+        needed.append("capture_status")
+    return needed
+
+
+def _read_manifest_parquet_projected(local_path: str, asset_group: str) -> pd.DataFrame:
+    """Read a manifest index/shard parquet restricted to the enumerator's columns.
+
+    Projects to :func:`_needed_manifest_columns` (schema read first — zero data
+    IO) so the full-width index is never materialised in pandas. Falls back to
+    a full-width read only when the schema carries NONE of the needed columns
+    (degenerate/foreign parquet — legacy behaviour, and the set builders then
+    return empty sets exactly as before).
+    """
+    schema_names = list(pq.read_schema(local_path).names)
+    columns = _needed_manifest_columns(asset_group, schema_names)
+    if not columns:
+        return pd.read_parquet(local_path)
+    return pd.read_parquet(local_path, columns=columns)
+
+
 def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame, str]:
     """Bulk-download the canonical manifest + unconsolidated per-VM shards. Returns (df, local_path).
 
@@ -2651,6 +2783,11 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     per-VM augmentation the enumerator's present_set would miss those typed rows, write
     expected_unattempted for the same keys, and the newer eu written_at would overwrite
     the typed rows after consolidation.
+
+    Every parquet read here is COLUMN-PROJECTED to the present-set key grain +
+    ``capture_status`` (:func:`_read_manifest_parquet_projected`) — the returned
+    frame is a key-column view of the manifest, NOT the full-width index (sports
+    OOM 2026-07-14; the enumerator consumes nothing else).
 
     If a pre-cached copy exists at /tmp/{asset_group}_manifest_cache.parquet
     (written by a preceding gsutil cp to avoid GCS SDK stream timeouts on
@@ -2663,7 +2800,7 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     cache_path = _home_cache if os.path.exists(_home_cache) else _tmp_cache
     if os.path.exists(cache_path):
         logger.info("Using pre-cached manifest at %s", cache_path)
-        df = pd.read_parquet(cache_path)
+        df = _read_manifest_parquet_projected(cache_path, asset_group)
         logger.info("Manifest rows: %d", len(df))
         return df, cache_path
 
@@ -2678,7 +2815,7 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     ) as tf:
         local_path = tf.name
     blob.download_to_filename(local_path, timeout=600)
-    df = pd.read_parquet(local_path)
+    df = _read_manifest_parquet_projected(local_path, asset_group)
     logger.info("Manifest rows: %d", len(df))
 
     # Augment with per-VM shards to close the pre-consolidation race window.
@@ -2705,7 +2842,11 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
                     ) as stf:
                         shard_local = stf.name
                     shard_blob.download_to_filename(shard_local, timeout=120)
-                    shard_df = pd.read_parquet(shard_local)
+                    # Same column projection as the main index: pd.concat
+                    # (sort=False) unions by name, so a shard-only key column
+                    # still surfaces and main-index rows get NaN -> "" exactly
+                    # as the legacy full-width concat did.
+                    shard_df = _read_manifest_parquet_projected(shard_local, asset_group)
                     extra_frames.append(shard_df)
                     logger.info("Loaded per-VM shard %s: %d rows", shard_blob.name, len(shard_df))
                 except Exception as shard_exc:
@@ -2761,11 +2902,13 @@ def _build_captured_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ..
     """
     if df.empty or "date" not in df.columns or "capture_status" not in df.columns:
         return set()
-    captured = df[df["capture_status"].fillna("").astype(str) == "captured"]
-    if captured.empty:
+    captured_mask = df["capture_status"].fillna("").astype(str) == "captured"
+    if not captured_mask.any():
         return set()
-    available = _present_cols_for(asset_group, list(captured.columns))
-    df_subset = captured[available].fillna("").astype(str)
+    # Project to the key columns in the SAME select as the row filter — never
+    # materialise a full-width copy of the captured rows (sports OOM 2026-07-14).
+    available = _present_cols_for(asset_group, list(df.columns))
+    df_subset = df.loc[captured_mask, available].fillna("").astype(str)
     return {tuple(row) for row in df_subset.itertuples(index=False, name=None)}
 
 
@@ -3399,6 +3542,10 @@ def main() -> int:
         logger.info("v2 manifest captured-set size: %d (oscillation guard)", len(v2_captured_set))
         # Column order used in _build_present_set (must match present_set tuples).
         v2_present_cols = _present_cols_for(asset_group, list(v2_manifest_df.columns))
+        # The manifest frame is fully consumed into the two key-sets + the
+        # present-cols list above — release it before the enumeration loop
+        # accumulates v2_absent (memory-frugal load path, sports OOM 2026-07-14).
+        del v2_manifest_df
         # Build date_axis as list[date]
         date_axis_ts = pd.date_range(start_date, end_date, freq="D")
         date_axis: list[date] = [d.date() for d in date_axis_ts]

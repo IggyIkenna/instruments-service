@@ -95,9 +95,13 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
+            instrument_key = f"{venue_tag}:LST:{symbol}"
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:LST:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
                     base_asset_contract_address=address,

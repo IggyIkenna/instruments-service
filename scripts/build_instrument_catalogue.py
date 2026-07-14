@@ -287,11 +287,12 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # (unified_api_contracts.predictions.build_cross_venue_mapping()) for a
     # matched crypto/macro/index pair, OR the Sports-asset-group-aligned
     # fixture_id for a Polymarket sports market (build_fixture_id() — see
-    # polymarket/parsing.py::_build_sports_id). Blank (honest absence, never a
-    # false pair) for every other asset_group/row and for an unmatched
-    # prediction instrument. Prediction-only today; other asset groups' own
-    # InstrumentRecord.canonical_instrument_id (TradFi/Databento product roots)
-    # is a SEPARATE, adapter-local mechanism not surfaced through this column.
+    # polymarket/parsing.py::_build_sports_id) for Prediction rows. For CeFi/DeFi
+    # rows (canonical_instrument_id_cefi_defi_backfill_2026_07_14.md): mirrors
+    # instrument_key, carried through from the adapter-populated per-date row's
+    # own canonical_instrument_id field (no raw-code-to-human-name translation gap
+    # to solve there, unlike TradFi/Databento's separate product-root use of this
+    # same InstrumentRecord field, which is NOT surfaced through this column).
     "canonical_instrument_id",
     # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean
     # computed via the UAC ``is_mvp(...)`` predicate over the rolled-up catalogue.
@@ -307,8 +308,10 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # operator Refinement 1 — keep BOTH forms per pool): the manifest-canonical
     # ``instrument_id`` above is ``pool_address.lower()`` (for DeFi POOL rows), while
     # ``glued_pair_id`` carries the HUMAN-READABLE UI id
-    # ``UNISWAPV3-ARBITRUM:POOL:AAVE-USDC:100`` (venue-chain glued + POOL + token0-token1
-    # PAIR + FEE). Built via the UAC SSOT converter ``build_pool_identity`` so the two
+    # ``UNISWAP_V3-ARBITRUM:POOL:AAVE-USDC:100`` (venue-chain glued + POOL + token0-token1
+    # PAIR + FEE — with-underscore protocol spelling is canonical, operator decision
+    # 2026-07-08/14, ``instrument_id_format_canonicalization_2026_07_08.md`` finding 2).
+    # Built via the UAC SSOT converter ``build_pool_identity`` so the two
     # forms are reversible. Blank for non-DeFi-pool rows (cefi/tradfi/sports/prediction).
     "glued_pair_id",
     # On-chain pool contract address (DeFi POOL rows) — the canonical-id source +
@@ -907,6 +910,18 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 # Margin type: propagated from the per-date instruments parquet.
                 # "" for non-derivative instruments (spot pairs, DeFi pools).
                 "margin_type": agg.meta.get("margin_type") or "",
+                # CeFi/DeFi canonical_instrument_id — the adapter-populated per-date
+                # value when present, else instrument_key itself (already carried
+                # through in agg.meta for every row). Both are the IDENTICAL value
+                # by design (canonical_instrument_id_cefi_defi_backfill_2026_07_14.md
+                # — CeFi/DeFi have no raw-code-to-human-name translation gap, so
+                # canonical_instrument_id always mirrors instrument_key), so this
+                # fallback backfills every historical row captured BEFORE the
+                # adapter fix shipped with the exact value a fresh capture would
+                # have produced — no separate migration script needed.
+                "canonical_instrument_id": (
+                    agg.meta.get("canonical_instrument_id") or agg.meta.get("instrument_key") or ""
+                ),
                 "glued_pair_id": glued_pair_id,
                 "pool_address": pool_address,
             }
@@ -951,6 +966,12 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         # The row's RESOLVED id (instrument_key OR instrument_id) — the non-pool
         # pass-through canonical id (a catalogue keyed only on instrument_id keeps it).
         "_resolved_id": _row_id(row) or "",
+        # Adapter-populated canonical_instrument_id (CeFi/DeFi: mirrors instrument_key
+        # — no raw-code-to-human-name translation gap to solve, unlike TradFi/Databento's
+        # product-root use of this field). Carried through so the catalogue row below
+        # doesn't have to re-derive it. SSOT: unified-trading-pm/plans/active/
+        # canonical_instrument_id_cefi_defi_backfill_2026_07_14.md.
+        "canonical_instrument_id": _str_field(row, "canonical_instrument_id"),
     }
 
 
