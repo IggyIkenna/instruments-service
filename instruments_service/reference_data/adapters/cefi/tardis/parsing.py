@@ -525,6 +525,19 @@ def _infer_margin_type(
     # Real evidence 2026-07-09 (api.tardis.dev/v1/exchanges/bybit).
     if exchange == "bybit" and quote.upper() == "USD":
         return MarginType.INVERSE
+    # Bitget Futures coin-margined ("delivery"/COIN-M) products quote-resolve to
+    # bare "USD" and are genuinely coin-margined -- live-verified 2026-07-14 via
+    # Bitget's own public REST (api.bitget.com/api/v2/mix/market/contracts?
+    # productType=coin-futures): BTCUSD/ETHUSD/... perpetuals + their dated-
+    # quarterly siblings (BTCUSDH25 etc, same symbol family) list
+    # supportMarginCoins=["BTC","ETH",...] (coin collateral), the same USD-quote-
+    # but-coin-settled shape as Bybit/Deribit/Binance-futures above. Had no
+    # bitget-futures branch at all -- every real inverse instrument here (the 16
+    # dated-quarterly FUTURE symbols the sibling _resolve_base_quote fix just made
+    # resolvable, plus any USD-quoted perpetual) silently fell through to the
+    # LINEAR default below.
+    if exchange == "bitget-futures" and quote.upper() == "USD":
+        return MarginType.INVERSE
     # All other derivatives with stable quote (USDT, USDC) or default → linear
     return MarginType.LINEAR
 
