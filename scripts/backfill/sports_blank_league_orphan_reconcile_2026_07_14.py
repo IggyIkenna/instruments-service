@@ -1,14 +1,17 @@
 # Epic: sports_master
 # Lifecycle: ONE-OFF — closes the footystats PREDICTIONS/ODDS TimeoutError +
-#   open_meteo WEATHER phantom_captured "blank league_id" residual
-#   root-caused in plans/active/sports_data_sources_canonical_completion_2026_07_13.md
+#   open_meteo WEATHER + soccer_football_info SFI_PROGRESSIVE_STATS
+#   phantom_captured/TimeoutError "blank league_id" residual root-caused in
+#   plans/active/sports_data_sources_canonical_completion_2026_07_13.md
 #   (2026-07-14 addendum).
 # Delete-when: manifest shows 0 blank-``league_id`` attempted_failed rows for
-#   (footystats, PREDICTIONS|ODDS) and (open_meteo, WEATHER).
+#   (footystats, PREDICTIONS|ODDS), (open_meteo, WEATHER), and
+#   (soccer_football_info, SFI_PROGRESSIVE_STATS).
 # SSOT: plans/active/sports_data_sources_canonical_completion_2026_07_13.md
 """sports_blank_league_orphan_reconcile_2026_07_14.py — closes the specific
 ``attempted_failed`` rows that carry a BLANK/None ``league_id`` for
-footystats (PREDICTIONS, ODDS) and open_meteo (WEATHER).
+footystats (PREDICTIONS, ODDS), open_meteo (WEATHER), and
+soccer_football_info (SFI_PROGRESSIVE_STATS).
 
 ROOT CAUSE (diagnosed 2026-07-14, see the plan above's Progress Log): the
 sports_reference write path migrated to PER-LEAGUE manifest shard atoms
@@ -28,6 +31,16 @@ with NO ``league_id`` at all:
     migration, later correctly reclassified from a phantom ``captured``
     claim to ``attempted_failed`` by an earlier phantom-reconciliation pass
     (its row_key was preserved as-is, blank ``league_id`` and all).
+  * soccer_football_info SFI_PROGRESSIVE_STATS ``phantom_captured_``… /
+    ``TimeoutError`` rows — the identical anti-pattern the footystats fix
+    above closes: the SFI top-level ``except`` handler in ``sfi.py`` wrote a
+    blank-``league_id`` date-aggregate ``record_failed`` row (fixed
+    instruments-service@<this commit's sfi.py change> to write per-league
+    instead). Live-verified 2026-07-14: all 10 blank rows' dates already carry
+    the full per-league set (94 leagues each, captured/empty_confirmed, 0
+    per-league failures) — the blank row masks no real gap; the real
+    per-league data self-heals on re-capture while the blank date-aggregate
+    row cannot (the success path writes no blank row), leaving it orphaned.
 
 Because NO current write path can ever again target a blank-``league_id``
 row_key, these rows are permanently orphaned: the residual-closer script's
@@ -104,15 +117,19 @@ from unified_trading_library import ManifestWriter, read_availability_index, res
 BUCKET = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports", deployment_env="prod")
 
 # (source, data_type) -> (pipeline_mode, manifest ``source`` key). Closed set —
-# only the two sources/three data_types root-caused + fixed 2026-07-14. A
-# broader blank-league_id sweep (api_football INJURIES/PLAYER_STATS/etc.,
-# understat XG, soccer_football_info, odds_api, mdps_odds_horizon_bucket —
-# ~2,400 more rows found live 2026-07-14) is a SEPARATE follow-up (see the
-# plan's Progress Log) and is deliberately OUT of this script's blast radius.
+# the three sources/four data_types root-caused + fixed 2026-07-14. A broader
+# blank-league_id sweep (api_football INJURIES/PLAYER_STATS/etc., understat XG,
+# odds_api, mdps_odds_horizon_bucket — ~2,400 more rows found live 2026-07-14)
+# is a SEPARATE follow-up (see the plan's Progress Log) and is deliberately OUT
+# of this script's blast radius.
 _TARGETS: dict[tuple[str, str], tuple[PipelineMode, str]] = {
     ("footystats", "PREDICTIONS"): (PipelineMode.BATCH_FOOTYSTATS, "footystats"),
     ("footystats", "ODDS"): (PipelineMode.BATCH_FOOTYSTATS, "footystats"),
     ("open_meteo", "WEATHER"): (PipelineMode.BATCH_OPEN_METEO, "open_meteo"),
+    ("soccer_football_info", "SFI_PROGRESSIVE_STATS"): (
+        PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+        "soccer_football_info",
+    ),
 }
 
 
