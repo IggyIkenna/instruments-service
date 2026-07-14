@@ -1,7 +1,7 @@
 {
   "asset_group": "tradfi",
-  "captured_at": "2026-07-13",
-  "tuple_count": 40,
+  "captured_at": "2026-07-14",
+  "tuple_count": 41,
   "tuples": [
     ["CBOE", "futures_chain", "ohlcv_1m"],
     ["CBOE", "futures_chain", "ohlcv_1s"],
@@ -14,6 +14,7 @@
     ["CME", "futures_chain", "ohlcv_1s"],
     ["CME", "options_chain", "ohlcv_1m"],
     ["FX", "spot_pair", "ohlcv_24h"],
+    ["ICE", "index", "ohlcv_24h"],
     ["KRX", "bond", "ohlcv_24h"],
     ["KRX", "commodity", "ohlcv_24h"],
     ["KRX", "currency", "ohlcv_24h"],
