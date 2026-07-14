@@ -85,6 +85,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pandas as pd
+import pyarrow.parquet as pq
 from google.api_core.exceptions import NotFound
 from google.cloud import storage
 from unified_api_contracts import (
@@ -2735,6 +2736,43 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
 # ---------------------------------------------------------------------------
 
 
+def _needed_manifest_columns(asset_group: str, schema_names: list[str]) -> list[str]:
+    """Manifest columns the v2 enumerator actually consumes for ``asset_group``.
+
+    The load path only ever feeds :func:`_build_present_set` /
+    :func:`_build_captured_set` (present-set key grain + ``capture_status``) —
+    nothing downstream reads any other manifest column. Intersected with the
+    parquet's actual ``schema_names`` so a manifest missing a key column keeps
+    the exact legacy present-cols behaviour (``_present_cols_for`` drops it).
+
+    Memory-frugality HARD RULE (sports OOM 2026-07-14): the sports availability
+    index is ~5.75M rows x 42 columns — ~5.6GB full-width in pandas, peaking
+    ~6GB at the per-VM ``pd.concat`` — which SIGKILLed the 8Gi nightly
+    expected-universe-v2-sports job. Column-project at READ time (never load
+    the full-width index); with the sports grain this is 4 columns (~0.5GB).
+    """
+    needed = _present_cols_for(asset_group, schema_names)
+    if "capture_status" in schema_names:
+        needed.append("capture_status")
+    return needed
+
+
+def _read_manifest_parquet_projected(local_path: str, asset_group: str) -> pd.DataFrame:
+    """Read a manifest index/shard parquet restricted to the enumerator's columns.
+
+    Projects to :func:`_needed_manifest_columns` (schema read first — zero data
+    IO) so the full-width index is never materialised in pandas. Falls back to
+    a full-width read only when the schema carries NONE of the needed columns
+    (degenerate/foreign parquet — legacy behaviour, and the set builders then
+    return empty sets exactly as before).
+    """
+    schema_names = list(pq.read_schema(local_path).names)
+    columns = _needed_manifest_columns(asset_group, schema_names)
+    if not columns:
+        return pd.read_parquet(local_path)
+    return pd.read_parquet(local_path, columns=columns)
+
+
 def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame, str]:
     """Bulk-download the canonical manifest + unconsolidated per-VM shards. Returns (df, local_path).
 
@@ -2745,6 +2783,11 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     per-VM augmentation the enumerator's present_set would miss those typed rows, write
     expected_unattempted for the same keys, and the newer eu written_at would overwrite
     the typed rows after consolidation.
+
+    Every parquet read here is COLUMN-PROJECTED to the present-set key grain +
+    ``capture_status`` (:func:`_read_manifest_parquet_projected`) — the returned
+    frame is a key-column view of the manifest, NOT the full-width index (sports
+    OOM 2026-07-14; the enumerator consumes nothing else).
 
     If a pre-cached copy exists at /tmp/{asset_group}_manifest_cache.parquet
     (written by a preceding gsutil cp to avoid GCS SDK stream timeouts on
@@ -2757,7 +2800,7 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     cache_path = _home_cache if os.path.exists(_home_cache) else _tmp_cache
     if os.path.exists(cache_path):
         logger.info("Using pre-cached manifest at %s", cache_path)
-        df = pd.read_parquet(cache_path)
+        df = _read_manifest_parquet_projected(cache_path, asset_group)
         logger.info("Manifest rows: %d", len(df))
         return df, cache_path
 
@@ -2772,7 +2815,7 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     ) as tf:
         local_path = tf.name
     blob.download_to_filename(local_path, timeout=600)
-    df = pd.read_parquet(local_path)
+    df = _read_manifest_parquet_projected(local_path, asset_group)
     logger.info("Manifest rows: %d", len(df))
 
     # Augment with per-VM shards to close the pre-consolidation race window.
@@ -2799,7 +2842,11 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
                     ) as stf:
                         shard_local = stf.name
                     shard_blob.download_to_filename(shard_local, timeout=120)
-                    shard_df = pd.read_parquet(shard_local)
+                    # Same column projection as the main index: pd.concat
+                    # (sort=False) unions by name, so a shard-only key column
+                    # still surfaces and main-index rows get NaN -> "" exactly
+                    # as the legacy full-width concat did.
+                    shard_df = _read_manifest_parquet_projected(shard_local, asset_group)
                     extra_frames.append(shard_df)
                     logger.info("Loaded per-VM shard %s: %d rows", shard_blob.name, len(shard_df))
                 except Exception as shard_exc:
@@ -2855,11 +2902,13 @@ def _build_captured_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ..
     """
     if df.empty or "date" not in df.columns or "capture_status" not in df.columns:
         return set()
-    captured = df[df["capture_status"].fillna("").astype(str) == "captured"]
-    if captured.empty:
+    captured_mask = df["capture_status"].fillna("").astype(str) == "captured"
+    if not captured_mask.any():
         return set()
-    available = _present_cols_for(asset_group, list(captured.columns))
-    df_subset = captured[available].fillna("").astype(str)
+    # Project to the key columns in the SAME select as the row filter — never
+    # materialise a full-width copy of the captured rows (sports OOM 2026-07-14).
+    available = _present_cols_for(asset_group, list(df.columns))
+    df_subset = df.loc[captured_mask, available].fillna("").astype(str)
     return {tuple(row) for row in df_subset.itertuples(index=False, name=None)}
 
 
@@ -3493,6 +3542,10 @@ def main() -> int:
         logger.info("v2 manifest captured-set size: %d (oscillation guard)", len(v2_captured_set))
         # Column order used in _build_present_set (must match present_set tuples).
         v2_present_cols = _present_cols_for(asset_group, list(v2_manifest_df.columns))
+        # The manifest frame is fully consumed into the two key-sets + the
+        # present-cols list above — release it before the enumeration loop
+        # accumulates v2_absent (memory-frugal load path, sports OOM 2026-07-14).
+        del v2_manifest_df
         # Build date_axis as list[date]
         date_axis_ts = pd.date_range(start_date, end_date, freq="D")
         date_axis: list[date] = [d.date() for d in date_axis_ts]
