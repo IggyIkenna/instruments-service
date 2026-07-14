@@ -293,7 +293,7 @@ async def _run_per_fixture_enrichment(
                 [n for n, _ in _per_fixture_entities],
             )
 
-    entity_rows, entity_failures = await _gather_per_fixture_rows(
+    entity_rows, entity_failures, pre_captured_leagues = await _gather_per_fixture_rows(
         per_fixture_entities=_per_fixture_entities,
         date=date,
         bucket=bucket,
@@ -310,6 +310,7 @@ async def _run_per_fixture_enrichment(
         entity_names=[name for name, _ in _per_fixture_entities],
         entity_rows=entity_rows,
         entity_failures=entity_failures,
+        pre_captured_leagues=pre_captured_leagues,
         af_fid_to_league=af_fid_to_league,
         recovery_fixture_ids=recovery_fixture_ids,
     )
@@ -323,7 +324,7 @@ async def _gather_per_fixture_rows(
     fixture_ids: list[int],
     af_fid_to_league: dict[str, str],
     redo_all: bool,
-) -> tuple[dict[str, list[dict[str, object]]], dict[str, tuple[int, str]]]:
+) -> tuple[dict[str, list[dict[str, object]]], dict[str, tuple[int, str]], dict[str, set[str]]]:
     """Concurrent per-fixture fetching with rate-limit semaphore.
 
     API Football Mega plan: 900 req/min shared across the fleet. The
@@ -437,6 +438,14 @@ async def _gather_per_fixture_rows(
     tasks: list[_orch.asyncio.Task[None]] = []
     skipped_already_captured = 0
     skipped_no_provider_coverage = 0
+    # Track, per (entity, league), whether ANY task was actually queued this
+    # run and whether at least one of its fixtures was provider-covered
+    # (i.e. reached the already-captured check rather than being skipped as
+    # observed-out-of-coverage). A league with zero queued tasks that DID
+    # reach that check was skipped purely because every one of its fixtures
+    # was already present on disk — see ``pre_captured_leagues`` below.
+    _queued_leagues: set[tuple[str, str]] = set()
+    _provider_covered_leagues: set[tuple[str, str]] = set()
     for entity_name, fetch_fn in per_fixture_entities:
         _af_entity_dt = _entity_dt_for_short(entity_name)
         for fid in fixture_ids:
@@ -450,11 +459,15 @@ async def _gather_per_fixture_rows(
                 # League never yields this entity in API-Football — skip the call.
                 skipped_no_provider_coverage += 1
                 continue
+            if canonical_league:
+                _provider_covered_leagues.add((entity_name, canonical_league))
             if not redo_all and captured_per_entity_league and canonical_league:
                 captured_set = captured_per_entity_league.get((entity_name, canonical_league), frozenset())
                 if int(fid) in captured_set:
                     skipped_already_captured += 1
                     continue
+            if canonical_league:
+                _queued_leagues.add((entity_name, canonical_league))
             tasks.append(_orch.asyncio.ensure_future(_fetch_one(entity_name, fetch_fn, fid)))
 
     if skipped_no_provider_coverage:
@@ -480,7 +493,26 @@ async def _gather_per_fixture_rows(
     )
     await _orch.asyncio.gather(*tasks)
 
-    return entity_rows, entity_failures
+    # A no-op run must never demote a present cell to empty_confirmed: a
+    # league with pre-existing captured data (non-empty captured_set) whose
+    # every fixture on this date was skip-as-already-present (no task
+    # queued, and it wasn't excluded as observed-out-of-provider-coverage)
+    # already has real data on disk — exclude it from the empty-gap
+    # emission below instead of letting an incomplete this-run
+    # captured_league_ids set stamp it EXPECTED_NO_FIXTURE (2026-07-14 GW
+    # verification: 3,720 false-empty cells on the top/prediction-tier
+    # leagues whose enrichment was entirely skip-as-present).
+    pre_captured_leagues: dict[str, set[str]] = {name: set() for name, _ in per_fixture_entities}
+    for (entity_name, canonical_league), captured_set in captured_per_entity_league.items():
+        if not captured_set:
+            continue
+        if (entity_name, canonical_league) in _queued_leagues:
+            continue
+        if (entity_name, canonical_league) not in _provider_covered_leagues:
+            continue
+        pre_captured_leagues[entity_name].add(canonical_league)
+
+    return entity_rows, entity_failures, pre_captured_leagues
 
 
 def _write_per_fixture_entities(
@@ -492,6 +524,7 @@ def _write_per_fixture_entities(
     entity_names: list[str],
     entity_rows: dict[str, list[dict[str, object]]],
     entity_failures: dict[str, tuple[int, str]],
+    pre_captured_leagues: dict[str, set[str]],
     af_fid_to_league: dict[str, str],
     recovery_fixture_ids: frozenset[int] | None,
 ) -> None:
@@ -599,8 +632,10 @@ def _write_per_fixture_entities(
 
                 # Drop unmapped rows — single-SSOT means bare writes are
                 # forbidden for league-axis data types. Surface as a
-                # warning so we can spot upstream league-mapping
-                # regressions in logs.
+                # warning AND record_failed (never silent — 2026-07-14 GW
+                # verification: 225,854 fetched-then-dropped rows across
+                # the fleet, quota spent with no manifest trace) so the
+                # shard is flagged for backfill instead of vanishing.
                 if not _without_league.empty:
                     _orch.logger.warning(
                         "%s bare-path fallback triggered for date=%s — data shape regression: "
@@ -609,8 +644,17 @@ def _write_per_fixture_entities(
                         date,
                         len(_without_league),
                     )
+                    if manifest is not None:
+                        manifest.record_failed(
+                            row_key={"date": date, "data_type": _af_entity_dt},
+                            error="LEAGUE_MAP_INCOMPLETE",
+                            attempted_at=hooks.attempt_ts,
+                            pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                        )
                 if manifest is not None:
-                    hooks.emit_empty_gaps_for_entity(_af_entity_dt, _pf_captured)
+                    hooks.emit_empty_gaps_for_entity(
+                        _af_entity_dt, _pf_captured | pre_captured_leagues.get(entity_name, set())
+                    )
             else:
                 # Single-SSOT: bare manifest row + bare parquet write are
                 # both suppressed; writing one would create a phantom
@@ -653,7 +697,13 @@ def _write_per_fixture_entities(
                         pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
                     )
             else:
-                # All calls succeeded but returned zero rows
-                # (e.g. post-match stats not yet published, lineups not
+                # All calls succeeded but returned zero rows (e.g.
+                # post-match stats not yet published, lineups not
                 # disclosed for low-profile fixture) — legitimate empty.
-                hooks.emit_empty_gaps_for_entity(_af_entity_dt, set())
+                # OR every fixture for this entity was skip-as-already-
+                # captured (zero tasks queued at all) — union in the
+                # pre-captured leagues so a no-op run cannot demote them
+                # to empty (same false-ENF bug as the ``if all_rows``
+                # branch above, but hit when literally nothing was
+                # fetched this run for the entity).
+                hooks.emit_empty_gaps_for_entity(_af_entity_dt, pre_captured_leagues.get(entity_name, set()))
