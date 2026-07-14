@@ -229,7 +229,7 @@ def _audit_captured_rows(
         row = df.loc[idx]
         venue = str(row.get("venue", "") or "")
         chain = str(row.get("chain", "") or "")
-        date_str = str(row.get("date", "") or "")[:10]
+        date_str = str(row.get("date", "") or "")[:10]  # noqa: qg-empty-fallback — date is a genuinely optional row field; "" is the correct absent-sentinel for _classify_phantom below
         is_real = prefix_exists.get(prefix, False)
         if is_real:
             results[idx] = (True, "")
