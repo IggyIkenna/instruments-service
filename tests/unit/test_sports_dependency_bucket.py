@@ -61,6 +61,53 @@ def test_dep_check_finds_legacy_per_league_fixtures() -> None:
         sports_dependency.check_api_football_dependency(date, bucket="instruments-store-sports-prd-x")
 
 
+def test_dep_check_finds_canonical_fixtures_schedule_post_cutover() -> None:
+    """Regression: the 2026-07-14+ writer cutover has NO legacy dual-write — post-cutover
+    dates carry ONLY entity=fixtures_schedule/entity=fixtures_outcomes, zero entity=fixtures
+    objects. Before this fix, the pre-flight gate only probed entity=fixtures and would
+    spuriously raise DependencyError for every date on/after the cutover, blocking all
+    api-football-dependent venue adapters (footystats/understat/transfermarkt/
+    soccer_football_info/open_meteo/betfair). The split fixtures_schedule prefix must
+    satisfy the check on its own.
+    """
+    date = "2026-07-14"
+    canonical_schedule_prefix = (
+        f"sports_reference/by_date/day={date}/pipeline_mode=batch_api_football/entity=fixtures_schedule/"
+    )
+    per_league_obj = canonical_schedule_prefix + "league=EPL/fixtures_schedule.parquet"
+
+    client = MagicMock()
+    client.list_blobs.side_effect = lambda bucket, prefix: (
+        [_blob(per_league_obj)] if prefix == canonical_schedule_prefix else []
+    )
+
+    with patch(
+        "instruments_service.reference_data.sports_dependency.get_storage_client",
+        return_value=client,
+    ):
+        # Must NOT raise — fixtures_schedule alone is an equivalent "api-football ran" marker.
+        sports_dependency.check_api_football_dependency(date, bucket="instruments-store-sports-prd-x")
+
+
+def test_dep_check_finds_legacy_fixtures_schedule_prefix() -> None:
+    """Defensive: a bare (no pipeline_mode= segment) fixtures_schedule prefix also satisfies
+    the check, mirroring the legacy-vs-canonical fallback already used for entity=fixtures."""
+    date = "2026-07-14"
+    legacy_schedule_prefix = f"sports_reference/by_date/day={date}/entity=fixtures_schedule/"
+    per_league_obj = legacy_schedule_prefix + "league=EPL/fixtures_schedule.parquet"
+
+    client = MagicMock()
+    client.list_blobs.side_effect = lambda bucket, prefix: (
+        [_blob(per_league_obj)] if prefix == legacy_schedule_prefix else []
+    )
+
+    with patch(
+        "instruments_service.reference_data.sports_dependency.get_storage_client",
+        return_value=client,
+    ):
+        sports_dependency.check_api_football_dependency(date, bucket="instruments-store-sports-prd-x")
+
+
 def test_dep_check_raises_when_no_fixtures_anywhere() -> None:
     """No fixtures under any prefix or exact blob → DependencyError (unchanged loud-fail)."""
     date = "2026-04-14"
