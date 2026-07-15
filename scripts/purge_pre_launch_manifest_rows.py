@@ -17,6 +17,20 @@ calling ``clip_dates_to_source_coverage(source, start, end, data_type)``
 at the date-iteration boundary.  Until that's patched (separate fix), this
 script cleans up the existing manifest in-place.
 
+Write-side guard status (2026-07-15): the "separate fix" above now EXISTS —
+``ManifestWriter._record_status`` (``unified_trading_library/manifest_writer/
+_writer_record.py``) silently no-ops any ``record_captured``/``record_empty``/
+``record_failed`` call whose ``(data_type, date)`` is ``is_pre_launch_date()``,
+so NO future write (success OR failure OR honest-empty) can ever land a new
+pre-launch row. This means a stuck pre-launch ``attempted_failed`` row from
+BEFORE the guard existed can never be organically cleared by re-fetching —
+every subsequent write attempt for that date is silently dropped by the same
+guard. This script is the ONLY way to clear such rows (live-verified
+2026-07-15: 612 api_football FIXTURES rows, dated 2017-02-25..2017-09-09,
+entirely inside the pre-2018 ``api_football`` subscription-floor dead zone —
+confirmed via a direct live re-fetch that the source genuinely returns real
+data for these dates, but every write attempt is a guard no-op regardless).
+
 Sports-only for now (the asset_group where pre-launch is most acute due
 to per-data-type coverage windows).  CeFi/DeFi/TradFi/Prediction use
 venue-level launch dates that are already enforced by
@@ -51,17 +65,22 @@ from unified_api_contracts.sports import (
     SPORTS_DATA_TYPE_TO_SOURCE,
     is_pre_launch_date,
 )
+from unified_trading_library import resolve_bucket_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 PROJECT_ID = "central-element-323112"
+# resolve_bucket_name() substitutes ``${GCP_PROJECT_ID}`` from the process
+# env at call time — set it here (this script's own constant) rather than
+# require the operator to export it separately.
+os.environ.setdefault("GCP_PROJECT_ID", PROJECT_ID)
+os.environ.setdefault("GOOGLE_CLOUD_PROJECT", PROJECT_ID)
 
-ASSET_GROUP_BUCKETS: dict[str, str] = {
-    "sports": f"instruments-store-sports-{PROJECT_ID}",
-    # Other asset_groups have venue-level launch enforcement instead of the
-    # per-data-type coverage windows; not currently in scope for this purge.
-}
+# Asset_groups this purge covers — per-data-type coverage windows are a
+# sports-specific concept (other asset_groups use venue-level launch dates,
+# already enforced by ``orchestrator.is_venue_available()``).
+_SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("sports",)
 
 INDEX_PATH = "_index/availability_index.parquet"
 
@@ -129,7 +148,7 @@ def main() -> int:
     p.add_argument(
         "--asset-group",
         required=True,
-        choices=list(ASSET_GROUP_BUCKETS.keys()),
+        choices=list(_SUPPORTED_ASSET_GROUPS),
         help="Asset group whose canonical manifest to purge.",
     )
     p.add_argument(
@@ -139,9 +158,22 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    bucket_name = ASSET_GROUP_BUCKETS[args.asset_group]
+    # Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15,
+    # see plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
+    # the bucket name was previously hardcoded as
+    # ``f"instruments-store-sports-{PROJECT_ID}"`` — a STALE bucket (no
+    # ``-prd-`` tier segment) last written 2026-06-27, NOT the live
+    # production bucket. Live-verified 2026-07-15: the hardcoded bucket had
+    # 2.59M rows vs the real prod bucket's 5.9M+ and growing — this script
+    # would have silently purged a dead/abandoned copy while the real stuck
+    # rows (612 FIXTURES cells) sat untouched in production. Resolve via the
+    # bucket-name SSOT (CLAUDE.md "Writing STORAGE code" HARD RULE) instead.
+    bucket_name = resolve_bucket_name(
+        cloud="gcp", kind="instruments-store", asset_group=args.asset_group, deployment_env="prod"
+    )
     client = storage.Client(project=PROJECT_ID)
     bucket = client.bucket(bucket_name)
+    logger.info("Target bucket (resolved via SSOT): gs://%s", bucket_name)
 
     logger.info("=" * 60)
     logger.info("SOURCE_COVERAGE_START (UAC SSOT):")
