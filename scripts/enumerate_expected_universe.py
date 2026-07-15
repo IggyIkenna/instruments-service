@@ -919,6 +919,56 @@ def _tradfi_mvp_data_types(instr: InstrumentCatalogEntry) -> frozenset[str]:
     return rule.data_types
 
 
+# TRADFI data_types declared in UAC's ``DATA_TYPES_BY_ASSET_GROUP["tradfi"]``
+# (the system-wide "what data_types are valid for tradfi" registry) whose REAL
+# capture code lives entirely in a DIFFERENT service/bucket than the one this
+# enumerator seeds (MTDS's ``market-data-tick-tradfi-prd`` manifest).
+# ``corporate_action_confirmed``/``earnings_result`` are captured entirely by
+# features-service's calendar module (``corporate_actions_calculator.py``,
+# ``earnings_results_calculator.py``, ``yfinance_earnings_adapter.py``), a
+# structurally separate service that writes to its own bucket/manifest — never
+# to the MTDS tick bucket. Seeding ``expected_unattempted``/``attempted_failed``
+# rows for these two data_types into the MTDS manifest therefore creates a
+# permanently-unsatisfiable cell (100% ``attempted_failed`` by construction; no
+# amount of retrying the MTDS backfill will ever close it). See
+# ``unified-trading-pm/plans/active/issues/
+# tradfi_unreachable_databento_data_types_mbp10_ohlcv_coarse_calendar_2026_07_15.md``
+# finding (3) for the full diagnosis + the operator decision (2026-07-15): stop
+# seeding these into the MTDS tick manifest; features-service's OWN manifest is
+# the correct place to track them going forward (that manifest is separately
+# already-flagged as unpopulated per
+# ``macro_micro_econ_data_capture_audit_2026_06_05.md`` — out of scope here).
+#
+# Scoped ONLY to this file's TRADFI MTDS-tick-manifest ``data_types``
+# resolution below — deliberately NOT applied to UAC's
+# ``DATA_TYPES_BY_ASSET_GROUP["tradfi"]`` itself, which is a cross-cutting
+# constant consumed by many OTHER UAC modules (validity matrices, UI
+# reference-data generation, ``mvp_scope``, …) that have nothing to do with the
+# MTDS tick bucket and must keep recognising these as legitimate tradfi
+# data_types.
+_TRADFI_MTDS_TICK_MANIFEST_EXCLUDED_DATA_TYPES: frozenset[str] = frozenset(
+    {"corporate_action_confirmed", "earnings_result"}
+)
+
+
+def _tradfi_mtds_tick_manifest_data_types() -> list[str]:
+    """TRADFI data_types this enumerator may seed into the MTDS tick manifest.
+
+    UAC ``DATA_TYPES_BY_ASSET_GROUP["tradfi"]`` minus
+    :data:`_TRADFI_MTDS_TICK_MANIFEST_EXCLUDED_DATA_TYPES` — data_types whose
+    real capture pipeline writes to a different bucket/service entirely (see
+    that constant's docstring). Preserves the UAC list's original order (no
+    sort/dedup) to match the pre-existing ``[str(dt) for dt in
+    DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]`` construction this
+    replaces for tradfi.
+    """
+    return [
+        str(dt)
+        for dt in DATA_TYPES_BY_ASSET_GROUP.get("tradfi", [])
+        if str(dt) not in _TRADFI_MTDS_TICK_MANIFEST_EXCLUDED_DATA_TYPES
+    ]
+
+
 def _yield_v2_cefi_pre_venue_launch_rows(
     date_axis: list[date],
     data_types: list[str],
@@ -2770,6 +2820,11 @@ def enumerate_v2(
         # (SPORTS_DATA_TYPE_TO_SOURCE), NOT DATA_TYPES_BY_ASSET_GROUP["sports"]
         # (the MTDS odds types) — see _sports_data_types().
         resolved_data_types = _sports_data_types()
+    elif asset_group == "tradfi":
+        # Excludes corporate_action_confirmed/earnings_result — real capture
+        # lives in features-service, not MTDS. See
+        # _tradfi_mtds_tick_manifest_data_types()'s docstring.
+        resolved_data_types = _tradfi_mtds_tick_manifest_data_types()
     else:
         resolved_data_types = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
     enumerator_func = _V2_ENUMERATORS[asset_group]
@@ -3703,6 +3758,11 @@ def main() -> int:
             logger.info("v2: data_type override active → %s", data_types_list)
         elif asset_group == "sports":
             data_types_list = _sports_data_types()
+        elif asset_group == "tradfi":
+            # Excludes corporate_action_confirmed/earnings_result — real capture
+            # lives in features-service, not MTDS. See
+            # _tradfi_mtds_tick_manifest_data_types()'s docstring.
+            data_types_list = _tradfi_mtds_tick_manifest_data_types()
         else:
             data_types_list = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
         # FULL-HISTORY (Part 2): enumerate the FULL --start..--end window. The
