@@ -29,6 +29,11 @@ Mechanics follow the ``recency_masked_adjudication_2026_07_13.py`` precedent:
   attributable to that fixture-day cell (day= partition + league= partition;
   league/date columns cross-checked when present). Cells whose parquet does
   NOT verify stay as-is and are listed (``adjudicated-empty``).
+* **Legacy frames get write-path availability stamping**: pre-2025
+  PLAYER_STATS parquets predate write-time ``available_at`` stamping and
+  would fail ``record_captured``'s PIT write-gate; ``--apply`` stamps a
+  missing/null ``available_at`` with the enrichment writer's own
+  ``day + 17:00 UTC`` approximation (see ``_ensure_available_at``).
 * **Writes ONLY a per-VM manifest shard** (``VM_NAME=gw-false-empty-repair-20260714``,
   ``MANIFEST_PER_VM_SHARDS=true``, explicit ``.write()``) — the cron
   consolidator absorbs it; NEVER hand-edits the consolidated index and NEVER
@@ -137,6 +142,7 @@ from unified_trading_library import (
     ManifestWriter,
     get_storage_client,
     resolve_bucket_name,
+    stamp_available_at_explicit,
 )
 
 BUCKET = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports", deployment_env="prod")
@@ -325,6 +331,39 @@ def run_adjudicate(storage: object, cells: pd.DataFrame) -> pd.DataFrame:
     return rep
 
 
+_AVAILABLE_AT_COL = "available_at"
+
+
+def _ensure_available_at(df: pd.DataFrame, day: str) -> pd.DataFrame:
+    """Stamp ``available_at`` on legacy pre-stamping parquet frames.
+
+    Pre-2025 PLAYER_STATS enrichment parquets predate write-time availability
+    stamping, so ``record_captured``'s PIT write-gate rejects their frames
+    (``LookaheadBiasError`` — the 2026-07-15 pre-GW apply crashed at
+    ~5,500/10,730 and lost the shard write). Frames already carrying a
+    fully-populated column pass through UNTOUCHED (idempotent for the
+    already-captured cells and for EVENTS/LINEUPS/STATS, whose parquets all
+    stamp at write time). A missing column — or per-row nulls, the guard's
+    second failure branch — gets the enrichment write path's OWN stamp
+    (``_write_per_fixture_entities`` in
+    ``instruments_service/engine/orchestrator/sports_reference_fixtures.py``):
+    no per-row kickoff in these frames, so ``day + 17:00 UTC`` (15:00 typical
+    KO + 2h). That is the UAC ``AVAILABILITY_AT_SEMANTICS``
+    ("sports", "FIXTURE_PLAYER_STATS") = ``match_end_time`` approximation the
+    writer itself uses — conservative (over-estimates availability, never
+    leaks), and NOT an invented offset.
+    """
+    when = pd.Timestamp(day, tz="UTC") + pd.Timedelta(hours=17)
+    if _AVAILABLE_AT_COL not in df.columns:
+        return stamp_available_at_explicit(df, when=when.to_pydatetime())
+    if df[_AVAILABLE_AT_COL].isna().any():
+        out = df.copy()
+        stamped_col = pd.to_datetime(out[_AVAILABLE_AT_COL], utc=True, errors="coerce")
+        out[_AVAILABLE_AT_COL] = stamped_col.fillna(when)
+        return out
+    return df
+
+
 def run_apply(storage: object, rep: pd.DataFrame) -> int:
     _snapshot_index(storage, "gw_false_empty_repair_pre_apply")
     to_stamp = rep[rep["verdict"] == "restamp-captured"]
@@ -337,7 +376,7 @@ def run_apply(storage: object, rep: pd.DataFrame) -> int:
         dt, lg, day = str(a["data_type"]), str(a["league_id"]), str(a["date"])
         path = str(a["object_path"])
         raw = storage.download_bytes(BUCKET, path)  # pyright: ignore[reportAttributeAccessIssue]
-        df = pd.read_parquet(io.BytesIO(raw))
+        df = _ensure_available_at(pd.read_parquet(io.BytesIO(raw)), day)
         manifest.record_captured(  # QG-allow: emission-policy-not-applicable
             row_key={"date": day, "data_type": dt, "league_id": lg},
             df=df,
