@@ -829,24 +829,34 @@ class TestZeroRecordsNonSportsFixedForFX:
 
 class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
     """Fix for a real production crash: an explicitly-requested (``--venue``
-    override) TradFi venue that is UAC-declared ``NO_ADAPTER_YET`` (e.g.
-    YAHOO_FINANCE — a legacy source-as-venue artifact, deliberately
-    adapterless) must resolve as an honest 0-result absence, never crash.
+    override) TradFi venue that is UAC-declared ``NO_ADAPTER_YET`` (i.e. no URDI
+    adapter is built yet) must resolve as an honest 0-result absence, never a
+    hard failure.
 
-    Root cause: ``get_venues_for_asset_groups`` already excludes YAHOO_FINANCE
-    from the asset-group default venue list via ``_TRADFI_NON_VENUE_KEYS``, but
-    an explicit ``--venue YAHOO_FINANCE`` override bypasses that filter
-    entirely, so it reaches ``_zero_records_non_sports`` as a lone
-    "tradfi_active" venue.  The old code fed every tradfi_active venue straight
-    into ``is_non_trading_day``, which fail-closed raises
-    ``UndeclaredTradfiVenueError`` for any venue absent from the session/
-    calendar SSOT — correct for a genuine config gap on a REAL venue, but wrong
-    for a venue UAC has already declared adapterless.
+    Fixture note (2026-07-15): this class formerly used ``YAHOO_FINANCE`` — a
+    legacy source-as-venue artifact that was REMOVED from every venue-shaped UAC
+    registry that day (source-as-venue modeling error; Yahoo is a *source*, not
+    a *venue*). ``FX`` is now the sole ``NO_ADAPTER_YET`` venue in the tradfi
+    asset group (``VENUE_TO_ADAPTER_KEY["FX"] == NO_ADAPTER_YET``), so it is the
+    canonical fixture for the adapterless-tradfi-venue short-circuit under test.
+
+    What the short-circuit guards: ``_zero_records_non_sports`` filters every
+    ``NO_ADAPTER_YET`` venue out of ``tradfi_active`` (``v not in
+    _no_adapter_active``). Without the dedicated short-circuit, a lone
+    ``NO_ADAPTER_YET`` venue that returned 0 records would therefore leave
+    ``tradfi_active`` empty and fall straight through to the terminal
+    ``raise RuntimeError`` (URDI-returned-zero shard failure) — turning an
+    honest, already-declared adapterless absence into a hard error. The
+    short-circuit instead returns ``{venue: 0}`` and stamps an honest
+    ``EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE`` manifest row. (For a tradfi
+    venue that is *also* absent from the session/calendar SSOT the alternative
+    failure mode is ``UndeclaredTradfiVenueError`` from ``is_non_trading_day`` —
+    the short-circuit returns before that call is ever reached either way.)
     """
 
     def test_sole_no_adapter_yet_venue_returns_zero_counts_cleanly(self) -> None:
-        """YAHOO_FINANCE alone in active_venues must return {"YAHOO_FINANCE": 0}
-        AND stamp an honest empty_confirmed manifest row (no silent absence)."""
+        """FX alone in active_venues must return {"FX": 0} AND stamp an honest
+        empty_confirmed manifest row (no silent absence, no RuntimeError)."""
         from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
 
         _expected_empty_calls: list[dict[str, object]] = []
@@ -868,10 +878,11 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
                 pass
 
         # NO_ADAPTER_YET / VENUE_TO_ADAPTER_KEY come straight from the real UAC
-        # registry, and the short-circuit returns before ever calling
-        # is_non_trading_day (which has no YAHOO_FINANCE entry and would raise).
-        # ManifestWriter/_get_instruments_bucket ARE patched here (new manifest-
-        # stamp behavior needs a real bucket/writer in production, not in a unit test).
+        # registry (FX is the sole tradfi NO_ADAPTER_YET venue), and the
+        # short-circuit returns before ever reaching the tradfi calendar path /
+        # the terminal RuntimeError. ManifestWriter/_get_instruments_bucket ARE
+        # patched here (the manifest-stamp behavior needs a real bucket/writer in
+        # production, not in a unit test).
         with (
             patch(
                 "instruments_service.engine.orchestrator.ManifestWriter",
@@ -885,21 +896,21 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
             result = _zero_records_non_sports(
                 date="2026-07-09",
                 asset_groups=["TRADFI"],
-                active_venues=["YAHOO_FINANCE"],
+                active_venues=["FX"],
                 mode="batch",
             )
 
-        assert result == {"YAHOO_FINANCE": 0}, f"Expected clean zero-count dict; got {result}"
+        assert result == {"FX": 0}, f"Expected clean zero-count dict; got {result}"
         assert len(_expected_empty_calls) == 1
-        assert _expected_empty_calls[0]["row_key"] == {"date": "2026-07-09", "venue": "YAHOO_FINANCE"}
+        assert _expected_empty_calls[0]["row_key"] == {"date": "2026-07-09", "venue": "FX"}
         assert _expected_empty_calls[0]["reason"] == "EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE"
 
     def test_no_adapter_yet_venue_mixed_with_real_tradfi_venue_excluded_from_calendar_check(
         self,
     ) -> None:
-        """YAHOO_FINANCE mixed with a real tradfi venue is excluded from tradfi_active
-        (never passed to is_non_trading_day) while the real venue still gets the
-        normal calendar treatment.
+        """FX (NO_ADAPTER_YET) mixed with a real tradfi venue is excluded from
+        tradfi_active (never passed to is_non_trading_day) while the real venue
+        still gets the normal calendar treatment.
         """
         from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
 
@@ -929,13 +940,13 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
             result = _zero_records_non_sports(
                 date="2026-06-21",
                 asset_groups=["TRADFI"],
-                active_venues=["CME", "YAHOO_FINANCE"],
+                active_venues=["CME", "FX"],
                 mode="batch",
             )
 
-        # is_non_trading_day must never have been called with YAHOO_FINANCE — only CME.
-        assert "YAHOO_FINANCE" not in _checked_venues, (
-            f"YAHOO_FINANCE must never reach is_non_trading_day; checked={_checked_venues}"
+        # is_non_trading_day must never have been called with FX (NO_ADAPTER_YET) — only CME.
+        assert "FX" not in _checked_venues, (
+            f"FX (NO_ADAPTER_YET) must never reach is_non_trading_day; checked={_checked_venues}"
         )
         assert "CME" in _checked_venues
         assert result == {"CME": 0}, f"Expected only CME stamped as non-trading; got {result}"
