@@ -3391,3 +3391,77 @@ def test_oscillation_guard_inert_without_present_cols() -> None:
         )
     )
     assert [r.reason for r in rows] == ["EXPECTED_INSTRUMENT_NOT_LISTED"]
+
+
+# ---------------------------------------------------------------------------
+# Sports ODDS seed provenance — regression guard
+#
+# The expected-universe seed for a sports data_type MUST derive its source from
+# the CANONICAL source registry (footystats for ODDS), never from the sports
+# asset_group fallback. api_football has no odds path in instruments-service
+# (the adapter's get_odds() is a deprecated stub) — codex/02-data/
+# sports-data-source-coverage-matrix.md §4 — so an api_football x ODDS seed is
+# impossible by construction and pure denominator pollution.
+#
+# This regressed for real, 2026-06-25 -> 2026-07-15: UAC 8fb1f54f stripped
+# ("sports","ODDS") from SOURCE_PRIORITY as decision #6's "coherent unit"; the
+# operator reversed #6 on 2026-06-27 but the revert only restored
+# SPORTS_DATA_TYPE_TO_SOURCE. With the SOURCE_PRIORITY key missing,
+# _derive_pm_source_transport's has_source_priority() probe missed and the CF-3
+# fallback (derive_pipeline_mode_for_row) resolved the sports asset_group
+# DEFAULT -> batch_api_football, stamping source=api_football on every seeded
+# ODDS row. Measured live 2026-07-15: 127,018 impossible api_football x ODDS
+# rows across 94 leagues (footystats ODDS covers 46), re-stamped by the 01:30
+# UTC cron, depressing every ODDS coverage ratio ~4.6x on the denominator.
+# Fixed at the registry (unified-api-contracts@57bcc7c5); pinned here because
+# the enumerator is where the wrong source actually reached the manifest.
+# Tracked: plans/active/issues/
+# sports_odds_ownership_registry_split_brain_and_bogus_api_football_denominator_2026_07_15.md §B
+# ---------------------------------------------------------------------------
+
+
+def test_sports_odds_seed_provenance_is_footystats_never_api_football() -> None:
+    """A seeded sports ODDS row carries source=footystats / pipeline_mode=batch_footystats."""
+    pipeline_mode, source, _transport = enumerator_module._derive_pm_source_transport(
+        "sports",
+        enumerator_module._sports_manifest_data_type("ODDS"),
+        venue=enumerator_module._sports_manifest_venue("ODDS"),
+    )
+    assert source == "footystats", f"sports ODDS seeded with source={source!r} — api_football has no IS odds path"
+    assert source != "api_football"
+    assert pipeline_mode == "batch_footystats"
+
+
+def test_sports_odds_seed_provenance_matches_canonical_registry() -> None:
+    """The seed's source must equal SPORTS_DATA_TYPE_TO_SOURCE's owner for the data_type.
+
+    Guards the split-brain directly: if the two registries disagree again, the seed
+    provenance silently diverges from the domain map and the manifest fills with rows
+    whose `source` column no source can ever satisfy.
+    """
+    from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE
+
+    _pm, source, _t = enumerator_module._derive_pm_source_transport("sports", "ODDS", venue="")
+    assert source == SPORTS_DATA_TYPE_TO_SOURCE["ODDS"]
+
+
+def test_every_sports_data_type_seed_provenance_matches_canonical_registry() -> None:
+    """Generalised: no sports data_type may seed a source other than its canonical owner.
+
+    ODDS is the one that bit us, but the failure mode is generic — any sports
+    data_type missing from SOURCE_PRIORITY silently falls back to the asset_group
+    default (api_football) and pollutes the denominator under a source that never
+    serves it.
+    """
+    from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE
+
+    mismatches: list[str] = []
+    for dt, canonical_source in SPORTS_DATA_TYPE_TO_SOURCE.items():
+        _pm, source, _t = enumerator_module._derive_pm_source_transport(
+            "sports",
+            enumerator_module._sports_manifest_data_type(dt),
+            venue=enumerator_module._sports_manifest_venue(dt),
+        )
+        if source != canonical_source:
+            mismatches.append(f"{dt}: seeds source={source!r}, canonical owner is {canonical_source!r}")
+    assert not mismatches, "sports seed provenance diverges from the canonical registry:\n  " + "\n  ".join(mismatches)

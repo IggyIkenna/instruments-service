@@ -114,6 +114,17 @@ def _ref_index() -> object:
             "timeframe": "",
             "capture_status": "captured",
         },
+        # a captured cell BELOW the amended 2018-01-01 api_football floor — exercises
+        # "covered wins over pre-launch" (such rows exist historically: the 2026-05-04
+        # incident purged 229,224 of them)
+        {
+            "date": "2017-06-02",
+            "data_type": "FIXTURE_STATS",
+            "venue": "",
+            "league_id": "EPL",
+            "timeframe": "",
+            "capture_status": "captured",
+        },
         # PER_DAY_PER_SEASON entity (season is path-only — not a manifest axis)
         {
             "date": "2026-05-01",
@@ -361,20 +372,31 @@ def test_reference_v2_tree_uncovered_is_class_e() -> None:
 
 
 def test_pre_launch_window_is_c3_not_e() -> None:
-    # footystats coverage starts 2019-01-01 (UAC SOURCE_COVERAGE_START) — a 2018 day
+    # Floors amended 2026-07-15 to the earliest date real objects exist (operator
+    # ruling "amend floors to reality"): footystats 2019-01-01→2018-01-01, and the
+    # api_football per-fixture 2020-06-06 overrides DELETED (they now inherit the
+    # source-wide 2018-01-01). Dates below track the AMENDED floors.
+    #
+    # footystats coverage starts 2018-01-01 (UAC SOURCE_COVERAGE_START) — a 2017 day
     # is contractually un-manifestable (ManifestWriter pre-launch guard) → C3, not E
     path = (
-        "sports_reference/by_date/day=2018-06-01/entity=footystats_predictions/"
+        "sports_reference/by_date/day=2017-06-01/entity=footystats_predictions/"
         "league=EPL/footystats_predictions.parquet"
     )
     cls, _f, reason = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
     assert cls is OC.PRE_LAUNCH_WINDOW and "pre-launch" in reason
-    # api_football FIXTURE_STATS window starts 2020-06-06 (DATA_TYPE_COVERAGE_START)
-    path = "sports_reference/by_date/day=2020-01-01/entity=fixture_stats/league=EPL/fixture_stats.parquet"
+    # SFI_PROGRESSIVE_STATS window starts 2020-01-01 (DATA_TYPE_COVERAGE_START — the
+    # one surviving override; earliest real progressive_stats object measures exactly
+    # 2020-01-01), so a 2019 day is pre-launch even though SFI's source-wide is 2019-01-01
+    path = "sports_reference/by_date/day=2019-06-01/entity=progressive_stats/progressive_stats.parquet"
     assert _mod.classify_reference_object(path, _ref_index(), is_parquet=True)[0] is OC.PRE_LAUNCH_WINDOW
-    # a COVERED pre-launch-window object stays A (covered wins; e.g. the 2018
-    # FIXTURE_STATS cells the manifest already carries as captured)
+    # 2018 per-fixture data is NO LONGER pre-launch — it is real data we hold
+    # (fixture_events ENG_CHAMPIONSHIP 2018-01-01 = 20 rows). Covered → A.
     path = "sports_reference/by_date/day=2018-01-02/entity=fixture_stats/league=EPL/fixture_stats.parquet"
+    assert _mod.classify_reference_object(path, _ref_index(), is_parquet=True)[0] is OC.CANONICAL_MANIFESTED
+    # a COVERED pre-launch-window object stays A (covered wins) — the 2017 FIXTURE_STATS
+    # cell the manifest carries as captured, below the amended 2018-01-01 floor
+    path = "sports_reference/by_date/day=2017-06-02/entity=fixture_stats/league=EPL/fixture_stats.parquet"
     assert _mod.classify_reference_object(path, _ref_index(), is_parquet=True)[0] is OC.CANONICAL_MANIFESTED
     # post-window uncovered stays E
     path = "sports_reference/by_date/day=2026-05-02/entity=fixture_stats/league=EPL/fixture_stats.parquet"

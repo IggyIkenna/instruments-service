@@ -147,13 +147,23 @@ class TestDeribitOptionsChainCarveOut:
 
 
 class TestAsterCapabilities:
-    def test_aster_book_snapshot_5_is_in_expected(self, mod: ModuleType) -> None:
-        """book_snapshot_5 IS expected for ASTER (live-wire capability landed uac@3652f99f, MVP includes it)."""
+    """REVISED 2026-07-15 (operator ruling, supersedes the 2026-06-23/uac@3652f99f +
+    2026-07-13 BLK-afc672cf history this class previously asserted): ASTER
+    book_snapshot_5 IS a declared live-wire capability (captured going forward by the
+    live WS connector) but has NO batch/historical source — its REST book endpoint is
+    current-snapshot-only. "Short of magic cannot physically be retrieved" BATCH combos
+    are excluded from the BATCH EXPECTED matrix entirely (UAC
+    ``VENUE_DATA_TYPE_NO_BATCH_SOURCE`` + this module's Carve-out 1b) — no
+    expected_unattempted, no empty_confirmed, no Layer-1 hole requirement either.
+    See plans/active/issues/
+    cefi_live_only_data_types_vs_layer1_denominator_contradiction_2026_07_12.md."""
+
+    def test_aster_book_snapshot_5_not_in_expected(self, mod: ModuleType) -> None:
+        """book_snapshot_5 is NOT expected for ASTER's BATCH matrix — no batch source exists
+        (live-only capability; VENUE_DATA_TYPE_NO_BATCH_SOURCE Carve-out 1b)."""
         expected = mod._build_expected_tuples("cefi")
         aster_bs5 = {(v, it, dt) for (v, it, dt) in expected if v == "ASTER" and dt == "book_snapshot_5"}
-        assert aster_bs5 == {("ASTER", "perpetual", "book_snapshot_5")}, (
-            f"ASTER book_snapshot_5 should be in EXPECTED (live-wire capability from 2026-06-23): {aster_bs5}"
-        )
+        assert aster_bs5 == set(), f"ASTER book_snapshot_5 should NOT be in the BATCH EXPECTED matrix: {aster_bs5}"
 
     def test_aster_liquidations_not_in_expected(self, mod: ModuleType) -> None:
         """liquidations is NOT expected for ASTER — capability present but liquidations not in MVP scope."""
@@ -161,8 +171,9 @@ class TestAsterCapabilities:
         aster_liq = {(v, it, dt) for (v, it, dt) in expected if v == "ASTER" and dt == "liquidations"}
         assert len(aster_liq) == 0, f"ASTER liquidations should NOT be in EXPECTED (not in MVP scope): {aster_liq}"
 
-    def test_aster_book_snapshot_5_absent_from_manifest_is_a_hole(self, mod: ModuleType) -> None:
-        """A manifest with no ASTER book_snapshot_5 rows now surfaces as a Layer-1 hole (live-wire capability)."""
+    def test_aster_book_snapshot_5_absent_from_manifest_is_not_a_hole(self, mod: ModuleType) -> None:
+        """A manifest with no ASTER book_snapshot_5 rows is NOT a Layer-1 hole — the tuple
+        is not in the BATCH EXPECTED matrix at all (no batch source exists to close it)."""
         df = _make_manifest(
             [
                 {"capture_status": "captured", "venue": "ASTER", "instrument_type": "perpetual", "data_type": "trades"},
@@ -172,7 +183,7 @@ class TestAsterCapabilities:
         aster_bs5_missing = [
             m for m in result.missing_tuples if m.venue == "ASTER" and m.data_type == "book_snapshot_5"
         ]
-        assert len(aster_bs5_missing) == 1, "ASTER book_snapshot_5 IS a Layer-1 hole when absent from manifest"
+        assert len(aster_bs5_missing) == 0, "ASTER book_snapshot_5 must NOT be a Layer-1 hole (no batch source)"
 
 
 # ---------------------------------------------------------------------------
