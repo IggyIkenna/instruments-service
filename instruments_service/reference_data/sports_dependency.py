@@ -70,6 +70,17 @@ _CANONICAL_FIXTURES_PREFIX_TEMPLATE: str = (
     "sports_reference/by_date/day={date}/pipeline_mode=batch_api_football/entity=fixtures/"
 )
 _LEGACY_FIXTURES_PREFIX_TEMPLATE: str = "sports_reference/by_date/day={date}/entity=fixtures/"
+# 2026-07-14+: the writer cut FIXTURES over to a two-entity split (fixtures_schedule +
+# fixtures_outcomes) with NO legacy dual-write (sports_fixtures_schema_split_completion_2026_06_20.md).
+# fixtures_schedule carries every fixture (played or not) so its presence alone is an equivalent
+# "api-football ran for this day" marker for THIS gate's purposes — fixtures_outcomes is a subset
+# (completed fixtures only) and would under-report thin/no-completed-match days as missing.
+# pipeline_mode_for_sports_entity("fixtures_schedule") == BATCH_API_FOOTBALL (UAC SSOT), same as
+# legacy "fixtures" — see unified_api_contracts.canonical.crosscutting.pipeline_mode.
+_CANONICAL_FIXTURES_SCHEDULE_PREFIX_TEMPLATE: str = (
+    "sports_reference/by_date/day={date}/pipeline_mode=batch_api_football/entity=fixtures_schedule/"
+)
+_LEGACY_FIXTURES_SCHEDULE_PREFIX_TEMPLATE: str = "sports_reference/by_date/day={date}/entity=fixtures_schedule/"
 
 
 def _resolve_sports_bucket() -> str:
@@ -160,7 +171,9 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
     join on canonical fixture IDs. The per-entity parquet
     ``entity=api_football/api_football.parquet`` is accepted as an equivalent
     marker (some fetch paths land the raw api-football payload at that
-    location before canonicalisation).
+    location before canonicalisation). Since the 2026-07-14+ writer cutover
+    (no legacy dual-write), the split ``entity=fixtures_schedule`` is also
+    accepted as an equivalent marker for post-cutover dates.
 
     Args:
         date: Target shard date (YYYY-MM-DD).
@@ -168,8 +181,9 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
             honouring ``IS_TEST_RUN``.
 
     Raises:
-        DependencyError: If neither the canonical fixtures nor the raw
-            api-football entity parquet exists for the date.
+        DependencyError: If none of the canonical fixtures, the split
+            fixtures_schedule, or the raw api-football entity parquet exists
+            for the date.
     """
     resolved_bucket = bucket or _resolve_sports_bucket()
 
@@ -177,6 +191,8 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
     raw_path = _FIXTURES_PATH_TEMPLATE.format(date=date)
     canonical_prefix = _CANONICAL_FIXTURES_PREFIX_TEMPLATE.format(date=date)
     legacy_prefix = _LEGACY_FIXTURES_PREFIX_TEMPLATE.format(date=date)
+    canonical_schedule_prefix = _CANONICAL_FIXTURES_SCHEDULE_PREFIX_TEMPLATE.format(date=date)
+    legacy_schedule_prefix = _LEGACY_FIXTURES_SCHEDULE_PREFIX_TEMPLATE.format(date=date)
 
     # Per-league fixtures under the canonical pipeline_mode= prefix (post-migration), then the
     # legacy per-league prefix (pre-migration). Either present = fixtures captured for the day.
@@ -192,6 +208,22 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
             "sports dep-check OK: legacy per-league fixtures present under gs://%s/%s",
             resolved_bucket,
             legacy_prefix,
+        )
+        return
+    # Split-entity writer cutover (2026-07-14+, no legacy dual-write): entity=fixtures_schedule
+    # under the canonical pipeline_mode= prefix, then the (unexpected but defensive) bare prefix.
+    if _prefix_has_object(resolved_bucket, canonical_schedule_prefix):
+        logger.debug(
+            "sports dep-check OK: split fixtures_schedule present under gs://%s/%s",
+            resolved_bucket,
+            canonical_schedule_prefix,
+        )
+        return
+    if _prefix_has_object(resolved_bucket, legacy_schedule_prefix):
+        logger.debug(
+            "sports dep-check OK: split fixtures_schedule present under gs://%s/%s",
+            resolved_bucket,
+            legacy_schedule_prefix,
         )
         return
     # Bare date-aggregate fixtures.parquet (oldest layout) — exact blob.
