@@ -1227,8 +1227,8 @@ def test_v2_enumerators_dict_covers_all_5_asset_groups() -> None:
 _DEFAULT_COLS = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
 
 
-def _row_key_from_dict(d: dict[str, str]) -> tuple[str, ...]:
-    return tuple(d.get(c, "") for c in _DEFAULT_COLS)
+def _row_key_from_dict(d: dict[str, str], cols: list[str] = _DEFAULT_COLS) -> tuple[str, ...]:
+    return tuple(d.get(c, "") for c in cols)
 
 
 def test_cefi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
@@ -1252,6 +1252,10 @@ def test_cefi_v2_alive_date_in_present_set_skipped() -> None:
     """Alive instrument date already in manifest → no per-instrument row emitted."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
     date_axis = _date_axis("2023-06-01")
+    # cefi present-set keying is underlying-aware (matches the enumerator's own
+    # default _pcols when present_cols is omitted, per the bundle-shape fix —
+    # cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_2026_07_15.md).
+    # This entry is a LEAF (not bundle), so underlying="" on both sides — a no-op.
     key = _row_key_from_dict(
         {
             "venue": "BINANCE",
@@ -1260,9 +1264,11 @@ def test_cefi_v2_alive_date_in_present_set_skipped() -> None:
             # Match the canonical instrument_type the MVP-qualifying fixture emits.
             "instrument_type": "PERPETUAL",
             "instrument_id": "BTC-USDT",
+            "underlying": "",
             "league_id": "",
             "date": "2023-06-01",
-        }
+        },
+        cols=enumerator_module._UNDERLYING_AWARE_PRESENT_COLS,
     )
     rows = _drop_v2_venue_grain(
         list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set={key}))
@@ -2507,7 +2513,13 @@ def test_cefi_v2_options_chain_bundle_yields_exactly_one_per_underlying() -> Non
     rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES)))
     assert len(rows) == 1, "bundle entry must yield exactly one candidate per underlying/date"
     assert rows[0].data_type == "trades"  # ERA-B: chain bundle's market data_type is trades
-    assert rows[0].instrument_id == "BTC"
+    # Bundle shard atom mirrors the MTDS writer's bundle-capture convention
+    # (instrument_id="" + underlying=<U>, _UNDERLYING_PARTITIONED_TYPES) — NOT the raw
+    # synthetic-entry shape (instrument_id=<U>, underlying="") the pre-fix enumerator
+    # emitted, which no real capture could ever match
+    # (cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_2026_07_15.md).
+    assert rows[0].instrument_id == ""
+    assert rows[0].underlying == "BTC"
 
 
 def test_cefi_v2_bundle_grain_matches_uac_grain_axis() -> None:
@@ -2566,8 +2578,12 @@ def test_enumerate_v2_option_leaves_collapse_to_one_per_underlying() -> None:
         list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
     )
     # Era-B: exactly one candidate per underlying, data_type=trades — NOT one per
-    # contract, NOT data_type=options_chain.
-    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "trades"), ("ETH", "trades")}
+    # contract, NOT data_type=options_chain. Bundle shard atom is instrument_id=""
+    # + underlying=<U> (matches the MTDS writer's bundle-capture convention).
+    assert {(r.instrument_id, r.underlying, r.data_type) for r in rows} == {
+        ("", "BTC", "trades"),
+        ("", "ETH", "trades"),
+    }
     assert all(r.instrument_type == "options_chain" for r in rows)
     # No per-contract OPTION candidates and no data_type=options_chain leaked through.
     assert not any(r.instrument_type == "OPTION" for r in rows)
@@ -2583,8 +2599,11 @@ def test_enumerate_v2_combo_leaves_roll_up_to_options_chain() -> None:
     rows = _drop_v2_venue_grain(
         list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
     )
-    # Era-B: instrument_type=options_chain bundle, data_type=trades.
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "options_chain", "trades")}
+    # Era-B: instrument_type=options_chain bundle, data_type=trades. Bundle shard
+    # atom is instrument_id="" + underlying=<U> (MTDS writer bundle convention).
+    assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
+        ("", "BTC", "options_chain", "trades")
+    }
 
 
 def test_enumerate_v2_underlying_derived_when_field_blank() -> None:
@@ -2593,19 +2612,22 @@ def test_enumerate_v2_underlying_derived_when_field_blank() -> None:
     rows = _drop_v2_venue_grain(
         list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
     )
-    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "trades")}
+    assert {(r.instrument_id, r.underlying, r.data_type) for r in rows} == {("", "BTC", "trades")}
 
 
 def test_enumerate_v2_futures_chain_bundle_entry_yields_one_per_underlying() -> None:
     """A futures_chain bundle entry (per-underlying) passes through the rollup and
     yields exactly one candidate — instrument_type=futures_chain, data_type=trades
-    (Era-B; the chain name is the instrument_type, the market data_type is trades)."""
+    (Era-B; the chain name is the instrument_type, the market data_type is trades).
+    Bundle shard atom is instrument_id="" + underlying=<U> (MTDS writer convention)."""
     catalog = [_opt_entry("BTC", "BTC", instrument_type="futures_chain")]
     dates = _date_axis("2024-06-01", "2025-06-01")
     rows = _drop_v2_venue_grain(
         list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
     )
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
+    assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
+        ("", "BTC", "futures_chain", "trades")
+    }
 
 
 def test_enumerate_v2_perpetual_does_not_produce_options_chain() -> None:
@@ -2694,7 +2716,9 @@ def test_enumerate_v2_future_leaf_bundles_at_deribit() -> None:
     rows = _drop_v2_venue_grain(
         list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
     )
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
+    assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
+        ("", "BTC", "futures_chain", "trades")
+    }
     assert not any(r.instrument_type == "FUTURE" for r in rows)
 
 
@@ -2705,7 +2729,9 @@ def test_enumerate_v2_future_leaf_bundles_at_okx() -> None:
     rows = _drop_v2_venue_grain(
         list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
     )
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
+    assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
+        ("", "BTC", "futures_chain", "trades")
+    }
 
 
 def test_enumerate_v2_future_leaf_stays_per_contract_at_bybit() -> None:
