@@ -1448,9 +1448,9 @@ def _build_forward_captured_idx(df: pd.DataFrame, args: argparse.Namespace) -> p
     """Build the captured-rows index for the FORWARD phantom-flagging pass.
 
     Applies the venue / data_type / start-date / end-date scope filters and the
-    schema_v4 vestigial-row drop, returning the captured rows in scope. Extracted
-    from ``main`` so ``--unphantom-only`` can cleanly skip the entire forward pass
-    (it never calls this).
+    blank/null-data_type structural-blind-spot drop, returning the captured rows
+    in scope. Extracted from ``main`` so ``--unphantom-only`` can cleanly skip
+    the entire forward pass (it never calls this).
     """
     captured_mask = df["capture_status"].fillna("") == "captured"
     if args.venues:
@@ -1464,25 +1464,51 @@ def _build_forward_captured_idx(df: pd.DataFrame, args: argparse.Namespace) -> p
     if args.end_date:
         captured_mask = captured_mask & (df["date"].astype(str) <= args.end_date)
 
-    # 2026-05-04: drop schema_v4 vestigial rows from audit scope. These are
-    # pre-v5 daily-manifest records with only ``venue`` populated (no
-    # ``data_type``, ``instrument_type``, etc.) and represent informational
-    # "this venue was touched on this date" markers, not real shards. The
-    # audit can't probe an empty ``data_type=`` substring, so these
-    # systematically false-positive as phantoms (9,757 rows on 2026-05-04
-    # CeFi). They're harmless legacy and should be filtered out, not flipped
-    # to attempted_failed (which would force VMs to retry venues that don't
-    # have a target data_type to retry against).
-    if "schema_version" in df.columns:
-        v4_empty_dt = (df["schema_version"] == 4) & (df["data_type"].fillna("").astype(str).str.len() == 0)
-        v4_in_scope = (captured_mask & v4_empty_dt).sum()
-        if v4_in_scope > 0:
-            logger.info(
-                "Dropping %d schema_v4 vestigial rows (empty data_type — "
-                "pre-v5 informational manifest records, not real shards)",
-                v4_in_scope,
-            )
-        captured_mask = captured_mask & ~v4_empty_dt
+    # Blank/null data_type rows are structurally unauditable by this tool's
+    # generic strategy (phantom_captures_cefi_2026_06_28.md todo #3, corrected
+    # 2026-07-15 investigation section): ``_audit_generic`` builds the on-disk
+    # match needle as ``data_type={data_type}/`` — for a blank data_type this
+    # needle is literally ``"data_type=/"``, a path segment that can NEVER
+    # exist on any real GCS object (every real write always carries a
+    # non-blank data_type in its hive path). So a ``captured`` row with
+    # blank/null data_type is UNCONDITIONALLY, PERMANENTLY flagged phantom by
+    # the forward pass regardless of whether real data exists elsewhere for
+    # that (date, venue) — a structural blind spot in the probe, not evidence
+    # the underlying data is missing.
+    #
+    # Originally scoped to ``schema_version==4`` only (2026-05-04, the first
+    # CeFi incident — 9,757 pre-v5 vestigial rows with only ``venue``
+    # populated, informational "this venue was touched on this date"
+    # markers, not real shards). Generalized here to ANY blank data_type
+    # regardless of schema_version: the needle-construction blind spot is
+    # structural, not schema-version-specific, and the narrower
+    # ``schema_version==4`` scoping is exactly what let an undocumented
+    # 2026-06-28T03:12:34Z apply run (a DIFFERENT invocation than the
+    # canonical forward pass covered by this filter at the time) flip a
+    # byte-identical 9,757-row population that live re-verification
+    # (2026-07-15) confirmed was 99.0% (9,658/9,757) redundant with an
+    # already-correctly-typed ``captured`` sibling row for the same (date,
+    # venue) elsewhere in the manifest. Never flipped to ``attempted_failed``
+    # (would force VMs to retry a data_type that doesn't exist to retry
+    # against); logged distinctly below (with a schema_version breakdown)
+    # rather than silently folded into the ordinary phantom count, so the
+    # hygiene signal stays visible instead of disappearing into "0 phantoms".
+    blank_dt = df["data_type"].fillna("").astype(str).str.len() == 0
+    blank_dt_in_scope = int((captured_mask & blank_dt).sum())
+    if blank_dt_in_scope > 0:
+        sv_breakdown = (
+            df.loc[captured_mask & blank_dt, "schema_version"].value_counts(dropna=False).to_dict()
+            if "schema_version" in df.columns
+            else {}
+        )
+        logger.info(
+            "Dropping %d captured rows with blank/null data_type from phantom-audit "
+            "scope — structurally unauditable (the data_type={} needle can never "
+            "match on disk); schema_version breakdown: %s",
+            blank_dt_in_scope,
+            sv_breakdown,
+        )
+    captured_mask = captured_mask & ~blank_dt
 
     return df[captured_mask].index
 
