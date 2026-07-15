@@ -39,7 +39,6 @@ from .adapters.defi.ethena import EthenaReferenceDataAdapter
 from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
 from .adapters.defi.ethfi import EthFiGovernanceReferenceDataAdapter
 from .adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
-from .adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
 from .adapters.defi.fluid import FluidReferenceDataAdapter
 from .adapters.defi.idle import IdleReferenceDataAdapter
 from .adapters.defi.jito import JitoReferenceDataAdapter
@@ -48,7 +47,6 @@ from .adapters.defi.kamino import KaminoReferenceDataAdapter
 from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
-from .adapters.defi.mango import MangoReferenceDataAdapter
 from .adapters.defi.marginfi import MarginfiReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
@@ -70,7 +68,6 @@ from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
 from .adapters.defi.venus import VenusReferenceDataAdapter
 from .adapters.defi.yearn import YearnReferenceDataAdapter
-from .adapters.defi.zeta import ZetaReferenceDataAdapter
 from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
 from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
 from .adapters.sports.adapters.api_football_reference import ApiFootballReferenceDataAdapter
@@ -134,7 +131,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "drift": DriftReferenceDataAdapter,
     "extended": ExtendedReferenceDataAdapter,
     "eigenlayer": EigenLayerReferenceDataAdapter,
-    "flash_trade": FlashTradeReferenceDataAdapter,
     "ethena": EthenaReferenceDataAdapter,
     "ethfi_governance": EthFiGovernanceReferenceDataAdapter,
     "etherfi": EtherFiReferenceDataAdapter,
@@ -147,7 +143,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "kelpdao": KelpDaoReferenceDataAdapter,
     "kamino": KaminoReferenceDataAdapter,
     "karak": KarakReferenceDataAdapter,
-    "mango": MangoReferenceDataAdapter,
     "marginfi": MarginfiReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
     "massive": MassiveReferenceDataAdapter,
@@ -179,7 +174,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "uniswap_v4": UniswapV4ReferenceDataAdapter,
     "venus": VenusReferenceDataAdapter,
     "yearn": YearnReferenceDataAdapter,
-    "zeta": ZetaReferenceDataAdapter,
 }
 
 
@@ -243,10 +237,10 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     # Solana lending adapters (2026-07-09) — public REST/JSON APIs, no API key needed.
     "solend": "",
     "marginfi": "",
-    # Solana perp DEX adapters (Plan B 2026-05-13) — public REST APIs, no API key needed
-    "mango": "",
-    "zeta": "",
-    "flash_trade": "",
+    # MANGO/ZETA/FLASH_TRADE (Plan B 2026-05-13) removed 2026-07-15 — operator ruling: all 3
+    # declared API hosts are dead (api.mngo.cloud/api.flash.trade NXDOMAIN, dex.zeta.markets/api
+    # returns HTML), ~$0 DeFiLlama TVL, zero MTDS market-data capture ever wired. SSOT:
+    # unified-trading-pm/codex/04-architecture/solana-defi-coverage.md.
     "pacifica": "",
     # Layer-2 perp DEX adapters — public REST APIs, no API key needed
     "lighter": "",
