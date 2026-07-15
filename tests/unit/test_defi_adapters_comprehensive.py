@@ -3114,25 +3114,6 @@ class TestRestAdapterHonestAbsenceA8b:
     legitimately-empty response (bare [] OR {"<key>": []})."""
 
     @pytest.mark.asyncio
-    async def test_flash_trade_missing_key_raises(self) -> None:
-        from instruments_service.reference_data.adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
-
-        adapter = FlashTradeReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_get_with_retry", return_value={"error": "boom"}),
-            pytest.raises(ConnectionError),
-        ):
-            await adapter._fetch_perp_markets()
-
-    @pytest.mark.asyncio
-    async def test_flash_trade_empty_list_is_legit_empty(self) -> None:
-        from instruments_service.reference_data.adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
-
-        adapter = FlashTradeReferenceDataAdapter()
-        with patch.object(adapter, "_get_with_retry", return_value=[]):
-            assert await adapter._fetch_perp_markets() == []
-
-    @pytest.mark.asyncio
     async def test_lifinity_missing_key_raises(self) -> None:
         from instruments_service.reference_data.adapters.defi.lifinity import LifinityReferenceDataAdapter
 
@@ -3150,17 +3131,6 @@ class TestRestAdapterHonestAbsenceA8b:
         adapter = LifinityReferenceDataAdapter()
         with patch.object(adapter, "_get_with_retry", return_value={"pools": []}):
             assert await adapter._fetch_pools() == []
-
-    @pytest.mark.asyncio
-    async def test_mango_missing_key_raises(self) -> None:
-        from instruments_service.reference_data.adapters.defi.mango import MangoReferenceDataAdapter
-
-        adapter = MangoReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_get_with_retry", return_value={"other": "data"}),
-            pytest.raises(ConnectionError),
-        ):
-            await adapter._fetch_perp_markets()
 
     @pytest.mark.asyncio
     async def test_meteora_missing_key_raises(self) -> None:
@@ -3183,25 +3153,6 @@ class TestRestAdapterHonestAbsenceA8b:
             pytest.raises(ConnectionError),
         ):
             await adapter._fetch_markets()
-
-    @pytest.mark.asyncio
-    async def test_zeta_missing_key_raises(self) -> None:
-        from instruments_service.reference_data.adapters.defi.zeta import ZetaReferenceDataAdapter
-
-        adapter = ZetaReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_get_with_retry", return_value={"other": "data"}),
-            pytest.raises(ConnectionError),
-        ):
-            await adapter._fetch_perp_markets()
-
-    @pytest.mark.asyncio
-    async def test_zeta_empty_markets_key_is_legit_empty(self) -> None:
-        from instruments_service.reference_data.adapters.defi.zeta import ZetaReferenceDataAdapter
-
-        adapter = ZetaReferenceDataAdapter()
-        with patch.object(adapter, "_get_with_retry", return_value={"markets": []}):
-            assert await adapter._fetch_perp_markets() == []
 
 
 # ── A8b: Uniswap V3 cascade-aware honest absence ──────────────────────────────

@@ -110,8 +110,8 @@ def extract_rest_list_or_raise(
 ) -> list[dict[str, object]]:
     """Extract the instrument list from a REST JSON response, or RAISE on a malformed body.
 
-    Shared by the Solana / REST reference-data adapters (drift, flash_trade, lifinity, mango,
-    meteora, phoenix, zeta) whose HTTP endpoints return EITHER a bare JSON array OR an envelope
+    Shared by the Solana / REST reference-data adapters (drift, lifinity, meteora, phoenix)
+    whose HTTP endpoints return EITHER a bare JSON array OR an envelope
     dict carrying the list under one of a small set of known keys (e.g. ``markets`` / ``data`` /
     ``pools``).
 

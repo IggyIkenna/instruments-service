@@ -251,7 +251,9 @@ raise an actionable `DependencyError` naming the exact backfill command to run f
 `radiant.py`, `venus.py`, `benqi.py`, `kamino.py`, `drift.py`; LST/yield/staking: `lido.py`, `etherfi.py`, `ethfi.py`,
 `rocket_pool.py`, `ethena.py`, `renzo.py`, `puffer.py`, `pendle.py`, `yearn.py`, `convex.py`, `idle.py`, `beefy.py`,
 `sanctum.py`, `solblaze.py`, `marinade.py`, `jito.py`, `jito_restaking.py`, `karak.py`, `symbiotic.py`,
-`kelpdao.py`, `eigenlayer.py`, `mango.py`, `zeta.py`, `flash_trade.py`, `solana_native_staking.py`. Every DeFi adapter
+`kelpdao.py`, `eigenlayer.py`, `solana_native_staking.py`. (`mango.py`/`zeta.py`/`flash_trade.py` removed 2026-07-15 —
+operator ruling: dead API endpoints, ~$0 TVL, zero MTDS capture ever wired; see
+`unified-trading-pm/codex/04-architecture/solana-defi-coverage.md`.) Every DeFi adapter
 builds its venue token as `f"{protocol}-{chain}"` (dash-separated — e.g. `AAVE_V3-ARBITRUM`, `UNISWAP_V3-ETHEREUM`;
 confirmed directly in `aave_v3.py`/`uniswap_v3.py` source), not the underscore-joined form (`AAVE_V3_ETH`) some older
 docs show.
