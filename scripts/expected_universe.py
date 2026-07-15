@@ -43,6 +43,7 @@ from unified_api_contracts import (
     VENUES_BY_ASSET_GROUP,
     bundle_instrument_type_for_leaf,
     get_mvp_data_types_for_cefi_venue_itype,
+    venue_data_type_has_batch_source,
 )
 from unified_api_contracts.registry import TRADFI_VENUE_INSTRUMENT_TYPES
 from unified_api_contracts.registry.market_data_categories import (
@@ -341,6 +342,24 @@ def _expected_generic(asset_group: str) -> set[tuple[str, str, str]]:
                 # Only apply for cefi/tradfi (VENUE_CAPABILITY_AGS); defi/
                 # prediction capability is already in the validity functions.
                 if in_capability_ag and dt not in venue_caps:
+                    continue
+
+                # Carve-out 1b: venue CAN produce this data_type (Carve-out 1
+                # above passed) but ONLY via a live WebSocket connector — there
+                # is no batch/historical source (no vendor archive, no venue
+                # REST history endpoint). "Short of magic" that historical data
+                # cannot be retrieved (operator ruling 2026-07-15,
+                # plans/active/issues/
+                # cefi_live_only_data_types_vs_layer1_denominator_contradiction_2026_07_12.md).
+                # build_expected() is the EXPECTED matrix for BOTH Layer-1
+                # completeness (>=1 row of ANY status required) and Layer-2's
+                # MVP read-time gate (filter_manifest_to_expected) — excluding
+                # these tuples here means neither layer requires or counts a
+                # row for them at all, which is correct: a batch backfill can
+                # NEVER produce one, so requiring it is the exact contradiction
+                # the issue doc found. Does NOT touch VENUE_DATA_TYPE_CAPABILITIES
+                # (the live-mode capability declaration survives untouched).
+                if in_capability_ag and not venue_data_type_has_batch_source(venue, dt):
                     continue
 
                 # Carve-out 2: cefi per-(venue, instrument_type) MVP override.

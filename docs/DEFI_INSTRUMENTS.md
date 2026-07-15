@@ -26,7 +26,7 @@ batch-vs-live swap-capture split.
 - **On-chain-perp DEXes**: Hyperliquid, Aster, Pacifica-Solana, Extended-Starknet, Lighter-Zksync.
 
 **Out of scope** (covered in other consolidated docs / not yet written up anywhere): Solana-native AMMs and perps
-(Drift, Raydium, Orca, Phoenix, Jupiter, Mango, Zeta, Flash_Trade, Meteora, Lifinity, Kamino, Camino) and Solana
+(Drift, Raydium, Orca, Phoenix, Jupiter, Meteora, Lifinity, Kamino, Camino) and Solana
 staking/restaking/lending (Marinade, Jito, JitoRestaking, Sanctum, Solblaze, Solana-native, MarginFi, Solend) — these
 have a real adapter presence too (see `instruments_service/reference_data/adapters/defi/`) but are organizationally a
 separate "Solana DeFi" surface from this doc's EVM-centric + on-chain-perp scope, per the 2026-07-08 docs-consolidation
@@ -424,15 +424,16 @@ per group:
   `JITORESTAKING-SOLANA:VAULT:JTORK-EZSOL` → `JITORESTAKING-SOLANA:YIELD_BEARING:JTORK-EZSOL` (key changed, field
   unchanged). `get_instruments(instrument_type=...)` on Sanctum/Solblaze now accepts either `InstrumentType.LST` or
   `InstrumentType.YIELD_BEARING` (back-compat), mirroring the `LST`-keyed group.
-- **Drift, Jupiter, Flash Trade — PERP/SPOT shorthand fixed 2026-07-09** (same C4 finding, same convention as the
+- **Drift, Jupiter — PERP/SPOT shorthand fixed 2026-07-09** (same C4 finding, same convention as the
   on-chain-perp `PERP`-vs-`PERPETUAL` canonicalization above): `drift.py` keyed `:PERP:`/`:SPOT:` against
-  `instrument_type=PERPETUAL`/`SPOT_PAIR`; `jupiter.py` keyed `:SPOT:` against `SPOT_PAIR`; `flash_trade.py` keyed
-  `:PERP:` against `PERPETUAL`. All 3 keys were fixed to the real enum spelling (`PERPETUAL`/`SPOT_PAIR` aren't
-  shorthand-able — `PERP`/`SPOT` are not real `InstrumentType` members). Real before/after:
+  `instrument_type=PERPETUAL`/`SPOT_PAIR`; `jupiter.py` keyed `:SPOT:` against `SPOT_PAIR`. Both keys were fixed to the
+  real enum spelling (`PERPETUAL`/`SPOT_PAIR` aren't shorthand-able — `PERP`/`SPOT` are not real `InstrumentType`
+  members). Real before/after:
   `DRIFT-SOLANA:PERP:SOL-PERP` → `DRIFT-SOLANA:PERPETUAL:SOL-PERP`,
   `DRIFT-SOLANA:SPOT:SOL` → `DRIFT-SOLANA:SPOT_PAIR:SOL`,
-  `JUPITER-SOLANA:SPOT:SOL-USDC` → `JUPITER-SOLANA:SPOT_PAIR:SOL-USDC`,
-  `FLASH-SOLANA:PERP:SOL` → `FLASH-SOLANA:PERPETUAL:SOL`.
+  `JUPITER-SOLANA:SPOT:SOL-USDC` → `JUPITER-SOLANA:SPOT_PAIR:SOL-USDC`.
+  (Flash Trade's equivalent fix is moot — `flash_trade.py` was removed 2026-07-15, operator ruling; see
+  "Remaining known limitation" below.)
 - **EigenLayer, EthFi — `GOVERNANCE_TOKEN` shorthand fixed 2026-07-09** (new finding, same C4 class): both adapters
   keyed `:GOVERNANCE_TOKEN:` while the field already correctly said `InstrumentType.SPOT_PAIR` (`GOVERNANCE_TOKEN` is
   not a real `InstrumentType` member). Keys fixed to `:SPOT_PAIR:` to match the field. This also fixed a real
@@ -454,12 +455,13 @@ per group:
   `build_canonical_instrument_id` can now represent both real enum members, but `compound_v3.py`'s `instrument_key`
   construction has not yet been retrofitted to route through it (still an ad hoc f-string) — that remains open,
   tracked in `canonical_id_builder_retrofit_checklist_2026_07_08.md`.
-- **Remaining known limitation** — 7 more Solana/DeFi venues (mango, zeta, meteora, phoenix, lifinity, kamino,
-  marinade) still share the `PERP`/`SPOT`-vs-`PERPETUAL`/`SPOT_PAIR` shorthand mismatch class (e.g. `mango.py` keys
-  `:PERP:` against `instrument_type=InstrumentType.PERPETUAL`) — out of this pass's scope, a known follow-up for
-  whichever pass covers the rest of Solana-native DeFi conventions.
+- **Remaining known limitation** — 5 more Solana/DeFi venues (meteora, phoenix, lifinity, kamino,
+  marinade) still share the `PERP`/`SPOT`-vs-`PERPETUAL`/`SPOT_PAIR` shorthand mismatch class (e.g. `meteora.py` keys
+  `:SPOT:` against `instrument_type=InstrumentType.SPOT_PAIR`) — out of this pass's scope, a known follow-up for
+  whichever pass covers the rest of Solana-native DeFi conventions. (`mango`/`zeta` — which shared this same
+  limitation — were removed 2026-07-15 along with `flash_trade`, operator ruling; no longer applicable.)
 - **Shared canonical-id builder adoption (2026-07-09)**: Sanctum/Solblaze/Jito-restaking/Drift/EigenLayer/EthFi/
-  Jupiter/Flash-Trade above, plus Balancer/Curve/Ethena/Jito/Beefy/Convex/Idle/Karak/EtherFi/KelpDAO (the
+  Jupiter above, plus Balancer/Curve/Ethena/Jito/Beefy/Convex/Idle/Karak/EtherFi/KelpDAO (the
   already-field-fixed `LST`/`VAULT`-keyed group from 2026-07-08), now all route `instrument_key` construction through
   `unified_api_contracts.build_canonical_instrument_id(AssetGroup.DEFI, venue, InstrumentType.X, symbol,
 passthrough=True)` instead of an ad hoc f-string — part of the same workspace-wide retrofit tracked in
