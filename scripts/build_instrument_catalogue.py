@@ -59,6 +59,8 @@ from typing import TypeVar
 
 import pandas as pd
 from unified_api_contracts import (
+    CEFI_BASE_ASSET_UNIVERSE,
+    CEFI_EQUITY_PERP_BASE_UNIVERSE,
     TRADFI_ROOTS,
     VENUE_TO_ASSET_GROUP,
     build_pool_identity,
@@ -525,6 +527,90 @@ def _venue_last_full_day(day_counts: dict[date, int]) -> date | None:
 #: spot_asset / perpetual) key on a contract address too but are not pools.
 _DEFI_POOL_ITYPES: frozenset[str] = frozenset({"pool"})
 
+#: CeFi perpetual-family instrument_type values (UPPERCASE) that share ONE
+#: canonical (venue, raw_symbol, margin) lifecycle across the 2026-07 id-convention
+#: churn. A single live perp appeared under up to THREE id strings as the format
+#: canonicalised (``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD`` →
+#: ``VENUE:PERPETUAL:BTC-USD@LIN``; instrument_id_format_canonicalization_2026_07_08),
+#: but the ``instrument_type`` COLUMN (PERPETUAL), ``raw_symbol`` (venue-native, e.g.
+#: BTC / BTCUSDT), ``venue`` and ``margin_type`` are STABLE across all three forms —
+#: so the lineage key below collapses them to ONE row keyed on the underlying, not
+#: the churning id string (the HYPERLIQUID/ASTER ~176-of-534 stale-dup class). The
+#: refined equity types ride the same family so a re-typed EQUITY_PERP row collapses
+#: onto its pre-refinement PERPETUAL siblings. SSOT: codex/04-architecture/
+#: instrument-universe-registry-consolidation.md + the plan cited in run_rollup.
+_PERP_FAMILY_ITYPES: frozenset[str] = frozenset({"PERPETUAL", "EQUITY_PERP", "TOKENIZED_EQUITY"})
+
+
+def _cefi_perp_lineage_key(instrument_id: str, instrument_type: str, raw_symbol: str, margin_type: str) -> str | None:
+    """Semantic collapse key for a CeFi perp-family row, or ``None`` when N/A.
+
+    Collapses the ``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD`` →
+    ``VENUE:PERPETUAL:BTC-USD@LIN`` convention chain onto ONE lineage keyed on the
+    UNDERLYING ``(venue, raw_symbol, margin)`` — matching the operator spec
+    "(venue, base, instrument_type, quote, margin)" where ``raw_symbol`` is the
+    venue-native encoding of base+quote (BTCUSDT vs BTCUSDC keep distinct keys, so
+    genuinely-different perps never over-collapse; verified 0 live-instrument
+    collisions across the full prod cefi catalogue). The venue prefix is read from
+    the STABLE first segment of ``instrument_id`` (not the ``venue`` FIELD, which
+    can carry era-specific spelling drift — the DERIBIT-COMBO ghost lesson).
+
+    Returns ``None`` (caller falls back to the id-string key = current behaviour)
+    when the row is not a perp-family type, or ``raw_symbol`` is blank (no
+    venue-native symbol to key on → cannot safely collapse). Pure + idempotent.
+    """
+    if (instrument_type or "").strip().upper() not in _PERP_FAMILY_ITYPES:
+        return None
+    rs = (raw_symbol or "").strip().upper()
+    if not rs:
+        return None
+    venue_prefix = str(instrument_id).split(":", 1)[0].strip().upper()
+    if not venue_prefix:
+        return None
+    marker = (margin_type or "").strip().upper()
+    return f"cefiperp::{venue_prefix}::{rs}::{marker}"
+
+
+def _refine_cefi_instrument_type(instrument_type: str, base_asset: str) -> str:
+    """Refine a generic CeFi ``instrument_type`` to EQUITY_PERP / TOKENIZED_EQUITY.
+
+    Phase-2 classification refinement (cefi_completion_program_2026_07_15): the IS
+    Tardis/venue-native adapters stamp every single-stock / commodity / index
+    perp as the generic ``PERPETUAL`` and every tokenized-share spot as the generic
+    ``SPOT_PAIR``. This re-classifies them via the UAC universe SSOT
+    (``CEFI_EQUITY_PERP_BASE_UNIVERSE``) at roll-up time — a PURE type refinement:
+    the ``instrument_id`` / lineage key are UNCHANGED (an existing
+    ``VENUE:PERPETUAL:AAPL-USDT@LIN`` row re-types IN PLACE, never orphaned), and no
+    row is dropped.
+
+      * ``PERPETUAL`` whose base ∈ ``CEFI_EQUITY_PERP_BASE_UNIVERSE`` → ``EQUITY_PERP``.
+        (The universe is the tradfi-underlying-perp set: equities + commodity RAW
+        forms XAU/XAG/… + index/ETF SPX/SPY/… — all crypto-venue perps tracking a
+        real tradfi underlying, per the UAC module docstring.)
+      * ``SPOT_PAIR`` tokenized-share form (base ``<TICKER>X`` where ``TICKER`` ∈
+        the equity universe and the base is NOT itself a crypto base) → ``TOKENIZED_EQUITY``
+        (Bybit ``AAPLX`` → base ``AAPLX`` → strip ``X`` → ``AAPL`` ∈ universe).
+
+    Any other row passes its ``instrument_type`` through unchanged. Pure + idempotent
+    (an already-refined EQUITY_PERP/TOKENIZED_EQUITY row is not a PERPETUAL/SPOT_PAIR
+    so it returns unchanged).
+    """
+    itype = (instrument_type or "").strip().upper()
+    base = (base_asset or "").strip().upper()
+    if not base:
+        return instrument_type
+    if itype == "PERPETUAL" and base in CEFI_EQUITY_PERP_BASE_UNIVERSE:
+        return "EQUITY_PERP"
+    if (
+        itype == "SPOT_PAIR"
+        and len(base) > 1
+        and base.endswith("X")
+        and base not in CEFI_BASE_ASSET_UNIVERSE
+        and base[:-1] in CEFI_EQUITY_PERP_BASE_UNIVERSE
+    ):
+        return "TOKENIZED_EQUITY"
+    return instrument_type
+
 
 def _fee_from_instrument_key(instrument_key: str) -> str:
     """Extract the fee token from a legacy glued ``…:POOL:PAIR:FEE`` instrument_key.
@@ -600,6 +686,13 @@ def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
     (``AAVE_V3-ARBITRUM:…``, ``COMPOUND_V3-BASE:…``) — the dual-key-ghost collapse
     fix (+171 AAVE_V3 / +26 COMPOUND_V3 triad discrepancy 2026-06-27).
 
+    CeFi perp-family rows (PERPETUAL / EQUITY_PERP / TOKENIZED_EQUITY) key on the
+    canonical ``(venue, raw_symbol, margin)`` lineage (:func:`_cefi_perp_lineage_key`)
+    so the ``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD`` → ``…@LIN`` id-convention
+    chain collapses to ONE continuous lifecycle instead of THREE stale-dup listings
+    (the HYPERLIQUID/ASTER ~176-of-534 churn duplicates). ``raw_symbol``-blank rows
+    have no venue-native key so they fall through to the id-string behaviour.
+
     All other rows key on the ``instrument_id`` (= instrument_key) as before, so
     non-DeFi behaviour is unchanged.
     """
@@ -614,6 +707,15 @@ def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
                 if "-" in venue:
                     chain = venue.rsplit("-", 1)[1].upper()
             return f"pool::{chain}::{pool_address.lower()}"
+    # CeFi perp-family: collapse the id-convention rename chain onto the underlying.
+    perp_key = _cefi_perp_lineage_key(
+        instrument_id,
+        str(row.get("instrument_type") or ""),
+        str(row.get("raw_symbol") or ""),
+        str(row.get("margin_type") or ""),
+    )
+    if perp_key is not None:
+        return perp_key
     # Non-pool: normalise the venue-prefix portion of structured DeFi instrument_ids
     # so ghost-spelling variants (AAVEV3-ARBITRUM:…) collapse onto the canonical key
     # (AAVE_V3-ARBITRUM:…).  No-op for non-DeFi / already-canonical keys.
@@ -827,8 +929,14 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 existing.first_day = day
             if day > existing.last_day:
                 existing.last_day = day
-            # BUG #4 (B): keep the EARLIEST declared listing date seen across snapshots.
-            if declared is not None and (existing.declared_from is None or declared < existing.declared_from):
+            _is_perp_family = str(_meta.get("instrument_type") or "").strip().upper() in _PERP_FAMILY_ITYPES
+            if not _is_perp_family:
+                # BUG #4 (B): keep the EARLIEST declared listing date seen across snapshots.
+                if declared is not None and (existing.declared_from is None or declared < existing.declared_from):
+                    existing.declared_from = declared
+            elif existing.declared_from is None and declared is not None:
+                # Perp-family with no declared date yet — seed it until the winning
+                # (most-recent) form arrives and takes over below.
                 existing.declared_from = declared
             # Metadata follows the most-recent definition of the instrument.
             if day >= existing.meta_day:
@@ -838,6 +946,16 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 # (the freshest exchange-declared expiry / delisting for this id).
                 existing.expiry = _expiry
                 existing.delisted_at = _delisted
+                if _is_perp_family and declared is not None:
+                    # CeFi perp-family lineage collapse (HYPERLIQUID/ASTER 2026-07 id
+                    # convention churn): declared_from follows the WINNING (most-recent)
+                    # form so a dead old-convention form's spurious genesis date (the
+                    # ASTER ``PERP:*USDT`` uniform venue-launch 2023-07-22, which
+                    # PREDATES the tokens it is stamped on) does NOT drag the collapsed
+                    # lifecycle's available_from below the live form's true per-instrument
+                    # listing date. None-guarded (the elif above seeds an earlier date)
+                    # so a fresh form lacking a declared date never wipes a known one.
+                    existing.declared_from = declared
 
     if not all_days:
         return pd.DataFrame(columns=list(CATALOG_COLUMNS))
@@ -890,10 +1008,18 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         # ``glued_pair_id`` alongside. Non-pool / non-DeFi rows pass through
         # unchanged (canonical_id == the original instrument_key, glued_pair_id "").
         canonical_id, glued_pair_id, bare_venue, chain, pool_address = _defi_pool_dual_form(agg.meta)
+        # Phase-2 CeFi type refinement (cefi_completion_program_2026_07_15): a generic
+        # PERPETUAL whose base is a tradfi underlying → EQUITY_PERP; a tokenized-share
+        # SPOT_PAIR (base ``<TICKER>X``) → TOKENIZED_EQUITY. PURE reclassification — the
+        # instrument_id / lineage key are unchanged, so the row re-types IN PLACE.
+        refined_type = _refine_cefi_instrument_type(
+            agg.meta["instrument_type"] or "",
+            agg.meta.get("base_asset") or "",
+        )
         rows.append(
             {
                 "instrument_id": canonical_id,
-                "instrument_type": agg.meta["instrument_type"] or "",
+                "instrument_type": refined_type,
                 "venue": bare_venue,
                 "chain": chain,
                 "league_id": agg.meta["league_id"] or "",
@@ -2506,13 +2632,20 @@ def _incremental_merge_keys(df: pd.DataFrame, *, asset_group: str) -> pd.Series[
       exist on MULTIPLE venues under the SAME id (``BNB_PRICE_RANGE_DAILY`` on
       both KALSHI and POLYMARKET — 31 real cross-venue pairs in prod), so venue
       IS identity here.
-    * cefi / tradfi / defi non-pool → ``instrument_id`` alone, which IS
-      ``_aggregate_key`` for these rows (the id embeds the canonical venue
-      prefix). The ``venue`` FIELD must NOT be part of the key: it carries the
-      era-specific raw spelling (``DERIBIT-COMBO`` in old rows vs ``DERIBIT``
-      in the window for the SAME ``instrument_id``), so keying on it splits one
-      lifecycle into ghost duplicates the full rebuild unifies — the 122-dupe
-      cefi ``CATALOGUE_SHRINK_BLOCKED`` on the first weekly self-heal
+    * cefi perp-family (PERPETUAL / EQUITY_PERP / TOKENIZED_EQUITY, raw_symbol
+      present) → the ``(venue, raw_symbol, margin)`` lineage key
+      (:func:`_cefi_perp_lineage_key`), mirroring ``_aggregate_key`` — so the
+      2026-07 id-convention churn (``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD``
+      → ``…@LIN``) collapses to ONE lifecycle instead of 3 stale-dup listings.
+      Here the venue prefix is read from the STABLE ``instrument_id`` first
+      segment (NOT the drifting ``venue`` field), for the same reason as below.
+    * cefi / tradfi / defi non-pool (not perp-family, or raw_symbol blank) →
+      ``instrument_id`` alone, which IS ``_aggregate_key`` for these rows (the id
+      embeds the canonical venue prefix). The ``venue`` FIELD must NOT be part of
+      the key: it carries the era-specific raw spelling (``DERIBIT-COMBO`` in old
+      rows vs ``DERIBIT`` in the window for the SAME ``instrument_id``), so keying
+      on it splits one lifecycle into ghost duplicates the full rebuild unifies —
+      the 122-dupe cefi ``CATALOGUE_SHRINK_BLOCKED`` on the first weekly self-heal
       (2026-07-04).
     """
 
@@ -2523,11 +2656,21 @@ def _incremental_merge_keys(df: pd.DataFrame, *, asset_group: str) -> pd.Series[
 
     if asset_group == "prediction":
         return _col("venue") + "::" + _col("instrument_id") + "::" + _col("data_type")
+    instrument_id = _col("instrument_id")
     pool_address = _col("pool_address").str.lower()
     chain = _col("chain").str.upper()
     is_pool = (pool_address != "") & (chain != "")
     pool_key = "pool::" + chain + "::" + pool_address
-    return pool_key.where(is_pool, _col("instrument_id"))
+    # CeFi perp-family lineage collapse — mirrors _aggregate_key. Venue prefix from
+    # the stable instrument_id first segment; raw_symbol-blank rows fall through.
+    itype = _col("instrument_type").str.strip().str.upper()
+    raw_symbol = _col("raw_symbol").str.strip().str.upper()
+    venue_prefix = instrument_id.str.split(":", n=1).str[0].str.strip().str.upper()
+    margin = _col("margin_type").str.strip().str.upper()
+    is_perp = itype.isin(_PERP_FAMILY_ITYPES) & (raw_symbol != "") & (venue_prefix != "")
+    perp_key = "cefiperp::" + venue_prefix + "::" + raw_symbol + "::" + margin
+    key = perp_key.where(is_perp, instrument_id)
+    return pool_key.where(is_pool, key)
 
 
 def _merge_incremental(
