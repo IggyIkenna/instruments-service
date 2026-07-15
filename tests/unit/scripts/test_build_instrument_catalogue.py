@@ -2158,6 +2158,192 @@ def test_rollup_ghost_venue_liveness_merges_into_canonical_window(rollup: Module
 
 
 # ---------------------------------------------------------------------------
+# CeFi perp-family lineage collapse (HYPERLIQUID / ASTER 2026-07 id-convention
+# churn) + EQUITY_PERP / TOKENIZED_EQUITY type refinement.
+# Plan: cefi_completion_program_2026_07_15.md.
+# ---------------------------------------------------------------------------
+
+
+def test_refine_cefi_instrument_type_classifier(rollup: ModuleType) -> None:
+    """Pure classifier: PERPETUAL→EQUITY_PERP, tokenized SPOT→TOKENIZED_EQUITY, else unchanged."""
+    r = rollup._refine_cefi_instrument_type
+    # equity/commodity/index single-stock perps ride CEFI_EQUITY_PERP_BASE_UNIVERSE
+    assert r("PERPETUAL", "AAPL") == "EQUITY_PERP"
+    assert r("PERPETUAL", "XAU") == "EQUITY_PERP"  # commodity RAW form is in the universe
+    assert r("PERPETUAL", "SPX") == "EQUITY_PERP"  # index
+    # crypto perps stay PERPETUAL (not in the equity universe)
+    assert r("PERPETUAL", "BTC") == "PERPETUAL"
+    assert r("PERPETUAL", "0G") == "PERPETUAL"
+    # tokenized-share spot: base <TICKER>X where TICKER in the equity universe
+    assert r("SPOT_PAIR", "AAPLX") == "TOKENIZED_EQUITY"
+    assert r("SPOT_PAIR", "TSLAX") == "TOKENIZED_EQUITY"
+    # spot that only LOOKS tokenized but strips to a non-equity stays SPOT_PAIR
+    assert r("SPOT_PAIR", "SPX") == "SPOT_PAIR"  # SPX[:-1]=SP not an equity ticker
+    assert r("SPOT_PAIR", "BTC") == "SPOT_PAIR"
+    # idempotent: an already-refined type is not a PERPETUAL/SPOT_PAIR
+    assert r("EQUITY_PERP", "AAPL") == "EQUITY_PERP"
+    assert r("TOKENIZED_EQUITY", "AAPLX") == "TOKENIZED_EQUITY"
+    # blank base is a no-op
+    assert r("PERPETUAL", "") == "PERPETUAL"
+
+
+def test_cefi_perp_lineage_key_helper(rollup: ModuleType) -> None:
+    """The (venue-prefix, raw_symbol, margin) key is STABLE across the id-convention chain."""
+    k = rollup._cefi_perp_lineage_key
+    # All three id forms of the SAME HL BTC perp collapse to one key.
+    k1 = k("HYPERLIQUID:PERP:BTC", "PERPETUAL", "BTC", "linear")
+    k2 = k("HYPERLIQUID:PERPETUAL:BTC-USD", "PERPETUAL", "BTC", "linear")
+    k3 = k("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "PERPETUAL", "BTC", "linear")
+    assert k1 == k2 == k3 is not None
+    # A re-typed EQUITY_PERP row rides the same family → same key as its PERPETUAL sibling.
+    assert k("BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN", "EQUITY_PERP", "AAPLUSDT", "linear") == k(
+        "BINANCE-FUTURES:PERP:AAPLUSDT", "PERPETUAL", "AAPLUSDT", "linear"
+    )
+    # Distinct quotes on the SAME venue/base stay DISTINCT (raw_symbol differs) — no over-collapse.
+    assert k("BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN", "PERPETUAL", "BTCUSDT", "linear") != k(
+        "BINANCE-FUTURES:PERPETUAL:BTC-USDC@LIN", "PERPETUAL", "BTCUSDC", "linear"
+    )
+    # Different venues never collapse.
+    assert k("BYBIT:PERPETUAL:BTC-USDT@LIN", "PERPETUAL", "BTCUSDT", "linear") != k(
+        "BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN", "PERPETUAL", "BTCUSDT", "linear"
+    )
+    # Non-perp types and blank raw_symbol return None (caller falls back to the id key).
+    assert k("DERIBIT:COMBO:BTC-X", "COMBO", "BTC-X", "") is None
+    assert k("HYPERLIQUID:SPOT_PAIR:BTC-USD", "SPOT_PAIR", "BTCUSD", "") is None
+    assert k("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "PERPETUAL", "", "linear") is None
+
+
+def _perp_row(iid: str, base: str, raw_symbol: str, genesis: str) -> dict[str, object]:
+    """A HYPERLIQUID/ASTER-style perp by_date row (linear, with a declared genesis)."""
+    venue = iid.split(":", 1)[0]
+    return {
+        "instrument_key": iid,
+        "venue": venue,
+        "instrument_type": "PERPETUAL",
+        "base_asset": base,
+        "raw_symbol": raw_symbol,
+        "margin_type": "linear",
+        "available_from_datetime": genesis,
+    }
+
+
+def test_rollup_hyperliquid_perp_convention_chain_collapses_to_one_lineage(rollup: ModuleType) -> None:
+    """The PERP:BTC → PERPETUAL:BTC-USD → PERPETUAL:BTC-USD@LIN chain (3 IDs for ONE
+    perp across the 2026-07 convention churn) collapses to ONE row — the current live
+    ``@LIN`` id, earliest available_from, active. The stale old-form rows do NOT
+    survive (the HYPERLIQUID ~176-of-534 stale-dup class)."""
+    d_old, d_mid, d_live = date(2026, 6, 20), date(2026, 7, 7), date(2026, 7, 14)
+    # Two live bases so no day is a thin-day outlier.
+    snapshots = [
+        (
+            d_old,
+            _snapshot(
+                [
+                    _perp_row("HYPERLIQUID:PERP:BTC", "BTC", "BTC", "2023-05-12"),
+                    _perp_row("HYPERLIQUID:PERP:ETH", "ETH", "ETH", "2023-05-12"),
+                ]
+            ),
+        ),
+        (
+            d_mid,
+            _snapshot(
+                [
+                    _perp_row("HYPERLIQUID:PERPETUAL:BTC-USD", "BTC", "BTC", "2023-05-12"),
+                    _perp_row("HYPERLIQUID:PERPETUAL:ETH-USD", "ETH", "ETH", "2023-05-12"),
+                ]
+            ),
+        ),
+        (
+            d_live,
+            _snapshot(
+                [
+                    _perp_row("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "BTC", "BTC", "2023-05-12"),
+                    _perp_row("HYPERLIQUID:PERPETUAL:ETH-USD@LIN", "ETH", "ETH", "2023-05-12"),
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_catalogue_dataframe(snapshots)
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    # Exactly one lineage per base — the live @LIN id survives, the stale forms are gone.
+    assert set(by_id) == {"HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "HYPERLIQUID:PERPETUAL:ETH-USD@LIN"}, by_id
+    btc = by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]
+    assert btc["available_from"] == "2023-05-12"  # earliest per-instrument genesis carried
+    assert btc["available_to"] is None  # re-observed on the latest day → active
+
+
+def test_rollup_aster_legacy_perp_date_folds_to_live_form(rollup: ModuleType) -> None:
+    """ASTER dating bug: the dead ``ASTER:PERP:0GUSDT`` form carries a spurious
+    uniform venue-launch genesis (2023-07-22, which PREDATES the 0G token). Folded
+    into the canonical lineage, available_from must follow the LIVE ``@LIN`` form's
+    true listing date (2025-09-24), NOT the spurious earlier old-form date."""
+    d_old, d_live = date(2026, 6, 20), date(2026, 7, 14)
+    snapshots = [
+        (
+            d_old,
+            _snapshot(
+                [
+                    _perp_row("ASTER:PERP:0GUSDT", "0G", "0GUSDT", "2023-07-22"),
+                    _perp_row("ASTER:PERP:BTCUSDT", "BTC", "BTCUSDT", "2021-08-27"),
+                ]
+            ),
+        ),
+        (
+            d_live,
+            _snapshot(
+                [
+                    _perp_row("ASTER:PERPETUAL:0G-USDT@LIN", "0G", "0GUSDT", "2025-09-24"),
+                    _perp_row("ASTER:PERPETUAL:BTC-USDT@LIN", "BTC", "BTCUSDT", "2021-08-27"),
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_catalogue_dataframe(snapshots)
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    assert set(by_id) == {"ASTER:PERPETUAL:0G-USDT@LIN", "ASTER:PERPETUAL:BTC-USDT@LIN"}, by_id
+    # 0G: spurious 2023-07-22 old-form date DISCARDED for the live form's real listing.
+    assert by_id["ASTER:PERPETUAL:0G-USDT@LIN"]["available_from"] == "2025-09-24"
+    # BTC: both forms agree on the genuine early date → preserved.
+    assert by_id["ASTER:PERPETUAL:BTC-USDT@LIN"]["available_from"] == "2021-08-27"
+
+
+def test_rollup_perp_collapse_never_merges_distinct_quotes(rollup: ModuleType) -> None:
+    """SAFETY: two genuinely-different live perps on the SAME venue/base but different
+    quote (Binance BTC-USDT vs BTC-USDC linear) have distinct raw_symbols → stay TWO
+    rows. No live instrument is ever lost to the collapse."""
+    d1, d2 = date(2026, 7, 10), date(2026, 7, 14)
+    rows = [
+        _perp_row("BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN", "BTC", "BTCUSDT", "2020-01-01"),
+        _perp_row("BINANCE-FUTURES:PERPETUAL:BTC-USDC@LIN", "BTC", "BTCUSDC", "2022-01-01"),
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    ids = {row["instrument_id"] for row in df.to_dict("records")}
+    assert ids == {"BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN", "BINANCE-FUTURES:PERPETUAL:BTC-USDC@LIN"}
+
+
+def test_rollup_equity_perp_and_tokenized_restamped_ids_unchanged(rollup: ModuleType) -> None:
+    """A tradfi-underlying PERPETUAL → EQUITY_PERP and a tokenized-share SPOT → TOKENIZED_EQUITY,
+    with the instrument_id UNCHANGED (pure classification refinement). A crypto perp is untouched."""
+    d1, d2 = date(2026, 7, 10), date(2026, 7, 14)
+    rows = [
+        _perp_row("BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN", "AAPL", "AAPLUSDT", "2026-06-01"),
+        _perp_row("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "BTC", "BTC", "2023-05-12"),
+        {
+            "instrument_key": "BYBIT:SPOT_PAIR:AAPLX-USDT",
+            "venue": "BYBIT-SPOT",
+            "instrument_type": "SPOT_PAIR",
+            "base_asset": "AAPLX",
+            "raw_symbol": "AAPLXUSDT",
+        },
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    assert by_id["BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN"]["instrument_type"] == "EQUITY_PERP"
+    assert by_id["BYBIT:SPOT_PAIR:AAPLX-USDT"]["instrument_type"] == "TOKENIZED_EQUITY"
+    assert by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]["instrument_type"] == "PERPETUAL"  # crypto untouched
+
+
+# ---------------------------------------------------------------------------
 # Incremental (trailing-window + frozen-tail) engine —
 # plans/active/instruments_catalogue_incremental_rollup_2026_06_29.md
 # Phase 1 (mode selection / windowed walk / merge branches / cold start) +
@@ -2361,6 +2547,69 @@ def test_merge_ghost_venue_spelling_updates_not_duplicates(rollup: ModuleType) -
     assert row["venue"] == "DERIBIT"  # metadata follows the most-recent (window) spelling
     assert row["available_from"] == "2024-01-01"  # lifecycle carried through the spelling change
     assert row["available_to"] is None  # re-observed in the window → active
+
+
+def test_merge_perp_convention_chain_collapses_to_live_lineage(rollup: ModuleType) -> None:
+    """Incremental merge over the EXISTING (unmigrated) catalogue: the 3 stale HL id
+    forms in prev collapse onto the single live ``@LIN`` lineage the window rebuild
+    emits — one row, live id, earliest available_from carried. This is the D-code HL
+    dedup applied through the incremental path (a legitimate corrective SHRINK: the
+    prod materialisation needs ``--allow-catalogue-shrink`` / a full rebuild)."""
+    prev = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id="HYPERLIQUID:PERP:BTC",
+                instrument_type="PERPETUAL",
+                venue="HYPERLIQUID",
+                base_asset="BTC",
+                raw_symbol="BTC",
+                margin_type="linear",
+                available_from="2023-05-12",
+                available_to="2026-07-06",
+            ),
+            _cat_row(
+                instrument_id="HYPERLIQUID:PERPETUAL:BTC-USD",
+                instrument_type="PERPETUAL",
+                venue="HYPERLIQUID",
+                base_asset="BTC",
+                raw_symbol="BTC",
+                margin_type="linear",
+                available_from="2023-05-12",
+                available_to="2026-07-08",
+            ),
+            _cat_row(
+                instrument_id="HYPERLIQUID:PERPETUAL:BTC-USD@LIN",
+                instrument_type="PERPETUAL",
+                venue="HYPERLIQUID",
+                base_asset="BTC",
+                raw_symbol="BTC",
+                margin_type="linear",
+                available_from="2023-05-12",
+                available_to=None,
+            ),
+        ]
+    )
+    # The window rebuild sees only the live @LIN form (current convention).
+    window = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id="HYPERLIQUID:PERPETUAL:BTC-USD@LIN",
+                instrument_type="PERPETUAL",
+                venue="HYPERLIQUID",
+                base_asset="BTC",
+                raw_symbol="BTC",
+                margin_type="linear",
+                available_from="2023-05-12",
+                available_to=None,
+            )
+        ]
+    ).drop(columns=["mvp"])
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 7, 10), asset_group="cefi")
+    assert len(merged) == 1, "the 3 id-convention forms must collapse to ONE live lineage row"
+    row = merged.to_dict("records")[0]
+    assert row["instrument_id"] == "HYPERLIQUID:PERPETUAL:BTC-USD@LIN"  # the live id survives
+    assert row["available_from"] == "2023-05-12"  # earliest carried
+    assert row["available_to"] is None
 
 
 def test_merge_defi_pool_keys_on_dual_form_identity(rollup: ModuleType) -> None:
