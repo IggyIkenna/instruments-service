@@ -1751,8 +1751,11 @@ def test_cefi_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(r
     catalog = enumerator._catalog_from_dataframe(catalogue_df)
 
     # Manifest says BTC was captured on d3 only.
-    # present_cols default: venue, chain, data_type, instrument_type, instrument_id, league_id, date
-    present_set = {("BINANCE-FUTURES", "", "INSTRUMENTS", "PERPETUAL", "BTC", "", "2024-06-03")}
+    # present_cols default (cefi, underlying-aware since
+    # cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_2026_07_15.md):
+    # venue, chain, data_type, instrument_type, instrument_id, underlying, league_id, date.
+    # This fixture is a PERPETUAL leaf, so underlying="" on both sides — a no-op slot.
+    present_set = {("BINANCE-FUTURES", "", "INSTRUMENTS", "PERPETUAL", "BTC", "", "", "2024-06-03")}
 
     rows = list(
         enumerator.enumerate_v2(
