@@ -204,7 +204,7 @@ _SPORTS_LEAGUE_ID_SENTINELS: frozenset[str] = frozenset({"UNKNOWN"})
 # build_sports_fixture_team_player_catalogue for the full architecture note).
 _SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE = "league"
 
-# Full per-instrument present-set columns for cefi / defi / prediction.
+# Full per-instrument present-set columns for defi / prediction.
 _DEFAULT_PRESENT_COLS: list[str] = [
     "venue",
     "chain",
@@ -215,20 +215,21 @@ _DEFAULT_PRESENT_COLS: list[str] = [
     "date",
 ]
 
-# TradFi present-set columns = the default per-instrument grain PLUS ``underlying``
-# (axis-3, 2026-06-22). The MTDS writer records per-underlying BUNDLE captures
-# (futures_chain / combo / options_chain) at ``instrument_id=""`` + ``underlying=<U>``
-# (venue_fetch.py:318-320 → manifest_finalize.py base_row_key), so the present-set
-# match + the seeded ``expected_unattempted`` atom MUST key on ``underlying`` — keying
-# on the (blank) instrument_id alone would collapse every underlying of a
-# (venue, bundle_type) into ONE tuple and the seed would never reconcile against the
-# real capture. Leaf rows carry ``underlying=""`` on BOTH sides, so the extra column is
-# a no-op for non-bundle tradfi cells. ``_present_cols_for`` intersects this with the
-# manifest's actual columns, so a manifest WITHOUT an ``underlying`` column drops it
-# (backward-safe). Scoped to tradfi to leave the cefi / defi / prediction grain — and
-# their per-AG enumerators, which do not yet collapse bundle ``instrument_id`` —
-# untouched.
-_TRADFI_PRESENT_COLS: list[str] = [
+# TradFi / CeFi present-set columns = the default per-instrument grain PLUS
+# ``underlying`` (axis-3, 2026-06-22 for tradfi; extended to cefi 2026-07-15 per
+# ``cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_2026_07_15.md``).
+# The MTDS writer records per-underlying BUNDLE captures (futures_chain / combo /
+# options_chain) at ``instrument_id=""`` + ``underlying=<U>`` (venue_fetch.py:318-320 →
+# manifest_finalize.py base_row_key, MTDS ``_UNDERLYING_PARTITIONED_TYPES``), so the
+# present-set match + the seeded ``expected_unattempted`` atom MUST key on
+# ``underlying`` — keying on the (blank) instrument_id alone would collapse every
+# underlying of a (venue, bundle_type) into ONE tuple and the seed would never
+# reconcile against the real capture (and, worse, one captured underlying would
+# falsely mark every OTHER underlying's cell "present"). Leaf rows carry
+# ``underlying=""`` on BOTH sides, so the extra column is a no-op for non-bundle
+# cells. ``_present_cols_for`` intersects this with the manifest's actual columns, so
+# a manifest WITHOUT an ``underlying`` column drops it (backward-safe).
+_UNDERLYING_AWARE_PRESENT_COLS: list[str] = [
     "venue",
     "chain",
     "data_type",
@@ -243,17 +244,18 @@ _TRADFI_PRESENT_COLS: list[str] = [
 def _present_cols_for(asset_group: str, available_in_df: list[str]) -> list[str]:
     """Return the manifest present-set column grain for ``asset_group``.
 
-    Sports is LEAGUE-grain (``_SPORTS_PRESENT_COLS``); tradfi is the per-instrument
-    grain PLUS ``underlying`` (``_TRADFI_PRESENT_COLS`` — so per-underlying bundle
-    captures with a blank instrument_id reconcile on the underlying); every other group
-    is the full per-instrument grain (``_DEFAULT_PRESENT_COLS``). Intersected with the
-    columns actually present in the manifest so the present-set tuples and the
-    enumerator row-keys line up.
+    Sports is LEAGUE-grain (``_SPORTS_PRESENT_COLS``); tradfi/cefi are the
+    per-instrument grain PLUS ``underlying`` (``_UNDERLYING_AWARE_PRESENT_COLS`` — so
+    per-underlying bundle captures with a blank instrument_id reconcile on the
+    underlying, not on colliding blank instrument_ids); every other group is the full
+    per-instrument grain (``_DEFAULT_PRESENT_COLS``). Intersected with the columns
+    actually present in the manifest so the present-set tuples and the enumerator
+    row-keys line up.
     """
     if asset_group == "sports":
         base = _SPORTS_PRESENT_COLS
-    elif asset_group == "tradfi":
-        base = _TRADFI_PRESENT_COLS
+    elif asset_group in ("tradfi", "cefi"):
+        base = _UNDERLYING_AWARE_PRESENT_COLS
     else:
         base = _DEFAULT_PRESENT_COLS
     return [c for c in base if c in available_in_df]
@@ -1069,7 +1071,7 @@ def _enumerate_v2_cefi(
        for that cell.
     """
     yield from _yield_v2_cefi_pre_venue_launch_rows(date_axis, data_types)
-    _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+    _pcols = present_cols or _UNDERLYING_AWARE_PRESENT_COLS
     # Pre-compute window bounds once for overlap filter below.
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
@@ -1102,6 +1104,23 @@ def _enumerate_v2_cefi(
         row_dts = _row_data_types("cefi", instr, data_types)
         if not row_dts:
             continue  # e.g. cefi OPTION leaf → frozenset() → skip entirely
+        # Shard-grain SSOT (mirrors _enumerate_v2_tradfi's identical fix): for the
+        # per-underlying BUNDLE instrument_types (futures_chain / options_chain — the
+        # synthetic entries _rollup_bundle_grain produces at instrument_id=<underlying>),
+        # the MTDS writer records the captured cell with instrument_id="" +
+        # underlying=<U> (MTDS _UNDERLYING_PARTITIONED_TYPES). Before this fix, cefi
+        # bundle rows were seeded with instrument_id=<underlying> and underlying=""
+        # (the RAW synthetic-entry shape, never translated) — a shard atom the real
+        # capture can never match, and the exact "stale-shape eu row" class found live
+        # in the KRAKEN-FUTURES/DERIBIT/OKX-FUTURES manifest (see this task's issue
+        # doc). A LEAF type keeps its real instrument_id and a blank underlying.
+        is_bundle = grain_for_instrument_type("cefi", instr.instrument_type, instr.venue) == GRAIN_BUNDLE_BY_UNDERLYING
+        if is_bundle:
+            seed_instrument_id = ""
+            seed_underlying = instr.underlying or instr.instrument_id
+        else:
+            seed_instrument_id = instr.instrument_id
+            seed_underlying = ""
         # Per-(venue, data_type) start_date gate — cefi_layer1_denominator_gaps
         # 2026_07_03 item -007. Alive dates BEFORE a data_type's UAC-declared
         # start_date must NOT seed expected_unattempted (they emit
@@ -1143,10 +1162,11 @@ def _enumerate_v2_cefi(
                             chain=instr.chain,
                             data_type=dt,
                             instrument_type=instr.instrument_type,
-                            instrument_id=instr.instrument_id,
+                            instrument_id=seed_instrument_id,
                             league_id="",
                             date=iso,
                             reason="EXPECTED_PRE_SOURCE_COVERAGE_START",
+                            underlying=seed_underlying,
                         )
                         continue
                     row_key = tuple(
@@ -1155,7 +1175,8 @@ def _enumerate_v2_cefi(
                             "chain": instr.chain,
                             "data_type": dt,
                             "instrument_type": instr.instrument_type,
-                            "instrument_id": instr.instrument_id,
+                            "instrument_id": seed_instrument_id,
+                            "underlying": seed_underlying,
                             "league_id": "",
                             "date": iso,
                         }.get(c, "")
@@ -1168,11 +1189,12 @@ def _enumerate_v2_cefi(
                             chain=instr.chain,
                             data_type=dt,
                             instrument_type=instr.instrument_type,
-                            instrument_id=instr.instrument_id,
+                            instrument_id=seed_instrument_id,
                             league_id="",
                             date=iso,
                             reason="",
                             capture_status="expected_unattempted",
+                            underlying=seed_underlying,
                         )
                 continue
             for dt in row_dts:
@@ -1182,10 +1204,11 @@ def _enumerate_v2_cefi(
                     chain=instr.chain,
                     data_type=dt,
                     instrument_type=instr.instrument_type,
-                    instrument_id=instr.instrument_id,
+                    instrument_id=seed_instrument_id,
                     league_id="",
                     date=iso,
                     reason=reason,
+                    underlying=seed_underlying,
                 )
 
 
