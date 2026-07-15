@@ -103,7 +103,7 @@ from unified_api_contracts import (
     bundle_instrument_type_for_leaf,
     default_transport_for_source,
     external_sources_for,
-    get_mvp_data_types_for_cefi_venue,
+    get_mvp_data_types_for_cefi_venue_itype,
     grain_for_instrument_type,
     has_source_priority,
     is_in_mvp_capture_universe,
@@ -700,31 +700,37 @@ def _row_data_types(
         if venue_caps:
             row_dts = [dt for dt in row_dts if dt in venue_caps or dt not in known_ag_dts]
 
-        # MVP data_type gate (bundle-aware) — kills the MVP-cut over-seed class
+        # MVP data_type gate (itype-AWARE) — kills the MVP-cut over-seed class
         # where a venue's MVP data_type set is strictly narrower than its raw
         # capability set (e.g. COINBASE-SPOT ships trades+book_snapshot_5 but
         # MVP scope keeps only {trades}; without this gate the enumerator
         # seeds book_snapshot_5 rows for COINBASE-SPOT that VMs will never
         # capture). Complements the VENUE_DATA_TYPE_CAPABILITIES carve-out
         # above (that's the "can-produce" half; this is the "MVP-cut" half).
-        # BUNDLE-AWARE skip: for instrument_types that MVP_SCOPE narrows via
-        # a per-instrument_type override (OPTION → {options_chain}), the
-        # validity matrix has ALREADY narrowed row_dts to the correct bundle
-        # data_type upstream — applying the venue-only helper here (which
-        # returns MVP_SCOPE.cefi.data_types = the flat tick set for Deribit,
-        # since Deribit has no venue override) would empty the correctly-
-        # narrowed ["trades"] slice for the post-rollup options_chain entry.
-        # _mvp_capture_itype normalises OPTIONS_CHAIN/COMBO → OPTION so the
-        # post-rollup bundle entry matches the override key too. A venue
-        # absent from MVP scope entirely (e.g. BINANCE-DELIVERY, COIN-M
-        # dropped per operator decision #3) returns an empty MVP set from
-        # the helper → the `if mvp_dts:` guard leaves row_dts unchanged,
-        # so the MVP gate does not blanket-block non-MVP-scoped venues.
+        #
+        # BUNDLE-GRAIN skip: for a per-underlying options_chain/futures_chain/
+        # combo BUNDLE, the validity matrix has ALREADY narrowed row_dts to the
+        # correct bundle data_type upstream (e.g. options_chain → ["trades"]);
+        # applying the leaf-equivalent MVP set here (OPTION → {options_chain})
+        # would wrongly empty that slice. ``_mvp_capture_itype`` normalises the
+        # bundle instrument_type to its leaf equivalent (OPTIONS_CHAIN/COMBO →
+        # OPTION, FUTURES_CHAIN → FUTURE); a bundle is exactly the case where
+        # that normalisation CHANGES the itype, so we skip on that signal.
+        #
+        # LEAF itypes (SPOT_PAIR / PERPETUAL / FUTURE / EQUITY_PERP): apply the
+        # itype-AWARE MVP set. This is what lets PERPETUAL carry ``liquidations``
+        # (its per-instrument_type override — 2026-07-15 workstream E) while
+        # FUTURE / spot do NOT, AND still honours the per-venue
+        # ``venue_data_types`` override (COINBASE-FUTURES stays trades-only for
+        # its PERPETUAL cells — no liquidations/book5 over-seed). A venue absent
+        # from MVP scope entirely returns an empty set → the ``if mvp_dts:``
+        # guard leaves row_dts unchanged (never blanket-blocks a non-MVP venue).
         cefi_rule = MVP_SCOPE.get("cefi")
         if isinstance(cefi_rule, CeFiMvpRule):
             itype_norm = _mvp_capture_itype(instr.instrument_type)
-            if itype_norm not in cefi_rule.instrument_type_data_types:
-                mvp_dts = get_mvp_data_types_for_cefi_venue(instr.venue)
+            is_bundle_grain = itype_norm != (instr.instrument_type or "").strip().upper()
+            if not is_bundle_grain:
+                mvp_dts = get_mvp_data_types_for_cefi_venue_itype(instr.venue, instr.instrument_type)
                 if mvp_dts:
                     row_dts = [dt for dt in row_dts if dt in mvp_dts or dt not in known_ag_dts]
 

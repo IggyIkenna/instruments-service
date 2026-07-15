@@ -217,11 +217,15 @@ def _entry(venue: str, instrument_type: str) -> object:
 
 
 def test_row_data_types_aster_capability_profile() -> None:
-    """ASTER capability profile after uac@3652f99f (cefi-008 live-wire flip 2026-07-07):
-    book_snapshot_5 IS a declared capability (live-only from 2026-06-23 via
-    aster_book_liq_ws) and IS in MVP scope, so the enumerator seeds it;
-    liquidations remains carved out at the MVP-scope layer (capability present
-    but not in MVP for ASTER). Retains the historical guard that survivors ⊆ capabilities."""
+    """ASTER capability profile: book_snapshot_5 IS a declared capability
+    (live-only from 2026-06-23 via aster_book_liq_ws) and IS in MVP scope, so
+    the enumerator seeds it. liquidations is EXCLUDED — since v15 (2026-07-15)
+    liquidations IS a PERPETUAL-leg MVP data_type, but ASTER's liquidations is a
+    LIVE-ONLY feed with ZERO batch capture, so it was removed from ASTER's
+    ``VENUE_DATA_TYPE_CAPABILITIES`` gate entry (operator ruling: live-only feeds
+    must not seed the batch honest-coverage denominator). It is now carved out at
+    the CAPABILITY layer, not the MVP-scope layer. Retains the historical guard
+    that survivors ⊆ capabilities."""
     from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
 
     cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations", "perp_funding"]
@@ -229,7 +233,10 @@ def test_row_data_types_aster_capability_profile() -> None:
     assert "book_snapshot_5" in row_dts, (
         "ASTER book_snapshot_5 is a live-wire capability (from 2026-06-23) and must be seeded"
     )
-    assert "liquidations" not in row_dts, "ASTER liquidations is not in MVP scope"
+    assert "liquidations" not in row_dts, (
+        "ASTER liquidations removed from the batch capability gate (live-only, 0 batch)"
+    )
+    assert "liquidations" not in VENUE_DATA_TYPE_CAPABILITIES["ASTER"], "ASTER liquidations gate entry removed (v15)"
     # What survives is exactly the venue's declared capability ∩ validity ∩ MVP.
     assert set(row_dts) <= set(VENUE_DATA_TYPE_CAPABILITIES["ASTER"]), row_dts
     assert "trades" in row_dts, "ASTER trades is a declared capability and must survive"
@@ -276,19 +283,19 @@ def test_row_data_types_deribit_options_chain_bundle_survives_mvp_gate() -> None
     """Deribit OPTION leaves roll up into a synthetic per-underlying
     ``options_chain`` bundle entry (BUNDLE_INSTRUMENT_TYPE_BY_AG_AND_LEAF).
     The UAC validity matrix narrows that bundle to data_type=trades. But
-    ``get_mvp_data_types_for_cefi_venue("DERIBIT")`` returns the flat cefi
-    tick set (Deribit has no venue-level override — it stays v10 behaviour;
-    the OPTION cost cut lives in ``instrument_type_data_types``). Applying
-    the intersection naively at the bundle entry would… still keep trades
-    (trades IS in the flat MVP set), so this test primarily guards the
-    SKIP-BY-OVERRIDE branch: the C2 point-fix must recognise that
-    OPTIONS_CHAIN (bundle-normalised via ``_mvp_capture_itype`` → OPTION) is
-    a key in ``MVP_SCOPE["cefi"].instrument_type_data_types`` and skip the
-    intersection entirely — so any future widening of the flat MVP set does
-    not accidentally re-widen options_chain seeding. This is the exact
-    regression class the plan CAUTION documents (attempts 1+2 wiped the
-    Deribit options_chain denominator by intersecting against the
-    venue-only set — G1 backfill mvp_backfill_cefi_tick_v10 centres on it)."""
+    ``get_mvp_data_types_for_cefi_venue_itype("DERIBIT", "options_chain")``
+    would resolve the flat cefi tick set (Deribit has no venue-level override).
+    Applying the intersection naively at the bundle entry would… still keep
+    trades (trades IS in the flat MVP set), so this test primarily guards the
+    SKIP-BY-BUNDLE-GRAIN branch: the itype-aware MVP gate (v15) must recognise
+    that OPTIONS_CHAIN is a per-underlying BUNDLE grain — ``_mvp_capture_itype``
+    CHANGES it (OPTIONS_CHAIN → OPTION), which is exactly the ``is_bundle_grain``
+    signal — and skip the intersection entirely, since the validity matrix has
+    already narrowed the bundle to its correct data_type. This guards against any
+    future widening of the flat MVP set accidentally re-widening options_chain
+    seeding. This is the exact regression class the plan CAUTION documents
+    (attempts 1+2 wiped the Deribit options_chain denominator by intersecting
+    against the venue-only set — G1 backfill mvp_backfill_cefi_tick_v10)."""
     from unified_api_contracts import MVP_SCOPE, CeFiMvpRule
 
     # Pre-conditions: MVP scope declares the OPTION override + Deribit has no venue override.
@@ -317,9 +324,9 @@ def test_row_data_types_deribit_options_chain_bundle_survives_mvp_gate() -> None
     assert row_dts == ["trades"], f"Deribit options_chain must survive MVP gate as ['trades']; got {row_dts}"
 
     # Additional bundle: FUTURES_CHAIN also normalises via _mvp_capture_itype
-    # → FUTURE. FUTURE is NOT in instrument_type_data_types → intersection
-    # DOES apply. Deribit futures_chain validity → ["trades"] and MVP flat
-    # set includes trades → survives as ["trades"] (not emptied).
+    # → FUTURE, which CHANGES the itype → is_bundle_grain True → the MVP-cut is
+    # SKIPPED (same as options_chain). Deribit futures_chain validity → ["trades"]
+    # and the skip leaves it unchanged → survives as ["trades"] (not emptied).
     row_dts_futures = enumerator_module._row_data_types("cefi", _entry("DERIBIT", "futures_chain"), cefi_dts)
     assert row_dts_futures == ["trades"], (
         f"Deribit futures_chain must survive MVP gate as ['trades']; got {row_dts_futures}"
@@ -327,21 +334,64 @@ def test_row_data_types_deribit_options_chain_bundle_survives_mvp_gate() -> None
 
 
 def test_row_data_types_deribit_perpetual_mvp_gate_drops_liquidations() -> None:
-    """Deribit PERPETUAL: raw capability admits {trades, book5,
-    derivative_ticker, liquidations} but MVP_SCOPE flat data_types are
-    {trades, book5, derivative_ticker, funding_rate} — liquidations is NOT
-    MVP. The C2 point-fix intersection must drop liquidations so the
-    Deribit-perp denominator matches the MVP capture universe (no
-    false EXPECTED_UNATTEMPTED liquidations rows). PERPETUAL is NOT in
-    instrument_type_data_types → intersection applies as expected."""
+    """Deribit PERPETUAL must NOT seed liquidations. Since v15 (2026-07-15)
+    liquidations IS a PERPETUAL-leg MVP data_type (instrument_type_data_types
+    ["PERPETUAL"] includes it), so the MVP-scope layer no longer excludes it.
+    DERIBIT is excluded at the CAPABILITY layer instead: it is NOT one of the 6
+    real-feed liquidations venues (only 3 noise ``captured`` rows in the live
+    manifest), so liquidations was removed from ``VENUE_DATA_TYPE_CAPABILITIES
+    ["DERIBIT"]`` — the capability carve-out drops it before the MVP gate, so no
+    phantom EXPECTED_UNATTEMPTED liquidations cell is seeded for Deribit perps."""
+    from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
+
+    assert "liquidations" not in VENUE_DATA_TYPE_CAPABILITIES["DERIBIT"], (
+        "DERIBIT liquidations gate entry removed (v15)"
+    )
     cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("DERIBIT", "PERPETUAL"), cefi_dts)
     assert "trades" in row_dts
     assert "book_snapshot_5" in row_dts
     assert "derivative_ticker" in row_dts
     assert "liquidations" not in row_dts, (
-        f"MVP gate must drop liquidations for Deribit PERPETUAL (not in MVP_SCOPE.cefi.data_types); got {row_dts}"
+        f"capability gate must drop liquidations for Deribit PERPETUAL (not a real-feed venue); got {row_dts}"
     )
+
+
+def test_row_data_types_liquidations_seeded_for_six_feed_venues() -> None:
+    """v15 (2026-07-15): liquidations IS seeded for PERPETUAL cells on exactly the
+    6 perp venues with a real captured liquidations feed. The itype-aware MVP gate
+    (instrument_type_data_types["PERPETUAL"] includes liquidations) ∩ the venue
+    capability gate (each of the 6 declares liquidations) admits it."""
+    cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations"]
+    for venue in ("BINANCE-FUTURES", "OKX-SWAP", "BYBIT", "KRAKEN-FUTURES", "BITFINEX-FUTURES", "BITGET-FUTURES"):
+        row_dts = enumerator_module._row_data_types("cefi", _entry(venue, "PERPETUAL"), cefi_dts)
+        assert "liquidations" in row_dts, f"{venue} PERPETUAL must seed liquidations (real feed): {row_dts}"
+
+
+def test_row_data_types_liquidations_excluded_for_future_and_non_feed() -> None:
+    """liquidations is PERPETUAL-leg ONLY. FUTURE cells on the feed venues do NOT
+    seed it (dated-futures liq is negligible — the itype-aware helper returns the
+    flat set, no liquidations, for FUTURE). Non-feed perp venues (HYPERLIQUID,
+    OKX-FUTURES) also do NOT seed it (no liquidations capability entry)."""
+    cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations"]
+    # FUTURE on real-feed venues → NO liquidations (PERPETUAL-only override).
+    for venue in ("BINANCE-FUTURES", "BYBIT", "KRAKEN-FUTURES"):
+        row_dts = enumerator_module._row_data_types("cefi", _entry(venue, "FUTURE"), cefi_dts)
+        assert "liquidations" not in row_dts, f"{venue} FUTURE must NOT seed liquidations: {row_dts}"
+    # Non-feed perp venues → NO liquidations (absent from capability gate).
+    for venue in ("HYPERLIQUID", "OKX-FUTURES"):
+        row_dts = enumerator_module._row_data_types("cefi", _entry(venue, "PERPETUAL"), cefi_dts)
+        assert "liquidations" not in row_dts, f"{venue} PERPETUAL must NOT seed liquidations: {row_dts}"
+
+
+def test_row_data_types_coinbase_futures_perpetual_stays_trades_only() -> None:
+    """COINBASE-FUTURES venue_data_types={trades} override MUST still win for its
+    PERPETUAL cells under the itype-aware gate (no liquidations/book5/
+    derivative_ticker over-seed). This is the exact regression the itype-aware
+    fix prevents — a venue-only skip would have bypassed the override."""
+    cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations"]
+    row_dts = enumerator_module._row_data_types("cefi", _entry("COINBASE-FUTURES", "PERPETUAL"), cefi_dts)
+    assert row_dts == ["trades"], f"COINBASE-FUTURES PERPETUAL must stay trades-only; got {row_dts}"
 
 
 def test_row_data_types_non_mvp_venue_skips_intersection() -> None:
