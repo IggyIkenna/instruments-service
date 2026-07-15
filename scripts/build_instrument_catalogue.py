@@ -68,6 +68,7 @@ from unified_api_contracts import (
     is_mvp,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.predictions import build_cross_venue_mapping
 from unified_trading_library import (
     GcsEventSink,
@@ -672,6 +673,50 @@ def _canonical_instrument_id(instrument_id: str) -> str:
     return canonical_prefix + instrument_id[colon_idx:]
 
 
+#: Margin-type word (as carried in the by_date snapshot's ``margin_type`` column) →
+#: the operator-decided ``@LIN``/``@INV`` marker token
+#: (instrument_id_format_canonicalization_2026_07_08.md finding 1).
+_CEFI_FUTURE_MARGIN_MARKER: dict[str, str] = {"linear": "LIN", "inverse": "INV"}
+
+
+def _canonicalize_cefi_future_id(instrument_id: str, meta: dict[str, str | None]) -> str:
+    """Rebuild a legacy raw-wire-form CeFi dated-FUTURE ``instrument_id`` to canonical shape.
+
+    Some ``by_date`` snapshot rows (captured before the Tardis reference-data adapter's
+    2026-07-09 canonicalization fix) still carry the raw wire-form id the adapter used to
+    stamp, e.g. ``BINANCE-FUTURES:FUTURE:ETHUSDT_260626`` (a ``VENUE:TYPE:`` prefix glued onto
+    the venue's raw concatenated-symbol+YYMMDD body), instead of the dash-canonical
+    ``VENUE:FUTURE:BASE-QUOTE@MARKER-YYYYMMDD`` every other dated-futures venue in the SAME
+    roll-up produces (KRAKEN-FUTURES/BYBIT). The parquet FILE content and the current adapter
+    are already correct for a fresh capture — this roll-up was the one place still passing a
+    legacy row's raw id straight through
+    (cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_2026_07_15.md). Rebuilds via
+    the SAME shared UAC builder (:func:`build_instrument_id`) the adapter itself uses, so a
+    fresh capture and a legacy-snapshot roll-up always agree on the identical canonical shape —
+    mirrors the ``_cefi_perp_lineage_key``/``_canonical_instrument_id`` precedent above for
+    other id-convention chains.
+
+    Returns ``instrument_id`` unchanged when it is not a CeFi FUTURE row, already carries the
+    ``@`` marker (idempotent no-op — covers Kraken/Bybit/Deribit already-canonical rows), or a
+    field the rebuild needs (base_asset/quote_asset/margin_type/expiry) is missing — degrade,
+    never guess. Pure + idempotent.
+    """
+    if (meta.get("instrument_type") or "").strip().upper() != "FUTURE":
+        return instrument_id
+    if "@" in instrument_id:
+        return instrument_id
+    venue = (meta.get("venue") or "").strip()
+    base = (meta.get("base_asset") or "").strip()
+    quote = (meta.get("quote_asset") or "").strip()
+    marker = _CEFI_FUTURE_MARGIN_MARKER.get((meta.get("margin_type") or "").strip().lower())
+    expiry = _parse_truth_date(meta.get("expiry"))
+    if not venue or not base or not quote or marker is None or expiry is None:
+        return instrument_id
+    return build_instrument_id(
+        venue, InstrumentType.FUTURE, f"{base}-{quote}", expiry_date=expiry, margin_marker=marker
+    )
+
+
 def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
     """Lifecycle-aggregation key for one per-date row.
 
@@ -1008,6 +1053,11 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         # ``glued_pair_id`` alongside. Non-pool / non-DeFi rows pass through
         # unchanged (canonical_id == the original instrument_key, glued_pair_id "").
         canonical_id, glued_pair_id, bare_venue, chain, pool_address = _defi_pool_dual_form(agg.meta)
+        # Legacy raw-wire-form CeFi dated-FUTURE id (BINANCE-FUTURES et al, captured
+        # before the adapter's 2026-07-09 canonicalization fix) — rebuild to the
+        # dash-canonical shape at roll-up time. No-op for already-canonical /
+        # non-FUTURE rows. See _canonicalize_cefi_future_id's docstring.
+        canonical_id = _canonicalize_cefi_future_id(canonical_id, agg.meta)
         # Phase-2 CeFi type refinement (cefi_completion_program_2026_07_15): a generic
         # PERPETUAL whose base is a tradfi underlying → EQUITY_PERP; a tokenized-share
         # SPOT_PAIR (base ``<TICKER>X``) → TOKENIZED_EQUITY. PURE reclassification — the
