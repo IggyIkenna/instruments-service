@@ -501,6 +501,27 @@ def _detect_thin_day_venues(
     return thin
 
 
+def _catalog_completeness_fraction(*, written_venues: set[str], expected_venues: set[str]) -> float:
+    """Fraction of the EXPECTED venue set actually written — always in [0, 1].
+
+    ``written_venues`` legitimately exceeds ``expected_venues`` on scoped
+    runs: the provider filter (``--sports-provider=API_FOOTBALL``) narrows
+    ``expected_venues`` to the filtered provider while the run still writes
+    sibling venues (WEATHER/open-meteo, per-fixture entity venues), and the
+    empty-ok / validation-failed subtractions above shrink expected further.
+    The naive ``len(written) / len(expected)`` then exceeds 1.0 and
+    ``publish_with_policy`` raises ``InvalidCompletenessFractionError`` —
+    which killed every full sports T1 fixtures run at finalize on 2026-07-15
+    (``uts-prod-instruments-service-sports-fixtures`` executions failing with
+    ``got 4.0``). Completeness of the expected set is the INTERSECTION over
+    expected; bonus venues outside the expected scope neither help nor hurt.
+    Empty expected set → 1.0 (nothing was required, nothing is missing).
+    """
+    if not expected_venues:
+        return 1.0
+    return len(written_venues & expected_venues) / len(expected_venues)
+
+
 def _finalize_completeness(
     *,
     counts: dict[str, int],
@@ -655,7 +676,9 @@ def _finalize_completeness(
     # but always allows write through. Per UAC seed Phase 6.8 PART B.
     _emission = _orch._check_emission_policy(
         date=date,
-        completeness_fraction=len(written_venues) / len(expected_venues) if expected_venues else 1.0,
+        completeness_fraction=_catalog_completeness_fraction(
+            written_venues=written_venues, expected_venues=expected_venues
+        ),
     )
     _orch.logger.debug(
         "catalog_snapshot emission decision date=%s: %s (completeness=%.3f)",
