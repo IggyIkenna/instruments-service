@@ -16,7 +16,15 @@ ARG PROJECT_ID
 # Digest-pinned UTL base image (QG STEP 5.79 -- reproducible builds + UTL/UAC provenance).
 # Refreshed by the dependency-update fan-out (update-dependency-version.yml) on base-image
 # republish; cloudbuild may override at build time: --build-arg BASE_IMAGE_DIGEST=sha256:...
-ARG BASE_IMAGE_DIGEST=sha256:c19afa13693326fbe3ccdafbfc27385a3d1999f9b4f4fe4835274210e7348d27
+#
+# Rebuild trigger 2026-07-15 18:50Z: pulls the UTL base image bundling the new UAC
+# (YAHOO_FINANCE phantom-venue REMOVED uac@fec3f110 + CBOE ohlcv_24h treasury capability
+# uac@2ace1fca). This operationalizes the YAHOO_FINANCE removal in the expected-universe /
+# is-daily-enum enumeration jobs (they enumerate VENUES_BY_ASSET_GROUP["tradfi"] via UAC, so
+# the new UAC stops them seeding phantom YAHOO_FINANCE expected-coverage rows into the MTDS
+# tradfi tick manifest). Digest sha256:b7c57243... = UTL AR 0.55.0/latest (Cloud Build
+# e7f72dc4, SUCCESS). Issue: tradfi_unreachable_databento_data_types_mbp10_ohlcv_coarse_calendar_2026_07_15.md.
+ARG BASE_IMAGE_DIGEST=sha256:b7c57243cd12827ed3103ce69c7fe6ffb827e75aa20f7fd1ad4feaf6d21126c2
 ARG BASE_IMAGE=asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-library/unified-trading-library@${BASE_IMAGE_DIGEST}
 FROM --platform=linux/amd64 ${BASE_IMAGE}
 
