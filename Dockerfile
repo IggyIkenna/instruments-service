@@ -17,14 +17,22 @@ ARG PROJECT_ID
 # Refreshed by the dependency-update fan-out (update-dependency-version.yml) on base-image
 # republish; cloudbuild may override at build time: --build-arg BASE_IMAGE_DIGEST=sha256:...
 #
-# Rebuild trigger 2026-07-15 18:50Z: pulls the UTL base image bundling the new UAC
+# Rebuild trigger 2026-07-15 22:45Z: pulls the UTL base image bundling the new UAC
 # (YAHOO_FINANCE phantom-venue REMOVED uac@fec3f110 + CBOE ohlcv_24h treasury capability
-# uac@2ace1fca). This operationalizes the YAHOO_FINANCE removal in the expected-universe /
-# is-daily-enum enumeration jobs (they enumerate VENUES_BY_ASSET_GROUP["tradfi"] via UAC, so
-# the new UAC stops them seeding phantom YAHOO_FINANCE expected-coverage rows into the MTDS
-# tradfi tick manifest). Digest sha256:b7c57243... = UTL AR 0.55.0/latest (Cloud Build
-# e7f72dc4, SUCCESS). Issue: tradfi_unreachable_databento_data_types_mbp10_ohlcv_coarse_calendar_2026_07_15.md.
-ARG BASE_IMAGE_DIGEST=sha256:b7c57243cd12827ed3103ce69c7fe6ffb827e75aa20f7fd1ad4feaf6d21126c2
+# uac@2ace1fca). This operationalizes the YAHOO_FINANCE removal in the expected-universe
+# enumeration jobs (they enumerate VENUES_BY_ASSET_GROUP["tradfi"] via UAC, so the new UAC
+# stops them seeding phantom YAHOO_FINANCE expected-coverage rows into the MTDS tradfi tick
+# manifest).
+# CORRECTION: the prior pin sha256:b7c57243 (UTL base cut 2026-07-15 17:54:46Z) had YAHOO
+# removed but PREDATED uac@7754661a (2026-07-15 18:14:29Z, "add venue_data_type_has_batch_source"),
+# so the enum crashed at runtime with `ImportError: cannot import name
+# 'venue_data_type_has_batch_source' from 'unified_api_contracts'` (enumerate_expected_universe.py
+# now imports that symbol). Bumped to the newer UTL 0.55.0/latest base (cut 2026-07-15 23:27:01Z)
+# which bundles all of {YAHOO removed, CBOE ohlcv_24h, venue_data_type_has_batch_source} — verified
+# in-image (cloudbuild=70dbc75f-c8db-4245-b3bb-fd175829f6b3, SUCCESS).
+# Digest sha256:be51b33f... = UTL AR 0.55.0/latest.
+# Issue: tradfi_unreachable_databento_data_types_mbp10_ohlcv_coarse_calendar_2026_07_15.md.
+ARG BASE_IMAGE_DIGEST=sha256:be51b33ff0f399d13f0e81628c16fefda60c385c3ff8452141b5cb784718f2c3
 ARG BASE_IMAGE=asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-library/unified-trading-library@${BASE_IMAGE_DIGEST}
 FROM --platform=linux/amd64 ${BASE_IMAGE}
 
