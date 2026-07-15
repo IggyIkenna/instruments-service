@@ -112,6 +112,7 @@ from unified_api_contracts import (
     pipeline_mode_for_source,
     source_string_for,
     valid_data_types_for_venue_instrument_type,
+    venue_data_type_has_batch_source,
 )
 from unified_api_contracts.registry import (
     VENUE_DATA_TYPE_CAPABILITIES,
@@ -699,6 +700,20 @@ def _row_data_types(
         venue_caps = VENUE_DATA_TYPE_CAPABILITIES.get(instr.venue)
         if venue_caps:
             row_dts = [dt for dt in row_dts if dt in venue_caps or dt not in known_ag_dts]
+
+        # Batch-vs-live carve-out (operator ruling 2026-07-15,
+        # plans/active/issues/
+        # cefi_live_only_data_types_vs_layer1_denominator_contradiction_2026_07_12.md):
+        # a dt CAN pass the "can-produce" carve-out above (it IS a declared
+        # capability — genuinely captured, just live-only) yet still have NO
+        # batch/historical source at all (no vendor archive, no venue REST
+        # history). Seeding expected_unattempted for such a cell manufactures a
+        # denominator entry a batch backfill can NEVER close — this is the
+        # writer half of the same fix `expected_universe.py`'s Carve-out 1b
+        # applies to the Layer-1/Layer-2 EXPECTED matrix. Never seed it, at any
+        # date (not just historical — this handler has no live-mode caller, so
+        # excluding it here is unconditionally "batch-mode-aware").
+        row_dts = [dt for dt in row_dts if venue_data_type_has_batch_source(instr.venue, dt) or dt not in known_ag_dts]
 
         # MVP data_type gate (itype-AWARE) — kills the MVP-cut over-seed class
         # where a venue's MVP data_type set is strictly narrower than its raw
