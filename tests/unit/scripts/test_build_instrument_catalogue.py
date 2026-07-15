@@ -1452,6 +1452,117 @@ def test_ftp_rollup_rows_never_treated_as_league_by_v2_enumerator(rollup: Module
 
 
 # ---------------------------------------------------------------------------
+# _merge_sports_ftp_with_frozen_tail — 2026-07-15 CATALOGUE_SHRINK_BLOCKED fix.
+#
+# Regression: build_sports_fixture_team_player_catalogue's trailing
+# SPORTS_FTP_WINDOW_DAYS window is a full rebuild every run with NO memory of
+# a prior run — an instrument whose only captured day ages off the window's
+# bottom edge simply has no blob left in the fresh walk, so its row vanishes
+# from the catalogue entirely (confirmed live incident: 9 single-day-only
+# fixture/player rows aged off day=2025-06-09 while only 3 new same-day
+# fixtures were gained, netting a 27216→27210 shrink that jammed the
+# monotonic guard). The frozen-tail merge must carry an aged-off row through
+# UNCHANGED rather than silently dropping it.
+# ---------------------------------------------------------------------------
+
+
+def test_sports_ftp_frozen_tail_keeps_row_that_aged_off_the_window(rollup: ModuleType) -> None:
+    """An FTP row whose sole captured day is now OUTSIDE the fresh window must
+    survive (frozen, unchanged) rather than vanish — the exact 2026-07-15 bug."""
+    # OLD_FIXTURE's only observed day (2025-06-09) is now before `since` — a
+    # bare full rebuild of the window would never see it again.
+    prev_catalogue = (
+        pd.DataFrame(
+            [
+                _cat_row(
+                    instrument_id="MLS:LOS_ANGELES_FC_v_SPORTING_KANSAS_CITY:20250609",
+                    instrument_type=rollup.SPORTS_FIXTURE_INSTRUMENT_TYPE,
+                    venue="",
+                    league_id="MLS",
+                    available_from="2025-06-09",
+                    available_to="2025-06-09",
+                ),
+                _cat_row(
+                    instrument_id="JOHNSON_T",
+                    instrument_type=rollup.SPORTS_PLAYER_INSTRUMENT_TYPE,
+                    venue="",
+                    league_id="MLS",
+                    available_from="2025-06-09",
+                    available_to="2025-06-09",
+                ),
+                # A league-grain row in the SAME previous catalogue must be
+                # filtered out by the helper — it is not FTP-grain.
+                _cat_row(
+                    instrument_id="MLS",
+                    instrument_type=rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE,
+                    venue="",
+                    league_id="MLS",
+                    available_from="2020-01-01",
+                    available_to=None,
+                ),
+            ]
+        ),
+        None,
+    )
+    # Fresh window walk (since=2025-06-10) — a brand-new fixture played today,
+    # OLD_FIXTURE/JOHNSON_T have no blob left inside the window at all.
+    since = date(2025, 6, 10)
+    d = "2026-07-15"
+    blobs = dict(
+        [
+            _sports_blob(
+                d,
+                "fixtures",
+                "USL_CHAMPIONSHIP",
+                [{"af_fixture_id": 1, "date": d, "af_home_name": "Miami FC", "af_away_name": "Indy Eleven"}],
+            ),
+        ]
+    )
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records")) for path, frame in blobs.items()})
+
+    merged = rollup._merge_sports_ftp_with_frozen_tail(
+        storage,
+        "test-bucket",
+        by_date_prefix=rollup.SPORTS_BY_DATE_PREFIX,
+        since=since,
+        max_blobs=None,
+        prev_catalogue=prev_catalogue,
+    )
+    by_id = {row["instrument_id"]: row for row in merged.to_dict("records")}
+
+    # The aged-off rows survive, frozen, with their original lifecycle window —
+    # NOT silently dropped (the bug) and NOT re-closed a second time.
+    assert "MLS:LOS_ANGELES_FC_v_SPORTING_KANSAS_CITY:20250609" in by_id
+    assert by_id["MLS:LOS_ANGELES_FC_v_SPORTING_KANSAS_CITY:20250609"]["available_from"] == "2025-06-09"
+    assert by_id["MLS:LOS_ANGELES_FC_v_SPORTING_KANSAS_CITY:20250609"]["available_to"] == "2025-06-09"
+    assert "JOHNSON_T" in by_id
+    assert by_id["JOHNSON_T"]["available_to"] == "2025-06-09"
+    # The league-grain row from the previous catalogue must NOT leak into the
+    # FTP-grain merge output (the caller concats league_df separately).
+    assert "MLS" not in by_id or by_id["MLS"]["instrument_type"] != rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE
+    # The brand-new same-day fixture is also present — net effect is growth,
+    # never a shrink, once the frozen tail is applied.
+    fresh_id = "USL_CHAMPIONSHIP:MIAMI_FC_v_INDY_ELEVEN:20260715"
+    assert fresh_id in by_id
+    assert len(merged) == 3  # 2 frozen-tail rows + 1 fresh row — never fewer than prev's FTP rows.
+
+
+def test_sports_ftp_frozen_tail_no_prev_catalogue_returns_window_only(rollup: ModuleType) -> None:
+    """Cold start (no previous catalogue) — no tail to merge, window passes through."""
+    storage = _FakeStorage({})
+    out = rollup._merge_sports_ftp_with_frozen_tail(
+        storage,
+        "test-bucket",
+        by_date_prefix=rollup.SPORTS_BY_DATE_PREFIX,
+        since=date(2025, 6, 10),
+        max_blobs=None,
+        prev_catalogue=None,
+    )
+    assert out.empty
+    assert list(out.columns) == list(rollup.CATALOG_COLUMNS)
+
+
+# ---------------------------------------------------------------------------
 # evaluate_monotonic_guard
 # ---------------------------------------------------------------------------
 
