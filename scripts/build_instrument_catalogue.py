@@ -2732,6 +2732,76 @@ def _merge_canonical_venue(raw: str) -> str:
     return canonical
 
 
+def _merge_sports_ftp_with_frozen_tail(
+    storage: StorageClient,
+    bucket: str,
+    *,
+    by_date_prefix: str,
+    since: date,
+    max_blobs: int | None,
+    prev_catalogue: tuple[pd.DataFrame, datetime | None] | None,
+) -> pd.DataFrame:
+    """Sports fixture/team/player-grain roll-up with a FROZEN TAIL (2026-07-15 fix).
+
+    :func:`build_sports_fixture_team_player_catalogue`'s trailing
+    :data:`SPORTS_FTP_WINDOW_DAYS` window is unconditionally full-rebuilt on
+    every run (sports is exempt from the generic ``--mode incremental`` engine
+    — see :func:`run_rollup`'s mode-resolution comment). The by_date WALK is
+    windowed, but with no memory of what a PRIOR run already rolled up: an
+    instrument whose last-observed day ages past the window's leading edge
+    (``since``) simply has NO blob in the fresh walk at all, so its row
+    vanishes from the recompute ENTIRELY — not just its ``available_to``
+    closing, the whole row disappears — silently shrinking the catalogue's row
+    count run over run. That contradicts this module's own documented
+    contract ("a cumulative, all-instruments-ever lifecycle catalogue, NOT a
+    current snapshot" — module docstring) and can permanently jam the
+    monotonic guard.
+
+    Confirmed root cause of the 2026-07-15 ``CATALOGUE_SHRINK_BLOCKED`` sports
+    incident (27216 → 27210): 9 single-day-only fixture/player rows (their
+    ONLY captured occurrence across the whole history was 2025-06-09) aged off
+    the window's bottom edge the moment ``since`` advanced past that day,
+    while only 3 new same-day USL_CHAMPIONSHIP fixtures were gained at the top
+    — net -6. Not a legitimate league de-registration (unrelated to
+    :func:`_sports_league_registered`) and not upstream flakiness (identical
+    49,916-blob / 27,210-row result on both same-day retries) — a real gap in
+    this roll-up's windowing.
+
+    Fix: reuse the generic frozen-tail merge (:func:`_merge_incremental`) —
+    its default (non-prediction, non-DeFi-pool) merge key is the bare
+    ``instrument_id``, which IS the fixture_id/team_id/player_id identity
+    these rows already carry, so no sports-specific key branch is needed. Its
+    venue-presence-gated close (branch 3) is a natural no-op here (sports FTP
+    rows carry ``venue=""`` always, by design — see
+    :func:`build_sports_fixture_team_player_catalogue`'s docstring), so an
+    aged-off row is carried through FROZEN — unchanged ``available_from`` /
+    ``available_to`` — rather than closed again. league-grain rows (the
+    manifest-derived could-exist universe) are untouched by this helper; the
+    caller filters them out of ``prev_catalogue`` before calling in.
+    """
+    window_df = build_sports_fixture_team_player_catalogue(
+        storage, bucket, by_date_prefix=by_date_prefix, since=since, max_blobs=max_blobs
+    )
+    if prev_catalogue is None:
+        return window_df
+    prev_df, _prev_mtime = prev_catalogue
+    if prev_df.empty:
+        return window_df
+    prev_ftp_df = prev_df[
+        prev_df["instrument_type"].isin(
+            (SPORTS_FIXTURE_INSTRUMENT_TYPE, SPORTS_TEAM_INSTRUMENT_TYPE, SPORTS_PLAYER_INSTRUMENT_TYPE)
+        )
+    ].copy()
+    if prev_ftp_df.empty:
+        return window_df
+    logger.info(
+        "Sports FTP frozen-tail merge: %d prev FTP rows + %d fresh window rows",
+        len(prev_ftp_df),
+        len(window_df),
+    )
+    return _merge_incremental(prev_ftp_df, window_df, window_start=since, asset_group="sports")
+
+
 def run_rollup(
     asset_group: str,
     *,
@@ -2818,9 +2888,23 @@ def run_rollup(
         # sports_reference/by_date (2026-07-09, extends past league-grain-only;
         # see build_sports_fixture_team_player_catalogue's docstring for why this
         # is architecturally distinct from the manifest-derived league-grain path
-        # above and safe to concat onto the same catalogue).
-        ftp_df = build_sports_fixture_team_player_catalogue(
-            storage, bucket, by_date_prefix=by_date_prefix, max_blobs=max_blobs
+        # above and safe to concat onto the same catalogue). FROZEN-TAIL merge
+        # (2026-07-15 fix, _merge_sports_ftp_with_frozen_tail) onto the previous
+        # catalogue's FTP rows — the trailing SPORTS_FTP_WINDOW_DAYS window is
+        # unconditionally recomputed every run with no memory of a prior run, so
+        # without the frozen tail an instrument that ages off the window's bottom
+        # edge silently vanishes from the catalogue entirely (not just closes),
+        # shrinking the row count and jamming the monotonic guard — see that
+        # helper's docstring for the confirmed 2026-07-15 incident (27216→27210).
+        sports_since = datetime.now(UTC).date() - timedelta(days=SPORTS_FTP_WINDOW_DAYS)
+        sports_prev_catalogue = _load_previous_catalogue(storage, bucket, canonical_blob)
+        ftp_df = _merge_sports_ftp_with_frozen_tail(
+            storage,
+            bucket,
+            by_date_prefix=by_date_prefix,
+            since=sports_since,
+            max_blobs=max_blobs,
+            prev_catalogue=sports_prev_catalogue,
         )
         df = pd.concat([league_df, ftp_df], ignore_index=True) if not ftp_df.empty else league_df
     elif mode == "incremental" and prev_catalogue is not None:
