@@ -218,26 +218,35 @@ def _entry(venue: str, instrument_type: str) -> object:
 
 def test_row_data_types_aster_capability_profile() -> None:
     """ASTER capability profile: book_snapshot_5 IS a declared capability
-    (live-only from 2026-06-23 via aster_book_liq_ws) and IS in MVP scope, so
-    the enumerator seeds it. liquidations is EXCLUDED — since v15 (2026-07-15)
-    liquidations IS a PERPETUAL-leg MVP data_type, but ASTER's liquidations is a
-    LIVE-ONLY feed with ZERO batch capture, so it was removed from ASTER's
-    ``VENUE_DATA_TYPE_CAPABILITIES`` gate entry (operator ruling: live-only feeds
-    must not seed the batch honest-coverage denominator). It is now carved out at
-    the CAPABILITY layer, not the MVP-scope layer. Retains the historical guard
-    that survivors ⊆ capabilities."""
+    (live-only from 2026-06-23 via aster_book_liq_ws) but is NOT seeded by the
+    enumerator — REVISED 2026-07-15 (operator ruling, supersedes the prior
+    "must be seeded" assertion this test carried): book_snapshot_5 has NO
+    batch/historical source at all (its REST endpoint is current-snapshot-only),
+    so it is excluded via UAC's ``VENUE_DATA_TYPE_NO_BATCH_SOURCE`` — a
+    "short of magic cannot physically be retrieved" BATCH combo must not seed the
+    honest-coverage denominator, even as a declared (live-only) capability.
+    liquidations is EXCLUDED too — since v15 (2026-07-15) liquidations IS a
+    PERPETUAL-leg MVP data_type, but ASTER's liquidations is a LIVE-ONLY feed with
+    ZERO batch capture, so it was removed from ASTER's ``VENUE_DATA_TYPE_CAPABILITIES``
+    gate entry entirely (operator ruling: live-only feeds must not seed the batch
+    honest-coverage denominator) — carved out at the CAPABILITY layer, not the
+    MVP-scope layer, and would ALSO now be caught by VENUE_DATA_TYPE_NO_BATCH_SOURCE
+    even if it were still a declared capability. Retains the historical guard that
+    survivors ⊆ capabilities.
+    SSOT: plans/active/issues/
+    cefi_live_only_data_types_vs_layer1_denominator_contradiction_2026_07_12.md."""
     from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
 
     cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations", "perp_funding"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("ASTER", "PERPETUAL"), cefi_dts)
-    assert "book_snapshot_5" in row_dts, (
-        "ASTER book_snapshot_5 is a live-wire capability (from 2026-06-23) and must be seeded"
+    assert "book_snapshot_5" not in row_dts, (
+        "ASTER book_snapshot_5 has no batch source (live-only) — must NOT be seeded"
     )
     assert "liquidations" not in row_dts, (
         "ASTER liquidations removed from the batch capability gate (live-only, 0 batch)"
     )
     assert "liquidations" not in VENUE_DATA_TYPE_CAPABILITIES["ASTER"], "ASTER liquidations gate entry removed (v15)"
-    # What survives is exactly the venue's declared capability ∩ validity ∩ MVP.
+    # What survives is exactly the venue's declared capability ∩ validity ∩ MVP ∩ batch-source.
     assert set(row_dts) <= set(VENUE_DATA_TYPE_CAPABILITIES["ASTER"]), row_dts
     assert "trades" in row_dts, "ASTER trades is a declared capability and must survive"
 
