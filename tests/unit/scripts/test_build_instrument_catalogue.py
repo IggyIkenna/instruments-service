@@ -401,6 +401,123 @@ def test_rollup_non_pool_row_has_blank_dual_form(rollup: ModuleType) -> None:
     assert row["pool_address"] == ""
 
 
+def test_rollup_legacy_raw_binance_futures_dated_future_id_canonicalized(rollup: ModuleType) -> None:
+    """A legacy by_date row captured BEFORE the adapter's 2026-07-09 fix still carries the
+    raw wire-form dated-FUTURE id (``BINANCE-FUTURES:FUTURE:ETHUSDT_260626``) — the roll-up
+    must rebuild it to the dash-canonical shape every other dated-futures venue in the same
+    catalogue produces (cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_
+    2026_07_15.md)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-FUTURES:FUTURE:ETHUSDT_260626",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "ETHUSDT_260626",
+                            "base_asset": "ETH",
+                            "quote_asset": "USDT",
+                            "margin_type": "linear",
+                            "expiry": "2026-06-26",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "BINANCE-FUTURES:FUTURE:ETH-USDT@LIN-20260626"
+
+
+def test_rollup_legacy_raw_binance_delivery_inverse_dated_future_id_canonicalized(rollup: ModuleType) -> None:
+    """Same defect class, BINANCE-DELIVERY inverse side (``@INV``)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-DELIVERY:FUTURE:BTCUSD_260925",
+                            "venue": "BINANCE-DELIVERY",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "BTCUSD_260925",
+                            "base_asset": "BTC",
+                            "quote_asset": "USD",
+                            "margin_type": "inverse",
+                            "expiry": "2026-09-25",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "BINANCE-DELIVERY:FUTURE:BTC-USD@INV-20260925"
+
+
+def test_rollup_already_canonical_dated_future_id_untouched(rollup: ModuleType) -> None:
+    """A row already fixed at the adapter (KRAKEN-FUTURES, carries ``@``) is an idempotent
+    no-op — the roll-up must never re-derive/mangle an already-canonical id."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260626",
+                            "venue": "KRAKEN-FUTURES",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "FF_XBTUSD_260626",
+                            "base_asset": "BTC",
+                            "quote_asset": "USD",
+                            "margin_type": "linear",
+                            "expiry": "2026-06-26",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260626"
+
+
+def test_rollup_raw_dated_future_missing_fields_degrades_unchanged(rollup: ModuleType) -> None:
+    """A dated-FUTURE row missing a field the rebuild needs (here: quote_asset) must
+    degrade to the raw id unchanged rather than guess or raise."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-FUTURES:FUTURE:ETHUSDT_260626",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "ETHUSDT_260626",
+                            "base_asset": "ETH",
+                            "margin_type": "linear",
+                            "expiry": "2026-06-26",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "BINANCE-FUTURES:FUTURE:ETHUSDT_260626"
+
+
 def test_rollup_cefi_row_carries_through_adapter_populated_canonical_instrument_id(rollup: ModuleType) -> None:
     """A CeFi row captured AFTER the adapter fix (canonical_instrument_id_cefi_defi_
     backfill_2026_07_14.md) carries its own value through unchanged."""
