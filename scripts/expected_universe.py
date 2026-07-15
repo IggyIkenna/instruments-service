@@ -14,7 +14,7 @@ Per-AG strategies share ONE interface (a callable returning the tuple set)
 but preserve the genuinely different grains the SSOT calls out:
 
   cefi:       INSTRUMENT_TYPES_BY_VENUE  +  VENUE_DATA_TYPE_CAPABILITIES  +
-              get_mvp_data_types_for_cefi_venue  (per-venue MVP override)
+              get_mvp_data_types_for_cefi_venue_itype  (per-(venue,itype) MVP override)
   defi:       PROTOCOL_CAPABILITIES  per-protocol  (chain-genesis grain)
   tradfi:     TRADFI_VENUE_INSTRUMENT_TYPES  +  VENUE_DATA_TYPE_CAPABILITIES
   sports:     VENUE_DATA_TYPE_CAPABILITIES  odds  grain per bookmaker venue
@@ -42,7 +42,7 @@ from unified_api_contracts import (
     INSTRUMENT_TYPES_BY_VENUE,
     VENUES_BY_ASSET_GROUP,
     bundle_instrument_type_for_leaf,
-    get_mvp_data_types_for_cefi_venue,
+    get_mvp_data_types_for_cefi_venue_itype,
 )
 from unified_api_contracts.registry import TRADFI_VENUE_INSTRUMENT_TYPES
 from unified_api_contracts.registry.market_data_categories import (
@@ -290,10 +290,6 @@ def _expected_generic(asset_group: str) -> set[tuple[str, str, str]]:
 
     for venue in venues:
         venue_caps = VENUE_DATA_TYPE_CAPABILITIES.get(venue, {}) if in_capability_ag else {}
-        # For cefi: pre-compute MVP data_types override for this venue.
-        cefi_mvp_dts: frozenset[str] | None = None
-        if ag == "cefi":
-            cefi_mvp_dts = get_mvp_data_types_for_cefi_venue(venue)
 
         for itype in instrument_types:
             # (venue, itype) validity GATE — prevents the cross-product
@@ -304,6 +300,17 @@ def _expected_generic(asset_group: str) -> set[tuple[str, str, str]]:
             itype_canon = _get_instrument_type_aliases().get(itype.strip().lower(), itype.strip().lower())
             if not _venue_itype_is_valid(ag, venue, itype_canon):
                 continue
+
+            # For cefi: the MVP data_type set is per-(venue, INSTRUMENT_TYPE) — the
+            # PERPETUAL override adds `liquidations` for perp cells ONLY (v15,
+            # 2026-07-15), the OPTION override narrows to options_chain, and the
+            # per-venue `venue_data_types` override (COINBASE-FUTURES → {trades})
+            # still wins. Computed per-itype (NOT venue-wide) via the itype-aware
+            # helper so liquidations lands on PERPETUAL only, never FUTURE/spot —
+            # matching the enumerate_expected_universe.py denominator producer.
+            cefi_mvp_dts: frozenset[str] | None = None
+            if ag == "cefi":
+                cefi_mvp_dts = get_mvp_data_types_for_cefi_venue_itype(venue, itype)
 
             # AUTHORITY: UAC functions, not the raw dict (bug fix 2026-06-29).
             # valid_data_types_for_venue_instrument_type narrows DeFi to the
@@ -336,13 +343,13 @@ def _expected_generic(asset_group: str) -> set[tuple[str, str, str]]:
                 if in_capability_ag and dt not in venue_caps:
                     continue
 
-                # Carve-out 2: cefi per-venue MVP override.
+                # Carve-out 2: cefi per-(venue, instrument_type) MVP override.
                 # NOTE: is_mvp() is NOT used here because it requires a
                 # base_ccy (instrument grain) to return True for CeFi/TradFi.
-                # The schema-level MVP gate for CeFi is
-                # get_mvp_data_types_for_cefi_venue.  TradFi:
-                # VENUES_BY_ASSET_GROUP already contains only MVP tradfi
-                # venues; non-MVP venues are absent from the AG's venue set.
+                # The schema-level MVP gate for CeFi is the itype-aware
+                # get_mvp_data_types_for_cefi_venue_itype (computed per-itype
+                # above).  TradFi: VENUES_BY_ASSET_GROUP already contains only
+                # MVP tradfi venues; non-MVP venues are absent from the AG's set.
                 if ag == "cefi" and cefi_mvp_dts is not None and dt not in cefi_mvp_dts:
                     continue
 
@@ -381,9 +388,9 @@ def build_expected(asset_group: str) -> set[tuple[str, str, str]]:
     raise so a typo doesn't kill the whole batch when only one AG is broken.
 
     HARD RULE (codex/02-data/honest-coverage-model.md): the expected universe
-    is the IS catalogue × UAC matrix — NEVER derive it from the manifest (the
-    manifest is the write ledger; using it as both numerator and denominator
-    is a circular reference that hides real holes).
+    is the cross-product of the IS catalogue and the UAC matrix -- NEVER derive
+    it from the manifest (the manifest is the write ledger; using it as both
+    numerator and denominator is a circular reference that hides real holes).
     """
     ag = asset_group.lower()
     strategy = _STRATEGIES.get(ag)
