@@ -1,11 +1,10 @@
 {
   "asset_group": "tradfi",
-  "captured_at": "2026-07-14",
-  "tuple_count": 41,
+  "captured_at": "2026-07-15",
+  "tuple_count": 40,
   "tuples": [
     ["CBOE", "futures_chain", "ohlcv_1m"],
     ["CBOE", "futures_chain", "ohlcv_1s"],
-    ["CBOE", "index", "ohlcv_15m"],
     ["CBOE", "index", "ohlcv_1m"],
     ["CBOE", "options_chain", "ohlcv_1m"],
     ["CME", "combo", "ohlcv_1m"],

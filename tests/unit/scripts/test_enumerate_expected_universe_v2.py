@@ -2373,6 +2373,79 @@ class TestG1EnumTradfiFilter:
 
 
 # ---------------------------------------------------------------------------
+# TRADFI MTDS-tick-manifest exclusion of corporate_action_confirmed /
+# earnings_result (2026-07-15) — real capture for both lives entirely in
+# features-service's calendar module (a structurally separate service/bucket),
+# never in market-tick-data-service. Seeding them as MTDS-tick-manifest
+# expected cells made a permanently-unsatisfiable 100% attempted_failed rate.
+# See unified-trading-pm/plans/active/issues/
+# tradfi_unreachable_databento_data_types_mbp10_ohlcv_coarse_calendar_2026_07_15.md
+# finding (3).
+# ---------------------------------------------------------------------------
+
+
+class TestTradfiMtdsTickManifestDataTypeExclusion:
+    _EXCLUDED: ClassVar[frozenset[str]] = frozenset({"corporate_action_confirmed", "earnings_result"})
+
+    def test_excluded_types_are_declared_in_uac_but_not_seeded(self) -> None:
+        """Sanity-check the fixture: both excluded types must actually be present in
+        UAC's DATA_TYPES_BY_ASSET_GROUP["tradfi"] — else this test would trivially
+        pass for the wrong reason (nothing to exclude)."""
+        uac_tradfi_dts = {str(dt) for dt in enumerator_module.DATA_TYPES_BY_ASSET_GROUP.get("tradfi", [])}
+        assert uac_tradfi_dts >= self._EXCLUDED
+
+    def test_tradfi_mtds_tick_manifest_data_types_excludes_both(self) -> None:
+        resolved = set(enumerator_module._tradfi_mtds_tick_manifest_data_types())
+        assert not (self._EXCLUDED & resolved)
+        # Every other UAC-declared tradfi data_type must still pass through unchanged
+        # (this is a narrow two-item exclusion, not a wholesale re-scoping).
+        uac_tradfi_dts = {str(dt) for dt in enumerator_module.DATA_TYPES_BY_ASSET_GROUP.get("tradfi", [])}
+        assert resolved == (uac_tradfi_dts - self._EXCLUDED)
+
+    def test_enumerate_v2_tradfi_default_resolution_never_seeds_excluded_types(self) -> None:
+        """enumerate_v2(asset_group="tradfi") with NO explicit data_types override
+        (the production default-resolution branch, mirroring main()'s CLI default)
+        must never emit a row for either excluded data_type, across both the
+        venue-grain non-trading-day pass and the per-instrument lifecycle pass.
+
+        EQUITY@NASDAQ is deliberately chosen — per TestG1EnumTradfiFilter above,
+        the G1-ENUM validity matrix considers corporate_action_confirmed/
+        earnings_result VALID for this instrument shape, so this test actually
+        exercises the exclusion (an instrument shape the validity matrix already
+        rejects them for would pass trivially).
+        """
+        # Window includes an alive date (2020-06-01) so the overlap filter does not
+        # skip the instrument entirely; 2019-01-01 is pre-listing → NOT_LISTED rows.
+        catalog = [
+            _make_tradfi_entry(
+                instrument_id="AAPL", instrument_type="EQUITY", venue="NASDAQ", available_from="2020-01-01"
+            )
+        ]
+        rows = list(
+            enumerator_module.enumerate_v2(
+                asset_group="tradfi",
+                catalog=catalog,
+                date_axis=_date_axis("2019-01-01", "2020-06-01"),
+            )
+        )
+        rows = _drop_v2_venue_grain(rows)
+        assert rows  # sanity: the default resolution path actually yields per-instrument rows
+        emitted_data_types = {r.data_type for r in rows}
+        assert not (self._EXCLUDED & emitted_data_types)
+        # Sanity: some other EQUITY-valid data_type (not excluded) IS still seeded.
+        assert emitted_data_types - self._EXCLUDED
+
+    def test_uac_data_types_by_asset_group_registry_itself_is_untouched(self) -> None:
+        """The fix must be scoped to THIS enumerator's MTDS-tick-manifest seeding
+        path only — UAC's own DATA_TYPES_BY_ASSET_GROUP["tradfi"] (a cross-cutting
+        registry consumed by other UAC modules: validity matrices, UI
+        reference-data generation, mvp_scope, …) must still declare both types as
+        legitimate tradfi data_types."""
+        uac_tradfi_dts = {str(dt) for dt in enumerator_module.DATA_TYPES_BY_ASSET_GROUP.get("tradfi", [])}
+        assert uac_tradfi_dts >= self._EXCLUDED
+
+
+# ---------------------------------------------------------------------------
 # G1-ENUM bundle-grain rollup (slot-7 2026-06-07)
 #
 # Leaf OPTION/COMBO contracts roll UP into a per-underlying options_chain /
