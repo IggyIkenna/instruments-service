@@ -12,7 +12,7 @@ value (`PERPETUAL`, `SPOT_PAIR`) — the same convention documented in `lido.py`
 Per-adapter identity assertions already live in each adapter's own dedicated test
 file (`test_sanctum_metadata.py`, `test_solblaze_metadata.py`,
 `test_jito_restaking_metadata.py`, `test_eigenlayer_metadata.py`,
-`test_flash_trade_metadata.py`, `test_jupiter_metadata.py`) — this module adds the
+`test_jupiter_metadata.py`) — this module adds the
 2 fixes (Drift's PERP/SPOT dual mismatch) that don't have a dedicated per-adapter
 metadata test file, kept standalone (not folded into the shared
 `test_defi_adapters_comprehensive.py`) to avoid entangling this narrow C4 regression

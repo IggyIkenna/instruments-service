@@ -45,9 +45,9 @@ SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "orca": datetime(2022, 3, 1, tzinfo=UTC),  # Orca Whirlpools (CLMM) launch
     "marinade": datetime(2021, 8, 1, tzinfo=UTC),  # Marinade mSOL mainnet launch
     "jito": datetime(2021, 11, 1, tzinfo=UTC),  # Jito stake pool mainnet launch
-    "mango": datetime(2023, 8, 1, tzinfo=UTC),  # Mango V4 mainnet launch (Aug 2023)
-    "zeta": datetime(2022, 4, 1, tzinfo=UTC),  # Zeta Markets v1 mainnet launch
-    "flash_trade": datetime(2023, 11, 1, tzinfo=UTC),  # Flash Trade mainnet launch
+    # mango / zeta / flash_trade removed 2026-07-15 (operator ruling; dead API endpoints,
+    # ~$0 TVL, zero MTDS capture ever wired). SSOT:
+    # unified-trading-pm/codex/04-architecture/solana-defi-coverage.md.
     # Plan C: Solana AMM coverage expansion (2026-05-13)
     "meteora": datetime(2022, 9, 1, tzinfo=UTC),  # Meteora Dynamic Liquidity mainnet launch
     "phoenix": datetime(2023, 6, 1, tzinfo=UTC),  # Phoenix CLOB DEX mainnet launch
