@@ -564,3 +564,97 @@ class TestEnsureCanonicalFixturesForOverride:
         mock_storage.bucket.return_value.blob.assert_called_once()
         mock_create_adapter.assert_called_once()
         mock_adapter.get_fixtures_with_raw.assert_awaited_once_with("2026-07-04")
+
+
+# ---------------------------------------------------------------------------
+# _write_per_fixture_entities — out-of-universe unmapped rows
+# ---------------------------------------------------------------------------
+
+
+class TestWritePerFixtureEntitiesOutOfUniverse:
+    """Regression: unmapped per-fixture enrichment rows are OUT-OF-UNIVERSE
+    fixtures, not a capture gap → must NOT be recorded as ``attempted_failed``
+    (``LEAGUE_MAP_INCOMPLETE``).
+
+    Determination (``sports_data_sources_canonical_completion`` 2026-07-16): the
+    enrichment TARGET (URDI ``get_fixtures(date=...)`` — no league filter) spans
+    the ENTIRE api_football league universe, while ``af_fid_to_league`` is built
+    only from the canonical-94 GCS fixtures map. So a completed fixture in one of
+    the 1,438 non-canonical leagues purged by
+    ``delete_noncanonical_sports_leagues_2026_06_25.py`` gets enriched but can
+    never map. The old ``record_failed(LEAGUE_MAP_INCOMPLETE)`` mis-classified
+    these deliberately-untracked leagues as a perpetual backfill target AND
+    minted a blank-league ``row_key={date,data_type}`` aggregate that no
+    per-league capture can ever supersede — so it sat ``attempted_failed``
+    forever. Correct behaviour: skip silently, mirroring the mapped-branch
+    ``_is_in_canonical_write_universe`` ``continue``.
+    """
+
+    def test_unmapped_rows_do_not_mint_league_map_incomplete_failure(self) -> None:
+        from datetime import UTC, datetime
+
+        from instruments_service.engine.orchestrator.sports_reference_core import (
+            _AfManifestHooks,
+        )
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _write_per_fixture_entities,
+        )
+
+        # Two enrichment rows: fixture 111 maps to an IN-universe league; fixture
+        # 999 is absent from the league map (out-of-universe by design).
+        entity_rows: dict[str, list[dict[str, object]]] = {
+            "fixture_events": [
+                {"af_fixture_id": 111, "minute": 12},
+                {"af_fixture_id": 999, "minute": 34},
+            ]
+        }
+        af_fid_to_league = {"111": "ENG_PREMIER_LEAGUE"}  # 999 intentionally absent
+
+        manifest = MagicMock()
+        hooks = _AfManifestHooks(
+            date="2026-07-04",
+            manifest=manifest,
+            attempt_ts=datetime(2026, 7, 4, tzinfo=UTC),
+            bucket="",
+        )
+        # Isolate the unit under test from the (separately-tested) empty-gap
+        # emission — it would otherwise iterate the real 94-league expected set.
+        hooks.emit_empty_gaps_for_entity = MagicMock()  # type: ignore[method-assign]
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "instruments_service.engine.orchestrator._is_in_canonical_write_universe",
+                    return_value=True,
+                )
+            )
+            stack.enter_context(patch("instruments_service.engine.orchestrator._gated_sink_write"))
+            stack.enter_context(patch("instruments_service.engine.orchestrator._sports_ref_sink_for"))
+            stack.enter_context(
+                patch(
+                    "instruments_service.engine.orchestrator._canonical_league_id",
+                    side_effect=lambda lid: str(lid),
+                )
+            )
+            _write_per_fixture_entities(
+                date="2026-07-04",
+                bucket="bucket",
+                hooks=hooks,
+                counts={},
+                entity_names=["fixture_events"],
+                entity_rows=entity_rows,
+                entity_failures={},
+                pre_captured_leagues={"fixture_events": set()},
+                af_fid_to_league=af_fid_to_league,
+                recovery_fixture_ids=None,
+            )
+
+        # The in-universe fixture (111) is still captured...
+        assert manifest.record_captured.called, "mapped in-universe row should be captured"
+        # ...and the unmapped fixture (999) must NOT mint a LEAGUE_MAP_INCOMPLETE
+        # failure (or any record_failed at all on this out-of-universe path).
+        for call in manifest.record_failed.call_args_list:
+            assert call.kwargs.get("error") != "LEAGUE_MAP_INCOMPLETE", (
+                "out-of-universe unmapped rows must not be recorded as attempted_failed"
+            )
+        manifest.record_failed.assert_not_called()
