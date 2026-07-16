@@ -144,7 +144,12 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
             manifest_venue = ""
         # DeFi: split AAVE_V3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM
         elif "-" in venue_str:
-            manifest_data_type = "instrument-catalog"  # UTL preflight filters on this
+            # Canonical value is "instruments" (operator decision 2026-07-16, P9 Q2) — matches
+            # REFERENCE_DATA_TYPE in migrate_instruments_store_v9.py and the live batched-writer
+            # path (_write_venue's manifest-not-None branch, writers.py). This legacy per-venue
+            # path is unreachable from the current orchestrator (_write_all_venues always passes
+            # a ManifestWriter), kept in sync for correctness if ever revived.
+            manifest_data_type = "instruments"
             try:
                 from unified_api_contracts.registry.capability_declarations._defi import (
                     KNOWN_CHAINS,
