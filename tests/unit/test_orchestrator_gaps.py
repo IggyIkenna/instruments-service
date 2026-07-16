@@ -173,7 +173,7 @@ class TestGetManifestHighWatermarksGeneralized:
         """A non-DEFI asset_group resolves via the same bucket-lookup mechanism."""
         index_df = pd.DataFrame(
             {
-                "venue": ["LIGHTER-ZKSYNC", "LIGHTER-ZKSYNC", "PACIFICA-SOLANA"],
+                "venue": ["LIGHTER-ZKSYNC", "LIGHTER-ZKSYNC", "EXTENDED-STARKNET"],
                 "instrument_count": [213, 18, 10],
                 "date": ["2026-06-25", "2026-06-26", "2026-06-20"],
             }
@@ -195,7 +195,7 @@ class TestGetManifestHighWatermarksGeneralized:
             result = _get_manifest_high_watermarks("CEFI")
         mock_bucket.assert_called_once_with("CEFI")
         assert result["LIGHTER-ZKSYNC"] == 213  # max across the two rows, not the latest
-        assert result["PACIFICA-SOLANA"] == 10
+        assert result["EXTENDED-STARKNET"] == 10
 
     def test_exception_returns_empty_dict(self) -> None:
         with (

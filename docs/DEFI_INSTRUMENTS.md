@@ -23,10 +23,12 @@ batch-vs-live swap-capture split.
 - **Lending**: Aave_V3, Spark, Compound_V3, Morpho, Euler_V2, Fluid, Radiant, Venus, Benqi.
 - **Yield-bearing / LST / restaking**: Lido, EtherFi, Ethena, RocketPool, Renzo, KelpDAO, Puffer, Symbiotic, Karak,
   Convex, Idle, Yearn(\_V3), Beefy, Pendle, EigenLayer.
-- **On-chain-perp DEXes**: Hyperliquid, Aster, Pacifica-Solana, Extended-Starknet, Lighter-Zksync.
+- **On-chain-perp DEXes**: Hyperliquid, Aster, Extended-Starknet, Lighter-Zksync. (Pacifica-Solana removed
+  2026-07-16 -- operator ruling: all Solana perp DEXes dropped except Jupiter, not integrated.)
 
 **Out of scope** (covered in other consolidated docs / not yet written up anywhere): Solana-native AMMs and perps
-(Drift, Raydium, Orca, Phoenix, Jupiter, Meteora, Lifinity, Kamino, Camino) and Solana
+(Raydium, Orca, Phoenix, Jupiter, Meteora, Lifinity, Kamino, Camino -- Drift removed 2026-07-16, operator ruling: all
+Solana perp DEXes dropped except Jupiter, not integrated) and Solana
 staking/restaking/lending (Marinade, Jito, JitoRestaking, Sanctum, Solblaze, Solana-native, MarginFi, Solend) — these
 have a real adapter presence too (see `instruments_service/reference_data/adapters/defi/`) but are organizationally a
 separate "Solana DeFi" surface from this doc's EVM-centric + on-chain-perp scope, per the 2026-07-08 docs-consolidation
@@ -253,18 +255,21 @@ linear and an inverse PERPETUAL quoted in the same `USD`):
 | ------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `HYPERLIQUID`       | USD (notional quote; vault collateral is USDC)                                  | `@LIN` — `hyperliquid.gitbook.io/hyperliquid-docs/trading/contract-specifications`: "Instrument type \| Linear perpetual" (venue's own explicit classification).              |
 | `ASTER`             | Per-symbol real `quoteAsset` (USDT/USD1/"U" depending on symbol, not hardcoded) | `@LIN` — `docs.asterdex.com`: perpetuals "fully settled in USDT"; live `exchangeInfo` shows 100% stablecoin `quoteAsset` across all 509 real perps, zero coin-margined pairs. |
-| `PACIFICA-SOLANA`   | USDC                                                                            | `@LIN` — real web research 2026-07-09: "Pacifica's core product is linear perpetual contracts", consistent with the already-confirmed USDC unified margin.                    |
 | `EXTENDED-STARKNET` | USD (`collateralAssetName="USD"` uniformly across markets)                      | `@LIN` — `docs.extended.exchange`: "USDC as the base collateral", uniformly USDC-settled markets, no inverse product offered.                                                 |
 | `LIGHTER-ZKSYNC`    | USDC                                                                            | `@LIN` — `docs.lighter.xyz/trading/multi-asset-margin`: "Portfolio Balance is the USDC value of the account" venue-wide (linear, not coin-margined).                          |
 
-None of the 5 on-chain-perp CLOBs offer an inverse (coin-margined) product — structurally consistent with the
+(`PACIFICA-SOLANA` was a fifth on-chain-perp CLOB here until removed entirely 2026-07-16 — operator ruling: all
+Solana perp DEXes dropped except Jupiter, not integrated. SSOT: unified-trading-pm/codex/04-architecture/
+solana-defi-coverage.md.)
+
+None of the 4 on-chain-perp CLOBs offer an inverse (coin-margined) product — structurally consistent with the
 on-chain-perp DEX category as a whole (USD-stablecoin vault/cross-margin, never margined in the base crypto itself).
 The marker is embedded directly in the `symbol` argument passed to the shared UAC builder
 (`build_instrument_id(venue, InstrumentType.PERPETUAL, f"{base}-{quote}@{marker}")` — `_build_cefi_simple` upper-cases
 the symbol verbatim, so no UAC-side builder change was needed) rather than derived by the builder itself.
 
 `HYPERLIQUID`/`ASTER` carry no chain suffix (each is effectively its own app-chain — `chain="HYPERLIQUID"` lives in
-the instrument's `chain` attribute, not the venue token), while `PACIFICA-SOLANA`/`EXTENDED-STARKNET`/`LIGHTER-ZKSYNC`
+the instrument's `chain` attribute, not the venue token), while `EXTENDED-STARKNET`/`LIGHTER-ZKSYNC`
 carry an explicit chain suffix in the venue itself. **No trailing `@VENUE`** on top — venue is already the first
 colon-segment.
 
@@ -428,9 +433,10 @@ per group:
   on-chain-perp `PERP`-vs-`PERPETUAL` canonicalization above): `drift.py` keyed `:PERP:`/`:SPOT:` against
   `instrument_type=PERPETUAL`/`SPOT_PAIR`; `jupiter.py` keyed `:SPOT:` against `SPOT_PAIR`. Both keys were fixed to the
   real enum spelling (`PERPETUAL`/`SPOT_PAIR` aren't shorthand-able — `PERP`/`SPOT` are not real `InstrumentType`
-  members). Real before/after:
-  `DRIFT-SOLANA:PERP:SOL-PERP` → `DRIFT-SOLANA:PERPETUAL:SOL-PERP`,
-  `DRIFT-SOLANA:SPOT:SOL` → `DRIFT-SOLANA:SPOT_PAIR:SOL`,
+  members). Real before/after (historical; `drift.py` + the DRIFT venue were removed entirely 2026-07-16 —
+  operator ruling: all Solana perp DEXes dropped except Jupiter, not integrated):
+  ~~`DRIFT-SOLANA:PERP:SOL-PERP` → `DRIFT-SOLANA:PERPETUAL:SOL-PERP`,
+  `DRIFT-SOLANA:SPOT:SOL` → `DRIFT-SOLANA:SPOT_PAIR:SOL`~~,
   `JUPITER-SOLANA:SPOT:SOL-USDC` → `JUPITER-SOLANA:SPOT_PAIR:SOL-USDC`.
   (Flash Trade's equivalent fix is moot — `flash_trade.py` was removed 2026-07-15, operator ruling; see
   "Remaining known limitation" below.)
@@ -460,7 +466,9 @@ per group:
   `:SPOT:` against `instrument_type=InstrumentType.SPOT_PAIR`) — out of this pass's scope, a known follow-up for
   whichever pass covers the rest of Solana-native DeFi conventions. (`mango`/`zeta` — which shared this same
   limitation — were removed 2026-07-15 along with `flash_trade`, operator ruling; no longer applicable.)
-- **Shared canonical-id builder adoption (2026-07-09)**: Sanctum/Solblaze/Jito-restaking/Drift/EigenLayer/EthFi/
+- **Shared canonical-id builder adoption (2026-07-09)**: Sanctum/Solblaze/Jito-restaking/EigenLayer/EthFi/
+  (Drift adopted this too, historically; removed entirely 2026-07-16 -- operator ruling: all Solana perp DEXes
+  dropped except Jupiter, not integrated.)
   Jupiter above, plus Balancer/Curve/Ethena/Jito/Beefy/Convex/Idle/Karak/EtherFi/KelpDAO (the
   already-field-fixed `LST`/`VAULT`-keyed group from 2026-07-08), now all route `instrument_key` construction through
   `unified_api_contracts.build_canonical_instrument_id(AssetGroup.DEFI, venue, InstrumentType.X, symbol,
@@ -811,9 +819,10 @@ Summary of what each venue actually supports today, confirmed in adapter code:
 
 - **Hyperliquid**, **Aster**: perpetuals only — both adapters explicitly reject `OPTION`/`FUTURE` instrument-type
   filter requests with a `CapabilityResolutionError` ("does not support X instruments. Only PERPETUAL is available").
-- **Extended-Starknet**, **Pacifica-Solana**, **Lighter-Zksync**: perpetuals only, same rejection pattern for any
-  non-`PERPETUAL` filter.
-- None of the 5 offer listed options contracts; this is a real capability limit, not an unimplemented gap.
+- **Extended-Starknet**, **Lighter-Zksync**: perpetuals only, same rejection pattern for any
+  non-`PERPETUAL` filter. (Pacifica-Solana removed 2026-07-16 -- operator ruling: all Solana perp DEXes dropped
+  except Jupiter, not integrated.)
+- None of the 4 offer listed options contracts; this is a real capability limit, not an unimplemented gap.
 
 ---
 
@@ -894,8 +903,10 @@ MVP set with no separate hand-edit needed.
 
 **Side effect worth flagging**: this ruling also resolves the previously-open
 `defi_perp_funding_mvp_scope_contradiction_2026_06_29.md` contradiction as its "Option 2" — `PERPETUAL` is now a real
-DeFi MVP `instrument_type`, so `DRIFT-SOLANA PERPETUAL perp_funding` evaluates `is_mvp()=True` (it previously
-evaluated `False` under every prior rule version, the exact contradiction that issue tracked).
+DeFi MVP `instrument_type`, so `DRIFT-SOLANA PERPETUAL perp_funding` (historical example; DRIFT-SOLANA was removed
+entirely 2026-07-16 — operator ruling: all Solana perp DEXes dropped except Jupiter, not integrated) evaluated
+`is_mvp()=True` (it previously evaluated `False` under every prior rule version, the exact contradiction that issue
+tracked).
 
 The 3 registries this section used to point at as "the real governing surface" (in lieu of a dedicated MVP rule)
 remain real and unchanged — they're now the SOURCE the derived MVP rule reads from, not a substitute for one:
@@ -914,15 +925,15 @@ separate question from MVP SCOPE (is this cell supposed to be collected at all) 
 
 ## Data sources and API keys
 
-| Source                                                          | Used by                                                                           | Auth                                                                                                           |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| The Graph (`gateway.thegraph.com`)                              | Uniswap V2/V3/V4 + forks, Aave_V3, Compound_V3, Fluid, Radiant, Venus, Benqi, GMX | `thegraph-api-key` secret; free tier 100k queries/month, paid $2/100k queries (billed in GRT on Arbitrum)      |
-| Balancer API v3                                                 | Balancer                                                                          | No key required                                                                                                |
-| Curve REST API (`api.curve.finance`)                            | Curve (no subgraph, no RPC — pure REST)                                           | No key required                                                                                                |
-| Goldsky                                                         | Euler_V2 (routed via an endpoint override, not the standard Graph gateway)        | —                                                                                                              |
-| `blue-api.morpho.org` GraphQL                                   | Morpho (subgraph is the fallback, not primary)                                    | No key required                                                                                                |
-| Alchemy SDK                                                     | Token metadata / contract resolution for the static yield/LST/restaking adapters  | `alchemy-api-key` secret; free tier 300M compute units/month                                                   |
-| Hyperliquid / Aster / Extended / Pacifica / Lighter native REST | On-chain-perp DEXes                                                               | Public endpoints, no key needed for instrument discovery (trading credentials are execution-service's concern) |
+| Source                                               | Used by                                                                           | Auth                                                                                                           |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| The Graph (`gateway.thegraph.com`)                   | Uniswap V2/V3/V4 + forks, Aave_V3, Compound_V3, Fluid, Radiant, Venus, Benqi, GMX | `thegraph-api-key` secret; free tier 100k queries/month, paid $2/100k queries (billed in GRT on Arbitrum)      |
+| Balancer API v3                                      | Balancer                                                                          | No key required                                                                                                |
+| Curve REST API (`api.curve.finance`)                 | Curve (no subgraph, no RPC — pure REST)                                           | No key required                                                                                                |
+| Goldsky                                              | Euler_V2 (routed via an endpoint override, not the standard Graph gateway)        | —                                                                                                              |
+| `blue-api.morpho.org` GraphQL                        | Morpho (subgraph is the fallback, not primary)                                    | No key required                                                                                                |
+| Alchemy SDK                                          | Token metadata / contract resolution for the static yield/LST/restaking adapters  | `alchemy-api-key` secret; free tier 300M compute units/month                                                   |
+| Hyperliquid / Aster / Extended / Lighter native REST | On-chain-perp DEXes                                                               | Public endpoints, no key needed for instrument discovery (trading credentials are execution-service's concern) |
 
 **Never commit real API keys to `.env`** — configure secret _names_ only (`THEGRAPH_SECRET_NAME`,
 `ALCHEMY_SECRET_NAME`), resolved via GCP Secret Manager at runtime.
