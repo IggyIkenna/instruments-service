@@ -341,7 +341,7 @@ class TestCanonicalVenueMapping:
             assert v in VENUE_TO_ADAPTER_KEY, f"{v} missing"
 
     def test_all_solana_venues_mapped(self) -> None:
-        solana = ["DRIFT-SOLANA", "KAMINO-SOLANA", "RAYDIUM-SOLANA", "ORCA-SOLANA"]
+        solana = ["KAMINO-SOLANA", "RAYDIUM-SOLANA", "ORCA-SOLANA"]
         for v in solana:
             assert v in VENUE_TO_ADAPTER_KEY, f"{v} missing"
 

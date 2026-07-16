@@ -65,7 +65,7 @@ class TestGetAdapterForCanonicalVenue:
         assert adapter._api_key == "test-key"
 
     def test_defi_solana_venue(self) -> None:
-        adapter = get_adapter_for_canonical_venue("DRIFT-SOLANA")
+        adapter = get_adapter_for_canonical_venue("KAMINO-SOLANA")
         assert adapter is not None
 
     def test_databento_with_date(self) -> None:
@@ -122,8 +122,8 @@ class TestAdapterDataSources:
         assert ADAPTER_DATA_SOURCES["balancer"] == "balancer_api_v3"
 
     def test_solana_no_api_key(self) -> None:
-        assert ADAPTER_DATA_SOURCES["drift"] == ""
         assert ADAPTER_DATA_SOURCES["kamino"] == ""
+        assert ADAPTER_DATA_SOURCES["raydium"] == ""
 
 
 class TestCanonicalVenueToAdapter:
@@ -149,8 +149,8 @@ class TestCanonicalVenueToAdapter:
         assert "API_FOOTBALL" in VENUE_TO_ADAPTER_KEY
 
     def test_solana_defi_venues(self) -> None:
-        assert "DRIFT-SOLANA" in VENUE_TO_ADAPTER_KEY
         assert "KAMINO-SOLANA" in VENUE_TO_ADAPTER_KEY
+        assert "RAYDIUM-SOLANA" in VENUE_TO_ADAPTER_KEY
 
 
 class TestRunRefdataPreflight:
@@ -196,7 +196,7 @@ class TestCreateReferenceDataAdapterExtended:
             assert adapter is not None, f"Factory failed for venue {venue}"
 
     def test_solana_venues(self) -> None:
-        solana_venues = ["drift", "kamino", "raydium", "orca", "marinade"]
+        solana_venues = ["kamino", "raydium", "orca", "marinade"]
         for venue in solana_venues:
             adapter = create_reference_data_adapter(venue)
             assert adapter is not None, f"Factory failed for venue {venue}"
