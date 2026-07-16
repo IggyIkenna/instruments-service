@@ -767,6 +767,26 @@ def main() -> None:
         logger.error("No manifests loaded — nothing to measure")
         sys.exit(1)
 
+    # Honest-absence: a PARTIAL run — some requested asset_groups failed to load
+    # (typically an availability-index parquet that OOM'd inside _read_parquet_safe,
+    # which swallows the error and returns None) — must be stamped LOUDLY, never
+    # served as if complete. Without this, a partial file (e.g. defi-only) is
+    # indistinguishable from a healthy full run and the Honest Coverage card
+    # silently renders only the asset groups that happened to load. Consumers read
+    # ``partial`` + ``asset_groups_failed`` to surface a "coverage incomplete" banner.
+    asset_groups_failed = [ag for ag in asset_groups if ag not in dfs]
+    partial = bool(asset_groups_failed)
+    if partial:
+        logger.error(
+            "PARTIAL coverage run: %d/%d asset_groups failed to load (%s) — output "
+            "marked partial=true. Most likely an availability-index read failure "
+            "(OOM/transient); verify the runner VM has enough RAM for the largest "
+            "single-asset-group parquet.",
+            len(asset_groups_failed),
+            len(asset_groups),
+            ", ".join(asset_groups_failed),
+        )
+
     coverage = _compute_coverage(dfs, diagnose=args.diagnose_layer1)
 
     now_utc = datetime.now(UTC)
@@ -774,7 +794,10 @@ def main() -> None:
         "generated_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "date": date.today().isoformat(),
         "schema_version": 2,
+        "asset_groups_requested": asset_groups,
         "asset_groups_measured": list(dfs.keys()),
+        "asset_groups_failed": asset_groups_failed,
+        "partial": partial,
         **coverage,
     }
 
