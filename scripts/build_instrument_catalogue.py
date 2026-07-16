@@ -336,6 +336,18 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # the address the bidirectional converter needs to re-resolve from a glued-pair.
     # Blank for non-pool rows.
     "pool_address",
+    # On-chain token contract addresses (DeFi rows) — projected from the per-date
+    # InstrumentRecord (UAC internal.reference.instrument: base_asset_contract_address,
+    # quote_asset_contract_address, atoken_address, debt_token_address). Surfaced so the
+    # data-status UI can show + copy the contract address per token leg, and so the
+    # SPOT_ASSET population (plan data_status_page_ux_and_canonicalisation_2026_07_16 P4-B)
+    # can derive one SPOT_ASSET per unique (chain, token → contract_address) without a
+    # re-fetch (the addresses already exist in the source rows). Blank for CeFi/tradfi/
+    # sports/prediction rows + DeFi rows the adapter left unset.
+    "base_asset_contract_address",
+    "quote_asset_contract_address",
+    "atoken_address",
+    "debt_token_address",
 )
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
@@ -1128,6 +1140,12 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 ),
                 "glued_pair_id": glued_pair_id,
                 "pool_address": pool_address,
+                # On-chain token contract addresses (DeFi) — projected from the source
+                # row without a re-fetch (P4-B). Blank for non-DeFi + unset DeFi rows.
+                "base_asset_contract_address": agg.meta.get("base_asset_contract_address") or "",
+                "quote_asset_contract_address": agg.meta.get("quote_asset_contract_address") or "",
+                "atoken_address": agg.meta.get("atoken_address") or "",
+                "debt_token_address": agg.meta.get("debt_token_address") or "",
             }
         )
 
@@ -1162,6 +1180,13 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         # glued_pair_id. Blank for non-DeFi rows.
         "quote_asset": _str_field(row, "quote_asset"),
         "pool_address": _str_field(row, "pool_address"),
+        # On-chain token contract addresses (DeFi) — carried through so the catalogue
+        # row can surface them without a re-fetch (P4-B). Blank when the adapter/source
+        # row didn't populate them (non-DeFi rows, or DeFi rows pre the address backfill).
+        "base_asset_contract_address": _str_field(row, "base_asset_contract_address"),
+        "quote_asset_contract_address": _str_field(row, "quote_asset_contract_address"),
+        "atoken_address": _str_field(row, "atoken_address"),
+        "debt_token_address": _str_field(row, "debt_token_address"),
         "pool_fee_tier": _opt_field(row, "pool_fee_tier"),
         # The original glued ``instrument_key`` — carried so ``_defi_pool_dual_form``
         # can recover the faithful raw fee token for the human-readable glued_pair_id
@@ -1526,9 +1551,13 @@ def build_prediction_catalogue_dataframe(
                     if data_type != _PREDICTION_CQG_DATA_TYPE
                     else ""
                 ),
-                # Non-DeFi grain → no dual-form pool ids.
+                # Non-DeFi grain → no dual-form pool ids + no on-chain addresses.
                 "glued_pair_id": "",
                 "pool_address": "",
+                "base_asset_contract_address": "",
+                "quote_asset_contract_address": "",
+                "atoken_address": "",
+                "debt_token_address": "",
             }
         )
 
