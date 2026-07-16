@@ -630,27 +630,55 @@ def _write_per_fixture_entities(
                             service_emission_state=None,
                         )
 
-                # Drop unmapped rows — single-SSOT means bare writes are
-                # forbidden for league-axis data types. Surface as a
-                # warning AND record_failed (never silent — 2026-07-14 GW
-                # verification: 225,854 fetched-then-dropped rows across
-                # the fleet, quota spent with no manifest trace) so the
-                # shard is flagged for backfill instead of vanishing.
+                # Out-of-universe drop (NOT a capture gap) — unmapped
+                # per-fixture rows belong to fixtures OUTSIDE the canonical
+                # write universe, so they are skipped silently, mirroring the
+                # mapped-branch ``_is_in_canonical_write_universe`` ``continue``
+                # above. Why they occur: the enrichment TARGET (URDI's
+                # ``get_fixtures(date=...)`` — no league filter, see
+                # ``api_football_reference.py::get_instruments``) spans the
+                # ENTIRE api_football league universe (~1000+ leagues), while
+                # ``af_fid_to_league`` is built ONLY from the canonical-94 GCS
+                # fixtures map (``_build_fixture_league_map_from_gcs`` over
+                # ``get_expected_leagues_for_source``). A completed fixture in
+                # one of the 1,438 non-canonical leagues purged by
+                # ``delete_noncanonical_sports_leagues_2026_06_25.py`` therefore
+                # gets enriched but can never map.
+                #
+                # Recording these as ``record_failed(LEAGUE_MAP_INCOMPLETE)``
+                # was wrong twice over: (1) it mis-classified deliberately-
+                # untracked leagues as ``attempted_failed`` — a perpetual
+                # backfill target that can never resolve (the league is out of
+                # universe by design); and (2) the blank-league
+                # ``row_key={date,data_type}`` aggregate can NEVER be superseded
+                # by any per-league capture (the same unsupersedable-row defect
+                # already fixed for the zero-rows branch below —
+                # ``api_football_per_fixture_blank_league_orphan_2026_07_15``),
+                # so it sat ``attempted_failed`` forever. The 2026-07-14 GW
+                # ``record_failed`` made sense only while the map was too NARROW
+                # (built from the 33-league ``get_prediction_leagues()``, so
+                # ~65% of IN-universe fixtures fell through); once the map was
+                # widened to the full 94 (see ``_build_fixture_league_map_from_gcs``
+                # addendum) the residual unmapped rows are exclusively
+                # out-of-universe. Determination:
+                # ``sports_data_sources_canonical_completion`` (2026-07-16) — the
+                # 362 residual ``LEAGUE_MAP_INCOMPLETE`` rows were ALL
+                # out-of-universe fixtures, not a registry gap.
+                #
+                # Honest-absence guard preserved: a genuine IN-universe capture
+                # gap (map build fails / fixtures parquet incomplete) surfaces
+                # on the FIXTURES shard itself (tracked separately); the WARNING
+                # below keeps any such regression visible in logs without
+                # minting an unsupersedable failure row here.
                 if not _without_league.empty:
                     _orch.logger.warning(
-                        "%s bare-path fallback triggered for date=%s — data shape regression: "
-                        "%d rows could not be mapped to a league. Skipping bare write to keep manifest honest.",
+                        "%s date=%s: %d per-fixture rows are out-of-universe "
+                        "(fixture league not in the canonical write universe) — skipping. "
+                        "Not a capture gap; genuine in-universe gaps surface on the FIXTURES shard.",
                         _af_entity_dt,
                         date,
                         len(_without_league),
                     )
-                    if manifest is not None:
-                        manifest.record_failed(
-                            row_key={"date": date, "data_type": _af_entity_dt},
-                            error="LEAGUE_MAP_INCOMPLETE",
-                            attempted_at=hooks.attempt_ts,
-                            pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-                        )
                 if manifest is not None:
                     hooks.emit_empty_gaps_for_entity(
                         _af_entity_dt, _pf_captured | pre_captured_leagues.get(entity_name, set())
