@@ -66,6 +66,7 @@ from unified_api_contracts import (
     build_pool_identity,
     is_in_mvp_capture_universe,
     is_mvp,
+    tracks_equity,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
 from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
@@ -302,6 +303,20 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # Read by deployment-api's ``scope=mvp`` coverage denominator + the data-status
     # MVP toggle. On-the-fly at roll-up time — never a baked rule (UAC owns the rule).
     "mvp",
+    # Crypto-venue equity-identity tags (operator 2026-07-16): instrument_type stays
+    # the BROAD mechanics type (a single-stock perp is PERPETUAL, a tokenized stock is
+    # SPOT_PAIR) — the equity identity + real-equity linkage ride these two tags so
+    # downstream can find the tradfi spot leg (basis arb) without inferring from the
+    # type or symbol string. Stamped on-the-fly by ``_add_equity_tags`` (UAC owns the
+    # universe + link map), same pattern as ``mvp``.
+    #   tracks_equity  — the Databento DBEQ.BASIC real-equity ticker the instrument
+    #                    tracks (METAUSDT→META, AAPLX→AAPL), or "" for a standalone/
+    #                    pre-IPO symbol (SPCX) and every non-equity row.
+    #   is_equity_perp — bool: the row is a crypto-venue EQUITY instrument (a
+    #                    single-stock perp OR a tokenized-share spot), i.e. its base
+    #                    resolves to a CEFI_EQUITY_PERP_BASE_UNIVERSE member.
+    "tracks_equity",
+    "is_equity_perp",
     # Margin type: "linear" (USDT/USDC-margined) or "inverse" (coin-margined/delivery).
     # Propagated from the per-date instruments parquet ``margin_type`` column
     # (populated by the IS cefi Tardis adapter). Empty for non-derivative instruments
@@ -536,11 +551,13 @@ _DEFI_POOL_ITYPES: frozenset[str] = frozenset({"pool"})
 #: but the ``instrument_type`` COLUMN (PERPETUAL), ``raw_symbol`` (venue-native, e.g.
 #: BTC / BTCUSDT), ``venue`` and ``margin_type`` are STABLE across all three forms —
 #: so the lineage key below collapses them to ONE row keyed on the underlying, not
-#: the churning id string (the HYPERLIQUID/ASTER ~176-of-534 stale-dup class). The
-#: refined equity types ride the same family so a re-typed EQUITY_PERP row collapses
-#: onto its pre-refinement PERPETUAL siblings. SSOT: codex/04-architecture/
+#: the churning id string (the HYPERLIQUID/ASTER ~176-of-534 stale-dup class).
+#: Crypto-venue equity perps are typed PERPETUAL (operator 2026-07-16 — no distinct
+#: EQUITY_PERP/TOKENIZED_EQUITY type), so they already ride this family via PERPETUAL;
+#: tokenized-share spots stay SPOT_PAIR and key on the id string like any spot pair.
+#: SSOT: codex/04-architecture/
 #: instrument-universe-registry-consolidation.md + the plan cited in run_rollup.
-_PERP_FAMILY_ITYPES: frozenset[str] = frozenset({"PERPETUAL", "EQUITY_PERP", "TOKENIZED_EQUITY"})
+_PERP_FAMILY_ITYPES: frozenset[str] = frozenset({"PERPETUAL"})
 
 
 def _cefi_perp_lineage_key(instrument_id: str, instrument_type: str, raw_symbol: str, margin_type: str) -> str | None:
@@ -572,36 +589,48 @@ def _cefi_perp_lineage_key(instrument_id: str, instrument_type: str, raw_symbol:
     return f"cefiperp::{venue_prefix}::{rs}::{marker}"
 
 
-def _refine_cefi_instrument_type(instrument_type: str, base_asset: str) -> str:
-    """Refine a generic CeFi ``instrument_type`` to EQUITY_PERP / TOKENIZED_EQUITY.
+def _cefi_equity_tags(instrument_type: str, base_asset: str) -> tuple[bool, str]:
+    """Return the ``(is_equity_perp, tracks_equity)`` catalogue tags for a CeFi row.
 
-    Phase-2 classification refinement (cefi_completion_program_2026_07_15): the IS
-    Tardis/venue-native adapters stamp every single-stock / commodity / index
-    perp as the generic ``PERPETUAL`` and every tokenized-share spot as the generic
-    ``SPOT_PAIR``. This re-classifies them via the UAC universe SSOT
-    (``CEFI_EQUITY_PERP_BASE_UNIVERSE``) at roll-up time — a PURE type refinement:
-    the ``instrument_id`` / lineage key are UNCHANGED (an existing
-    ``VENUE:PERPETUAL:AAPL-USDT@LIN`` row re-types IN PLACE, never orphaned), and no
-    row is dropped.
+    Operator decision 2026-07-16 (broad instrument_type + equity tags, superseding
+    the cefi_completion_program_2026_07_15 EQUITY_PERP/TOKENIZED_EQUITY *type*
+    refinement): ``instrument_type`` stays the BROAD contract-mechanics type — a
+    crypto-venue single-stock perp is ``PERPETUAL`` and a tokenized stock is
+    ``SPOT_PAIR``. The equity identity + real-equity linkage instead ride two
+    dedicated catalogue tags so the system can still find the tradfi spot leg
+    (basis arb) / cross-venue dispersion without inferring it from the type or the
+    symbol string:
 
-      * ``PERPETUAL`` whose base ∈ ``CEFI_EQUITY_PERP_BASE_UNIVERSE`` → ``EQUITY_PERP``.
-        (The universe is the tradfi-underlying-perp set: equities + commodity RAW
-        forms XAU/XAG/… + index/ETF SPX/SPY/… — all crypto-venue perps tracking a
-        real tradfi underlying, per the UAC module docstring.)
+      * ``is_equity_perp`` — ``True`` iff the row is a crypto-venue EQUITY
+        instrument (a single-stock perp OR a tokenized-share spot), i.e. its base
+        resolves to a ``CEFI_EQUITY_PERP_BASE_UNIVERSE`` member. This is the durable
+        "it's an equity instrument" flag (the operator's label; it deliberately
+        covers BOTH the perp form and the tokenized-spot form).
+      * ``tracks_equity`` — the Databento ``DBEQ.BASIC`` real-equity ticker the
+        instrument tracks (``crypto_equity_link.tracks_equity`` — METAUSDT→META,
+        AAPLX→AAPL), or ``""`` for a standalone/pre-IPO symbol with no real-equity
+        twin (e.g. SPCX) and for every non-equity row.
+
+    Discrimination MIRRORS the pre-2026-07-16 ``_refine_cefi_instrument_type`` so the
+    exact same rows are flagged (the ~715 crypto-venue equity instruments):
+
+      * ``PERPETUAL`` whose base ∈ ``CEFI_EQUITY_PERP_BASE_UNIVERSE`` → equity perp
+        (equities + commodity RAW forms XAU/XAG/… + index/ETF SPX/SPY/…). tracks
+        ``tracks_equity(base)`` (``""`` for standalone SPCX/OPENAI/ANTHROPIC etc.).
       * ``SPOT_PAIR`` tokenized-share form (base ``<TICKER>X`` where ``TICKER`` ∈
-        the equity universe and the base is NOT itself a crypto base) → ``TOKENIZED_EQUITY``
-        (Bybit ``AAPLX`` → base ``AAPLX`` → strip ``X`` → ``AAPL`` ∈ universe).
+        the equity universe and the base is NOT itself a crypto base) → equity
+        (Bybit ``AAPLX`` → strip ``X`` → ``AAPL`` ∈ universe). tracks
+        ``tracks_equity(TICKER)``.
 
-    Any other row passes its ``instrument_type`` through unchanged. Pure + idempotent
-    (an already-refined EQUITY_PERP/TOKENIZED_EQUITY row is not a PERPETUAL/SPOT_PAIR
-    so it returns unchanged).
+    Any other row → ``(False, "")``. Pure + idempotent. instrument_type is NEVER
+    changed (the row keeps its broad mechanics type + stable id / lineage key).
     """
     itype = (instrument_type or "").strip().upper()
     base = (base_asset or "").strip().upper()
     if not base:
-        return instrument_type
+        return (False, "")
     if itype == "PERPETUAL" and base in CEFI_EQUITY_PERP_BASE_UNIVERSE:
-        return "EQUITY_PERP"
+        return (True, tracks_equity(base) or "")
     if (
         itype == "SPOT_PAIR"
         and len(base) > 1
@@ -609,8 +638,8 @@ def _refine_cefi_instrument_type(instrument_type: str, base_asset: str) -> str:
         and base not in CEFI_BASE_ASSET_UNIVERSE
         and base[:-1] in CEFI_EQUITY_PERP_BASE_UNIVERSE
     ):
-        return "TOKENIZED_EQUITY"
-    return instrument_type
+        return (True, tracks_equity(base[:-1]) or "")
+    return (False, "")
 
 
 def _fee_from_instrument_key(instrument_key: str) -> str:
@@ -731,7 +760,8 @@ def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
     (``AAVE_V3-ARBITRUM:…``, ``COMPOUND_V3-BASE:…``) — the dual-key-ghost collapse
     fix (+171 AAVE_V3 / +26 COMPOUND_V3 triad discrepancy 2026-06-27).
 
-    CeFi perp-family rows (PERPETUAL / EQUITY_PERP / TOKENIZED_EQUITY) key on the
+    CeFi perp-family rows (PERPETUAL — incl. crypto-venue equity perps, operator
+    2026-07-16 no distinct EQUITY_PERP type) key on the
     canonical ``(venue, raw_symbol, margin)`` lineage (:func:`_cefi_perp_lineage_key`)
     so the ``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD`` → ``…@LIN`` id-convention
     chain collapses to ONE continuous lifecycle instead of THREE stale-dup listings
@@ -1058,18 +1088,16 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         # dash-canonical shape at roll-up time. No-op for already-canonical /
         # non-FUTURE rows. See _canonicalize_cefi_future_id's docstring.
         canonical_id = _canonicalize_cefi_future_id(canonical_id, agg.meta)
-        # Phase-2 CeFi type refinement (cefi_completion_program_2026_07_15): a generic
-        # PERPETUAL whose base is a tradfi underlying → EQUITY_PERP; a tokenized-share
-        # SPOT_PAIR (base ``<TICKER>X``) → TOKENIZED_EQUITY. PURE reclassification — the
-        # instrument_id / lineage key are unchanged, so the row re-types IN PLACE.
-        refined_type = _refine_cefi_instrument_type(
-            agg.meta["instrument_type"] or "",
-            agg.meta.get("base_asset") or "",
-        )
+        # instrument_type stays the BROAD contract-mechanics type (operator
+        # 2026-07-16, superseding the cefi_completion_program_2026_07_15
+        # EQUITY_PERP/TOKENIZED_EQUITY *type* refinement): a crypto-venue single-stock
+        # perp stays PERPETUAL, a tokenized stock stays SPOT_PAIR. The equity identity
+        # + real-equity linkage ride the ``is_equity_perp`` / ``tracks_equity`` tags,
+        # stamped by ``_add_equity_tags`` on the finalized frame (see CATALOG_COLUMNS).
         rows.append(
             {
                 "instrument_id": canonical_id,
-                "instrument_type": refined_type,
+                "instrument_type": agg.meta["instrument_type"] or "",
                 "venue": bare_venue,
                 "chain": chain,
                 "league_id": agg.meta["league_id"] or "",
@@ -2554,7 +2582,9 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
     if asset_group == "cefi" and not df.empty and "instrument_type" in df.columns:
         for _, _prow in df.iterrows():
             _itype = _cell(_prow, "instrument_type").strip().upper()
-            if _itype in ("PERPETUAL", "EQUITY_PERP"):
+            # PERPETUAL is the sole perp itype (operator 2026-07-16: crypto-venue
+            # equity perps are typed PERPETUAL too, no distinct EQUITY_PERP type).
+            if _itype == "PERPETUAL":
                 _v = _cell(_prow, "venue")
                 _b = _cell(_prow, "base_asset") or _cell(_prow, "underlying")
                 if _v and _b:
@@ -2605,6 +2635,55 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
 
     out = df.copy()
     out["mvp"] = out.apply(_row_is_mvp, axis=1).astype("bool")
+    return out
+
+
+def _add_equity_tags(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
+    """Stamp the crypto-venue equity-identity tags ``tracks_equity`` + ``is_equity_perp``.
+
+    Operator decision 2026-07-16 (broad instrument_type + equity tags): the catalogue
+    ``instrument_type`` stays the BROAD contract-mechanics type (a single-stock perp is
+    ``PERPETUAL``, a tokenized stock is ``SPOT_PAIR``); the equity identity + real-equity
+    linkage ride these two tags so downstream can find the tradfi spot leg (basis arb)
+    without inferring it from the type or the symbol string. Derived on-the-fly from
+    (``instrument_type``, ``base_asset``) via :func:`_cefi_equity_tags` over the
+    rolled-up frame — never baked (UAC owns ``CEFI_EQUITY_PERP_BASE_UNIVERSE`` + the
+    ``tracks_equity`` link map), mirroring the :func:`_add_mvp_column` pattern (so the
+    tags self-heal on every rebuild + incremental run rather than persisting stale).
+
+    Only ``cefi`` rows can be equity instruments; every other asset group carries
+    ``(is_equity_perp=False, tracks_equity="")``.
+    """
+    out = df.copy()
+    if df.empty:
+        out["tracks_equity"] = pd.Series([], dtype="object")
+        out["is_equity_perp"] = pd.Series([], dtype="bool")
+        return out
+    if asset_group != "cefi":
+        out["tracks_equity"] = ""
+        out["is_equity_perp"] = False
+        return out
+
+    def _cell(row: pd.Series[object], col: str) -> str:
+        """NaN/None/empty-safe string cell (``str(np.nan)`` is ``"nan"`` — guard it)."""
+        raw = row.get(col)
+        if raw is None:
+            return ""
+        try:
+            if pd.isna(raw):  # pyright: ignore[reportArgumentType]
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(raw)
+
+    is_equity_perp_vals: list[bool] = []
+    tracks_equity_vals: list[str] = []
+    for _, row in out.iterrows():
+        is_equity, ticker = _cefi_equity_tags(_cell(row, "instrument_type"), _cell(row, "base_asset"))
+        is_equity_perp_vals.append(is_equity)
+        tracks_equity_vals.append(ticker)
+    out["tracks_equity"] = tracks_equity_vals
+    out["is_equity_perp"] = is_equity_perp_vals
     return out
 
 
@@ -2682,7 +2761,7 @@ def _incremental_merge_keys(df: pd.DataFrame, *, asset_group: str) -> pd.Series[
       exist on MULTIPLE venues under the SAME id (``BNB_PRICE_RANGE_DAILY`` on
       both KALSHI and POLYMARKET — 31 real cross-venue pairs in prod), so venue
       IS identity here.
-    * cefi perp-family (PERPETUAL / EQUITY_PERP / TOKENIZED_EQUITY, raw_symbol
+    * cefi perp-family (PERPETUAL — incl. crypto-venue equity perps, raw_symbol
       present) → the ``(venue, raw_symbol, margin)`` lineage key
       (:func:`_cefi_perp_lineage_key`), mirroring ``_aggregate_key`` — so the
       2026-07 id-convention churn (``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD``
@@ -2750,11 +2829,14 @@ def _merge_incremental(
     The output row set is prev UNION window-new, so ``len(merged) >= len(prev)`` and
     the monotonic guard passes by construction.
     """
-    out_columns = [c for c in CATALOG_COLUMNS if c != "mvp"]
+    # Derived/finalization columns (mvp + the equity-identity tags) are re-stamped
+    # on the MERGED frame by _add_mvp_column / _add_equity_tags — drop them from both
+    # inputs so the merge carries only the stable rollup columns (full-rebuild parity:
+    # mvp's cefi perp-gate is computed over the whole catalogue, and the equity tags
+    # self-heal from instrument_type + base_asset every run).
+    out_columns = [c for c in CATALOG_COLUMNS if c not in ("mvp", "tracks_equity", "is_equity_perp")]
     prev = prev_df.copy()
-    # The prev catalogue carries the mvp tag; drop it — _add_mvp_column re-tags
-    # the MERGED frame (full-rebuild parity: the cefi perp-gate is computed over
-    # the whole catalogue, not the window slice).
+    # The prev catalogue carries the derived tags; drop them (see above).
     prev = prev.drop(columns=[c for c in prev.columns if c not in out_columns])
     for col in out_columns:
         if col not in prev.columns:
@@ -3157,6 +3239,13 @@ def run_rollup(
     df = _add_mvp_column(df, asset_group)
     _mvp_count = int(df["mvp"].sum()) if not df.empty else 0
     logger.info("MVP-tagged catalogue: %d / %d rows in MVP scope", _mvp_count, len(df))
+
+    # Crypto-venue equity-identity tags (operator 2026-07-16): instrument_type stays
+    # the broad mechanics type; the equity identity + real-equity linkage ride the
+    # tracks_equity / is_equity_perp tags (see _add_equity_tags / CATALOG_COLUMNS).
+    df = _add_equity_tags(df, asset_group)
+    _eq_count = int(df["is_equity_perp"].sum()) if not df.empty else 0
+    logger.info("Equity-tagged catalogue: %d / %d rows flagged is_equity_perp", _eq_count, len(df))
 
     # Phase E: monotonic-guard + promote-write
     print(f"[BISECT-E] monotonic-guard + promote-write asset_group={asset_group} rows={len(df)}", flush=True)
