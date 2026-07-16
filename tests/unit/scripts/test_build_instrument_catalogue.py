@@ -2279,32 +2279,42 @@ def test_rollup_ghost_venue_liveness_merges_into_canonical_window(rollup: Module
 
 # ---------------------------------------------------------------------------
 # CeFi perp-family lineage collapse (HYPERLIQUID / ASTER 2026-07 id-convention
-# churn) + EQUITY_PERP / TOKENIZED_EQUITY type refinement.
-# Plan: cefi_completion_program_2026_07_15.md.
+# churn) + crypto-venue equity-identity tags (is_equity_perp / tracks_equity).
+# Operator 2026-07-16: instrument_type stays the BROAD mechanics type (PERPETUAL /
+# SPOT_PAIR), equity identity rides the two tags — NOT a distinct EQUITY_PERP /
+# TOKENIZED_EQUITY type.
+# Plans: cefi_completion_program_2026_07_15.md +
+#        cryptovenue_equity_perps_and_tokenized_stocks_2026_06_20.md.
 # ---------------------------------------------------------------------------
 
 
-def test_refine_cefi_instrument_type_classifier(rollup: ModuleType) -> None:
-    """Pure classifier: PERPETUAL→EQUITY_PERP, tokenized SPOT→TOKENIZED_EQUITY, else unchanged."""
-    r = rollup._refine_cefi_instrument_type
-    # equity/commodity/index single-stock perps ride CEFI_EQUITY_PERP_BASE_UNIVERSE
-    assert r("PERPETUAL", "AAPL") == "EQUITY_PERP"
-    assert r("PERPETUAL", "XAU") == "EQUITY_PERP"  # commodity RAW form is in the universe
-    assert r("PERPETUAL", "SPX") == "EQUITY_PERP"  # index
-    # crypto perps stay PERPETUAL (not in the equity universe)
-    assert r("PERPETUAL", "BTC") == "PERPETUAL"
-    assert r("PERPETUAL", "0G") == "PERPETUAL"
-    # tokenized-share spot: base <TICKER>X where TICKER in the equity universe
-    assert r("SPOT_PAIR", "AAPLX") == "TOKENIZED_EQUITY"
-    assert r("SPOT_PAIR", "TSLAX") == "TOKENIZED_EQUITY"
-    # spot that only LOOKS tokenized but strips to a non-equity stays SPOT_PAIR
-    assert r("SPOT_PAIR", "SPX") == "SPOT_PAIR"  # SPX[:-1]=SP not an equity ticker
-    assert r("SPOT_PAIR", "BTC") == "SPOT_PAIR"
-    # idempotent: an already-refined type is not a PERPETUAL/SPOT_PAIR
-    assert r("EQUITY_PERP", "AAPL") == "EQUITY_PERP"
-    assert r("TOKENIZED_EQUITY", "AAPLX") == "TOKENIZED_EQUITY"
+def test_cefi_equity_tags_classifier(rollup: ModuleType) -> None:
+    """Pure classifier → (is_equity_perp, tracks_equity). instrument_type is NEVER
+    changed (operator 2026-07-16): equity identity rides the two tags."""
+    r = rollup._cefi_equity_tags
+    # equity single-stock perps → (True, real-equity ticker) via tracks_equity
+    assert r("PERPETUAL", "AAPL") == (True, "AAPL")
+    assert r("PERPETUAL", "NVDA") == (True, "NVDA")
+    assert r("PERPETUAL", "META") == (True, "META")
+    # commodity RAW form / index are in the universe → is_equity_perp True, but they
+    # have no Databento equity twin in the link map → tracks_equity "".
+    assert r("PERPETUAL", "XAU") == (True, "")  # commodity RAW form
+    assert r("PERPETUAL", "SPX") == (True, "")  # index
+    # standalone / pre-IPO equity perp: in the universe (is_equity_perp True) but no
+    # real-equity twin → tracks_equity "".
+    assert r("PERPETUAL", "SPCX") == (True, "")  # SpaceX pre-IPO
+    # crypto perps → not equity (not in the equity universe)
+    assert r("PERPETUAL", "BTC") == (False, "")
+    assert r("PERPETUAL", "0G") == (False, "")
+    # tokenized-share spot: base <TICKER>X where TICKER in the equity universe →
+    # is_equity_perp True (it's an equity instrument), tracks_equity = the ticker.
+    assert r("SPOT_PAIR", "AAPLX") == (True, "AAPL")
+    assert r("SPOT_PAIR", "TSLAX") == (True, "TSLA")
+    # spot that only LOOKS tokenized but strips to a non-equity → not equity
+    assert r("SPOT_PAIR", "SPX") == (False, "")  # SPX[:-1]=SP not an equity ticker
+    assert r("SPOT_PAIR", "BTC") == (False, "")
     # blank base is a no-op
-    assert r("PERPETUAL", "") == "PERPETUAL"
+    assert r("PERPETUAL", "") == (False, "")
 
 
 def test_cefi_perp_lineage_key_helper(rollup: ModuleType) -> None:
@@ -2315,8 +2325,9 @@ def test_cefi_perp_lineage_key_helper(rollup: ModuleType) -> None:
     k2 = k("HYPERLIQUID:PERPETUAL:BTC-USD", "PERPETUAL", "BTC", "linear")
     k3 = k("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "PERPETUAL", "BTC", "linear")
     assert k1 == k2 == k3 is not None
-    # A re-typed EQUITY_PERP row rides the same family → same key as its PERPETUAL sibling.
-    assert k("BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN", "EQUITY_PERP", "AAPLUSDT", "linear") == k(
+    # A crypto-venue equity perp is typed PERPETUAL (operator 2026-07-16, no distinct
+    # EQUITY_PERP type) so it rides the same family across the id-convention chain.
+    assert k("BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN", "PERPETUAL", "AAPLUSDT", "linear") == k(
         "BINANCE-FUTURES:PERP:AAPLUSDT", "PERPETUAL", "AAPLUSDT", "linear"
     )
     # Distinct quotes on the SAME venue/base stay DISTINCT (raw_symbol differs) — no over-collapse.
@@ -2441,12 +2452,15 @@ def test_rollup_perp_collapse_never_merges_distinct_quotes(rollup: ModuleType) -
     assert ids == {"BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN", "BINANCE-FUTURES:PERPETUAL:BTC-USDC@LIN"}
 
 
-def test_rollup_equity_perp_and_tokenized_restamped_ids_unchanged(rollup: ModuleType) -> None:
-    """A tradfi-underlying PERPETUAL → EQUITY_PERP and a tokenized-share SPOT → TOKENIZED_EQUITY,
-    with the instrument_id UNCHANGED (pure classification refinement). A crypto perp is untouched."""
+def test_rollup_equity_instrument_type_broad_and_tags_stamped(rollup: ModuleType) -> None:
+    """Operator 2026-07-16: a tradfi-underlying PERPETUAL STAYS PERPETUAL and a
+    tokenized-share SPOT STAYS SPOT_PAIR (instrument_type is the broad mechanics
+    type, id unchanged). The equity identity rides the is_equity_perp / tracks_equity
+    tags stamped by _add_equity_tags. A crypto perp is untouched + untagged."""
     d1, d2 = date(2026, 7, 10), date(2026, 7, 14)
     rows = [
         _perp_row("BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN", "AAPL", "AAPLUSDT", "2026-06-01"),
+        _perp_row("BINANCE-FUTURES:PERPETUAL:NVDA-USDT@LIN", "NVDA", "NVDAUSDT", "2026-06-01"),
         _perp_row("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "BTC", "BTC", "2023-05-12"),
         {
             "instrument_key": "BYBIT:SPOT_PAIR:AAPLX-USDT",
@@ -2457,10 +2471,38 @@ def test_rollup_equity_perp_and_tokenized_restamped_ids_unchanged(rollup: Module
         },
     ]
     df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    df = rollup._add_equity_tags(df, "cefi")
     by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
-    assert by_id["BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN"]["instrument_type"] == "EQUITY_PERP"
-    assert by_id["BYBIT:SPOT_PAIR:AAPLX-USDT"]["instrument_type"] == "TOKENIZED_EQUITY"
-    assert by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]["instrument_type"] == "PERPETUAL"  # crypto untouched
+    # instrument_type stays the BROAD mechanics type — NOT EQUITY_PERP / TOKENIZED_EQUITY.
+    assert by_id["BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN"]["instrument_type"] == "PERPETUAL"
+    assert by_id["BINANCE-FUTURES:PERPETUAL:NVDA-USDT@LIN"]["instrument_type"] == "PERPETUAL"
+    assert by_id["BYBIT:SPOT_PAIR:AAPLX-USDT"]["instrument_type"] == "SPOT_PAIR"
+    assert by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]["instrument_type"] == "PERPETUAL"
+    # equity instruments carry the tags (NVDA → NVDA, AAPL perp/tokenized → AAPL).
+    assert bool(by_id["BINANCE-FUTURES:PERPETUAL:NVDA-USDT@LIN"]["is_equity_perp"]) is True
+    assert by_id["BINANCE-FUTURES:PERPETUAL:NVDA-USDT@LIN"]["tracks_equity"] == "NVDA"
+    assert bool(by_id["BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN"]["is_equity_perp"]) is True
+    assert by_id["BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN"]["tracks_equity"] == "AAPL"
+    assert bool(by_id["BYBIT:SPOT_PAIR:AAPLX-USDT"]["is_equity_perp"]) is True
+    assert by_id["BYBIT:SPOT_PAIR:AAPLX-USDT"]["tracks_equity"] == "AAPL"
+    # a crypto perp is NOT an equity instrument.
+    assert bool(by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]["is_equity_perp"]) is False
+    assert by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]["tracks_equity"] == ""
+
+
+def test_add_equity_tags_non_cefi_defaults_and_dtype(rollup: ModuleType) -> None:
+    """Non-cefi rows carry (is_equity_perp=False, tracks_equity=""); empty frame keeps
+    a typed bool column (stable schema)."""
+    df = pd.DataFrame(
+        [{"instrument_id": "UNI-1", "instrument_type": "POOL", "venue": "UNISWAP_V3-ARBITRUM", "base_asset": ""}],
+        columns=[c for c in rollup.CATALOG_COLUMNS if c not in ("mvp", "tracks_equity", "is_equity_perp")],
+    )
+    out = rollup._add_equity_tags(df, "defi")
+    assert bool(out["is_equity_perp"].iloc[0]) is False
+    assert out["tracks_equity"].iloc[0] == ""
+    empty = rollup.build_catalogue_dataframe([])
+    out_empty = rollup._add_equity_tags(empty, "cefi")
+    assert out_empty["is_equity_perp"].dtype == bool
 
 
 # ---------------------------------------------------------------------------
@@ -2837,7 +2879,11 @@ def _parity_frames(rollup: ModuleType, all_snapshots: list, prev_age_days: int =
 
 
 def _assert_frames_match(full: pd.DataFrame, incremental: pd.DataFrame) -> None:
-    cols = [c for c in full.columns if c != "mvp"]
+    # Compare only the stable rollup columns — mvp + the equity-identity tags are
+    # derived/finalization columns stamped AFTER the merge (build_catalogue_dataframe
+    # emits them NaN in the full path; _merge_incremental drops them), so they are
+    # not part of the merge-parity invariant here.
+    cols = [c for c in full.columns if c not in ("mvp", "tracks_equity", "is_equity_perp")]
     f = full[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True)
     i = incremental[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True)
     pd.testing.assert_frame_equal(f, i)
@@ -2911,13 +2957,15 @@ def _cefi_corpus() -> list:
 def test_incremental_matches_full_rebuild_cefi(rollup: ModuleType) -> None:
     full, incremental = _parity_frames(rollup, _cefi_corpus())
     _assert_frames_match(full, incremental)
-    # And the MVP tag is identical on both (perp-gate computed over the full frame).
-    full_mvp = rollup._add_mvp_column(full, "cefi")
-    inc_mvp = rollup._add_mvp_column(incremental, "cefi")
-    cols = list(full_mvp.columns)
+    # The finalization tags (mvp + equity tags) are identical on both paths — the
+    # full pipeline is merge → _add_mvp_column → _add_equity_tags (perp-gate + equity
+    # tags computed over the whole finalized frame, not the window slice).
+    full_final = rollup._add_equity_tags(rollup._add_mvp_column(full, "cefi"), "cefi")
+    inc_final = rollup._add_equity_tags(rollup._add_mvp_column(incremental, "cefi"), "cefi")
+    cols = list(full_final.columns)
     pd.testing.assert_frame_equal(
-        full_mvp[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
-        inc_mvp[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
+        full_final[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
+        inc_final[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
     )
 
 
