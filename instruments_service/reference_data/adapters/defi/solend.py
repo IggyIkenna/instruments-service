@@ -42,6 +42,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ...utils.defi_utils import build_spot_asset_record
 from ._solana_utils import batch_resolve_creation_timestamps, get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ class SolendReferenceDataAdapter(BaseReferenceDataAdapter):
             passthrough=True,
         )
 
-        return [
+        records: list[InstrumentRecord] = [
             InstrumentRecord(
                 instrument_key=a_token_key,
                 # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
@@ -248,6 +249,24 @@ class SolendReferenceDataAdapter(BaseReferenceDataAdapter):
                 **base_kwargs,
             ),
         ]
+        # SPOT_ASSET sibling (P4-B): ONE per reserve (not per A_TOKEN/DEBT_TOKEN leg —
+        # both legs share the identical underlying mint) representing the reserve's
+        # own liquidity token, reusing the SAME mint address/decimals resolved above.
+        # `symbol` (sanitized) keys the instrument_key; `raw_symbol_field` (unsanitized,
+        # may carry embedded whitespace) is preserved as the base_asset label, mirroring
+        # the A_TOKEN/DEBT_TOKEN convention above.
+        spot_asset = build_spot_asset_record(
+            venue=venue_tag,
+            symbol=symbol,
+            base_asset=raw_symbol_field,
+            contract_address=mint,
+            decimals=decimals_int,
+            onchain_symbol=raw_symbol_field,
+            available_from_datetime=available_since,
+        )
+        if spot_asset is not None:
+            records.append(spot_asset)
+        return records
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single instrument by identifier."""

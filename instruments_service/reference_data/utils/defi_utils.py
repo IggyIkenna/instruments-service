@@ -5,7 +5,10 @@ to eliminate copy-paste duplication across 7 adapters.
 """
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import cast
+
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 #: Tokens that act as quote/price denominators in DeFi pool pairs.
 DEFI_QUOTE_TOKENS: frozenset[str] = frozenset({"USDC", "USDT", "DAI", "WETH", "ETH", "WBTC", "USDE"})
@@ -182,3 +185,102 @@ def parse_created_timestamp(ts_raw: object) -> datetime | None:
         return datetime.fromtimestamp(ts, tz=UTC)
     except (ValueError, OSError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# SPOT_ASSET sibling emission (data_status_page_ux_and_canonicalisation_2026_07_16
+# P4-B "Make SPOT_ASSET emission normal at token-pair discovery time"). Every
+# on-chain DeFi type carries at least one real ERC-20/SPL token leg (a POOL's
+# base/quote, an LST/A_TOKEN/DEBT_TOKEN's own receipt token); SPOT_ASSET
+# surfaces that leg as its own catalogue-able instrument so its contract
+# address is directly queryable/copyable, without a re-fetch — reuses
+# addresses + decimals the caller already resolved for its primary record.
+# ---------------------------------------------------------------------------
+
+
+def build_spot_asset_record(
+    *,
+    venue: str,
+    symbol: str,
+    contract_address: str | None,
+    decimals: int | None,
+    onchain_symbol: str | None = None,
+    available_from_datetime: datetime | None = None,
+    base_asset: str | None = None,
+) -> InstrumentRecord | None:
+    """Build one SPOT_ASSET sibling record for a single on-chain token leg.
+
+    Honest-absence (never fabricate): returns ``None`` when ``symbol``,
+    ``contract_address``, or ``decimals`` is missing — ``InstrumentRecord``'s
+    ``DEFI_ONCHAIN_INSTRUMENT_TYPES`` validator requires a resolvable on-chain
+    identifier (``base_asset_contract_address`` here) AND non-null
+    ``base_asset_decimals``, so a leg without both can never construct.
+
+    ``symbol`` is used for the ``VENUE:SPOT_ASSET:SYMBOL`` instrument_key
+    segment (must be colon/key-safe — callers sanitize embedded whitespace
+    first, mirroring ``solend.py``'s A_TOKEN/DEBT_TOKEN convention);
+    ``base_asset`` (defaults to ``symbol``) is the human-readable label carried
+    on the record body and may retain characters the key segment cannot.
+    """
+    if not symbol or not contract_address or decimals is None:
+        return None
+    instrument_key = f"{venue}:SPOT_ASSET:{symbol}"
+    label = base_asset if base_asset is not None else symbol
+    return InstrumentRecord(
+        instrument_key=instrument_key,
+        # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its
+        # symbols are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+        canonical_instrument_id=instrument_key,
+        venue=venue,
+        raw_symbol=contract_address,
+        instrument_type=InstrumentType.SPOT_ASSET,
+        base_asset=label,
+        quote_asset="",
+        tick_size=Decimal("0.000001"),
+        min_size=Decimal("0.000001"),
+        contract_size=Decimal("1"),
+        expiry=None,
+        strike=None,
+        option_type=None,
+        status=InstrumentStatus.ACTIVE,
+        underlying=label,
+        available_from_datetime=available_from_datetime,
+        base_asset_contract_address=contract_address,
+        base_asset_decimals=decimals,
+        base_asset_symbol_onchain=onchain_symbol,
+    )
+
+
+def build_spot_asset_siblings_for_pool(source: InstrumentRecord) -> list[InstrumentRecord]:
+    """Derive 0-2 SPOT_ASSET siblings (base + quote leg) from a two-asset POOL record.
+
+    Reuses ``source``'s own already-resolved base/quote contract address +
+    decimals + on-chain symbol — no re-fetch. Valid for POOL-type records
+    where ``base_asset``/``quote_asset`` ARE the real per-leg token symbols
+    (curve / uniswap_v2 / uniswap_v3); a leg missing its contract address or
+    decimals is skipped (honest-absence), and a degenerate base==quote pool
+    yields the base leg only (no duplicate instrument_key).
+    """
+    siblings: list[InstrumentRecord] = []
+    base = build_spot_asset_record(
+        venue=source.venue,
+        symbol=source.base_asset,
+        contract_address=source.base_asset_contract_address,
+        decimals=source.base_asset_decimals,
+        onchain_symbol=source.base_asset_symbol_onchain,
+        available_from_datetime=source.available_from_datetime,
+    )
+    if base is not None:
+        siblings.append(base)
+    if source.quote_asset and source.quote_asset != source.base_asset:
+        quote = build_spot_asset_record(
+            venue=source.venue,
+            symbol=source.quote_asset,
+            contract_address=source.quote_asset_contract_address,
+            decimals=source.quote_asset_decimals,
+            onchain_symbol=source.quote_asset_symbol_onchain,
+            available_from_datetime=source.available_from_datetime,
+        )
+        if quote is not None:
+            siblings.append(quote)
+    return siblings

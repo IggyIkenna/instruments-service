@@ -23,7 +23,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
-from ...utils.defi_utils import classify_graph_error
+from ...utils.defi_utils import build_spot_asset_siblings_for_pool, classify_graph_error
 
 logger = logging.getLogger(__name__)
 
@@ -193,38 +193,41 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
             # REST envelope (per-pool fees vary; require on-chain fee()
             # / future API surfacing). Leave pool_fee_tier=None.
             try:
-                results.append(
-                    InstrumentRecord(
-                        instrument_key=instrument_key,
-                        # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
-                        # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
-                        canonical_instrument_id=instrument_key,
-                        venue=venue_tag,
-                        raw_symbol=str(pool_address),
-                        instrument_type=InstrumentType.POOL,
-                        base_asset=sym0,
-                        quote_asset=sym1,
-                        tick_size=Decimal("0.000001"),
-                        min_size=Decimal("0.000001"),
-                        contract_size=Decimal("1"),
-                        expiry=None,
-                        strike=None,
-                        option_type=None,
-                        status=InstrumentStatus.ACTIVE,
-                        underlying=pool_name if pool_name else None,
-                        available_from_datetime=deploy_date,
-                        pool_address=str(pool_address),
-                        pool_fee_tier=None,
-                        base_asset_contract_address=_optional_str(coin0.get("address")),
-                        base_asset_decimals=_parse_decimals(coin0.get("decimals")),
-                        base_asset_symbol_onchain=_optional_str(coin0.get("symbol")),
-                        quote_asset_contract_address=_optional_str(coin1.get("address")),
-                        quote_asset_decimals=_parse_decimals(coin1.get("decimals")),
-                        quote_asset_symbol_onchain=_optional_str(coin1.get("symbol")),
-                    )
+                pool_record = InstrumentRecord(
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
+                    venue=venue_tag,
+                    raw_symbol=str(pool_address),
+                    instrument_type=InstrumentType.POOL,
+                    base_asset=sym0,
+                    quote_asset=sym1,
+                    tick_size=Decimal("0.000001"),
+                    min_size=Decimal("0.000001"),
+                    contract_size=Decimal("1"),
+                    expiry=None,
+                    strike=None,
+                    option_type=None,
+                    status=InstrumentStatus.ACTIVE,
+                    underlying=pool_name if pool_name else None,
+                    available_from_datetime=deploy_date,
+                    pool_address=str(pool_address),
+                    pool_fee_tier=None,
+                    base_asset_contract_address=_optional_str(coin0.get("address")),
+                    base_asset_decimals=_parse_decimals(coin0.get("decimals")),
+                    base_asset_symbol_onchain=_optional_str(coin0.get("symbol")),
+                    quote_asset_contract_address=_optional_str(coin1.get("address")),
+                    quote_asset_decimals=_parse_decimals(coin1.get("decimals")),
+                    quote_asset_symbol_onchain=_optional_str(coin1.get("symbol")),
                 )
             except Exception as exc:
                 logger.warning("Curve: skipping pool %s — %s", pool_address, exc)
+            else:
+                results.append(pool_record)
+                # SPOT_ASSET siblings (P4-B): one per resolvable token leg, reusing the
+                # SAME addresses/decimals just resolved above — no re-fetch.
+                results.extend(build_spot_asset_siblings_for_pool(pool_record))
 
         logger.info("Curve: fetched %d pool instruments on %s", len(results), self._chain)
         return results
