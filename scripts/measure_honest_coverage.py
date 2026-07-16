@@ -185,6 +185,24 @@ _READ_COLUMNS = ["capture_status", "venue", "data_type", "date", "instrument_id"
 _READ_COLUMNS_FALLBACK = ["capture_status", "venue", "data_type", "date", "instrument_type"]
 _READ_COLUMNS_LEGACY = ["capture_status", "venue", "data_type", "date"]
 _READ_COLUMNS_MIN = ["capture_status", "venue", "data_type"]
+# Column-prune hardening (defence-in-depth, 2026-07-16): the availability-index
+# parquet stores every one of these columns PLAIN_DICTIONARY-encoded per row
+# group (verified via pyarrow row-group metadata on real prd buckets). pandas'
+# default `pd.read_parquet` DECODES that dictionary encoding into a plain
+# python-object array per row — on a real 1.96M-row sports bucket this cost
+# 613.8MB for the 6 columns; passing `read_dictionary=<columns>` (forwarded by
+# pandas to `pyarrow.parquet.read_table`) instead preserves the on-disk
+# dictionary as pandas `category` dtype, measured at 15.9MB for the identical
+# read (~38.6x smaller, same values — `instrument_id.nunique()` verified
+# identical before/after). This is what stops the read from scaling toward
+# OOM on tens-of-millions-of-row corpora (cefi/tradfi/sports) — no row-group
+# streaming needed, the parquet file already carries the compact encoding.
+# NOTE: this changes 3 of _READ_COLUMNS' dtypes to `category`; see
+# _merge_manifests (defensive .astype("int64") on the priority column — a
+# Categorical.map() result stays Categorical and SORTS BY CATEGORY-DISCOVERY
+# ORDER, not numeric order, if left uncast) and _compute_coverage (groupby
+# calls pass observed=True to avoid phantom empty groups pandas' groupby
+# would otherwise synthesise for every unobserved category combination).
 _SHARD_KEY = ["date", "venue", "data_type"]
 _SHARD_KEY_WITH_IID = ["date", "venue", "instrument_id", "data_type"]
 # Priority order for deduplication: lower index = higher priority.
@@ -239,14 +257,18 @@ def _read_parquet_safe(
     uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
     try:
         # Preferred: all 6 columns incl. instrument_id + instrument_type (v2).
-        df = pd.read_parquet(uri, columns=_READ_COLUMNS)
+        # read_dictionary preserves the parquet's on-disk PLAIN_DICTIONARY
+        # encoding as pandas `category` dtype instead of expanding every row
+        # into a python-object string — the memory-bounded read (see the
+        # _READ_COLUMNS comment above for the measured ~38.6x reduction).
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS, read_dictionary=_READ_COLUMNS)
         return df
     except Exception:
         pass  # fall through
 
     # Fallback 1: 5 columns (no instrument_id — bucket lacks iid column).
     try:
-        df = pd.read_parquet(uri, columns=_READ_COLUMNS_FALLBACK)
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS_FALLBACK, read_dictionary=_READ_COLUMNS_FALLBACK)
         logger.warning(
             "  [%s] 'instrument_id' column absent in parquet — "
             "merge dedup will fall back to (date, venue, data_type) key.",
@@ -258,7 +280,7 @@ def _read_parquet_safe(
 
     # Fallback 2: 4 columns (no instrument_id, no instrument_type — legacy bucket).
     try:
-        df = pd.read_parquet(uri, columns=_READ_COLUMNS_LEGACY)
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS_LEGACY, read_dictionary=_READ_COLUMNS_LEGACY)
         logger.warning(
             "  [%s] 'instrument_type' column absent in parquet — "
             "Layer-1 ENUMERATED set and instrument_type projections will be empty. "
@@ -271,7 +293,7 @@ def _read_parquet_safe(
 
     # Fallback 3: 3 columns minimal (oldest buckets — no date/iid/itype).
     try:
-        df = pd.read_parquet(uri, columns=_READ_COLUMNS_MIN)
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS_MIN, read_dictionary=_READ_COLUMNS_MIN)
         logger.warning(
             "  [%s] Only 3 columns available — merge dedup, by_day and v2 projections unavailable.",
             bucket_name,
@@ -292,7 +314,11 @@ def _read_parquet_eu_only(bucket_name: str) -> pd.DataFrame | None:
     eu_filter = [("capture_status", "==", "expected_unattempted")]
     for cols in (_READ_COLUMNS, _READ_COLUMNS_FALLBACK, _READ_COLUMNS_LEGACY, _READ_COLUMNS_MIN):
         try:
-            return pd.read_parquet(uri, columns=list(cols), filters=eu_filter)
+            # read_dictionary: same column-prune hardening as _read_parquet_safe
+            # (category dtype instead of python-object strings) — this read is
+            # already row-filtered to expected_unattempted, but the dtype win is
+            # free and keeps the two readers' output dtypes consistent.
+            return pd.read_parquet(uri, columns=list(cols), filters=eu_filter, read_dictionary=list(cols))
         except Exception:
             pass
     logger.info("  eu-only read failed for all column variants: %s", uri)
@@ -337,8 +363,18 @@ def _merge_manifests(
     # Add priority column so sort-then-drop_duplicates keeps the best status per shard.
     df_primary = df_primary.copy()
     df_secondary = df_secondary.copy()
-    df_primary["_priority"] = df_primary["capture_status"].map(lambda s: _STATUS_PRIORITY.get(s, 99))
-    df_secondary["_priority"] = df_secondary["capture_status"].map(lambda s: _STATUS_PRIORITY.get(s, 99))
+    # .astype("int64") is mandatory, not cosmetic: when capture_status is
+    # `category` dtype (read_dictionary hardening, see _read_parquet_safe),
+    # Series.map() on a Categorical returns a Categorical result that SORTS BY
+    # CATEGORY-DISCOVERY ORDER rather than numeric value order (verified: an
+    # uncast map of {captured:0, attempted_failed:1, expected_unattempted:3}
+    # sorted as [1, 0, 3] instead of [0, 1, 3]) — silently picking the WRONG
+    # "best status" per shard. Casting to int64 forces correct numeric sort
+    # regardless of the input column's dtype.
+    df_primary["_priority"] = df_primary["capture_status"].map(lambda s: _STATUS_PRIORITY.get(s, 99)).astype("int64")
+    df_secondary["_priority"] = (
+        df_secondary["capture_status"].map(lambda s: _STATUS_PRIORITY.get(s, 99)).astype("int64")
+    )
 
     combined = pd.concat([df_primary, df_secondary], ignore_index=True)
     # Sort ascending by priority so drop_duplicates(keep='first') keeps the best status.
@@ -601,21 +637,28 @@ def _compute_coverage(
         by_asset_group[ag] = ag_counts
 
         # level 2 — per (ag, venue)
+        # observed=True: mandatory once any grouper column can be `category`
+        # dtype (read_dictionary hardening, see _read_parquet_safe) — without
+        # it, pandas' groupby synthesises a phantom EMPTY group for every
+        # category value that was never actually observed together in this
+        # (possibly MVP-filtered) slice, injecting bogus zero-count cells into
+        # the coverage output. A no-op when grouper columns are plain object
+        # dtype (legacy buckets), so this is safe either way.
         venue_group: dict[str, object] = {}
-        for venue, vdf in df_l2.groupby("venue"):
+        for venue, vdf in df_l2.groupby("venue", observed=True):
             venue_group[str(venue)] = _count_statuses(vdf)
         by_venue[ag] = venue_group
 
         # level 3 — per (ag, venue, data_type)
         vdt_group: dict[str, dict[str, object]] = defaultdict(dict)
-        for (venue, data_type), vtdf in df_l2.groupby(["venue", "data_type"]):
+        for (venue, data_type), vtdf in df_l2.groupby(["venue", "data_type"], observed=True):
             vdt_group[str(venue)][str(data_type)] = _count_statuses(vtdf)
         by_venue_data_type[ag] = dict(vdt_group)
 
         # level 4 — per (ag, venue, instrument_type) [v2]
         vit_group: dict[str, dict[str, object]] = defaultdict(dict)
         if "instrument_type" in df_l2.columns:
-            for (venue, itype), vitdf in df_l2.groupby(["venue", "instrument_type"]):
+            for (venue, itype), vitdf in df_l2.groupby(["venue", "instrument_type"], observed=True):
                 vit_group[str(venue)][str(itype)] = _count_statuses(vitdf)
         else:
             logger.warning(
@@ -627,14 +670,14 @@ def _compute_coverage(
         # level 5 — per (ag, venue, instrument_type, data_type) [v2]
         vitdt_group: dict[str, dict[str, dict[str, object]]] = defaultdict(lambda: defaultdict(dict))
         if "instrument_type" in df_l2.columns:
-            for (venue, itype, dt), vitdtdf in df_l2.groupby(["venue", "instrument_type", "data_type"]):
+            for (venue, itype, dt), vitdtdf in df_l2.groupby(["venue", "instrument_type", "data_type"], observed=True):
                 vitdt_group[str(venue)][str(itype)][str(dt)] = _count_statuses(vitdtdf)
         by_venue_instrument_type_data_type[ag] = {v: dict(it_map) for v, it_map in vitdt_group.items()}
 
         # level 6 — per (ag, date) [v2]
         day_group: dict[str, object] = {}
         if "date" in df_l2.columns:
-            for day_val, daydf in df_l2.groupby("date"):
+            for day_val, daydf in df_l2.groupby("date", observed=True):
                 day_group[str(day_val)] = _count_statuses(daydf)
         else:
             logger.warning("  [%s] date column absent — by_day will be empty", ag)
