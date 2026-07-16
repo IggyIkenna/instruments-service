@@ -337,11 +337,27 @@ class TestSFIHelpers:
         assert _safe_float("abc") is None
 
     def test_parse_timer_to_seconds(self) -> None:
+        assert _parse_timer_to_seconds("00:00") == 0
         assert _parse_timer_to_seconds("00:30") == 30
         assert _parse_timer_to_seconds("45:00") == 2700
         assert _parse_timer_to_seconds("90:00") == 5400
-        assert _parse_timer_to_seconds("bad") == 0
-        assert _parse_timer_to_seconds("ab:cd") == 0
+
+    def test_parse_timer_to_seconds_stoppage_time(self) -> None:
+        """SFI's "MM:SS+MM:SS" stoppage form must add, not collapse to 0.
+
+        ~15% of a fixture's real snapshots use this form (measured 2026-07-16),
+        including the run-up to the halftime whistle.
+        """
+        assert _parse_timer_to_seconds("45:00+00:00") == 2700
+        assert _parse_timer_to_seconds("45:00+02:30") == 2850
+        assert _parse_timer_to_seconds("90:00+07:30") == 5850
+
+    def test_parse_timer_to_seconds_unparseable_is_none_not_zero(self) -> None:
+        """None, never 0 — a 0 would masquerade as a genuine pre-kickoff row."""
+        assert _parse_timer_to_seconds("bad") is None
+        assert _parse_timer_to_seconds("ab:cd") is None
+        assert _parse_timer_to_seconds("") is None
+        assert _parse_timer_to_seconds("45:00+bad") is None
 
     def test_normalize_sfi_standing(self) -> None:
         item = {
@@ -409,6 +425,80 @@ class TestSFIHelpers:
     def test_extract_odds_empty(self) -> None:
         result = _extract_odds({})
         assert result == {}
+
+    def test_extract_odds_first_half_markets(self) -> None:
+        """The ``1h_*`` family — verified against the live API 2026-07-16.
+
+        Provider keys are ``1h_result`` / ``1h_asian_handicap`` / ``1h_goalline``
+        / ``1h_asian_corner`` — NOT the flat ``h1_home_win`` spelling of the
+        legacy bulk-dump table mirrored by ``SFMatchProgressiveOddsRaw``.
+        """
+        odds = {
+            "1h_result": {"1": "2.600", "X": "2.250", "2": "4.000"},
+            "1h_asian_handicap": {"1": "1.875", "2": "1.925", "v": "-0.5"},
+            "1h_goalline": {"o": "1.850", "u": "1.950", "v": "1.5"},
+            "1h_asian_corner": {"o": "2.025", "u": "1.775", "v": "3.5"},
+        }
+        result = _extract_odds(odds)
+        assert result["odds_h1_result_home"] == 2.6
+        assert result["odds_h1_result_draw"] == 2.25
+        assert result["odds_h1_result_away"] == 4.0
+        assert result["odds_h1_ah_home"] == 1.875
+        assert result["odds_h1_ah_away"] == 1.925
+        assert result["odds_h1_ah_line"] == -0.5
+        assert result["odds_h1_goalline_over"] == 1.85
+        assert result["odds_h1_goalline_under"] == 1.95
+        assert result["odds_h1_goalline_line"] == 1.5
+        assert result["odds_h1_ac_over"] == 2.025
+        assert result["odds_h1_ac_under"] == 1.775
+        assert result["odds_h1_ac_line"] == 3.5
+
+    def test_extract_odds_first_half_distinct_from_full_time(self) -> None:
+        """A first-half price must never be conflated with the full-time 1X2."""
+        odds = {
+            "1X2": {"1": "1.980", "X": "3.350", "2": "3.850"},
+            "1h_result": {"1": "2.600", "X": "2.250", "2": "4.000"},
+        }
+        result = _extract_odds(odds)
+        assert result["odds_1x2_home"] == 1.98
+        assert result["odds_h1_result_home"] == 2.6
+        assert result["odds_1x2_home"] != result["odds_h1_result_home"]
+
+    def test_extract_odds_null_and_dash_sentinels(self) -> None:
+        """SFI signals "no price" as null OR the string "-" — both mean None."""
+        odds = {
+            "1h_result": {"1": None, "X": "-", "2": "4.000"},
+            "1h_asian_corner": {"o": None, "u": None, "v": None},
+        }
+        result = _extract_odds(odds)
+        assert result["odds_h1_result_home"] is None
+        assert result["odds_h1_result_draw"] is None
+        assert result["odds_h1_result_away"] == 4.0
+        assert result["odds_h1_ac_over"] is None
+
+    def test_normalize_progressive_stat_carries_first_half_odds(self) -> None:
+        """End-to-end: the nested 1h_* payload reaches the canonical fields."""
+        item = {
+            "timer": "40:00",
+            "team": "home",
+            "odds": {
+                "1X2": {"1": "1.980", "X": "3.350", "2": "3.850"},
+                "1h_result": {"1": "2.600", "X": "2.250", "2": "4.000"},
+                "1h_goalline": {"o": "1.850", "u": "1.950", "v": "1.5"},
+            },
+        }
+        row = _normalize_sfi_progressive_stat(item, "match-1")
+        assert row.timer_seconds == 2400
+        assert row.odds_1x2_home == 1.98
+        assert row.odds_h1_result_home == 2.6
+        assert row.odds_h1_result_draw == 2.25
+        assert row.odds_h1_result_away == 4.0
+        assert row.odds_h1_goalline_over == 1.85
+
+    def test_normalize_progressive_stat_rejects_unparseable_timer(self) -> None:
+        """Refuse to coerce a bad timer to 0 — raise so the caller drops the row."""
+        with pytest.raises(ValueError, match="unparseable SFI timer"):
+            _normalize_sfi_progressive_stat({"timer": "garbage", "team": "home"}, "match-1")
 
     def test_normalize_sfi_progressive_stat(self) -> None:
         item = {
