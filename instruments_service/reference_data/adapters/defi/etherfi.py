@@ -22,6 +22,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ...utils.defi_utils import build_spot_asset_record
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,18 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
                     source_archive_url_template=_ETHERFI_APY_URL_TEMPLATE,
                 )
             )
+            # SPOT_ASSET sibling (P4-B): the LST receipt token itself (weETH — NOT its
+            # "ETH" economic-peg label) as a directly-queryable on-chain instrument,
+            # reusing the SAME address/decimals just resolved above — no re-fetch.
+            spot_asset = build_spot_asset_record(
+                venue=venue_tag,
+                symbol=symbol,
+                contract_address=address,
+                decimals=18,
+                available_from_datetime=_ETHERFI_DEPLOY_DATE,
+            )
+            if spot_asset is not None:
+                results.append(spot_asset)
 
         logger.info("EtherFi: fetched %d LST instruments on %s", len(results), self._chain)
         return results
