@@ -100,33 +100,41 @@ async def test_get_instruments_only_uses_primary_market() -> None:
         records = await adapter.get_instruments()
 
     # Primary market has 3 reserves; one (BROKEN, missing mint) is skipped.
-    # Remaining 2 reserves x 2 legs (A_TOKEN + DEBT_TOKEN) = 4 records.
-    # The non-primary "Coin98" market's reserve must NOT appear.
-    assert len(records) == 4
+    # Remaining 2 reserves x 3 records (A_TOKEN + DEBT_TOKEN + SPOT_ASSET sibling,
+    # P4-B) = 6 records. The non-primary "Coin98" market's reserve must NOT appear.
+    assert len(records) == 6
     for rec in records:
         assert isinstance(rec, InstrumentRecord)
         assert rec.venue == "SOLEND-SOLANA"
         assert rec.status == InstrumentStatus.ACTIVE
         assert rec.available_from_datetime == _EXPECTED_DEPLOY_DATE
-        assert rec.instrument_type in (InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN)
+        assert rec.instrument_type in (InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN, InstrumentType.SPOT_ASSET)
         assert rec.base_asset != "IGNORE"
 
     msol_records = [r for r in records if r.base_asset == "mSOL"]
-    assert len(msol_records) == 2
+    assert len(msol_records) == 3
     a_token = next(r for r in msol_records if r.instrument_type == InstrumentType.A_TOKEN)
     debt_token = next(r for r in msol_records if r.instrument_type == InstrumentType.DEBT_TOKEN)
+    spot_asset = next(r for r in msol_records if r.instrument_type == InstrumentType.SPOT_ASSET)
     assert a_token.instrument_key == "SOLEND-SOLANA:A_TOKEN:AmSOL"
     assert debt_token.instrument_key == "SOLEND-SOLANA:DEBT_TOKEN:DEBTmSOL"
     assert a_token.base_asset_contract_address == "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"
     assert a_token.base_asset_decimals == 9
     assert a_token.pool_address == "CCpirWrgNuBVLdkP2haxLTbD6XqEgaYuVXixbbpxUB6"
+    # SPOT_ASSET sibling — ONE per reserve (not one per A_TOKEN/DEBT_TOKEN leg),
+    # keyed on the reserve's own mint (same address/decimals as the A_TOKEN leg).
+    assert spot_asset.instrument_key == "SOLEND-SOLANA:SPOT_ASSET:mSOL"
+    assert spot_asset.base_asset_contract_address == "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"
+    assert spot_asset.base_asset_decimals == 9
 
     # The space-carrying LP symbol is sanitized in the instrument_key but the
     # original (unsanitized) symbol is preserved in base_asset.
     lp_records = [r for r in records if r.base_asset == "SOL-mSOL MLP"]
-    assert len(lp_records) == 2
+    assert len(lp_records) == 3
     lp_a_token = next(r for r in lp_records if r.instrument_type == InstrumentType.A_TOKEN)
+    lp_spot_asset = next(r for r in lp_records if r.instrument_type == InstrumentType.SPOT_ASSET)
     assert lp_a_token.instrument_key == "SOLEND-SOLANA:A_TOKEN:ASOL-mSOLMLP"
+    assert lp_spot_asset.instrument_key == "SOLEND-SOLANA:SPOT_ASSET:SOL-mSOLMLP"
 
 
 @pytest.mark.asyncio
