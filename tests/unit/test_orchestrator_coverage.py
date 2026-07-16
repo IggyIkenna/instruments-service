@@ -237,12 +237,12 @@ class TestEnforceMonotonicityGeneralized:
 
     def test_cefi_tradfi_below_half_ratio_is_flagged(self) -> None:
         """Below the 50% thin-collapse ratio IS flagged, even though non-blocking."""
-        records = [_make_record(venue="PACIFICA-SOLANA", instrument_key=f"P-{i}") for i in range(4)]
-        hwm = {"PACIFICA-SOLANA": 10}  # 4/10 = 40% < 50% threshold
+        records = [_make_record(venue="GMX-ARBITRUM", instrument_key=f"P-{i}") for i in range(4)]
+        hwm = {"GMX-ARBITRUM": 10}  # 4/10 = 40% < 50% threshold
         clean, flagged = _enforce_monotonicity(
             records, hwm, block_on_regression=False, min_ratio=_CEFI_TRADFI_THIN_COLLAPSE_RATIO
         )
-        assert flagged == {"PACIFICA-SOLANA"}
+        assert flagged == {"GMX-ARBITRUM"}
         assert len(clean) == 4  # still not removed
 
 

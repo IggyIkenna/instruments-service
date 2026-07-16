@@ -23,7 +23,6 @@ from .adapters.cefi.extended import ExtendedReferenceDataAdapter
 from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.cefi.kalshi_perp import KalshiPerpReferenceDataAdapter
 from .adapters.cefi.lighter import LighterReferenceDataAdapter
-from .adapters.cefi.pacifica import PacificaReferenceDataAdapter
 from .adapters.cefi.polymarket_perp import PolymarketPerpReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
@@ -33,7 +32,6 @@ from .adapters.defi.benqi import BenqiReferenceDataAdapter
 from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.defi.convex import ConvexReferenceDataAdapter
 from .adapters.defi.curve import CurveReferenceDataAdapter
-from .adapters.defi.drift import DriftReferenceDataAdapter
 from .adapters.defi.eigenlayer import EigenLayerReferenceDataAdapter
 from .adapters.defi.ethena import EthenaReferenceDataAdapter
 from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
@@ -128,7 +126,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "convex": ConvexReferenceDataAdapter,
     "curve": CurveReferenceDataAdapter,
     "databento": DatabentoReferenceDataAdapter,
-    "drift": DriftReferenceDataAdapter,
     "extended": ExtendedReferenceDataAdapter,
     "eigenlayer": EigenLayerReferenceDataAdapter,
     "ethena": EthenaReferenceDataAdapter,
@@ -153,7 +150,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "lido": LidoReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
     "orca": OrcaReferenceDataAdapter,
-    "pacifica": PacificaReferenceDataAdapter,
     "pendle": PendleReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "polymarket_perp": PolymarketPerpReferenceDataAdapter,
@@ -228,7 +224,8 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "eigenlayer": "",
     "ethfi_governance": "",
     # Solana adapters use public REST APIs (no API key needed)
-    "drift": "",
+    # "drift" removed 2026-07-16 (operator ruling: all Solana perp DEXes
+    # dropped except Jupiter, not integrated).
     "kamino": "",
     "raydium": "",
     "orca": "",
@@ -241,7 +238,8 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     # declared API hosts are dead (api.mngo.cloud/api.flash.trade NXDOMAIN, dex.zeta.markets/api
     # returns HTML), ~$0 DeFiLlama TVL, zero MTDS market-data capture ever wired. SSOT:
     # unified-trading-pm/codex/04-architecture/solana-defi-coverage.md.
-    "pacifica": "",
+    # "pacifica" removed 2026-07-16 (same SSOT, operator ruling: all Solana
+    # perp DEXes dropped except Jupiter, not integrated).
     # Layer-2 perp DEX adapters — public REST APIs, no API key needed
     "lighter": "",
     "extended": "",
@@ -318,7 +316,8 @@ _DEFI_GRAPH_ADAPTERS: frozenset[str] = frozenset(
         "venus",
         "benqi",
         # Solana adapters
-        "drift",
+        # "drift" removed 2026-07-16 (operator ruling: all Solana perp DEXes
+        # dropped except Jupiter, not integrated).
         "kamino",
         "raydium",
         "orca",
