@@ -98,7 +98,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 if TYPE_CHECKING:
-    from unified_trading_library.cloud_interface.abstractions import StorageClient
+    from unified_trading_library import StorageClient
 
 logger = logging.getLogger(__name__)
 
