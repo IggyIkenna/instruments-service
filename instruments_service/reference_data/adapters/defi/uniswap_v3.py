@@ -25,7 +25,12 @@ from ...schemas import (
     OHLCVRef,
 )
 from ...utils import date_to_block
-from ...utils.defi_utils import classify_graph_error, order_base_quote, parse_created_timestamp
+from ...utils.defi_utils import (
+    build_spot_asset_siblings_for_pool,
+    classify_graph_error,
+    order_base_quote,
+    parse_created_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +311,9 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             record = self._build_pool_record(pool)
             if record:
                 results.append(record)
+                # SPOT_ASSET siblings (P4-B): one per resolvable token leg, reusing the
+                # SAME addresses/decimals already resolved on the pool record above.
+                results.extend(build_spot_asset_siblings_for_pool(record))
 
         logger.info("UniswapV3: fetched %d pool instruments on %s", len(results), self._chain)
         return results

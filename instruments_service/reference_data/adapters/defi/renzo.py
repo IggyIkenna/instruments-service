@@ -30,6 +30,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ...utils.defi_utils import build_spot_asset_record
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,18 @@ class RenzoReferenceDataAdapter(BaseReferenceDataAdapter):
                     base_asset_decimals=_EZETH_DECIMALS,
                 )
             )
+            # SPOT_ASSET sibling (P4-B): the LRT receipt token itself (ezETH — NOT its
+            # "ETH" economic-peg label) as a directly-queryable on-chain instrument,
+            # reusing the SAME address/decimals just resolved above — no re-fetch.
+            spot_asset = build_spot_asset_record(
+                venue=venue_tag,
+                symbol=symbol,
+                contract_address=address,
+                decimals=_EZETH_DECIMALS,
+                available_from_datetime=deploy_date,
+            )
+            if spot_asset is not None:
+                results.append(spot_asset)
 
         logger.info("Renzo: fetched %d LRT instruments on %s", len(results), self._chain)
         return results

@@ -27,6 +27,7 @@ from ...schemas import (
 from ...utils import date_to_block
 from ...utils.defi_utils import (
     assert_subgraph_payload,
+    build_spot_asset_siblings_for_pool,
     classify_graph_error,
     order_base_quote,
     parse_created_timestamp,
@@ -136,6 +137,9 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
             record = self._build_pair_record(pair)
             if record:
                 results.append(record)
+                # SPOT_ASSET siblings (P4-B): one per resolvable token leg, reusing the
+                # SAME addresses/decimals already resolved on the pool record above.
+                results.extend(build_spot_asset_siblings_for_pool(record))
 
         logger.info("UniswapV2: fetched %d pair instruments on %s", len(results), self._chain)
         return results
