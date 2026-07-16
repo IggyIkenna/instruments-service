@@ -834,8 +834,10 @@ _CATALOGUE_KNOWN_CHAINS = frozenset(
 def _canonical_bare_venue_chain(venue: str, chain: str) -> tuple[str, str]:
     """Map any DeFi venue drift form ``(venue, chain)`` → canonical ``(bare_protocol, chain)``.
 
-    1. On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET)
-       are GLUED ``VENUE-CHAIN`` strings whose suffix IS a KNOWN_CHAIN, but they are
+    1. On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / EXTENDED-STARKNET -- PACIFICA (Solana)
+       was a third example here until removed 2026-07-16, operator ruling: all Solana
+       perp DEXes dropped except Jupiter, not integrated) are GLUED ``VENUE-CHAIN``
+       strings whose suffix IS a KNOWN_CHAIN, but they are
        CeFi venues (``VENUE_TO_ASSET_GROUP == "cefi"``, like HYPERLIQUID/ASTER) — NOT
        DeFi pools. Applying the DeFi split desynchronises them from the by_date PATH
        (``venue=LIGHTER-ZKSYNC``), the IS manifest writer (``writers._canonical_manifest_venue_chain``

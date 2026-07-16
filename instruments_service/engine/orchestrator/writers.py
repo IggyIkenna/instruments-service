@@ -53,7 +53,9 @@ def _canonical_manifest_venue_chain(venue_str: str) -> tuple[str, str]:
     """
     if "-" not in venue_str:
         return venue_str, ""
-    # On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET)
+    # On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / EXTENDED-STARKNET -- PACIFICA
+    # (Solana) was a third example here until removed 2026-07-16, operator
+    # ruling: all Solana perp DEXes dropped except Jupiter, not integrated)
     # are GLUED ``VENUE-CHAIN`` strings whose suffix IS a KNOWN_CHAIN, but they are
     # CeFi venues (VENUE_TO_ASSET_GROUP == "cefi", like HYPERLIQUID/ASTER) — NOT defi pools.
     # The split below is the DeFi PROTOCOL-CHAIN→venue+chain rule; applying it to these
@@ -62,7 +64,7 @@ def _canonical_manifest_venue_chain(venue_str: str) -> tuple[str, str]:
     # manifest row matches the by_date PATH (``venue=LIGHTER-ZKSYNC``) and the cefi
     # asset_group resolution at the call site (_cat = "cefi" when chain is "").
     # Use UAC reverse-lookup: cefi venues (incl. on-chain perp CLOBs like
-    # LIGHTER-ZKSYNC/PACIFICA-SOLANA/EXTENDED-STARKNET) must NOT be DeFi-split.
+    # LIGHTER-ZKSYNC/EXTENDED-STARKNET) must NOT be DeFi-split.
     # VENUE_TO_ASSET_GROUP resolves from VENUES_BY_ASSET_GROUP (the canonical registry).
     if VENUE_TO_ASSET_GROUP.get(venue_str) == "cefi":
         return venue_str, ""
