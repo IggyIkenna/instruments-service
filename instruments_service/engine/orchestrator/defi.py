@@ -97,8 +97,10 @@ _STATIC_DEFI_VENUES: list[str] = [
 
 
 # Solana DeFi venues (non-EVM, REST API-based discovery).
+# DRIFT (Solana) removed 2026-07-16 (operator ruling: all Solana perp DEXes
+# dropped except Jupiter, not integrated). SSOT: unified-trading-pm/codex/
+# 04-architecture/solana-defi-coverage.md.
 _SOLANA_DEFI_VENUES: list[str] = [
-    "DRIFT-SOLANA",
     "KAMINO-SOLANA",
     "RAYDIUM-SOLANA",
     "ORCA-SOLANA",
@@ -110,12 +112,14 @@ _SOLANA_DEFI_VENUES: list[str] = [
     "MARGINFI-SOLANA",
     "SOLEND-SOLANA",
 ]
-# NOTE: PACIFICA-SOLANA / LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp
-# CLOBs classified as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, same as HYPERLIQUID/
-# ASTER). They were wrongly enumerated here → captured into the defi
-# instrument-catalog. Reclassified to the UAC cefi registry 2026-06-25
+# NOTE: LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp CLOBs classified
+# as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, same as HYPERLIQUID/ASTER). They
+# were wrongly enumerated here → captured into the defi instrument-catalog.
+# Reclassified to the UAC cefi registry 2026-06-25
 # (instruments_foundation_completeness_2026_06_24.md): they ride the cefi
-# backfill like HYPERLIQUID/ASTER, not the defi path.
+# backfill like HYPERLIQUID/ASTER, not the defi path. (PACIFICA (Solana) was
+# a third venue in this note until removed entirely 2026-07-16 — operator
+# ruling: all Solana perp DEXes dropped except Jupiter, not integrated.)
 
 
 def _build_defi_venues() -> list[str]:

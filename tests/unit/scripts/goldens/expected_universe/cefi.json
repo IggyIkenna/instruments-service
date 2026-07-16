@@ -1,7 +1,7 @@
 {
   "asset_group": "cefi",
   "captured_at": "2026-07-16",
-  "tuple_count": 74,
+  "tuple_count": 72,
   "tuples": [
     ["ASTER", "perpetual", "derivative_ticker"],
     ["ASTER", "perpetual", "trades"],
@@ -73,8 +73,6 @@
     ["OKX", "perpetual", "trades"],
     ["OKX-SPOT", "spot_pair", "book_snapshot_5"],
     ["OKX-SPOT", "spot_pair", "trades"],
-    ["PACIFICA-SOLANA", "perpetual", "derivative_ticker"],
-    ["PACIFICA-SOLANA", "perpetual", "trades"],
     ["UPBIT", "spot_pair", "book_snapshot_5"],
     ["UPBIT", "spot_pair", "trades"]
   ]

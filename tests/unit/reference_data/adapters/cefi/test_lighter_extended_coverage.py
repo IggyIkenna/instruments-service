@@ -1,6 +1,11 @@
-"""Coverage tests for Lighter, Extended, Pacifica and HTTP-path coverage for
+"""Coverage tests for Lighter, Extended and HTTP-path coverage for
 existing adapter tests that mock at _fetch_perp_markets level (leaving the
 internal HTTP code uncovered).
+
+(Pacifica coverage removed 2026-07-16 -- operator ruling: all Solana perp
+DEXes dropped except Jupiter, not integrated; the pacifica.py adapter was
+deleted in the same landing. SSOT: unified-trading-pm/codex/04-architecture/
+solana-defi-coverage.md.)
 
 All tests are credential-free and use unittest.mock.
 """
@@ -396,103 +401,6 @@ class TestExtendedAdapter:
         ):
             results = await adapter.get_instruments()
         assert results[0].base_asset == "BTCUSD"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pacifica adapter
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestPacificaAdapter:
-    def test_venue_name(self) -> None:
-        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
-
-        assert PacificaReferenceDataAdapter().venue == "PACIFICA-SOLANA"
-
-    @pytest.mark.asyncio
-    async def test_get_instruments_wrong_type_returns_empty(self) -> None:
-        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
-
-        adapter = PacificaReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
-        assert results == []
-
-    @pytest.mark.asyncio
-    async def test_get_instruments_returns_all_perps(self) -> None:
-        from instruments_service.reference_data.adapters.cefi.pacifica import (
-            _PACIFICA_TOP_COINS,
-            PacificaReferenceDataAdapter,
-        )
-
-        adapter = PacificaReferenceDataAdapter()
-        results = await adapter.get_instruments()
-        assert len(results) == len(_PACIFICA_TOP_COINS)
-        assert all(r.instrument_type == InstrumentType.PERPETUAL for r in results)
-        assert all(r.venue == "PACIFICA-SOLANA" for r in results)
-        # Canonical instrument_id VENUE:PERPETUAL:BASE-QUOTE@LIN, routed through the
-        # shared UAC builder (2026-07-09 retrofit, canonical_id_builder_retrofit_
-        # checklist_2026_07_08.md todo 4). 2026-07-09 (same day, later) —
-        # PERPETUAL scope-expansion added the real @LIN margin marker (PACIFICA
-        # confirmed linear-margined: real web research 2026-07-09, "Pacifica's
-        # core product is linear perpetual contracts", consistent with the
-        # already-confirmed USDC unified margin).
-        btc = next(r for r in results if r.base_asset == "BTC")
-        assert btc.instrument_key == "PACIFICA-SOLANA:PERPETUAL:BTC-USDC@LIN"
-
-    @pytest.mark.asyncio
-    async def test_get_instruments_perpetual_type_filter(self) -> None:
-        from instruments_service.reference_data.adapters.cefi.pacifica import (
-            _PACIFICA_TOP_COINS,
-            PacificaReferenceDataAdapter,
-        )
-
-        adapter = PacificaReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type=InstrumentType.PERPETUAL)
-        assert len(results) == len(_PACIFICA_TOP_COINS)
-
-    @pytest.mark.asyncio
-    async def test_get_instrument_found(self) -> None:
-        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
-
-        adapter = PacificaReferenceDataAdapter()
-        found = await adapter.get_instrument("BTC-PERP")
-        assert found is not None
-        assert found.base_asset == "BTC"
-
-    @pytest.mark.asyncio
-    async def test_get_instrument_not_found(self) -> None:
-        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
-
-        adapter = PacificaReferenceDataAdapter()
-        result = await adapter.get_instrument("AAPL-PERP")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_instrument_fields(self) -> None:
-        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
-
-        adapter = PacificaReferenceDataAdapter()
-        results = await adapter.get_instruments()
-        btc = next(r for r in results if r.base_asset == "BTC")
-        assert btc.settle_asset == "USDC"
-        assert btc.quote_asset == "USDC"
-        assert btc.raw_symbol == "BTC-PERP"
-        assert btc.tick_size == Decimal("0.0001")
-        assert btc.status == InstrumentStatus.ACTIVE
-
-    @pytest.mark.asyncio
-    async def test_unsupported_methods_raise(self) -> None:
-        from instruments_service.reference_data.adapters.cefi.pacifica import PacificaReferenceDataAdapter
-
-        adapter = PacificaReferenceDataAdapter()
-        with pytest.raises(NotImplementedError):
-            await adapter.get_options_chain("BTC")
-        with pytest.raises(NotImplementedError):
-            await adapter.get_expiry_calendar("BTC")
-        with pytest.raises(NotImplementedError):
-            await adapter.get_funding_rate("BTC-PERP")
-        with pytest.raises(NotImplementedError):
-            await adapter.get_ohlcv("BTC-PERP")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

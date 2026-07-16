@@ -31,7 +31,7 @@ Scope (STRICT — all conditions must hold):
 * ``venue`` is one of the 18 Tardis-sourced venues that have a same-named
   catalogue snapshot (measured live 2026-07-15) — see ``CATALOGUE_VENUES``.
   The 5 non-Tardis ``OnchainPerpBatchHandler`` venues (HYPERLIQUID / ASTER /
-  LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET) are excluded by
+  LIGHTER-ZKSYNC / PACIFICA (Solana) / EXTENDED-STARKNET) are excluded by
   construction (not in the allow-list) — confirmed already canonical, out of
   this defect's scope per the issue doc's scope correction.
 * A small number of legacy/ambiguous venue labels (bare ``BINANCE`` / ``KRAKEN``
