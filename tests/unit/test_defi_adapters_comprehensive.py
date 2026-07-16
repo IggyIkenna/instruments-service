@@ -239,10 +239,13 @@ class TestUniswapV3Adapter:
             patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(pool_data)),
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 1
+        # 1 POOL + 2 SPOT_ASSET siblings (WETH + USDC, both address+decimals resolvable) — P4-B.
+        assert len(results) == 3
         assert results[0].instrument_type == InstrumentType.POOL
         assert results[0].base_asset == "WETH"
         assert results[0].quote_asset == "USDC"
+        spot_assets = [r for r in results if r.instrument_type == InstrumentType.SPOT_ASSET]
+        assert {r.base_asset for r in spot_assets} == {"WETH", "USDC"}
 
     @pytest.mark.asyncio
     async def test_get_instruments_empty_data_response(self) -> None:
@@ -617,6 +620,9 @@ class TestUniswapV3Adapter:
             patch("aiohttp.ClientSession", return_value=mock_session_cm),
         ):
             results = await adapter.get_instruments()
+        # Algebra-fork fixture tokens carry no "id" (contract address) field — no
+        # resolvable on-chain address means no SPOT_ASSET sibling can construct
+        # (honest-absence, P4-B); count stays at the 1 POOL record.
         assert len(results) == 1
         assert results[0].base_asset == "UNI"
 
@@ -700,10 +706,12 @@ class TestUniswapV3Adapter:
         ):
             results = await adapter.get_instruments()
 
-        base_quote_pairs = {(r.base_asset, r.quote_asset) for r in results}
+        base_quote_pairs = {(r.base_asset, r.quote_asset) for r in results if r.instrument_type == InstrumentType.POOL}
         assert ("WETH", "USDC") in base_quote_pairs
         assert ("DAI", "USDT") in base_quote_pairs
-        assert len(results) == 2
+        # 2 POOLs + 4 SPOT_ASSET siblings (WETH/USDC/DAI/USDT, all address+decimals
+        # resolvable) — P4-B.
+        assert len(results) == 6
 
     @pytest.mark.asyncio
     async def test_get_instruments_skips_major_asset_query_on_non_ethereum_chain(self) -> None:
@@ -731,7 +739,10 @@ class TestUniswapV3Adapter:
         ):
             results = await adapter.get_instruments()
 
-        assert len(results) == 1
+        # 1 POOL + 2 SPOT_ASSET siblings (WETH + USDC) — P4-B. Sibling derivation is a
+        # pure in-memory step (reuses the pool record's already-resolved fields), so it
+        # does not add any network calls.
+        assert len(results) == 3
         # Only the primary pagination call should have happened (single POST call captured
         # by the shared mock session), not a second call for the major-asset query.
         underlying_session = mock_session_cm.__aenter__.return_value
@@ -1722,8 +1733,11 @@ class TestUniswapV2Adapter:
             patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(pairs_data)),
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 1
+        # 1 POOL + 2 SPOT_ASSET siblings (WETH + USDC, both address+decimals resolvable) — P4-B.
+        assert len(results) == 3
         assert results[0].base_asset == "WETH"
+        spot_assets = [r for r in results if r.instrument_type == InstrumentType.SPOT_ASSET]
+        assert {r.base_asset for r in spot_assets} == {"WETH", "USDC"}
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
@@ -2216,8 +2230,15 @@ class TestCurveAdapter:
         }
         with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(pool_data)):
             results = await adapter.get_instruments()
-        assert len(results) == 1
+        # 1 POOL + 2 SPOT_ASSET siblings (DAI + USDC, both address+decimals resolvable) — P4-B.
+        assert len(results) == 3
         assert results[0].underlying == "3pool"
+        spot_assets = [r for r in results if r.instrument_type == InstrumentType.SPOT_ASSET]
+        assert {r.base_asset for r in spot_assets} == {"DAI", "USDC"}
+        assert all(r.venue == results[0].venue for r in spot_assets)
+        dai_spot = next(r for r in spot_assets if r.base_asset == "DAI")
+        assert dai_spot.base_asset_contract_address == "0xdai"
+        assert dai_spot.base_asset_decimals == 18
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
@@ -2545,11 +2566,18 @@ class TestEtherFiAdapter:
 
         adapter = EtherFiReferenceDataAdapter()
         results = await adapter.get_instruments()
-        assert len(results) == 1
+        # 1 LST + 1 SPOT_ASSET sibling (weETH itself — P4-B) = 2.
+        assert len(results) == 2
         # 2026-07-08: field fixed to match the `:LST:` key segment.
         assert results[0].instrument_type == InstrumentType.LST
         assert results[0].base_asset == "ETH"
         assert "WEETH" in results[0].instrument_key
+        spot_asset = next(r for r in results if r.instrument_type == InstrumentType.SPOT_ASSET)
+        # The SPOT_ASSET sibling names the actual on-chain receipt token (WEETH),
+        # not the "ETH" economic-peg label the primary LST record carries.
+        assert spot_asset.base_asset == "WEETH"
+        assert spot_asset.base_asset_contract_address == results[0].base_asset_contract_address
+        assert spot_asset.base_asset_decimals == 18
 
     @pytest.mark.asyncio
     async def test_get_instruments_yield_bearing_type(self) -> None:
@@ -2557,7 +2585,7 @@ class TestEtherFiAdapter:
 
         adapter = EtherFiReferenceDataAdapter()
         results = await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
-        assert len(results) == 1
+        assert len(results) == 2
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
