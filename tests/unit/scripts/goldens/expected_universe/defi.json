@@ -1,202 +1,992 @@
 {
   "asset_group": "defi",
-  "captured_at": "2026-07-15",
-  "tuple_count": 195,
+  "captured_at": "2026-07-16",
+  "tuple_count": 197,
   "tuples": [
-    ["AAVE_V3-ARBITRUM", "lending", "flash_loan_events"],
-    ["AAVE_V3-ARBITRUM", "lending", "lending_indices"],
-    ["AAVE_V3-ARBITRUM", "lending", "liquidation_events"],
-    ["AAVE_V3-ARBITRUM", "lending", "liquidations"],
-    ["AAVE_V3-ARBITRUM", "lending", "oracle_prices"],
-    ["AAVE_V3-ARBITRUM", "lending", "position_data"],
-    ["AAVE_V3-ARBITRUM", "lending", "risk_params"],
-    ["AAVE_V3-AVALANCHE", "lending", "flash_loan_events"],
-    ["AAVE_V3-AVALANCHE", "lending", "lending_indices"],
-    ["AAVE_V3-AVALANCHE", "lending", "liquidation_events"],
-    ["AAVE_V3-AVALANCHE", "lending", "liquidations"],
-    ["AAVE_V3-AVALANCHE", "lending", "oracle_prices"],
-    ["AAVE_V3-AVALANCHE", "lending", "position_data"],
-    ["AAVE_V3-AVALANCHE", "lending", "risk_params"],
-    ["AAVE_V3-BASE", "lending", "flash_loan_events"],
-    ["AAVE_V3-BASE", "lending", "lending_indices"],
-    ["AAVE_V3-BASE", "lending", "liquidation_events"],
-    ["AAVE_V3-BASE", "lending", "liquidations"],
-    ["AAVE_V3-BASE", "lending", "oracle_prices"],
-    ["AAVE_V3-BASE", "lending", "position_data"],
-    ["AAVE_V3-BASE", "lending", "risk_params"],
-    ["AAVE_V3-BSC", "lending", "flash_loan_events"],
-    ["AAVE_V3-BSC", "lending", "lending_indices"],
-    ["AAVE_V3-BSC", "lending", "liquidation_events"],
-    ["AAVE_V3-BSC", "lending", "liquidations"],
-    ["AAVE_V3-BSC", "lending", "oracle_prices"],
-    ["AAVE_V3-BSC", "lending", "position_data"],
-    ["AAVE_V3-BSC", "lending", "risk_params"],
-    ["AAVE_V3-ETHEREUM", "lending", "flash_loan_events"],
-    ["AAVE_V3-ETHEREUM", "lending", "lending_indices"],
-    ["AAVE_V3-ETHEREUM", "lending", "liquidation_events"],
-    ["AAVE_V3-ETHEREUM", "lending", "liquidations"],
-    ["AAVE_V3-ETHEREUM", "lending", "oracle_prices"],
-    ["AAVE_V3-ETHEREUM", "lending", "position_data"],
-    ["AAVE_V3-ETHEREUM", "lending", "risk_params"],
-    ["AAVE_V3-LINEA", "lending", "flash_loan_events"],
-    ["AAVE_V3-LINEA", "lending", "lending_indices"],
-    ["AAVE_V3-LINEA", "lending", "liquidation_events"],
-    ["AAVE_V3-LINEA", "lending", "liquidations"],
-    ["AAVE_V3-LINEA", "lending", "oracle_prices"],
-    ["AAVE_V3-LINEA", "lending", "position_data"],
-    ["AAVE_V3-LINEA", "lending", "risk_params"],
-    ["AAVE_V3-OPTIMISM", "lending", "flash_loan_events"],
-    ["AAVE_V3-OPTIMISM", "lending", "lending_indices"],
-    ["AAVE_V3-OPTIMISM", "lending", "liquidation_events"],
-    ["AAVE_V3-OPTIMISM", "lending", "liquidations"],
-    ["AAVE_V3-OPTIMISM", "lending", "oracle_prices"],
-    ["AAVE_V3-OPTIMISM", "lending", "position_data"],
-    ["AAVE_V3-OPTIMISM", "lending", "risk_params"],
-    ["AAVE_V3-POLYGON", "lending", "flash_loan_events"],
-    ["AAVE_V3-POLYGON", "lending", "lending_indices"],
-    ["AAVE_V3-POLYGON", "lending", "liquidation_events"],
-    ["AAVE_V3-POLYGON", "lending", "liquidations"],
-    ["AAVE_V3-POLYGON", "lending", "oracle_prices"],
-    ["AAVE_V3-POLYGON", "lending", "position_data"],
-    ["AAVE_V3-POLYGON", "lending", "risk_params"],
-    ["AERODROME_V3-BASE", "pool", "dex_pool_state"],
-    ["AERODROME_V3-BASE", "pool", "dex_pool_swaps"],
-    ["BALANCER-ARBITRUM", "pool", "dex_pool_state"],
-    ["BALANCER-ARBITRUM", "pool", "dex_pool_swaps"],
-    ["BALANCER-AVALANCHE", "pool", "dex_pool_state"],
-    ["BALANCER-AVALANCHE", "pool", "dex_pool_swaps"],
-    ["BALANCER-BASE", "pool", "dex_pool_state"],
-    ["BALANCER-BASE", "pool", "dex_pool_swaps"],
-    ["BALANCER-ETHEREUM", "pool", "dex_pool_state"],
-    ["BALANCER-ETHEREUM", "pool", "dex_pool_swaps"],
-    ["BALANCER-OPTIMISM", "pool", "dex_pool_state"],
-    ["BALANCER-OPTIMISM", "pool", "dex_pool_swaps"],
-    ["BALANCER-POLYGON", "pool", "dex_pool_state"],
-    ["BALANCER-POLYGON", "pool", "dex_pool_swaps"],
-    ["BENQI-AVALANCHE", "lending", "lending_indices"],
-    ["CAMELOT_V3-ARBITRUM", "pool", "dex_pool_state"],
-    ["CAMELOT_V3-ARBITRUM", "pool", "dex_pool_swaps"],
-    ["COMPOUND_V3-ARBITRUM", "lending", "lending_indices"],
-    ["COMPOUND_V3-ARBITRUM", "lending", "liquidations"],
-    ["COMPOUND_V3-ARBITRUM", "lending", "risk_params"],
-    ["COMPOUND_V3-BASE", "lending", "lending_indices"],
-    ["COMPOUND_V3-BASE", "lending", "liquidations"],
-    ["COMPOUND_V3-BASE", "lending", "risk_params"],
-    ["COMPOUND_V3-ETHEREUM", "lending", "lending_indices"],
-    ["COMPOUND_V3-ETHEREUM", "lending", "liquidations"],
-    ["COMPOUND_V3-ETHEREUM", "lending", "risk_params"],
-    ["COMPOUND_V3-OPTIMISM", "lending", "lending_indices"],
-    ["COMPOUND_V3-OPTIMISM", "lending", "liquidations"],
-    ["COMPOUND_V3-OPTIMISM", "lending", "risk_params"],
-    ["CURVE-AVALANCHE", "pool", "dex_pool_state"],
-    ["CURVE-AVALANCHE", "pool", "dex_pool_swaps"],
-    ["CURVE-ETHEREUM", "pool", "dex_pool_state"],
-    ["CURVE-ETHEREUM", "pool", "dex_pool_swaps"],
-    ["CURVE-OPTIMISM", "pool", "dex_pool_state"],
-    ["CURVE-OPTIMISM", "pool", "dex_pool_swaps"],
-    ["DRIFT-SOLANA", "perpetual", "oracle_prices"],
-    ["DRIFT-SOLANA", "perpetual", "perp_funding"],
-    ["DRIFT-SOLANA", "spot_pair", "oracle_prices"],
-    ["EIGENLAYER-ETHEREUM", "spot_asset", "eigenlayer_rewards"],
-    ["EIGENLAYER-ETHEREUM", "spot_asset", "oracle_prices"],
-    ["EIGENLAYER-ETHEREUM", "spot_asset", "rewards"],
-    ["EIGENLAYER-ETHEREUM", "spot_asset", "staking_yields"],
-    ["ETHENA-ETHEREUM", "yield_bearing", "lst_rates"],
-    ["ETHENA-ETHEREUM", "yield_bearing", "oracle_prices"],
-    ["ETHERFI-ETHEREUM", "yield_bearing", "lst_rates"],
-    ["ETHERFI-ETHEREUM", "yield_bearing", "oracle_prices"],
-    ["ETHERFI-ETHEREUM", "yield_bearing", "rewards"],
-    ["ETHERFI-ETHEREUM", "yield_bearing", "staking_yields"],
-    ["EULER_V2-ETHEREUM", "lending", "lending_indices"],
-    ["EULER_V2-ETHEREUM", "lending", "liquidations"],
-    ["EULER_V2-ETHEREUM", "lending", "risk_params"],
-    ["FLUID-ETHEREUM", "lending", "lending_indices"],
-    ["FLUID-ETHEREUM", "lending", "liquidations"],
-    ["FLUID-ETHEREUM", "lending", "risk_params"],
-    ["GMX-ARBITRUM", "pool", "dex_pool_state"],
-    ["GMX-ARBITRUM", "pool", "dex_pool_swaps"],
-    ["GMX-ARBITRUM", "pool", "liquidations"],
-    ["GMX-ARBITRUM", "pool", "perp_funding"],
-    ["GMX-AVALANCHE", "pool", "dex_pool_state"],
-    ["GMX-AVALANCHE", "pool", "dex_pool_swaps"],
-    ["GMX-AVALANCHE", "pool", "liquidations"],
-    ["GMX-AVALANCHE", "pool", "perp_funding"],
-    ["JITO-SOLANA", "staking", "lst_rates"],
-    ["JITO-SOLANA", "staking", "oracle_prices"],
-    ["KAMINO-SOLANA", "pool", "dex_pool_state"],
-    ["KAMINO-SOLANA", "pool", "lending_indices"],
-    ["LIDO-ETHEREUM", "yield_bearing", "lst_rates"],
-    ["LIDO-ETHEREUM", "yield_bearing", "oracle_prices"],
-    ["LIDO-ETHEREUM", "yield_bearing", "rewards"],
-    ["LIDO-ETHEREUM", "yield_bearing", "staking_yields"],
-    ["MARGINFI-SOLANA", "lending", "lending_indices"],
-    ["MARINADE-SOLANA", "staking", "lst_rates"],
-    ["MARINADE-SOLANA", "staking", "oracle_prices"],
-    ["MORPHO-BASE", "lending", "lending_indices"],
-    ["MORPHO-BASE", "lending", "liquidation_events"],
-    ["MORPHO-BASE", "lending", "liquidations"],
-    ["MORPHO-BASE", "lending", "position_data"],
-    ["MORPHO-BASE", "lending", "risk_params"],
-    ["MORPHO-ETHEREUM", "lending", "lending_indices"],
-    ["MORPHO-ETHEREUM", "lending", "liquidation_events"],
-    ["MORPHO-ETHEREUM", "lending", "liquidations"],
-    ["MORPHO-ETHEREUM", "lending", "position_data"],
-    ["MORPHO-ETHEREUM", "lending", "risk_params"],
-    ["ORCA-SOLANA", "pool", "dex_pool_state"],
-    ["ORCA-SOLANA", "pool", "dex_pool_swaps"],
-    ["PANCAKESWAP_V3-BASE", "pool", "dex_pool_state"],
-    ["PANCAKESWAP_V3-BASE", "pool", "dex_pool_swaps"],
-    ["PANCAKESWAP_V3-BSC", "pool", "dex_pool_state"],
-    ["PANCAKESWAP_V3-BSC", "pool", "dex_pool_swaps"],
-    ["PANCAKESWAP_V3-ETHEREUM", "pool", "dex_pool_state"],
-    ["PANCAKESWAP_V3-ETHEREUM", "pool", "dex_pool_swaps"],
-    ["RADIANT-ARBITRUM", "lending", "lending_indices"],
-    ["RADIANT-ARBITRUM", "lending", "liquidations"],
-    ["RADIANT-ARBITRUM", "lending", "risk_params"],
-    ["RADIANT-BSC", "lending", "lending_indices"],
-    ["RADIANT-BSC", "lending", "liquidations"],
-    ["RADIANT-BSC", "lending", "risk_params"],
-    ["RADIANT-ETHEREUM", "lending", "lending_indices"],
-    ["RADIANT-ETHEREUM", "lending", "liquidations"],
-    ["RADIANT-ETHEREUM", "lending", "risk_params"],
-    ["RAYDIUM-SOLANA", "pool", "dex_pool_state"],
-    ["RAYDIUM-SOLANA", "pool", "dex_pool_swaps"],
-    ["SOLEND-SOLANA", "lending", "lending_indices"],
-    ["SPARK-ETHEREUM", "lending", "lending_indices"],
-    ["SPARK-ETHEREUM", "lending", "liquidations"],
-    ["SPARK-ETHEREUM", "lending", "risk_params"],
-    ["SUSHISWAP-ARBITRUM", "pool", "dex_pool_state"],
-    ["SUSHISWAP-ARBITRUM", "pool", "dex_pool_swaps"],
-    ["SUSHISWAP_V3-AVALANCHE", "pool", "dex_pool_state"],
-    ["SUSHISWAP_V3-AVALANCHE", "pool", "dex_pool_swaps"],
-    ["SUSHISWAP_V3-BASE", "pool", "dex_pool_state"],
-    ["SUSHISWAP_V3-BASE", "pool", "dex_pool_swaps"],
-    ["SUSHISWAP_V3-ETHEREUM", "pool", "dex_pool_state"],
-    ["SUSHISWAP_V3-ETHEREUM", "pool", "dex_pool_swaps"],
-    ["TRADER_JOE_V2-AVALANCHE", "pool", "dex_pool_state"],
-    ["TRADER_JOE_V2-AVALANCHE", "pool", "dex_pool_swaps"],
-    ["UNISWAP_V2-ETHEREUM", "pool", "dex_pool_state"],
-    ["UNISWAP_V2-ETHEREUM", "pool", "dex_pool_swaps"],
-    ["UNISWAP_V3-ARBITRUM", "pool", "dex_pool_state"],
-    ["UNISWAP_V3-ARBITRUM", "pool", "dex_pool_swaps"],
-    ["UNISWAP_V3-ARBITRUM", "pool", "position_data"],
-    ["UNISWAP_V3-BASE", "pool", "dex_pool_state"],
-    ["UNISWAP_V3-BASE", "pool", "dex_pool_swaps"],
-    ["UNISWAP_V3-BASE", "pool", "position_data"],
-    ["UNISWAP_V3-ETHEREUM", "pool", "dex_pool_state"],
-    ["UNISWAP_V3-ETHEREUM", "pool", "dex_pool_swaps"],
-    ["UNISWAP_V3-ETHEREUM", "pool", "position_data"],
-    ["UNISWAP_V3-OPTIMISM", "pool", "dex_pool_state"],
-    ["UNISWAP_V3-OPTIMISM", "pool", "dex_pool_swaps"],
-    ["UNISWAP_V3-OPTIMISM", "pool", "position_data"],
-    ["UNISWAP_V3-POLYGON", "pool", "dex_pool_state"],
-    ["UNISWAP_V3-POLYGON", "pool", "dex_pool_swaps"],
-    ["UNISWAP_V3-POLYGON", "pool", "position_data"],
-    ["UNISWAP_V4-ETHEREUM", "pool", "dex_pool_state"],
-    ["UNISWAP_V4-ETHEREUM", "pool", "dex_pool_swaps"],
-    ["VELODROME_V2-OPTIMISM", "pool", "dex_pool_state"],
-    ["VELODROME_V2-OPTIMISM", "pool", "dex_pool_swaps"],
-    ["VENUS-BSC", "lending", "lending_indices"],
-    ["VENUS-ETHEREUM", "lending", "lending_indices"]
+    [
+      "AAVE_V3-ARBITRUM",
+      "lending",
+      "flash_loan_events"
+    ],
+    [
+      "AAVE_V3-ARBITRUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "AAVE_V3-ARBITRUM",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "AAVE_V3-ARBITRUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "AAVE_V3-ARBITRUM",
+      "lending",
+      "oracle_prices"
+    ],
+    [
+      "AAVE_V3-ARBITRUM",
+      "lending",
+      "position_data"
+    ],
+    [
+      "AAVE_V3-ARBITRUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "AAVE_V3-AVALANCHE",
+      "lending",
+      "flash_loan_events"
+    ],
+    [
+      "AAVE_V3-AVALANCHE",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "AAVE_V3-AVALANCHE",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "AAVE_V3-AVALANCHE",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "AAVE_V3-AVALANCHE",
+      "lending",
+      "oracle_prices"
+    ],
+    [
+      "AAVE_V3-AVALANCHE",
+      "lending",
+      "position_data"
+    ],
+    [
+      "AAVE_V3-AVALANCHE",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "AAVE_V3-BASE",
+      "lending",
+      "flash_loan_events"
+    ],
+    [
+      "AAVE_V3-BASE",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "AAVE_V3-BASE",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "AAVE_V3-BASE",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "AAVE_V3-BASE",
+      "lending",
+      "oracle_prices"
+    ],
+    [
+      "AAVE_V3-BASE",
+      "lending",
+      "position_data"
+    ],
+    [
+      "AAVE_V3-BASE",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "AAVE_V3-BSC",
+      "lending",
+      "flash_loan_events"
+    ],
+    [
+      "AAVE_V3-BSC",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "AAVE_V3-BSC",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "AAVE_V3-BSC",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "AAVE_V3-BSC",
+      "lending",
+      "oracle_prices"
+    ],
+    [
+      "AAVE_V3-BSC",
+      "lending",
+      "position_data"
+    ],
+    [
+      "AAVE_V3-BSC",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "AAVE_V3-ETHEREUM",
+      "lending",
+      "flash_loan_events"
+    ],
+    [
+      "AAVE_V3-ETHEREUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "AAVE_V3-ETHEREUM",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "AAVE_V3-ETHEREUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "AAVE_V3-ETHEREUM",
+      "lending",
+      "oracle_prices"
+    ],
+    [
+      "AAVE_V3-ETHEREUM",
+      "lending",
+      "position_data"
+    ],
+    [
+      "AAVE_V3-ETHEREUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "AAVE_V3-LINEA",
+      "lending",
+      "flash_loan_events"
+    ],
+    [
+      "AAVE_V3-LINEA",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "AAVE_V3-LINEA",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "AAVE_V3-LINEA",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "AAVE_V3-LINEA",
+      "lending",
+      "oracle_prices"
+    ],
+    [
+      "AAVE_V3-LINEA",
+      "lending",
+      "position_data"
+    ],
+    [
+      "AAVE_V3-LINEA",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "AAVE_V3-OPTIMISM",
+      "lending",
+      "flash_loan_events"
+    ],
+    [
+      "AAVE_V3-OPTIMISM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "AAVE_V3-OPTIMISM",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "AAVE_V3-OPTIMISM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "AAVE_V3-OPTIMISM",
+      "lending",
+      "oracle_prices"
+    ],
+    [
+      "AAVE_V3-OPTIMISM",
+      "lending",
+      "position_data"
+    ],
+    [
+      "AAVE_V3-OPTIMISM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "AAVE_V3-POLYGON",
+      "lending",
+      "flash_loan_events"
+    ],
+    [
+      "AAVE_V3-POLYGON",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "AAVE_V3-POLYGON",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "AAVE_V3-POLYGON",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "AAVE_V3-POLYGON",
+      "lending",
+      "oracle_prices"
+    ],
+    [
+      "AAVE_V3-POLYGON",
+      "lending",
+      "position_data"
+    ],
+    [
+      "AAVE_V3-POLYGON",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "AERODROME_V3-BASE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "AERODROME_V3-BASE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "BALANCER-ARBITRUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "BALANCER-ARBITRUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "BALANCER-AVALANCHE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "BALANCER-AVALANCHE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "BALANCER-BASE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "BALANCER-BASE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "BALANCER-ETHEREUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "BALANCER-ETHEREUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "BALANCER-OPTIMISM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "BALANCER-OPTIMISM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "BALANCER-POLYGON",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "BALANCER-POLYGON",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "BENQI-AVALANCHE",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "CAMELOT_V3-ARBITRUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "CAMELOT_V3-ARBITRUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "COMPOUND_V3-ARBITRUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "COMPOUND_V3-ARBITRUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "COMPOUND_V3-ARBITRUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "COMPOUND_V3-BASE",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "COMPOUND_V3-BASE",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "COMPOUND_V3-BASE",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "COMPOUND_V3-ETHEREUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "COMPOUND_V3-ETHEREUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "COMPOUND_V3-ETHEREUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "COMPOUND_V3-OPTIMISM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "COMPOUND_V3-OPTIMISM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "COMPOUND_V3-OPTIMISM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "CURVE-AVALANCHE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "CURVE-AVALANCHE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "CURVE-ETHEREUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "CURVE-ETHEREUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "CURVE-OPTIMISM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "CURVE-OPTIMISM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "DRIFT-SOLANA",
+      "perpetual",
+      "oracle_prices"
+    ],
+    [
+      "DRIFT-SOLANA",
+      "perpetual",
+      "perp_funding"
+    ],
+    [
+      "DRIFT-SOLANA",
+      "perpetual",
+      "perp_trades"
+    ],
+    [
+      "DRIFT-SOLANA",
+      "spot_pair",
+      "oracle_prices"
+    ],
+    [
+      "DRIFT-SOLANA",
+      "spot_pair",
+      "perp_trades"
+    ],
+    [
+      "EIGENLAYER-ETHEREUM",
+      "spot_asset",
+      "eigenlayer_rewards"
+    ],
+    [
+      "EIGENLAYER-ETHEREUM",
+      "spot_asset",
+      "oracle_prices"
+    ],
+    [
+      "EIGENLAYER-ETHEREUM",
+      "spot_asset",
+      "rewards"
+    ],
+    [
+      "EIGENLAYER-ETHEREUM",
+      "spot_asset",
+      "staking_yields"
+    ],
+    [
+      "ETHENA-ETHEREUM",
+      "yield_bearing",
+      "lst_rates"
+    ],
+    [
+      "ETHENA-ETHEREUM",
+      "yield_bearing",
+      "oracle_prices"
+    ],
+    [
+      "ETHERFI-ETHEREUM",
+      "yield_bearing",
+      "lst_rates"
+    ],
+    [
+      "ETHERFI-ETHEREUM",
+      "yield_bearing",
+      "oracle_prices"
+    ],
+    [
+      "ETHERFI-ETHEREUM",
+      "yield_bearing",
+      "rewards"
+    ],
+    [
+      "ETHERFI-ETHEREUM",
+      "yield_bearing",
+      "staking_yields"
+    ],
+    [
+      "EULER_V2-ETHEREUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "EULER_V2-ETHEREUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "EULER_V2-ETHEREUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "FLUID-ETHEREUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "FLUID-ETHEREUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "FLUID-ETHEREUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "GMX-ARBITRUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "GMX-ARBITRUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "GMX-ARBITRUM",
+      "pool",
+      "liquidations"
+    ],
+    [
+      "GMX-ARBITRUM",
+      "pool",
+      "perp_funding"
+    ],
+    [
+      "GMX-AVALANCHE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "GMX-AVALANCHE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "GMX-AVALANCHE",
+      "pool",
+      "liquidations"
+    ],
+    [
+      "GMX-AVALANCHE",
+      "pool",
+      "perp_funding"
+    ],
+    [
+      "JITO-SOLANA",
+      "staking",
+      "lst_rates"
+    ],
+    [
+      "JITO-SOLANA",
+      "staking",
+      "oracle_prices"
+    ],
+    [
+      "KAMINO-SOLANA",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "KAMINO-SOLANA",
+      "pool",
+      "lending_indices"
+    ],
+    [
+      "LIDO-ETHEREUM",
+      "yield_bearing",
+      "lst_rates"
+    ],
+    [
+      "LIDO-ETHEREUM",
+      "yield_bearing",
+      "oracle_prices"
+    ],
+    [
+      "LIDO-ETHEREUM",
+      "yield_bearing",
+      "rewards"
+    ],
+    [
+      "LIDO-ETHEREUM",
+      "yield_bearing",
+      "staking_yields"
+    ],
+    [
+      "MARGINFI-SOLANA",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "MARINADE-SOLANA",
+      "staking",
+      "lst_rates"
+    ],
+    [
+      "MARINADE-SOLANA",
+      "staking",
+      "oracle_prices"
+    ],
+    [
+      "MORPHO-BASE",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "MORPHO-BASE",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "MORPHO-BASE",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "MORPHO-BASE",
+      "lending",
+      "position_data"
+    ],
+    [
+      "MORPHO-BASE",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "MORPHO-ETHEREUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "MORPHO-ETHEREUM",
+      "lending",
+      "liquidation_events"
+    ],
+    [
+      "MORPHO-ETHEREUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "MORPHO-ETHEREUM",
+      "lending",
+      "position_data"
+    ],
+    [
+      "MORPHO-ETHEREUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "ORCA-SOLANA",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "ORCA-SOLANA",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "PANCAKESWAP_V3-BASE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "PANCAKESWAP_V3-BASE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "PANCAKESWAP_V3-BSC",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "PANCAKESWAP_V3-BSC",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "PANCAKESWAP_V3-ETHEREUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "PANCAKESWAP_V3-ETHEREUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "RADIANT-ARBITRUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "RADIANT-ARBITRUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "RADIANT-ARBITRUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "RADIANT-BSC",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "RADIANT-BSC",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "RADIANT-BSC",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "RADIANT-ETHEREUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "RADIANT-ETHEREUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "RADIANT-ETHEREUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "RAYDIUM-SOLANA",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "RAYDIUM-SOLANA",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "SOLEND-SOLANA",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "SPARK-ETHEREUM",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "SPARK-ETHEREUM",
+      "lending",
+      "liquidations"
+    ],
+    [
+      "SPARK-ETHEREUM",
+      "lending",
+      "risk_params"
+    ],
+    [
+      "SUSHISWAP-ARBITRUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "SUSHISWAP-ARBITRUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "SUSHISWAP_V3-AVALANCHE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "SUSHISWAP_V3-AVALANCHE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "SUSHISWAP_V3-BASE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "SUSHISWAP_V3-BASE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "SUSHISWAP_V3-ETHEREUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "SUSHISWAP_V3-ETHEREUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "TRADER_JOE_V2-AVALANCHE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "TRADER_JOE_V2-AVALANCHE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "UNISWAP_V2-ETHEREUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "UNISWAP_V2-ETHEREUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "UNISWAP_V3-ARBITRUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "UNISWAP_V3-ARBITRUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "UNISWAP_V3-ARBITRUM",
+      "pool",
+      "position_data"
+    ],
+    [
+      "UNISWAP_V3-BASE",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "UNISWAP_V3-BASE",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "UNISWAP_V3-BASE",
+      "pool",
+      "position_data"
+    ],
+    [
+      "UNISWAP_V3-ETHEREUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "UNISWAP_V3-ETHEREUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "UNISWAP_V3-ETHEREUM",
+      "pool",
+      "position_data"
+    ],
+    [
+      "UNISWAP_V3-OPTIMISM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "UNISWAP_V3-OPTIMISM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "UNISWAP_V3-OPTIMISM",
+      "pool",
+      "position_data"
+    ],
+    [
+      "UNISWAP_V3-POLYGON",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "UNISWAP_V3-POLYGON",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "UNISWAP_V3-POLYGON",
+      "pool",
+      "position_data"
+    ],
+    [
+      "UNISWAP_V4-ETHEREUM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "UNISWAP_V4-ETHEREUM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "VELODROME_V2-OPTIMISM",
+      "pool",
+      "dex_pool_state"
+    ],
+    [
+      "VELODROME_V2-OPTIMISM",
+      "pool",
+      "dex_pool_swaps"
+    ],
+    [
+      "VENUS-BSC",
+      "lending",
+      "lending_indices"
+    ],
+    [
+      "VENUS-ETHEREUM",
+      "lending",
+      "lending_indices"
+    ]
   ]
 }

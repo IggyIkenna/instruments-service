@@ -1,81 +1,377 @@
 {
   "asset_group": "cefi",
-  "captured_at": "2026-07-15",
+  "captured_at": "2026-07-16",
   "tuple_count": 74,
   "tuples": [
-    ["ASTER", "perpetual", "derivative_ticker"],
-    ["ASTER", "perpetual", "trades"],
-    ["BINANCE-FUTURES", "future", "book_snapshot_5"],
-    ["BINANCE-FUTURES", "future", "derivative_ticker"],
-    ["BINANCE-FUTURES", "future", "trades"],
-    ["BINANCE-FUTURES", "perpetual", "book_snapshot_5"],
-    ["BINANCE-FUTURES", "perpetual", "derivative_ticker"],
-    ["BINANCE-FUTURES", "perpetual", "liquidations"],
-    ["BINANCE-FUTURES", "perpetual", "trades"],
-    ["BINANCE-SPOT", "spot_pair", "book_snapshot_5"],
-    ["BINANCE-SPOT", "spot_pair", "trades"],
-    ["BITFINEX-FUTURES", "perpetual", "book_snapshot_5"],
-    ["BITFINEX-FUTURES", "perpetual", "derivative_ticker"],
-    ["BITFINEX-FUTURES", "perpetual", "liquidations"],
-    ["BITFINEX-FUTURES", "perpetual", "trades"],
-    ["BITFINEX-SPOT", "spot_pair", "book_snapshot_5"],
-    ["BITFINEX-SPOT", "spot_pair", "trades"],
-    ["BITGET-FUTURES", "future", "book_snapshot_5"],
-    ["BITGET-FUTURES", "future", "derivative_ticker"],
-    ["BITGET-FUTURES", "future", "trades"],
-    ["BITGET-FUTURES", "perpetual", "book_snapshot_5"],
-    ["BITGET-FUTURES", "perpetual", "derivative_ticker"],
-    ["BITGET-FUTURES", "perpetual", "liquidations"],
-    ["BITGET-FUTURES", "perpetual", "trades"],
-    ["BITGET-SPOT", "spot_pair", "book_snapshot_5"],
-    ["BITGET-SPOT", "spot_pair", "trades"],
-    ["BYBIT", "future", "book_snapshot_5"],
-    ["BYBIT", "future", "derivative_ticker"],
-    ["BYBIT", "future", "trades"],
-    ["BYBIT", "perpetual", "book_snapshot_5"],
-    ["BYBIT", "perpetual", "derivative_ticker"],
-    ["BYBIT", "perpetual", "liquidations"],
-    ["BYBIT", "perpetual", "trades"],
-    ["BYBIT-SPOT", "spot_pair", "book_snapshot_5"],
-    ["BYBIT-SPOT", "spot_pair", "trades"],
-    ["COINBASE-CDE", "future", "trades"],
-    ["COINBASE-FUTURES", "perpetual", "trades"],
-    ["COINBASE-FUTURES", "spot_pair", "trades"],
-    ["COINBASE-SPOT", "spot_pair", "trades"],
-    ["DERIBIT", "futures_chain", "trades"],
-    ["DERIBIT", "options_chain", "trades"],
-    ["DERIBIT", "perpetual", "book_snapshot_5"],
-    ["DERIBIT", "perpetual", "derivative_ticker"],
-    ["DERIBIT", "perpetual", "trades"],
-    ["DERIBIT", "spot_pair", "book_snapshot_5"],
-    ["DERIBIT", "spot_pair", "trades"],
-    ["DERIBIT-COMBO", "options_chain", "trades"],
-    ["EXTENDED-STARKNET", "perpetual", "derivative_ticker"],
-    ["EXTENDED-STARKNET", "perpetual", "trades"],
-    ["HYPERLIQUID", "perpetual", "book_snapshot_5"],
-    ["HYPERLIQUID", "perpetual", "derivative_ticker"],
-    ["HYPERLIQUID", "perpetual", "trades"],
-    ["KRAKEN-FUTURES", "future", "book_snapshot_5"],
-    ["KRAKEN-FUTURES", "future", "derivative_ticker"],
-    ["KRAKEN-FUTURES", "future", "trades"],
-    ["KRAKEN-FUTURES", "perpetual", "book_snapshot_5"],
-    ["KRAKEN-FUTURES", "perpetual", "derivative_ticker"],
-    ["KRAKEN-FUTURES", "perpetual", "liquidations"],
-    ["KRAKEN-FUTURES", "perpetual", "trades"],
-    ["KRAKEN-SPOT", "spot_pair", "book_snapshot_5"],
-    ["KRAKEN-SPOT", "spot_pair", "trades"],
-    ["LIGHTER-ZKSYNC", "perpetual", "derivative_ticker"],
-    ["OKX", "futures_chain", "trades"],
-    ["OKX", "options_chain", "trades"],
-    ["OKX", "perpetual", "book_snapshot_5"],
-    ["OKX", "perpetual", "derivative_ticker"],
-    ["OKX", "perpetual", "liquidations"],
-    ["OKX", "perpetual", "trades"],
-    ["OKX-SPOT", "spot_pair", "book_snapshot_5"],
-    ["OKX-SPOT", "spot_pair", "trades"],
-    ["PACIFICA-SOLANA", "perpetual", "derivative_ticker"],
-    ["PACIFICA-SOLANA", "perpetual", "trades"],
-    ["UPBIT", "spot_pair", "book_snapshot_5"],
-    ["UPBIT", "spot_pair", "trades"]
+    [
+      "ASTER",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "ASTER",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "BINANCE-FUTURES",
+      "future",
+      "book_snapshot_5"
+    ],
+    [
+      "BINANCE-FUTURES",
+      "future",
+      "derivative_ticker"
+    ],
+    [
+      "BINANCE-FUTURES",
+      "future",
+      "trades"
+    ],
+    [
+      "BINANCE-FUTURES",
+      "perpetual",
+      "book_snapshot_5"
+    ],
+    [
+      "BINANCE-FUTURES",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "BINANCE-FUTURES",
+      "perpetual",
+      "liquidations"
+    ],
+    [
+      "BINANCE-FUTURES",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "BINANCE-SPOT",
+      "spot_pair",
+      "book_snapshot_5"
+    ],
+    [
+      "BINANCE-SPOT",
+      "spot_pair",
+      "trades"
+    ],
+    [
+      "BITFINEX-FUTURES",
+      "perpetual",
+      "book_snapshot_5"
+    ],
+    [
+      "BITFINEX-FUTURES",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "BITFINEX-FUTURES",
+      "perpetual",
+      "liquidations"
+    ],
+    [
+      "BITFINEX-FUTURES",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "BITFINEX-SPOT",
+      "spot_pair",
+      "book_snapshot_5"
+    ],
+    [
+      "BITFINEX-SPOT",
+      "spot_pair",
+      "trades"
+    ],
+    [
+      "BITGET-FUTURES",
+      "future",
+      "book_snapshot_5"
+    ],
+    [
+      "BITGET-FUTURES",
+      "future",
+      "derivative_ticker"
+    ],
+    [
+      "BITGET-FUTURES",
+      "future",
+      "trades"
+    ],
+    [
+      "BITGET-FUTURES",
+      "perpetual",
+      "book_snapshot_5"
+    ],
+    [
+      "BITGET-FUTURES",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "BITGET-FUTURES",
+      "perpetual",
+      "liquidations"
+    ],
+    [
+      "BITGET-FUTURES",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "BITGET-SPOT",
+      "spot_pair",
+      "book_snapshot_5"
+    ],
+    [
+      "BITGET-SPOT",
+      "spot_pair",
+      "trades"
+    ],
+    [
+      "BYBIT",
+      "future",
+      "book_snapshot_5"
+    ],
+    [
+      "BYBIT",
+      "future",
+      "derivative_ticker"
+    ],
+    [
+      "BYBIT",
+      "future",
+      "trades"
+    ],
+    [
+      "BYBIT",
+      "perpetual",
+      "book_snapshot_5"
+    ],
+    [
+      "BYBIT",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "BYBIT",
+      "perpetual",
+      "liquidations"
+    ],
+    [
+      "BYBIT",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "BYBIT-SPOT",
+      "spot_pair",
+      "book_snapshot_5"
+    ],
+    [
+      "BYBIT-SPOT",
+      "spot_pair",
+      "trades"
+    ],
+    [
+      "COINBASE-CDE",
+      "future",
+      "trades"
+    ],
+    [
+      "COINBASE-FUTURES",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "COINBASE-FUTURES",
+      "spot_pair",
+      "trades"
+    ],
+    [
+      "COINBASE-SPOT",
+      "spot_pair",
+      "trades"
+    ],
+    [
+      "DERIBIT",
+      "futures_chain",
+      "trades"
+    ],
+    [
+      "DERIBIT",
+      "options_chain",
+      "trades"
+    ],
+    [
+      "DERIBIT",
+      "perpetual",
+      "book_snapshot_5"
+    ],
+    [
+      "DERIBIT",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "DERIBIT",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "DERIBIT",
+      "spot_pair",
+      "book_snapshot_5"
+    ],
+    [
+      "DERIBIT",
+      "spot_pair",
+      "trades"
+    ],
+    [
+      "DERIBIT-COMBO",
+      "options_chain",
+      "trades"
+    ],
+    [
+      "EXTENDED-STARKNET",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "EXTENDED-STARKNET",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "HYPERLIQUID",
+      "perpetual",
+      "book_snapshot_5"
+    ],
+    [
+      "HYPERLIQUID",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "HYPERLIQUID",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "KRAKEN-FUTURES",
+      "future",
+      "book_snapshot_5"
+    ],
+    [
+      "KRAKEN-FUTURES",
+      "future",
+      "derivative_ticker"
+    ],
+    [
+      "KRAKEN-FUTURES",
+      "future",
+      "trades"
+    ],
+    [
+      "KRAKEN-FUTURES",
+      "perpetual",
+      "book_snapshot_5"
+    ],
+    [
+      "KRAKEN-FUTURES",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "KRAKEN-FUTURES",
+      "perpetual",
+      "liquidations"
+    ],
+    [
+      "KRAKEN-FUTURES",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "KRAKEN-SPOT",
+      "spot_pair",
+      "book_snapshot_5"
+    ],
+    [
+      "KRAKEN-SPOT",
+      "spot_pair",
+      "trades"
+    ],
+    [
+      "LIGHTER-ZKSYNC",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "OKX",
+      "futures_chain",
+      "trades"
+    ],
+    [
+      "OKX",
+      "options_chain",
+      "trades"
+    ],
+    [
+      "OKX",
+      "perpetual",
+      "book_snapshot_5"
+    ],
+    [
+      "OKX",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "OKX",
+      "perpetual",
+      "liquidations"
+    ],
+    [
+      "OKX",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "OKX-SPOT",
+      "spot_pair",
+      "book_snapshot_5"
+    ],
+    [
+      "OKX-SPOT",
+      "spot_pair",
+      "trades"
+    ],
+    [
+      "PACIFICA-SOLANA",
+      "perpetual",
+      "derivative_ticker"
+    ],
+    [
+      "PACIFICA-SOLANA",
+      "perpetual",
+      "trades"
+    ],
+    [
+      "UPBIT",
+      "spot_pair",
+      "book_snapshot_5"
+    ],
+    [
+      "UPBIT",
+      "spot_pair",
+      "trades"
+    ]
   ]
 }
