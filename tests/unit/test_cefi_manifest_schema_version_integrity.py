@@ -12,7 +12,7 @@ This test ensures the current code cannot reproduce that bug:
 1. AvailabilityRecord always stamps ``schema_version=MANIFEST_SCHEMA_VERSION``
    (integer 9) regardless of venue / chain value.
 2. The cefi manifest writer path (_write_venue) separates chain from schema_version:
-   for on-chain CeFi venues like LIGHTER-ZKSYNC and PACIFICA-SOLANA, the manifest
+   for on-chain CeFi venues like LIGHTER-ZKSYNC and EXTENDED-STARKNET, the manifest
    row carries ``chain=""`` (cefi, not defi) and ``schema_version=int``.
 """
 
@@ -36,8 +36,7 @@ class TestAvailabilityRecordSchemaVersionAlwaysInt:
             written_at="2023-12-17T00:00:00+00:00",
         )
         assert isinstance(rec.schema_version, int), (
-            "schema_version must be int, got "
-            f"{type(rec.schema_version).__name__!r} = {rec.schema_version!r}"
+            f"schema_version must be int, got {type(rec.schema_version).__name__!r} = {rec.schema_version!r}"
         )
         assert rec.schema_version == MANIFEST_SCHEMA_VERSION
 
@@ -62,10 +61,14 @@ class TestAvailabilityRecordSchemaVersionAlwaysInt:
             )
 
     def test_cefi_on_chain_venue_schema_version_integer(self) -> None:
-        """On-chain CeFi venues (LIGHTER-ZKSYNC, PACIFICA-SOLANA, EXTENDED-STARKNET) get int schema_version."""
+        """On-chain CeFi venues (LIGHTER-ZKSYNC, EXTENDED-STARKNET) get int schema_version.
+
+        (PACIFICA (Solana) was a third venue here until removed entirely
+        2026-07-16 -- operator ruling: all Solana perp DEXes dropped except
+        Jupiter, not integrated.)
+        """
         cefi_on_chain_venues = [
             "LIGHTER-ZKSYNC",
-            "PACIFICA-SOLANA",
             "EXTENDED-STARKNET",
         ]
         for venue in cefi_on_chain_venues:
@@ -83,9 +86,7 @@ class TestAvailabilityRecordSchemaVersionAlwaysInt:
             )
             assert rec.schema_version == MANIFEST_SCHEMA_VERSION
             # Chain must be empty for cefi venues (chain is a defi-only axis)
-            assert rec.chain == "", (
-                f"Venue {venue}: cefi manifest row must have chain='', got {rec.chain!r}"
-            )
+            assert rec.chain == "", f"Venue {venue}: cefi manifest row must have chain='', got {rec.chain!r}"
 
     def test_manifest_schema_version_constant_is_int(self) -> None:
         """MANIFEST_SCHEMA_VERSION itself is an integer (guard against type drift)."""

@@ -13,7 +13,6 @@ from instruments_service.reference_data.adapters.defi.balancer import BalancerRe
 from instruments_service.reference_data.adapters.defi.benqi import BenqiReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.curve import CurveReferenceDataAdapter
-from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.ethena import EthenaReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.etherfi import EtherFiReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
@@ -82,9 +81,8 @@ class TestDefiAdapterVenueProperty:
         adapter = EthenaReferenceDataAdapter()
         assert adapter.venue is not None and len(adapter.venue) > 0
 
-    def test_drift_venue(self) -> None:
-        adapter = DriftReferenceDataAdapter()
-        assert adapter.venue is not None and len(adapter.venue) > 0
+    # test_drift_venue removed 2026-07-16 (operator ruling: all Solana perp
+    # DEXes dropped except Jupiter, not integrated).
 
     def test_kamino_venue(self) -> None:
         adapter = KaminoReferenceDataAdapter()
@@ -292,17 +290,9 @@ class TestDefiAdapterUnsupportedMethods:
         with pytest.raises(NotImplementedError):
             await adapter.get_funding_rate("stETH")
 
-    @pytest.mark.asyncio
-    async def test_drift_get_options_chain_raises(self) -> None:
-        adapter = DriftReferenceDataAdapter()
-        with pytest.raises(NotImplementedError):
-            await adapter.get_options_chain("SOL")
-
-    @pytest.mark.asyncio
-    async def test_drift_get_expiry_calendar_raises(self) -> None:
-        adapter = DriftReferenceDataAdapter()
-        with pytest.raises(NotImplementedError):
-            await adapter.get_expiry_calendar("SOL")
+    # test_drift_get_options_chain_raises / test_drift_get_expiry_calendar_raises
+    # removed 2026-07-16 (operator ruling: all Solana perp DEXes dropped
+    # except Jupiter, not integrated).
 
     @pytest.mark.asyncio
     async def test_kamino_get_funding_rate_raises(self) -> None:

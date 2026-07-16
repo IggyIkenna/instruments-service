@@ -136,16 +136,19 @@ class TestCanonicalManifestVenueChainCefiOnChain:
     """On-chain CeFi perp CLOBs keep their full venue + chain="" (asset_group=cefi)."""
 
     def test_on_chain_cefi_perps_not_split_to_defi_shape(self) -> None:
-        """LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET → (full_venue, "").
+        """LIGHTER-ZKSYNC / EXTENDED-STARKNET → (full_venue, "").
 
         Regression for the G1.3 320-row contamination: the manifest writer split
         these glued cefi venues on their KNOWN_CHAIN suffix → manifest
         asset_group=defi + chain=<L2>. They are cefi venues (VENUE_TO_ASSET_GROUP=="cefi",
         like HYPERLIQUID/ASTER) and MUST carry chain="" so _cat resolves to cefi.
+        (PACIFICA (Solana) was a third venue in this tuple until removed entirely
+        2026-07-16 -- operator ruling: all Solana perp DEXes dropped except
+        Jupiter, not integrated.)
         """
         from instruments_service.engine.orchestrator import _canonical_manifest_venue_chain
 
-        for venue in ("LIGHTER-ZKSYNC", "PACIFICA-SOLANA", "EXTENDED-STARKNET"):
+        for venue in ("LIGHTER-ZKSYNC", "EXTENDED-STARKNET"):
             mv, mc = _canonical_manifest_venue_chain(venue)
             assert (mv, mc) == (venue, ""), f"{venue}: expected ({venue!r}, '') got ({mv!r}, {mc!r})"
 
@@ -557,7 +560,8 @@ class TestBuildDefiVenues:
 
     def test_includes_solana_venues(self) -> None:
         venues = _build_defi_venues()
-        assert "DRIFT-SOLANA" in venues
+        # DRIFT (Solana) removed 2026-07-16 (operator ruling: all Solana perp
+        # DEXes dropped except Jupiter, not integrated).
         assert "KAMINO-SOLANA" in venues
         assert "RAYDIUM-SOLANA" in venues
         assert "ORCA-SOLANA" in venues

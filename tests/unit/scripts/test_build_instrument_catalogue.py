@@ -612,12 +612,14 @@ def test_rollup_supports_instrument_id_column(rollup: ModuleType) -> None:
 
 
 def test_rollup_on_chain_cefi_perp_venue_kept_glued(rollup: ModuleType) -> None:
-    """On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET)
+    """On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / EXTENDED-STARKNET)
     stay GLUED in the catalogue — the DeFi PROTOCOL-CHAIN split does NOT apply, they
     are cefi venues per UAC ``VENUE_TO_ASSET_GROUP`` and must match the by_date PATH
     + the ``_index`` writer (writers._canonical_manifest_venue_chain @ 24c0dd5) + the
     ``instrument_key`` prefix. Ref: instruments_foundation_completeness_2026_06_24.md
-    §G1.3 follow-up (2026-06-27) — 3 venues, one row each.
+    §G1.3 follow-up (2026-06-27) — originally 3 venues, one row each; PACIFICA (Solana)
+    removed entirely 2026-07-16 (operator ruling: all Solana perp DEXes dropped
+    except Jupiter, not integrated).
     """
     d1 = date(2024, 10, 19)
     snapshots = [
@@ -627,13 +629,6 @@ def test_rollup_on_chain_cefi_perp_venue_kept_glued(rollup: ModuleType) -> None:
             "instrument_type": "PERPETUAL",
             "raw_symbol": "BTC-PERP",
             "base_asset": "BTC",
-        },
-        {
-            "instrument_key": "PACIFICA-SOLANA:PERP:SOL-USDC",
-            "venue": "PACIFICA-SOLANA",
-            "instrument_type": "PERPETUAL",
-            "raw_symbol": "SOL-PERP",
-            "base_asset": "SOL",
         },
         {
             "instrument_key": "EXTENDED-STARKNET:PERP:ETH-USD",
@@ -647,7 +642,6 @@ def test_rollup_on_chain_cefi_perp_venue_kept_glued(rollup: ModuleType) -> None:
     by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
     for full_id in (
         "LIGHTER-ZKSYNC:PERP:BTC-USDC",
-        "PACIFICA-SOLANA:PERP:SOL-USDC",
         "EXTENDED-STARKNET:PERP:ETH-USD",
     ):
         assert full_id in by_id, f"catalogue dropped {full_id}"
