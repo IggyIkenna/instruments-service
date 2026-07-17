@@ -97,10 +97,21 @@ staleness" in its own ``shard count DRIFT`` warnings and docstring. Live-verifie
 pre-migration snapshot (``_index/snapshots/pre_tradfi_instrument_type_canon_2026_07_16_20260716T143452Z.parquet``):
 tradfi CME 2026-06-28 went from a single blank row of 74,005 to OPTION 2,566 + FUTURE 32 + COMBO 228 =
 2,826, while the CANONICAL object for that shard holds exactly 74,005 (OPTION 69,212/COMBO 4,446/FUTURE
-347) — matching the ORIGINAL manifest count precisely. Aggregate tradfi coalesced count fell 47,189,618 →
-46,764,522 (425,096 instruments lost). The drift its docstring documents as pre-existing was in fact
-manufactured by reading the wrong object. This script's canonical-path-first rule is the fix for that class;
-tradfi itself needs a re-run of the same logic to repair, which is out of scope for a cefi/defi task.
+347) — matching the ORIGINAL manifest count precisely. The drift its docstring documents as pre-existing was
+in fact manufactured by reading the wrong object. This script's canonical-path-first rule is the fix for that
+class.
+
+MAGNITUDE — CORRECTED 2026-07-17 (this block previously said "aggregate tradfi coalesced count fell
+47,189,618 → 46,764,522 (425,096 instruments lost)"; that number was an OVERSTATEMENT and is retracted).
+Measured per-atom against every canonical object during the repair
+(``scripts/repair_tradfi_instrument_type_counts_2026_07_17.py``, which is the tradfi fix — NOT a re-run of
+this script, whose blank-row targeting is a no-op on tradfi now that zero blank+captured rows remain): the
+snapshot→live Σ ``instrument_count`` delta of -422,560 decomposes into -453,041 superseded-ghost rows the
+consolidator legitimately deduped, +75,709 genuine post-snapshot re-captures, and +25,951 legitimate
+re-stamps where the snapshot's count really was stale. The ONLY atom actually corrupted is CME 2026-06-28
+(-71,179) — the single case where a canonical object exists AND diverges from the legacy one. Consistent with
+this script's own sampling: where both objects exist they AGREE (149/149 on a random tradfi 150-target
+sample), so the hazard is real but concentrated, not systemic.
 
 Usage (run from the instruments-service repo root)::
 
