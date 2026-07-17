@@ -78,7 +78,15 @@ from datetime import UTC, datetime
 
 import pandas as pd
 from unified_trading_library import get_storage_client, resolve_bucket_name
-from unified_trading_library.manifest_writer import _ROW_KEY_COLUMNS
+
+# noqa: qg-deep-import — `_ROW_KEY_COLUMNS` is the manifest's real composite
+# row-identity and is NOT re-exported from `unified_trading_library`'s top level
+# (verified 2026-07-17: `from unified_trading_library import _ROW_KEY_COLUMNS`
+# raises ImportError). So `check-import-patterns.py --fix`'s mechanical rewrite
+# to the shallow form would REPLACE a working import with a runtime ImportError
+# and break this migration — do not apply it. The deep import is deliberate; the
+# clean long-term fix is a public UTL export of the row-key contract.
+from unified_trading_library.manifest_writer import _ROW_KEY_COLUMNS  # noqa: qg-deep-import
 
 logger = logging.getLogger(__name__)
 
