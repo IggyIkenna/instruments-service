@@ -1394,6 +1394,100 @@ def test_cefi_v2_dt_start_gate_no_start_date_permissive() -> None:
     assert rows[0].reason == ""
 
 
+# ---------------------------------------------------------------------------
+# COVERAGE_EXCLUSIONS gate wiring (sports_manifest_canonicalisation_2026_06_01
+# item -008) — a declared, evidenced UAC bounded exclusion must take the cell
+# OUT OF MODEL (EXPECTED_UPSTREAM_OUT_OF_BOUNDS), checked BEFORE the
+# source-coverage-start floor. The production registry is empty by design, so
+# these tests monkeypatch ``is_out_of_bounds`` directly rather than
+# constructing a real (evidence-gated) CoverageExclusion.
+# ---------------------------------------------------------------------------
+
+
+def test_cefi_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over expected_unattempted seeding."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("cefi", "BINANCE-FUTURES", "trades")
+        ),
+    )
+    catalog = [_make_cefi_entry(venue="BINANCE-FUTURES", available_from="2019-01-01")]
+    date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+
+
+def test_cefi_v2_out_of_bounds_beats_pre_source_coverage_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The exclusion check runs BEFORE the dt_start_ts floor — a cell inside both
+    a declared exclusion and before the source floor must report the more
+    specific EXPECTED_UPSTREAM_OUT_OF_BOUNDS, not EXPECTED_PRE_SOURCE_COVERAGE_START."""
+    monkeypatch.setattr(enumerator_module, "is_out_of_bounds", lambda *_args, **_kwargs: True)
+    catalog = [
+        _make_cefi_entry(
+            venue="HYPERLIQUID", instrument_type="PERPETUAL", instrument_id="BTC-USD", available_from="2023-06-14"
+        )
+    ]
+    date_axis = _date_axis("2024-06-01")  # pre-trades-start (real HYPERLIQUID floor = 2025-03-22)
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+
+
+def test_cefi_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_cefi_entry(venue="BINANCE-FUTURES", available_from="2019-01-01")]
+    date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over sports expected_unattempted seeding,
+    keyed on dt_source.get(dt) (e.g. FIXTURES → api_football)."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("sports", "api_football", "FIXTURES")
+        ),
+    )
+    catalog = [
+        _make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL", venue="api_football")
+    ]
+    date_axis = _date_axis("2024-01-12")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["FIXTURES"], present_set=set()))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.league_id == "EPL"
+    assert r.asset_group == "sports"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+
+
+def test_sports_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-01-12")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["lineups"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
 def test_defi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
     """DeFi alive instrument date absent from manifest → expected_unattempted."""
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
