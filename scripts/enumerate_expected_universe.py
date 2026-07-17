@@ -1429,6 +1429,25 @@ def _enumerate_v2_defi(
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
                 for dt in row_dts:
+                    # Bounded evidenced out-of-bounds ranges (COVERAGE_EXCLUSIONS,
+                    # operator 2026-07-17) — mirrors the cefi wiring above (item -008).
+                    # Checked before seeding expected_unattempted: a proven-uncapturable
+                    # window is the more specific claim and must take the cell OUT OF
+                    # MODEL rather than inflate the denominator. Registry is empty by
+                    # design today, so this is inert until a range is PROVEN.
+                    if is_out_of_bounds("defi", canonical_venue, dt, d):
+                        yield ExpectedRow(
+                            asset_group="defi",
+                            venue=canonical_venue,
+                            chain=chain_upper,
+                            data_type=dt,
+                            instrument_type=canonical_itype,
+                            instrument_id=canonical_instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="EXPECTED_UPSTREAM_OUT_OF_BOUNDS",
+                        )
+                        continue
                     row_key = tuple(
                         {
                             "venue": canonical_venue,
@@ -1753,6 +1772,26 @@ def _enumerate_v2_tradfi(
                     _floor = _dt_floor[dt]
                     if _floor is not None and d < _floor:
                         continue  # older than the Databento rolling-history floor — unfetchable, do not seed
+                    # Bounded evidenced out-of-bounds ranges (COVERAGE_EXCLUSIONS,
+                    # operator 2026-07-17) — mirrors the cefi wiring above (item -008).
+                    # Checked before seeding expected_unattempted: a proven-uncapturable
+                    # window is the more specific claim and must take the cell OUT OF
+                    # MODEL rather than inflate the denominator. Registry is empty by
+                    # design today, so this is inert until a range is PROVEN.
+                    if is_out_of_bounds("tradfi", instr.venue, dt, d):
+                        yield ExpectedRow(
+                            asset_group="tradfi",
+                            venue=instr.venue,
+                            chain="",
+                            data_type=dt,
+                            instrument_type=canon_it,
+                            instrument_id=seed_instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="EXPECTED_UPSTREAM_OUT_OF_BOUNDS",
+                            underlying=seed_underlying,
+                        )
+                        continue
                     row_key = tuple(
                         {
                             "venue": instr.venue,
@@ -2589,6 +2628,25 @@ def _enumerate_v2_prediction(
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
                 for dt in row_dts:
+                    # Bounded evidenced out-of-bounds ranges (COVERAGE_EXCLUSIONS,
+                    # operator 2026-07-17) — mirrors the cefi wiring above (item -008).
+                    # Checked before seeding expected_unattempted: a proven-uncapturable
+                    # window is the more specific claim and must take the cell OUT OF
+                    # MODEL rather than inflate the denominator. Registry is empty by
+                    # design today, so this is inert until a range is PROVEN.
+                    if is_out_of_bounds("prediction", instr.venue, dt, d):
+                        yield ExpectedRow(
+                            asset_group="prediction",
+                            venue=instr.venue,
+                            chain="",
+                            data_type=dt,
+                            instrument_type=instr.instrument_type,
+                            instrument_id=instr.instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="EXPECTED_UPSTREAM_OUT_OF_BOUNDS",
+                        )
+                        continue
                     row_key = tuple(
                         {
                             "venue": instr.venue,
