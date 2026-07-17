@@ -1488,6 +1488,114 @@ def test_sports_v2_no_exclusion_declared_unaffected() -> None:
     assert rows[0].capture_status == "expected_unattempted"
 
 
+def test_defi_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over defi expected_unattempted seeding.
+
+    Item -010 (sports_manifest_canonicalisation_2026_06_01): extends the -008
+    cefi/sports wiring to the tradfi/defi/prediction loops, keyed on the
+    canonical protocol venue.
+    """
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("defi", "AAVE_V3", "lending_indices")
+        ),
+    )
+    catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
+    date_axis = _date_axis("2024-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+    assert r.asset_group == "defi"
+
+
+def test_defi_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
+    date_axis = _date_axis("2024-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_tradfi_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over tradfi expected_unattempted seeding,
+    checked BEFORE the Databento rolling-history floor clip (item -010)."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("tradfi", "NASDAQ", "ohlcv_1d")
+        ),
+    )
+    catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
+    date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+    assert r.asset_group == "tradfi"
+
+
+def test_tradfi_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
+    date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_prediction_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over prediction expected_unattempted seeding (item -010)."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("prediction", "POLYMARKET", "prediction_clob")
+        ),
+    )
+    catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
+    date_axis = _date_axis("2024-03-15")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+    assert r.asset_group == "prediction"
+
+
+def test_prediction_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
+    date_axis = _date_axis("2024-03-15")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
 def test_defi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
     """DeFi alive instrument date absent from manifest → expected_unattempted."""
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
