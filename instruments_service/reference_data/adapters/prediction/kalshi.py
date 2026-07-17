@@ -771,6 +771,15 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         event_ticker = market.event_ticker or ticker
         series_ticker = getattr(market, "series_ticker", None) or event_ticker
         title = getattr(market, "title", None) or getattr(market, "subtitle", None) or ticker
+        # question (uac InstrumentRecord.question): the human-readable market
+        # question/title threaded onto the record (previously computed and passed
+        # as symbol=, which InstrumentRecord does not declare, so pydantic's
+        # extra='ignore' silently DROPPED it every capture). The workflow measured
+        # `title — yes_sub_title` is 100% unique vs 43.3% for `title` alone
+        # (KalshiMarket carries yes_sub_title), so compose it when yes_sub_title is
+        # present; else the bare title. Honest-None left to raw_symbol as the floor.
+        yes_sub_title = getattr(market, "yes_sub_title", None)
+        question = f"{title} — {yes_sub_title}" if yes_sub_title else str(title)
         base_asset = str(series_ticker)[:50] if series_ticker else ticker[:50]
         expiry = self._parse_close_time(market.close_time)
         status_raw = getattr(market, "status", None)
@@ -829,7 +838,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=self.venue,
-            symbol=str(title)[:100],
+            question=question,
             raw_symbol=event_ticker,
             instrument_type=InstrumentType.PREDICTION_MARKET,
             base_asset=base_asset,
