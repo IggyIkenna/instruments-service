@@ -175,6 +175,55 @@ def test_rollup_dated_instrument_available_to_is_venue_truth_expiry(rollup: Modu
     assert row["available_to"] == "2024-01-02"  # venue-truth expiry, not None/last-seen
 
 
+def test_rollup_emits_distinct_expiry_column_for_dated_derivative(rollup: ModuleType) -> None:
+    """A2: a dated FUTURE/OPTION carries its venue-declared expiry in the NEW ``expiry``
+    column, distinct from (though here equal to) ``available_to``. The point is that
+    ``expiry`` is the CLEAN value — see the perp/spot cases below where the two diverge."""
+    d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
+    rows = [
+        {
+            "instrument_key": "DERIBIT:OPTION:BTC-2JAN24",
+            "venue": "DERIBIT",
+            "instrument_type": "OPTION",
+            "expiry": "2024-01-02",
+        }
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    assert "expiry" in df.columns
+    row = df.to_dict("records")[0]
+    assert row["expiry"] == "2024-01-02"
+
+
+def test_rollup_expiry_is_null_when_available_to_is_a_delisting_not_an_expiry(rollup: ModuleType) -> None:
+    """THE reason the column exists: ``available_to`` is overloaded. A delisted SPOT
+    pair has ``available_to`` = its delisting date but NO expiry — ``expiry`` must be
+    NULL, not the delisting date. This is what a consumer could not tell from
+    ``available_to`` alone."""
+    d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
+    rows = [
+        {
+            "instrument_key": "BINANCE-SPOT:SPOT_PAIR:FOO-USDT",
+            "venue": "BINANCE-SPOT",
+            "instrument_type": "SPOT_PAIR",
+            "delisted_at": "2024-05-15",
+        }
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    row = df.to_dict("records")[0]
+    assert row["available_to"] == "2024-05-15"  # delisting date, unchanged
+    assert row["expiry"] is None  # but it is NOT an expiry — honest-null
+
+
+def test_rollup_expiry_is_null_for_active_perp(rollup: ModuleType) -> None:
+    """A live perp has no expiry — the column is honestly NULL (available_to is also
+    None here, but the column must be NULL regardless of available_to's value)."""
+    d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
+    rows = [{"instrument_key": "HYPERLIQUID:PERPETUAL:BTC", "venue": "HYPERLIQUID", "instrument_type": "PERPETUAL"}]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    row = df.to_dict("records")[0]
+    assert row["expiry"] is None
+
+
 def test_rollup_delisted_at_takes_priority_over_liveness(rollup: ModuleType) -> None:
     """An explicit ``delisted_at`` (venue-reported removal) wins over last-seen liveness."""
     d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
