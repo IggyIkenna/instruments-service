@@ -770,7 +770,26 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         self._last_markets.append(market)
         event_ticker = market.event_ticker or ticker
         series_ticker = getattr(market, "series_ticker", None) or event_ticker
-        title = getattr(market, "title", None) or getattr(market, "subtitle", None) or ticker
+        # Human title from venue truth ONLY (no ticker fallback) — see ``question`` below:
+        # the ticker is NOT a human question, so a market with no real title must yield
+        # ``question=None`` (honest-absence), letting raw_symbol=event_ticker be the label
+        # floor, symmetric with the Polymarket adapter. ``title`` is used solely to build
+        # ``question`` now (the old ``symbol=`` consumer was removed).
+        title = getattr(market, "title", None) or getattr(market, "subtitle", None)
+        # question (uac InstrumentRecord.question): the human-readable market
+        # question/title threaded onto the record (previously computed and passed
+        # as symbol=, which InstrumentRecord does not declare, so pydantic's
+        # extra='ignore' silently DROPPED it every capture). The workflow measured
+        # `title — yes_sub_title` is 100% unique vs 43.3% for `title` alone
+        # (KalshiMarket carries yes_sub_title), so compose it when yes_sub_title is
+        # present; else the bare title. Honest-None left to raw_symbol as the floor.
+        yes_sub_title = getattr(market, "yes_sub_title", None)
+        if title and yes_sub_title:
+            question = f"{title} — {yes_sub_title}"
+        elif title:
+            question = title
+        else:
+            question = None  # honest-absence: no human title → raw_symbol is the floor
         base_asset = str(series_ticker)[:50] if series_ticker else ticker[:50]
         expiry = self._parse_close_time(market.close_time)
         status_raw = getattr(market, "status", None)
@@ -829,7 +848,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=self.venue,
-            symbol=str(title)[:100],
+            question=question,
             raw_symbol=event_ticker,
             instrument_type=InstrumentType.PREDICTION_MARKET,
             base_asset=base_asset,
