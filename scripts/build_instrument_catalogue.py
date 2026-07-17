@@ -369,6 +369,18 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # Sourced from the LATEST-observed snapshot per fixture, because ``status``
     # legitimately evolves across days (NS -> 1H -> FT) — the newest observation is
     # the honest one (see ``_fixture_attr_day`` in the roll-up).
+    #
+    # MEASURED FILL (real GCS, 2026-07-17): kickoff_utc/status/home_team_name/
+    # away_team_name = 76/76 of a sampled window; venue_name = 65/76 (the source
+    # leaves it None for some fixtures — honest blank); ``round`` = **0/62 across
+    # every sampled day AND every major league** (LA_LIGA / BUNDESLIGA /
+    # ENG_CHAMPIONSHIP / DANISH_SUPERLIGA ...). The column is retained because it
+    # IS a legitimate fixture field the upstream API supplies — the blank is an
+    # instruments-service WRITER gap (it never stamps ``round`` into the
+    # ``entity=fixtures`` snapshot), NOT a roll-up bug, and it is exactly why the
+    # fixtures browser's ``round`` has always rendered blank (same source). Tracked
+    # as a todo on data_status_page_ux_and_canonicalisation_2026_07_16 (P10). If
+    # that writer is fixed, this column populates with no schema change.
     "kickoff_utc",
     "status",
     "home_team_name",
@@ -3284,9 +3296,21 @@ def run_rollup(
     mode: str = "incremental",
     by_date_prefix: str = DEFAULT_BY_DATE_PREFIX,
     max_blobs: int | None = None,
+    since: date | None = None,
     storage: StorageClient | None = None,
 ) -> int:
-    """Roll up the per-date definitions for ``asset_group`` and promote the catalogue."""
+    """Roll up the per-date definitions for ``asset_group`` and promote the catalogue.
+
+    ``since`` overrides the sports FTP roll-up's window start (default
+    ``today - SPORTS_FTP_WINDOW_DAYS``). It exists for the deliberate ONE-OFF
+    full-history backfill the module docstring describes but previously offered
+    no supported path to run: because the window start was hardcoded here, the
+    sports catalogue could only ever hold ~13 months, and the frozen-tail merge
+    can only PRESERVE rows already present — it cannot recover history that was
+    never rolled up. Pass an early date once (e.g. 2019-01-01) to populate the
+    full corpus; every subsequent windowed cron run then carries those rows
+    forward via the frozen tail, so the cost is paid once, not per run.
+    """
     run_id = f"catalogue-rollup-{asset_group}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
     # Phase A: storage-client init
@@ -3370,7 +3394,16 @@ def run_rollup(
         # edge silently vanishes from the catalogue entirely (not just closes),
         # shrinking the row count and jamming the monotonic guard — see that
         # helper's docstring for the confirmed 2026-07-15 incident (27216→27210).
-        sports_since = datetime.now(UTC).date() - timedelta(days=SPORTS_FTP_WINDOW_DAYS)
+        # ``--since`` (one-off full-history backfill) overrides the trailing
+        # window; absent it, the affordable cron default. See run_rollup's docstring.
+        sports_since = since if since is not None else datetime.now(UTC).date() - timedelta(days=SPORTS_FTP_WINDOW_DAYS)
+        logger.info(
+            "Sports FTP window start: %s (%s)",
+            sports_since.isoformat(),
+            "explicit --since (full-history backfill)"
+            if since is not None
+            else f"default {SPORTS_FTP_WINDOW_DAYS}d trailing",
+        )
         sports_prev_catalogue = _load_previous_catalogue(storage, bucket, canonical_blob)
         ftp_df = _merge_sports_ftp_with_frozen_tail(
             storage,
@@ -3506,6 +3539,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Roll up + evaluate the guard, but do NOT write the catalogue.",
     )
     parser.add_argument(
+        "--since",
+        default=None,
+        help=(
+            "SPORTS ONLY — override the FTP roll-up's window start (YYYY-MM-DD). Default is a "
+            f"{SPORTS_FTP_WINDOW_DAYS}d trailing window, which is why the sports catalogue holds only "
+            "~13 months. Pass an early date (e.g. 2019-01-01) for the deliberate ONE-OFF full-history "
+            "backfill; the frozen-tail merge then carries those rows forward on every subsequent "
+            "windowed run, so the (multi-hour) full walk is paid once, not per run."
+        ),
+    )
+    parser.add_argument(
         "--max-blobs",
         type=int,
         default=None,
@@ -3528,6 +3572,21 @@ def main(argv: list[str] | None = None) -> int:
     by_date_prefix: str = args.by_date_prefix
     max_blobs: int | None = args.max_blobs
 
+    # --since is sports-only (the other asset groups' window is driven by --mode +
+    # the incremental engine). Fail LOUD on a bad date rather than silently
+    # falling back to the 400d default — a typo on a multi-hour backfill that
+    # quietly rolled up 13 months instead of 8 years would look like success.
+    since: date | None = None
+    if args.since is not None:
+        try:
+            since = date.fromisoformat(str(args.since).strip())
+        except ValueError:
+            logger.error("--since must be YYYY-MM-DD (got %r)", args.since)
+            return 2
+        if asset_group != "sports":
+            logger.error("--since is sports-only (got --asset-group %s)", asset_group)
+            return 2
+
     # Real event-log wiring so CATALOGUE_SHRINK_BLOCKED actually leaves the process
     # (was best-effort logger.info-only — cefi_monotonicity_guard_alerting_and_dark_
     # venues_2026_07_07.md). setup_events() must run before promote_catalogue()'s
@@ -3548,6 +3607,7 @@ def main(argv: list[str] | None = None) -> int:
         mode=mode,
         by_date_prefix=by_date_prefix,
         max_blobs=max_blobs,
+        since=since,
     )
 
 
