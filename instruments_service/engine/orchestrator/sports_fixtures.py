@@ -58,7 +58,13 @@ def _sports_ref_pm(entity_name: str) -> str:
 # default path-key-derived value (``batch_<pathkey>`` stripped). The source must
 # match the UAC ``SOURCE_PRIORITY``/``SPORTS_DATA_TYPE_TO_SOURCE`` SSOT accepted by
 # ``record_captured`` (a mismatch raises ``MissingSourceError`` fail_fast).
-# footystats_odds was removed 2026-06-25 (ODDS retired to MTDS-only; UAC@8fb1f54f).
+# This map is empty because every sports-ref path key already strips to its correct UAC
+# source (e.g. ``footystats_odds`` → ``footystats``); no entity currently needs an override.
+# (Historical note: this comment previously claimed ODDS was "retired to MTDS-only"
+# per UAC@8fb1f54f. That decision (#6) was REVERSED by the operator 2026-06-27
+# (UAC@c75101be) and the reversal completed @57bcc7c5 on 2026-07-15, which restored
+# ``SOURCE_PRIORITY[("sports","ODDS")]`` + ``AVAILABILITY_AT_SEMANTICS`` and pinned by
+# test that footystats PREDICTIVE pre-match ODDS is IS-owned reference data.)
 _SPORTS_REF_SOURCE_OVERRIDE: dict[str, str] = {}
 
 
