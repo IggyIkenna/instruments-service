@@ -2963,6 +2963,84 @@ def test_parse_args_mode_defaults_incremental(rollup: ModuleType) -> None:
     assert args.mode == "full"
 
 
+# ---------------------------------------------------------------------------
+# --since: the one-off full-history sports backfill escape hatch (2026-07-17).
+# Before this, the sports FTP window start was HARDCODED to today-400d with no
+# CLI override, so the sports catalogue could only ever hold ~13 months — and
+# the frozen-tail merge can only preserve rows already present, never recover
+# history that was never rolled up in the first place.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_args_since_defaults_none(rollup: ModuleType) -> None:
+    assert rollup._parse_args(["--asset-group", "sports"]).since is None
+    assert rollup._parse_args(["--asset-group", "sports", "--since", "2019-01-01"]).since == "2019-01-01"
+
+
+def test_main_rejects_unparseable_since(rollup: ModuleType) -> None:
+    """Fail LOUD: a typo must not silently roll up 13 months on a multi-hour
+    full-history backfill and look like success."""
+    assert rollup.main(["--asset-group", "sports", "--since", "01-01-2019"]) == 2
+    assert rollup.main(["--asset-group", "sports", "--since", "not-a-date"]) == 2
+
+
+def test_main_rejects_since_for_non_sports_asset_groups(rollup: ModuleType) -> None:
+    """--since only drives the sports FTP window; the other groups' window comes
+    from --mode + the incremental engine, so accepting it there would be a lie."""
+    for ag in ("cefi", "defi", "tradfi", "prediction"):
+        assert rollup.main(["--asset-group", ag, "--since", "2019-01-01"]) == 2
+
+
+def _spy_ftp_window(rollup: ModuleType, monkeypatch: pytest.MonkeyPatch, seen: dict[str, object]) -> None:
+    """Capture the ``since`` the sports FTP roll-up is actually called with."""
+
+    def _spy(
+        _storage: object,
+        _bucket: str,
+        *,
+        by_date_prefix: str,
+        since: date,
+        max_blobs: int | None,
+        prev_catalogue: object,
+    ) -> pd.DataFrame:
+        seen["since"] = since
+        return pd.DataFrame(columns=list(rollup.CATALOG_COLUMNS))
+
+    monkeypatch.setattr(rollup, "_merge_sports_ftp_with_frozen_tail", _spy)
+
+
+def test_run_rollup_threads_since_into_the_sports_ftp_window(
+    rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The explicit --since must reach the FTP roll-up as the window start
+    (otherwise the full-history backfill silently stays on the 400d default —
+    a 3-hour walk that quietly produced 13 months would look like success)."""
+    seen: dict[str, object] = {}
+    _spy_ftp_window(rollup, monkeypatch, seen)
+
+    rollup.run_rollup(
+        "sports",
+        allow_shrink=False,
+        dry_run=True,
+        since=date(2019, 1, 1),
+        storage=_FakeStorage({}),
+    )
+    assert seen["since"] == date(2019, 1, 1)
+
+
+def test_run_rollup_without_since_keeps_the_trailing_window_default(
+    rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No --since → the affordable cron default, unchanged."""
+    seen: dict[str, object] = {}
+    _spy_ftp_window(rollup, monkeypatch, seen)
+
+    rollup.run_rollup("sports", allow_shrink=False, dry_run=True, storage=_FakeStorage({}))
+
+    expected = _datetime.now(_UTC).date() - _timedelta(days=rollup.SPORTS_FTP_WINDOW_DAYS)
+    assert seen["since"] == expected
+
+
 def test_compute_window_start_fresh_and_stale(rollup: ModuleType) -> None:
     """Fresh catalogue → 21-day window; stale catalogue → SELF-WIDENING covers the gap."""
     today = date(2026, 7, 3)
