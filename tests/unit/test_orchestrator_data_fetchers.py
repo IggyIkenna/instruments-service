@@ -312,7 +312,6 @@ class TestFetchUnderstatXg:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
             result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET)
@@ -465,7 +464,6 @@ class TestRunUnderstatShotsDate:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
             result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
@@ -878,7 +876,6 @@ class TestFetchWeatherData:
                 return_value=[_mk_league("EPL")],
             ),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
         ):
@@ -982,7 +979,6 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
@@ -1022,7 +1018,6 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
             patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="RuntimeError"),
@@ -1061,7 +1056,6 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
@@ -1097,7 +1091,6 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.SOCCER_FOOTBALL_INFO_IDS", sfi_ids),
             patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="abc123"),
@@ -1141,7 +1134,6 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.SOCCER_FOOTBALL_INFO_IDS", sfi_ids),
             patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="abc123"),
@@ -1384,7 +1376,6 @@ class TestFetchFootystatsPredictions:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
             result = await _fetch_footystats_predictions(date=_DATE, api_key="key", bucket=_BUCKET)
@@ -1441,7 +1432,6 @@ class TestFetchFootystatsMatches:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
             result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
@@ -1500,7 +1490,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_POST_SEASON",
@@ -1529,7 +1518,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_PRE_SEASON",
@@ -1557,7 +1545,6 @@ class TestOffSeasonSeasonWindowGuard:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_POST_SEASON",
@@ -1590,7 +1577,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_POST_SEASON",
@@ -1618,7 +1604,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_PRE_SEASON",
@@ -1646,7 +1631,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_POST_SEASON",

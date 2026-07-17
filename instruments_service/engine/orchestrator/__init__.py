@@ -81,7 +81,6 @@ from unified_api_contracts.sports import (
     get_provider_league_id,
     get_source_coverage_start,
     is_any_league_refresh_date,
-    is_in_known_gap,
     is_transfer_window_open,
 )
 from unified_api_contracts.sports import (
@@ -856,7 +855,6 @@ __all__ = [
     "get_venues_for_asset_groups",
     "io",
     "is_any_league_refresh_date",
-    "is_in_known_gap",
     "is_league_entity_covered",
     "is_non_trading_day",
     "is_transfer_window_open",

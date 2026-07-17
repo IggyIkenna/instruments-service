@@ -245,9 +245,8 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
        data_type needle as capture evidence. See ``_TRADFI_DATABENTO_PAIRED_SCHEMAS``.
     8. **Cross-asset venue=UNKNOWN** (2026-05-13) — UNKNOWN sentinel has no
        canonical path; skip the venue needle. See ``_VENUE_UNKNOWN_SENTINELS``.
-    9. **Sports pre-coverage + known-gap** (2026-05-13) — rows before source
-       launch date or in registered gaps are not phantoms; excluded in
-       ``_audit_sports`` via ``is_pre_launch_date`` + ``is_in_known_gap``.
+    9. **Sports pre-coverage** (2026-05-13) — rows before source launch date
+       are not phantoms; excluded in ``_audit_sports`` via ``is_pre_launch_date``.
     10. **Phase-3 pipeline_mode= prefix** (2026-05-19) — the GCS migration
         bundle (``gcs_migration_bundle_pipeline_mode_2026_05_08``) Phase 3
         prepended ``pipeline_mode={batch_*}/`` before ``asset_group=`` on all
@@ -299,8 +298,6 @@ def _audit_sports(
     """
     from unified_api_contracts.sports import (
         candidate_parquet_paths,
-        get_source_for_data_type,
-        is_in_known_gap,
         is_pre_launch_date,
     )
 
@@ -334,26 +331,20 @@ def _audit_sports(
     # Probe each captured row.
     real_or_phantom: dict[int, bool] = {}  # idx -> True if real
     _axis9_pre_coverage = 0
-    _axis9_known_gap = 0
     for idx in captured_idx:
         row = df.loc[idx]
         date = str(row["date"])
         data_type = str(row.get("data_type", "") or "")  # noqa: qg-empty-fallback — missing col => preserved, not dropped
         league_id = str(row.get("league_id", "") or "")  # noqa: qg-empty-fallback — non-sports rows have no league_id
         # Axis-9 (sports per-league SSOT + UAC date-range clips, 2026-05-13):
-        # Rows before the source's coverage start or inside a known gap are
-        # NOT phantoms — the source never had data for that (data_type, date).
-        # Flipping to attempted_failed would re-queue them for retry (wrong).
-        # Mark real=True to exclude from phantom detection; the absence-reason
+        # Rows before the source's coverage start are NOT phantoms — the
+        # source never had data for that (data_type, date). Flipping to
+        # attempted_failed would re-queue them for retry (wrong). Mark
+        # real=True to exclude from phantom detection; the absence-reason
         # reconciler handles these rows separately.
         if is_pre_launch_date(data_type, date):
             real_or_phantom[idx] = True
             _axis9_pre_coverage += 1
-            continue
-        _src_key = get_source_for_data_type(data_type)
-        if _src_key and is_in_known_gap(_src_key, data_type, date):
-            real_or_phantom[idx] = True
-            _axis9_known_gap += 1
             continue
         # Pass the row's pipeline_mode so the CANONICAL pipeline_mode= path is probed.
         # Post-Phase-3 migration the parquet lives at
@@ -388,11 +379,10 @@ def _audit_sports(
                     is_real = True
                     break
         real_or_phantom[idx] = is_real
-    if _axis9_pre_coverage or _axis9_known_gap:
+    if _axis9_pre_coverage:
         logger.info(
-            "Sports axis-9 coverage clip: %d pre-launch + %d known-gap rows excluded from phantom check",
+            "Sports axis-9 coverage clip: %d pre-launch rows excluded from phantom check",
             _axis9_pre_coverage,
-            _axis9_known_gap,
         )
     return real_or_phantom
 
