@@ -348,6 +348,33 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     "quote_asset_contract_address",
     "atoken_address",
     "debt_token_address",
+    # Sports FIXTURE scheduling/display fields (operator round-3, 2026-07-17 —
+    # "all the fixtures broken down by searching by date, league and/or team").
+    # The ``entity=fixtures`` by_date snapshots that
+    # :func:`build_sports_fixture_team_player_catalogue` ALREADY walks carry every
+    # one of these (``timestamp`` / ``status_short`` / ``af_home_name`` /
+    # ``af_away_name`` / ``venue_name`` / ``round``) — they were previously
+    # DISCARDED, the roll-up keeping only the first/last-day lifecycle. That gap is
+    # exactly why deployment-api's fixtures browser had to re-walk the per-day
+    # parquets over a <=120-day window just to render a kickoff time. Carrying them
+    # here makes the ONE rolled-up catalogue object a COMPLETE fixtures source over
+    # the whole :data:`SPORTS_FTP_WINDOW_DAYS` window — no extra walk, no extra
+    # read, the data was already in hand. Blank/None on every non-sports-fixture row.
+    #
+    # NOTE ``venue_name`` is the physical STADIUM (from the fixture snapshot), which
+    # is a different axis from the ``venue`` column above (the bookmaker/exchange
+    # association — honestly blank for sports reference rows, see SPORTS_INSTRUMENTS.md's
+    # "``venue`` vs ``source``" note). The two never carry the same thing.
+    #
+    # Sourced from the LATEST-observed snapshot per fixture, because ``status``
+    # legitimately evolves across days (NS -> 1H -> FT) — the newest observation is
+    # the honest one (see ``_fixture_attr_day`` in the roll-up).
+    "kickoff_utc",
+    "status",
+    "home_team_name",
+    "away_team_name",
+    "venue_name",
+    "round",
 )
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
@@ -1919,12 +1946,34 @@ def _split_full_name(display_name: str) -> tuple[str, str]:
     return parts[-1], " ".join(parts[:-1])
 
 
+def _sports_attr_str(raw: object) -> str:
+    """Normalise a sports fixture-snapshot cell to a clean string ("" when absent).
+
+    Same missing-value idiom as :func:`_opt_field` / :func:`_row_id` (guard
+    ``pd.isna`` in a try/except — the snapshots carry None/NaN/NaT freely, e.g.
+    ``venue_id``/``venue_city`` are frequently None), but collapses to the honest
+    empty string rather than None, and refuses to emit the STRINGIFIED sentinels
+    ``"None"``/``"nan"``/``"NaT"`` — writing those into the catalogue would be a
+    fabricated value, not an absent one (never silent placeholders).
+    """
+    if raw is None:
+        return ""
+    try:
+        if pd.isna(raw):  # pyright: ignore[reportArgumentType]
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(raw).strip()
+    return "" if text.lower() in {"none", "nan", "nat"} else text
+
+
 def _sports_grain_rollup_to_df(
     first_day: dict[str, date],
     last_day: dict[str, date],
     row_league: dict[str, str],
     all_days: set[date],
     instrument_type: str,
+    extra_attrs: dict[str, dict[str, str]] | None = None,
 ) -> pd.DataFrame:
     """Shared first/last-day lifecycle -> :data:`CATALOG_COLUMNS` row assembly.
 
@@ -1933,6 +1982,13 @@ def _sports_grain_rollup_to_df(
     active); otherwise the last day it was observed. Shared by the fixture/
     team/player-grain folding loop in
     :func:`build_sports_fixture_team_player_catalogue`.
+
+    ``extra_attrs`` (id -> {column: value}) merges per-instrument columns onto
+    the assembled row — used by the FIXTURE grain to carry the scheduling/display
+    fields (``kickoff_utc``/``status``/team names/``venue_name``/``round``) that
+    the by_date snapshot already had. Only keys in :data:`CATALOG_COLUMNS`
+    survive (``pd.DataFrame(..., columns=cols)`` drops the rest); ids absent from
+    the mapping simply keep the honest blank the other grains get.
     """
     cols = list(CATALOG_COLUMNS)
     if not all_days:
@@ -1941,22 +1997,23 @@ def _sports_grain_rollup_to_df(
     rows: list[dict[str, str | None]] = []
     for iid in sorted(first_day):
         available_to = None if last_day[iid] >= latest_day else last_day[iid].isoformat()
-        rows.append(
-            {
-                "instrument_id": iid,
-                "instrument_type": instrument_type,
-                "venue": "",
-                "chain": "",
-                "league_id": row_league[iid],
-                "available_from": first_day[iid].isoformat(),
-                "available_to": available_to,
-                "market_created_at": None,
-                "settlement_time": None,
-                "data_type": None,
-                "glued_pair_id": "",
-                "pool_address": "",
-            }
-        )
+        row: dict[str, str | None] = {
+            "instrument_id": iid,
+            "instrument_type": instrument_type,
+            "venue": "",
+            "chain": "",
+            "league_id": row_league[iid],
+            "available_from": first_day[iid].isoformat(),
+            "available_to": available_to,
+            "market_created_at": None,
+            "settlement_time": None,
+            "data_type": None,
+            "glued_pair_id": "",
+            "pool_address": "",
+        }
+        if extra_attrs:
+            row.update(extra_attrs.get(iid, {}))
+        rows.append(row)
     return pd.DataFrame(rows, columns=cols)
 
 
@@ -2434,6 +2491,12 @@ def build_sports_fixture_team_player_catalogue(
     fixture_first: dict[str, date] = {}
     fixture_last: dict[str, date] = {}
     fixture_league: dict[str, str] = {}
+    # Scheduling/display fields carried onto the FIXTURE rows (see CATALOG_COLUMNS'
+    # sports-fixture block). ``_fixture_attr_day`` tracks which snapshot day each
+    # id's attrs came from so the LATEST observation wins — ``status`` evolves
+    # (NS -> 1H -> FT) and a stale "NS" on a played fixture would be a lie.
+    fixture_attrs: dict[str, dict[str, str]] = {}
+    fixture_attr_day: dict[str, date] = {}
     team_first: dict[str, date] = {}
     team_last: dict[str, date] = {}
     team_league: dict[str, str] = {}
@@ -2473,6 +2536,17 @@ def build_sports_fixture_team_player_catalogue(
                 if fid not in fixture_last or day > fixture_last[fid]:
                     fixture_last[fid] = day
                 fixture_league[fid] = league_id
+                # Latest-snapshot-wins (see _fixture_attr_day above).
+                if fid not in fixture_attr_day or day >= fixture_attr_day[fid]:
+                    fixture_attr_day[fid] = day
+                    fixture_attrs[fid] = {
+                        "kickoff_utc": _sports_attr_str(row.get("timestamp")),
+                        "status": _sports_attr_str(row.get("status_short")),
+                        "home_team_name": home,
+                        "away_team_name": away,
+                        "venue_name": _sports_attr_str(row.get("venue_name")),
+                        "round": _sports_attr_str(row.get("round")),
+                    }
         elif entity == SPORTS_TEAM_ENTITY:
             for row in records:
                 tid = str(row.get("team_id") or "").strip()
@@ -2499,7 +2573,12 @@ def build_sports_fixture_team_player_catalogue(
                 player_league[pid] = league_id
 
     fixture_df = _sports_grain_rollup_to_df(
-        fixture_first, fixture_last, fixture_league, all_days, SPORTS_FIXTURE_INSTRUMENT_TYPE
+        fixture_first,
+        fixture_last,
+        fixture_league,
+        all_days,
+        SPORTS_FIXTURE_INSTRUMENT_TYPE,
+        extra_attrs=fixture_attrs,
     )
     team_df = _sports_grain_rollup_to_df(team_first, team_last, team_league, all_days, SPORTS_TEAM_INSTRUMENT_TYPE)
     player_df = _sports_grain_rollup_to_df(

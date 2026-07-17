@@ -1801,6 +1801,123 @@ def test_ftp_rollup_empty_walk_returns_catalog_columns(rollup: ModuleType) -> No
     assert list(df.columns) == list(rollup.CATALOG_COLUMNS)
 
 
+# ---------------------------------------------------------------------------
+# Fixture scheduling/display fields on the rolled-up FIXTURE rows (operator
+# round-3, 2026-07-17 — "all the fixtures ... searching by date, league and/or
+# team"). The entity=fixtures snapshot ALREADY carries kickoff/status/venue/
+# round; the roll-up used to discard them, which is why deployment-api had to
+# re-walk the per-day parquets over a <=120-day window for a kickoff time.
+# ---------------------------------------------------------------------------
+
+
+def _fixture_snapshot_row(**overrides: object) -> dict[str, object]:
+    """A real-shaped ``entity=fixtures`` snapshot row (column names as the live
+    GCS objects carry them — verified 2026-07-17 against
+    ``sports_reference/by_date/day=2026-07-15/entity=fixtures/``)."""
+    row: dict[str, object] = {
+        "af_fixture_id": 1493574,
+        "date": "2026-03-22",
+        "timestamp": "2026-03-22T15:00:00+00:00",
+        "venue_id": None,
+        "venue_name": "Emirates Stadium",
+        "status_long": "Not Started",
+        "status_short": "NS",
+        "af_league_id": 39,
+        "round": "Regular Season - 30",
+        "af_home_name": "Arsenal",
+        "af_away_name": "Chelsea",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_sports_attr_str_collapses_missing_and_stringified_sentinels(rollup: ModuleType) -> None:
+    """Never a silent placeholder: a literal "None"/"nan" in the catalogue would
+    be a FABRICATED value, not an absent one."""
+    assert rollup._sports_attr_str(None) == ""
+    assert rollup._sports_attr_str(float("nan")) == ""
+    assert rollup._sports_attr_str("None") == ""
+    assert rollup._sports_attr_str("nan") == ""
+    assert rollup._sports_attr_str("  Emirates Stadium  ") == "Emirates Stadium"
+    assert rollup._sports_attr_str(123) == "123"
+
+
+def test_ftp_rollup_carries_fixture_kickoff_status_and_display_fields(rollup: ModuleType) -> None:
+    d1 = "2026-03-22"
+    path, frame = _sports_blob(d1, "fixtures", "EPL", [_fixture_snapshot_row()])
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records"))})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    row = by_id["EPL:ARSENAL_v_CHELSEA:20260322"]
+
+    assert row["kickoff_utc"] == "2026-03-22T15:00:00+00:00"
+    assert row["status"] == "NS"
+    assert row["home_team_name"] == "Arsenal"
+    assert row["away_team_name"] == "Chelsea"
+    assert row["venue_name"] == "Emirates Stadium"
+    assert row["round"] == "Regular Season - 30"
+    # The stadium is NOT the `venue` axis (bookmaker/exchange association) —
+    # that stays honestly blank for sports reference rows.
+    assert row["venue"] == ""
+
+
+def test_ftp_rollup_fixture_status_takes_the_latest_snapshot(rollup: ModuleType) -> None:
+    """``status`` evolves NS -> FT across snapshot days — the catalogue must
+    carry the NEWEST observation; a stale "NS" on a played fixture is a lie."""
+    d1, d2 = "2026-03-22", "2026-03-23"
+    # Same fixture (date stays d1) re-observed on d2 with a settled status.
+    p1, f1 = _sports_blob(d1, "fixtures", "EPL", [_fixture_snapshot_row(status_short="NS")])
+    p2, f2 = _sports_blob(d2, "fixtures", "EPL", [_fixture_snapshot_row(status_short="FT")])
+    storage = _FakeStorage({p1: _parquet_bytes(f1.to_dict("records")), p2: _parquet_bytes(f2.to_dict("records"))})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    row = by_id["EPL:ARSENAL_v_CHELSEA:20260322"]
+
+    assert row["status"] == "FT"
+    # ...and the lifecycle still reflects BOTH observation days.
+    assert row["available_from"] == d1
+
+
+def test_ftp_rollup_missing_optional_fixture_fields_are_blank_not_none_strings(rollup: ModuleType) -> None:
+    """A snapshot with a None venue_name/round (common in the real data) must
+    yield "" — never the string "None"."""
+    path, frame = _sports_blob("2026-03-22", "fixtures", "EPL", [_fixture_snapshot_row(venue_name=None, round=None)])
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records"))})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    row = {r["instrument_id"]: r for r in df.to_dict("records")}["EPL:ARSENAL_v_CHELSEA:20260322"]
+
+    assert row["venue_name"] == ""
+    assert row["round"] == ""
+    assert row["status"] == "NS"  # the fields that WERE present still land
+
+
+def test_ftp_rollup_team_and_player_grains_get_no_fixture_display_fields(rollup: ModuleType) -> None:
+    """No leakage: only the FIXTURE grain carries kickoff/status — team/player
+    rows keep the honest blank the shared row-assembly gives them."""
+    d1 = "2026-03-22"
+    blobs = dict(
+        [
+            _sports_blob(d1, "fixtures", "EPL", [_fixture_snapshot_row()]),
+            _sports_blob(d1, "teams", "EPL", [{"team_id": "ARSENAL", "name": "Arsenal", "league_id": "EPL"}]),
+            _sports_blob(d1, "injuries", "EPL", [{"player_id": 1, "player_name": "Bukayo Saka", "league_id": 39}]),
+        ]
+    )
+    storage = _FakeStorage({p: _parquet_bytes(f.to_dict("records")) for p, f in blobs.items()})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+
+    for non_fixture_id in ("ARSENAL", "SAKA_B"):
+        row = by_id[non_fixture_id]
+        for col in ("kickoff_utc", "status", "home_team_name", "away_team_name", "venue_name", "round"):
+            assert pd.isna(row[col]) or row[col] in ("", None), f"{non_fixture_id}.{col} leaked: {row[col]!r}"
+    # ...while the fixture row in the SAME roll-up does carry them.
+    assert by_id["EPL:ARSENAL_v_CHELSEA:20260322"]["status"] == "NS"
+
+
 def test_ftp_rollup_rows_never_treated_as_league_by_v2_enumerator(rollup: ModuleType) -> None:
     """Cross-module regression: a fixture-grain catalogue row concatenated onto
     league-grain rows must be invisible to enumerate_expected_universe.py's
