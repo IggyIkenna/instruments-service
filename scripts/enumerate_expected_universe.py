@@ -114,6 +114,7 @@ from unified_api_contracts import (
     valid_data_types_for_venue_instrument_type,
     venue_data_type_has_batch_source,
 )
+from unified_api_contracts.canonical.coverage_exclusions import is_out_of_bounds
 from unified_api_contracts.registry import (
     VENUE_DATA_TYPE_CAPABILITIES,
     get_venue_data_type_start_date,
@@ -1154,6 +1155,26 @@ def _enumerate_v2_cefi(
                 # (or EXPECTED_PRE_SOURCE_COVERAGE_START for dates before the
                 # data_type's UAC-declared start_date — see gate comment above).
                 for dt in row_dts:
+                    # Bounded evidenced out-of-bounds ranges (COVERAGE_EXCLUSIONS,
+                    # operator 2026-07-17) — checked BEFORE the source-coverage-start
+                    # floor: a proven-uncapturable window is the more specific claim
+                    # and must take the cell OUT OF MODEL rather than seeding
+                    # expected_unattempted. Registry is empty by design today, so this
+                    # is inert until a range is PROVEN (see coverage_exclusions.py).
+                    if is_out_of_bounds("cefi", instr.venue, dt, d):
+                        yield ExpectedRow(
+                            asset_group="cefi",
+                            venue=instr.venue,
+                            chain=instr.chain,
+                            data_type=dt,
+                            instrument_type=instr.instrument_type,
+                            instrument_id=seed_instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="EXPECTED_UPSTREAM_OUT_OF_BOUNDS",
+                            underlying=seed_underlying,
+                        )
+                        continue
                     dt_start_ts = dt_start_ts_by_dt.get(dt)
                     if dt_start_ts is not None and d_ts < dt_start_ts:
                         yield ExpectedRow(
@@ -2300,6 +2321,24 @@ def _enumerate_v2_sports(
                 # to prevent fabricating expected_unattempted for alive leagues
                 # on dates the source could never have covered.
                 if cov_ts is not None and d_ts < cov_ts:
+                    continue
+                # Bounded evidenced out-of-bounds ranges (COVERAGE_EXCLUSIONS,
+                # operator 2026-07-17) — same precedence rule as cefi above: a
+                # proven-uncapturable window beats the floor + the below fixture/
+                # season gates. Registry is empty by design today (inert).
+                _src_for_bounds = dt_source.get(dt)
+                if _src_for_bounds is not None and is_out_of_bounds("sports", _src_for_bounds, dt, d):
+                    yield ExpectedRow(
+                        asset_group="sports",
+                        venue=_sports_manifest_venue(dt),
+                        chain="",
+                        data_type=_sports_manifest_data_type(dt),
+                        instrument_type="",
+                        instrument_id="",
+                        league_id=league_id,
+                        date=iso,
+                        reason="EXPECTED_UPSTREAM_OUT_OF_BOUNDS",
+                    )
                     continue
                 if af_ts is not None and d_ts < af_ts:
                     reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
