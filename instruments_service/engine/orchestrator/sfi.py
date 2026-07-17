@@ -263,24 +263,15 @@ async def _fetch_sfi_data(
     # Requires SFI match IDs for the date, then fetches progressive data
     # for each completed match. Written as entity=progressive_stats.
     #
-    # Pre-cutoff / known-gap skip: SFI's progressive endpoint has a hard
-    # historical floor (probed live 2026-04-30: pre-2020-01-01 returns
-    # empty for every match). Honour the per-(source, data_type) coverage
-    # start in UAC + any registered known-gap windows so the VM doesn't
-    # burn rate-limit quota grinding through dead range.
+    # Pre-cutoff skip: SFI's progressive endpoint has a hard historical floor
+    # (probed live 2026-04-30: pre-2020-01-01 returns empty for every match).
+    # Honour the per-(source, data_type) coverage start in UAC so the VM
+    # doesn't burn rate-limit quota grinding through dead range.
     _sfi_pp_floor = _orch.get_source_coverage_start("soccer_football_info", data_type="SFI_PROGRESSIVE_STATS")
     _sfi_pp_pre_cutoff = bool(_sfi_pp_floor) and date < _sfi_pp_floor.isoformat()
-    _sfi_pp_in_known_gap = _orch.is_in_known_gap("soccer_football_info", "SFI_PROGRESSIVE_STATS", date)
-    if _want_sfi_progressive and (_sfi_pp_pre_cutoff or _sfi_pp_in_known_gap):
-        _orch.logger.info(
-            "SFI progressive stats: skipping date=%s (%s)",
-            date,
-            "pre-coverage-start" if _sfi_pp_pre_cutoff else "known-gap",
-        )
-        # Honest-coverage Phase 2.E.2: pre-source-coverage-start vs paused-league
-        # window get distinct EXPECTED_* reasons so downstream consumers can
-        # classify legacy null-reason rows without re-deriving the calendar.
-        _sfi_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _sfi_pp_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+    if _want_sfi_progressive and _sfi_pp_pre_cutoff:
+        _orch.logger.info("SFI progressive stats: skipping date=%s (pre-coverage-start)", date)
+        _sfi_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
         manifest.record_expected_empty(
             row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
             reason=_sfi_reason,

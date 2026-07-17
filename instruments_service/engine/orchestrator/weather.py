@@ -115,18 +115,13 @@ async def _fetch_weather_data(
                 source="open_meteo",
             )
 
-    # Coverage-start / known-gap guard — skip the date without any API call
-    # when Open-Meteo hasn't launched yet or is in a registered gap window.
+    # Coverage-start guard — skip the date without any API call when
+    # Open-Meteo hasn't launched yet.
     _om_floor = _orch.get_source_coverage_start("open_meteo", data_type="WEATHER")
     _om_pre_cutoff = bool(_om_floor) and date < _om_floor.isoformat()
-    _om_in_known_gap = _orch.is_in_known_gap("open_meteo", "WEATHER", date)
-    if _om_pre_cutoff or _om_in_known_gap:
-        _orch.logger.info(
-            "Weather: skipping date=%s (%s)",
-            date,
-            "pre-coverage-start" if _om_pre_cutoff else "known-gap",
-        )
-        _om_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _om_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+    if _om_pre_cutoff:
+        _orch.logger.info("Weather: skipping date=%s (pre-coverage-start)", date)
+        _om_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
         for _exp_lid in sorted(_expected_weather_league_ids):
             manifest.record_expected_empty(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
