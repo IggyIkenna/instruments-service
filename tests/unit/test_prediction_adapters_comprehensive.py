@@ -297,6 +297,53 @@ class TestPolymarketParseMarketBranches:
         assert result.instrument_key == "POLYMARKET:PREDICTION_MARKET:0xcrypto123"
         assert str(result.status) == "active"
 
+    def test_parse_market_threads_question_and_survives(self) -> None:
+        """The Gamma ``question`` is threaded into InstrumentRecord.question and SURVIVES.
+
+        Regression: the adapter previously passed only ``symbol=slug`` and the human
+        market question was never carried, so downstream (catalogue) had no title.
+        Now that uac added ``InstrumentRecord.question``, ``market.question`` (99.3%
+        unique per the workflow) must arrive on ``record.question`` verbatim.
+        """
+        from unified_api_contracts import PolymarketGammaMarket
+
+        adapter = PolymarketReferenceDataAdapter()
+        market = PolymarketGammaMarket.model_validate(
+            {
+                "conditionId": "0xcrypto123",
+                "marketSlug": "btc-above-100k",
+                "question": "Will Bitcoin reach $100,000 by end of 2026?",
+                "active": True,
+                "closed": False,
+                "outcomes": "Yes,No",
+                "endDateIso": "2026-12-31T23:59:59Z",
+            }
+        )
+        now = datetime.now(UTC)
+        result = adapter._parse_market(market, now)
+        assert result is not None
+        assert result.question == "Will Bitcoin reach $100,000 by end of 2026?"
+
+    def test_parse_market_question_honest_none_when_absent(self) -> None:
+        """A market with no ``question`` yields honest ``None`` (never fabricated)."""
+        from unified_api_contracts import PolymarketGammaMarket
+
+        adapter = PolymarketReferenceDataAdapter()
+        market = PolymarketGammaMarket.model_validate(
+            {
+                "conditionId": "0xnoquestion",
+                "marketSlug": "some-slug",
+                "active": True,
+                "closed": False,
+                "outcomes": "Yes,No",
+                "endDateIso": "2026-12-31T23:59:59Z",
+            }
+        )
+        now = datetime.now(UTC)
+        result = adapter._parse_market(market, now)
+        assert result is not None
+        assert result.question is None
+
     def test_parse_market_instrument_key_preserves_condition_id_case(self) -> None:
         """The wrapped instrument_key must NOT upper-case condition_id.
 
@@ -980,6 +1027,62 @@ class TestKalshiParseMarket:
         assert result is not None
         assert result.tick_size == Decimal("0.01")
         assert result.min_size == Decimal("1")
+
+    def test_market_question_composed_with_yes_sub_title(self) -> None:
+        """The human title is threaded into InstrumentRecord.question and SURVIVES.
+
+        Regression: the adapter previously passed the title as ``symbol=``, which
+        InstrumentRecord does not declare, so pydantic's ``extra='ignore'`` SILENTLY
+        DROPPED it every capture. Now that uac added ``InstrumentRecord.question``,
+        the title must arrive on ``record.question``. When ``yes_sub_title`` is
+        present the adapter composes ``title — yes_sub_title`` (100% unique vs 43.3%
+        for title alone per the workflow measurement).
+        """
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXBTC-26MAR-90000",
+            "event_ticker": "KXBTC",
+            "title": "BTC price on Mar 26?",
+            "yes_sub_title": "Above $90,000",
+            "status": "active",
+            "close_time": "2026-03-26T23:59:59Z",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.question == "BTC price on Mar 26? — Above $90,000"
+
+    def test_market_question_bare_title_when_no_yes_sub_title(self) -> None:
+        """With no ``yes_sub_title`` the question is the bare title (honest floor)."""
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXTEST",
+            "event_ticker": "KXTEST",
+            "title": "Will it rain tomorrow?",
+            "status": "active",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.question == "Will it rain tomorrow?"
+
+    def test_market_question_is_none_when_no_human_title(self) -> None:
+        """Honest-absence: a market with NO title/subtitle yields question=None — the
+        ticker is NOT a human question, so it must NOT surface as one. raw_symbol
+        (event_ticker) remains the label floor, symmetric with Polymarket. (Guards the
+        fix for the wx1ogy6pl verifier's caveat: the adapter previously fell title back
+        to the ticker, so question was never None.)"""
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXNOTITLE",
+            "event_ticker": "KXNOTITLE",
+            "status": "active",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.question is None
+        assert result.raw_symbol == "KXNOTITLE"  # the honest label floor is intact
 
 
 class TestKalshiParseCloseTime:
