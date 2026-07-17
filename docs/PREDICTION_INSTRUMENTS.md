@@ -37,20 +37,25 @@ current MVP definition is:
   to narrow this to `{polymarket_clob, polymarket_gamma_api}` once source tagging is confirmed downstream; not done
   yet.
 
-**Real coverage** (from `prod/catalog.parquet`, bucket `instruments-store-pred-prd-central-element-323112`,
-2,486,092 rows):
+**Real coverage** — measured 2026-07-17 against `prod/catalog.parquet` (bucket
+`instruments-store-pred-prd-central-element-323112`, 184,462,581 bytes / ~184.5 MB, 24 columns, object updated
+2026-07-17T01:02:27Z), **2,673,230 rows**:
 
 |            | Rows          | Distinct real markets |
 | ---------- | ------------- | --------------------- |
-| POLYMARKET | 2,440,607     | 1,220,340             |
-| KALSHI     | 45,485        | 22,760                |
-| **Total**  | **2,486,092** | **1,242,992**         |
+| POLYMARKET | 2,590,757     | 1,295,342             |
+| KALSHI     | 82,473        | 41,217                |
+| **Total**  | **2,673,230** | **1,336,559**         |
+
+> **Numbers are date-stamped, not eternal.** These are a real measurement of the live object as of **2026-07-17**; the
+> catalogue is regenerated, so re-measure rather than trusting this table verbatim. (It supersedes an earlier
+> 2,486,092-row / 1,242,992-market reading — that was a real measurement of an older object, not an error.)
 
 The row count is roughly double the distinct-market count because `trades` and `market_lifecycle` each contribute one
-row per real market (1,242,992 rows apiece) — that 2x factor, not cross-venue duplication, is the majority of the gap
-between "rows" and "distinct instrument_ids" reported in the canonicalization audit (see "Canonical identity model"
-below for the full reconciliation). A further 108 rows (`data_type=prediction_canonical_question_group`) are cluster/group-grain,
-not per-market, rows.
+row per real market (1,336,559 rows apiece — measured `data_type` distribution) — that 2x factor, not cross-venue
+duplication, is the majority of the gap between "rows" and "distinct instrument_ids" reported in the canonicalization
+audit (see "Canonical identity model" below for the full reconciliation). A further **112 rows**
+(`data_type=prediction_canonical_question_group`) are cluster/group-grain, not per-market, rows.
 
 Note: **MVP universe is not the same as everything captured**. The adapters below can enumerate far more than the 3
 in-scope `market_groups` — `financial`-category markets, and any category outside crypto/politics/sports, are fetched
@@ -254,7 +259,8 @@ The mechanism that actually lets a strategy compare Polymarket vs. Kalshi pricin
 like `BTC_UP_DOWN_DAILY`, `BNB_PRICE_RANGE_DAILY`, `CPI_PRINT_PER_MONTH`, `FED_RATE_DECISION_PER_FOMC` — venue-agnostic
 labels for a recurring _class_ of question, not a specific dated market instance.
 
-> 31 `canonical_question_group` values appear verbatim on both venues — this is **by design, not a collision**.
+> **35** `canonical_question_group` values appear verbatim on both venues (measured 2026-07-17) — this is **by design,
+> not a collision**.
 > `venue` is tracked as its own column (`CatalogRow.venue`, `unified_api_contracts/canonical/domain/instruments_catalog.py`),
 > `canonical_question_group` is a _thematic cross-venue label_ by design (same docstring: `"canonical_question_group":
 e.g. "US_ELECTION_2024", "CRYPTO_BTC_DAILY"`), and sharing the label across venues is the **intended mechanism** for
@@ -263,11 +269,11 @@ e.g. "US_ELECTION_2024", "CRYPTO_BTC_DAILY"`), and sharing the label across venu
 > globally unique without also keying on `venue` — that combination is what identifies "this venue's instance of this
 > recurring question."
 
-Only **108 of the 2,486,092 catalog rows** carry `data_type=prediction_canonical_question_group` (46 Polymarket-only
-
-- 31 shared labels × 2 venues = 62 shared-label rows). The other 2,485,984 rows are ordinary per-market
-  `trades`/`market_lifecycle` rows with venue-opaque `instrument_id`s (see next section) — the shared-label mechanism
-  is a small, deliberate cluster-grain overlay on top of the per-market catalog, not something that touches most rows.
+Only **112 of the 2,673,230 catalog rows** carry `data_type=prediction_canonical_question_group` (measured 2026-07-17):
+**35 shared labels × 2 venues = 70 rows**, + **38 Polymarket-only**, + **4 Kalshi-only** = 112. The other **2,673,118**
+rows are ordinary per-market `trades`/`market_lifecycle` rows with venue-opaque `instrument_id`s (see next section) —
+the shared-label mechanism is a small, deliberate cluster-grain overlay on top of the per-market catalog, not something
+that touches most rows.
 
 ### Per-instrument join — `cross_venue_mapping.build_cross_venue_mapping()`
 
@@ -321,9 +327,27 @@ multi-grain roll-up (`build_prediction_catalogue_dataframe()`, distinct from the
 `build_catalogue_dataframe()` every other asset group uses) threads `raw_symbol` + `base_asset` through its
 `_PredLifecycle` / `_merge_lifecycle` / `_emit()` accumulator at the per-conditionId grain (a
 `canonical_question_group` bundle row leaves them `""` — honest absence, a family has no single per-market value).
-**Known gap (data-state, not code-verifiable here)**: this rollup logic has not yet had a full catalogue regen run
-against it — `prod/catalog.parquet` may still reflect the pre-fix `NaN` values for `raw_symbol`/`base_asset` until
-that regen runs.
+
+> **✅ RESOLVED 2026-07-17 (history kept deliberately).** This section previously carried a **Known gap**: _"this rollup
+> logic has not yet had a full catalogue regen run against it — `prod/catalog.parquet` may still reflect the pre-fix
+> `NaN` values for `raw_symbol`/`base_asset` until that regen runs."_ **That regen has since run.** Measured directly
+> against the live `prod/catalog.parquet` (object updated 2026-07-17T01:02:27Z), over per-market rows only
+> (`data_type != prediction_canonical_question_group`):
+>
+> | Field        | POLYMARKET                        | KALSHI                      |
+> | ------------ | --------------------------------- | --------------------------- |
+> | `raw_symbol` | **100.00%** (2,590,684/2,590,684) | **100.00%** (82,434/82,434) |
+> | `base_asset` | **100.00%** (2,590,684/2,590,684) | **100.00%** (82,434/82,434) |
+>
+> No `NaN`/blank `raw_symbol` or `base_asset` survives on any per-market row, on either venue. The gap is closed.
+>
+> **On the "KALSHI 99.95%" figure**: a fill rate computed over ALL Kalshi rows gives 82,434/82,473 = **99.9527%**. That
+> 0.05% is **not** a data gap — it is exactly the 39 Kalshi `prediction_canonical_question_group` cluster rows, which
+> are blank **by design** (a family has no single per-market `raw_symbol`; see the honest-absence rule in
+> `codex/02-data/honest-absence-downstream-handling.md`). The same arithmetic on Polymarket gives 2,590,684/2,590,757 =
+> 99.9972%, which merely rounds to "100.00%". The apparent venue asymmetry is an artifact of each venue's cqg-row
+> share, not a real difference — **measure fill over per-market rows only, or the honest-absence rows will masquerade
+> as a defect.**
 
 `underlying` (2026-07-09 fix): both adapters' `_parse_market()` now call `underlying_for_group()` on the SAME
 `classify_*_to_canonical_group()` result already computed for `MarketLifecycle.canonical_group` (one classification
@@ -407,7 +431,11 @@ Implementation — extends the **existing** mechanism, not a new one:
 4. **`titles` map source for sports cross-venue matching (todo 4 — DECIDED: not built this migration)**: the
    canonical `InstrumentRecord` schema dropped the `symbol` field (see `cross_venue_mapping.py`'s own module
    docstring), so **no per-instrument human title survives anywhere the offline catalogue roll-up can reach** — not
-   the per-day parquet snapshot (`model_dump()` of a schema with no title field), not `prod/catalog.parquet`. Real
+   the per-day parquet snapshot (`model_dump()` of a schema with no title field), not `prod/catalog.parquet`.
+   **⚠️ Partially superseded 2026-07-17 — see "Prediction titles" below**: the legacy Shape-B objects DO still carry
+   `question` at 100% fill (47-column family), so `question` is recoverable by re-reading data at rest — **no
+   re-capture needed**. This does NOT rescue sports: `event_title` measures 0.00% fill and sports objects lack the
+   column entirely, so the `titles=` decision below stands unchanged. Real
    options considered: (a) re-add a title field to `InstrumentRecord` — a schema change out of this migration's
    scope; (b) a live re-fetch from both venues' APIs at roll-up time — defeats the point of an offline, parquet-driven
    rollup and adds a real network dependency to a batch job; (c) a persisted title side-table (mirroring the
@@ -448,17 +476,56 @@ rule — smoke-tested + measured, not executed at full scale unsupervised).
 
 ## GCS output & the bucket-naming split
 
+**Measured 2026-07-17**: a full recursive listing of `instrument_availability/` returns **22,111 objects, 100% of them
+`.parquet` — there is not a single `.json` object under that prefix.** (An earlier revision of this doc drew the tree
+below as `instruments.json`; that was wrong on the extension AND on the layout.) The corpus is **two live shapes**, and
+the legacy one is NOT dead — see "Prediction titles" below.
+
 ```
 gs://instruments-store-pred-{env}-{project}/
   prod/catalog.parquet                     # rolled-up per-market + per-cluster catalog (this doc's analysis above)
   instrument_availability/
     by_date/
+
+      # SHAPE A — canonical_question_group-partitioned: 12,451 objects (56.3%)
+      canonical_question_group={CQG}/      # 78 distinct values, e.g. BTC_UP_DOWN_DAILY
+        day={YYYY-MM-DD}/
+          venue={POLYMARKET|KALSHI}/       # 11,013 POLYMARKET + 1,438 KALSHI
+            instruments.parquet
+
+      # SHAPE B — legacy: 9,660 objects (43.7%), POLYMARKET-only (zero KALSHI)
       day={YYYY-MM-DD}/
-        venue=POLYMARKET/
-          instruments.json
-        venue=KALSHI/
-          instruments.json
+        [pipeline_mode=batch_instruments_service/asset_group=prediction/]   # present on 4,729; absent on 4,931
+          [market={BTC|ETH|OTHER|FOOTBALL|…}/] [venue=POLYMARKET/]          # market= / venue= order VARIES
+            instruments.parquet | prediction_market_metadata.parquet
 ```
+
+Shape B is not one layout but a **family of 7 real skeletons** (measured counts, `instrument_availability/by_date/`
+prefix elided):
+
+| Skeleton                                                                         | Objects |
+| -------------------------------------------------------------------------------- | ------: |
+| `day=*/venue=*/market=*/instruments.parquet`                                     |   3,142 |
+| `day=*/pipeline_mode=*/asset_group=*/venue=*/market=*/instruments.parquet`       |   3,041 |
+| `day=*/pipeline_mode=*/asset_group=*/market=*/venue=*/instruments.parquet`       |     826 |
+| `day=*/market=*/venue=*/instruments.parquet`                                     |     826 |
+| `day=*/venue=*/instruments.parquet`                                              |     574 |
+| `day=*/pipeline_mode=*/asset_group=*/venue=*/instruments.parquet`                |     473 |
+| `day=*/venue=*/prediction_market_metadata.parquet`                               |     389 |
+| `day=*/pipeline_mode=*/asset_group=*/venue=*/prediction_market_metadata.parquet` |     389 |
+
+Measured facts a reader/consumer must not assume away:
+
+- **All 22,111 objects are `.parquet`** (21,333 `instruments.parquet` + 778 `prediction_market_metadata.parquet`) — a
+  second filename exists under `by_date/`, so a glob assuming `instruments.parquet` misses 778 objects.
+- **`pipeline_mode` is not universal**: only 4,729 of the 9,660 legacy objects carry
+  `pipeline_mode=batch_instruments_service/asset_group=prediction/`; the other 4,931 have no `pipeline_mode`/
+  `asset_group` level at all. Both values are single-valued where present. Per the SOURCE-AWARE prefix-match rule
+  (`codex/02-data/pipeline-mode-partition.md`), a reader must PREFIX-MATCH, not assume the segment exists.
+- **`market=` and `venue=` appear in BOTH orders** (826 objects each way) — never parse these positionally; parse by
+  `key=` name.
+- **KALSHI exists only in Shape A.** All 9,660 legacy objects are `venue=POLYMARKET`.
+- **`day=` spans 2025-03-13 … 2029-01-20** — far-future days are expiry-dated markets, not capture days.
 
 The real, live bucket is the abbreviated `instruments-store-pred-{env}-{project_id}`
 (`instruments-store-pred-prd-central-element-323112` exists with 33,122 blobs; the unabbreviated
@@ -484,6 +551,46 @@ prediction instruments bucket," and both now agree on the abbreviated form:
 (lines ~149, ~155) still asserts the OLD unabbreviated `instruments-store-prediction-` value for the INSTRUMENTS
 bucket_template — that repo's `unified-api-contracts` pin has not picked up the abbreviated-form fix yet, so its
 assertions need updating once it bumps that pin.
+
+## Prediction titles — a REGRESSION, not an eternal gap (READ BEFORE PLANNING A RE-CAPTURE)
+
+> **🟡 If you are about to plan a multi-day re-capture to recover prediction market titles: don't — at least not for
+> `question`. The human question text is ALREADY in GCS today.** Measured 2026-07-17.
+
+The legacy Shape-B objects predate a stored-field reduction (~36 → 22 fields) and therefore carry a **much wider raw
+Gamma payload than the current per-day snapshot does** — including the human-readable `question`. The roll-up already
+reads these objects. So a missing title downstream is a **regression introduced by the field reduction, NOT an
+absence that requires re-fetching from the venue**. Recovering `question` is a re-read of data already at rest.
+
+**Measured evidence** — 40 randomly-sampled legacy objects (16,360 rows), read individually with `pyarrow.parquet`:
+
+| Schema family | Objects |   Rows | Has `question` col | `question` fill | Has `event_title` col | `event_title` fill |
+| ------------- | ------: | -----: | ------------------ | --------------: | --------------------- | -----------------: |
+| **47-column** |      35 | 15,665 | yes (35/35)        |     **100.00%** | yes (35/35)           |          **0.00%** |
+| 41-column     |       3 |    693 | no                 |           0.00% | no                    |              0.00% |
+| 30-column     |       2 |      2 | no                 |           0.00% | no                    |              0.00% |
+| **Overall**   |      40 | 16,360 | —                  |      **95.75%** | —                     |          **0.00%** |
+
+Real sampled text (day span 2025-03-15 … 2029-01-20): _"Will J.B. Pritzker win the 2028 Democratic presidential
+nomination?"_, _"Will Kamala Harris win the 2028 Democratic presidential nomination?"_ — 6,775 distinct values across
+15,665 rows (**43.2% distinct**; recurring dated markets legitimately repeat the same question text across days).
+
+**Three measured caveats that bound the claim — do not over-read it:**
+
+1. **`event_title` is NOT recoverable this way.** The 47-column schema _has_ an `event_title` column, but it is
+   **0.00% filled across all 15,665 sampled rows**. "Legacy objects carry `question` AND `event_title` at ~100%" is
+   **false on `event_title`** — only `question` is populated.
+2. **Sports objects carry NEITHER field.** Every `market=FOOTBALL` object sampled (20 objects, 2 independent samples)
+   is **30-column with no `question` and no `event_title`**. Since Polymarket sports team resolution depends on
+   `event_title` (see "Polymarket sports — team/league resolution"), **the sports `titles=` map in "Canonical identity
+   model" §3 item 4 is NOT unblocked by this finding** and remains honestly absent.
+3. **The legacy corpus is not uniformly 47-column** (30/41/47 families observed), so `question` covers ~95.75% of
+   legacy rows sampled — not 100% of the corpus.
+
+**Net**: the re-capture assumption is retired for **`question` on non-sports markets** (already at rest → re-read, no
+venue fetch). It is **not** retired for `event_title` / sports titles, where the field is empty or the column is
+absent — that still needs a real source, and the persisted title side-table (§3 item 4 option (c)) remains the
+tracked follow-up.
 
 ## Key files
 

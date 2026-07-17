@@ -96,18 +96,13 @@ async def _fetch_footystats_predictions(
         return counts
     attempt_ts = _orch.datetime.now(_orch.UTC)
 
-    # Coverage-start / known-gap guard for PREDICTIONS — skip without an API
-    # call when FootyStats hasn't launched or the date is in a gap window.
+    # Coverage-start guard for PREDICTIONS — skip without an API call when
+    # FootyStats hasn't launched yet.
     _ftp_floor = _orch.get_source_coverage_start("footystats", data_type="PREDICTIONS")
     _ftp_pre_cutoff = bool(_ftp_floor) and date < _ftp_floor.isoformat()
-    _ftp_in_known_gap = _orch.is_in_known_gap("footystats", "PREDICTIONS", date)
-    if _ftp_pre_cutoff or _ftp_in_known_gap:
-        _orch.logger.info(
-            "FootyStats predictions: skipping date=%s (%s)",
-            date,
-            "pre-coverage-start" if _ftp_pre_cutoff else "known-gap",
-        )
-        _ftp_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _ftp_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+    if _ftp_pre_cutoff:
+        _orch.logger.info("FootyStats predictions: skipping date=%s (pre-coverage-start)", date)
+        _ftp_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
         for _exp_lid in sorted(_ft_expected):
             pred_manifest.record_expected_empty(
                 row_key={"date": date, "data_type": "PREDICTIONS", "league_id": _exp_lid},
@@ -509,17 +504,12 @@ async def _fetch_footystats_matches(
         return counts
     attempt_ts = _orch.datetime.now(_orch.UTC)
 
-    # Coverage-start / known-gap guard for MATCHES.
+    # Coverage-start guard for MATCHES.
     _ftm_floor = _orch.get_source_coverage_start("footystats", data_type="MATCHES")
     _ftm_pre_cutoff = bool(_ftm_floor) and date < _ftm_floor.isoformat()
-    _ftm_in_known_gap = _orch.is_in_known_gap("footystats", "MATCHES", date)
-    if _ftm_pre_cutoff or _ftm_in_known_gap:
-        _orch.logger.info(
-            "FootyStats matches: skipping date=%s (%s)",
-            date,
-            "pre-coverage-start" if _ftm_pre_cutoff else "known-gap",
-        )
-        _ftm_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _ftm_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+    if _ftm_pre_cutoff:
+        _orch.logger.info("FootyStats matches: skipping date=%s (pre-coverage-start)", date)
+        _ftm_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
         for _exp_lid in sorted(_ft_expected):
             _ft_manifest.record_expected_empty(
                 row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
