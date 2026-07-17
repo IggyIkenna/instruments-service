@@ -270,6 +270,16 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     "league_id",
     "available_from",
     "available_to",
+    # Distinct venue-declared EXPIRY (dated FUTURE/OPTION/COMBO), stored separately
+    # from the overloaded ``available_to`` (which for a non-expiring type is a
+    # delisting / last-observed date, NOT an expiry). This is the already-parsed
+    # ``_InstrumentAggregate.expiry`` (venue truth), emitted verbatim — NOT derived
+    # from ``available_to``: for the ~74% of cefi dated rows where the venue declared
+    # no expiry, ``available_to`` is a last-observed date, so deriving from it would
+    # fabricate an expiry. Honest-NULL means "no venue-declared expiry captured"; the
+    # ``available_to`` + type-filter path in ``catalogue_lifecycle.list_upcoming_expiries``
+    # stays correct as the floor. Plan: data_status_page_ux_and_canonicalisation_2026_07_16 A2.
+    "expiry",
     "market_created_at",
     "settlement_time",
     "data_type",
@@ -1229,6 +1239,11 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 "league_id": agg.meta["league_id"] or "",
                 "available_from": available_from.isoformat(),
                 "available_to": available_to,
+                # A2: the CLEAN venue-declared expiry, separate from the overloaded
+                # available_to above (which may be a delisting/last-observed here).
+                # Honest-NULL when the venue declared no expiry (perps, spot, or a
+                # dated contract whose expiry we never captured from source).
+                "expiry": agg.expiry.isoformat() if agg.expiry is not None else None,
                 "market_created_at": agg.meta["market_created_at"],
                 "settlement_time": agg.meta["settlement_time"],
                 # Single-grain AGs leave data_type empty → the enumerator iterates
