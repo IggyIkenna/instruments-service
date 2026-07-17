@@ -716,8 +716,10 @@ def _canonical_instrument_id(instrument_id: str) -> str:
 
 #: Margin-type word (as carried in the by_date snapshot's ``margin_type`` column) →
 #: the operator-decided ``@LIN``/``@INV`` marker token
-#: (instrument_id_format_canonicalization_2026_07_08.md finding 1).
-_CEFI_FUTURE_MARGIN_MARKER: dict[str, str] = {"linear": "LIN", "inverse": "INV"}
+#: (instrument_id_format_canonicalization_2026_07_08.md finding 1). Shared by BOTH
+#: roll-up id rebuilds (:func:`_canonicalize_cefi_future_id` dated-FUTURE +
+#: :func:`_canonicalize_cefi_perp_id` legacy-PERP) — one mapping, one spelling.
+_CEFI_MARGIN_MARKER: dict[str, str] = {"linear": "LIN", "inverse": "INV"}
 
 
 def _canonicalize_cefi_future_id(instrument_id: str, meta: dict[str, str | None]) -> str:
@@ -749,13 +751,82 @@ def _canonicalize_cefi_future_id(instrument_id: str, meta: dict[str, str | None]
     venue = (meta.get("venue") or "").strip()
     base = (meta.get("base_asset") or "").strip()
     quote = (meta.get("quote_asset") or "").strip()
-    marker = _CEFI_FUTURE_MARGIN_MARKER.get((meta.get("margin_type") or "").strip().lower())
+    marker = _CEFI_MARGIN_MARKER.get((meta.get("margin_type") or "").strip().lower())
     expiry = _parse_truth_date(meta.get("expiry"))
     if not venue or not base or not quote or marker is None or expiry is None:
         return instrument_id
     return build_instrument_id(
         venue, InstrumentType.FUTURE, f"{base}-{quote}", expiry_date=expiry, margin_marker=marker
     )
+
+
+#: The LEGACY CeFi perp-family type token: the pre-2026-07 on-chain adapters stamped
+#: ``VENUE:PERP:<raw_symbol>`` where the canonical form is
+#: ``VENUE:PERPETUAL:BASE-QUOTE@MARKER``. Used ONLY as the rebuild TRIGGER — a row whose
+#: id already carries the canonical ``PERPETUAL`` token is left alone (including the 586
+#: marker-less ``VENUE:PERPETUAL:BASE-QUOTE`` rows, which are a SEPARATE catalogue-
+#: completeness concern tracked as blueprint open-q #19 — deliberately NOT in scope here).
+_LEGACY_CEFI_PERP_TYPE_TOKEN = "PERP"
+
+
+def _canonicalize_cefi_perp_id(instrument_id: str, meta: dict[str, str | None]) -> str:
+    """Rebuild a legacy ``VENUE:PERP:<raw>``-form CeFi perp ``instrument_id`` to canonical shape.
+
+    The on-chain perp venues (HYPERLIQUID / ASTER / EXTENDED-STARKNET / LIGHTER-ZKSYNC)
+    stamped ``VENUE:PERP:<raw_symbol>`` until the adapter's id-format canonicalization
+    (``instrument_id_format_canonicalization_2026_07_08``) switched them to the canonical
+    ``VENUE:PERPETUAL:BASE-QUOTE@MARKER``. A perp that was still LIVE after the switch
+    collapses onto its canonical form via :func:`_cefi_perp_lineage_key` (the lineage key
+    is stable across the churn), so the roll-up emits the canonical id. But a perp
+    DELISTED *before* the switch has no post-fix snapshot at all — its most-recent
+    ``by_date`` row carries the legacy id, and the roll-up passed that raw id straight
+    through, so the catalogue kept 9 stale ``:PERP:`` ids (HYPERLIQUID ARK/DOOD/FTT/MATIC/IP,
+    ASTER IPUSDT, EXTENDED-STARKNET IP-USD/TON-USD, LIGHTER-ZKSYNC IP — all with
+    ``available_to`` set, i.e. delisted). This is the SAME legacy-snapshot class the dated-
+    FUTURE fix (:func:`_canonicalize_cefi_future_id`, instruments-service@79d4dbcb) closed,
+    so it is fixed the SAME way and in the same place: at roll-up time, via the SAME shared
+    UAC builder (:func:`build_instrument_id`) the adapter itself uses — a fresh capture and a
+    legacy-snapshot roll-up therefore always agree on the identical canonical shape.
+
+    The legacy rows carry every field the rebuild needs (verified against the live
+    ``by_date`` corpus 2026-07-17: ``base_asset`` + ``quote_asset`` USD/USDT/USDC +
+    ``margin_type=linear`` are all populated), and the rebuilt ids byte-match their live
+    canonical siblings (``HYPERLIQUID:PERPETUAL:ARK-USD@LIN``, ``ASTER:PERPETUAL:IP-USDT@LIN``,
+    ``EXTENDED-STARKNET:PERPETUAL:IP-USD@LIN``, ``LIGHTER-ZKSYNC:PERPETUAL:IP-USDC@LIN``).
+
+    Returns ``instrument_id`` unchanged when the row is not a perp-family type, the id does
+    NOT carry the legacy ``PERP`` token (idempotent no-op — every already-canonical
+    ``PERPETUAL`` row, marker or not), or a field the rebuild needs
+    (venue/base_asset/quote_asset/margin_type) is missing — degrade, never guess. Pure +
+    idempotent.
+    """
+    if (meta.get("instrument_type") or "").strip().upper() not in _PERP_FAMILY_ITYPES:
+        return instrument_id
+    parts = instrument_id.split(":")
+    if len(parts) < 3 or parts[1].strip().upper() != _LEGACY_CEFI_PERP_TYPE_TOKEN:
+        return instrument_id
+    venue = (meta.get("venue") or "").strip()
+    base = (meta.get("base_asset") or "").strip()
+    quote = (meta.get("quote_asset") or "").strip()
+    marker = _CEFI_MARGIN_MARKER.get((meta.get("margin_type") or "").strip().lower())
+    if not venue or not base or not quote or marker is None:
+        return instrument_id
+    return build_instrument_id(venue, InstrumentType.PERPETUAL, f"{base}-{quote}", margin_marker=marker)
+
+
+def _canonicalize_cefi_rollup_id(instrument_id: str, meta: dict[str, str | None]) -> str:
+    """Apply EVERY roll-up CeFi id-canonicalization step to ``instrument_id``, in order.
+
+    The SINGLE source of the roll-up's id-rebuild chain, so the emitted ``instrument_id``
+    and its ``canonical_instrument_id`` mirror can never drift apart (the 511-row
+    ``instrument_id != canonical_instrument_id`` defect was exactly that drift: the
+    dated-FUTURE rebuild ran on the emitted id only, leaving the mirror on the stale
+    raw-glued form). Every no-op guard lives in the individual helpers, so this is a
+    no-op for non-CeFi / already-canonical rows. Pure + idempotent.
+    """
+    if not instrument_id:
+        return instrument_id
+    return _canonicalize_cefi_perp_id(_canonicalize_cefi_future_id(instrument_id, meta), meta)
 
 
 def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
@@ -1097,11 +1168,13 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         # ``glued_pair_id`` alongside. Non-pool / non-DeFi rows pass through
         # unchanged (canonical_id == the original instrument_key, glued_pair_id "").
         canonical_id, glued_pair_id, bare_venue, chain, pool_address = _defi_pool_dual_form(agg.meta)
-        # Legacy raw-wire-form CeFi dated-FUTURE id (BINANCE-FUTURES et al, captured
-        # before the adapter's 2026-07-09 canonicalization fix) — rebuild to the
-        # dash-canonical shape at roll-up time. No-op for already-canonical /
-        # non-FUTURE rows. See _canonicalize_cefi_future_id's docstring.
-        canonical_id = _canonicalize_cefi_future_id(canonical_id, agg.meta)
+        # Legacy raw-wire-form CeFi ids captured before the adapter's canonicalization
+        # fixes — rebuild to the canonical shape at roll-up time: dated-FUTURE
+        # (BINANCE-FUTURES et al, 2026-07-09 fix) + legacy ``:PERP:``-token on-chain perps
+        # (HYPERLIQUID/ASTER/EXTENDED-STARKNET/LIGHTER-ZKSYNC delisted before the
+        # 2026-07-08 fix). No-op for already-canonical / non-CeFi rows. See
+        # _canonicalize_cefi_rollup_id's docstring.
+        canonical_id = _canonicalize_cefi_rollup_id(canonical_id, agg.meta)
         # instrument_type stays the BROAD contract-mechanics type (operator
         # 2026-07-16, superseding the cefi_completion_program_2026_07_15
         # EQUITY_PERP/TOKENIZED_EQUITY *type* refinement): a crypto-venue single-stock
@@ -1137,8 +1210,24 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 # fallback backfills every historical row captured BEFORE the
                 # adapter fix shipped with the exact value a fresh capture would
                 # have produced — no separate migration script needed.
-                "canonical_instrument_id": (
-                    agg.meta.get("canonical_instrument_id") or agg.meta.get("instrument_key") or ""
+                #
+                # The mirror is run through the SAME ``_canonicalize_cefi_rollup_id``
+                # chain as the emitted ``instrument_id`` above. Without this the two
+                # DRIFT on exactly the rows the chain rebuilds: the 2026-07-17 live
+                # catalogue carried 511 cefi rows (BINANCE-DELIVERY/OKX-FUTURES/
+                # COINBASE-CDE/BINANCE-FUTURES/DERIBIT dated FUTUREs) whose
+                # ``instrument_id`` was the CORRECT canonical form while this mirror
+                # still held the stale raw-glued one
+                # (``…:FUTURE:ADA-USD@INV-20200926`` vs ``…:FUTURE:ADAUSD_200925``) —
+                # the roll-up rebuilt the id but never re-applied the mirror.
+                # Canonicalising the SOURCE (rather than blanket-copying the emitted
+                # ``canonical_id``) is deliberate: it keeps the DeFi POOL contract
+                # intact, where ``instrument_id`` is re-keyed to ``pool_address`` but
+                # ``canonical_instrument_id`` mirrors the glued ``instrument_key``
+                # (test_rollup_defi_pool_row_backfills_canonical_instrument_id_from_
+                # instrument_key), and preserves honest-blank for an id-less row.
+                "canonical_instrument_id": _canonicalize_cefi_rollup_id(
+                    agg.meta.get("canonical_instrument_id") or agg.meta.get("instrument_key") or "", agg.meta
                 ),
                 "glued_pair_id": glued_pair_id,
                 "pool_address": pool_address,
