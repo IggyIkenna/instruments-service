@@ -1066,6 +1066,24 @@ class TestKalshiParseMarket:
         assert result is not None
         assert result.question == "Will it rain tomorrow?"
 
+    def test_market_question_is_none_when_no_human_title(self) -> None:
+        """Honest-absence: a market with NO title/subtitle yields question=None — the
+        ticker is NOT a human question, so it must NOT surface as one. raw_symbol
+        (event_ticker) remains the label floor, symmetric with Polymarket. (Guards the
+        fix for the wx1ogy6pl verifier's caveat: the adapter previously fell title back
+        to the ticker, so question was never None.)"""
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXNOTITLE",
+            "event_ticker": "KXNOTITLE",
+            "status": "active",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.question is None
+        assert result.raw_symbol == "KXNOTITLE"  # the honest label floor is intact
+
 
 class TestKalshiParseCloseTime:
     """Tests for _parse_close_time."""
