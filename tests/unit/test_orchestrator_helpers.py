@@ -990,3 +990,23 @@ def test_split_by_instrument_type_absent_or_empty_single_blank_group() -> None:
     blank_vals = _split_by_instrument_type(pd.DataFrame([{"instrument_type": ""}, {"instrument_type": None}]))
     assert [g[0] for g in blank_vals] == [""]
     assert len(blank_vals[0][1]) == 2
+
+
+def test_split_by_instrument_type_canonicalizes_legacy_lowercase_aliases() -> None:
+    """Defensive guard (2026-07-16 CeFi legacy-lowercase-dupes fix): a stray
+    lowercase ``perpetual``/``spot`` value is canonicalised to the UAC
+    ``InstrumentType`` value BEFORE grouping, so it lands in the SAME manifest
+    row_key as any already-canonical-cased sibling row instead of minting a new
+    permanently-duplicated lowercase key.
+    """
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
+
+    df = pd.DataFrame(
+        [
+            {"instrument_key": "BTC-PERP-1", "instrument_type": "perpetual"},
+            {"instrument_key": "BTC-PERP-2", "instrument_type": "PERPETUAL"},
+            {"instrument_key": "BTC-USDT", "instrument_type": "spot"},
+        ]
+    )
+    groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
+    assert groups == {"PERPETUAL": 2, "SPOT_PAIR": 1}

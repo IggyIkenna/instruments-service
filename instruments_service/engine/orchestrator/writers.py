@@ -82,6 +82,26 @@ def _canonical_manifest_venue_chain(venue_str: str) -> tuple[str, str]:
     return venue_str, ""
 
 
+# Legacy-lowercase → canonical UAC InstrumentType alias map (operator-confirmed
+# 2026-07-16 live full-stack review). The manifest row_key embeds `instrument_type`
+# VERBATIM (see `_write_venue` below) and row_keys are permanent/literal-string-keyed
+# — a stray lowercase value here never self-heals, it just accumulates alongside the
+# canonical-cased row for the same real shard atom forever (the exact mechanism that
+# produced the CeFi `"perpetual"`/`"spot"` legacy dupes migrated by
+# `scripts/canonicalize_cefi_instrument_type_legacy_lowercase_2026_07_16.py`).
+# `InstrumentRecord.instrument_type` (UAC `unified_api_contracts.internal.reference.
+# instrument`) has been a strict `InstrumentType` enum field since UAC@6f0e0c2e
+# (2026-04-02) — every live CeFi adapter (Tardis + CCXT) now constructs records via
+# enum members, so this alias map is defense-in-depth (a normalization guard at the
+# row_key write boundary), not evidence of a currently-known live leak: real
+# production data confirms fresh CeFi captures have been clean (canonical uppercase,
+# correctly split per-type) since >= 2026-07-10.
+_LEGACY_INSTRUMENT_TYPE_ALIASES: dict[str, str] = {
+    "perpetual": "PERPETUAL",
+    "spot": "SPOT_PAIR",
+}
+
+
 def _split_by_instrument_type(df: _orch.pd.DataFrame) -> list[tuple[str, _orch.pd.DataFrame]]:
     """Split a venue's instrument-definition df into ``(instrument_type, sub_df)`` groups.
 
@@ -94,10 +114,16 @@ def _split_by_instrument_type(df: _orch.pd.DataFrame) -> list[tuple[str, _orch.p
     Returns "" as the group key (never fabricated) when the column is absent, empty, or
     the value itself is blank for that row — single-type venues (ASTER, HYPERLIQUID, ...)
     naturally yield exactly one group and behave identically to before this split existed.
+
+    Any known legacy-lowercase spelling (``_LEGACY_INSTRUMENT_TYPE_ALIASES``) is
+    canonicalised BEFORE grouping, so a stray un-enum-validated value can never mint a
+    new permanently-duplicated manifest row_key alongside the canonical-cased row for
+    the same real shard atom.
     """
     if "instrument_type" not in df.columns or df.empty:
         return [("", df)]
     col: _orch.pd.Series = df["instrument_type"].astype("string").fillna("").astype(str)
+    col = col.replace(_LEGACY_INSTRUMENT_TYPE_ALIASES)
     return [(str(_itype), _sub_df) for _itype, _sub_df in df.groupby(col)]
 
 
