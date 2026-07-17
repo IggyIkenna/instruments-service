@@ -47,7 +47,9 @@ shard) grouped by blank-vs-populated ``instrument_type``, not a manifest row cou
 
 DERIVATION (never fabricated — honest-absence rule): for each blank ``captured`` row, this script reads
 THAT EXACT shard's own ``instrument_availability/by_date/day={date}/venue={venue}/instruments.parquet``
-object (a targeted single-object read keyed by the manifest row's own (date, venue) — NOT a fresh
+object [**<- THIS IS THE BUG: that is the LEGACY path, a stale partial. The canonical path carries
+``pipeline_mode=``/``asset_group=`` — see the correction block below.**] (a targeted single-object read keyed
+by the manifest row's own (date, venue) — NOT a fresh
 whole-corpus GCS walk/listing; single-walk discipline preserved) and re-derives ``instrument_type`` from
 that object's OWN ``instrument_type`` column, using the SAME grouping logic the current writer uses
 (mirrors ``writers._split_by_instrument_type``): every distinct non-blank type present in the shard's real
@@ -65,18 +67,45 @@ shape (it is what the current writer would have produced had it not had this bug
 row's ``row_count``/``instrument_count`` is re-stamped from the REAL object it just read, which is honest
 even when it differs from the shard's old (stale) manifest count.
 
-KNOWN, PRE-EXISTING, UNRELATED FINDING (2026-07-16, live-verified — flagged for the operator, not fixed by
-this script): a small number of shards' manifest ``row_count``/``instrument_count`` is stale relative to
-the object's CURRENT content — e.g. tradfi CME 2026-06-28 carries a manifest count of 74,005 while the
-object itself now holds only 2,826 rows (the object was legitimately overwritten by a later, narrower
-capture without a manifest update). This script does NOT attempt to preserve the old, stale count — per
-workspace convention ("trust the actual distribution, not the constant") it re-stamps each row from the
-real object, which is strictly more correct. Every such shard is logged as a ``shard count DRIFT`` WARNING
-with the before/after counts, and the aggregate is surfaced in the run's ``drift_shards``/``drift_magnitude``
-stats — this is a separate, pre-existing manifest-vs-object staleness bug (likely not tradfi-specific) that
-warrants its own follow-up investigation/migration, out of scope for an instrument_type-only fix.
+!!! CORRECTED 2026-07-17 — THIS SCRIPT HAD A BUG AND ITS OWN DIAGNOSIS OF IT WAS WRONG !!!
+(Correction only; this script's LOGIC is untouched. It has RUN and is DONE — do not re-run it. The repair
+is ``scripts/repair_tradfi_instrument_type_counts_2026_07_17.py``; the issue is
+``unified-trading-pm/plans/active/issues/tradfi_instrument_type_migration_read_stale_legacy_object_2026_07_17.md``.)
 
-Usage (run from the instruments-service repo root)::
+**THE BUG**: the DERIVATION paragraph above reads each shard's object at the LEGACY path
+``instrument_availability/by_date/day={date}/venue={venue}/instruments.parquet``. That is NOT the canonical
+location. The canonical, source-aware path is
+``instrument_availability/by_date/day={D}/pipeline_mode={PM}/asset_group={AG}/venue={V}/instruments.parquet``.
+Both objects exist and they can disagree: the legacy one is a STALE PARTIAL left behind by the pipeline_mode
+partition migration. Because this script re-stamps ``row_count``/``instrument_count`` from whatever object it
+read, it wrote PARTIAL counts over correct ones wherever the two diverge.
+
+**WHAT THE ORIGINAL TEXT HERE CLAIMED (AND WHY IT WAS FALSE)**: this block used to report a "known,
+pre-existing, unrelated" manifest-vs-object staleness bug, citing tradfi CME 2026-06-28 as a manifest count of
+74,005 against an object "now holding only 2,826 rows … legitimately overwritten by a later, narrower
+capture". That explanation was wrong, and it was wrong in the most misleading possible direction: the drift
+was MANUFACTURED BY THIS SCRIPT. Live-verified 2026-07-17 — for CME 2026-06-28 the CANONICAL object holds
+exactly **74,005** rows (OPTION 69,212 / COMBO 4,446 / FUTURE 347), matching the ORIGINAL manifest count
+precisely, while the LEGACY object holds exactly **2,826** (OPTION 2,566 / COMBO 228 / FUTURE 32) — exactly
+what this script wrote. There was no "later, narrower capture"; there was a read of the wrong object. The
+``shard count DRIFT`` WARNINGs below are therefore this script's own damage report, not evidence of a
+separate bug, and ``drift_shards``/``drift_magnitude`` measure the corruption rather than documenting it.
+
+**MEASURED BLAST RADIUS (2026-07-17, corrected)**: smaller than first believed, and the issue doc's original
+headline (-425,096 instruments) conflated three different things. The snapshot→live Σ ``instrument_count``
+delta of -422,560 decomposes as: **-453,041** superseded-ghost rows the consolidator legitimately deduped
+(stale blank rows whose typed sibling matches the canonical object); **+75,709** genuine post-snapshot
+re-captures; **+25,951** legitimate re-stamps where the snapshot's count really was stale and the object is
+right. The ONLY atom this script actually corrupted is **CME 2026-06-28 (-71,179)** — the single measured
+case where a canonical object exists AND diverges from the legacy one. On a random 150-target sample the two
+objects AGREE 149/149 where both exist, which is why the damage is concentrated rather than systemic.
+
+Usage — **DO NOT RUN THIS SCRIPT. It is COMPLETE (applied 2026-07-16) and it CORRUPTS what it touches**
+(it reads the stale legacy object; see the correction block above). Re-running it would re-stamp partial
+counts over the repair. It is retained only as the historical record of what was applied. To fix tradfi's
+``instrument_type``/counts, use ``scripts/repair_tradfi_instrument_type_counts_2026_07_17.py``; for cefi/defi
+use ``scripts/canonicalize_cefi_defi_instrument_type_2026_07_17.py`` (canonical-path-first, correct).
+The invocations below are recorded for provenance ONLY::
 
     python scripts/canonicalize_tradfi_instrument_type_2026_07_16.py                 # dry-run (default)
     python scripts/canonicalize_tradfi_instrument_type_2026_07_16.py --workers 48     # dry-run, more parallel shard reads
@@ -276,19 +305,29 @@ def derive(
 def _gate(stats: Mapping[str, object]) -> bool:
     """Refuse to --apply on signs of a REAL bug — never on honest manifest/object drift.
 
-    A handful of shards' manifest ``row_count``/``instrument_count`` is provably STALE
-    relative to the object's CURRENT content (confirmed live 2026-07-16: e.g. tradfi
-    CME 2026-06-28 carries manifest_count=74005 while the object itself now holds only
-    2,826 rows — the object was legitimately overwritten by a later, narrower capture
-    without a manifest update, a pre-existing drift bug unrelated to instrument_type).
-    Per workspace convention ("trust the actual distribution, not the constant"), this
-    migration re-stamps each resolved row's count from the REAL object it just read —
-    which is MORE correct than the stale value it replaces — so an aggregate coalesced-
-    count DELTA is EXPECTED and is not, by itself, a gate failure (logged per-shard via
-    "shard count DRIFT" WARNING lines + ``drift_shards``/``drift_magnitude`` in stats for
-    the record). The gate instead refuses to apply on signs of an actual derivation bug:
-    blank rows increasing (real data loss) or every single captured target going
-    unresolved (a systemic read failure, not scattered honest absence).
+    !!! CORRECTED 2026-07-17 — THIS GATE'S REASONING WAS UNSOUND AND LET THE CORRUPTION THROUGH.
+    (Correction only; the logic below is untouched — this script has RUN and is DONE.)
+
+    This docstring used to justify ignoring the coalesced-count delta by asserting that
+    the manifest counts were "provably STALE" relative to the objects, citing tradfi CME
+    2026-06-28 (manifest 74,005 vs an object "now holding only 2,826 rows … legitimately
+    overwritten by a later, narrower capture"). That was FALSE. The CANONICAL object for
+    that shard holds exactly 74,005 rows; only the LEGACY object — the one ``derive`` reads
+    (see the module docstring's correction block) — holds 2,826. The counts were not stale;
+    the read was wrong.
+
+    The unsoundness is worth naming, because the reasoning is what disarmed the gate: the
+    ONE signal that would have caught the bug (an aggregate count DROP of 425k) was
+    explicitly reclassified as expected-and-not-a-failure by invoking "trust the actual
+    distribution, not the constant". That convention is about trusting a REAL object over a
+    stale constant — it cannot license trusting an object the script never established as
+    the right one. A gate that explains away its only failing signal is not a gate. The
+    repair script's gate therefore requires the aggregate count to strictly INCREASE and
+    treats a decrease as proof of re-breaking.
+
+    As written, the gate only refuses on blank rows increasing (real data loss) or every
+    single captured target going unresolved (a systemic read failure) — neither of which
+    the legacy-path bug triggers, which is exactly why it applied cleanly.
     """
     blank_regressed = int(stats["blank_after"]) > int(stats["blank_before"])
     all_unresolved = int(stats["targets"]) > 0 and int(stats["unresolvable_left_blank"]) == int(stats["targets"])
