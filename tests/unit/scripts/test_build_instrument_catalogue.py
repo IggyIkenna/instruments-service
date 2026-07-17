@@ -518,6 +518,161 @@ def test_rollup_raw_dated_future_missing_fields_degrades_unchanged(rollup: Modul
     assert row["instrument_id"] == "BINANCE-FUTURES:FUTURE:ETHUSDT_260626"
 
 
+# ---------------------------------------------------------------------------
+# Legacy ``VENUE:PERP:<raw>`` on-chain perp id rebuild (Phase -1 catalogue gate 1)
+# ---------------------------------------------------------------------------
+
+
+def _legacy_perp_row(iid: str, base: str, quote: str, raw_symbol: str) -> dict[str, object]:
+    """A pre-2026-07-08 on-chain perp by_date row, in the legacy ``:PERP:`` id form.
+
+    Field values mirror the LIVE by_date corpus exactly (measured 2026-07-17): the
+    legacy rows do carry base_asset + quote_asset + margin_type.
+    """
+    return {
+        "instrument_key": iid,
+        "venue": iid.split(":", 1)[0],
+        "instrument_type": "PERPETUAL",
+        "raw_symbol": raw_symbol,
+        "base_asset": base,
+        "quote_asset": quote,
+        "margin_type": "linear",
+    }
+
+
+@pytest.mark.parametrize(
+    ("legacy_id", "base", "quote", "raw_symbol", "expected"),
+    [
+        # The exact 9 live-catalogue defect rows (2026-07-17 Phase -1 gate 1 measurement),
+        # each expected id byte-matching its live canonical sibling on the same venue.
+        ("HYPERLIQUID:PERP:ARK", "ARK", "USD", "ARK", "HYPERLIQUID:PERPETUAL:ARK-USD@LIN"),
+        ("HYPERLIQUID:PERP:DOOD", "DOOD", "USD", "DOOD", "HYPERLIQUID:PERPETUAL:DOOD-USD@LIN"),
+        ("HYPERLIQUID:PERP:FTT", "FTT", "USD", "FTT", "HYPERLIQUID:PERPETUAL:FTT-USD@LIN"),
+        ("HYPERLIQUID:PERP:MATIC", "MATIC", "USD", "MATIC", "HYPERLIQUID:PERPETUAL:MATIC-USD@LIN"),
+        ("HYPERLIQUID:PERP:IP", "IP", "USD", "IP", "HYPERLIQUID:PERPETUAL:IP-USD@LIN"),
+        ("ASTER:PERP:IPUSDT", "IP", "USDT", "IPUSDT", "ASTER:PERPETUAL:IP-USDT@LIN"),
+        (
+            "EXTENDED-STARKNET:PERP:IP-USD",
+            "IP",
+            "USD",
+            "IP-USD",
+            "EXTENDED-STARKNET:PERPETUAL:IP-USD@LIN",
+        ),
+        (
+            "EXTENDED-STARKNET:PERP:TON-USD",
+            "TON",
+            "USD",
+            "TON-USD",
+            "EXTENDED-STARKNET:PERPETUAL:TON-USD@LIN",
+        ),
+        ("LIGHTER-ZKSYNC:PERP:IP", "IP", "USDC", "IP", "LIGHTER-ZKSYNC:PERPETUAL:IP-USDC@LIN"),
+    ],
+)
+def test_rollup_legacy_perp_id_rebuilt_to_canonical(
+    rollup: ModuleType, legacy_id: str, base: str, quote: str, raw_symbol: str, expected: str
+) -> None:
+    """A perp DELISTED before the 2026-07-08 id-format fix has NO post-fix snapshot, so
+    its most-recent by_date row carries the legacy ``VENUE:PERP:<raw>`` id and the roll-up
+    used to pass it straight through — the 9 stale ``:PERP:`` ids the Phase -1 catalogue
+    gate measured RED. The roll-up now rebuilds it via the shared UAC builder, and the
+    ``canonical_instrument_id`` mirror follows.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot([_legacy_perp_row(legacy_id, base, quote, raw_symbol)]))])
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == expected
+    assert row["canonical_instrument_id"] == expected
+    assert ":PERP:" not in row["instrument_id"]
+
+
+def test_rollup_legacy_perp_rebuild_is_idempotent(rollup: ModuleType) -> None:
+    """Re-rolling an ALREADY-canonical ``@LIN`` perp is a byte-for-byte no-op — the
+    rebuild triggers on the legacy ``PERP`` token only, so a rebuilt catalogue re-rolled
+    a second time produces the identical id (the gate's re-run must stay green).
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot([_legacy_perp_row("HYPERLIQUID:PERPETUAL:ARK-USD@LIN", "ARK", "USD", "ARK")]),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "HYPERLIQUID:PERPETUAL:ARK-USD@LIN"
+    assert row["canonical_instrument_id"] == "HYPERLIQUID:PERPETUAL:ARK-USD@LIN"
+
+
+def test_rollup_marker_less_canonical_perp_left_untouched(rollup: ModuleType) -> None:
+    """SCOPE GUARD: the 586 live ``VENUE:PERPETUAL:BASE-QUOTE`` rows that carry the
+    canonical type token but NO ``@marker`` are a SEPARATE catalogue-completeness concern
+    (blueprint open-q #19) and are deliberately NOT rewritten here — the Phase -1 gate is
+    ``0`` rows containing ``:PERP:``, not ``0`` marker-less perps. Rewriting them would be
+    a silent 586-row blast-radius expansion beyond the documented gate.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot([_legacy_perp_row("BINANCE-DELIVERY:PERPETUAL:ALGO-USD", "ALGO", "USD", "algousd_perp")]),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "BINANCE-DELIVERY:PERPETUAL:ALGO-USD"
+    assert row["canonical_instrument_id"] == "BINANCE-DELIVERY:PERPETUAL:ALGO-USD"
+
+
+def test_rollup_legacy_perp_missing_fields_degrades_unchanged(rollup: ModuleType) -> None:
+    """A legacy ``:PERP:`` row missing a field the rebuild needs (here: quote_asset) must
+    degrade to the raw id unchanged rather than guess or raise — honest, never invented.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "HYPERLIQUID:PERP:ARK",
+                            "venue": "HYPERLIQUID",
+                            "instrument_type": "PERPETUAL",
+                            "raw_symbol": "ARK",
+                            "base_asset": "ARK",
+                            "margin_type": "linear",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "HYPERLIQUID:PERP:ARK"
+    assert row["canonical_instrument_id"] == "HYPERLIQUID:PERP:ARK"
+
+
+def test_rollup_live_perp_lineage_still_collapses_onto_canonical_form(rollup: ModuleType) -> None:
+    """REGRESSION: a perp that survived the convention churn still collapses to ONE
+    lineage via _cefi_perp_lineage_key — the legacy-id rebuild must not fork it into a
+    second row (the rebuilt legacy id and the live id are the SAME string).
+    """
+    d_old, d_live = date(2026, 6, 20), date(2026, 7, 14)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (d_old, _snapshot([_legacy_perp_row("ASTER:PERP:IPUSDT", "IP", "USDT", "IPUSDT")])),
+            (
+                d_live,
+                _snapshot([_legacy_perp_row("ASTER:PERPETUAL:IP-USDT@LIN", "IP", "USDT", "IPUSDT")]),
+            ),
+        ]
+    )
+    ids = list(df["instrument_id"])
+    assert ids == ["ASTER:PERPETUAL:IP-USDT@LIN"], ids
+
+
 def test_rollup_cefi_row_carries_through_adapter_populated_canonical_instrument_id(rollup: ModuleType) -> None:
     """A CeFi row captured AFTER the adapter fix (canonical_instrument_id_cefi_defi_
     backfill_2026_07_14.md) carries its own value through unchanged."""
@@ -602,6 +757,133 @@ def test_rollup_defi_pool_row_backfills_canonical_instrument_id_from_instrument_
     # is NOT that; it mirrors instrument_key instead, per the operator-approved policy.
     assert row["instrument_id"] == "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640"
     assert row["canonical_instrument_id"] == "UNISWAP_V3-ARBITRUM:POOL:USDC-WETH:3000"
+
+
+# ---------------------------------------------------------------------------
+# canonical_instrument_id MIRRORS the canonicalized instrument_id (Phase -1 gate 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("legacy_id", "venue", "base", "raw_symbol", "margin", "expiry", "expected"),
+    [
+        # The exact live-catalogue gate-2 defect rows (2026-07-17): instrument_id already
+        # held the CORRECT canonical form while canonical_instrument_id held the STALE
+        # raw-glued one. 511 rows across these 5 venues, ALL instrument_type=FUTURE.
+        (
+            "BINANCE-DELIVERY:FUTURE:ADAUSD_200925",
+            "BINANCE-DELIVERY",
+            "ADA",
+            "adausd_200925",
+            "inverse",
+            "2020-09-26",
+            "BINANCE-DELIVERY:FUTURE:ADA-USD@INV-20200926",
+        ),
+        (
+            "BINANCE-FUTURES:FUTURE:ETHUSDT_260626",
+            "BINANCE-FUTURES",
+            "ETH",
+            "ethusdt_260626",
+            "linear",
+            "2026-06-26",
+            "BINANCE-FUTURES:FUTURE:ETH-USDT@LIN-20260626",
+        ),
+    ],
+)
+def test_rollup_canonical_instrument_id_mirrors_rebuilt_future_id(
+    rollup: ModuleType,
+    legacy_id: str,
+    venue: str,
+    base: str,
+    raw_symbol: str,
+    margin: str,
+    expiry: str,
+    expected: str,
+) -> None:
+    """GATE 2: the dated-FUTURE roll-up rebuild must be reflected in BOTH surfaces.
+
+    instruments-service@79d4dbcb rebuilt the emitted ``instrument_id`` but never
+    re-applied the ``canonical_instrument_id`` mirror, which kept sourcing the stale
+    adapter/instrument_key value -> 511 live rows where the two disagreed. Both now run
+    through the same ``_canonicalize_cefi_rollup_id`` chain.
+    """
+    quote = "USD" if margin == "inverse" else "USDT"
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": legacy_id,
+                            # The adapter stamped the stale raw-glued form here too --
+                            # this is the exact live-catalogue shape.
+                            "canonical_instrument_id": legacy_id,
+                            "venue": venue,
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": raw_symbol,
+                            "base_asset": base,
+                            "quote_asset": quote,
+                            "margin_type": margin,
+                            "expiry": expiry,
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == expected
+    assert row["canonical_instrument_id"] == expected, (
+        "canonical_instrument_id must MIRROR the canonicalized instrument_id"
+    )
+
+
+def test_rollup_canonical_instrument_id_mirrors_instrument_id_for_every_cefi_row(
+    rollup: ModuleType,
+) -> None:
+    """GATE 1 + GATE 2 together, end-to-end: a mixed frame of every legacy CeFi id class
+    rolls up with ``0`` ``:PERP:`` ids and ``0`` ``instrument_id != canonical_instrument_id``
+    -- the Phase -1 verify gate, asserted in-process.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        _legacy_perp_row("HYPERLIQUID:PERP:ARK", "ARK", "USD", "ARK"),
+                        _legacy_perp_row("ASTER:PERP:IPUSDT", "IP", "USDT", "IPUSDT"),
+                        _legacy_perp_row("LIGHTER-ZKSYNC:PERP:IP", "IP", "USDC", "IP"),
+                        _legacy_perp_row("EXTENDED-STARKNET:PERP:TON-USD", "TON", "USD", "TON-USD"),
+                        # already-canonical perp -- untouched
+                        _legacy_perp_row("ASTER:PERPETUAL:BNB-USDT@LIN", "BNB", "USDT", "BNBUSDT"),
+                        {
+                            "instrument_key": "BINANCE-DELIVERY:FUTURE:ADAUSD_200925",
+                            "canonical_instrument_id": "BINANCE-DELIVERY:FUTURE:ADAUSD_200925",
+                            "venue": "BINANCE-DELIVERY",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "adausd_200925",
+                            "base_asset": "ADA",
+                            "quote_asset": "USD",
+                            "margin_type": "inverse",
+                            "expiry": "2020-09-26",
+                        },
+                    ]
+                ),
+            )
+        ]
+    )
+    records = df.to_dict("records")
+    assert [r for r in records if ":PERP:" in r["instrument_id"]] == [], "gate 1: no :PERP: ids"
+    drift = [
+        (r["instrument_id"], r["canonical_instrument_id"])
+        for r in records
+        if r["instrument_id"] != r["canonical_instrument_id"]
+    ]
+    assert drift == [], f"gate 2: instrument_id != canonical_instrument_id for {drift}"
 
 
 def test_rollup_supports_instrument_id_column(rollup: ModuleType) -> None:
@@ -1517,6 +1799,123 @@ def test_ftp_rollup_empty_walk_returns_catalog_columns(rollup: ModuleType) -> No
     df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 1, 1))
     assert df.empty
     assert list(df.columns) == list(rollup.CATALOG_COLUMNS)
+
+
+# ---------------------------------------------------------------------------
+# Fixture scheduling/display fields on the rolled-up FIXTURE rows (operator
+# round-3, 2026-07-17 — "all the fixtures ... searching by date, league and/or
+# team"). The entity=fixtures snapshot ALREADY carries kickoff/status/venue/
+# round; the roll-up used to discard them, which is why deployment-api had to
+# re-walk the per-day parquets over a <=120-day window for a kickoff time.
+# ---------------------------------------------------------------------------
+
+
+def _fixture_snapshot_row(**overrides: object) -> dict[str, object]:
+    """A real-shaped ``entity=fixtures`` snapshot row (column names as the live
+    GCS objects carry them — verified 2026-07-17 against
+    ``sports_reference/by_date/day=2026-07-15/entity=fixtures/``)."""
+    row: dict[str, object] = {
+        "af_fixture_id": 1493574,
+        "date": "2026-03-22",
+        "timestamp": "2026-03-22T15:00:00+00:00",
+        "venue_id": None,
+        "venue_name": "Emirates Stadium",
+        "status_long": "Not Started",
+        "status_short": "NS",
+        "af_league_id": 39,
+        "round": "Regular Season - 30",
+        "af_home_name": "Arsenal",
+        "af_away_name": "Chelsea",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_sports_attr_str_collapses_missing_and_stringified_sentinels(rollup: ModuleType) -> None:
+    """Never a silent placeholder: a literal "None"/"nan" in the catalogue would
+    be a FABRICATED value, not an absent one."""
+    assert rollup._sports_attr_str(None) == ""
+    assert rollup._sports_attr_str(float("nan")) == ""
+    assert rollup._sports_attr_str("None") == ""
+    assert rollup._sports_attr_str("nan") == ""
+    assert rollup._sports_attr_str("  Emirates Stadium  ") == "Emirates Stadium"
+    assert rollup._sports_attr_str(123) == "123"
+
+
+def test_ftp_rollup_carries_fixture_kickoff_status_and_display_fields(rollup: ModuleType) -> None:
+    d1 = "2026-03-22"
+    path, frame = _sports_blob(d1, "fixtures", "EPL", [_fixture_snapshot_row()])
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records"))})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    row = by_id["EPL:ARSENAL_v_CHELSEA:20260322"]
+
+    assert row["kickoff_utc"] == "2026-03-22T15:00:00+00:00"
+    assert row["status"] == "NS"
+    assert row["home_team_name"] == "Arsenal"
+    assert row["away_team_name"] == "Chelsea"
+    assert row["venue_name"] == "Emirates Stadium"
+    assert row["round"] == "Regular Season - 30"
+    # The stadium is NOT the `venue` axis (bookmaker/exchange association) —
+    # that stays honestly blank for sports reference rows.
+    assert row["venue"] == ""
+
+
+def test_ftp_rollup_fixture_status_takes_the_latest_snapshot(rollup: ModuleType) -> None:
+    """``status`` evolves NS -> FT across snapshot days — the catalogue must
+    carry the NEWEST observation; a stale "NS" on a played fixture is a lie."""
+    d1, d2 = "2026-03-22", "2026-03-23"
+    # Same fixture (date stays d1) re-observed on d2 with a settled status.
+    p1, f1 = _sports_blob(d1, "fixtures", "EPL", [_fixture_snapshot_row(status_short="NS")])
+    p2, f2 = _sports_blob(d2, "fixtures", "EPL", [_fixture_snapshot_row(status_short="FT")])
+    storage = _FakeStorage({p1: _parquet_bytes(f1.to_dict("records")), p2: _parquet_bytes(f2.to_dict("records"))})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    row = by_id["EPL:ARSENAL_v_CHELSEA:20260322"]
+
+    assert row["status"] == "FT"
+    # ...and the lifecycle still reflects BOTH observation days.
+    assert row["available_from"] == d1
+
+
+def test_ftp_rollup_missing_optional_fixture_fields_are_blank_not_none_strings(rollup: ModuleType) -> None:
+    """A snapshot with a None venue_name/round (common in the real data) must
+    yield "" — never the string "None"."""
+    path, frame = _sports_blob("2026-03-22", "fixtures", "EPL", [_fixture_snapshot_row(venue_name=None, round=None)])
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records"))})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    row = {r["instrument_id"]: r for r in df.to_dict("records")}["EPL:ARSENAL_v_CHELSEA:20260322"]
+
+    assert row["venue_name"] == ""
+    assert row["round"] == ""
+    assert row["status"] == "NS"  # the fields that WERE present still land
+
+
+def test_ftp_rollup_team_and_player_grains_get_no_fixture_display_fields(rollup: ModuleType) -> None:
+    """No leakage: only the FIXTURE grain carries kickoff/status — team/player
+    rows keep the honest blank the shared row-assembly gives them."""
+    d1 = "2026-03-22"
+    blobs = dict(
+        [
+            _sports_blob(d1, "fixtures", "EPL", [_fixture_snapshot_row()]),
+            _sports_blob(d1, "teams", "EPL", [{"team_id": "ARSENAL", "name": "Arsenal", "league_id": "EPL"}]),
+            _sports_blob(d1, "injuries", "EPL", [{"player_id": 1, "player_name": "Bukayo Saka", "league_id": 39}]),
+        ]
+    )
+    storage = _FakeStorage({p: _parquet_bytes(f.to_dict("records")) for p, f in blobs.items()})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+
+    for non_fixture_id in ("ARSENAL", "SAKA_B"):
+        row = by_id[non_fixture_id]
+        for col in ("kickoff_utc", "status", "home_team_name", "away_team_name", "venue_name", "round"):
+            assert pd.isna(row[col]) or row[col] in ("", None), f"{non_fixture_id}.{col} leaked: {row[col]!r}"
+    # ...while the fixture row in the SAME roll-up does carry them.
+    assert by_id["EPL:ARSENAL_v_CHELSEA:20260322"]["status"] == "NS"
 
 
 def test_ftp_rollup_rows_never_treated_as_league_by_v2_enumerator(rollup: ModuleType) -> None:
