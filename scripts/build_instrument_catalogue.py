@@ -296,6 +296,15 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # match. Blank for prediction/sports (no exchange-native symbol there).
     "raw_symbol",
     "base_asset",
+    # Human-readable market question/title (uac InstrumentRecord.question). TODAY
+    # populated only by the PREDICTION adapters (Polymarket ``question`` / Kalshi
+    # ``title — yes_sub_title``) and emitted onto the per-market prediction roll-up
+    # rows below. FORWARD-ONLY: the per-date parquet only carries ``question`` for
+    # captures written after uac@c1de078a, so on pre-migration data it is honest-None
+    # (never fabricated). Non-prediction rows (cefi/tradfi/defi/sports) get None via
+    # the ``pd.DataFrame(rows, columns=CATALOG_COLUMNS)`` reindex — the main emission
+    # is not wired for question (those instruments have no market-question axis).
+    "question",
     # Per-instance cross-venue identity (prediction_canonical_identity_migration_
     # 2026_07_08.md todos 2 + 5): the Kalshi<->Polymarket SAME-MARKET join key
     # (unified_api_contracts.predictions.build_cross_venue_mapping()) for a
@@ -1397,6 +1406,13 @@ class _PredLifecycle:
     #: one post-hoc for a matched crypto/macro pair; ``_emit`` prefers the
     #: cross-venue match, falling back to this adapter-populated value.
     canonical_instrument_id: str = ""
+    #: ``InstrumentRecord.question`` — the human-readable market question/title
+    #: carried straight through from the per-date row (Polymarket ``question`` /
+    #: Kalshi ``title — yes_sub_title``, populated as of uac@c1de078a). FORWARD-ONLY:
+    #: honest ``None`` for any per-date row captured before that field landed (the
+    #: field is genuinely absent, not blank), so this stays ``None`` rather than "".
+    #: Per-conditionId grain only — a cqg spans many markets with distinct questions.
+    question: str | None = None
 
 
 def _merge_lifecycle(
@@ -1411,6 +1427,7 @@ def _merge_lifecycle(
     base_asset: str = "",
     underlying: str = "",
     canonical_instrument_id: str = "",
+    question: str | None = None,
 ) -> None:
     """Fold one (entity, day) observation into the lifecycle accumulator."""
     cur = acc.get(key)
@@ -1426,6 +1443,7 @@ def _merge_lifecycle(
             base_asset=base_asset,
             underlying=underlying,
             canonical_instrument_id=canonical_instrument_id,
+            question=question,
         )
         return
     if day < cur.first_day:
@@ -1445,6 +1463,8 @@ def _merge_lifecycle(
             cur.underlying = underlying
         if canonical_instrument_id:
             cur.canonical_instrument_id = canonical_instrument_id
+        if question:
+            cur.question = question
     else:
         # An earlier day's row may be the only one carrying a value (e.g. a market's
         # last snapshot before delisting had a transiently-blank field) — backfill
@@ -1457,6 +1477,8 @@ def _merge_lifecycle(
             cur.underlying = underlying
         if not cur.canonical_instrument_id and canonical_instrument_id:
             cur.canonical_instrument_id = canonical_instrument_id
+        if not cur.question and question:
+            cur.question = question
     if created and (cur.created is None or created < cur.created):
         cur.created = created
     if settled and (cur.settled is None or settled > cur.settled):
@@ -1559,6 +1581,11 @@ def build_prediction_catalogue_dataframe(
             # grain only, same reasoning as raw_symbol/base_asset above.
             underlying = _str_field(row, "underlying")
             canonical_instrument_id = _str_field(row, "canonical_instrument_id")
+            # question (uac InstrumentRecord.question): human-readable market
+            # question/title, honest-None (via _opt_field) when the per-date row
+            # predates the field or the adapter resolved none — FORWARD-ONLY, never
+            # fabricated. Per-conditionId grain only (a cqg has no single question).
+            question = _opt_field(row, "question")
             cqg_itype = cqg_itype or itype
             if created and (cqg_created is None or created < cqg_created):
                 cqg_created = created
@@ -1576,6 +1603,7 @@ def build_prediction_catalogue_dataframe(
                 base_asset,
                 underlying,
                 canonical_instrument_id,
+                question,
             )
         # cqg grain only when the writer emits a cqg (249-b, gated on decision
         # 338). Currently always empty → no cqg rows, conditionId grain only.
@@ -1675,6 +1703,14 @@ def build_prediction_catalogue_dataframe(
                 # per-market raw_symbol/base_asset (honest absence, not unpopulated).
                 "raw_symbol": lc.raw_symbol,
                 "base_asset": lc.base_asset,
+                # `question` (uac InstrumentRecord.question): the human-readable
+                # market question/title threaded straight through from the per-date
+                # row (Polymarket ``question`` / Kalshi ``title — yes_sub_title``).
+                # FORWARD-ONLY: honest ``None`` for rows captured before uac@c1de078a
+                # or for a market the adapter resolved no question for — never
+                # fabricated. cqg-grain rows carry ``None`` (lc.question default) — a
+                # family has no single per-market question.
+                "question": lc.question,
                 # `underlying` (prediction_canonical_identity_migration_2026_07_08.md
                 # todo 1): real, adapter-populated value threaded straight through
                 # from the per-date row (see _PredLifecycle.underlying) as of the

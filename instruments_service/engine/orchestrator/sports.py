@@ -195,6 +195,33 @@ def _lifecycle_columns_from_af_response(af_response: dict[str, object]) -> dict[
     }
 
 
+def _round_from_af_response(af_response: dict[str, object] | None) -> str:
+    """Extract API-Football's ``league.round`` from the raw fixture response.
+
+    ``round`` is the competition-phase label ("Regular Season - 30", "Relegation
+    Round", "Quarter-finals") — the SOLE input to
+    ``adapters/sports/competition_phase.classify_competition_phase``, which the
+    ML pipeline uses to separate relegation/playoff/knockout dynamics from
+    ordinary league games. The CanonicalFixture model does NOT carry it (nor
+    does the ``ApiFootballLeague`` schema), so the previous
+    ``getattr(fx, "round", "")`` defaulted every row to "" — leaving
+    ``competition_phase`` UNKNOWN and ``is_promotion_relegation`` a false-not-null
+    everywhere (issue: sports_fixture_round_not_captured_competition_phase_
+    unknown_2026_07_17). But the value is present all along in the RAW response
+    dict ``af_response`` (which the writer already threads for the Q5/Q6 overlay
+    via ``_lifecycle_columns_from_af_response``): api-football nests it at
+    ``item["league"]["round"]``. Read it there — same source, same pattern, no
+    new fetch. Empty string on any absence (no raw / no league block / no round
+    key) — honest blank, never a fabricated placeholder."""
+    if not af_response:
+        return ""
+    league = af_response.get("league")
+    if not isinstance(league, dict):
+        return ""
+    rnd = league.get("round")
+    return str(rnd).strip() if rnd is not None else ""
+
+
 def _flatten_canonical_fixture_for_disk(
     fx: object,
     day: str,
@@ -202,8 +229,10 @@ def _flatten_canonical_fixture_for_disk(
 ) -> dict[str, object]:
     """Flatten a CanonicalFixture into a dict matching SPORTS_FIXTURES SchemaContract.
 
-    Returns the full flat schema (43 columns). Defaults required-non-null
-    columns the canonical model doesn't carry (``round``, ``status_long``).
+    Returns the full flat schema (43 columns). ``round`` comes from the raw
+    ``af_response`` (``league.round``) via :func:`_round_from_af_response` — the
+    CanonicalFixture model does not carry it; ``status_long`` is still defaulted
+    (it is genuinely absent from both the model and the raw fixture block).
 
     Q5/Q6 lifecycle columns (HT/ET/PEN phase timestamps + score distinction +
     ``went_to_*`` + ``match_result``) are populated from ``af_response`` when the
@@ -277,7 +306,10 @@ def _flatten_canonical_fixture_for_disk(
         "status_elapsed_time": None,
         "af_league_id": _orch._af_id_from_canonical(league) if league is not None else None,
         "season": season_int,
-        "round": getattr(fx, "round", "") or "",
+        # From the raw af_response's league.round (see _round_from_af_response) —
+        # NOT getattr(fx, "round") (CanonicalFixture has no such field, so that
+        # was "" on every row). Falls back to any fx.round for non-af sources.
+        "round": _round_from_af_response(af_response) or (getattr(fx, "round", "") or ""),
         "af_home_id": af_home_id,
         "af_away_id": af_away_id,
         "af_winner_id": af_winner_id,

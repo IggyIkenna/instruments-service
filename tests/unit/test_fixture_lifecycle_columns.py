@@ -25,6 +25,7 @@ from instruments_service.engine.orchestrator import (
     _Q5_SCHEDULE_COLUMNS,
     _Q6_OUTCOME_COLUMNS,
     _flatten_canonical_fixture_for_disk,
+    _round_from_af_response,
 )
 
 _KICKOFF = datetime(2024, 8, 17, 11, 30, tzinfo=UTC)
@@ -235,3 +236,53 @@ def test_lifecycle_rows_assemble_homogeneous_dataframe() -> None:
     df = pd.DataFrame(rows)
     assert len(df) == 3
     assert _ALL_LIFECYCLE_COLUMNS.issubset(set(df.columns))
+
+
+# ---------------------------------------------------------------------------
+# round from the raw af_response's league.round (2026-07-17). Previously
+# defaulted to "" via getattr(fx, "round") — CanonicalFixture has no such
+# field — leaving competition_phase UNKNOWN everywhere. Issue:
+# sports_fixture_round_not_captured_competition_phase_unknown_2026_07_17.
+# ---------------------------------------------------------------------------
+
+
+def test_round_pulled_from_af_response_league_block() -> None:
+    fx = _make_canonical_fixture()
+    af = _af_response(status_short="FT", fulltime={"home": 2, "away": 1})
+    af["league"] = {"id": 39, "round": "Regular Season - 30"}
+    out = _flatten_canonical_fixture_for_disk(fx, "2024-08-17", af_response=af)
+    assert out["round"] == "Regular Season - 30"
+
+
+def test_round_captures_knockout_and_relegation_phase_labels() -> None:
+    """The whole point: round must carry the competition-phase labels the ML
+    classifier keys on (relegation/playoff/knockout), not just regular season."""
+    fx = _make_canonical_fixture()
+    for label in ("Relegation Round", "Quarter-finals", "Final", "Championship Round"):
+        af = _af_response(status_short="NS", fulltime=None)
+        af["league"] = {"id": 39, "round": label}
+        out = _flatten_canonical_fixture_for_disk(fx, "2024-08-17", af_response=af)
+        assert out["round"] == label
+
+
+def test_round_is_blank_not_none_string_when_absent() -> None:
+    """No af_response, no league block, or no round key → honest "" — never the
+    string "None", and never a fabricated placeholder."""
+    fx = _make_canonical_fixture()
+    # no af_response at all
+    assert _flatten_canonical_fixture_for_disk(fx, "2024-08-17")["round"] == ""
+    # af_response present but league block missing round
+    af = _af_response(status_short="FT", fulltime={"home": 1, "away": 0})  # league={"id":39}
+    assert _flatten_canonical_fixture_for_disk(fx, "2024-08-17", af_response=af)["round"] == ""
+    # league.round explicitly None
+    af2 = _af_response(status_short="FT", fulltime={"home": 1, "away": 0})
+    af2["league"] = {"id": 39, "round": None}
+    assert _flatten_canonical_fixture_for_disk(fx, "2024-08-17", af_response=af2)["round"] == ""
+
+
+def test_round_helper_units() -> None:
+    assert _round_from_af_response(None) == ""
+    assert _round_from_af_response({}) == ""
+    assert _round_from_af_response({"league": None}) == ""
+    assert _round_from_af_response({"league": {"round": "  Group A - 3  "}}) == "Group A - 3"
+    assert _round_from_af_response({"league": {"round": 5}}) == "5"

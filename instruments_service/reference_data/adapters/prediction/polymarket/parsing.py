@@ -183,7 +183,13 @@ class PolymarketParsingMixin:
         return _pm.InstrumentRecord(
             instrument_key=instrument_key,
             venue=self.venue,
-            symbol=slug,
+            # question (uac InstrumentRecord.question): the Gamma market.question is
+            # the human-readable market question (99.3% unique per the workflow, vs
+            # event_title's 34% which is absent from CLOB). Already in scope here
+            # (line ~67: `question = market.question or ""`). Pass the raw
+            # market.question so a genuinely-absent question stays honest-None
+            # rather than an empty string; slug remains the raw_symbol label floor.
+            question=market.question,
             raw_symbol=slug,
             instrument_type="PREDICTION_MARKET",
             base_asset=base_asset,

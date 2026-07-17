@@ -1166,6 +1166,61 @@ def test_prediction_rollup_threads_underlying_from_per_date_row(rollup: ModuleTy
     assert row["underlying"] == "BTC"
 
 
+def test_prediction_rollup_emits_question_column(rollup: ModuleType) -> None:
+    """A real, adapter-populated ``question`` on the per-date row survives into the
+    catalogue's ``question`` column (uac@c1de078a InstrumentRecord.question)."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xabc",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "btc-above-100k",
+                        "question": "Will Bitcoin reach $100,000 by end of 2026?",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    assert "question" in df.columns
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["question"] == "Will Bitcoin reach $100,000 by end of 2026?"
+
+
+def test_prediction_rollup_question_honest_none_when_absent(rollup: ModuleType) -> None:
+    """FORWARD-ONLY: a per-date row with no ``question`` (pre-migration capture)
+    yields honest ``None`` in the catalogue, never a fabricated title."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXBTCD",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    assert "question" in df.columns
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["question"] is None
+
+
 def test_prediction_rollup_cross_venue_mapping_matches_same_market(rollup: ModuleType) -> None:
     """A real Kalshi<->Polymarket BTC UP_DOWN pair on the SAME settlement date gets
     the SAME canonical_instrument_id on BOTH sides (todo 2's cross-venue join,
