@@ -187,10 +187,32 @@ class TestEnforceDefiMonotonicity:
         ]
         hwm = {"A": 5, "B": 1}
         clean, blocked = _enforce_defi_monotonicity(records, hwm)
-        assert "A" in blocked
+        assert "A" in blocked  # A collapses 5 → 1 = 20% < 50% → catastrophic-fetch block
         # B grows (1→2), A regresses (1<5)
         assert len(clean) == 2
         assert all(r.venue == "B" for r in clean)
+
+    def test_small_real_delisting_writes_through(self) -> None:
+        """R2c relax: a real per-instrument delisting (>=50% of HWM retained) is NOT blocked.
+
+        The old ``min_ratio=1.0`` policy blocked ANY decrease, so a genuine delisting
+        (100 → 99) was suppressed, the drop never reached ``by_date/`` and the roll-up
+        never closed ``available_to``. The relaxed ratio (0.5) writes the smaller set
+        through so the delisting is observed + ``available_to`` closes at last-seen.
+        """
+        records = [_make_record(venue="LIDO-ETHEREUM", instrument_key=f"L-{i}") for i in range(99)]
+        hwm = {"LIDO-ETHEREUM": 100}  # 99/100 = 99% retained → a real, small delisting
+        clean, blocked = _enforce_defi_monotonicity(records, hwm)
+        assert blocked == set()
+        assert len(clean) == 99
+
+    def test_catastrophic_collapse_still_blocked(self) -> None:
+        """A broken/partial fetch (<50% of HWM) is STILL blocked — protect good data."""
+        records = [_make_record(venue="LIDO-ETHEREUM", instrument_key=f"L-{i}") for i in range(5)]
+        hwm = {"LIDO-ETHEREUM": 100}  # 5/100 = 5% < 50% → catastrophic collapse
+        clean, blocked = _enforce_defi_monotonicity(records, hwm)
+        assert blocked == {"LIDO-ETHEREUM"}
+        assert len(clean) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -202,13 +224,24 @@ class TestEnforceDefiMonotonicity:
 
 class TestEnforceMonotonicityGeneralized:
     def test_defi_policy_matches_enforce_defi_monotonicity(self) -> None:
-        """block_on_regression=True, min_ratio=1.0 reproduces the DeFi wrapper exactly."""
-        records = [_make_record(venue="A")]
-        hwm = {"A": 5}
-        clean_generic, blocked_generic = _enforce_monotonicity(records, hwm, block_on_regression=True, min_ratio=1.0)
-        clean_wrapper, blocked_wrapper = _enforce_defi_monotonicity(records, hwm)
-        assert blocked_generic == blocked_wrapper == {"A"}
-        assert len(clean_generic) == len(clean_wrapper) == 0
+        """R2c: the DeFi wrapper now uses block_on_regression=True + the 0.5 thin-collapse
+        ratio (a real delisting writes through; only a catastrophic collapse blocks).
+
+        A small delisting (60/100 = 60% retained) is blocked by the OLD min_ratio=1.0
+        policy but NOT by the wrapper's new 0.5 ratio — proving the wrapper relaxed. A
+        catastrophic collapse (1/100) is blocked by BOTH, so it still matches there.
+        """
+        records60 = [_make_record(venue="A", instrument_key=f"A-{i}") for i in range(60)]
+        hwm = {"A": 100}
+        _, blocked_old = _enforce_monotonicity(records60, hwm, block_on_regression=True, min_ratio=1.0)
+        _, blocked_wrapper = _enforce_defi_monotonicity(records60, hwm)
+        assert blocked_old == {"A"}  # old policy blocks ANY decrease
+        assert blocked_wrapper == set()  # new wrapper tolerates a real, >=50% delisting
+
+        collapse = [_make_record(venue="A")]
+        clean_c, blocked_c = _enforce_defi_monotonicity(collapse, hwm)
+        assert blocked_c == {"A"}  # a 1/100 collapse still blocks (broken fetch)
+        assert len(clean_c) == 0
 
     def test_cefi_tradfi_policy_never_blocks(self) -> None:
         """block_on_regression=False: a regressed venue is flagged but NOT dropped."""

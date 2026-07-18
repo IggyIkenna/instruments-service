@@ -87,6 +87,38 @@ def test_polymarket_resolve_unresolved_not_in_lookup() -> None:
     assert attrs.away_team_canonical_id == "EVERTON"
 
 
+def test_polymarket_resolve_matched_reversed_title_order() -> None:
+    """A title rendered "Away vs Home" (reverse of the fixture's own order) still
+    MATCHES: the resolver probes BOTH orderings and takes home/away from the
+    matched fixture's orientation, not the title order.
+    """
+    # Fixture parquet stores the game as home=Arsenal, away=Chelsea.
+    resolver = _resolver_with(_fixtures_parquet_bytes("Arsenal", "Chelsea", 12345))
+
+    # Title order is reversed ("Chelsea vs Arsenal") — the pair arrives away-first.
+    attrs = resolver.resolve("EPL", "Chelsea", "Arsenal", date(2026, 3, 22))
+
+    assert attrs.af_fixture_match_status == FixtureMatchStatus.MATCHED
+    assert attrs.af_fixture_id == 12345
+    # home/away reflect the FIXTURE's own orientation (Arsenal home), not the title.
+    assert attrs.home_team_canonical_id == "ARSENAL"
+    assert attrs.away_team_canonical_id == "CHELSEA"
+    assert attrs.fixture_date == "2026-03-22"
+
+
+def test_polymarket_resolve_reversed_order_still_one_read() -> None:
+    """Probing both orderings reuses the single cached (league, day) download —
+    a reversed-order match costs exactly one GCS read, not two.
+    """
+    client = _FakeStorageClient(_fixtures_parquet_bytes("Arsenal", "Chelsea", 12345))
+    resolver = PredictionFixtureResolver(storage_client=client, bucket="test-bucket")
+
+    attrs = resolver.resolve("EPL", "Chelsea", "Arsenal", date(2026, 3, 22))
+
+    assert attrs.af_fixture_match_status == FixtureMatchStatus.MATCHED
+    assert len(client.calls) == 1  # both orderings probed against ONE download
+
+
 def test_polymarket_resolve_no_fixture_data() -> None:
     """No FIXTURES parquet on disk → NO_FIXTURE_DATA, null id (never a fake value)."""
     resolver = _resolver_with(None)
@@ -180,6 +212,34 @@ def test_kalshi_soccer_resolves_when_alias_present() -> None:
     assert attrs.home_team_canonical_id == "ARSENAL"
     assert attrs.away_team_canonical_id == "CHELSEA"
     assert attrs.fixture_date == "2026-05-24"  # close date keys the day lookup
+
+
+def test_kalshi_soccer_resolves_reversed_title_order() -> None:
+    """A Kalshi soccer title rendered "Away vs Home" (reverse of the fixture's own
+    order) still MATCHES via the shared order-robust resolver: af_fixture_id is
+    found and home/away are stamped from the FIXTURE's orientation, not the title.
+    """
+    reset_fixture_match_registry()
+    adapter = KalshiReferenceDataAdapter()
+    # Fixture parquet stores the game as home=Arsenal, away=Chelsea.
+    adapter._fixture_resolver_instance = _resolver_with(  # pyright: ignore[reportPrivateUsage]
+        _fixtures_parquet_bytes("Arsenal", "Chelsea", 55555)
+    )
+
+    # Kalshi title renders the pair reversed ("Chelsea vs Arsenal").
+    record = adapter._parse_market(  # pyright: ignore[reportPrivateUsage]
+        _kalshi_soccer_raw("Chelsea vs Arsenal Winner?"), datetime.now(UTC)
+    )
+
+    assert record is not None
+    attrs = fixture_match_for_instrument_key(record.instrument_key)
+    assert attrs is not None
+    assert attrs.af_fixture_match_status == FixtureMatchStatus.MATCHED
+    assert attrs.af_fixture_id == 55555
+    # home/away come from the fixture (Arsenal home), NOT the reversed title order.
+    assert attrs.home_team_canonical_id == "ARSENAL"
+    assert attrs.away_team_canonical_id == "CHELSEA"
+    assert attrs.fixture_date == "2026-05-24"
 
 
 def test_kalshi_soccer_honest_absence_when_alias_missing() -> None:
