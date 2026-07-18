@@ -984,6 +984,191 @@ def test_rollup_on_chain_cefi_perp_venue_kept_glued(rollup: ModuleType) -> None:
         assert row["chain"] == "", f"{full_id}: chain leaked to {row['chain']!r} (cefi venue has no chain column)"
 
 
+# ---------------------------------------------------------------------------
+# instrument_type canonicalisation (2026-07-18: measured live COINBASE-SPOT/BYBIT
+# legacy-lowercase + literal-"None" instrument_type values reaching the rollup)
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalize_instrument_type_legacy_lowercase_aliases(rollup: ModuleType) -> None:
+    """Every documented UAC InstrumentType legacy lowercase spelling canonicalises."""
+    cases = {
+        "spot": "SPOT_PAIR",
+        "spot_pair": "SPOT_PAIR",
+        "perp": "PERPETUAL",
+        "perpetual": "PERPETUAL",
+        "futures": "FUTURE",
+        "futures_chain": "FUTURE",
+        "future": "FUTURE",
+        "option": "OPTION",
+        "pool": "POOL",
+        "lending_market": "LENDING",
+        "lending": "LENDING",
+        "lst": "LST",
+        "yield": "YIELD_BEARING",
+        "etf": "ETF",
+    }
+    for raw, expected in cases.items():
+        assert rollup._canonicalize_instrument_type(raw) == expected, raw
+        # Case-insensitive on the raw side.
+        assert rollup._canonicalize_instrument_type(raw.upper()) == expected, raw.upper()
+
+
+def test_canonicalize_instrument_type_blank_and_literal_none_become_unknown(rollup: ModuleType) -> None:
+    """Blank, ``None``, and the literal string ``"None"`` all collapse to the single
+    honest UNKNOWN sentinel — never fabricated, never the literal ``"None"`` string."""
+    assert rollup._canonicalize_instrument_type("") == rollup.INSTRUMENT_TYPE_UNKNOWN
+    assert rollup._canonicalize_instrument_type(None) == rollup.INSTRUMENT_TYPE_UNKNOWN
+    assert rollup._canonicalize_instrument_type("None") == rollup.INSTRUMENT_TYPE_UNKNOWN
+    assert rollup._canonicalize_instrument_type("   ") == rollup.INSTRUMENT_TYPE_UNKNOWN
+    assert rollup.INSTRUMENT_TYPE_UNKNOWN == "UNKNOWN"
+
+
+def test_canonicalize_instrument_type_already_canonical_round_trips(rollup: ModuleType) -> None:
+    """An already-canonical uppercase value passes through unchanged (idempotent)."""
+    for value in ("SPOT_PAIR", "PERPETUAL", "FUTURE", "OPTION", "POOL", "LST", "STAKING"):
+        assert rollup._canonicalize_instrument_type(value) == value
+
+
+def test_canonicalize_instrument_type_unrecognised_value_uppercased_not_fabricated(rollup: ModuleType) -> None:
+    """A genuinely new/unrecognised venue-side type is uppercased and preserved for
+    triage — never silently swallowed into UNKNOWN (never a fabricated real type)."""
+    assert rollup._canonicalize_instrument_type("some_new_type") == "SOME_NEW_TYPE"
+
+
+def test_rollup_stamps_canonical_instrument_type_from_legacy_lowercase_source(rollup: ModuleType) -> None:
+    """End-to-end: a per-date row's raw legacy-lowercase ``instrument_type`` reaches
+    the emitted catalogue row already canonicalised (COINBASE-SPOT/BYBIT measured-live
+    shape: blank, canonical uppercase, legacy lowercase, and literal-"None" values for
+    the SAME venue on the same day)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {"instrument_key": "COINBASE-SPOT:1", "venue": "COINBASE-SPOT", "instrument_type": "spot"},
+                        {
+                            "instrument_key": "COINBASE-SPOT:2",
+                            "venue": "COINBASE-SPOT",
+                            "instrument_type": "spot_pair",
+                        },
+                        {
+                            "instrument_key": "COINBASE-SPOT:3",
+                            "venue": "COINBASE-SPOT",
+                            "instrument_type": "SPOT_PAIR",
+                        },
+                        {"instrument_key": "COINBASE-SPOT:4", "venue": "COINBASE-SPOT", "instrument_type": ""},
+                        {"instrument_key": "COINBASE-SPOT:5", "venue": "COINBASE-SPOT", "instrument_type": "None"},
+                    ]
+                ),
+            )
+        ]
+    )
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    assert by_id["COINBASE-SPOT:1"]["instrument_type"] == "SPOT_PAIR"
+    assert by_id["COINBASE-SPOT:2"]["instrument_type"] == "SPOT_PAIR"
+    assert by_id["COINBASE-SPOT:3"]["instrument_type"] == "SPOT_PAIR"
+    assert by_id["COINBASE-SPOT:4"]["instrument_type"] == "UNKNOWN"
+    assert by_id["COINBASE-SPOT:5"]["instrument_type"] == "UNKNOWN"
+
+
+# ---------------------------------------------------------------------------
+# Removed-venue exclusion + bare-vs-chain duplicate venue collapse (2026-07-18)
+# ---------------------------------------------------------------------------
+
+
+def test_rollup_excludes_registry_removed_venues(rollup: ModuleType) -> None:
+    """Stale historical rows for a registry-removed venue (bare or -SOLANA-suffixed
+    spelling) never re-mint a catalogue row on a fresh regen."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {"instrument_key": "DRIFT:1", "venue": "DRIFT", "instrument_type": "PERPETUAL"},
+                        {
+                            "instrument_key": "PACIFICA-SOLANA:1",
+                            "venue": "PACIFICA-SOLANA",
+                            "instrument_type": "PERPETUAL",
+                        },
+                        {
+                            "instrument_key": "MANGO-SOLANA:1",
+                            "venue": "MANGO-SOLANA",
+                            "instrument_type": "SPOT_ASSET",
+                        },
+                        {"instrument_key": "ZETA:1", "venue": "ZETA", "instrument_type": "PERPETUAL"},
+                        {
+                            "instrument_key": "FLASH-SOLANA:1",
+                            "venue": "FLASH-SOLANA",
+                            "instrument_type": "PERPETUAL",
+                        },
+                        {"instrument_key": "SURVIVOR:1", "venue": "JITO-SOLANA", "instrument_type": "STAKING"},
+                    ]
+                ),
+            )
+        ]
+    )
+    ids = set(df["instrument_id"])
+    assert ids == {"SURVIVOR:1"}
+
+
+def test_rollup_is_removed_venue_matches_bare_and_suffixed_forms(rollup: ModuleType) -> None:
+    removed = (
+        "DRIFT",
+        "drift",
+        "DRIFT-SOLANA",
+        "PACIFICA",
+        "PACIFICA-SOLANA",
+        "MANGO-SOLANA",
+        "MANGO",
+        "ZETA-SOLANA",
+        "ZETA",
+        "FLASH-SOLANA",
+        "FLASH",
+    )
+    for venue in removed:
+        assert rollup._is_removed_venue(venue), venue
+    for venue in ("JITO-SOLANA", "RAYDIUM-SOLANA", "BINANCE-FUTURES", ""):
+        assert not rollup._is_removed_venue(venue), venue
+
+
+def test_rollup_collapses_bare_and_suffixed_duplicate_venue_to_one_canonical_form(rollup: ModuleType) -> None:
+    """JITO and JITO-SOLANA (same protocol, two venue-column spellings measured live
+    in the IS defi availability index) both resolve to the SAME (venue, chain) pair."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {"instrument_key": "JITO:STAKED", "venue": "JITO", "instrument_type": "STAKING"},
+                        {
+                            "instrument_key": "JITO-SOLANA:STAKED",
+                            "venue": "JITO-SOLANA",
+                            "instrument_type": "STAKING",
+                        },
+                    ]
+                ),
+            )
+        ]
+    )
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    for key in ("JITO:STAKED", "JITO-SOLANA:STAKED"):
+        assert by_id[key]["venue"] == "JITO"
+        assert by_id[key]["chain"] == "SOLANA"
+
+
+def test_canonical_bare_venue_chain_collapses_raydium_and_marinade(rollup: ModuleType) -> None:
+    for bare, suffixed in (("RAYDIUM", "RAYDIUM-SOLANA"), ("MARINADE", "MARINADE-SOLANA")):
+        assert rollup._canonical_bare_venue_chain(bare, "") == rollup._canonical_bare_venue_chain(suffixed, "")
+        assert rollup._canonical_bare_venue_chain(bare, "") == (bare, "SOLANA")
+
+
 def test_rollup_skips_blank_ids_and_empty_frames(rollup: ModuleType) -> None:
     """Rows with no usable id are skipped; an EMPTY latest frame does not false-delist.
 

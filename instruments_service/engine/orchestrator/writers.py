@@ -96,9 +96,31 @@ def _canonical_manifest_venue_chain(venue_str: str) -> tuple[str, str]:
 # row_key write boundary), not evidence of a currently-known live leak: real
 # production data confirms fresh CeFi captures have been clean (canonical uppercase,
 # correctly split per-type) since >= 2026-07-10.
+#
+# Extended 2026-07-18 with the additional legacy spellings measured live on
+# COINBASE-SPOT (``spot_pair``) and BYBIT (``futures_chain``) — same row_key-
+# permanence rationale, plus the documented legacy map in UAC
+# ``unified_api_contracts._instrument_enums.InstrumentType``'s own docstring
+# (``futures``/``future``/``perp``/``option``/``pool``/``lending_market``/``lst``/
+# ``yield``/``etf``). Exact-lowercase-match only (mirrors the original 2 entries) —
+# deliberately does NOT touch blank/`""` (see `_split_by_instrument_type`'s "never
+# fabricated" contract below) or the literal string ``"None"`` (no evidence this
+# writer path ever emits it; a display-side fix for historical rows already carrying
+# it lives elsewhere, not in this forward-only row_key guard).
 _LEGACY_INSTRUMENT_TYPE_ALIASES: dict[str, str] = {
     "perpetual": "PERPETUAL",
+    "perp": "PERPETUAL",
     "spot": "SPOT_PAIR",
+    "spot_pair": "SPOT_PAIR",
+    "future": "FUTURE",
+    "futures": "FUTURE",
+    "futures_chain": "FUTURE",
+    "option": "OPTION",
+    "pool": "POOL",
+    "lending_market": "LENDING",
+    "lst": "LST",
+    "yield": "YIELD_BEARING",
+    "etf": "ETF",
 }
 
 
