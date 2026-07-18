@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # Epic: cefi_master (canonical-completeness program)
-# Lifecycle: one-off cutover gate — Phase-−1 catalogue verification before the D4 GCS cutover
+# Lifecycle: one-off cutover gate — Phase-1 catalogue verification before the D4 GCS cutover
 # Delete-when: cefi canonical migration DONE (both cefi_residual_followups + cefi_consolidated_closeout archived)
-"""Phase-−1 catalogue gate — assert the REBUILT ``prod/catalog.parquet`` is fully canonical.
+"""Phase-1 catalogue gate — assert the REBUILT ``prod/catalog.parquet`` is fully canonical.
 
 The migration ``--apply`` scripts (rename / manifest / content) all build their wire→canonical map
 from this catalogue, so it MUST be canonical-clean before any of them run against prod. This gate
