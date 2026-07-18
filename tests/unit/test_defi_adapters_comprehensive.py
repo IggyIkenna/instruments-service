@@ -2910,8 +2910,11 @@ class TestTimestampResolution:
 
         adapter = KaminoReferenceDataAdapter()
         strategies = [{"address": "vault_1", "status": "LIVE", "tokenAMint": "SOL", "tokenBMint": "USDC"}]
-        # Use a timestamp EARLIER than the Kamino deploy floor date so the RPC result replaces it
-        resolved_ts = datetime(2023, 1, 1, tzinfo=UTC)
+        # Use a timestamp EARLIER than the Kamino deploy floor date so the RPC result
+        # replaces it. The floor is now UAC venue_launch_dates["KAMINO-SOLANA"] =
+        # 2022-08-24 (real Kamino mainnet launch, threaded 2026-07-18) — previously
+        # the module-level floor was the stale local-fallback 2024-01-01.
+        resolved_ts = datetime(2022, 6, 1, tzinfo=UTC)
         with (
             patch.object(adapter, "_get_with_retry", return_value=strategies),
             patch.object(adapter, "_resolve_symbol", side_effect=lambda m: m),
