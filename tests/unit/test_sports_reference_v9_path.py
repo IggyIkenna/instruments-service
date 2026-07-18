@@ -658,3 +658,84 @@ class TestWritePerFixtureEntitiesOutOfUniverse:
                 "out-of-universe unmapped rows must not be recorded as attempted_failed"
             )
         manifest.record_failed.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _ensure_canonical_fixtures_for_override — redo_all (--force) MUST re-write
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureCanonicalFixturesRedoAll:
+    """The existence check must be overridable by ``--force`` (redo_all).
+
+    Regression pins for ``sports_features_layer_findings_sweep_2026_07_18`` § G:
+    the gate was existence-ONLY, so an already-captured date could never be
+    re-written and a WRITER fix could never reach historical data. Two full
+    backfill launches of ``--entity FIXTURES 2019-01-01..2026-07-17`` (the second
+    WITH ``--force``) wrote ZERO ``entity=fixtures`` objects — ``redo_all`` was
+    plumbed to the per-fixture enrichment entities but never to here.
+    """
+
+    @staticmethod
+    def _existing_canonical_df() -> pd.DataFrame:
+        # Presence of af_fixture_id is what trips the "already canonical" branch.
+        return pd.DataFrame({"af_fixture_id": [1, 2], "timestamp": ["2019-01-12", "2019-01-12"]})
+
+    @pytest.mark.asyncio
+    async def test_existing_canonical_skips_write_without_force(self) -> None:
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _ensure_canonical_fixtures_for_override,
+        )
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", MagicMock()),
+            patch(
+                "instruments_service.engine.orchestrator._read_per_league_entity_df",
+                MagicMock(return_value=self._existing_canonical_df()),
+            ),
+            patch("instruments_service.engine.orchestrator._write_fixtures_per_league", MagicMock()) as _write,
+        ):
+            await _ensure_canonical_fixtures_for_override(date="2019-01-12", bucket="b", api_key="k", redo_all=False)
+        assert _write.call_count == 0, "already-canonical date must not be rewritten without --force"
+
+    @pytest.mark.asyncio
+    async def test_force_rewrites_via_api_not_stale_old_path(self) -> None:
+        """--force must re-fetch through the CURRENT writer, never copy the old path.
+
+        The old-path parquet is pre-migration data from the OLD writer, so copying
+        it forward would re-materialise exactly the stale rows (e.g. blank ``round``)
+        that --force was passed to replace.
+        """
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _ensure_canonical_fixtures_for_override,
+        )
+
+        _storage = MagicMock()
+        _storage.bucket.return_value.blob.return_value.exists.return_value = True  # old path EXISTS
+        _adapter = MagicMock()
+        _adapter.get_fixtures_with_raw = AsyncMock(
+            return_value=[({"id": 1}, {"league": {"round": "Regular Season - 21"}})]
+        )
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", MagicMock(return_value=_storage)),
+            patch(
+                "instruments_service.engine.orchestrator._read_per_league_entity_df",
+                MagicMock(return_value=self._existing_canonical_df()),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.create_sports_reference_adapter",
+                MagicMock(return_value=_adapter),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._flatten_canonical_fixture_for_disk",
+                MagicMock(return_value={"af_fixture_id": 1, "timestamp": "2019-01-12", "round": "Regular Season - 21"}),
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", MagicMock()),
+            patch("instruments_service.engine.orchestrator._write_fixtures_per_league", MagicMock()) as _write,
+        ):
+            await _ensure_canonical_fixtures_for_override(date="2019-01-12", bucket="b", api_key="k", redo_all=True)
+
+        assert _write.call_count == 1, "--force must rewrite an already-canonical date"
+        # source_label proves it took the API branch, NOT the stale old-path copy.
+        assert _write.call_args.kwargs.get("source_label") == "api-fetch-override"
