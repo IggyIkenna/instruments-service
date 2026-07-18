@@ -240,20 +240,22 @@ raise an actionable `DependencyError` naming the exact backfill command to run f
   without a dedicated adapter (real-time public endpoints, no historical data).
 - `deribit_options_adapter.py`, `deribit_combo_adapter.py` — Deribit-specific options-chain and combo/strategy
   builders.
-- `aster.py`, `hyperliquid.py`, `lighter.py`, `pacifica.py`, `extended.py` — on-chain/DEX perpetual venues
-  (Aster, Hyperliquid, Lighter (zkSync), Pacifica (Solana), Extended (Starknet)).
+- `aster.py`, `hyperliquid.py`, `lighter.py`, `extended.py` — on-chain/DEX perpetual venues
+  (Aster, Hyperliquid, Lighter (zkSync), Extended (Starknet)). (`pacifica.py` removed — Pacifica (Solana) is a
+  culled venue, purged entirely; adapter file deleted from disk.)
 - `kalshi_perp.py`, `polymarket_perp.py` — prediction-venue perpetual wrappers (cross-listed under CeFi for the
   perpetual instrument type, distinct from the `prediction/` adapters below which handle the market/event side).
 
 **DeFi** (`reference_data/adapters/defi/`, ~40 adapters) — DEX pools: `uniswap_v2.py`, `uniswap_v3.py`,
 `uniswap_v4.py`, `curve.py`, `balancer.py`, `raydium.py`, `orca.py`, `phoenix.py`, `meteora.py`, `jupiter.py`,
 `lifinity.py`; lending: `aave_v3.py`, `morpho.py`, `compound_v3.py`, `spark.py`, `euler_v2.py`, `fluid.py`,
-`radiant.py`, `venus.py`, `benqi.py`, `kamino.py`, `drift.py`; LST/yield/staking: `lido.py`, `etherfi.py`, `ethfi.py`,
+`radiant.py`, `venus.py`, `benqi.py`, `kamino.py`; LST/yield/staking: `lido.py`, `etherfi.py`, `ethfi.py`,
 `rocket_pool.py`, `ethena.py`, `renzo.py`, `puffer.py`, `pendle.py`, `yearn.py`, `convex.py`, `idle.py`, `beefy.py`,
 `sanctum.py`, `solblaze.py`, `marinade.py`, `jito.py`, `jito_restaking.py`, `karak.py`, `symbiotic.py`,
-`kelpdao.py`, `eigenlayer.py`, `solana_native_staking.py`. (`mango.py`/`zeta.py`/`flash_trade.py` removed 2026-07-15 —
-operator ruling: dead API endpoints, ~$0 TVL, zero MTDS capture ever wired; see
-`unified-trading-pm/codex/04-architecture/solana-defi-coverage.md`.) Every DeFi adapter
+`kelpdao.py`, `eigenlayer.py`, `solana_native_staking.py`. (`mango.py`/`zeta.py`/`flash_trade.py`/`drift.py` removed —
+operator ruling: culled venues, purged entirely (dead API endpoints, ~$0 TVL, zero MTDS capture ever wired);
+`drift.py` confirmed deleted from disk, and DRIFT was in any case a perp DEX — a defi perp venue, not lending — so
+its listing under lending here was a mislabel. See `unified-trading-pm/codex/04-architecture/solana-defi-coverage.md`.) Every DeFi adapter
 builds its venue token as `f"{protocol}-{chain}"` (dash-separated — e.g. `AAVE_V3-ARBITRUM`, `UNISWAP_V3-ETHEREUM`;
 confirmed directly in `aave_v3.py`/`uniswap_v3.py` source), not the underscore-joined form (`AAVE_V3_ETH`) some older
 docs show.
