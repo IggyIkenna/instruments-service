@@ -186,20 +186,24 @@ def test_kalshi_soccer_honest_absence_when_alias_missing() -> None:
     """A Kalshi soccer market whose rendering is NOT in the alias index stays
     honest UNRESOLVED_TEAM_NAME with af_fixture_id=None + null canonical ids.
 
-    "Bilbao" / "Vallecano" are Kalshi short-form renderings genuinely absent from
-    the shared alias index (worklist for the deferred team_mappings addition), so
-    the honest outcome is 'league + date known, teams + fixture id unresolved'.
+    "Saints" / "Hammers" (Southampton / West Ham nicknames) are Kalshi short-form
+    renderings genuinely absent from the shared alias index, so the honest outcome
+    is 'league + date known, teams + fixture id unresolved'. (Note: "Bilbao" /
+    "Vallecano" — the prior fixtures used here — were added to the shared alias
+    index by unified-api-contracts on 2026-07-18 and now resolve, so they no
+    longer exercise this honest-absence path; swapped to still-unresolved
+    nicknames to keep the regression coverage meaningful.)
     """
     reset_fixture_match_registry()
     adapter = KalshiReferenceDataAdapter()
     # A fixtures parquet is present, but the team names never canonicalise, so the
     # resolver short-circuits to UNRESOLVED_TEAM_NAME before the lookup.
     adapter._fixture_resolver_instance = _resolver_with(  # pyright: ignore[reportPrivateUsage]
-        _fixtures_parquet_bytes("Athletic Club", "Rayo Vallecano", 77777)
+        _fixtures_parquet_bytes("Southampton", "West Ham", 77777)
     )
 
     record = adapter._parse_market(  # pyright: ignore[reportPrivateUsage]
-        _kalshi_soccer_raw("Bilbao vs Vallecano Winner?"), datetime.now(UTC)
+        _kalshi_soccer_raw("Saints vs Hammers Winner?"), datetime.now(UTC)
     )
 
     assert record is not None
@@ -208,8 +212,8 @@ def test_kalshi_soccer_honest_absence_when_alias_missing() -> None:
     assert attrs.af_fixture_match_status == FixtureMatchStatus.UNRESOLVED_TEAM_NAME
     assert attrs.af_fixture_id is None
     assert attrs.af_league_id == 39  # EPL — resolvable from the ticker
-    assert attrs.home_team_canonical_id is None  # "Bilbao" not in alias index
-    assert attrs.away_team_canonical_id is None  # "Vallecano" not in alias index
+    assert attrs.home_team_canonical_id is None  # "Saints" not in alias index
+    assert attrs.away_team_canonical_id is None  # "Hammers" not in alias index
     assert attrs.fixture_date == "2026-05-24"  # close date is honestly resolvable
 
 
