@@ -168,6 +168,7 @@ async def _fetch_sports_reference_data(
         bucket=bucket,
         fixture_ids_override=fixture_ids_override,
         hooks=hooks,
+        redo_all=redo_all,
     )
 
     # Recovery-mode fixture-id allowlist filter — runs BEFORE the per-fixture

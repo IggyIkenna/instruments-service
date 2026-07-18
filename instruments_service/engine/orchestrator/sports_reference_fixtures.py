@@ -63,6 +63,7 @@ async def _resolve_fixture_ids(
     bucket: str,
     fixture_ids_override: list[int] | None,
     hooks: _AfManifestHooks,
+    redo_all: bool = False,
 ) -> tuple[list[int], dict[str, str]]:
     """Resolve completed fixture IDs + the AF fixture_id → league mapping.
 
@@ -79,7 +80,7 @@ async def _resolve_fixture_ids(
         )
         # Build AF fixture_id -> league mapping from GCS fixtures parquet
         _af_fid_to_league = _orch._build_fixture_league_map_from_gcs(bucket, date)
-        await _ensure_canonical_fixtures_for_override(date=date, bucket=bucket, api_key=api_key)
+        await _ensure_canonical_fixtures_for_override(date=date, bucket=bucket, api_key=api_key, redo_all=redo_all)
         return fixture_ids, _af_fid_to_league
     return await _fetch_fixture_ids_via_api(adapter=adapter, date=date, bucket=bucket, hooks=hooks)
 
@@ -89,6 +90,7 @@ async def _ensure_canonical_fixtures_for_override(
     date: str,
     bucket: str,
     api_key: str,
+    redo_all: bool = False,
 ) -> None:
     """Ensure canonical fixtures exist at sports_reference/by_date/entity=fixtures/.
 
@@ -115,11 +117,28 @@ async def _ensure_canonical_fixtures_for_override(
         if _existing is not None and ("af_fixture_id" in _existing.columns or "timestamp" in _existing.columns):
             _needs_write = False  # Already canonical format
 
+        # ``--force`` (redo_all) MUST override the existence check. Without this the
+        # gate is existence-ONLY, so an already-captured date can never be re-written
+        # and a WRITER fix can never reach historical data. Measured 2026-07-18: two
+        # full backfill launches of `--entity FIXTURES 2019-01-01..2026-07-17` (the
+        # second WITH --force) wrote ZERO entity=fixtures objects, because redo_all
+        # was plumbed to the per-fixture enrichment entities but never to here — the
+        # enrichment shards re-wrote fine while `round` stayed blank on every fixture
+        # row. See sports_features_layer_findings_sweep_2026_07_18 § G.
+        if redo_all:
+            _needs_write = True
+
         if _needs_write:
-            # Try old path first (zero API calls)
+            # Try old path first (zero API calls) — but NOT under ``redo_all``. The
+            # old-path parquet is pre-migration data written by the OLD writer, so
+            # copying it forward would re-materialise exactly the stale rows the
+            # operator passed ``--force`` to replace (e.g. blank ``round``). A forced
+            # re-capture must go to the API branch below, which flattens through the
+            # CURRENT writer (``_flatten_canonical_fixture_for_disk``) and therefore
+            # picks up writer fixes such as instruments-service@19ae5890.
             _old_path = f"sports_reference/fixtures/day={date}/fixtures.parquet"
             _old_blob = _storage.bucket(bucket).blob(_old_path)
-            if _old_blob.exists():
+            if _old_blob.exists() and not redo_all:
                 _old_data = _storage.download_bytes(bucket=bucket, blob_path=_old_path)
                 _old_df = _orch.pd.read_parquet(_orch.io.BytesIO(_old_data))
                 # v9: _write_fixtures_per_league creates entity-specific sink internally
