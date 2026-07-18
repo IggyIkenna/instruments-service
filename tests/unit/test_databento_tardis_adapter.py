@@ -1,6 +1,6 @@
 """Unit tests for Databento and Tardis adapters (no live network — mocked responses)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -317,25 +317,35 @@ class TestDatabentoCanonicalIdentity:
         return adapter
 
     def test_es_future_gets_sp500_product_root_and_canonical_id(self) -> None:
+        # tradfi_consolidated_closeout_2026_07_18.md A1: CME FUTURE →
+        # VENUE:FUTURE:PRODUCT_ROOT-USD@LIN-YYYYMMDD, byte-identical to the
+        # MTDS databento_enrichment.py::_classify_row write path.
         adapter = self._make_adapter()
-        row = self._make_row("ESM0", instrument_class="F", expiry="2026-06-19T13:30:00+00:00")
+        adapter._target_date = date(2029, 6, 25)  # within 365d of the 2030-06-21 expiry
+        row = self._make_row("ESM0", instrument_class="F", expiry="2030-06-21T13:30:00+00:00")
         record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
         assert record is not None
         assert record.instrument_type == "FUTURE"
         # raw_symbol unchanged — canonicals are additive.
         assert record.raw_symbol == "ESM0"
         assert record.product_root == "SP500"
-        assert record.canonical_instrument_id is not None
-        assert record.canonical_instrument_id.startswith("CME:FUTURE:SP500:")
+        assert record.instrument_key == "CME:FUTURE:SP500-USD@LIN-20300621"
+        # canonical_instrument_id is byte-equal to instrument_key (no second,
+        # independently-built id field — the old colon/month-only additive
+        # shape is gone).
+        assert record.canonical_instrument_id == record.instrument_key
 
     def test_spaced_option_gets_sp500_product_root_and_canonical_id(self) -> None:
+        # tradfi_consolidated_closeout_2026_07_18.md A1: CME OPTION →
+        # VENUE:OPTION:PRODUCT_ROOT-USD@LIN-YYYYMMDD-STRIKE-C|P.
         adapter = self._make_adapter()
+        adapter._target_date = date(2025, 9, 20)  # within 365d of the 2025-10-17 expiry
         # E5A = Friday-daily ES option root; spaced contract code + strike token.
         row = self._make_row(
             "E5AH0 C2510",
             instrument_class="C",
-            expiry="2026-09-18T14:00:00+00:00",
-            strike_price=2510.0,
+            expiry="2025-10-17T14:00:00+00:00",
+            strike_price=5000.0,
         )
         record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
         assert record is not None
@@ -343,10 +353,54 @@ class TestDatabentoCanonicalIdentity:
         # raw_symbol stays the raw spaced exchange code.
         assert record.raw_symbol == "E5AH0 C2510"
         assert record.product_root == "SP500"
-        assert record.canonical_instrument_id is not None
-        assert record.canonical_instrument_id.startswith("CME:OPTION:SP500:")
-        # strike + C/P suffix encoded in the canonical id.
-        assert record.canonical_instrument_id.endswith("C")
+        assert record.instrument_key == "CME:OPTION:SP500-USD@LIN-20251017-5000-C"
+        assert record.canonical_instrument_id == record.instrument_key
+
+    def test_cboe_vix_future_gets_vix_product_root_and_canonical_id(self) -> None:
+        # tradfi_consolidated_closeout_2026_07_18.md A1: CBOE/XCBF.PITCH VIX
+        # future → VENUE:FUTURE:VIX-USD@LIN-YYYYMMDD.
+        adapter = self._make_adapter()
+        adapter._target_date = date(2026, 5, 20)  # within 365d of the 2026-07-22 expiry
+        row = self._make_row("VXQ6", instrument_class="F", expiry="2026-07-22T13:30:00+00:00")
+        record = adapter._parse_row_to_record(row, dataset="XCBF.PITCH", canonical_venue="CBOE")
+        assert record is not None
+        assert record.instrument_type == "FUTURE"
+        assert record.raw_symbol == "VXQ6"
+        assert record.product_root == "VIX"
+        assert record.instrument_key == "CBOE:FUTURE:VIX-USD@LIN-20260722"
+        assert record.canonical_instrument_id == record.instrument_key
+
+    def test_unresolved_product_root_falls_back_to_raw_shape(self) -> None:
+        # OSI-format option symbol the exchange-code registry doesn't cover
+        # (e.g. secondary-source SPX options) — must not crash and must not
+        # fabricate a canonical id; falls back to the sanitized-raw shape.
+        adapter = self._make_adapter()
+        # underlying is set explicitly (as the real Databento/secondary-source
+        # API row would carry it) so the instrument stays OPTION instead of
+        # being reclassified COMBO by the "no derivable underlying" fallback
+        # — isolates the product-root-resolution edge case from that
+        # unrelated COMBO-reclassification path.
+        row = self._make_row(
+            "O:SPX260618C00200000",
+            instrument_class="C",
+            expiry="2026-06-18T14:00:00+00:00",
+            strike_price=200.0,
+            underlying="SPX",
+        )
+        record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
+        assert record is not None
+        assert record.product_root is None
+        assert record.instrument_key == "CME:OPTION:O:SPX260618C00200000"
+        assert record.canonical_instrument_id == record.instrument_key
+
+    # NOTE: a FUTURE with a missing/null expiry is not testable at this layer —
+    # the InstrumentRecord schema HARD-REQUIRES non-null expiry for FUTURE
+    # (futures shard by expiry for contract-roll detection, per
+    # hard_schema_enforcement_2026_05_08), so such a record can never be
+    # constructed regardless of the id logic. Continuous/generic-roll futures
+    # (e.g. "VX/F1") are handled upstream (dropped/rebuilt), not persisted as a
+    # dated FUTURE record. The real writer-side fallback (product root does not
+    # resolve) is covered by test_unresolved_product_root_falls_back_to_raw_shape.
 
     def test_cefi_instrument_unaffected(self) -> None:
         # A CeFi spot/perp record (built directly, not via the TradFi adapter)
