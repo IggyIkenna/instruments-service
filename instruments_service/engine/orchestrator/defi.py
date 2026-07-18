@@ -240,27 +240,38 @@ def _enforce_defi_monotonicity(
     records: list[_orch.InstrumentRecord],
     hwm: dict[str, int],
 ) -> tuple[list[_orch.InstrumentRecord], set[str]]:
-    """Remove venues from records that regressed below their manifest high-water mark.
+    """Block only a CATASTROPHIC per-venue count collapse; let real delistings through.
 
-    Returns (clean_records, blocked_venues). Blocked venues had fewer instruments
-    than the manifest max and must NOT be written to GCS (would overwrite better data).
-    Only checks venues that are actually present in the records — venues not fetched
-    are ignored (they have 0 count but were never requested).
+    Returns (clean_records, blocked_venues). Blocked venues collapsed to *below half*
+    their manifest max — a broken / partial API fetch that would overwrite better data —
+    and must NOT be written to GCS. Only checks venues actually present in the records
+    (venues not fetched this run have 0 count but were never requested, not a regression).
 
-    Thin wrapper over the asset-group-parameterized
-    ``venue_core._enforce_monotonicity`` (extracted 2026-07-10, Todo 6 of
-    cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md), with
-    DeFi's original strict policy preserved exactly: ``block_on_regression=True``
-    (any regressed venue is removed from the write) and ``min_ratio=1.0`` (any
-    decrease at all counts — DeFi's immutable smart-contract instruments never
-    shrink under correct adapter behaviour, so any decrease means the API call
-    was incomplete). CeFi/TradFi use a different, non-blocking, thin-collapse
-    policy (see ``process_fetch._fetch_urdi_records`` + ``venue_core``
-    docstring) — never a verbatim copy of this DeFi rule, since CeFi delistings
-    and TradFi contract expiries are legitimate decreases in today's active
-    count.
+    R2c honest-``available_to`` relax (IS R2c — instruments-service availability-
+    denominator honesty): the original DeFi policy was ``min_ratio=1.0`` ("any decrease
+    at all is an incomplete fetch — immutable smart-contract instruments never shrink").
+    That premise is wrong at the *per-instrument active-set* grain the catalogue tracks:
+    a governance-token delisting, a pool going below a subgraph's TVL cut, or a lending
+    market being retired IS a real, small decrease in a venue's live count. Blocking on
+    it SUPPRESSED the fresh (smaller) record set, so the delisting never reached
+    ``by_date/`` → the catalogue roll-up never observed the drop → the instrument's
+    ``available_to`` was never closed and it sat permanently "active". A real count
+    regression is a real delist, not an error.
+
+    So this now passes ``min_ratio=_CEFI_TRADFI_THIN_COLLAPSE_RATIO`` (0.5) while keeping
+    ``block_on_regression=True``: a real delisting (>=50% of the HWM retained) writes
+    through — the drop reaches ``by_date/`` and the roll-up's §7.3 liveness closes
+    ``available_to`` at the instrument's last-seen day — while a genuinely broken fetch
+    (a subgraph returning a fraction of the universe, <50% of the HWM) is still blocked
+    from clobbering good data. This is now the SAME thin-collapse ratio CeFi/TradFi use
+    (``venue_core`` docstring), since CeFi delistings, TradFi expiries and DeFi delistings
+    are all legitimate small decreases in today's active count. The full per-instrument
+    TVL-time-series close is a documented follow-up; this is the guard-relax + last-seen
+    ``available_to`` first cut.
     """
-    return _orch._enforce_monotonicity(records, hwm, block_on_regression=True, min_ratio=1.0)
+    return _orch._enforce_monotonicity(
+        records, hwm, block_on_regression=True, min_ratio=_orch._CEFI_TRADFI_THIN_COLLAPSE_RATIO
+    )
 
 
 async def _get_or_fetch_defi_universe(

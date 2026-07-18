@@ -473,6 +473,72 @@ def test_defi_v2_pool_seeds_canonical_pool_address_id_and_lowercase_type() -> No
     assert row.chain == "ARBITRUM"  # populated chain
 
 
+def test_defi_v2_acquisition_pending_venue_yields_typed_empty_not_dangling() -> None:
+    """IS R2c residual reconciliation: an IS-listed instrument on a venue whose MTDS
+    acquisition has NOT landed (in UAC DEFI_INSTRUMENTS_NOT_YET_COLLECTED) becomes a
+    per-instrument empty_confirmed[EXPECTED_ACQUISITION_PENDING], NOT a dangling
+    expected_unattempted. IS-side analogue of MTDS record_catalogue_residual_empty.
+    """
+    from unified_api_contracts import EmptyConfirmedReason
+
+    # SANCTUM-SOLANA: IS adapter shipped, MTDS acquisition pending (in the UAC registry).
+    pending = _make_defi_entry(
+        instrument_id="SANCTUM-SOLANA:LST:INF",
+        instrument_type="LST",
+        venue="SANCTUM",
+        chain="SOLANA",
+        available_from="2024-01-01",
+        available_to=None,
+    )
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [pending],
+                _date_axis("2024-06-01"),
+                ["staking_yields"],
+                present_set=set(),  # nothing captured — would otherwise dangle expected_unattempted
+                present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+            )
+        )
+    )
+    assert rows, "expected a residual row for the acquisition-pending venue"
+    for row in rows:
+        assert row.capture_status == "empty_confirmed"
+        assert row.reason == EmptyConfirmedReason.EXPECTED_ACQUISITION_PENDING.value
+        assert row.venue == "SANCTUM"
+        assert row.chain == "SOLANA"
+
+
+def test_defi_v2_acquired_venue_stays_expected_unattempted() -> None:
+    """A live/acquired venue (NOT in DEFI_INSTRUMENTS_NOT_YET_COLLECTED) keeps the
+    dangling-until-captured expected_unattempted seed — the R2c reconciliation is
+    scoped strictly to acquisition-pending venues, never masking a real coverage gap.
+    """
+    live = _make_defi_entry(
+        instrument_id="AAVE_V3-ARBITRUM:LENDING:ETH-USDC",
+        instrument_type="LENDING",
+        venue="AAVE_V3",
+        chain="ARBITRUM",
+        available_from="2022-01-01",
+        available_to=None,
+    )
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [live],
+                _date_axis("2024-06-01"),
+                ["lending_indices"],
+                present_set=set(),
+                present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+            )
+        )
+    )
+    assert rows, "expected an expected_unattempted seed for the live venue"
+    for row in rows:
+        assert row.capture_status == "expected_unattempted"
+        assert row.reason == ""
+
+
 def test_defi_v2_empty_catalog() -> None:
     """Empty catalog → no per-instrument rows (venue-grain pre-launch pass filtered out).
 
