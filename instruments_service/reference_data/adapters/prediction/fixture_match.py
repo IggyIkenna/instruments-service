@@ -17,9 +17,11 @@ by ``instrument_key`` — the SAME carrier pattern the polymarket package alread
 uses for ``clob_token_ids``
 (``polymarket/markets.py::_CLOB_TOKEN_IDS_BY_CONDITION_ID``, joined into the
 parquet by ``engine/orchestrator/process_write.py::_records_to_dataframe``).
-Materialising these as parquet columns is that same downstream join and is
-DEFERRED here: ``_records_to_dataframe`` is shared IS orchestrator infra, out of
-this increment's prediction-specific scope.
+Materialising these as the six parquet columns is that same downstream join and
+is SHIPPED there (A4 completion): ``_records_to_dataframe`` reads this side-table
+via ``fixture_match_for_instrument_key`` and converts the ``int`` ``af_league_id``
+/ ``str`` ``fixture_date`` here to the shipped InstrumentRecord ``str`` / ``date``
+columns at the boundary, exactly as it already joins ``clob_token_ids``.
 
 Reuse, not reinvention — no new GCS walk or team-matching heuristic:
 
@@ -406,9 +408,9 @@ def _build_fixture_lookup(fixtures_df: object) -> dict[tuple[str, str], int]:
 # ── Per-instrument side-table (join carrier into the availability parquet) ───────
 # Keyed by ``instrument_key`` (the wrapped condition_id / ticker == what
 # ``_records_to_dataframe`` joins by), the SAME lifetime/bound class as
-# ``_CLOB_TOKEN_IDS_BY_CONDITION_ID``. The (deferred) ``_records_to_dataframe``
-# join reads this via ``fixture_match_for_instrument_key`` to materialise the six
-# columns — exactly as it already does for ``clob_token_ids``.
+# ``_CLOB_TOKEN_IDS_BY_CONDITION_ID``. ``_records_to_dataframe`` reads this via
+# ``fixture_match_for_instrument_key`` to materialise the six columns — exactly as
+# it already does for ``clob_token_ids`` (A4 completion, shipped).
 _FIXTURE_MATCH_BY_INSTRUMENT_KEY: dict[str, FixtureMatchAttributes] = {}
 
 

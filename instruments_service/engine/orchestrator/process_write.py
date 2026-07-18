@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from typing import TYPE_CHECKING
 
 from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
@@ -171,8 +172,29 @@ def _validate_records(
     return valid_records, validation_failed_venues
 
 
+def _fixture_date_to_date(raw: str | None) -> date | None:
+    """Convert the fixture-match side-table's ISO ``fixture_date`` string to a
+    ``date`` for the InstrumentRecord/parquet ``fixture_date`` column.
+
+    Type boundary: ``FixtureMatchAttributes.fixture_date`` is ``str | None`` (a
+    faithful mirror of the resolver's ``fixture_date.isoformat()``), while the
+    shipped InstrumentRecord/``INSTRUMENTS_PARQUET_SCHEMA`` field is ``date |
+    None``. A blank or non-ISO value degrades to ``None`` (honest-absence) rather
+    than raising into the shared write path.
+    """
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return None
+
+
 def _records_to_dataframe(records: list[_orch.InstrumentRecord]) -> _orch.pd.DataFrame:
     """Serialize InstrumentRecord list to a flat DataFrame for parquet writes."""
+    from instruments_service.reference_data.adapters.prediction.fixture_match import (  # noqa: qg-inside-import
+        fixture_match_for_instrument_key,
+    )
     from instruments_service.reference_data.adapters.prediction.polymarket import (  # noqa: qg-inside-import
         _clob_token_ids_for_condition_id,
     )
@@ -193,6 +215,22 @@ def _records_to_dataframe(records: list[_orch.InstrumentRecord]) -> _orch.pd.Dat
             _tids = _clob_token_ids_for_condition_id(_ik)
             if _tids:
                 d["clob_token_ids"] = _tids
+            # Prediction (Polymarket/Kalshi soccer): materialise the six additive
+            # fixture-match columns from the per-instrument side-table (keyed by
+            # instrument_key, stamped in the prediction parse path) — the SAME join
+            # shape as clob_token_ids above. Convert at the type boundary: the
+            # side-table types af_league_id as int + fixture_date as str, but the
+            # shipped InstrumentRecord/parquet columns are str + date. No-op for
+            # every non-prediction / non-soccer row (lookup returns None → all six
+            # stay the model default None, so cefi/tradfi/defi are unaffected).
+            _fm = fixture_match_for_instrument_key(_ik)
+            if _fm is not None:
+                d["af_league_id"] = None if _fm.af_league_id is None else str(_fm.af_league_id)
+                d["home_team_canonical_id"] = _fm.home_team_canonical_id
+                d["away_team_canonical_id"] = _fm.away_team_canonical_id
+                d["fixture_date"] = _fixture_date_to_date(_fm.fixture_date)
+                d["af_fixture_id"] = _fm.af_fixture_id
+                d["af_fixture_match_status"] = _fm.af_fixture_match_status
         rows.append(d)
     return _orch.pd.DataFrame(rows)
 
