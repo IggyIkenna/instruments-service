@@ -419,6 +419,15 @@ class TestTardisHelperFunctions:
         # longer a gate for spot/perp/future (small-coin funding is valuable).
         assert _passes_asset_filter("OBSCURECOIN123", "USDT", "PERPETUAL") is True
 
+    def test_passes_asset_filter_binance_equity_perp_base(self) -> None:
+        # 2026-07-18 Binance full-listing widen: a NEW equity-perp base (US
+        # EQUITY or the new HK_EQUITY category) on a canonical USDT quote RESOLVES
+        # / passes the filter — the CEFI_BASE_ASSET_UNIVERSE whitelist was removed
+        # 2026-06-23, so equity perps are never dropped; the equity identity rides
+        # the is_equity_perp catalogue tag (stamped at rollup), not this gate.
+        assert _passes_asset_filter("APP", "USDT", "PERPETUAL", "BINANCE-FUTURES") is True
+        assert _passes_asset_filter("TENCENT", "USDT", "PERPETUAL", "BINANCE-FUTURES") is True
+
     def test_passes_asset_filter_invalid_quote(self) -> None:
         assert _passes_asset_filter("BTC", "INVALIDQUOTE", "PERPETUAL") is False
 
@@ -1108,6 +1117,10 @@ class TestCCXTAdapterComprehensive:
         assert result.instrument_type == InstrumentType.OPTION
         assert result.strike == Decimal("50000.0")
         assert result.option_type == OptionType.CALL
+        # Operator ruling 2026-07-18: the quote is ALWAYS present — DERIBIT included.
+        # A BTC inverse option is USD-quoted → id carries BASE-QUOTE@INV (no longer
+        # the dropped BTC@INV form that hit the fail-loud builder).
+        assert result.instrument_key == "DERIBIT:OPTION:BTC-USD@INV-20260627-50000-C"
 
     def test_parse_ccxt_market_option_without_strike_returns_none(self) -> None:
         """Options without strike are skipped (combo/conditional)."""
