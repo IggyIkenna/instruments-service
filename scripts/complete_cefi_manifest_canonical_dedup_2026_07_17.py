@@ -95,10 +95,18 @@ options_chain} are keyed on ``underlying`` and the per-row ``instrument_id`` MAY
 design. This script does NOT synthesise a bundle id; bundle rows are KEPT untouched (the
 full per-contract canonical ids live INSIDE the bundle parquet, not the manifest shard key).
 
-The fork's expected_unattempted reconcile pass is RETAINED (drops eu rows in the main
-index whose 5-col shard key now matches a relabeled ``captured`` key — the 5-col key
-deliberately excludes ``pipeline_mode`` so a ``batch_tardis`` eu skeleton reconciles
-against the canonical ``captured`` twin regardless of which lane fulfilled it).
+EU-RECONCILE (post-apply-gate fix 2026-07-18) — drops an ``expected_unattempted`` skeleton
+whose 5-col shard key (date, venue, data_type, instrument_type, instrument_id) collides with
+ANY captured row (captured wins; eu carries no data). Two bugs the first ``--apply`` hit —
+now fixed: (1) it reconciled only eu twins of RELABELED captured rows, missing eu twins of
+ALREADY-CANONICAL captured rows (and dropping nothing on an idempotent re-apply); it now uses
+the FULL post-relabel captured-key set. (2) it ran on the main index only, missing cross-blob
+eu/captured collisions; it now runs on every loaded blob. The 5-col key excludes
+``pipeline_mode`` so a ``batch_tardis`` eu reconciles against a canonical captured twin from
+another lane (measured: 100% of the residual collisions were cross-pipeline_mode, which is
+why the 6-col de-dup could not catch them). Re-apply is safe + idempotent (relabel/de-dup
+no-op on canonical rows; the eu-reconcile still cleans the collisions; the candidate/:PERP:
+VOLUME STOP bands are skipped when the BEFORE fraction proves the index is already canonical).
 
 KEEP-trend policy (operator CORRECTIONS 2026-07-18) — this script now DROPS almost nothing.
 ``KALSHI-PERP`` / ``POLYMARKET-PERP`` are KEPT (roadmap placeholder venues); blank-id rows
@@ -231,6 +239,12 @@ _MAX_TOTAL_DROPPED = 400_000
 # STOP-ON-SURPRISE: an upper bound on the drop-venue cull row count (13 venues, INCLUDING
 # captured-with-data). A blow-past means a wrong venue slipped into ``_CULL_VENUES``.
 _MAX_CULL_DROPPED = 800_000
+
+# IDEMPOTENT RE-RUN: when the BEFORE captured-venue-prefixed fraction is already this high, the
+# index is already canonicalised (a re-apply for the eu-reconcile cleanup), so the candidate /
+# :PERP: VOLUME bands are EXPECTED to read ~0 and are skipped. All SAFETY invariants
+# (captured-with-data-drop, total-dropped cap, cull cap) stay enforced. First apply saw ~83%.
+_APPLIED_FRAC_THRESHOLD = 90.0
 
 # ---------------------------------------------------------------------------
 # Track-6 canonical-form constants (operator rulings 2026-07-18).
@@ -1079,14 +1093,19 @@ def _canonicalize_blob(
     if bool(okx_mask.any()):
         out.loc[okx_mask, "venue"] = keyser[okx_mask].map(venue_by)
 
-    new_keys = (
-        out.loc[captured & id_changed_mask, SHARD_KEY_COLS].drop_duplicates().reset_index(drop=True)
-        if bool((captured & id_changed_mask).any())
+    out = out.loc[~drop_flag].copy()
+    # ALL captured 5-col shard keys (post-relabel, post-cull) — NOT just the id-changed ones.
+    # The eu-reconcile drops an eu row whose 5-col key matches ANY captured row, so an eu twin
+    # of an ALREADY-CANONICAL captured row (id unchanged during relabel) is ALSO dropped, and a
+    # (idempotent) re-apply still reconciles even though relabel then changes nothing. Using only
+    # the id-changed subset was the bug behind the 42,915 residual eu/captured collisions.
+    captured_out = out["capture_status"].astype(str) == "captured"
+    captured_keys = (
+        out.loc[captured_out, SHARD_KEY_COLS].drop_duplicates().reset_index(drop=True)
+        if bool(captured_out.any())
         else _empty_keys()
     )
-
-    out = out.loc[~drop_flag].copy()
-    return out, new_keys, stats
+    return out, captured_keys, stats
 
 
 def _dedup_blob(df: pd.DataFrame) -> tuple[pd.DataFrame, int, dict[str, int]]:
@@ -1106,15 +1125,23 @@ def _dedup_blob(df: pd.DataFrame) -> tuple[pd.DataFrame, int, dict[str, int]]:
     return kept, collapsed, breakdown
 
 
-def _reconcile_eu_duplicates(df: pd.DataFrame, all_new_keys: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """RETAINED fork pass: drop eu rows whose 5-col shard key now matches a relabeled captured row."""
-    if all_new_keys.empty or not set(SHARD_KEY_COLS).issubset(df.columns) or "capture_status" not in df.columns:
+def _reconcile_eu_duplicates(df: pd.DataFrame, captured_keys: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Drop eu rows whose 5-col shard key collides with ANY captured row (captured wins).
+
+    ``captured_keys`` is the FULL set of captured 5-col keys (all blobs, post-relabel), NOT
+    just the id-changed subset — an eu skeleton is a redundant duplicate of a captured row on
+    the same (date, venue, data_type, instrument_type, instrument_id) regardless of whether the
+    captured id changed during relabel. eu rows carry NO data, so dropping them is always safe.
+    The 5-col key deliberately excludes ``pipeline_mode`` so a ``batch_tardis`` eu written by
+    one lane reconciles against the canonical captured twin written by another.
+    """
+    if captured_keys.empty or not set(SHARD_KEY_COLS).issubset(df.columns) or "capture_status" not in df.columns:
         return df, 0
     eu_mask = df["capture_status"] == "expected_unattempted"
     if not bool(eu_mask.any()):
         return df, 0
     eu_keys = df.loc[eu_mask, SHARD_KEY_COLS].reset_index().rename(columns={"index": "_orig_index"})
-    merged = eu_keys.merge(all_new_keys.drop_duplicates().assign(_hit=True), on=SHARD_KEY_COLS, how="left")
+    merged = eu_keys.merge(captured_keys.drop_duplicates().assign(_hit=True), on=SHARD_KEY_COLS, how="left")
     hit = merged["_hit"].astype("boolean").fillna(False)
     drop_idx = merged.loc[hit, "_orig_index"].tolist()
     if drop_idx:
@@ -1327,7 +1354,7 @@ def main(argv: list[str] | None = None) -> int:
 
     dfs: dict[str, pd.DataFrame] = {}
     added_cols: dict[str, list[str]] = {}
-    all_new_keys: list[pd.DataFrame] = []
+    all_captured_keys: list[pd.DataFrame] = []
     totals: dict[str, int] = {}
     main_candidates = 0
     total_collapsed = 0
@@ -1352,12 +1379,12 @@ def main(argv: list[str] | None = None) -> int:
         before_cap += bc
         before_exempt += be
 
-        df, new_keys, stats = _canonicalize_blob(
+        df, captured_keys, stats = _canonicalize_blob(
             df, wire_map, marker_base, itype_infer, base_quote_map, base_quote_date_map, catalog_ids, catalog_wires
         )
         dfs[blob] = df
-        if not new_keys.empty:
-            all_new_keys.append(new_keys)
+        if not captured_keys.empty:
+            all_captured_keys.append(captured_keys)
         for k, val in stats.items():
             totals[k] = totals.get(k, 0) + val
         if blob == INDEX_BLOB:
@@ -1385,9 +1412,17 @@ def main(argv: list[str] | None = None) -> int:
     # Only blobs that actually loaded (a transient per-VM shard may have vanished mid-run).
     loaded_blobs = [b for b in blobs if b in dfs]
 
-    # Pass 2 — RETAINED fork eu-reconcile: drop eu twins of relabeled captured rows (main only).
-    combined_new_keys = pd.concat(all_new_keys, ignore_index=True).drop_duplicates() if all_new_keys else _empty_keys()
-    dfs[INDEX_BLOB], n_eu_dropped = _reconcile_eu_duplicates(dfs[INDEX_BLOB], combined_new_keys)
+    # Pass 2 — eu-reconcile: drop eu rows colliding (5-col) with ANY captured row, in EVERY
+    # loaded blob (not main-only — an eu row can twin a captured row in another blob). The
+    # captured key set is the FULL post-relabel set, so it also catches eu twins of
+    # already-canonical captured rows (the 42,915-collision bug) and reconciles on re-apply.
+    combined_captured_keys = (
+        pd.concat(all_captured_keys, ignore_index=True).drop_duplicates() if all_captured_keys else _empty_keys()
+    )
+    n_eu_dropped = 0
+    for blob in loaded_blobs:
+        dfs[blob], n_dropped = _reconcile_eu_duplicates(dfs[blob], combined_captured_keys)
+        n_eu_dropped += n_dropped
 
     # Pass 3 — de-dup coexisting shard-atom spellings (PINNED 6-col atom, keep best status).
     after_pref = after_cap = after_exempt = 0
@@ -1486,7 +1521,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     logger.info("  --- reconcile + de-dup ---")
     logger.info(
-        "  eu-reconcile dropped    : %d  (main index only, 5-col twin of a relabeled captured row)", n_eu_dropped
+        "  eu-reconcile dropped    : %d  (ALL blobs; eu whose 5-col key twins ANY captured row — captured wins)",
+        n_eu_dropped,
     )
     logger.info("  de-dup collapsed        : %d  by status: %s", total_collapsed, collapse_breakdown)
     logger.info("  canonical-fraction (raw): %.2f%% -> %.2f%% (captured venue-prefixed)", before_frac, after_frac)
@@ -1500,7 +1536,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # STOP-ON-SURPRISE guards.
     surprised = False
-    if not (_CANDIDATE_MIN <= totals.get("candidates", 0) <= _CANDIDATE_MAX):
+    # An idempotent re-apply on an already-canonicalised index reads ~0 candidates / :PERP:
+    # (the first apply already did that work) — the VOLUME bands would false-halt, so skip them
+    # when the BEFORE fraction proves the index is already canonical. SAFETY invariants below
+    # (data-loss, over-drop, cull cap) are ALWAYS enforced.
+    already_applied = before_frac >= _APPLIED_FRAC_THRESHOLD
+    if already_applied:
+        logger.info(
+            "RE-RUN on an already-canonicalised index (before-fraction %.2f%% >= %.1f%%) — candidate/:PERP: VOLUME "
+            "bands EXPECTED ~0 (idempotent); skipping those two bands, all safety invariants retained.",
+            before_frac,
+            _APPLIED_FRAC_THRESHOLD,
+        )
+    if not already_applied and not (_CANDIDATE_MIN <= totals.get("candidates", 0) <= _CANDIDATE_MAX):
         logger.error(
             "STOP-ON-SURPRISE: raw-captured candidate count %d outside band [%d, %d].",
             totals.get("candidates", 0),
@@ -1508,7 +1556,7 @@ def main(argv: list[str] | None = None) -> int:
             _CANDIDATE_MAX,
         )
         surprised = True
-    if not (_PERP_MIN <= totals.get("perp_rewritten", 0) <= _PERP_MAX):
+    if not already_applied and not (_PERP_MIN <= totals.get("perp_rewritten", 0) <= _PERP_MAX):
         logger.error(
             "STOP-ON-SURPRISE: :PERP: rewrite count %d outside band [%d, %d] — perp venues may have left the catalogue.",
             totals.get("perp_rewritten", 0),

@@ -186,9 +186,13 @@ def test_kalshi_soccer_honest_absence_when_alias_missing() -> None:
     """A Kalshi soccer market whose rendering is NOT in the alias index stays
     honest UNRESOLVED_TEAM_NAME with af_fixture_id=None + null canonical ids.
 
-    "Bilbao" / "Vallecano" are Kalshi short-form renderings genuinely absent from
-    the shared alias index (worklist for the deferred team_mappings addition), so
-    the honest outcome is 'league + date known, teams + fixture id unresolved'.
+    Uses structurally-fictional club renderings ("Zzyzx Wanderers" / "Noexist
+    Rovers") that will never be real clubs, so the honest-absence guard stays
+    durable as the shared alias index grows. (The earlier "Bilbao"/"Vallecano"
+    renderings this test used were the deferred team_mappings worklist and have
+    since been ADDED upstream — they now correctly MATCH, which is the feature
+    working, so they no longer exercise the alias-missing path.) The honest
+    outcome here is 'league + date known, teams + fixture id unresolved'.
     """
     reset_fixture_match_registry()
     adapter = KalshiReferenceDataAdapter()
@@ -199,7 +203,7 @@ def test_kalshi_soccer_honest_absence_when_alias_missing() -> None:
     )
 
     record = adapter._parse_market(  # pyright: ignore[reportPrivateUsage]
-        _kalshi_soccer_raw("Bilbao vs Vallecano Winner?"), datetime.now(UTC)
+        _kalshi_soccer_raw("Zzyzx Wanderers vs Noexist Rovers Winner?"), datetime.now(UTC)
     )
 
     assert record is not None
@@ -208,8 +212,8 @@ def test_kalshi_soccer_honest_absence_when_alias_missing() -> None:
     assert attrs.af_fixture_match_status == FixtureMatchStatus.UNRESOLVED_TEAM_NAME
     assert attrs.af_fixture_id is None
     assert attrs.af_league_id == 39  # EPL — resolvable from the ticker
-    assert attrs.home_team_canonical_id is None  # "Bilbao" not in alias index
-    assert attrs.away_team_canonical_id is None  # "Vallecano" not in alias index
+    assert attrs.home_team_canonical_id is None  # fictional rendering, not in alias index
+    assert attrs.away_team_canonical_id is None  # fictional rendering, not in alias index
     assert attrs.fixture_date == "2026-05-24"  # close date is honestly resolvable
 
 
