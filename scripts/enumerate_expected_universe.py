@@ -90,6 +90,7 @@ from google.api_core.exceptions import NotFound
 from google.cloud import storage
 from unified_api_contracts import (
     DATA_TYPES_BY_ASSET_GROUP,
+    DEFI_INSTRUMENTS_NOT_YET_COLLECTED,
     GRAIN_BUNDLE_BY_UNDERLYING,
     MVP_SCOPE,
     TOTAL_UNIVERSE_AXES,
@@ -98,6 +99,7 @@ from unified_api_contracts import (
     TRADFI_ROOTS,
     VENUES_BY_ASSET_GROUP,
     CeFiMvpRule,
+    EmptyConfirmedReason,
     Mode,
     TradFiMvpRule,
     bundle_instrument_type_for_leaf,
@@ -1415,6 +1417,20 @@ def _enumerate_v2_defi(
         row_dts = _row_data_types("defi", _instr_canonical, data_types)
         if not row_dts:
             continue  # instrument type not in PROTOCOL_CAPABILITIES → skip entirely
+        # IS R2c catalogue-residual reconciliation (IS-side analogue of MTDS
+        # ``dex_pools_handler.record_catalogue_residual_empty``): this instrument is
+        # LISTED in the IS catalogue but its venue's MTDS market-data acquisition
+        # pipeline has not landed yet (the venue is in the UAC
+        # ``DEFI_INSTRUMENTS_NOT_YET_COLLECTED`` acquisition-pending set — e.g. the new
+        # staking/vault Solana venues SANCTUM/SOLBLAZE whose IS adapters shipped while
+        # MTDS wiring is pending). An alive-with-no-manifest-row cell for such a venue
+        # must become a per-instrument typed ``empty_confirmed[EXPECTED_ACQUISITION_
+        # PENDING]`` (out-of-window, self-healing), NEVER a dangling ``expected_
+        # unattempted`` (which reads as "should have captured but never attempted" and
+        # overstates the coverage denominator for a venue nothing can yet capture).
+        _acq_pending = (
+            bool(chain_upper) and f"{canonical_venue}-{chain_upper}".upper() in DEFI_INSTRUMENTS_NOT_YET_COLLECTED
+        )
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -1461,18 +1477,34 @@ def _enumerate_v2_defi(
                         for c in _pcols
                     )
                     if row_key not in present_set:
-                        yield ExpectedRow(
-                            asset_group="defi",
-                            venue=canonical_venue,
-                            chain=chain_upper,
-                            data_type=dt,
-                            instrument_type=canonical_itype,
-                            instrument_id=canonical_instrument_id,
-                            league_id="",
-                            date=iso,
-                            reason="",
-                            capture_status="expected_unattempted",
-                        )
+                        if _acq_pending:
+                            # IS-listed, MTDS acquisition pending → typed empty_confirmed,
+                            # not a dangling expected_unattempted (IS R2c). Out-of-window,
+                            # self-heals to ``captured`` when the MTDS pipeline ships.
+                            yield ExpectedRow(
+                                asset_group="defi",
+                                venue=canonical_venue,
+                                chain=chain_upper,
+                                data_type=dt,
+                                instrument_type=canonical_itype,
+                                instrument_id=canonical_instrument_id,
+                                league_id="",
+                                date=iso,
+                                reason=EmptyConfirmedReason.EXPECTED_ACQUISITION_PENDING.value,
+                            )
+                        else:
+                            yield ExpectedRow(
+                                asset_group="defi",
+                                venue=canonical_venue,
+                                chain=chain_upper,
+                                data_type=dt,
+                                instrument_type=canonical_itype,
+                                instrument_id=canonical_instrument_id,
+                                league_id="",
+                                date=iso,
+                                reason="",
+                                capture_status="expected_unattempted",
+                            )
                 continue
             for dt in row_dts:
                 yield ExpectedRow(

@@ -64,6 +64,7 @@ from unified_api_contracts import (
     TRADFI_ROOTS,
     VENUE_TO_ASSET_GROUP,
     build_pool_identity,
+    is_defi_force_include,
     is_in_mvp_capture_universe,
     is_mvp,
     tracks_equity,
@@ -336,6 +337,16 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     #                    resolves to a CEFI_EQUITY_PERP_BASE_UNIVERSE member.
     "tracks_equity",
     "is_equity_perp",
+    # TVL-exempt FORCE-INCLUDE marker (IS R2c — availability-denominator honesty).
+    # bool: True for a DeFi governance / forced token that is in the catalogue because
+    # a dedicated governance-token adapter issues it (EIGENLAYER→EIGEN, ETHERFI→ETHFI),
+    # NOT because it crossed a DEX TVL/liquidity threshold — so downstream can tell a
+    # FORCED inclusion (tracked regardless of TVL) from COINCIDENTAL liquidity (a
+    # Uniswap EIGEN/WETH pool). Stamped on-the-fly by ``_add_force_include`` via the
+    # UAC SSOT ``is_defi_force_include`` (keyed on venue-protocol + base_asset), same
+    # self-healing pattern as ``mvp`` / ``is_equity_perp``. False for every non-DeFi
+    # row and every coincidental-liquidity DeFi row.
+    "force_include",
     # Margin type: "linear" (USDT/USDC-margined) or "inverse" (coin-margined/delivery).
     # Propagated from the per-date instruments parquet ``margin_type`` column
     # (populated by the IS cefi Tardis adapter). Empty for non-derivative instruments
@@ -3208,6 +3219,52 @@ def _add_equity_tags(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
     return out
 
 
+def _add_force_include(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
+    """Stamp the TVL-exempt ``force_include`` marker (IS R2c availability-denominator honesty).
+
+    bool: True iff the row is a DeFi governance / forced token the catalogue carries
+    because a dedicated governance-token adapter issues it (EIGENLAYER→EIGEN,
+    ETHERFI→ETHFI), rather than because it crossed a DEX TVL threshold — so a coverage
+    denominator can distinguish a FORCED inclusion (tracked regardless of TVL) from
+    COINCIDENTAL liquidity (a Uniswap pool that merely contains the token). Derived
+    on-the-fly from (``venue``, ``base_asset``) via the UAC SSOT
+    :func:`~unified_api_contracts.is_defi_force_include` — never baked (UAC owns the
+    ``DEFI_FORCE_INCLUDE_TOKENS`` registry), mirroring the :func:`_add_mvp_column` /
+    :func:`_add_equity_tags` pattern so the flag self-heals on every rebuild + incremental
+    run rather than persisting stale.
+
+    Only ``defi`` rows can be force-included; every other asset group carries ``False``.
+    The keyed-on-protocol predicate leaves a DEX pool that merely contains a force-include
+    token at ``False`` (its venue protocol is not a governance-token venue), so
+    coincidental liquidity stays distinguishable from a forced inclusion.
+    """
+    out = df.copy()
+    if df.empty:
+        out["force_include"] = pd.Series([], dtype="bool")
+        return out
+    if asset_group != "defi":
+        out["force_include"] = False
+        return out
+
+    def _cell(row: pd.Series[object], col: str) -> str:
+        """NaN/None/empty-safe string cell (``str(np.nan)`` is ``"nan"`` — guard it)."""
+        raw = row.get(col)
+        if raw is None:
+            return ""
+        try:
+            if pd.isna(raw):  # pyright: ignore[reportArgumentType]
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(raw)
+
+    force_vals: list[bool] = [
+        is_defi_force_include(_cell(row, "venue"), _cell(row, "base_asset")) for _, row in out.iterrows()
+    ]
+    out["force_include"] = force_vals
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Incremental (trailing-window + frozen-tail) engine
 # ---------------------------------------------------------------------------
@@ -3362,12 +3419,13 @@ def _merge_incremental(
     The output row set is prev UNION window-new, so ``len(merged) >= len(prev)`` and
     the monotonic guard passes by construction.
     """
-    # Derived/finalization columns (mvp + the equity-identity tags) are re-stamped
-    # on the MERGED frame by _add_mvp_column / _add_equity_tags — drop them from both
-    # inputs so the merge carries only the stable rollup columns (full-rebuild parity:
-    # mvp's cefi perp-gate is computed over the whole catalogue, and the equity tags
-    # self-heal from instrument_type + base_asset every run).
-    out_columns = [c for c in CATALOG_COLUMNS if c not in ("mvp", "tracks_equity", "is_equity_perp")]
+    # Derived/finalization columns (mvp + the equity-identity tags + force_include) are
+    # re-stamped on the MERGED frame by _add_mvp_column / _add_equity_tags /
+    # _add_force_include — drop them from both inputs so the merge carries only the stable
+    # rollup columns (full-rebuild parity: mvp's cefi perp-gate is computed over the whole
+    # catalogue; the equity tags self-heal from instrument_type + base_asset every run; and
+    # force_include self-heals from venue + base_asset via the UAC SSOT every run).
+    out_columns = [c for c in CATALOG_COLUMNS if c not in ("mvp", "tracks_equity", "is_equity_perp", "force_include")]
     prev = prev_df.copy()
     # The prev catalogue carries the derived tags; drop them (see above).
     prev = prev.drop(columns=[c for c in prev.columns if c not in out_columns])
@@ -3828,6 +3886,13 @@ def run_rollup(
     df = _add_equity_tags(df, asset_group)
     _eq_count = int(df["is_equity_perp"].sum()) if not df.empty else 0
     logger.info("Equity-tagged catalogue: %d / %d rows flagged is_equity_perp", _eq_count, len(df))
+
+    # TVL-exempt force-include marker (IS R2c): distinguish a FORCED governance-token
+    # inclusion (EIGEN/ETHFI, tracked regardless of TVL) from coincidental DEX liquidity,
+    # so the availability denominator is honest. Derived on-the-fly from the UAC SSOT.
+    df = _add_force_include(df, asset_group)
+    _fi_count = int(df["force_include"].sum()) if not df.empty else 0
+    logger.info("Force-include-tagged catalogue: %d / %d rows flagged force_include", _fi_count, len(df))
 
     # Phase E: monotonic-guard + promote-write
     print(f"[BISECT-E] monotonic-guard + promote-write asset_group={asset_group} rows={len(df)}", flush=True)
