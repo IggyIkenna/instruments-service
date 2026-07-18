@@ -82,6 +82,13 @@ from ....schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ..fixture_match import (
+    FixtureMatchAttributes,
+    FixtureMatchStatus,
+    PredictionFixtureResolver,
+    fixture_match_for_instrument_key,
+    register_fixture_match,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +160,8 @@ __all__ = [
     "CanonicalQuestionGroup",
     "ClassVar",
     "Decimal",
+    "FixtureMatchAttributes",
+    "FixtureMatchStatus",
     "FundingRateRef",
     "InstrumentRecord",
     "InstrumentType",
@@ -162,6 +171,7 @@ __all__ = [
     "PolymarketGammaMarket",
     "PolymarketParsingMixin",
     "PolymarketReferenceDataAdapter",
+    "PredictionFixtureResolver",
     "PredictionMarketMapper",
     "_classify_polymarket_error",
     "_clob_token_ids_for_condition_id",
@@ -189,6 +199,7 @@ __all__ = [
     "classify_venue_error",
     "clob",
     "datetime",
+    "fixture_match_for_instrument_key",
     "get_canonical_league_for_polymarket_series",
     "get_canonical_team_for_polymarket",
     "log_event",
@@ -198,6 +209,7 @@ __all__ = [
     "parse_polymarket_sports_fixture",
     "parsing",
     "re",
+    "register_fixture_match",
     "slugify_canonical_name",
     "time",
     "underlying_for_group",

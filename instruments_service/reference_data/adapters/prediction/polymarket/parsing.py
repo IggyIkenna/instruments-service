@@ -92,7 +92,7 @@ class PolymarketParsingMixin:
         )
         if result is None:
             return None  # League not in prediction registry — skip
-        _sub_category, base_asset, sports_canonical_instrument_id = result
+        _sub_category, base_asset, sports_canonical_instrument_id, fixture_attrs = result
 
         # Canonical question group — the SSOT classification pipeline (also drives
         # MarketLifecycle.canonical_group below). Computed ONCE here and threaded
@@ -166,6 +166,17 @@ class PolymarketParsingMixin:
         # subscribes by (live + batch resolve the same per-outcome token-ids).
         _pm._register_clob_token_ids(instrument_key, market.clob_token_ids)
 
+        # Phase-E Leg-1 (prediction_consolidated_closeout_2026_07_18.md A4): stamp the
+        # additive, honest-absence fixture-match attributes for a resolvable soccer
+        # fixture (af_league_id / home+away canonical id / fixture_date / af_fixture_id /
+        # af_fixture_match_status) into the prediction package side-table keyed by the
+        # SAME instrument_key process_write._records_to_dataframe joins by (the clob
+        # token-id carrier pattern). fixture_attrs is non-None only for a cleanly-parsed
+        # soccer fixture (see _build_sports_id); materialising these as parquet columns is
+        # the DEFERRED _records_to_dataframe join (shared IS orchestrator file).
+        if fixture_attrs is not None:
+            _pm.register_fixture_match(instrument_key, fixture_attrs)
+
         # underlying (prediction_canonical_identity_migration_2026_07_08.md todo 1 /
         # docs/PREDICTION_INSTRUMENTS.md § "Canonical identity model" §3 item 2): the
         # SAME classify_polymarket_to_canonical_group() -> underlying_for_group()
@@ -217,8 +228,8 @@ class PolymarketParsingMixin:
         question: str,
         slug: str,
         expiry: datetime | None,
-    ) -> tuple[str, str, str | None] | None:
-        """Build (instrument_type, base_asset, canonical_instrument_id) with canonical naming.
+    ) -> tuple[str, str, str | None, _pm.FixtureMatchAttributes | None] | None:
+        """Build (instrument_type, base_asset, canonical_instrument_id, fixture_attrs).
 
         Returns:
             instrument_type: e.g. "prediction::crypto", "prediction::sports::EPL"
@@ -229,6 +240,10 @@ class PolymarketParsingMixin:
                         for a resolvable sports fixture, else None (crypto/macro/
                         other — populated separately by the cross-venue mapping
                         rollup step, see ``build_instrument_catalogue.py``).
+            fixture_attrs: the additive fixture-match attributes (Phase-E Leg-1)
+                        for a resolvable soccer fixture, else None (non-sports /
+                        unparsed). Stamped into the prediction side-table by the
+                        caller under the record's instrument_key.
             None if the market should be skipped (e.g. league not in prediction registry).
         """
         date_str = expiry.strftime("%Y-%m-%d") if expiry else "unknown"
@@ -241,18 +256,18 @@ class PolymarketParsingMixin:
         crypto_match = _pm._match_crypto_asset(q_lower)
         if crypto_match:
             canonical_id = _pm.build_crypto_prediction_id("polymarket", crypto_match, "1D", date_str)
-            return "prediction::crypto", canonical_id, None
+            return "prediction::crypto", canonical_id, None, None
 
         macro_match = _pm._match_macro_index(q_lower)
         if macro_match:
             canonical_id = _pm.build_macro_prediction_id("polymarket", macro_match, "1D", date_str)
-            return "prediction::macro", canonical_id, None
+            return "prediction::macro", canonical_id, None, None
 
         # Sports classified by PredictionMarketMapper but without sportsMarketType
         # (e.g. F1, UFC, NBA props) — reclassify as "other" since they're not
         # structured sports markets we can normalize.
         label = "other" if category == "sports" else category
-        return f"prediction::{label}", question[:50] if question else slug[:50], None
+        return f"prediction::{label}", question[:50] if question else slug[:50], None, None
 
     def _build_sports_id(
         self: PolymarketReferenceDataAdapter,
@@ -260,7 +275,7 @@ class PolymarketParsingMixin:
         slug: str,
         expiry: datetime | None,
         date_str: str,
-    ) -> tuple[str, str, str | None] | None:
+    ) -> tuple[str, str, str | None, _pm.FixtureMatchAttributes | None] | None:
         """Build canonical sports instrument ID using the system-wide format.
 
         Uses ``build_prediction_instrument_id()`` from UAC canonical_ids so that
@@ -335,6 +350,7 @@ class PolymarketParsingMixin:
         # capture-throughput regression); that method remains available as a
         # higher-fidelity follow-up for an async, rate-limited pipeline stage.
         sports_canonical_instrument_id: str | None = None
+        fixture_attrs: _pm.FixtureMatchAttributes | None = None
         fixture = _pm.parse_polymarket_sports_fixture(
             league=league_id,
             event_title=market.event_title or "",
@@ -348,8 +364,20 @@ class PolymarketParsingMixin:
                 _pm.build_team_id(fixture.away),
                 fixture.fixture_date.isoformat(),
             )
+            # Phase-E Leg-1 (A4): additionally resolve the canonical API-Football
+            # af_fixture_id off the SAME fixtures parquet MTDS's FixtureIdResolver
+            # reads (candidate_parquet_paths, cached per league/day) + stamp the
+            # honest-absence status. Additive + nullable — resolve() never raises,
+            # so a missing fixtures parquet / unresolved team name degrades to
+            # NO_FIXTURE_DATA / UNRESOLVED_TEAM_NAME rather than blocking capture.
+            fixture_attrs = self._fixture_match_resolver.resolve(
+                league_id,
+                fixture.home,
+                fixture.away,
+                fixture.fixture_date,
+            )
 
-        return instrument_type, instrument_id, sports_canonical_instrument_id
+        return instrument_type, instrument_id, sports_canonical_instrument_id, fixture_attrs
 
     def _extract_teams(
         self: PolymarketReferenceDataAdapter,

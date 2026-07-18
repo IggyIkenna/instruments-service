@@ -45,6 +45,11 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from .fixture_match import (
+    FixtureMatchAttributes,
+    football_league_for_sports_underlying,
+    register_fixture_match,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -845,6 +850,26 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         # not a blanket "politics/geo" bucket.
         underlying_axis = underlying_for_group(group)
         underlying = None if underlying_axis.value.startswith("SPORTS_") else underlying_axis.value
+        # Phase-E Leg-1 (prediction_consolidated_closeout_2026_07_18.md A4): honest-
+        # absence fixture-match stamp for Kalshi SOCCER markets. Kalshi titles are
+        # city-level ("Seattle vs Cleveland") with no team registry, so the team names
+        # cannot canonicalise into the shared af namespace and no af_fixture_id can be
+        # resolved yet — full Kalshi resolution is gated on the E2 team registry (out of
+        # scope). Stamp what IS honestly resolvable (af_league_id + fixture_date from the
+        # close date) with af_fixture_id=None + af_fixture_match_status=UNRESOLVED_TEAM_NAME
+        # (never a fake value). Side-table keyed by the SAME instrument_key
+        # process_write._records_to_dataframe joins by; parquet-column materialisation is
+        # the DEFERRED shared-file join.
+        _football = football_league_for_sports_underlying(underlying_axis.value)
+        if _football is not None:
+            _, _af_league_id = _football
+            register_fixture_match(
+                instrument_key,
+                FixtureMatchAttributes.team_unresolved(
+                    af_league_id=_af_league_id,
+                    fixture_date=expiry.date().isoformat() if expiry else None,
+                ),
+            )
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=self.venue,
