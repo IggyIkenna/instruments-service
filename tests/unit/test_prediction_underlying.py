@@ -130,7 +130,22 @@ class TestPolymarketUnderlying:
         date) pipeline build_sports_fixture_team_player_catalogue() uses for the
         Sports asset group's own fixture rows.
         """
+        from instruments_service.reference_data.adapters.prediction.fixture_match import (
+            PredictionFixtureResolver,
+        )
+
         adapter = PolymarketReferenceDataAdapter()
+
+        # Phase-E Leg-1: the soccer path resolves af_fixture_id off the FIXTURES parquet.
+        # Inject a hermetic (no-network) resolver so this unit test never touches GCS;
+        # canonical_instrument_id (asserted below) is unaffected by the fixture-match stamp.
+        class _NoNetworkClient:
+            def download_bytes(self, bucket: str, path: str) -> bytes | None:
+                return None
+
+        adapter._fixture_match_resolver_instance = PredictionFixtureResolver(  # pyright: ignore[reportPrivateUsage]
+            storage_client=_NoNetworkClient(), bucket="test-bucket"
+        )
         market = PolymarketGammaMarket.model_validate(
             {
                 "conditionId": "0xsports001",
