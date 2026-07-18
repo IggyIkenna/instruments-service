@@ -69,6 +69,9 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
         super().__init__(project_id=project_id, api_key=api_key)
         self._api_football_key = api_football_api_key
         self._fixture_cache: dict[str, str] = {}  # "LEAGUE:HOME:AWAY:DATE" → fixture_id
+        # Phase-E Leg-1: lazy resolver for the additive af_fixture_id soccer join
+        # (reads the shared FIXTURES parquet once per league/day; see fixture_match.py).
+        self._fixture_match_resolver_instance: _pm.PredictionFixtureResolver | None = None
         self._last_raw_page_size: int = 0
         # Captured during get_instruments() — available via get_market_metadata()
         self._last_markets: list[PolymarketGammaMarket] = []
@@ -82,6 +85,19 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
     def venue(self) -> str:
         """Return the venue identifier."""
         return "POLYMARKET"
+
+    @property
+    def _fixture_match_resolver(self) -> _pm.PredictionFixtureResolver:
+        """Lazily-built resolver for the Phase-E Leg-1 soccer af_fixture_id join.
+
+        One instance per adapter run so the per-(league, day) fixtures lookup is
+        downloaded once and reused for every soccer market on that day (mirrors
+        MTDS's ``OddsApiAdapter.fixture_resolver``). Its GCS reads degrade to
+        honest-absence, so this is safe to build even with no cloud creds.
+        """
+        if self._fixture_match_resolver_instance is None:
+            self._fixture_match_resolver_instance = _pm.PredictionFixtureResolver()
+        return self._fixture_match_resolver_instance
 
     def get_market_metadata_df(self) -> pd.DataFrame:
         """Return captured market metadata from the last ``get_instruments()`` call.
