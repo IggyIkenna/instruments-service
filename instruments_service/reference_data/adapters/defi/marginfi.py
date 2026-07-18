@@ -113,7 +113,15 @@ class MarginfiReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch MarginFi Banks (from the public bank/token metadata caches) as instruments."""
-        if instrument_type not in (None, InstrumentType.LENDING):
+        # ``instrument_type`` is a call-level GUARD (accept the whole fetch or reject
+        # it with []), not a per-record filter. This adapter MINTS the A_TOKEN (supply)
+        # + DEBT_TOKEN (borrow) split per bank (see ``_build_bank_records`` /
+        # defi_lending_atoken_debttoken_instrument_split_2026_07_07.md), mirroring
+        # morpho.py — so accept exactly those minted types (+ None = unfiltered). The
+        # pre-split ``LENDING`` literal is no longer minted; the stale guard rejected
+        # the real minted type, silently returning [] (a capture gap masquerading as
+        # empty).
+        if instrument_type not in (None, InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN):
             return []
 
         banks, token_decimals = await self._fetch_bank_and_token_caches()

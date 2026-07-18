@@ -138,6 +138,43 @@ async def test_get_instruments_only_uses_primary_market() -> None:
 
 
 @pytest.mark.asyncio
+async def test_split_types_accepted_stale_lending_rejected() -> None:
+    """Guard regression (instruments_service_defi_lending_type_guard_fix_2026_07_18):
+    each Solend reserve mints the A_TOKEN (supply) + DEBT_TOKEN (borrow) split PLUS a
+    SPOT_ASSET sibling (P4-B), so its call-level guard must ACCEPT all THREE canonical
+    minted values — each returning the WHOLE fetch, not a per-type slice — and REJECT
+    the pre-split ``LENDING`` literal, which the stale guard used to whitelist while
+    silently dropping the real minted types (a capture gap masquerading as empty).
+    """
+    adapter = SolendReferenceDataAdapter()
+    with (
+        patch.object(adapter, "_get_with_retry", return_value=_SAMPLE_MARKETS),
+        patch(
+            "instruments_service.reference_data.adapters.defi.solend.batch_resolve_creation_timestamps",
+            return_value={},
+        ),
+    ):
+        unfiltered = await adapter.get_instruments()
+        a_tokens = await adapter.get_instruments(instrument_type=InstrumentType.A_TOKEN)
+        debt_tokens = await adapter.get_instruments(instrument_type=InstrumentType.DEBT_TOKEN)
+        spot_assets = await adapter.get_instruments(instrument_type=InstrumentType.SPOT_ASSET)
+        stale_lending = await adapter.get_instruments(instrument_type=InstrumentType.LENDING)
+
+    assert unfiltered, "fixture is broken — unfiltered fetch returned no records"
+    assert {r.instrument_type for r in unfiltered} == {
+        InstrumentType.A_TOKEN,
+        InstrumentType.DEBT_TOKEN,
+        InstrumentType.SPOT_ASSET,
+    }
+    # Each canonical minted value is a call-level GUARD → the WHOLE fetch (all 3 types).
+    assert a_tokens == unfiltered
+    assert debt_tokens == unfiltered
+    assert spot_assets == unfiltered
+    # The no-longer-minted LENDING literal must now filter to [].
+    assert stale_lending == []
+
+
+@pytest.mark.asyncio
 async def test_get_instruments_no_primary_market_returns_empty() -> None:
     adapter = SolendReferenceDataAdapter()
     non_primary_only = [{**m, "isPrimary": False} for m in _SAMPLE_MARKETS]

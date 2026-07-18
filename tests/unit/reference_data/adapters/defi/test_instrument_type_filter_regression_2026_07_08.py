@@ -15,6 +15,16 @@ fix, ``beefy.py`` + the 2 already-correct reference adapters, ``aave_v3``/``spar
 asserts ``get_instruments(instrument_type=<real canonical InstrumentType value>)``
 returns non-empty when instruments genuinely exist for that adapter. This locks in the
 fix and guards adapter #27 from repeating the same casing mismatch.
+
+Follow-up (2026-07-18, instruments_service_defi_lending_type_guard_fix): the curated
+EVM lending adapters (euler_v2/benqi/venus/radiant/fluid) migrated to the A_TOKEN/
+DEBT_TOKEN split (defi_lending_atoken_debttoken_instrument_split_2026_07_07) but their
+type-guard still whitelisted only the pre-split ``LENDING`` literal — so a real caller
+passing the minted A_TOKEN/DEBT_TOKEN got ``[]`` (a capture gap masquerading as empty).
+They are therefore covered by :func:`test_get_instruments_dual_type_atoken_debttoken_split`
+below (A_TOKEN/DEBT_TOKEN ACCEPTED, stale ``LENDING`` now REJECTED) rather than the
+single-type loop; the Solana pair (solend/marginfi) carry the same regression in their
+own bespoke-fixture test modules.
 """
 
 from __future__ import annotations
@@ -110,11 +120,18 @@ def _resolver_patch(module: str) -> Callable[[], object]:
     )
 
 
-_LENDING_CASES = [
+# Post-split (defi_lending_atoken_debttoken_instrument_split_2026_07_07 + the
+# 2026-07-18 stale-guard fix): these 5 curated EVM lending adapters now MINT the
+# A_TOKEN (supply) + DEBT_TOKEN (borrow) split (like aave_v3/morpho), and their
+# call-level guard rejects the pre-split ``LENDING`` literal. They therefore join the
+# DUAL-TYPE cases below, NOT the single-type loop. ``instrument_type`` is unread by
+# the dual-type test (which drives A_TOKEN/DEBT_TOKEN directly); set to A_TOKEN for
+# documentation only.
+_CURATED_EVM_SPLIT_CASES = [
     _Case(
         label=name,
         factory=cls,
-        instrument_type=InstrumentType.LENDING,
+        instrument_type=InstrumentType.A_TOKEN,
         patch_builders=(_resolver_patch(name),),
     )
     for name, cls in _RESOLVER_ONLY_LENDING
@@ -327,9 +344,18 @@ def _morpho_case() -> _Case:
 # 2026_07_07.md) they emit TWO types (A_TOKEN + DEBT_TOKEN) per reserve/market, not a
 # single LENDING type — see test_get_instruments_dual_type_atoken_debttoken_split below
 # for their equivalent canonical-value-accepted regression coverage.
-_NETWORK_CASES = [_aave_v3_case(), _spark_case(), _compound_v3_case(), _morpho_case()]
+# Every A_TOKEN/DEBT_TOKEN-split lending adapter: the 4 subgraph adapters (own aiohttp
+# fixtures) + the 5 curated EVM adapters (resolver-only). solend/marginfi carry their
+# own split-guard regression in test_solend.py / test_marginfi.py (bespoke fixtures).
+_SPLIT_CASES = [
+    _aave_v3_case(),
+    _spark_case(),
+    _compound_v3_case(),
+    _morpho_case(),
+    *_CURATED_EVM_SPLIT_CASES,
+]
 
-ALL_CASES = [*_LENDING_CASES, *_YIELD_CASES]
+ALL_CASES = [*_YIELD_CASES]
 
 
 @pytest.mark.asyncio
@@ -376,16 +402,21 @@ async def test_get_instruments_rejects_non_matching_instrument_type(case: _Case)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", _NETWORK_CASES, ids=[c.label for c in _NETWORK_CASES])
+@pytest.mark.parametrize("case", _SPLIT_CASES, ids=[c.label for c in _SPLIT_CASES])
 async def test_get_instruments_dual_type_atoken_debttoken_split(case: _Case) -> None:
-    """aave_v3/spark/compound_v3/morpho each emit A_TOKEN (supply) + DEBT_TOKEN (borrow)
-    records per reserve/market — the dual-type equivalent of the canonical-value-accepted
-    regression above. ``instrument_type`` is a call-level GUARD on these adapters (accept
-    the whole fetch or reject it with ``[]``), not a per-record filter — a canonical
-    A_TOKEN or DEBT_TOKEN value must be ACCEPTED (the exact P0 casing-mismatch bug class)
-    rather than rejected, and the output must genuinely contain both types. An unrelated
-    type (PERPETUAL) is covered by test_get_instruments_rejects_non_matching_instrument_
-    type above for these same 4 adapters.
+    """Every A_TOKEN/DEBT_TOKEN-split lending adapter — the 4 subgraph adapters
+    (aave_v3/spark/compound_v3/morpho) PLUS the 5 curated EVM adapters (euler_v2/
+    benqi/venus/radiant/fluid, migrated to the split 2026-07-07 with their stale
+    ``LENDING`` guard fixed 2026-07-18) — emits A_TOKEN (supply) + DEBT_TOKEN
+    (borrow) records per reserve/market. ``instrument_type`` is a call-level GUARD
+    (accept the whole fetch or reject it with ``[]``), not a per-record filter, so:
+
+      * a canonical A_TOKEN / DEBT_TOKEN value must be ACCEPTED (returns the whole
+        fetch, both types present) — the exact canonical-value bug class; and
+      * the pre-split ``LENDING`` literal (which real callers no longer pass, and
+        which these adapters no longer mint) must now be REJECTED to ``[]`` — the
+        exact stale-guard bug this file's 2026-07-18 update locks in — as must any
+        unrelated type (PERPETUAL).
     """
     adapter = case.factory()
     with ExitStack() as stack:
@@ -411,3 +442,18 @@ async def test_get_instruments_dual_type_atoken_debttoken_split(case: _Case) -> 
             stack.enter_context(build_patch())
         debt_tokens = await adapter.get_instruments(instrument_type=InstrumentType.DEBT_TOKEN)
     assert debt_tokens, f"{case.label}: instrument_type=DEBT_TOKEN returned [] — canonical value rejected"
+
+    # The pre-split ``LENDING`` literal is no longer minted → the call-level guard must
+    # now reject it with [] (this is the exact bug the 2026-07-18 fix closes: the stale
+    # guard used to ACCEPT LENDING and REJECT the real minted A_TOKEN/DEBT_TOKEN). An
+    # unrelated PERPETUAL is likewise rejected.
+    for rejected in (InstrumentType.LENDING, InstrumentType.PERPETUAL):
+        adapter = case.factory()
+        with ExitStack() as stack:
+            for build_patch in case.patch_builders:
+                stack.enter_context(build_patch())
+            result = await adapter.get_instruments(instrument_type=rejected)
+        assert result == [], (
+            f"{case.label}: instrument_type={rejected!r} must filter to [] — the pre-split LENDING "
+            "literal is no longer minted, and PERPETUAL is unrelated."
+        )
