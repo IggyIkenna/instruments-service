@@ -656,8 +656,43 @@ _INSTRUMENT_TYPE_LEGACY_ALIASES: dict[str, str] = {
 #: the existing :data:`SPORTS_LEAGUE_ID_SENTINELS` "UNKNOWN" convention above.
 INSTRUMENT_TYPE_UNKNOWN = "UNKNOWN"
 
+#: DeFi lending-reserve split instrument types whose canonical ``VENUE:TYPE:SYMBOL``
+#: id ALREADY encodes the authoritative type in its middle segment. When a legacy
+#: per-date row carries a stale ``LENDING`` (or ``lending`` / ``lending_market``)
+#: ``instrument_type`` COLUMN but its id is already split (e.g.
+#: ``VENUS-BSC:A_TOKEN:ABNB-USDC``, ``SOLEND-SOLANA:DEBT_TOKEN:DEBTmSOL``), the ID
+#: WINS — so a ``--mode full`` rebuild re-derives A_TOKEN/DEBT_TOKEN/SPOT_ASSET
+#: INTRINSICALLY from the id and can never revert the split back to ``LENDING`` (the
+#: 2026-07-14 durability landmine a post-hoc data migration alone would leave
+#: re-openable on the next rebuild — the ~16.7M-row DATA migration is a separate
+#: task). The IS lending adapters (aave_v3/morpho/venus/euler_v2/benqi/radiant/fluid/
+#: marginfi/solend/…) mint EXACTLY these types; solend adds the SPOT_ASSET sibling.
+#: SSOT: defi_lending_atoken_debttoken_instrument_split_2026_07_07.md.
+_DEFI_LENDING_SPLIT_ITYPES: frozenset[str] = frozenset(
+    {InstrumentType.A_TOKEN.value, InstrumentType.DEBT_TOKEN.value, InstrumentType.SPOT_ASSET.value}
+)
 
-def _canonicalize_instrument_type(raw: str | None) -> str:
+
+def _instrument_type_from_id(instrument_id: str | None) -> str | None:
+    """Return the ``VENUE:TYPE:SYMBOL`` middle TYPE segment (uppercased), or None.
+
+    The canonical DeFi/CeFi instrument id reserves ``:`` as the top-level
+    ``VENUE:TYPE:SYMBOL`` delimiter — any internal disambiguator inside the symbol
+    segment is dash-separated (see ``morpho.py``'s ``pair_key``), so the SECOND
+    colon-segment is unambiguously the type. Returns None when the id is blank or
+    not in that 3+-segment shape (e.g. a DeFi POOL row re-keyed to a bare
+    ``pool_address``, or an id-less row). Pure + idempotent.
+    """
+    if not instrument_id:
+        return None
+    parts = instrument_id.split(":")
+    if len(parts) < 3:
+        return None
+    seg = parts[1].strip().upper()
+    return seg or None
+
+
+def _canonicalize_instrument_type(raw: str | None, instrument_id: str | None = None) -> str:
     """Canonicalise a raw per-date ``instrument_type`` value to the UAC vocabulary.
 
     Deterministic + pure — applied at catalogue-row EMISSION time only (never
@@ -666,6 +701,14 @@ def _canonicalize_instrument_type(raw: str | None) -> str:
     the perp-family checks — is unaffected; they already defensively
     ``.strip().upper()`` at their own read sites):
 
+      0. DeFi lending-reserve split — when the emitted ``instrument_id`` already
+         encodes an A_TOKEN/DEBT_TOKEN/SPOT_ASSET type in its ``VENUE:TYPE:SYMBOL``
+         middle segment (:data:`_DEFI_LENDING_SPLIT_ITYPES`), that ID is
+         AUTHORITATIVE over the raw column — so a stale ``LENDING`` column can never
+         revert an already-split row on a ``--mode full`` rebuild (durability
+         landmine 2026-07-14). Scoped to the split types only; every other id's TYPE
+         segment (PERPETUAL/SPOT_PAIR/POOL/…) falls through to the raw-column logic
+         below UNCHANGED, so existing CeFi/pool behaviour is byte-for-byte preserved;
       1. blank / ``None`` / the literal string ``"None"`` → the single honest
          :data:`INSTRUMENT_TYPE_UNKNOWN` sentinel (never fabricated, never the
          literal ``"None"``);
@@ -681,6 +724,9 @@ def _canonicalize_instrument_type(raw: str | None) -> str:
     BYBIT carried ``['', 'FUTURE', 'PERPETUAL', 'SPOT_PAIR', 'futures_chain',
     'perpetual']``, and the literal string ``'None'`` also appears.
     """
+    id_type = _instrument_type_from_id(instrument_id)
+    if id_type in _DEFI_LENDING_SPLIT_ITYPES:
+        return id_type
     text = (raw or "").strip()
     if not text or text == "None":
         return INSTRUMENT_TYPE_UNKNOWN
@@ -1453,8 +1499,14 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 # Canonicalised at EMISSION only (see _canonicalize_instrument_type's
                 # docstring) — agg.meta itself stays raw so _canonicalize_cefi_rollup_id
                 # above (called with agg.meta, not this row dict) keeps its existing
-                # behaviour byte-for-byte.
-                "instrument_type": _canonicalize_instrument_type(agg.meta["instrument_type"]),
+                # behaviour byte-for-byte. The emitted ``canonical_id`` is passed so a
+                # DeFi lending row whose id already carries the A_TOKEN/DEBT_TOKEN/
+                # SPOT_ASSET split segment emits that split type INTRINSICALLY (id is
+                # authoritative over a stale ``LENDING`` column — durability landmine
+                # 2026-07-14; the split can never revert on a --mode full rebuild).
+                "instrument_type": _canonicalize_instrument_type(
+                    agg.meta["instrument_type"], instrument_id=canonical_id
+                ),
                 "venue": bare_venue,
                 "chain": chain,
                 "league_id": agg.meta["league_id"] or "",

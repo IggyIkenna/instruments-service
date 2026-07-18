@@ -144,19 +144,36 @@ async def test_instrument_type_filter_rejects_non_lending() -> None:
 
 
 @pytest.mark.asyncio
-async def test_canonical_lending_type_is_accepted() -> None:
-    """P0 regression guard: real callers filter on the canonical uppercase
-    ``InstrumentType.LENDING`` value. A prior guard compared against the
-    lowercase literal ``"lending_market"`` instead, which never matched and
-    silently returned ``[]`` for any canonical-form request — see
-    canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08.md. The lowercase
-    literal was never a real alias; it was the bug itself, so it is now
-    correctly rejected like any other non-matching value.
+async def test_canonical_split_types_accepted_stale_lending_rejected() -> None:
+    """P0 regression guard: these adapters MINT the A_TOKEN (supply) + DEBT_TOKEN
+    (borrow) split (defi_lending_atoken_debttoken_instrument_split_2026_07_07), so
+    real callers filter on the canonical ``InstrumentType.A_TOKEN`` /
+    ``InstrumentType.DEBT_TOKEN`` values. ``instrument_type`` is a call-level GUARD
+    (accept the whole fetch or reject with ``[]``), not a per-record filter, so
+    either minted value returns the FULL supply+debt fetch.
+
+    The pre-split ``LENDING`` literal — which the stale guard used to whitelist while
+    silently rejecting the real minted A_TOKEN/DEBT_TOKEN (a capture gap masquerading
+    as empty; instruments_service_defi_lending_type_guard_fix_2026_07_18) — and the
+    never-real lowercase ``"lending_market"`` literal (the earlier
+    canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08 bug) are now BOTH correctly
+    rejected like any other non-matching value.
     """
     adapter = VenusReferenceDataAdapter(chain="BSC")
     with patch(_RESOLVER_PATHS["venus"], return_value={}):
-        assert await adapter.get_instruments(instrument_type=InstrumentType.LENDING)
-        assert await adapter.get_instruments(instrument_type="lending_market") == []
+        unfiltered = await adapter.get_instruments()
+        a_tokens = await adapter.get_instruments(instrument_type=InstrumentType.A_TOKEN)
+        debt_tokens = await adapter.get_instruments(instrument_type=InstrumentType.DEBT_TOKEN)
+        stale_lending = await adapter.get_instruments(instrument_type=InstrumentType.LENDING)
+        legacy_literal = await adapter.get_instruments(instrument_type="lending_market")
+
+    # A canonical minted value is a call-level GUARD → returns the WHOLE fetch.
+    assert a_tokens == unfiltered
+    assert debt_tokens == unfiltered
+    assert {r.instrument_type for r in unfiltered} == {InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN}
+    # The no-longer-minted LENDING literal (and the never-real lowercase alias) → [].
+    assert stale_lending == []
+    assert legacy_literal == []
 
 
 @pytest.mark.asyncio
