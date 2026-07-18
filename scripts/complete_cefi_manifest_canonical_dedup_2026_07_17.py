@@ -103,9 +103,20 @@ against the canonical ``captured`` twin regardless of which lane fulfilled it).
 KEEP-trend policy (operator CORRECTIONS 2026-07-18) — this script now DROPS almost nothing.
 ``KALSHI-PERP`` / ``POLYMARKET-PERP`` are KEPT (roadmap placeholder venues); blank-id rows
 are KEPT (roadmap + null-id bundle shards); chain BUNDLE rows are KEPT; blank venue/data_type
-are KEPT. The ONLY drop is a genuine catalogue-orphan (a resolvable-shaped bare id whose
-(venue, wire) the catalogue SSOT does not know), and even that is non-captured only. A
-targeted venue cull is HELD pending explicit operator confirmation. ``COMBO`` is CANONICAL.
+are KEPT. Non-cull drops are a genuine catalogue-orphan (a resolvable-shaped bare id whose
+(venue, wire) the catalogue SSOT does not know), non-captured only. ``COMBO`` is CANONICAL.
+
+DROP-VENUE CULL (operator-CONFIRMED 2026-07-18) — every row for ``_CULL_VENUES``
+(BINANCE-DELIVERY, BITSTAMP, HUOBI, GEMINI, PHEMEX, DRIFT, PACIFICA, MANGO, ZETA, FLASH,
+SOLAYER, PICASSO, CAMBRIAN) is DROPPED, INCLUDING captured-with-data — the ONE operator-
+authorized exception to the captured-data-safe invariant (snapshot-first ⇒ reversible). The
+report prints the per-venue cull rows / captured-with-data / ticks so the operator sees the
+impact (esp. BINANCE-DELIVERY's COIN-M). KALSHI-PERP/POLYMARKET-PERP/LIGHTER-ZKSYNC/
+EXTENDED-STARKNET are explicitly NOT culled.
+
+Definitive venue-suffix itype (2026-07-18): a ``-SPOT`` venue is ONLY SPOT_PAIR and a ``-SWAP``
+venue ONLY PERPETUAL, so the suffix CORRECTS a mis-set column itype (fixed BYBIT-SPOT rows
+carrying a stray PERPETUAL that made the wire-map miss).
 
   DATA-CORRECTNESS CARVE-OUT (HARD RULE, this script): a row that would DROP is PROTECTED
   (kept honest-unresolved, itype-normalised) when it is ``captured`` with ``row_count > 0``
@@ -217,6 +228,10 @@ _PERP_MAX = 500_000
 # catalogue regression made a huge population look like orphans.
 _MAX_TOTAL_DROPPED = 400_000
 
+# STOP-ON-SURPRISE: an upper bound on the drop-venue cull row count (13 venues, INCLUDING
+# captured-with-data). A blow-past means a wrong venue slipped into ``_CULL_VENUES``.
+_MAX_CULL_DROPPED = 800_000
+
 # ---------------------------------------------------------------------------
 # Track-6 canonical-form constants (operator rulings 2026-07-18).
 # ---------------------------------------------------------------------------
@@ -285,9 +300,27 @@ _KEEP_ITYPES = frozenset({"PERPETUAL", "FUTURE", "OPTION", "SPOT_PAIR", "COMBO"}
 # BYBIT/OKX are DELIBERATELY absent (mixed spot+deriv → cannot infer from the venue).
 _DERIV_VENUES = frozenset({"DERIBIT", "BINANCE-DELIVERY", "BITMEX"})
 
-# No venue is dropped by this script (coordinator CORRECTION 2026-07-18): KALSHI-PERP /
-# POLYMARKET-PERP are KEPT (roadmap placeholder venues, empty now); a targeted venue cull is
-# HELD pending explicit operator confirmation.
+# DROP-VENUE CULL — operator CONFIRMED 2026-07-18 ("yeah cull drop venue"). Every manifest row
+# for these venues is DROPPED, INCLUDING captured-with-data: this is the ONE operator-authorized
+# exception to the captured-data-safe invariant (snapshot-first, so it is reversible). NOT in the
+# cull (KEPT): KALSHI-PERP, POLYMARKET-PERP, LIGHTER-ZKSYNC, EXTENDED-STARKNET.
+_CULL_VENUES: frozenset[str] = frozenset(
+    {
+        "BINANCE-DELIVERY",
+        "BITSTAMP",
+        "HUOBI",
+        "GEMINI",
+        "PHEMEX",
+        "DRIFT",
+        "PACIFICA",
+        "MANGO",
+        "ZETA",
+        "FLASH",
+        "SOLAYER",
+        "PICASSO",
+        "CAMBRIAN",
+    }
+)
 
 # bare-``OKX`` remap candidates (operator ruling #2: try each, keep the one that resolves).
 _OKX_REMAP = ("OKX-SWAP", "OKX-SPOT", "OKX-FUTURES")
@@ -600,12 +633,21 @@ def _resolve_itype(
     is dated else ``PERPETUAL``). A bare mixed venue (bare ``BYBIT``/``OKX``) returns ``None``.
     """
     it = _ITYPE_ALIASES.get(raw_itype.strip().upper(), raw_itype.strip().upper())
+    vu = venue.strip().upper()
+    # DEFINITIVE venue-suffix override (2026-07-18): a ``-SPOT`` venue trades ONLY spot and a
+    # ``-SWAP`` venue ONLY perpetuals, so the suffix is authoritative — it CORRECTS a mis-set
+    # column itype (measured: BYBIT-SPOT rows carrying a stray ``PERPETUAL`` itype that made the
+    # wire-map miss). ``-FUTURES`` is NOT definitive (it mixes FUTURE + PERPETUAL) so it stays a
+    # last-resort inference below.
+    if vu.endswith("-SPOT"):
+        return "SPOT_PAIR"
+    if vu.endswith("-SWAP"):
+        return "PERPETUAL"
     dated = _dated_itype(raw_symbol)
     if dated and (it == "PERPETUAL" or it not in _KEEP_ITYPES):
         return dated
     if it in _KEEP_ITYPES:
         return it
-    vu = venue.strip().upper()
     inferred = itype_infer.get((vu, raw_symbol.strip().upper()))
     if inferred:
         return inferred
@@ -614,9 +656,9 @@ def _resolve_itype(
         return "FUTURE"
     if dtu == "OPTIONS_CHAIN":
         return "OPTION"
-    if vu.endswith("-SPOT"):
-        return "SPOT_PAIR"
-    if vu.endswith(("-FUTURES", "-SWAP", "-PERP")) or vu in _DERIV_VENUES:
+    # ``-SPOT``/``-SWAP`` already returned above (definitive). ``-FUTURES``/``-PERP`` + bare
+    # derivatives venues are a last-resort mixed inference (FUTURE when dated, else PERPETUAL).
+    if vu.endswith(("-FUTURES", "-PERP")) or vu in _DERIV_VENUES:
         return "FUTURE" if _DATED_RE.search(raw_symbol) else "PERPETUAL"
     return None
 
@@ -870,6 +912,9 @@ def _canonicalize_blob(
         "bare_underlying_genuine": 0,
         "dropped_orphan": 0,
         "dropped_captured_with_data": 0,
+        "cull_dropped": 0,
+        "cull_dropped_captured_data": 0,
+        "cull_ticks": 0,
     }
     required = {
         "capture_status",
@@ -940,11 +985,21 @@ def _canonicalize_blob(
     row_count = pd.to_numeric(df["row_count"], errors="coerce").fillna(0)
     captured_data = captured & (row_count > 0)
 
+    # DROP-VENUE CULL (operator-CONFIRMED 2026-07-18) — every row for a culled venue is dropped,
+    # INCLUDING captured-with-data (the ONE authorized exception to the captured-data-safe
+    # invariant; snapshot-first makes it reversible). Match the bare venue AND its venue-chain-
+    # glued form (the Solana perp DEXs are stored as ``PACIFICA-SOLANA`` etc.), but NEVER a
+    # longer DIFFERENT venue (``BINANCE-DELIVERY-`` won't match ``BINANCE-FUTURES``).
+    vu = orig_venue.str.upper()
+    cull_mask = vu.isin(_CULL_VENUES)
+    for _c in _CULL_VENUES:
+        cull_mask = cull_mask | vu.str.startswith(_c + "-")
+
     # DATA-CORRECTNESS carve-out: a drop-intent row that is captured-with-data is PROTECTED
-    # (kept, itype normalised) rather than dropped.
+    # (kept, itype normalised) rather than dropped — EXCEPT on a culled venue.
     drop_intent = intent_ser == "drop"
-    drop_flag = drop_intent & (~captured_data)
-    protected = drop_intent & captured_data
+    drop_flag = (drop_intent & (~captured_data)) | cull_mask
+    protected = drop_intent & captured_data & (~cull_mask)
 
     # --- counters (computed BEFORE the id/itype columns are reassigned) ---
     # venue-prefixed = the id's first ':'-segment equals the venue (case-insensitive).
@@ -979,8 +1034,12 @@ def _canonicalize_blob(
     stats["blank_axis_kept"] = int((via_ser == "blank_axis_kept").sum())
     stats["unresolved_kept"] = int((via_ser == "unresolved_kept").sum())
     stats["protected_captured"] = int(protected.sum())
-    stats["dropped_orphan"] = int((drop_flag & (dclass_ser == "orphan")).sum())
-    stats["dropped_captured_with_data"] = int((drop_flag & captured_data).sum())  # invariant: 0
+    stats["dropped_orphan"] = int((drop_flag & (~cull_mask) & (dclass_ser == "orphan")).sum())
+    # invariant: 0 NON-cull captured-with-data dropped (the cull is the ONLY authorized exception).
+    stats["dropped_captured_with_data"] = int((drop_flag & (~cull_mask) & captured_data).sum())
+    stats["cull_dropped"] = int(cull_mask.sum())
+    stats["cull_dropped_captured_data"] = int((cull_mask & captured_data).sum())
+    stats["cull_ticks"] = int(row_count[cull_mask].sum())
     # DATED-WIRE itype-fix (Option A): rows whose itype went PERPETUAL/blank -> FUTURE/OPTION.
     dated_fix_mask = (
         new_itype.isin({"FUTURE", "OPTION"})
@@ -997,6 +1056,20 @@ def _canonicalize_blob(
     chain_dt = df["data_type"].astype(str).str.upper().isin(_BUNDLE_DATA_TYPES)
     stats["bare_underlying_bundle"] = int((bare_unres & chain_dt).sum())
     stats["bare_underlying_genuine"] = int((bare_unres & ~chain_dt).sum())
+
+    # Per-venue cull impact (rows | captured-with-data | ticks) — esp. BINANCE-DELIVERY COIN-M.
+    if bool(cull_mask.any()):
+        cull_df = pd.DataFrame(
+            {"venue": orig_venue[cull_mask].str.upper(), "rc": row_count[cull_mask], "cd": captured_data[cull_mask]}
+        )
+        for ven, grp in cull_df.groupby("venue", sort=False):
+            logger.info(
+                "  CULL %-18s rows=%d captured-with-data=%d ticks=%d",
+                ven,
+                len(grp),
+                int(grp["cd"].sum()),
+                int(grp["rc"].sum()),
+            )
 
     # --- apply: reassign id/itype for every kept row; retarget okx-remap venues ---
     out = df.copy()
@@ -1401,9 +1474,15 @@ def main(argv: list[str] | None = None) -> int:
         totals.get("protected_captured", 0),
     )
     logger.info(
-        "  DROPPED                 : %d  (genuine catalogue-orphans, non-captured only; captured-with-data in set=%d [MUST be 0])",
+        "  DROPPED (orphans)       : %d  (genuine catalogue-orphans, non-captured only; NON-cull captured-with-data in set=%d [MUST be 0])",
         total_dropped,
         totals.get("dropped_captured_with_data", 0),
+    )
+    logger.info(
+        "  DROP-VENUE CULL         : %d rows (operator-CONFIRMED; incl. %d captured-with-data / %d ticks — the ONE authorized captured-data-drop exception, snapshot-first)",
+        totals.get("cull_dropped", 0),
+        totals.get("cull_dropped_captured_data", 0),
+        totals.get("cull_ticks", 0),
     )
     logger.info("  --- reconcile + de-dup ---")
     logger.info(
@@ -1446,8 +1525,15 @@ def main(argv: list[str] | None = None) -> int:
         surprised = True
     if totals.get("dropped_captured_with_data", 0) != 0:
         logger.error(
-            "STOP-ON-SURPRISE (DATA LOSS): %d captured-with-data rows are in the drop set — the carve-out failed.",
+            "STOP-ON-SURPRISE (DATA LOSS): %d NON-cull captured-with-data rows are in the drop set — the carve-out failed.",
             totals.get("dropped_captured_with_data", 0),
+        )
+        surprised = True
+    if totals.get("cull_dropped", 0) > _MAX_CULL_DROPPED:
+        logger.error(
+            "STOP-ON-SURPRISE: drop-venue cull count %d exceeds cap %d — a wrong venue may be in _CULL_VENUES.",
+            totals.get("cull_dropped", 0),
+            _MAX_CULL_DROPPED,
         )
         surprised = True
     if surprised:
