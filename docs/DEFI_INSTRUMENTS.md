@@ -19,7 +19,10 @@ batch-vs-live swap-capture split.
 **In scope for this doc**:
 
 - **DEX pools**: Uniswap V2/V3/V4, Balancer, Curve, plus 7 Uniswap-V3-fork/Messari-schema DEXes (PancakeSwap_V3,
-  Sushiswap_V3/Sushiswap, Camelot_V3, Aerodrome_V3, TraderJoe_V2, Velodrome_V2) and GMX (perps-via-pool).
+  Sushiswap_V3/Sushiswap, Camelot_V3, Aerodrome_V3, TraderJoe_V2, Velodrome_V2) and GMX — a DEX-pool-shaped
+  **perpetual** (discovered via the shared Uniswap-V3 adapter, but its canonical `instrument_type` target is
+  `perpetual` with `asset_group=defi`, not `POOL`, even though it is pool-shaped; the `POOL` typing in the
+  coverage / `glued_pair_id` tables below is the pre-canonicalization state).
 - **Lending**: Aave_V3, Spark, Compound_V3, Morpho, Euler_V2, Fluid, Radiant, Venus, Benqi.
 - **Yield-bearing / LST / restaking**: Lido, EtherFi, Ethena, RocketPool, Renzo, KelpDAO, Puffer, Symbiotic, Karak,
   Convex, Idle, Yearn(\_V3), Beefy, Pendle, EigenLayer.
@@ -47,8 +50,12 @@ migrated in production data. Full detail, decision rationale, and open todos:
 
 ### DEX pools
 
-- **Target format**: `VENUE-CHAIN:POOL:TOKEN0-TOKEN1[-FEE_TIER]`, fee tier a real Uniswap-V3-style basis-point value
-  (100/500/3000/10000), dash-separated. `pool_address` is its own column, not the entire identity key.
+- **Target format (canonical_instrument_id — the symbolic form)**: `VENUE-CHAIN:POOL:TOKEN0-TOKEN1[-FEE_TIER]`, fee
+  tier a real Uniswap-V3-style basis-point value (100/500/3000/10000), dash-separated. This symbolic form is the
+  **`canonical_instrument_id`** (materialized today as `glued_pair_id`), **not** the machine key: under the DeFi
+  two-id model (Option A) the `instrument_id` for POOL rows stays `pool_address.lower()` — the address-anchored
+  machine/join key — and `pool_address` is its own column. POOL rows legitimately DIVERGE between the two ids; that is
+  the decided design, not a mismatch to reconcile or migrate away.
 - **Current adapter code**: all 13 DEX-pool protocols in scope (the 5 native adapter classes — Uniswap V2/V3/V4,
   Balancer, Curve — plus the 8 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug`, see "Adapter
   architecture" below) build a structured key — `instrument_key = f"{venue_tag}:POOL:{base}-{quote}[-{fee_bps}]"`
@@ -67,27 +74,26 @@ migrated in production data. Full detail, decision rationale, and open todos:
   `glued_pair_id` — it does **not** touch `instrument_id` for POOL rows, which is a separate, deliberately-different
   field (next bullet).
 
-- **RE-VERIFIED 2026-07-09, finding corrected — this is NOT a simple catalog-regeneration gap.** The
-  2026-07-08 framing ("the persisted catalog predates the current adapter code... the fix is likely a catalog
-  regeneration/backfill against the current adapter code, not a from-scratch code change") is **incomplete**: reading
+- **RE-VERIFIED 2026-07-09 — `instrument_id = pool_address.lower()` for POOL rows is the INTENDED machine/join key
+  (DeFi two-id model, Option A), not a gap.** An earlier framing treated the persisted catalog's bare-address
+  `instrument_id` as stale/wrong ("the fix is likely a catalog regeneration/backfill... to flip it to the structured
+  form"); the operator ruling (DeFi two-id model, Option A) is that this is **not** the design. Reading
   `scripts/build_instrument_catalogue.py::_defi_pool_dual_form()` directly shows the catalogue ROLLUP step (which
-  runs strictly downstream of adapter discovery and is what actually writes `prod/catalog.parquet`) **unconditionally**
+  runs strictly downstream of adapter discovery and is what actually writes `prod/catalog.parquet`) **deliberately**
   sets `instrument_id = pool_address.lower()` for every DeFi POOL-typed row, via UAC's
-  `DefiPoolIdentity.canonical_instrument_id` (`unified_api_contracts/canonical/crosscutting/defi.py:299-301`) — by
-  design, not staleness. Re-running instrument discovery against the current (now-fixed) adapter code and re-rolling
-  the catalogue would **still** write the bare pool address into `instrument_id`, because that decision is made in
-  the rollup, not the adapter. This is **load-bearing, live, cross-repo**: `market-tick-data-service`'s
+  `DefiPoolIdentity.canonical_instrument_id` (`unified_api_contracts/canonical/crosscutting/defi.py:299-301`) — the
+  correct behaviour by design, not staleness. The symbolic `VENUE-CHAIN:POOL:...` form is the SEPARATE
+  `canonical_instrument_id` (materialized as `glued_pair_id`), not `instrument_id`; POOL rows legitimately DIVERGE
+  between the two. This division is **load-bearing, live, cross-repo**: `market-tick-data-service`'s
   `engine/defi_catalog_reader.py` reads `instrument_id` from this exact catalogue expecting `pool_address.lower()`
   for POOL rows (its own fallback deriver `_canonical_defi_id` independently recomputes the identical value) to
-  build its expected-universe join for DEX swap/pool market data — flipping `instrument_id` to the structured form
-  for POOL rows without a coordinated MTDS-side change would silently break that join for all 13 protocols. This is
-  exactly the class of change the canonicalization doc's already-planned "ground-up migration (UAC →
-  instruments-service → MTDS → strategy-service → deployment, live breakage explicitly authorized)" exists for — it
-  is **not** achievable as an instruments-service-only regen, and needs an explicit operator go-ahead + an MTDS-side
-  companion change shipped in lockstep, not a same-session smoke test. (Independently corroborated by
-  `scripts/balancer_cross_chain_pool_address_collision_backfill_2026_07_08.py`'s own header, which already flagged
-  the bare-`pool_address` `instrument_id` as "a known, already-documented architectural gap... that has not yet
-  shipped as a catalog-wide migration" — this pass adds the root-cause mechanism and the MTDS blocking dependency.)
+  build its expected-universe join for DEX swap/pool market data — so `instrument_id` MUST stay the address machine
+  key; flipping it to the structured form would silently break that join for all 13 protocols. There is therefore
+  **no** address→symbol `instrument_id` rewrite to schedule and no "gap" to close: the symbolic form already lives in
+  `canonical_instrument_id`/`glued_pair_id` and the address form is the intended machine key. (The
+  `scripts/balancer_cross_chain_pool_address_collision_backfill_2026_07_08.py` header's older "known architectural
+  gap... not yet shipped as a catalog-wide migration" note reflects the superseded framing — under Option A the
+  divergence is by design, not a pending cleanup.)
 
   **The good news**: the target structured form already exists TODAY, in a separate, already-populated column —
   `glued_pair_id` (0 nulls across all 6,352 real POOL rows for the 13 protocols, verified live against
@@ -146,31 +152,25 @@ migrated in production data. Full detail, decision rationale, and open todos:
   ongoing backfill grew the population between the two dates but it was stable within 2026-07-09 itself between the
   smoke test and the real write a few hours later.) Idempotent — re-running the script against the now-canonical
   catalog reports 0 rewrites (dry-run-verified). Script kept in `scripts/` per its own `Delete-when:` marker (delete
-  once a re-run shows 0 remaining mismatches AND the `instrument_id` migration below lands, at which point
-  `glued_pair_id` becomes redundant).
+  once a re-run shows 0 remaining mismatches). `glued_pair_id` is the symbolic `canonical_instrument_id` under the
+  two-id model and is **not** made redundant by any `instrument_id` change — the address-anchored `instrument_id` and
+  the symbolic id coexist permanently by design (Option A).
 
-- **`instrument_id` catalogue regeneration — CONFIRMED STILL BLOCKED 2026-07-09, not attempted.** Re-checked both
-  halves of the blocker for real before deciding not to touch `instrument_id`: (1)
-  `market-tick-data-service/market_tick_data_service/engine/defi_catalog_reader.py` still reads `instrument_id`
+- **`instrument_id` for POOL rows stays `pool_address.lower()` — by design (two-id model, Option A), NOT a blocked
+  migration.** Both facts once framed as a "blocker" are actually the design working as intended: (1)
+  `market-tick-data-service/market_tick_data_service/engine/defi_catalog_reader.py` reads `instrument_id`
   directly off this exact catalogue expecting `pool_address.lower()` for POOL rows (its own fallback deriver
-  `_canonical_defi_id` independently recomputes the identical bare-address value) to build its expected-universe
-  join for DEX swap/pool market data — confirmed live in the current MTDS tree, not stale; (2)
-  `build_instrument_catalogue.py::_defi_pool_dual_form()` still unconditionally sets `instrument_id =
-pool_address.lower()` for every POOL row by design (the catalogue rollup step, not the adapter) — a regen/backfill
-  alone, even against the now-fixed adapter code, would still write the bare address. So this is **not** a bounded,
-  safely-scriptable regeneration the way `glued_pair_id` was: flipping `instrument_id` to the structured
-  `VENUE-CHAIN:POOL:...` form for POOL rows requires a coordinated MTDS-side change shipped in lockstep (MTDS's
-  reader + its `_canonical_defi_id` fallback both need the new shape at the same time `instrument_id` changes, or the
-  live DEX swap/pool market-data join breaks for all 13 protocols simultaneously) plus an explicit operator
-  go-ahead for that cross-repo, live-breakage-authorized migration — exactly the class of change
-  `instrument_id_format_canonicalization_2026_07_08.md`'s already-scoped "ground-up migration (UAC →
-  instruments-service → MTDS → strategy-service → deployment)" exists for. **Not run in this pass** — the real,
-  precise blocker (not a guess) is: no MTDS-side companion change exists yet, and none was authorized for this pass.
-  `glued_pair_id` (now canonical, see above) is the safe interim substitute for any human-readable/UI consumer until
-  that cross-repo migration ships.
+  `_canonical_defi_id` independently recomputes the identical address value) to build its expected-universe
+  join for DEX swap/pool market data — this is the INTENDED join key, confirmed live in the current MTDS tree; (2)
+  `build_instrument_catalogue.py::_defi_pool_dual_form()` sets `instrument_id = pool_address.lower()` for every POOL
+  row deliberately (the catalogue rollup step, not the adapter). There is no address→symbol `instrument_id` rewrite
+  to schedule: the symbolic `VENUE-CHAIN:POOL:...` form is the separate `canonical_instrument_id`/`glued_pair_id`,
+  and the address form is the machine key MTDS joins on. Flipping `instrument_id` to the symbolic form would break
+  that join for all 13 protocols and is explicitly NOT the target. `glued_pair_id` (canonical, see above) is the
+  permanent symbolic id for any human-readable/UI consumer.
 
-- **Known gap, data state**: the `instrument_id`/MTDS cross-repo migration above remains the only unresolved piece
-  of finding 2 — see the migration doc above for current status and the dedicated todo.
+- **Not a gap**: the `instrument_id` = address / `canonical_instrument_id` = symbolic divergence for POOL rows is the
+  decided two-id model (Option A), not an unresolved item of finding 2.
 
 ### Lending — A_TOKEN/DEBT_TOKEN split (from `defi_lending_atoken_debttoken_instrument_split_2026_07_07.md`)
 
@@ -440,16 +440,20 @@ per group:
   `JUPITER-SOLANA:SPOT:SOL-USDC` → `JUPITER-SOLANA:SPOT_PAIR:SOL-USDC`.
   (Flash Trade's equivalent fix is moot — `flash_trade.py` was removed 2026-07-15, operator ruling; see
   "Remaining known limitation" below.)
-- **EigenLayer, EthFi — `GOVERNANCE_TOKEN` shorthand fixed 2026-07-09** (new finding, same C4 class): both adapters
-  keyed `:GOVERNANCE_TOKEN:` while the field already correctly said `InstrumentType.SPOT_PAIR` (`GOVERNANCE_TOKEN` is
-  not a real `InstrumentType` member). Keys fixed to `:SPOT_PAIR:` to match the field. This also fixed a real
-  canonical-form type-filter bug (same class as
+- **EigenLayer, EthFi — `GOVERNANCE_TOKEN` shorthand + wrong `SPOT_PAIR` field (target: `SPOT_ASSET`)**: both
+  adapters historically keyed `:GOVERNANCE_TOKEN:` (not a real `InstrumentType` member). EIGEN and ETHFI are each a
+  SINGLE on-chain governance token, so the correct canonical type is **`SPOT_ASSET`** (a single on-chain token), NOT
+  `SPOT_PAIR` (a two-token quoted market) — consistent with this doc's own "Restaking (`SPOT_ASSET`-typed)"
+  classification for EigenLayer below. The 2026-07-09 pass changed the key to `:SPOT_PAIR:` to match the adapters'
+  then-current `InstrumentType.SPOT_PAIR` field, but that field is itself the contradiction: a single token is never
+  a `SPOT_PAIR`. **Target (migration pending — `eigenlayer.py`/`ethfi.py` + this doc): both key and field become
+  `SPOT_ASSET`.** The same pass also fixed a real canonical-form type-filter bug (same class as
   `canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08.md`): both adapters' `get_instruments(instrument_type=...)`
   guard only matched the literal strings `"GOVERNANCE_TOKEN"`/`"governance_token"`, so filtering by the adapters' own
-  real field value (`InstrumentType.SPOT_PAIR`) silently returned `[]`; the guard now accepts
-  `InstrumentType.SPOT_PAIR` too (plus the legacy strings, back-compat). Real before/after:
-  `EIGENLAYER-ETHEREUM:GOVERNANCE_TOKEN:EIGEN` → `EIGENLAYER-ETHEREUM:SPOT_PAIR:EIGEN`,
-  `ETHERFI-GOV-ETHEREUM:GOVERNANCE_TOKEN:ETHFI` → `ETHERFI-GOV-ETHEREUM:SPOT_PAIR:ETHFI`.
+  field value silently returned `[]`; the guard now accepts the enum too (plus the legacy strings, back-compat).
+  Target before/after:
+  `EIGENLAYER-ETHEREUM:GOVERNANCE_TOKEN:EIGEN` → `EIGENLAYER-ETHEREUM:SPOT_ASSET:EIGEN`,
+  `ETHERFI-GOV-ETHEREUM:GOVERNANCE_TOKEN:ETHFI` → `ETHERFI-GOV-ETHEREUM:SPOT_ASSET:ETHFI`.
 - **COMPOUND_V3's `SUPPLY`/`BORROW` key segments — migrated 2026-07-13** (supersedes the 2026-07-09 "deliberately
   left as-is" review this bullet originally described): the real crash-risk key segments (`SUPPLY`/`BORROW`, neither
   a valid `InstrumentType` — a real `UnknownInstrumentTypeError` risk had either ever reached
@@ -461,11 +465,21 @@ per group:
   `build_canonical_instrument_id` can now represent both real enum members, but `compound_v3.py`'s `instrument_key`
   construction has not yet been retrofitted to route through it (still an ad hoc f-string) — that remains open,
   tracked in `canonical_id_builder_retrofit_checklist_2026_07_08.md`.
-- **Remaining known limitation** — 5 more Solana/DeFi venues (meteora, phoenix, lifinity, kamino,
-  marinade) still share the `PERP`/`SPOT`-vs-`PERPETUAL`/`SPOT_PAIR` shorthand mismatch class (e.g. `meteora.py` keys
-  `:SPOT:` against `instrument_type=InstrumentType.SPOT_PAIR`) — out of this pass's scope, a known follow-up for
-  whichever pass covers the rest of Solana-native DeFi conventions. (`mango`/`zeta` — which shared this same
-  limitation — were removed 2026-07-15 along with `flash_trade`, operator ruling; no longer applicable.)
+- **Remaining known limitation / misclassification** — several more Solana/DeFi venues (meteora, phoenix, lifinity,
+  kamino, marinade) carry a type mismatch, but it is NOT uniformly the `SPOT`-vs-`SPOT_PAIR` shorthand — the correct
+  target type depends on what each venue actually is:
+  - **meteora, lifinity, kamino** are Solana AMM-DEX / liquidity pools — an AMM spot pool is **never** `SPOT_PAIR`;
+    the canonical type is `DEX_POOL`/`SOLANA_AMM_POOL` (e.g. `meteora.py` currently keys `:SPOT:` against
+    `instrument_type=InstrumentType.SPOT_PAIR`, which is doubly wrong — the shorthand AND the AMM-as-`SPOT_PAIR`
+    classification).
+  - **marinade** is a Solana LST/staking protocol — its single staked-SOL token is `STAKING`/`LST`, not `SPOT_PAIR`.
+  - **phoenix** (an on-chain orderbook DEX) and **jupiter** (an aggregator quoting a two-token market) are
+    legitimately `SPOT_PAIR` — a two-token quoted market — once the `:SPOT:`→`:SPOT_PAIR:` key shorthand is fixed.
+
+  These reclassifications are out of this pass's scope, a known follow-up for whichever pass covers the rest of
+  Solana-native DeFi conventions. (`mango`/`zeta` — which shared the shorthand limitation — were removed 2026-07-15
+  along with `flash_trade`, operator ruling; no longer applicable.)
+
 - **Shared canonical-id builder adoption (2026-07-09)**: Sanctum/Solblaze/Jito-restaking/EigenLayer/EthFi/
   (Drift adopted this too, historically; removed entirely 2026-07-16 -- operator ruling: all Solana perp DEXes
   dropped except Jupiter, not integrated.)
@@ -889,9 +903,14 @@ All 3 axes are **derived**, not hand-curated literals, so the rule can never sil
   MVP⊆P invariant is deliberate (`instrument_universe_registry_consolidation_2026_06_29.md` Decision D) — MVP
   membership feeds the honest-coverage reachable denominator, so tagging a not-yet-producible venue MVP=true would
   mint a phantom expected-but-never-captured cell.
-- **Instrument types** (9, up from a prior curated 4): every real `InstrumentType` value a live adapter actually
-  emits — `POOL`, `LENDING`, `A_TOKEN`, `DEBT_TOKEN`, `LST`, `YIELD_BEARING`, `PERPETUAL`, `SPOT_PAIR`, `STAKING`
-  (verified against live adapter code; drops the never-real `DEX_POOL` placeholder the prior rule carried).
+- **Instrument types**: every real `InstrumentType` value a live adapter actually
+  emits — `POOL`, `A_TOKEN`, `DEBT_TOKEN`, `LST`, `YIELD_BEARING`, `PERPETUAL`, `SPOT_PAIR`, `SPOT_ASSET`, `STAKING`,
+  plus `DEX_POOL`/`SOLANA_AMM_POOL` for Solana spot-DEX (AMM) shards (verified against live adapter code). Legacy flat
+  `LENDING` is **retired** — all 9 lending protocols emit the `A_TOKEN`/`DEBT_TOKEN` split (see the lending table
+  above), so `LENDING` is no longer an emitted type. `DEX_POOL`/`SOLANA_AMM_POOL` is a **real** classification for
+  Solana spot-DEX (AMM) pools, not a never-real placeholder — its scarcity in captured data is a downstream symptom
+  of the Solana AMM-DEX-as-`SPOT_PAIR` misclassification (see "Remaining known limitation" above), not evidence the
+  type is fictional.
 - **Data types** (25, up from a prior curated 6): the full `DATA_TYPES_BY_ASSET_GROUP["defi"]` list — dex pool
   state/swaps, lending/utilization indices, LST rates, perp funding, oracle prices, gas fees, rewards/risk params,
   liquidation/flash-loan/bridge/mev/governance events, vault share price/APY/TVL, native staking rates, and more.
@@ -992,8 +1011,11 @@ per-swap events and hourly OHLCV as **two independently-fetched data_types today
   (+ every 30s for `dex_pool_state`), reusing the exact same GraphQL field shape + `SubgraphService` client the
   batch `uniswap_v3_adapter.py` already relies on — deliberately polling-based rather than a raw `eth_subscribe`
   Swap-event log decode, so live and batch read the identical data source (this workspace's "Live = batch" hard
-  rule). Instrument IDs match the batch adapter byte-for-byte:
-  `UNISWAP_V3-ETHEREUM:POOL:{base}-{quote}:{fee}@ETHEREUM`. **Known gap, explicit**: a live authenticated
+  rule). Instrument IDs match the batch adapter. The canonical POOL form is the 3-segment
+  `UNISWAP_V3-ETHEREUM:POOL:{base}-{quote}-{fee_bps}` — fee dash-inside the symbol, in basis points, and **no**
+  trailing `@ETHEREUM` (the `UNISWAP_V3-ETHEREUM` venue-chain prefix already carries the chain), consistent with the
+  `glued_pair_id` target grammar above. (The older colon-before-fee, `@ETHEREUM`-suffixed shape
+  `UNISWAP_V3-ETHEREUM:POOL:{base}-{quote}:{fee}@ETHEREUM` is the pre-canonicalization form, not the target.) **Known gap, explicit**: a live authenticated
   round-trip against the real Graph-Network gateway could not be verified in the building agent's sandbox (no
   Secret-Manager access there for a real `thegraph-api-key`); query-field correctness was instead verified by
   construction against this repo's own already-shipped batch query + UAC's `GraphPoolHourData` schema. Separately
