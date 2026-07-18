@@ -733,12 +733,14 @@ def test_rollup_cefi_row_carries_through_adapter_populated_canonical_instrument_
                 _snapshot(
                     [
                         {
-                            "instrument_key": "DERIBIT:OPTION:BTC@INV-20260713-56000-C",
-                            "canonical_instrument_id": "DERIBIT:OPTION:BTC@INV-20260713-56000-C",
+                            "instrument_key": "DERIBIT:OPTION:BTC-USD@INV-20260713-56000-C",
+                            "canonical_instrument_id": "DERIBIT:OPTION:BTC-USD@INV-20260713-56000-C",
                             "venue": "DERIBIT",
                             "instrument_type": "OPTION",
                             "raw_symbol": "BTC-13JUL26-56000-C",
                             "base_asset": "BTC",
+                            "quote_asset": "USD",
+                            "margin_type": "inverse",
                         }
                     ]
                 ),
@@ -746,7 +748,7 @@ def test_rollup_cefi_row_carries_through_adapter_populated_canonical_instrument_
         ]
     )
     row = df.to_dict("records")[0]
-    assert row["canonical_instrument_id"] == "DERIBIT:OPTION:BTC@INV-20260713-56000-C"
+    assert row["canonical_instrument_id"] == "DERIBIT:OPTION:BTC-USD@INV-20260713-56000-C"
 
 
 def test_rollup_cefi_row_backfills_canonical_instrument_id_from_instrument_key(rollup: ModuleType) -> None:
@@ -887,6 +889,112 @@ def test_rollup_canonical_instrument_id_mirrors_rebuilt_future_id(
     assert row["canonical_instrument_id"] == expected, (
         "canonical_instrument_id must MIRROR the canonicalized instrument_id"
     )
+
+
+# ---------------------------------------------------------------------------
+# DERIBIT dated-quote heal (operator ruling 2026-07-18): legacy ``by_date``
+# snapshot rows still carrying the quote-less ``DERIBIT:FUTURE:AVAX@LIN-…`` /
+# ``DERIBIT:OPTION:BTC@INV-…`` form are self-healed to the quote-carrying
+# canonical shape at roll-up (so a rebuild-from-snapshot need not re-fetch
+# Deribit's ~264k historical rows). DERIBIT-scoped + idempotent.
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalizeCefiDeribitDatedQuote:
+    def test_linear_future_inserts_usdc(self, rollup: ModuleType) -> None:
+        """The exact live FUTURE defect row: raw ``AVAX_USDC-1APR26`` (linear)."""
+        meta = {
+            "instrument_type": "FUTURE",
+            "venue": "DERIBIT",
+            "base_asset": "AVAX",
+            "quote_asset": "USDC",
+            "margin_type": "linear",
+        }
+        healed = rollup._canonicalize_cefi_deribit_dated_quote("DERIBIT:FUTURE:AVAX@LIN-20260401", meta)
+        assert healed == "DERIBIT:FUTURE:AVAX-USDC@LIN-20260401"
+
+    def test_inverse_option_inserts_usd(self, rollup: ModuleType) -> None:
+        """The exact live OPTION defect row: raw ``BTC-5APR19-3250-C`` (inverse)."""
+        meta = {
+            "instrument_type": "OPTION",
+            "venue": "DERIBIT",
+            "base_asset": "BTC",
+            "quote_asset": "USD",
+            "margin_type": "inverse",
+        }
+        healed = rollup._canonicalize_cefi_deribit_dated_quote("DERIBIT:OPTION:BTC@INV-20190405-3250-C", meta)
+        assert healed == "DERIBIT:OPTION:BTC-USD@INV-20190405-3250-C"
+
+    def test_falls_back_to_margin_type_when_quote_asset_blank(self, rollup: ModuleType) -> None:
+        """No quote_asset on the row → operator rule linear→USDC / inverse→USD."""
+        meta = {"instrument_type": "FUTURE", "venue": "DERIBIT", "base_asset": "AVAX", "margin_type": "linear"}
+        healed = rollup._canonicalize_cefi_deribit_dated_quote("DERIBIT:FUTURE:AVAX@LIN-20260401", meta)
+        assert healed == "DERIBIT:FUTURE:AVAX-USDC@LIN-20260401"
+
+    def test_idempotent_on_already_quote_carrying_id(self, rollup: ModuleType) -> None:
+        """A post-fix id (base segment already has the quote) is left byte-identical."""
+        meta = {
+            "instrument_type": "OPTION",
+            "venue": "DERIBIT",
+            "base_asset": "BTC",
+            "quote_asset": "USD",
+            "margin_type": "inverse",
+        }
+        canonical = "DERIBIT:OPTION:BTC-USD@INV-20190405-3250-C"
+        assert rollup._canonicalize_cefi_deribit_dated_quote(canonical, meta) == canonical
+
+    def test_no_op_for_non_deribit_venue(self, rollup: ModuleType) -> None:
+        """Zero blast radius: a non-DERIBIT dated id is untouched even if quote-less."""
+        meta = {"instrument_type": "FUTURE", "venue": "BYBIT", "base_asset": "BTC", "margin_type": "inverse"}
+        other = "BYBIT:FUTURE:BTC@INV-20231201"
+        assert rollup._canonicalize_cefi_deribit_dated_quote(other, meta) == other
+
+    def test_no_op_for_quote_less_non_marker_legacy_shape(self, rollup: ModuleType) -> None:
+        """A raw DDMMMYY legacy shape (no ``@``) is left to the sibling rebuilders."""
+        meta = {"instrument_type": "OPTION", "venue": "DERIBIT", "base_asset": "BTC", "margin_type": "inverse"}
+        raw = "DERIBIT:OPTION:BTC-2JAN24"
+        assert rollup._canonicalize_cefi_deribit_dated_quote(raw, meta) == raw
+
+    def test_degrades_when_no_quote_resolvable(self, rollup: ModuleType) -> None:
+        """No quote_asset and no margin_type → degrade (return unchanged), never guess."""
+        meta = {"instrument_type": "FUTURE", "venue": "DERIBIT", "base_asset": "AVAX"}
+        quote_less = "DERIBIT:FUTURE:AVAX@LIN-20260401"
+        assert rollup._canonicalize_cefi_deribit_dated_quote(quote_less, meta) == quote_less
+
+
+def test_rollup_heals_legacy_quote_less_deribit_snapshot_end_to_end(rollup: ModuleType) -> None:
+    """A legacy DERIBIT ``by_date`` snapshot row (quote-less ``@`` form, captured
+    before the 2026-07-18 adapter fix) is healed to the quote-carrying canonical
+    shape on BOTH surfaces (instrument_id + canonical_instrument_id mirror) at
+    roll-up — proving the fix propagates via a rebuild-from-snapshot, not only a
+    re-capture.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "DERIBIT:FUTURE:AVAX@LIN-20260401",
+                            "canonical_instrument_id": "DERIBIT:FUTURE:AVAX@LIN-20260401",
+                            "venue": "DERIBIT",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "AVAX_USDC-1APR26",
+                            "base_asset": "AVAX",
+                            "quote_asset": "USDC",
+                            "margin_type": "linear",
+                            "expiry": "2026-04-01",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "DERIBIT:FUTURE:AVAX-USDC@LIN-20260401"
+    assert row["canonical_instrument_id"] == "DERIBIT:FUTURE:AVAX-USDC@LIN-20260401"
 
 
 def test_rollup_canonical_instrument_id_mirrors_instrument_id_for_every_cefi_row(

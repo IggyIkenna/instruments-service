@@ -1108,6 +1108,10 @@ class TestCCXTAdapterComprehensive:
         assert result.instrument_type == InstrumentType.OPTION
         assert result.strike == Decimal("50000.0")
         assert result.option_type == OptionType.CALL
+        # Operator ruling 2026-07-18: the quote is ALWAYS present — DERIBIT included.
+        # A BTC inverse option is USD-quoted → id carries BASE-QUOTE@INV (no longer
+        # the dropped BTC@INV form that hit the fail-loud builder).
+        assert result.instrument_key == "DERIBIT:OPTION:BTC-USD@INV-20260627-50000-C"
 
     def test_parse_ccxt_market_option_without_strike_returns_none(self) -> None:
         """Options without strike are skipped (combo/conditional)."""

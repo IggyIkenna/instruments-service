@@ -157,20 +157,30 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
           ``_build_canonical_perpetual_key`` → ``VENUE:PERPETUAL:BASE-QUOTE@LIN|INV``.
         * FUTURE/OPTION with ``margin_type`` + ``expiry`` resolved (OPTION also
           needs ``strike``/``option_type``): shared ``_build_canonical_future_key``/
-          ``_build_canonical_option_key`` → ``VENUE:TYPE:BASE[-QUOTE]@LIN|INV-
-          YYYYMMDD[-STRIKE-C|P]``. DERIBIT drops the quote segment for dated
-          derivatives (its real target format — matches Tardis's ``exchange ==
-          "deribit"`` special case); every other margined venue keeps it.
+          ``_build_canonical_option_key`` → ``VENUE:TYPE:BASE-QUOTE@LIN|INV-
+          YYYYMMDD[-STRIKE-C|P]``. The quote is ALWAYS present — DERIBIT included
+          (operator ruling 2026-07-18, superseding the earlier "Deribit drops the
+          quote for dated derivatives" special case; mirrors the same removal in
+          ``tardis/adapter.py``). ccxt usually populates ``market["quote"]``
+          ("USD" inverse / "USDC" linear for Deribit); a DERIBIT-scoped fallback
+          derives it from the margin type when ccxt left it blank, so a marked id
+          never reaches the fail-loud builder without a quote.
         * Falls back to the legacy ``VENUE:TYPE:BASE-QUOTE`` /
           ``VENUE:TYPE:RAW_SYMBOL`` shape (unchanged from before this wiring)
           when the margin/expiry/strike/right inputs the target format needs
           aren't resolvable — shard-level isolation, never raise.
         """
-        if instrument_type is InstrumentType.PERPETUAL and margin_type is not None and base and quote:
-            return _build_canonical_perpetual_key(canonical_venue, base, quote, margin_type)
+        # Deribit's quote resolves to USDC (linear, USDC-settled) / USD (inverse,
+        # coin-settled). Fallback ONLY when ccxt didn't populate the quote and a
+        # margin type is resolved — DERIBIT-scoped so a non-Deribit linear (e.g.
+        # BINANCE USDT) is never mis-defaulted to USDC.
+        resolved_quote = quote
+        if canonical_venue == "DERIBIT" and not resolved_quote and margin_type is not None:
+            resolved_quote = "USDC" if margin_type is MarginType.LINEAR else "USD"
+        if instrument_type is InstrumentType.PERPETUAL and margin_type is not None and base and resolved_quote:
+            return _build_canonical_perpetual_key(canonical_venue, base, resolved_quote, margin_type)
         if instrument_type is InstrumentType.FUTURE and margin_type is not None and expiry is not None and base:
-            dated_quote = "" if canonical_venue == "DERIBIT" else quote
-            return _build_canonical_future_key(canonical_venue, base, dated_quote, margin_type, expiry)
+            return _build_canonical_future_key(canonical_venue, base, resolved_quote, margin_type, expiry)
         if (
             instrument_type is InstrumentType.OPTION
             and margin_type is not None
@@ -179,10 +189,9 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
             and option_type is not None
             and base
         ):
-            dated_quote = "" if canonical_venue == "DERIBIT" else quote
             option_right = "C" if option_type is OptionType.CALL else "P"
             return _build_canonical_option_key(
-                canonical_venue, base, dated_quote, margin_type, expiry, strike, option_right
+                canonical_venue, base, resolved_quote, margin_type, expiry, strike, option_right
             )
         if instrument_type in (InstrumentType.SPOT_PAIR, InstrumentType.PERPETUAL) and base and quote:
             symbol = f"{base.upper()}-{quote.upper()}"

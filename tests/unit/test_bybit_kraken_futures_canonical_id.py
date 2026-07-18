@@ -393,9 +393,32 @@ class TestCanonicalSymbolBuilders:
     def test_dated_derivative_with_strike_and_right(self) -> None:
         expiry = datetime(2026, 7, 10, tzinfo=UTC)
         result = _build_dated_derivative_canonical_symbol(
-            "BTC", "", MarginType.INVERSE, expiry, strike=Decimal("48000"), option_right="C"
+            "BTC", "USD", MarginType.INVERSE, expiry, strike=Decimal("48000"), option_right="C"
         )
-        assert result == "BTC@INV-20260710-48000-C"
+        assert result == "BTC-USD@INV-20260710-48000-C"
+
+    def test_marker_without_quote_raises_fail_loud(self) -> None:
+        """Operator ruling 2026-07-18: a resolved @LIN/@INV marker with NO quote
+        is a contradiction — the builder RAISES rather than silently dropping to
+        a base-only symbol (the exact ``AVAX@LIN`` defect that lost 265k quotes).
+        """
+        expiry = datetime(2026, 7, 10, tzinfo=UTC)
+        with pytest.raises(ValueError, match=r"marker.*quote"):
+            _build_dated_derivative_canonical_symbol("BTC", "", MarginType.INVERSE, expiry)
+        with pytest.raises(ValueError, match=r"marker.*quote"):
+            _build_dated_derivative_canonical_symbol(
+                "BTC", "", MarginType.LINEAR, expiry, strike=Decimal("48000"), option_right="C"
+            )
+        with pytest.raises(ValueError, match=r"marker.*quote"):
+            _build_perpetual_canonical_symbol("BTC", "", MarginType.INVERSE)
+
+    def test_no_marker_no_quote_degrades_to_bare_base_no_raise(self) -> None:
+        """When the margin type is UNRESOLVED (no marker), a bare-BASE degrade is
+        still allowed — only the marker-present / quote-absent contradiction raises.
+        """
+        expiry = datetime(2026, 7, 10, tzinfo=UTC)
+        assert _build_perpetual_canonical_symbol("BTC", "", None) == "BTC"
+        assert _build_dated_derivative_canonical_symbol("BTC", "", None, expiry) == "BTC-20260710"
 
 
 class TestCanonicalKeyBuildersRoutedThroughSharedUacBuilder:

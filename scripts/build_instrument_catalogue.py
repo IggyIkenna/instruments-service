@@ -945,6 +945,58 @@ def _canonicalize_cefi_perp_id(instrument_id: str, meta: dict[str, str | None]) 
     return build_instrument_id(venue, InstrumentType.PERPETUAL, f"{base}-{quote}", margin_marker=marker)
 
 
+#: Operator-decided DERIBIT quote fallback when a legacy snapshot row carries no
+#: ``quote_asset`` (operator ruling 2026-07-18): linear → USDC (USDC-settled),
+#: inverse → USD (coin-settled). NOT a guess — the operator's explicit derivation
+#: rule for the two DERIBIT margin families.
+_DERIBIT_MARGIN_QUOTE: dict[str, str] = {"linear": "USDC", "inverse": "USD"}
+
+
+def _canonicalize_cefi_deribit_dated_quote(instrument_id: str, meta: dict[str, str | None]) -> str:
+    """Insert the missing BASE-QUOTE quote into a legacy DERIBIT dated-derivative id.
+
+    Pre-2026-07-18, DERIBIT dated FUTURE/OPTION ids dropped the quote segment
+    (``DERIBIT:FUTURE:AVAX@LIN-20260401`` / ``DERIBIT:OPTION:BTC@INV-20190405-3250-C``)
+    — every OTHER venue already keeps it (BYBIT ``BTC-USDT``, KRAKEN ``XBT-USD``).
+    The operator's 2026-07-18 ruling makes the quote ALWAYS present regardless of
+    venue/asset class (``DERIBIT:FUTURE:AVAX-USDC@LIN-20260401`` /
+    ``DERIBIT:OPTION:BTC-USD@INV-20190405-3250-C``). The reference-data adapters
+    (``tardis/adapter.py``, ``deribit_options_adapter.py``) now stamp the quote at
+    capture time; this roll-up self-heals any LEGACY ``by_date`` snapshot row still
+    carrying the quote-less ``@`` form so a rebuild-from-snapshot (no re-fetch of
+    Deribit's ~264k historical rows) also emits the canonical shape — the same
+    legacy-snapshot healing pattern as :func:`_canonicalize_cefi_future_id` /
+    :func:`_canonicalize_cefi_perp_id`.
+
+    A pure string insert (``-QUOTE`` before ``@``), NOT a rebuild: the expiry /
+    strike / option-right suffix after ``@`` is already canonical and preserved
+    byte-for-byte; only the base segment needs the quote. DERIBIT-scoped +
+    idempotent — a no-op for any other venue, a non-FUTURE/OPTION row, a
+    quote-less non-``@`` legacy shape (left to the sibling rebuilders), or an id
+    whose base segment already carries the quote (already-canonical). Degrades
+    (returns unchanged) when no quote can be resolved. Pure.
+    """
+    if (meta.get("instrument_type") or "").strip().upper() not in ("FUTURE", "OPTION"):
+        return instrument_id
+    parts = instrument_id.split(":", 2)
+    if len(parts) != 3 or parts[0].strip().upper() != "DERIBIT":
+        return instrument_id
+    body = parts[2]
+    if "@" not in body:
+        # Quote-less non-marker legacy shape (e.g. raw ``BTC-2JAN24``) — not this
+        # helper's job; the sibling @LIN/@INV rebuilders own the marker form.
+        return instrument_id
+    base_seg, marker_seg = body.split("@", 1)
+    if "-" in base_seg:
+        return instrument_id  # base segment already carries the quote — idempotent no-op
+    quote = (meta.get("quote_asset") or "").strip()
+    if not quote:
+        quote = _DERIBIT_MARGIN_QUOTE.get((meta.get("margin_type") or "").strip().lower(), "")
+    if not quote:
+        return instrument_id  # degrade, never guess
+    return f"{parts[0]}:{parts[1]}:{base_seg}-{quote.upper()}@{marker_seg}"
+
+
 def _canonicalize_cefi_rollup_id(instrument_id: str, meta: dict[str, str | None]) -> str:
     """Apply EVERY roll-up CeFi id-canonicalization step to ``instrument_id``, in order.
 
@@ -954,10 +1006,17 @@ def _canonicalize_cefi_rollup_id(instrument_id: str, meta: dict[str, str | None]
     dated-FUTURE rebuild ran on the emitted id only, leaving the mirror on the stale
     raw-glued form). Every no-op guard lives in the individual helpers, so this is a
     no-op for non-CeFi / already-canonical rows. Pure + idempotent.
+
+    The DERIBIT dated-quote heal runs LAST: the sibling ``@LIN``/``@INV`` rebuilders
+    produce the marker form (from a raw-glued legacy id), then the heal ensures its
+    BASE-QUOTE segment carries the quote (operator ruling 2026-07-18) — and it is a
+    no-op on an already-canonical quote-carrying id.
     """
     if not instrument_id:
         return instrument_id
-    return _canonicalize_cefi_perp_id(_canonicalize_cefi_future_id(instrument_id, meta), meta)
+    return _canonicalize_cefi_deribit_dated_quote(
+        _canonicalize_cefi_perp_id(_canonicalize_cefi_future_id(instrument_id, meta), meta), meta
+    )
 
 
 def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
