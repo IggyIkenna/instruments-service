@@ -5,9 +5,11 @@ Covers Phase-E Leg-1 (``prediction_consolidated_closeout_2026_07_18.md`` A4):
 * Polymarket ``PredictionFixtureResolver.resolve`` — MATCHED (af_fixture_id found
   in the injected FIXTURES parquet) + UNRESOLVED_TEAM_NAME (team resolves but is
   not in the lookup) + NO_FIXTURE_DATA (no parquet).
-* Kalshi honest-absence stamping — a Kalshi soccer market gets
-  ``af_fixture_match_status=UNRESOLVED_TEAM_NAME`` with ``af_fixture_id=None``
-  (full Kalshi resolution is gated on the E2 team registry).
+* Kalshi soccer resolution (Phase-E Leg-2 / E2) — the participant pair is parsed
+  off the Kalshi title and fed into the SAME alias index + FIXTURES resolver: a
+  club whose rendering is in the alias index resolves (MATCHED when the fixture
+  parquet is present), a genuinely-absent rendering stays honest
+  ``UNRESOLVED_TEAM_NAME`` with ``af_fixture_id=None`` (never a fake value).
 
 All GCS reads are hermetic: the resolver is constructed with an in-memory fake
 storage client, never touching the network.
@@ -25,6 +27,7 @@ from instruments_service.reference_data.adapters.prediction.fixture_match import
     PredictionFixtureResolver,
     fixture_match_for_instrument_key,
     football_league_for_sports_underlying,
+    parse_kalshi_soccer_participants,
     reset_fixture_match_registry,
 )
 from instruments_service.reference_data.adapters.prediction.kalshi import KalshiReferenceDataAdapter
@@ -119,26 +122,84 @@ def test_football_league_for_sports_underlying() -> None:
     assert football_league_for_sports_underlying("BTC") is None  # not a sports underlying at all
 
 
-def test_kalshi_soccer_honest_absence_stamped() -> None:
-    """A Kalshi EPL market stamps UNRESOLVED_TEAM_NAME with af_fixture_id=None.
+def test_parse_kalshi_soccer_participants() -> None:
+    """The title parser extracts (home, away), stripping the market-type suffix."""
+    # EPL/BUN/LALIGA/SERIEA/LIGUE1 GAME titles: "{Home} vs {Away} Winner?"
+    assert parse_kalshi_soccer_participants("Liverpool vs Brentford Winner?") == ("Liverpool", "Brentford")
+    assert parse_kalshi_soccer_participants("Manchester City vs Aston Villa Winner?") == (
+        "Manchester City",
+        "Aston Villa",
+    )
+    # Colon-suffixed variant ("… : Regulation Time Moneyline").
+    assert parse_kalshi_soccer_participants("Real Madrid vs Bilbao: Regulation Time Moneyline") == (
+        "Real Madrid",
+        "Bilbao",
+    )
+    # Bare "X vs Y" with no suffix still works.
+    assert parse_kalshi_soccer_participants("Arsenal vs Chelsea") == ("Arsenal", "Chelsea")
+    # Non-fixture / non-parseable titles yield None (→ caller honest-absence).
+    assert parse_kalshi_soccer_participants("Bitcoin above 95000?") is None
+    assert parse_kalshi_soccer_participants(None) is None
+    assert parse_kalshi_soccer_participants("") is None
 
-    Kalshi carries city-level titles with no team registry (gated on E2), so the
-    honest outcome is 'league + date known, teams + fixture id unresolved'.
+
+def _kalshi_soccer_raw(title: str) -> dict[str, object]:
+    """A minimal Kalshi EPL GAME market payload with the given title."""
+    return {
+        "ticker": "KXEPLGAME-26MAY24LFCBRE-LFC",
+        "event_ticker": "KXEPLGAME-26MAY24LFCBRE",
+        "series_ticker": "KXEPLGAME",
+        "title": title,
+        "status": "active",
+        "close_time": "2026-05-24T18:00:00Z",
+        "open_time": "2026-05-01T00:00:00Z",
+    }
+
+
+def test_kalshi_soccer_resolves_when_alias_present() -> None:
+    """A Kalshi EPL market whose clubs ARE in the alias index resolves to a real
+    af_fixture_id when the FIXTURES parquet carries the fixture — MATCHED, no fake.
     """
     reset_fixture_match_registry()
     adapter = KalshiReferenceDataAdapter()
+    # Inject the resolver with an in-memory FIXTURES parquet (hermetic — no GCS).
+    adapter._fixture_resolver_instance = _resolver_with(  # pyright: ignore[reportPrivateUsage]
+        _fixtures_parquet_bytes("Arsenal", "Chelsea", 55555)
+    )
 
     record = adapter._parse_market(  # pyright: ignore[reportPrivateUsage]
-        {
-            "ticker": "KXEPLGAME-25AUG16ARSCHE",
-            "event_ticker": "KXEPLGAME-25AUG16",
-            "series_ticker": "KXEPLGAME",
-            "title": "Arsenal vs Chelsea",
-            "status": "active",
-            "close_time": "2026-08-16T18:00:00Z",
-            "open_time": "2026-08-01T00:00:00Z",
-        },
-        datetime.now(UTC),
+        _kalshi_soccer_raw("Arsenal vs Chelsea Winner?"), datetime.now(UTC)
+    )
+
+    assert record is not None
+    attrs = fixture_match_for_instrument_key(record.instrument_key)
+    assert attrs is not None
+    assert attrs.af_fixture_match_status == FixtureMatchStatus.MATCHED
+    assert attrs.af_fixture_id == 55555
+    assert attrs.af_league_id == 39  # EPL
+    assert attrs.home_team_canonical_id == "ARSENAL"
+    assert attrs.away_team_canonical_id == "CHELSEA"
+    assert attrs.fixture_date == "2026-05-24"  # close date keys the day lookup
+
+
+def test_kalshi_soccer_honest_absence_when_alias_missing() -> None:
+    """A Kalshi soccer market whose rendering is NOT in the alias index stays
+    honest UNRESOLVED_TEAM_NAME with af_fixture_id=None + null canonical ids.
+
+    "Bilbao" / "Vallecano" are Kalshi short-form renderings genuinely absent from
+    the shared alias index (worklist for the deferred team_mappings addition), so
+    the honest outcome is 'league + date known, teams + fixture id unresolved'.
+    """
+    reset_fixture_match_registry()
+    adapter = KalshiReferenceDataAdapter()
+    # A fixtures parquet is present, but the team names never canonicalise, so the
+    # resolver short-circuits to UNRESOLVED_TEAM_NAME before the lookup.
+    adapter._fixture_resolver_instance = _resolver_with(  # pyright: ignore[reportPrivateUsage]
+        _fixtures_parquet_bytes("Athletic Club", "Rayo Vallecano", 77777)
+    )
+
+    record = adapter._parse_market(  # pyright: ignore[reportPrivateUsage]
+        _kalshi_soccer_raw("Bilbao vs Vallecano Winner?"), datetime.now(UTC)
     )
 
     assert record is not None
@@ -147,9 +208,9 @@ def test_kalshi_soccer_honest_absence_stamped() -> None:
     assert attrs.af_fixture_match_status == FixtureMatchStatus.UNRESOLVED_TEAM_NAME
     assert attrs.af_fixture_id is None
     assert attrs.af_league_id == 39  # EPL — resolvable from the ticker
-    assert attrs.home_team_canonical_id is None  # no Kalshi team registry yet
-    assert attrs.away_team_canonical_id is None
-    assert attrs.fixture_date == "2026-08-16"  # close date is honestly resolvable
+    assert attrs.home_team_canonical_id is None  # "Bilbao" not in alias index
+    assert attrs.away_team_canonical_id is None  # "Vallecano" not in alias index
+    assert attrs.fixture_date == "2026-05-24"  # close date is honestly resolvable
 
 
 def test_kalshi_non_soccer_market_not_stamped() -> None:
