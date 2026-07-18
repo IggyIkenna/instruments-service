@@ -32,7 +32,7 @@ ARG PROJECT_ID
 # in-image (cloudbuild=70dbc75f-c8db-4245-b3bb-fd175829f6b3, SUCCESS).
 # Digest sha256:be51b33f... = UTL AR 0.55.0/latest.
 # Issue: tradfi_unreachable_databento_data_types_mbp10_ohlcv_coarse_calendar_2026_07_15.md.
-ARG BASE_IMAGE_DIGEST=sha256:be51b33ff0f399d13f0e81628c16fefda60c385c3ff8452141b5cb784718f2c3
+ARG BASE_IMAGE_DIGEST=sha256:796c33b9ac71c2dfd676999384fe2b27232f5995cf29888ba62b65aaab8030cc
 ARG BASE_IMAGE=asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-library/unified-trading-library@${BASE_IMAGE_DIGEST}
 FROM --platform=linux/amd64 ${BASE_IMAGE}
 

@@ -945,6 +945,58 @@ def _canonicalize_cefi_perp_id(instrument_id: str, meta: dict[str, str | None]) 
     return build_instrument_id(venue, InstrumentType.PERPETUAL, f"{base}-{quote}", margin_marker=marker)
 
 
+#: Operator-decided DERIBIT quote fallback when a legacy snapshot row carries no
+#: ``quote_asset`` (operator ruling 2026-07-18): linear → USDC (USDC-settled),
+#: inverse → USD (coin-settled). NOT a guess — the operator's explicit derivation
+#: rule for the two DERIBIT margin families.
+_DERIBIT_MARGIN_QUOTE: dict[str, str] = {"linear": "USDC", "inverse": "USD"}
+
+
+def _canonicalize_cefi_deribit_dated_quote(instrument_id: str, meta: dict[str, str | None]) -> str:
+    """Insert the missing BASE-QUOTE quote into a legacy DERIBIT dated-derivative id.
+
+    Pre-2026-07-18, DERIBIT dated FUTURE/OPTION ids dropped the quote segment
+    (``DERIBIT:FUTURE:AVAX@LIN-20260401`` / ``DERIBIT:OPTION:BTC@INV-20190405-3250-C``)
+    — every OTHER venue already keeps it (BYBIT ``BTC-USDT``, KRAKEN ``XBT-USD``).
+    The operator's 2026-07-18 ruling makes the quote ALWAYS present regardless of
+    venue/asset class (``DERIBIT:FUTURE:AVAX-USDC@LIN-20260401`` /
+    ``DERIBIT:OPTION:BTC-USD@INV-20190405-3250-C``). The reference-data adapters
+    (``tardis/adapter.py``, ``deribit_options_adapter.py``) now stamp the quote at
+    capture time; this roll-up self-heals any LEGACY ``by_date`` snapshot row still
+    carrying the quote-less ``@`` form so a rebuild-from-snapshot (no re-fetch of
+    Deribit's ~264k historical rows) also emits the canonical shape — the same
+    legacy-snapshot healing pattern as :func:`_canonicalize_cefi_future_id` /
+    :func:`_canonicalize_cefi_perp_id`.
+
+    A pure string insert (``-QUOTE`` before ``@``), NOT a rebuild: the expiry /
+    strike / option-right suffix after ``@`` is already canonical and preserved
+    byte-for-byte; only the base segment needs the quote. DERIBIT-scoped +
+    idempotent — a no-op for any other venue, a non-FUTURE/OPTION row, a
+    quote-less non-``@`` legacy shape (left to the sibling rebuilders), or an id
+    whose base segment already carries the quote (already-canonical). Degrades
+    (returns unchanged) when no quote can be resolved. Pure.
+    """
+    if (meta.get("instrument_type") or "").strip().upper() not in ("FUTURE", "OPTION"):
+        return instrument_id
+    parts = instrument_id.split(":", 2)
+    if len(parts) != 3 or parts[0].strip().upper() != "DERIBIT":
+        return instrument_id
+    body = parts[2]
+    if "@" not in body:
+        # Quote-less non-marker legacy shape (e.g. raw ``BTC-2JAN24``) — not this
+        # helper's job; the sibling @LIN/@INV rebuilders own the marker form.
+        return instrument_id
+    base_seg, marker_seg = body.split("@", 1)
+    if "-" in base_seg:
+        return instrument_id  # base segment already carries the quote — idempotent no-op
+    quote = (meta.get("quote_asset") or "").strip()
+    if not quote:
+        quote = _DERIBIT_MARGIN_QUOTE.get((meta.get("margin_type") or "").strip().lower(), "")
+    if not quote:
+        return instrument_id  # degrade, never guess
+    return f"{parts[0]}:{parts[1]}:{base_seg}-{quote.upper()}@{marker_seg}"
+
+
 def _canonicalize_cefi_rollup_id(instrument_id: str, meta: dict[str, str | None]) -> str:
     """Apply EVERY roll-up CeFi id-canonicalization step to ``instrument_id``, in order.
 
@@ -954,10 +1006,17 @@ def _canonicalize_cefi_rollup_id(instrument_id: str, meta: dict[str, str | None]
     dated-FUTURE rebuild ran on the emitted id only, leaving the mirror on the stale
     raw-glued form). Every no-op guard lives in the individual helpers, so this is a
     no-op for non-CeFi / already-canonical rows. Pure + idempotent.
+
+    The DERIBIT dated-quote heal runs LAST: the sibling ``@LIN``/``@INV`` rebuilders
+    produce the marker form (from a raw-glued legacy id), then the heal ensures its
+    BASE-QUOTE segment carries the quote (operator ruling 2026-07-18) — and it is a
+    no-op on an already-canonical quote-carrying id.
     """
     if not instrument_id:
         return instrument_id
-    return _canonicalize_cefi_perp_id(_canonicalize_cefi_future_id(instrument_id, meta), meta)
+    return _canonicalize_cefi_deribit_dated_quote(
+        _canonicalize_cefi_perp_id(_canonicalize_cefi_future_id(instrument_id, meta), meta), meta
+    )
 
 
 def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
@@ -2815,6 +2874,52 @@ def _to_parquet_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+def _shrink_drop_diagnostics(new_df: pd.DataFrame, prev_df: pd.DataFrame) -> dict[str, object]:
+    """Describe WHICH instruments a rejected new catalogue drops vs the current one.
+
+    Turns an opaque ``CATALOGUE_SHRINK_BLOCKED`` into a reviewable report: an operator
+    can see exactly what a ``--allow-catalogue-shrink`` would delete BEFORE deciding.
+    Returns counts by venue / instrument_type, an active-vs-delisted split, and a small
+    id sample.
+
+    Root cause of the recurring shrink class (F8, measured 2026-07-18): a ``--mode full``
+    rebuild UNDER-produces the CUMULATIVE all-instruments-ever set the incremental frozen
+    tail preserves — the dropped rows are dominated by DELISTED instruments (``available_to``
+    set) that a fresh full aggregation no longer surfaces (e.g. a full defi rebuild dropped
+    2,378 rows, 2,346 of them delisted DeFi pools/tokens). This is the SAME class as the
+    2026-07-15 sports incident; the durable fix is to reuse the frozen-tail merge
+    (:func:`_merge_incremental`) for full-mode too so a rebuild never silently loses the
+    cumulative set. Until then the guard + this diagnostic keep full-mode SAFE (blocks +
+    reports rather than silently shrinking).
+    """
+    if "instrument_id" not in new_df.columns or "instrument_id" not in prev_df.columns:
+        return {"error": "no instrument_id column on one side"}
+    new_ids = set(new_df["instrument_id"].astype(str))
+    prev_ids = set(prev_df["instrument_id"].astype(str))
+    dropped_ids = prev_ids - new_ids
+    dropped = prev_df[prev_df["instrument_id"].astype(str).isin(dropped_ids)]
+
+    def _top(col: str, n: int = 15) -> dict[str, int]:
+        if col not in dropped.columns:
+            return {}
+        return {str(k): int(v) for k, v in dropped[col].astype(str).value_counts().head(n).items()}
+
+    active = delisted = 0
+    if "available_to" in dropped.columns:
+        available_to = pd.to_datetime(dropped["available_to"], errors="coerce")
+        delisted = int(available_to.notna().sum())
+        active = int(available_to.isna().sum())
+    return {
+        "dropped": len(dropped_ids),
+        "added": len(new_ids - prev_ids),
+        "dropped_active": active,
+        "dropped_delisted": delisted,
+        "dropped_by_venue": _top("venue"),
+        "dropped_by_instrument_type": _top("instrument_type"),
+        "dropped_sample_ids": sorted(dropped_ids)[:10],
+    }
+
+
 def promote_catalogue(
     storage: StorageClient,
     bucket: str,
@@ -2839,6 +2944,17 @@ def promote_catalogue(
     )
 
     if not decision.accept:
+        # Diagnose WHICH instruments the rejected catalogue would drop, so the block is
+        # reviewable rather than opaque (F8 2026-07-18). Best-effort: the diagnostic must
+        # never mask the block itself, and it pays one extra GCS read only on a (rare) block.
+        drop_diagnostics: dict[str, object] = {}
+        previous = _load_previous_catalogue(storage, bucket, canonical_blob)
+        if previous is not None:
+            try:
+                drop_diagnostics = _shrink_drop_diagnostics(df, previous[0])
+                logger.error("CATALOGUE_SHRINK_BLOCKED drop-list: %s", drop_diagnostics)
+            except (KeyError, ValueError, TypeError) as exc:
+                logger.warning("shrink drop-diagnostics failed (block still stands): %s", exc)
         # Real event-log emission (was best-effort logger.info-only via _emit_event —
         # cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md). CRITICAL
         # severity + this event name route through UAC's DP-CATALOG-002 rule to
@@ -2851,6 +2967,7 @@ def promote_catalogue(
                 "env": env,
                 "new_count": new_count,
                 "current_count": current_count,
+                "drop_diagnostics": drop_diagnostics,
                 "hint": "re-run a complete regeneration, or pass --allow-catalogue-shrink for a corrective shrink",
             },
         )
@@ -3210,8 +3327,9 @@ def _merge_incremental(
     prev_df: pd.DataFrame,
     window_df: pd.DataFrame,
     *,
-    window_start: date,
+    window_start: date | None,
     asset_group: str,
+    close_absent: bool = True,
 ) -> pd.DataFrame:
     """Upsert the window recompute onto the previous catalogue (frozen tail kept).
 
@@ -3225,10 +3343,21 @@ def _merge_incremental(
          the window → newly delisted; close ``available_to`` at
          ``window_start - 1`` (tightest provable bound — near-dead code under the
          self-widening window; healed exactly by the weekly full rebuild).
+         SKIPPED when ``close_absent=False`` (the full-rebuild frozen-tail merge —
+         see below), where there is no meaningful window boundary to close against.
       4. every other prev row (frozen tail — incl. every row of a venue with NO
          window presence: a venue-level capture outage is NOT a delisting, §7.3
          keeps a stopped venue's instruments active exactly like the full
          rebuild) → copied through unchanged.
+
+    ``close_absent`` (default True — the trailing-window incremental): when False,
+    the merge is the FULL-REBUILD frozen-tail merge (F8, 2026-07-15 incident class).
+    A ``--mode full`` walk is authoritative for the ``available_to`` of every
+    instrument that STILL has by_date data (branch 1 recomputes it, so a genuine
+    delisting is already carried by the fresh window row) — so the ONLY prev rows
+    absent from a full walk are those whose by_date has been PRUNED. Those must be
+    preserved verbatim, not closed at a garbage ``window_start - 1`` boundary; hence
+    branch 3 is disabled and ``window_start`` is unused (may be None).
 
     The output row set is prev UNION window-new, so ``len(merged) >= len(prev)`` and
     the monotonic guard passes by construction.
@@ -3271,7 +3400,9 @@ def _merge_incremental(
 
     # Branch 3+4 — prev rows absent from the window.
     tail = prev[~prev_keys.isin(window_key_set).to_numpy()].copy()
-    if not tail.empty:
+    if close_absent and not tail.empty:
+        if window_start is None:
+            raise ValueError("close_absent=True requires window_start (the delist-close boundary)")
         # §7.3 venue-truth: only close an instrument when its venue DID capture
         # in the window (instrument-level absence). Venue-level absence = capture
         # outage / stopped venue → preserve prev state (full-rebuild parity).
@@ -3654,6 +3785,32 @@ def run_rollup(
         )
     else:
         df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
+
+    # F8 (2026-07-18): a --mode full rebuild is CUMULATIVE-preserving — merge the
+    # fresh full walk onto the previous catalogue's frozen tail so a previously
+    # catalogued instrument whose by_date data has since been PRUNED is never
+    # silently dropped (the 2026-07-15 sports incident class, generalised to
+    # defi/cefi/tradfi/prediction: a full defi rebuild dropped 2,378 rows — 2,346
+    # delisted DeFi pools/tokens whose by_date aged off — under-producing the
+    # all-instruments-ever contract and jamming the monotonic guard). The full
+    # walk stays authoritative for the available_to of everything with data
+    # (branch 1 recomputes it → a genuine delisting is carried by the fresh row),
+    # so close_absent=False preserves the DATALESS tail verbatim. Sports already
+    # runs its own frozen-tail merge above; --allow-catalogue-shrink is the escape
+    # hatch for a deliberate re-aggregate that INTENDS to drop (skips the merge).
+    if mode == "full" and asset_group != "sports" and not allow_shrink:
+        full_prev = _load_previous_catalogue(storage, bucket, canonical_blob)
+        if full_prev is not None:
+            full_prev_df, _ = full_prev
+            before = len(df)
+            df = _merge_incremental(full_prev_df, df, window_start=None, asset_group=asset_group, close_absent=False)
+            logger.info(
+                "Full-rebuild frozen-tail merge (%s): %d walked rows + %d prev → %d preserved",
+                asset_group,
+                before,
+                len(full_prev_df),
+                len(df),
+            )
 
     # Phase D: dedup / row-count
     print(f"[BISECT-D] dedup complete rows={len(df)} asset_group={asset_group}", flush=True)

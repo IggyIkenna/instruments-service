@@ -21,7 +21,7 @@ from __future__ import annotations
 import contextlib
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from unified_api_contracts import (
     FX_SPOT_PAIRS,
@@ -30,6 +30,7 @@ from unified_api_contracts import (
     TRADFI_TICKER_UNIVERSE,
     CanonicalFuturesContract,
     FuturesContractLifecyclePhase,
+    build_instrument_id,
 )
 from unified_api_contracts.internal import AssetClass, InstrumentLeg, InstrumentRecord, InstrumentType, OptionType
 
@@ -860,14 +861,6 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         # registry (no Databento API call). COMBO/spread instruments span >1
         # product, so they carry no single canonical root.
         product_root = None if is_combo else _db._resolve_product_root(raw_symbol)
-        canonical_instrument_id = self._build_canonical_instrument_id(
-            canonical_venue=canonical_venue,
-            instrument_type=instrument_type,
-            product_root=product_root,
-            expiry=expiry,
-            strike=strike if not is_combo else None,
-            option_type=option_type if not is_combo else None,
-        )
 
         # Whitespace is never an acceptable delimiter inside the canonical key
         # (operator-decided workspace-wide rule, 2026-07-08) — real Databento
@@ -876,8 +869,47 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         # tickers). raw_symbol itself stays untouched below (the verbatim vendor
         # code); only the key is sanitized.
         sanitized_symbol = _db._sanitize_symbol_for_key(raw_symbol)
+
+        # FUTURE/OPTION → the operator-decided PRODUCT_ROOT-USD@LIN-YYYYMMDD
+        # [-STRIKE-C|P] shape (tradfi_consolidated_closeout_2026_07_18.md A1),
+        # built via the shared UAC builder so this catalogue's instrument_key
+        # is byte-for-byte identical to the MTDS tick-parquet/manifest
+        # instrument_id for the same instrument (databento_enrichment.py::
+        # _classify_row + tradfi_shared.py::derive_tradfi_row_instrument_id —
+        # both pass margin_marker="LIN", quote_asset="USD"). Only emitted when
+        # BOTH the product root AND the expiry resolve (OPTION additionally
+        # needs strike + option_right); everything else — continuous/generic
+        # roll symbols like "VX/F1" with no dated expiry, OSI-format symbols
+        # the registry doesn't cover, unresolved combos — falls back to the
+        # sanitized-raw shape unchanged: no crash, no fabricated identity.
+        # Historical/unresolvable rows are a separate Phase-B migration.
+        canonical_key: str | None = None
+        if not is_combo and instrument_type in (InstrumentType.FUTURE, InstrumentType.OPTION) and product_root:
+            expiry_date = expiry.date() if expiry is not None else None
+            option_right: Literal["C", "P"] | None = None
+            ot_upper = (option_type or "").upper()
+            if ot_upper == "C":
+                option_right = "C"
+            elif ot_upper == "P":
+                option_right = "P"
+            has_required_option_fields = strike is not None and option_right is not None
+            if expiry_date is not None and (instrument_type is InstrumentType.FUTURE or has_required_option_fields):
+                with contextlib.suppress(ValueError):
+                    canonical_key = build_instrument_id(
+                        canonical_venue,
+                        instrument_type,
+                        product_root,
+                        expiry_date=expiry_date,
+                        strike=strike if instrument_type is InstrumentType.OPTION else None,
+                        option_right=option_right if instrument_type is InstrumentType.OPTION else None,
+                        margin_marker="LIN",
+                        quote_asset="USD",
+                    )
+
+        instrument_key = canonical_key or f"{canonical_venue}:{instrument_type.upper()}:{sanitized_symbol}"
+
         return InstrumentRecord(
-            instrument_key=f"{canonical_venue}:{instrument_type.upper()}:{sanitized_symbol}",
+            instrument_key=instrument_key,
             venue=canonical_venue,
             asset_group=asset_group,
             raw_symbol=raw_symbol,
@@ -885,7 +917,13 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             base_asset=underlying or raw_symbol,
             quote_asset=currency,
             product_root=product_root,
-            canonical_instrument_id=canonical_instrument_id,
+            # canonical_instrument_id mirrors instrument_key (the established
+            # pattern for every other adapter — deribit_options_adapter.py,
+            # deribit_combo_adapter.py, coinbase_cde.py, defi_utils.py — none
+            # of which maintain a second, independently-built id field).
+            # Supersedes the old additive _build_canonical_instrument_id()
+            # (colon/month-only, non-@LIN, mostly empty live) — removed.
+            canonical_instrument_id=instrument_key,
             tick_size=tick_size if not is_combo else None,
             min_size=lot_size if not is_combo else None,
             contract_size=Decimal("1") if not is_combo else None,
@@ -969,31 +1007,3 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # 3. Fallback to dataset-level mapping
         return _db._DATASET_TO_asset_group.get(dataset, AssetClass.EQUITY)
-
-    @staticmethod
-    def _build_canonical_instrument_id(
-        canonical_venue: str,
-        instrument_type: InstrumentType,
-        product_root: str | None,
-        expiry: datetime | None,
-        strike: Decimal | None,
-        option_type: str | None,
-    ) -> str | None:
-        """Build a human-canonical instrument id from the resolved product root.
-
-        Shape: ``{venue}:{instrument_type}:{product_root}:{expiry_or_tenor}[:{strike}{C|P}]``
-        e.g. ``CME:FUTURE:SP500:2030-06`` / ``CME:OPTION:SP500:2025-10:5000C``.
-
-        Returns ``None`` when no product root resolves — the id is additive and
-        must not fabricate identity for instruments the registry can't canonicalise.
-        """
-        if not product_root:
-            return None
-        parts = [canonical_venue, instrument_type.upper(), product_root]
-        if expiry is not None:
-            parts.append(expiry.strftime("%Y-%m"))
-        if strike is not None and instrument_type == InstrumentType.OPTION:
-            strike_str = format(strike.normalize(), "f")
-            suffix = {"C": "C", "P": "P"}.get((option_type or "").upper(), "")
-            parts.append(f"{strike_str}{suffix}")
-        return ":".join(parts)
