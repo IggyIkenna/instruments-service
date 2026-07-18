@@ -29,6 +29,7 @@ from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
 from .adapters.defi.beefy import BeefyReferenceDataAdapter
 from .adapters.defi.benqi import BenqiReferenceDataAdapter
+from .adapters.defi.cbeth import CbethReferenceDataAdapter
 from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.defi.convex import ConvexReferenceDataAdapter
 from .adapters.defi.curve import CurveReferenceDataAdapter
@@ -65,6 +66,7 @@ from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
 from .adapters.defi.venus import VenusReferenceDataAdapter
+from .adapters.defi.wbeth import WbethReferenceDataAdapter
 from .adapters.defi.yearn import YearnReferenceDataAdapter
 from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
 from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
@@ -122,6 +124,10 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "beefy": BeefyReferenceDataAdapter,
     "benqi": BenqiReferenceDataAdapter,
     "betfair": BetfairReferenceDataAdapter,
+    # Single-token LST adapters (Coinbase cbETH / Binance wBETH — curated static
+    # registry, modelled on renzo.py). cbETH = ETHEREUM only; wBETH = ETHEREUM + BSC.
+    "cbeth": CbethReferenceDataAdapter,
+    "wbeth": WbethReferenceDataAdapter,
     "compound_v3": CompoundV3ReferenceDataAdapter,
     "convex": ConvexReferenceDataAdapter,
     "curve": CurveReferenceDataAdapter,
@@ -251,6 +257,9 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "benqi": "",
     # LST / LRT protocols — curated single-token registries (deploy dates hardcoded).
     "rocket_pool": "",
+    # cbETH (Coinbase) / wBETH (Binance) single-token LSTs — curated static registries.
+    "cbeth": "",
+    "wbeth": "",
     "renzo": "",
     "kelpdao": "",
     "puffer": "",
@@ -335,6 +344,11 @@ _DEFI_GRAPH_ADAPTERS: frozenset[str] = frozenset(
         "beefy",
         "pendle",
         "jito_restaking",
+        # Single-token LST adapters that encode chain in the canonical venue
+        # (COINBASE-ETHEREUM / BINANCE-ETHEREUM / BINANCE-BSC) — factory parses
+        # the chain segment and passes chain= so wBETH resolves BSC vs ETHEREUM.
+        "cbeth",
+        "wbeth",
     }
 )
 
