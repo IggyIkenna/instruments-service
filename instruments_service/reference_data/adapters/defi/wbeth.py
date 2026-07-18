@@ -12,10 +12,8 @@ References:
   (Binance wBETH support FAQ) and the launch announcement
   https://www.binance.com/en/support/announcement/binance-introduces-wrapped-beacon-eth-wbeth-on-eth-staking-a1197f34d832445db41654ad01f56b4d
   (WBETH live on ETH Staking effective 2023-04-27 08:00 UTC).
-- wBETH address: see ``_WBETH_ADDRESS`` below. Binance deploys wBETH at the SAME
-  address on Ethereum mainnet AND BSC (Etherscan + BscScan-verified):
-  https://etherscan.io/token/0xa2E3356610840701BDf5611a53974510Ae27E2e1 and
-  https://bscscan.com/token/0xa2E3356610840701BDf5611a53974510Ae27E2e1 .
+- wBETH address: see ``_WBETH_ADDRESS`` below (Etherscan + BscScan-verified).
+  Binance deploys wBETH at the SAME address on Ethereum mainnet AND BSC.
 - Launch dates sourced from unified_api_contracts.registry.chain_env.PROTOCOL_LAUNCH_DATES
   (("ETHEREUM", "BINANCE") == 2023-04-27; ("BSC", "BINANCE") == 2023-04-27).
 
