@@ -94,7 +94,7 @@ import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from unified_api_contracts import VenueMapping
+from unified_api_contracts import VENUE_TO_ADAPTER_KEY, VenueMapping
 from unified_api_contracts.canonical.crosscutting.mvp_scope import (
     MVP_SCOPE,
     CeFiMvpRule,
@@ -632,6 +632,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--venue", default=None, help="Restrict to one venue (or sports provider).")
     parser.add_argument(
+        "--tardis-only",
+        action="store_true",
+        help="Restrict to venues sourced via the Tardis adapter (VENUE_TO_ADAPTER_KEY == 'tardis'); "
+        "excludes native-REST HYPERLIQUID/ASTER/LIGHTER-ZKSYNC/PACIFICA-SOLANA/EXTENDED-STARKNET. "
+        "Tardis cells are N=1 serial on the shared IP (tardis-concurrency-guard enforces it).",
+    )
+    parser.add_argument(
         "--legs",
         default="force,skip,live",
         help="Comma list of legs to run: force,skip,live (default: all three).",
@@ -701,6 +708,11 @@ def main(argv: list[str] | None = None) -> int:
     run_ts = run_started_at.strftime("%m%d%H%M%S")
 
     cells = enumerate_cells(asset_group_filter=args.asset_group, venue_filter=args.venue)
+    if args.tardis_only:
+        # Tardis-only scope: keep only venues our pipeline sources via the Tardis adapter
+        # (authoritative UAC routing, NOT Tardis's catalog — the native-REST venues are
+        # catalogued by Tardis but fetched via their own adapters and are excluded here).
+        cells = [c for c in cells if VENUE_TO_ADAPTER_KEY.get(c.venue) == "tardis"]
     shard_targets = _dedupe_shard_targets(cells)
     logger.info(
         "enumerated %d shard target(s) (asset_group=%s venue=%s legs=%s day=%s)",

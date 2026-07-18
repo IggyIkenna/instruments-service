@@ -18,6 +18,7 @@ from pathlib import Path
 
 import aiohttp
 import aiohttp.resolver
+from unified_api_contracts.registry.venue_launch_dates import get_venue_launch_date
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,20 @@ def _make_session() -> aiohttp.ClientSession:
 
 
 # ── Protocol floor dates (conservative mainnet launch dates) ──────────
-# Used as guaranteed fallback when per-pool RPC resolution fails or is
-# unavailable.  Matches the Aave V3 pattern (_AAVE_V3_DEPLOY_DATE).
-# Any instrument that currently exists on-chain was created ON or AFTER
-# its protocol's launch date.
+# SECONDARY fallback only — ``get_protocol_floor_date`` below checks UAC
+# ``venue_launch_dates.DEFI_VENUE_LAUNCH_DATES`` (the operator-curated
+# real-launch-date SSOT) FIRST. This dict is consulted only for protocols
+# UAC does not yet track. Used as guaranteed fallback when per-pool RPC
+# resolution fails or is unavailable.  Matches the Aave V3 pattern
+# (_AAVE_V3_DEPLOY_DATE). Any instrument that currently exists on-chain was
+# created ON or AFTER its protocol's launch date.
+#
+# NOTE some entries here are STALE vs the UAC SSOT (e.g. kamino=2024-01-01
+# here vs the real 2022-08-24 in UAC ``DEFI_VENUE_LAUNCH_DATES["KAMINO-
+# SOLANA"]``; jito=2021-11-01 here vs the real 2022-08-16) — left as-is
+# since UAC now wins for any protocol it covers; only reached for the
+# protocols UAC does not yet carry (drift/meteora/phoenix/jupiter/
+# lifinity/pyth/solend/marginfi/sanctum at time of writing).
 SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "drift": datetime(2022, 11, 4, tzinfo=UTC),  # Drift v2 mainnet launch
     "kamino": datetime(2024, 1, 1, tzinfo=UTC),  # Kamino vaults mainnet launch
@@ -263,12 +274,36 @@ def _update_cache(new_entries: dict[str, str]) -> None:
 def get_protocol_floor_date(protocol: str) -> datetime:
     """Return the conservative floor date for a Solana protocol.
 
-    Raises KeyError if the protocol is not registered — this forces
-    callers to register new protocols rather than silently defaulting.
+    Lookup precedence:
+      1. UAC ``venue_launch_dates.DEFI_VENUE_LAUNCH_DATES`` (canonical SSOT,
+         operator-curated real-launch dates) — tried first as the
+         chain-suffixed venue form ``{PROTOCOL}-SOLANA`` (e.g.
+         ``KAMINO-SOLANA``, matching the manifest's ``venue`` column for
+         per-chain DeFi rows), then the bare ``{PROTOCOL}`` form (protocols
+         catalogued without a chain suffix).
+      2. Local ``SOLANA_PROTOCOL_DEPLOY_DATES`` fallback for protocols UAC
+         does not yet track.
+
+    Raises KeyError if the protocol is in NEITHER layer — this forces
+    callers to register new protocols rather than silently defaulting
+    (honest-absence: no date is fabricated here).
+
+    Reference: pre-2026-07-18 this function only consulted the local dict,
+    which carried stale dates for several protocols UAC now tracks more
+    accurately (kamino: local 2024-01-01 vs UAC real 2022-08-24; jito:
+    local 2021-11-01 vs UAC real 2022-08-16) — floored years of legitimate
+    on-chain history to the wrong (too-late) listing date, which the DeFi
+    drilldown then rendered as a generic pre-history gap. UAC's
+    ``DEFI_VENUE_LAUNCH_DATES`` is the workspace SSOT for venue launch
+    dates — consult it first.
     """
     key = protocol.lower()
+    venue_upper = protocol.upper()
+    uac_date = get_venue_launch_date("defi", f"{venue_upper}-SOLANA") or get_venue_launch_date("defi", venue_upper)
+    if uac_date is not None:
+        return datetime.fromisoformat(uac_date).replace(tzinfo=UTC)
     if key not in SOLANA_PROTOCOL_DEPLOY_DATES:
-        msg = f"No floor date for Solana protocol {protocol!r} — register it in _solana_utils.SOLANA_PROTOCOL_DEPLOY_DATES"
+        msg = f"No floor date for Solana protocol {protocol!r} — register it in _solana_utils.SOLANA_PROTOCOL_DEPLOY_DATES or unified_api_contracts.registry.venue_launch_dates.DEFI_VENUE_LAUNCH_DATES"
         raise KeyError(msg)
     return SOLANA_PROTOCOL_DEPLOY_DATES[key]
 
