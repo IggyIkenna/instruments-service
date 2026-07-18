@@ -47,7 +47,9 @@ from ...schemas import (
 )
 from .fixture_match import (
     FixtureMatchAttributes,
+    PredictionFixtureResolver,
     football_league_for_sports_underlying,
+    parse_kalshi_soccer_participants,
     register_fixture_match,
 )
 
@@ -169,6 +171,24 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         self._kalshi_key_id, self._kalshi_private_key_pem = self._parse_kalshi_creds(api_key)
         self._loaded_private_key: RSAPrivateKey | None = None  # lazily loaded crypto key
         self._historical_cutoff: date_cls | None = None  # lazily resolved
+        # Phase-E Leg-2 (E2): lazy resolver for the additive af_fixture_id soccer
+        # join. Reads the shared FIXTURES parquet once per (league, day); GCS reads
+        # degrade to honest-absence, so it is safe to build even with no creds.
+        self._fixture_resolver_instance: PredictionFixtureResolver | None = None
+
+    @property
+    def _fixture_resolver(self) -> PredictionFixtureResolver:
+        """Lazily-built resolver for the Kalshi soccer af_fixture_id join (E2).
+
+        One instance per adapter run so the per-(league, day) FIXTURES lookup is
+        downloaded once and reused for every soccer market on that day (the SAME
+        caching contract + resolver plumbing the Polymarket path uses — no new GCS
+        walk). Its GCS reads degrade to ``NO_FIXTURE_DATA``, so building it with no
+        cloud creds is safe (unit-test context yields honest-absence, not a crash).
+        """
+        if self._fixture_resolver_instance is None:
+            self._fixture_resolver_instance = PredictionFixtureResolver()
+        return self._fixture_resolver_instance
 
     @property
     def venue(self) -> str:
@@ -850,26 +870,33 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         # not a blanket "politics/geo" bucket.
         underlying_axis = underlying_for_group(group)
         underlying = None if underlying_axis.value.startswith("SPORTS_") else underlying_axis.value
-        # Phase-E Leg-1 (prediction_consolidated_closeout_2026_07_18.md A4): honest-
-        # absence fixture-match stamp for Kalshi SOCCER markets. Kalshi titles are
-        # city-level ("Seattle vs Cleveland") with no team registry, so the team names
-        # cannot canonicalise into the shared af namespace and no af_fixture_id can be
-        # resolved yet — full Kalshi resolution is gated on the E2 team registry (out of
-        # scope). Stamp what IS honestly resolvable (af_league_id + fixture_date from the
-        # close date) with af_fixture_id=None + af_fixture_match_status=UNRESOLVED_TEAM_NAME
-        # (never a fake value). Side-table keyed by the SAME instrument_key
-        # process_write._records_to_dataframe joins by; parquet-column materialisation is
-        # the DEFERRED shared-file join.
+        # Phase-E Leg-2 (prediction_consolidated_closeout_2026_07_18.md E2): additive
+        # af_fixture_id fixture-match stamp for Kalshi SOCCER markets. Kalshi encodes
+        # the two clubs in the human `title` ("Liverpool vs Brentford Winner?"), NOT in
+        # a team registry, so we parse the participant pair off the title and feed it
+        # into the SAME `validate_team_resolution` alias index + FIXTURES-parquet
+        # resolver the Polymarket path uses (A4's `resolve()` plumbing — no new GCS
+        # walk). A club whose Kalshi rendering IS in the alias index resolves to a real
+        # canonical id (→ MATCHED when the fixture parquet is present, else
+        # NO_FIXTURE_DATA); a rendering that is genuinely absent stays honest
+        # UNRESOLVED_TEAM_NAME (never a fake value). When the title carries no clean
+        # two-participant "X vs Y" pair (or there is no close date to key the day
+        # lookup), we fall back to the league-only honest-absence record. Side-table
+        # keyed by the SAME instrument_key process_write._records_to_dataframe joins by;
+        # parquet-column materialisation is the DEFERRED shared-file join.
         _football = football_league_for_sports_underlying(underlying_axis.value)
         if _football is not None:
-            _, _af_league_id = _football
-            register_fixture_match(
-                instrument_key,
-                FixtureMatchAttributes.team_unresolved(
+            _canonical_league_id, _af_league_id = _football
+            _participants = parse_kalshi_soccer_participants(title)
+            if _participants is not None and expiry is not None:
+                _home, _away = _participants
+                fixture_attrs = self._fixture_resolver.resolve(_canonical_league_id, _home, _away, expiry.date())
+            else:
+                fixture_attrs = FixtureMatchAttributes.team_unresolved(
                     af_league_id=_af_league_id,
                     fixture_date=expiry.date().isoformat() if expiry else None,
-                ),
-            )
+                )
+            register_fixture_match(instrument_key, fixture_attrs)
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=self.venue,
