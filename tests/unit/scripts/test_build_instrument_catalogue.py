@@ -1182,6 +1182,54 @@ def test_rollup_stamps_canonical_instrument_type_from_legacy_lowercase_source(ro
     assert by_id["COINBASE-SPOT:5"]["instrument_type"] == "UNKNOWN"
 
 
+def test_canonicalize_instrument_type_defi_split_id_is_authoritative(rollup: ModuleType) -> None:
+    """FIX 2 durability guard (defi_lending_atoken_debttoken_instrument_split_2026_07_07):
+    when the emitted ``instrument_id`` already carries an A_TOKEN/DEBT_TOKEN/SPOT_ASSET
+    split segment, that ID is AUTHORITATIVE over a stale ``LENDING`` column — so a
+    ``--mode full`` rebuild re-derives the split from the id and can NEVER revert an
+    already-split row back to LENDING (the 2026-07-14 landmine)."""
+    fn = rollup._canonicalize_instrument_type
+    # Split id + any stale/legacy lending column → the id's split type WINS.
+    assert fn("LENDING", instrument_id="VENUS-BSC:A_TOKEN:ABNB-USDC") == "A_TOKEN"
+    assert fn("lending", instrument_id="VENUS-BSC:DEBT_TOKEN:DEBTBNB-USDC") == "DEBT_TOKEN"
+    assert fn("lending_market", instrument_id="MARGINFI-SOLANA:A_TOKEN:AUSDC") == "A_TOKEN"
+    assert fn("LENDING", instrument_id="SOLEND-SOLANA:SPOT_ASSET:mSOL") == "SPOT_ASSET"
+    # A non-split id TYPE segment falls through to the existing raw-column logic
+    # UNCHANGED — no behaviour change for CeFi / pool / non-split DeFi rows.
+    assert fn("spot", instrument_id="BINANCE-SPOT:SPOT_PAIR:BTC-USDT") == "SPOT_PAIR"
+    assert fn("perpetual", instrument_id="HYPERLIQUID:PERPETUAL:BTC") == "PERPETUAL"
+    # A genuinely-LENDING-id row (no split in the id) stays LENDING — that residual is
+    # the separate ~16.7M-row DATA migration, out of scope for the CODE half.
+    assert fn("LENDING", instrument_id="OLDPROTO-ETH:LENDING:DAI") == "LENDING"
+    # A bare pool_address id (no VENUE:TYPE:SYMBOL shape) → no TYPE segment → fall through.
+    assert fn("LENDING", instrument_id="0xpooladdressnotype") == "LENDING"
+    # Backward-compatible: no id → pure raw-column logic (existing callers unaffected).
+    assert fn("LENDING", instrument_id=None) == "LENDING"
+    assert fn("A_TOKEN", instrument_id=None) == "A_TOKEN"
+
+
+def test_rollup_lending_split_id_emits_split_not_lending(rollup: ModuleType) -> None:
+    """End-to-end FIX 2: a per-date lending row whose id already carries the A_TOKEN/
+    DEBT_TOKEN/SPOT_ASSET split but whose ``instrument_type`` COLUMN is a stale legacy
+    ``LENDING`` emits the SPLIT type in the rolled-up catalogue — the split is intrinsic
+    to row-construction, so a ``--mode full`` rebuild cannot revert it to LENDING (the
+    2026-07-14 durability landmine). A genuinely-LENDING-id row (no split in the id)
+    stays LENDING — the residual the separate DATA migration owns."""
+    d1 = date(2024, 1, 1)
+    rows = [
+        {"instrument_key": "VENUS-BSC:A_TOKEN:ABNB-USDC", "venue": "VENUS-BSC", "instrument_type": "LENDING"},
+        {"instrument_key": "VENUS-BSC:DEBT_TOKEN:DEBTBNB-USDC", "venue": "VENUS-BSC", "instrument_type": "LENDING"},
+        {"instrument_key": "SOLEND-SOLANA:SPOT_ASSET:mSOL", "venue": "SOLEND-SOLANA", "instrument_type": "lending"},
+        {"instrument_key": "OLDPROTO-ETH:LENDING:DAI", "venue": "OLDPROTO-ETH", "instrument_type": "LENDING"},
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows))])
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    assert by_id["VENUS-BSC:A_TOKEN:ABNB-USDC"]["instrument_type"] == "A_TOKEN"
+    assert by_id["VENUS-BSC:DEBT_TOKEN:DEBTBNB-USDC"]["instrument_type"] == "DEBT_TOKEN"
+    assert by_id["SOLEND-SOLANA:SPOT_ASSET:mSOL"]["instrument_type"] == "SPOT_ASSET"
+    assert by_id["OLDPROTO-ETH:LENDING:DAI"]["instrument_type"] == "LENDING"
+
+
 # ---------------------------------------------------------------------------
 # Removed-venue exclusion + bare-vs-chain duplicate venue collapse (2026-07-18)
 # ---------------------------------------------------------------------------
@@ -2935,13 +2983,16 @@ def test_rollup_non_pool_defi_ghost_lending_collapses_to_one_lifecycle(rollup: M
             (d_now, _snapshot([canonical_row])),
         ]
     )
-    lending_rows = df[df["instrument_type"].astype(str).str.lower() == "lending"].to_dict("records")
+    # Post-split (defi_lending_atoken_debttoken_instrument_split_2026_07_07): the id's
+    # ``:A_TOKEN:`` segment is AUTHORITATIVE over the legacy ``"lending"`` source COLUMN,
+    # so these rows emit instrument_type=A_TOKEN (FIX 2 durability) — select on that.
+    a_token_rows = df[df["instrument_type"].astype(str) == "A_TOKEN"].to_dict("records")
     # Must collapse to exactly ONE row (not two).
-    assert len(lending_rows) == 1, (
-        f"Expected 1 lending row (ghost+canonical collapsed) but got {len(lending_rows)}. "
+    assert len(a_token_rows) == 1, (
+        f"Expected 1 A_TOKEN row (ghost+canonical collapsed) but got {len(a_token_rows)}. "
         "The dual-key ghost collapse fix is missing."
     )
-    row = lending_rows[0]
+    row = a_token_rows[0]
     # available_to=None: the market is present on the latest day (d_now).
     assert row["available_to"] is None, (
         f"Expected available_to=None (active on latest day) but got {row['available_to']!r}."
