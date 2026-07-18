@@ -3308,6 +3308,63 @@ def test_add_equity_tags_non_cefi_defaults_and_dtype(rollup: ModuleType) -> None
 
 
 # ---------------------------------------------------------------------------
+# IS R2c — force_include TVL-exempt governance/forced token marker
+# ---------------------------------------------------------------------------
+
+
+def test_add_force_include_flags_governance_tokens_not_coincidental_liquidity(rollup: ModuleType) -> None:
+    """A DeFi governance token issued by a governance-token venue (EIGENLAYER→EIGEN,
+    ETHERFI→ETHFI) is force_include=True; a DEX pool that merely CONTAINS the token
+    (coincidental liquidity) is force_include=False — the R2c denominator-honesty
+    distinction. Derived via the UAC SSOT is_defi_force_include over (venue, base_asset).
+    """
+    d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
+    rows = [
+        {
+            "instrument_key": "EIGENLAYER-ETHEREUM:SPOT_PAIR:EIGEN",
+            "venue": "EIGENLAYER-ETHEREUM",
+            "instrument_type": "SPOT_PAIR",
+            "base_asset": "EIGEN",
+            "quote_asset": "ETH",
+        },
+        {
+            "instrument_key": "ETHERFI-ETHEREUM:SPOT_PAIR:ETHFI",
+            "venue": "ETHERFI-ETHEREUM",
+            "instrument_type": "SPOT_PAIR",
+            "base_asset": "ETHFI",
+            "quote_asset": "ETH",
+        },
+        {
+            "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:EIGEN-WETH:3000",
+            "venue": "UNISWAP_V3-ETHEREUM",
+            "instrument_type": "POOL",
+            "base_asset": "EIGEN",
+            "quote_asset": "WETH",
+            "raw_symbol": "0xabc0000000000000000000000000000000000001",
+            "pool_address": "0xabc0000000000000000000000000000000000001",
+        },
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    df = rollup._add_force_include(df, "defi")
+    by_venue = {row["venue"]: row for row in df.to_dict("records")}
+    # Catalogue stores bare-protocol venue (dual-form split).
+    assert bool(by_venue["EIGENLAYER"]["force_include"]) is True
+    assert bool(by_venue["ETHERFI"]["force_include"]) is True
+    assert bool(by_venue["UNISWAP_V3"]["force_include"]) is False
+    assert "force_include" in rollup.CATALOG_COLUMNS
+
+
+def test_add_force_include_non_defi_and_empty_typed(rollup: ModuleType) -> None:
+    """Every non-defi row is force_include=False; the empty frame keeps a typed bool column."""
+    cefi = pd.DataFrame([{"venue": "BINANCE-FUTURES", "base_asset": "EIGEN"}])
+    out = rollup._add_force_include(cefi, "cefi")
+    assert bool(out["force_include"].iloc[0]) is False
+    empty = rollup.build_catalogue_dataframe([])
+    out_empty = rollup._add_force_include(empty, "defi")
+    assert out_empty["force_include"].dtype == bool
+
+
+# ---------------------------------------------------------------------------
 # Incremental (trailing-window + frozen-tail) engine —
 # plans/active/instruments_catalogue_incremental_rollup_2026_06_29.md
 # Phase 1 (mode selection / windowed walk / merge branches / cold start) +
@@ -3759,11 +3816,11 @@ def _parity_frames(rollup: ModuleType, all_snapshots: list, prev_age_days: int =
 
 
 def _assert_frames_match(full: pd.DataFrame, incremental: pd.DataFrame) -> None:
-    # Compare only the stable rollup columns — mvp + the equity-identity tags are
-    # derived/finalization columns stamped AFTER the merge (build_catalogue_dataframe
-    # emits them NaN in the full path; _merge_incremental drops them), so they are
-    # not part of the merge-parity invariant here.
-    cols = [c for c in full.columns if c not in ("mvp", "tracks_equity", "is_equity_perp")]
+    # Compare only the stable rollup columns — mvp + the equity-identity tags +
+    # force_include are derived/finalization columns stamped AFTER the merge
+    # (build_catalogue_dataframe emits them NaN in the full path; _merge_incremental
+    # drops them), so they are not part of the merge-parity invariant here.
+    cols = [c for c in full.columns if c not in ("mvp", "tracks_equity", "is_equity_perp", "force_include")]
     f = full[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True)
     i = incremental[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True)
     pd.testing.assert_frame_equal(f, i)
@@ -3840,8 +3897,12 @@ def test_incremental_matches_full_rebuild_cefi(rollup: ModuleType) -> None:
     # The finalization tags (mvp + equity tags) are identical on both paths — the
     # full pipeline is merge → _add_mvp_column → _add_equity_tags (perp-gate + equity
     # tags computed over the whole finalized frame, not the window slice).
-    full_final = rollup._add_equity_tags(rollup._add_mvp_column(full, "cefi"), "cefi")
-    inc_final = rollup._add_equity_tags(rollup._add_mvp_column(incremental, "cefi"), "cefi")
+    full_final = rollup._add_force_include(
+        rollup._add_equity_tags(rollup._add_mvp_column(full, "cefi"), "cefi"), "cefi"
+    )
+    inc_final = rollup._add_force_include(
+        rollup._add_equity_tags(rollup._add_mvp_column(incremental, "cefi"), "cefi"), "cefi"
+    )
     cols = list(full_final.columns)
     pd.testing.assert_frame_equal(
         full_final[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),

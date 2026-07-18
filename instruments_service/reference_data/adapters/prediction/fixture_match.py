@@ -188,9 +188,11 @@ def parse_kalshi_soccer_participants(title: str | None) -> tuple[str, str] | Non
     Kalshi rendering that isn't in the alias index stays honestly unresolved
     rather than being force-slugged.
 
-    Home/away order follows the title's left-to-right order (Kalshi soccer GAME
-    titles render "Home vs Away"); the resolver's fixture lookup is keyed on that
-    order, mirroring the Polymarket path.
+    Home/away order follows the title's left-to-right order; Kalshi soccer GAME
+    titles nominally render "Home vs Away" but may be reversed, so the returned
+    pair is passed to the resolver as-is — the resolver's fixture lookup is
+    ORDER-ROBUST (probes both orderings and takes home/away from the matched
+    fixture's own orientation), mirroring the Polymarket path.
     """
     if not title:
         return None
@@ -274,6 +276,13 @@ class PredictionFixtureResolver:
         canonicalised through the SAME ``validate_team_resolution`` universal
         alias index MTDS uses; a name that doesn't resolve yields
         ``UNRESOLVED_TEAM_NAME`` (no false match via a fallback slug).
+
+        Home/away ORDER-ROBUST: ``home_name``/``away_name`` arrive in the title's
+        order, which is home-first for Polymarket but may be reversed for Kalshi
+        (and possibly some Polymarket) titles. The (league, day) lookup is probed
+        in BOTH orderings; on a hit the returned ``home_team_canonical_id`` /
+        ``away_team_canonical_id`` reflect the matched FIXTURE's own orientation
+        (from the fixtures parquet), not the title order.
         """
         af_league_id = _af_league_id_for(canonical_league_id)
         day_str = fixture_date.isoformat()
@@ -302,15 +311,37 @@ class PredictionFixtureResolver:
                 af_fixture_match_status=FixtureMatchStatus.NO_FIXTURE_DATA,
             )
 
-        fixture_id = lookup.get((home_cid, away_cid))
-        status = FixtureMatchStatus.MATCHED if fixture_id is not None else FixtureMatchStatus.UNRESOLVED_TEAM_NAME
+        # Order-robust match: a prediction title may render "Away vs Home" (Kalshi
+        # soccer GAME titles, and possibly some Polymarket), so the two clubs can
+        # arrive in the reverse of the fixture's own home/away order. Date-scoping
+        # makes a given team-pair unique (a pair plays once per date), so probe BOTH
+        # orderings against the same cached (league, day) lookup — no extra GCS read.
+        # Whichever key hits a real fixture carries THAT fixture's own orientation:
+        # home/away are taken from the matched key (the fixtures parquet is the
+        # truth), not from the title order, so a reversed title still yields the
+        # correct home_team_canonical_id / away_team_canonical_id.
+        for fixture_home_cid, fixture_away_cid in ((home_cid, away_cid), (away_cid, home_cid)):
+            fixture_id = lookup.get((fixture_home_cid, fixture_away_cid))
+            if fixture_id is not None:
+                return FixtureMatchAttributes(
+                    af_league_id=af_league_id,
+                    home_team_canonical_id=fixture_home_cid,
+                    away_team_canonical_id=fixture_away_cid,
+                    fixture_date=day_str,
+                    af_fixture_id=fixture_id,
+                    af_fixture_match_status=FixtureMatchStatus.MATCHED,
+                )
+
+        # Neither ordering matched a real fixture → honest absence. Keep the
+        # title-order canonical ids (best-effort) so the row still carries the
+        # resolved names for the UNRESOLVED_TEAM_NAME record.
         return FixtureMatchAttributes(
             af_league_id=af_league_id,
             home_team_canonical_id=home_cid,
             away_team_canonical_id=away_cid,
             fixture_date=day_str,
-            af_fixture_id=fixture_id,
-            af_fixture_match_status=status,
+            af_fixture_id=None,
+            af_fixture_match_status=FixtureMatchStatus.UNRESOLVED_TEAM_NAME,
         )
 
     def _fixture_lookup(self, canonical_league_id: str, day_str: str) -> dict[tuple[str, str], int]:
