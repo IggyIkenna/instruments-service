@@ -93,6 +93,43 @@ _STATIC_DEFI_VENUES: list[str] = [
     "RADIANT-BSC",
     "RADIANT-ETHEREUM",
     "EULER_V2-ETHEREUM",
+    # LST / restaking / vault protocols (2026-07-18 wiring — factory + adapters
+    # existed with populated curated registries but this venue list never
+    # requested them, so 0 catalogue rows were ever produced despite working
+    # code, exactly like the 2026-07-10 VENUS/RADIANT/BENQI finding. Only chains
+    # with a POPULATED per-chain registry are listed (measured: each returns >=1
+    # real instrument via the factory). Chains whose adapter registry is empty
+    # for that chain (YEARN_V3-OPTIMISM / BEEFY-POLYGON / IDLE-ARBITRUM /
+    # IDLE-POLYGON) are deliberately NOT enumerated — they'd emit 0 rows and
+    # pollute honest-coverage as expected-but-always-empty; they stay phase=
+    # "pipeline" in UAC until their curated vault addresses are researched.
+    # UAC DEFI_VENUE_PHASE flips these to "live" in lockstep (denominator drift
+    # guard: set(_build_defi_venues()) == VENUES_BY_ASSET_GROUP["defi"]).
+    "ROCKETPOOL-ETHEREUM",
+    "RENZO-ETHEREUM",
+    "RENZO-ARBITRUM",
+    "KELPDAO-ETHEREUM",
+    "PUFFER-ETHEREUM",
+    "KARAK-ETHEREUM",
+    "KARAK-ARBITRUM",
+    "SYMBIOTIC-ETHEREUM",
+    "YEARN_V3-ETHEREUM",
+    "YEARN_V3-ARBITRUM",
+    "BEEFY-ETHEREUM",
+    "BEEFY-ARBITRUM",
+    "BEEFY-BASE",
+    "BEEFY-AVALANCHE",
+    "BEEFY-BSC",
+    "PENDLE-ETHEREUM",
+    "PENDLE-ARBITRUM",
+    "CONVEX-ETHEREUM",
+    "IDLE-ETHEREUM",
+    # Single-token exchange-issued LSTs (cbeth.py / wbeth.py, new 2026-07-18).
+    # cbETH = Coinbase (ETHEREUM only); wBETH = Binance (ETHEREUM + BSC, same
+    # contract address on both chains).
+    "COINBASE-ETHEREUM",
+    "BINANCE-ETHEREUM",
+    "BINANCE-BSC",
 ]
 
 
@@ -111,6 +148,18 @@ _SOLANA_DEFI_VENUES: list[str] = [
     # REST/JSON APIs, now IS-producible (marginfi.py / solend.py).
     "MARGINFI-SOLANA",
     "SOLEND-SOLANA",
+    # Solana LST / restaking / native-staking (2026-07-18 wiring — sanctum.py /
+    # solblaze.py / jito_restaking.py / solana_native_staking.py adapters exist
+    # with populated curated registries but were never requested. Each returns
+    # >=1 real instrument (measured via the factory). UAC flips these to phase=
+    # "live" in lockstep. Canonical venue spellings match each adapter's own
+    # venue_tag: JITORESTAKING-SOLANA (not JITO_RESTAKING) and SOLANA-NATIVE-
+    # SOLANA (not SOLANA_NATIVE) — the underscored forms would create duplicate
+    # canonical venues and break the per-venue monotonicity count.
+    "SANCTUM-SOLANA",
+    "SOLBLAZE-SOLANA",
+    "JITORESTAKING-SOLANA",
+    "SOLANA-NATIVE-SOLANA",
 ]
 # NOTE: LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp CLOBs classified
 # as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, same as HYPERLIQUID/ASTER). They
