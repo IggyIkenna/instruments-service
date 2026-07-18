@@ -105,9 +105,9 @@ def _resolve_deribit_option_margin(item: dict[str, object], name: str) -> tuple[
 
 
 def _build_deribit_option_symbol(
-    base: str, margin_type: MarginType, expiry: datetime, strike: Decimal, option_right: str
+    base: str, quote: str, margin_type: MarginType, expiry: datetime, strike: Decimal, option_right: str
 ) -> str:
-    """Build the target OPTION symbol: ``BASE@LIN|INV-YYYYMMDD-STRIKE-C|P``.
+    """Build the target OPTION symbol: ``BASE-QUOTE@LIN|INV-YYYYMMDD-STRIKE-C|P``.
 
     Deribit-local mirror of the shared Bybit/Kraken-Futures/OKX dated-
     derivative marker convention (``tardis/parsing.py::
@@ -117,12 +117,25 @@ def _build_deribit_option_symbol(
     (``reportPrivateUsage``) rejects even though ``tardis/__init__.py``
     re-exports it). ``YYYYMMDD`` per the operator's date-format decision
     (string-sortable, unlike Deribit's native ``DDMMMYY``); the quote segment
-    is intentionally omitted — Deribit's target drops it for dated
-    derivatives (unlike PERPETUAL, which keeps ``BASE-QUOTE@MARKER``).
+    is ALWAYS present (operator ruling 2026-07-18: quote present regardless of
+    venue/asset class — ``USDC`` for linear, ``USD`` for inverse), matching
+    PERPETUAL and every other margined venue.
+
+    Fail loud on the contradiction: a Deribit option always carries a resolved
+    ``@LIN``/``@INV`` marker, so an empty ``quote`` here means settlement is
+    indeterminable — raise rather than silently drop to a base-only symbol (the
+    mirror of ``tardis/parsing.py::_require_quote_when_marked``).
     """
     marker = "INV" if margin_type is MarginType.INVERSE else "LIN"
+    if not quote:
+        msg = (
+            f"Deribit option '@{marker}' marker resolved but quote asset is empty "
+            f"(base={base!r}) — a linear/inverse marker without a quote is a contradiction; "
+            f"refusing to emit a base-only id (operator ruling 2026-07-18)."
+        )
+        raise ValueError(msg)
     strike_str = str(int(strike)) if strike == strike.to_integral_value() else format(strike.normalize(), "f")
-    return f"{base.upper()}@{marker}-{expiry.strftime('%Y%m%d')}-{strike_str}-{option_right}"
+    return f"{base.upper()}-{quote.upper()}@{marker}-{expiry.strftime('%Y%m%d')}-{strike_str}-{option_right}"
 
 
 def _parse_option(item: object) -> InstrumentRecord | None:
@@ -144,18 +157,19 @@ def _parse_option(item: object) -> InstrumentRecord | None:
         return None
     option_right = "C" if opt is OptionType.CALL else "P"
     margin_type, quote_asset = _resolve_deribit_option_margin(item, name)
-    # Target canonical format (operator decision 2026-07-08/09,
-    # instrument_id_format_canonicalization_2026_07_08.md finding 1):
-    # VENUE:OPTION:BASE@LIN|INV-YYYYMMDD-STRIKE-C|P. Still routed through the
-    # shared UAC builder via passthrough=True (the same mechanism this
-    # adapter already used for the prior raw-DDMMMYY-passthrough format) —
-    # _build_deribit_option_symbol only computes the marker-embedded symbol
-    # string, matching the sibling Bybit/Kraken-Futures/OKX convention
+    # Target canonical format (operator ruling 2026-07-18, superseding the
+    # 2026-07-08/09 "quote optional for dated derivatives" decision):
+    # VENUE:OPTION:BASE-QUOTE@LIN|INV-YYYYMMDD-STRIKE-C|P — quote ALWAYS present
+    # (USDC linear / USD inverse, resolved by _resolve_deribit_option_margin).
+    # Still routed through the shared UAC builder via passthrough=True (the same
+    # mechanism this adapter already used for the prior raw-DDMMMYY-passthrough
+    # format) — _build_deribit_option_symbol only computes the marker-embedded
+    # symbol string, matching the sibling Bybit/Kraken-Futures/OKX convention
     # (tardis/parsing.py::_build_dated_derivative_canonical_symbol).
     option_instrument_key = build_instrument_id(
         "DERIBIT",
         InstrumentType.OPTION,
-        _build_deribit_option_symbol(base, margin_type, expiry, strike, option_right),
+        _build_deribit_option_symbol(base, quote_asset, margin_type, expiry, strike, option_right),
         passthrough=True,
     )
     return InstrumentRecord(
