@@ -801,15 +801,41 @@ def _margin_marker(margin_type: MarginType | None) -> str:
     return ""
 
 
+def _require_quote_when_marked(base: str, quote: str, marker: str) -> None:
+    """Fail loud when a resolved ``@LIN``/``@INV`` marker has no quote asset.
+
+    Operator ruling 2026-07-18: a linear/inverse marker with NO quote is a
+    contradiction — the marker exists precisely to disambiguate settlement
+    (``USDC`` vs ``USDT`` vs ``USD``), which is impossible without the quote —
+    so the canonical-id builder must NEVER silently drop to a base-only symbol.
+    That silent ``f"{base}-{quote}" if quote else base`` fallback is exactly how
+    265,538 DERIBIT rows lost their quote (``DERIBIT:FUTURE:AVAX@LIN-…`` — marker
+    present, quote dropped). An UNMARKED symbol (``margin_type`` unresolved →
+    no marker) keeps the bare-``BASE`` degrade; only the marker-present /
+    quote-absent contradiction raises.
+    """
+    if marker and not quote:
+        msg = (
+            f"Canonical-id builder: margin marker '@{marker}' resolved but quote asset is empty "
+            f"(base={base!r}) — a linear/inverse marker without a quote is a contradiction "
+            f"(settlement USDC/USDT/USD is indeterminable); refusing to emit a base-only id "
+            f"(operator ruling 2026-07-18: quote is mandatory whenever @LIN/@INV is present)."
+        )
+        raise ValueError(msg)
+
+
 def _build_perpetual_canonical_symbol(base: str, quote: str, margin_type: MarginType | None) -> str:
     """Build the target PERPETUAL symbol: ``BASE-QUOTE@LIN`` / ``BASE-QUOTE@INV``.
 
-    No date suffix — perpetuals don't expire. Falls back to the bare
-    ``BASE-QUOTE`` (no marker) when ``margin_type`` is unknown, so a caller
-    with an unresolved margin type doesn't silently invent one.
+    No date suffix — perpetuals don't expire. Falls back to the bare ``BASE``
+    (no marker) ONLY when ``margin_type`` is unknown, so a caller with an
+    unresolved margin type doesn't silently invent one. When a marker DOES
+    resolve, the quote is mandatory — a marker without a quote raises
+    (``_require_quote_when_marked``), never silently drops to base-only.
     """
-    core = f"{base.upper()}-{quote.upper()}" if quote else base.upper()
     marker = _margin_marker(margin_type)
+    _require_quote_when_marked(base, quote, marker)
+    core = f"{base.upper()}-{quote.upper()}" if quote else base.upper()
     return f"{core}@{marker}" if marker else core
 
 
@@ -825,10 +851,14 @@ def _build_dated_derivative_canonical_symbol(
 
     ``YYYYMMDD`` (not Deribit's native ``DDMMMYY``) — string-sortable, per the
     operator's date-format decision. ``strike``/``option_right`` are appended
-    only when both are given (OPTION); FUTURE callers omit them.
+    only when both are given (OPTION); FUTURE callers omit them. The quote is
+    mandatory whenever a marker resolves — a marker without a quote raises
+    (``_require_quote_when_marked``), never silently drops to base-only
+    (operator ruling 2026-07-18).
     """
-    core = f"{base.upper()}-{quote.upper()}" if quote else base.upper()
     marker = _margin_marker(margin_type)
+    _require_quote_when_marked(base, quote, marker)
+    core = f"{base.upper()}-{quote.upper()}" if quote else base.upper()
     if marker:
         core = f"{core}@{marker}"
     core = f"{core}-{expiry.strftime('%Y%m%d')}"
