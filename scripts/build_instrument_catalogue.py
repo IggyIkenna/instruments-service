@@ -3327,8 +3327,9 @@ def _merge_incremental(
     prev_df: pd.DataFrame,
     window_df: pd.DataFrame,
     *,
-    window_start: date,
+    window_start: date | None,
     asset_group: str,
+    close_absent: bool = True,
 ) -> pd.DataFrame:
     """Upsert the window recompute onto the previous catalogue (frozen tail kept).
 
@@ -3342,10 +3343,21 @@ def _merge_incremental(
          the window → newly delisted; close ``available_to`` at
          ``window_start - 1`` (tightest provable bound — near-dead code under the
          self-widening window; healed exactly by the weekly full rebuild).
+         SKIPPED when ``close_absent=False`` (the full-rebuild frozen-tail merge —
+         see below), where there is no meaningful window boundary to close against.
       4. every other prev row (frozen tail — incl. every row of a venue with NO
          window presence: a venue-level capture outage is NOT a delisting, §7.3
          keeps a stopped venue's instruments active exactly like the full
          rebuild) → copied through unchanged.
+
+    ``close_absent`` (default True — the trailing-window incremental): when False,
+    the merge is the FULL-REBUILD frozen-tail merge (F8, 2026-07-15 incident class).
+    A ``--mode full`` walk is authoritative for the ``available_to`` of every
+    instrument that STILL has by_date data (branch 1 recomputes it, so a genuine
+    delisting is already carried by the fresh window row) — so the ONLY prev rows
+    absent from a full walk are those whose by_date has been PRUNED. Those must be
+    preserved verbatim, not closed at a garbage ``window_start - 1`` boundary; hence
+    branch 3 is disabled and ``window_start`` is unused (may be None).
 
     The output row set is prev UNION window-new, so ``len(merged) >= len(prev)`` and
     the monotonic guard passes by construction.
@@ -3388,7 +3400,9 @@ def _merge_incremental(
 
     # Branch 3+4 — prev rows absent from the window.
     tail = prev[~prev_keys.isin(window_key_set).to_numpy()].copy()
-    if not tail.empty:
+    if close_absent and not tail.empty:
+        if window_start is None:
+            raise ValueError("close_absent=True requires window_start (the delist-close boundary)")
         # §7.3 venue-truth: only close an instrument when its venue DID capture
         # in the window (instrument-level absence). Venue-level absence = capture
         # outage / stopped venue → preserve prev state (full-rebuild parity).
@@ -3771,6 +3785,32 @@ def run_rollup(
         )
     else:
         df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
+
+    # F8 (2026-07-18): a --mode full rebuild is CUMULATIVE-preserving — merge the
+    # fresh full walk onto the previous catalogue's frozen tail so a previously
+    # catalogued instrument whose by_date data has since been PRUNED is never
+    # silently dropped (the 2026-07-15 sports incident class, generalised to
+    # defi/cefi/tradfi/prediction: a full defi rebuild dropped 2,378 rows — 2,346
+    # delisted DeFi pools/tokens whose by_date aged off — under-producing the
+    # all-instruments-ever contract and jamming the monotonic guard). The full
+    # walk stays authoritative for the available_to of everything with data
+    # (branch 1 recomputes it → a genuine delisting is carried by the fresh row),
+    # so close_absent=False preserves the DATALESS tail verbatim. Sports already
+    # runs its own frozen-tail merge above; --allow-catalogue-shrink is the escape
+    # hatch for a deliberate re-aggregate that INTENDS to drop (skips the merge).
+    if mode == "full" and asset_group != "sports" and not allow_shrink:
+        full_prev = _load_previous_catalogue(storage, bucket, canonical_blob)
+        if full_prev is not None:
+            full_prev_df, _ = full_prev
+            before = len(df)
+            df = _merge_incremental(full_prev_df, df, window_start=None, asset_group=asset_group, close_absent=False)
+            logger.info(
+                "Full-rebuild frozen-tail merge (%s): %d walked rows + %d prev → %d preserved",
+                asset_group,
+                before,
+                len(full_prev_df),
+                len(df),
+            )
 
     # Phase D: dedup / row-count
     print(f"[BISECT-D] dedup complete rows={len(df)} asset_group={asset_group}", flush=True)
