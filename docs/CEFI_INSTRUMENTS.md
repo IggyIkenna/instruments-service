@@ -15,7 +15,7 @@
 This doc covers **genuinely centralized exchanges**: Binance, Bybit, OKX, Deribit, Coinbase, Upbit, Kraken /
 Kraken-Futures, Bitfinex, Bitget.
 
-The on-chain perp CLOBs (Hyperliquid, Aster, Pacifica, Extended, Lighter) and the prediction-platform crypto-perps
+The on-chain perp CLOBs (Hyperliquid, Aster, Extended, Lighter) and the prediction-platform crypto-perps
 (Kalshi-Perp, Polymarket-Perp) are **order-book venues, not AMM pools**, so they're classified `asset_group=cefi`
 (`VENUES_BY_ASSET_GROUP["cefi"]`, `market_data_categories.py:226-274`) and share the CeFi capture/adapter path — but
 their instrument specs are documented in [`DEFI_INSTRUMENTS.md`](./DEFI_INSTRUMENTS.md) and
@@ -205,12 +205,12 @@ get the same cleanup the same venue's own PERPETUAL gets:
 | KRAKEN-FUTURES  | `KRAKEN-FUTURES:FUTURE:ETH-USD@LIN-20230728`                                 | **MIGRATED 2026-07-09** (`prod/catalog.parquet` + all 4,752 real per-day snapshots) — see "BYBIT / KRAKEN-FUTURES `@LIN`/`@INV` migration" below. Raw Tardis form was `KRAKEN-FUTURES:FUTURE:FF_ETHUSD_230728` (untransformed `FI_`/`FF_`/`PI_`/`PF_`-prefixed passthrough, not the `-inverse-` word-form previously documented here — that shape was never actually what `prod/catalog.parquet` carried; corrected 2026-07-09). |
 | BINANCE-FUTURES | `BINANCE-FUTURES:FUTURE:BTCUSDT_260925`                                      | Raw concatenated base+quote, underscore-date                                                                                                                                                                                                                                                                                                                                                                                     |
 | BYBIT           | `BYBIT:FUTURE:BTC-USD@INV-20231201`                                          | **MIGRATED 2026-07-09** (`prod/catalog.parquet` + all 4,788 real per-day snapshots) — see "BYBIT / KRAKEN-FUTURES `@LIN`/`@INV` migration" below. Raw Tardis form was `BYBIT:FUTURE:BTC-01DEC23` (no quote segment, `DDMMMYY` date).                                                                                                                                                                                             |
-| DERIBIT         | `DERIBIT:OPTION:BTC-10JUL26-48000-C`                                         | `DDMMMYY` date — looks clean in isolation, but does not match the other 3 venues, and `DDMMMYY` does not sort chronologically as a string. **The live options-chain adapter now emits the target format** (`DERIBIT:OPTION:BTC@INV-20260710-48000-C`) — see "Deribit `@LIN`/`@INV` migration" below; Tardis-batch/CCXT-live still emit the raw form shown here.                                                                  |
+| DERIBIT         | `DERIBIT:OPTION:BTC-10JUL26-48000-C`                                         | `DDMMMYY` date — looks clean in isolation, but does not match the other 3 venues, and `DDMMMYY` does not sort chronologically as a string. **The live options-chain adapter now emits the target format** (`DERIBIT:OPTION:BTC-USD@INV-20260710-48000-C`) — see "Deribit `@LIN`/`@INV` migration" below; Tardis-batch/CCXT-live still emit the raw form shown here.                                                              |
 | OKX-FUTURES     | `OKX-FUTURES:FUTURE:BTC-USD_UM-260710` / `OKX-FUTURES:FUTURE:BTC-USD-260710` | Raw Tardis id passthrough (`YYMMDD`, no separate margin marker) — the two real siblings above are the SAME underlying + expiry but genuinely opposite margin types (`_UM` = linear, bare = inverse; see margin-type bug entry below), currently indistinguishable without reading the literal `_UM` substring                                                                                                                    |
 
-**Decided target (operator, 2026-07-08)**: `VENUE:TYPE:BASE[_QUOTE]@LIN|@INV-YYYYMMDD[-STRIKE-C|P]` — uniform across
+**Decided target (operator, 2026-07-08)**: `VENUE:TYPE:BASE-QUOTE@LIN|@INV-YYYYMMDD[-STRIKE-C|P]` — uniform across
 every CeFi venue and both dated-derivative types. Examples: `KRAKEN-FUTURES:FUTURE:XBT-USD@INV-20260731`,
-`BYBIT:FUTURE:BTC-USD@INV-20231201`, `DERIBIT:OPTION:BTC@INV-20260710-48000-C`. Two settled sub-decisions:
+`BYBIT:FUTURE:BTC-USD@INV-20231201`, `DERIBIT:OPTION:BTC-USD@INV-20260710-48000-C`. Two settled sub-decisions:
 
 - **Margin marker = `@LIN`/`@INV` suffix**, not `canonical_id_builder.py`'s already-written-but-unused `-linear-`/
   `-inverse-` word form — chosen to match strategy-service's existing `@LIN`/`@INV` position-id convention (e.g.
@@ -400,11 +400,12 @@ scope.
 ### Deribit `@LIN`/`@INV` migration (2026-07-09)
 
 Deribit's dated-derivative + perpetual instrument_id now has a real, callable canonical builder and a shipped
-consumer, per the doc's own worked examples above (`DERIBIT:FUTURE:BTC@INV-20260710`,
-`DERIBIT:OPTION:BTC@INV-20260710-48000-C`, `DERIBIT:PERPETUAL:BTC-USDC@LIN`) — Deribit's target intentionally **drops
-the quote segment for FUTURE/OPTION** (`BASE@MARKER-YYYYMMDD[-STRIKE-C|P]`, no `-QUOTE-`) while **keeping it for
-PERPETUAL** (`BASE-QUOTE@MARKER`), unlike Kraken-Futures/Bybit above, which keep the quote for dated derivatives too —
-matches the doc's own literal Deribit examples, not a new decision.
+consumer, per the doc's own worked examples above (`DERIBIT:FUTURE:BTC-USD@INV-20260710`,
+`DERIBIT:OPTION:BTC-USD@INV-20260710-48000-C`, `DERIBIT:PERPETUAL:BTC-USDC@LIN`) — Deribit's target **keeps the
+quote segment for FUTURE/OPTION** (`BASE-QUOTE@MARKER-YYYYMMDD[-STRIKE-C|P]`) just as it does **for
+PERPETUAL** (`BASE-QUOTE@MARKER`), consistent with Kraken-Futures/Bybit above, which keep the quote for dated
+derivatives too — DERIBIT always carries a quote (`USD` for inverse, `USDC` for linear) — matches the doc's own
+literal Deribit examples, not a new decision.
 
 **Shipped**: `deribit_options_adapter.py` (the live, real-time options-chain adapter — used for the VOL\_\* mark-IV
 family, independent of the Tardis-batch/CCXT-live universe-enumeration paths) now builds this format directly,
@@ -430,7 +431,7 @@ ran directly against the live catalog 2026-07-09 — backup
 `prod/catalog.deribit-marker-migration.20260709-092610.bak.parquet`, all 28 corrections verified correct by
 re-downloading the written blob, 0 unrelated rows touched (352,132 total rows unchanged). Real before/after examples:
 `DERIBIT:PERPETUAL:BTC-USD` → `DERIBIT:PERPETUAL:BTC-USD@INV`; `DERIBIT:FUTURE:AVAX_USDC-10APR26` →
-`DERIBIT:FUTURE:AVAX@LIN-20260410`; `DERIBIT:OPTION:BTC-10APR20-4750-C` → `DERIBIT:OPTION:BTC@INV-20200410-4750-C`.
+`DERIBIT:FUTURE:AVAX-USDC@LIN-20260410`; `DERIBIT:OPTION:BTC-10APR20-4750-C` → `DERIBIT:OPTION:BTC-USD@INV-20200410-4750-C`.
 Measured: the local re-derivation of all 263,979 rows takes ~8-14s (negligible, string parsing only); the dominant
 cost is the fixed single-file download+backup+write+verify round trip against `prod/catalog.parquet` (~23s observed,
 independent of sample size, same shape as the OKX smoke test above) — so migrating the **remaining ~263,951
@@ -679,7 +680,7 @@ every CeFi adapter; a bare `_create_empty_output()` placeholder method is banned
 
 - [`ADAPTER_ARCHITECTURE.md`](../ADAPTER_ARCHITECTURE.md) — adapter code structure, the general
   `VENUE:TYPE:PAYLOAD[@CHAIN]` grammar, and `canonical_id_builder.py`'s real (limited) usage.
-- [`DEFI_INSTRUMENTS.md`](./DEFI_INSTRUMENTS.md) — on-chain perp CLOBs (Hyperliquid, Aster, Pacifica, Extended,
+- [`DEFI_INSTRUMENTS.md`](./DEFI_INSTRUMENTS.md) — on-chain perp CLOBs (Hyperliquid, Aster, Extended,
   Lighter) and the rest of the DeFi universe.
 - [`TRADFI_INSTRUMENTS.md`](./TRADFI_INSTRUMENTS.md) — the TradFi-underlying side of the equity/commodity-basis perp
   arc referenced above.

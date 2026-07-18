@@ -241,12 +241,18 @@ its **full** curated list unfiltered even in MVP mode. Note also: the main adapt
 Canonical grammar (full spec lives in the shared instrument-ID doc): `VENUE:TYPE:PAYLOAD[@CHAIN]`. TradFi's
 `chain` is always `"off-chain"`.
 
-| Type     | Format                                               | Example                                                            |
-| -------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
-| `FUTURE` | `VENUE:FUTURE:PRODUCT_ROOT@LIN-YYYYMMDD`             | `CME:FUTURE:GOLD@LIN-20260821`                                     |
-| `OPTION` | `VENUE:OPTION:PRODUCT_ROOT@LIN-YYYYMMDD-STRIKE-C\|P` | `CME:OPTION:NASDAQ100@LIN-20260918-32000-C`                        |
-| `EQUITY` | `VENUE:EQUITY:SYMBOL`                                | `NASDAQ:EQUITY:AAPL`, `NYSE:EQUITY:SPY`                            |
-| `INDEX`  | `VENUE:INDEX:SYMBOL`                                 | see §4 for the resolved Yahoo-sourced index `instrument_key` shape |
+| Type     | Format                                                   | Example                                                            |
+| -------- | -------------------------------------------------------- | ------------------------------------------------------------------ |
+| `FUTURE` | `VENUE:FUTURE:PRODUCT_ROOT-USD@LIN-YYYYMMDD`             | `CME:FUTURE:GOLD-USD@LIN-20260821`                                 |
+| `OPTION` | `VENUE:OPTION:PRODUCT_ROOT-USD@LIN-YYYYMMDD-STRIKE-C\|P` | `CME:OPTION:NASDAQ100-USD@LIN-20260918-32000-C`                    |
+| `EQUITY` | `VENUE:EQUITY:SYMBOL-USD`                                | `NASDAQ:EQUITY:AAPL-USD`, `NYSE:EQUITY:SPY-USD`                    |
+| `INDEX`  | `VENUE:INDEX:SYMBOL`                                     | see §4 for the resolved Yahoo-sourced index `instrument_key` shape |
+
+> **Quote suffix (`-USD`) is canonical.** Every TradFi surface carries the settlement quote on the ROOT — dated
+> derivatives as `ROOT-USD@LIN-YYYYMMDD` and equities as `SYM-USD` — since the whole product universe is USD-settled;
+> this is the cross-AG-normalisation target and the shape the four surfaces (canonical id / manifest / GCS path / catalog)
+> must agree on. The `@LIN`-`YYYYMMDD` write path shipped 2026-07-09 (below); making it also stamp the explicit `-USD`
+> quote marker on the ROOT is migration-pending, so historical rows may still show the bare-ROOT form until backfilled.
 
 **Single-leg dated-derivative `@LIN`-`YYYYMMDD` extension — SHIPPED 2026-07-09 (write path + historical
 migration, MTDS repo).** The 2026-07-08 assessment above (real exchange contract codes like `CME:FUTURE:6AF0`

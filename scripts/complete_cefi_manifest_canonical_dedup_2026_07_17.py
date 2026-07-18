@@ -73,10 +73,22 @@ WHAT THIS FIXES (four deltas vs the fork base):
 
        MEASURED REALITY (dry-run 2026-07-18): the base-quote map recovers only ~2.6k rows,
        NOT the ~420k the "clean dashed" model expected — the unresolved-captured population is
-       dominated instead by DATED contracts (~115k rows / ~41B ticks, e.g.
-       ``OKX-FUTURES``/``LTC-USD-210625`` — OUT OF SCOPE for the undated base-quote map; a
-       separate dated-wire itype-fix + wire-map path), null-id BUNDLE shards (~34.6k), and
-       bare-underlying shards (~18.7k / ~7B ticks). All carry real ticks and are KEPT.
+       dominated instead by DATED contracts (~115k rows / ~41B ticks) — see (vi).
+
+  (vi) DATED-WIRE itype-fix (operator Option A, 2026-07-18 — the 41B-tick lever). A dated
+       contract is a FUTURE/OPTION, NEVER a PERPETUAL; the manifest's itype column is often
+       mis-set to PERPETUAL (or blank) on a dated wire (``OKX-FUTURES``/``LTC-USD-210625``),
+       so the 3-tuple wire-map — which DOES already key the venue-native dated ``raw_symbol``
+       — misses. ``_resolve_itype`` now detects a GENUINE date tail (numeric ``[-_]YY[YY]MMDD``,
+       DERIBIT text date ``-5APR19``, CME letter-month ``…USDH25``, option strike ``…-3250-C``)
+       and overrides PERPETUAL/blank → FUTURE/OPTION, which UNBLOCKS the existing wire-map
+       (measured: ~115k of ~118k dated rows / ~40.7B ticks resolve this way — the wire-map,
+       not a new map, does the resolution). ``_build_base_quote_date_map`` is a fallback for a
+       dated wire the exact-raw-symbol keying missed (keyed on
+       ``(venue, itype, BASE-QUOTE, YYYYMMDD, strike, cp)`` → exact catalogue id). The residual
+       (BITGET CME ``ETHUSDH25`` with no derivable day) gets its itype corrected but stays
+       honest-raw. Also: MATIC→POL rebrand alias on the base; null-id BUNDLE shards + genuine
+       bare underlyings stay KEPT.
 
 BUNDLE shards (operator CORRECTION 2026-07-18) — ``data_type`` ∈ {futures_chain,
 options_chain} are keyed on ``underlying`` and the per-row ``instrument_id`` MAY be NULL by
@@ -218,6 +230,41 @@ _CANON_ID_RE = re.compile(
 _COMBO_ID_RE = re.compile(r"^[A-Z0-9._-]+:COMBO:.+$")
 # A trailing YYMMDD (``_210326``/``-210326``) or YYYYMMDD (``-20260401``) date = a dated future.
 _DATED_RE = re.compile(r"(?:[-_]\d{6}|-\d{8})$")
+
+# --- DATED-WIRE itype-fix (operator Option A, 2026-07-18) — a dated contract is a
+# FUTURE/OPTION, NEVER a PERPETUAL; the itype column is often mis-set to PERPETUAL on a
+# dated wire, so the 3-tuple wire-map (which DOES key the venue-native dated raw_symbol)
+# misses. Fixing the itype unblocks it. Detect a GENUINE date tail (not any trailing digits):
+_OPT_TAIL_RE = re.compile(r"-\d+(?:\.\d+)?-[CP]$")  # option strike tail (…-3250-C)
+# text date DDMONYY (DERIBIT: BTC-5APR19-…):
+_TXT_DATE_RE = re.compile(r"-\d{1,2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2}")
+# CME letter-month (BITGET: ETHUSDH25 = ETH-USD, H=Mar, 25) — quote + month-letter + year digit:
+_CME_TAIL_RE = re.compile(r"(?:USD|USDT|USDC)[FGHJKMNQUVXZ]\d{1,2}$")
+_MONTHS: dict[str, str] = {
+    "JAN": "01",
+    "FEB": "02",
+    "MAR": "03",
+    "APR": "04",
+    "MAY": "05",
+    "JUN": "06",
+    "JUL": "07",
+    "AUG": "08",
+    "SEP": "09",
+    "OCT": "10",
+    "NOV": "11",
+    "DEC": "12",
+}
+# Rebrand aliases on the BASE token — a delisted ticker → the current catalogue ticker
+# (Polygon MATIC→POL 2024): the manifest carries `MATIC-BTC`, the catalogue holds `POL-BTC`.
+_REBRAND_ALIASES: dict[str, str] = {"MATIC": "POL"}
+# Catalogue dated-id parse (the BASE-QUOTE:ITYPE-stripped remainder): BASE-QUOTE[@LIN|@INV]-YYYYMMDD[-STRIKE-C|P].
+_DATED_ID_RE = re.compile(
+    r"^(?P<bq>[A-Z0-9]+-[A-Z0-9]+)(?:@(?:LIN|INV))?-(?P<date>\d{8})(?:-(?P<strike>\d+(?:\.\d+)?)-(?P<cp>[CP]))?$"
+)
+# Manifest dated-wire parse: BASE-QUOTE-YY[YY]MMDD[-STRIKE-C|P].
+_WIRE_DATED_RE = re.compile(
+    r"^(?P<bq>[A-Z0-9]+-[A-Z0-9]+)-(?P<date>\d{6}|\d{8})(?:-(?P<strike>\d+(?:\.\d+)?)-(?P<cp>[CP]))?$"
+)
 
 # itype casing + alias + data-type-leak normalization (operator ruling #1). The keys are
 # already ``.strip().upper()``-ed at call time.
@@ -394,6 +441,51 @@ def _build_base_quote_map(cat: pd.DataFrame) -> dict[tuple[str, str], str]:
     return {k: next(iter(s)) for k, s in by_bq.items() if len(s) == 1}
 
 
+def _build_base_quote_date_map(cat: pd.DataFrame) -> dict[tuple[str, str, str, str, str, str], str]:
+    """``(venue, itype, BASE-QUOTE, YYYYMMDD, strike, cp) -> id`` for DATED FUTURE/OPTION.
+
+    The fallback for a dated wire the exact-raw-symbol wire-map missed (coordinator Option A
+    2026-07-18). Most dated rows resolve via the itype-fix + the existing wire-map (which DOES
+    key the venue-native dated raw_symbol); this map catches a residual whose wire format
+    differs but whose BASE-QUOTE + full date + strike/cp match the catalogue EXACTLY (never a
+    fabrication; ambiguous keys dropped).
+    """
+    cols = cat[["venue", "instrument_type", "instrument_id"]].fillna("").astype(str)
+    by_key: dict[tuple[str, str, str, str, str, str], set[str]] = {}
+    for venue, itype, iid in zip(cols["venue"], cols["instrument_type"], cols["instrument_id"], strict=True):
+        vu, itu, idu = venue.strip().upper(), itype.strip().upper(), iid.strip()
+        if itu not in {"FUTURE", "OPTION"}:
+            continue
+        parts = idu.split(":", 2)
+        if len(parts) < 3:
+            continue
+        m = _DATED_ID_RE.match(parts[2].strip().upper())
+        if not m:
+            continue
+        key = (vu, itu, m.group("bq"), m.group("date"), m.group("strike") or "", m.group("cp") or "")
+        by_key.setdefault(key, set()).add(idu)
+    return {k: next(iter(s)) for k, s in by_key.items() if len(s) == 1}
+
+
+def _parse_dated_wire(raw_symbol: str) -> tuple[str, str, str, str] | None:
+    """Parse a manifest dated wire ``BASE-QUOTE-YY[YY]MMDD[-STRIKE-C|P]`` → key parts, or ``None``.
+
+    Returns ``(BASE-QUOTE, YYYYMMDD, strike, cp)`` with the base rebrand-aliased (MATIC→POL)
+    and the date normalised to YYYYMMDD. Only the numeric ``base-quote-date`` form parses
+    (DERIBIT text-date + BITGET CME wires resolve via the wire-map or stay honest-raw).
+    """
+    m = _WIRE_DATED_RE.match(raw_symbol.strip().upper())
+    if not m:
+        return None
+    d = m.group("date")
+    yyyy, mo, dd = ("20" + d[:2], d[2:4], d[4:6]) if len(d) == 6 else (d[:4], d[4:6], d[6:8])
+    if not (yyyy[:2] == "20" and "01" <= mo <= "12" and "01" <= dd <= "31"):
+        return None
+    base, _, quote = m.group("bq").partition("-")
+    base = _REBRAND_ALIASES.get(base, base)
+    return f"{base}-{quote}", yyyy + mo + dd, m.group("strike") or "", m.group("cp") or ""
+
+
 def _catalog_id_set(cat: pd.DataFrame) -> set[str]:
     """Upper-cased set of every catalogue ``instrument_id`` — the 'in the catalogue' test."""
     return {s.strip().upper() for s in cat["instrument_id"].fillna("").astype(str) if s.strip()}
@@ -457,6 +549,36 @@ def _extract_raw(cur: str) -> tuple[str, str, str | None]:
     return "bare", cur, None
 
 
+def _wire_date_yyyymmdd(sym: str) -> str | None:
+    """Normalise a trailing ``[-_]YYMMDD``/``[-_]YYYYMMDD`` date to ``YYYYMMDD``, or ``None``.
+
+    Conservative — validates MM ∈ 01-12, DD ∈ 01-31, and a 20xx century (so a random
+    trailing 6/8-digit run is NOT mistaken for a date).
+    """
+    m = re.search(r"[-_](\d{6}|\d{8})$", sym)
+    if not m:
+        return None
+    d = m.group(1)
+    yyyy, mo, dd = ("20" + d[:2], d[2:4], d[4:6]) if len(d) == 6 else (d[:4], d[4:6], d[6:8])
+    if yyyy[:2] == "20" and "01" <= mo <= "12" and "01" <= dd <= "31":
+        return yyyy + mo + dd
+    return None
+
+
+def _dated_itype(raw_symbol: str) -> str | None:
+    """A GENUINE date tail on the wire ⇒ ``OPTION`` (strike) / ``FUTURE`` (dated), else ``None``.
+
+    Covers a numeric ``[-_]YY[YY]MMDD`` tail, a DERIBIT text date (``-5APR19``), and a CME
+    letter-month (``…USDH25``). A strike ``…-3250-C`` ⇒ OPTION.
+    """
+    s = raw_symbol.strip().upper()
+    if _OPT_TAIL_RE.search(s):
+        return "OPTION"
+    if _wire_date_yyyymmdd(s) or _TXT_DATE_RE.search(s) or _CME_TAIL_RE.search(s):
+        return "FUTURE"
+    return None
+
+
 def _resolve_itype(
     venue: str,
     raw_itype: str,
@@ -466,7 +588,10 @@ def _resolve_itype(
 ) -> str | None:
     """Resolver steps 1 + 1b — normalise the itype, INFER when blank/unknown.
 
-    Step 1: casing/alias/data-type-leak normalise; keep a canonical member as-is.
+    Step 1: casing/alias/data-type-leak normalise; keep a canonical member as-is. DATED-WIRE
+    override (operator Option A 2026-07-18): a dated wire whose itype column is PERPETUAL or
+    blank/unknown is corrected to FUTURE/OPTION (a dated contract is never a perpetual) — this
+    unblocks the wire-map, which DOES key the venue-native dated raw_symbol.
     Step 1b (operator ruling #1, MOST AGGRESSIVE): a blank/``None``/``INDEX``/unknown itype
     is inferred from (a) the catalogue 2-tuple ``(venue, wire) -> type`` map, else (b) the
     row's own chain-bundle ``data_type`` (``futures_chain`` -> ``FUTURE`` / ``options_chain``
@@ -475,6 +600,9 @@ def _resolve_itype(
     is dated else ``PERPETUAL``). A bare mixed venue (bare ``BYBIT``/``OKX``) returns ``None``.
     """
     it = _ITYPE_ALIASES.get(raw_itype.strip().upper(), raw_itype.strip().upper())
+    dated = _dated_itype(raw_symbol)
+    if dated and (it == "PERPETUAL" or it not in _KEEP_ITYPES):
+        return dated
     if it in _KEEP_ITYPES:
         return it
     vu = venue.strip().upper()
@@ -509,7 +637,7 @@ def _to_dashed_base_quote(raw_symbol: str) -> tuple[str, str] | None:
         if sep in r:
             parts = r.split(sep)
             if len(parts) == 2 and parts[0] and parts[1]:
-                base = _BASE_ALIASES.get(parts[0], parts[0])
+                base = _REBRAND_ALIASES.get(parts[0], _BASE_ALIASES.get(parts[0], parts[0]))
                 quote = _BASE_ALIASES.get(parts[1], parts[1])
                 return f"{base}-{quote}", kind
             return None
@@ -546,16 +674,19 @@ def _resolve_full(
     marker_base: dict[str, str],
     itype_infer: dict[tuple[str, str], str],
     base_quote_map: dict[tuple[str, str], str],
+    base_quote_date_map: dict[tuple[str, str, str, str, str, str], str],
 ) -> tuple[str | None, str]:
     """Resolve to ``(canonical_id, source_tag)`` — the source-aware core of ``resolve_canonical``.
 
     Order (first hit wins; every catalogue path precedes any construction, so the SSOT is
     NEVER overridden):
       1. already-canonical (returned as-is).
-      2. raw wire-map (``CeFiWireCanonicalMap`` on the venue-native wire, e.g. ``scusdt``).
-      3. BASE-QUOTE SSOT map (the dashed manifest value → the exact catalogue id).
-      4. marker-base / wrapped-wire peel.
-      5. reconstruction — Kraken slash + underscore ONLY, after the SSOT map missed.
+      2. raw wire-map (``CeFiWireCanonicalMap`` on the venue-native wire, e.g. ``scusdt`` /
+         the dated ``ltc-usd-210625`` once the itype-fix corrects a mis-set PERPETUAL).
+      3. base-quote-WITH-DATE map (a dated FUTURE/OPTION the exact-wire-map keying missed).
+      4. BASE-QUOTE SSOT map (the undated dashed manifest value → the exact catalogue id).
+      5. marker-base / wrapped-wire peel.
+      6. reconstruction — Kraken slash + underscore ONLY, after the SSOT map missed.
     Chain BUNDLE rows are NOT resolved here (no id is synthesised — null id is valid);
     the caller KEEPS them. ``("", None)`` tags are never returned; an unresolved row is
     ``(None, "")``.
@@ -572,6 +703,12 @@ def _resolve_full(
         fwd = wire_map.canonical_for(v, itype, raw)
         if fwd and _is_canonical_id(fwd):
             return fwd, "catalogue"
+    if itype in {"FUTURE", "OPTION"}:
+        pdw = _parse_dated_wire(raw)
+        if pdw:
+            hit = base_quote_date_map.get((v.upper(), itype, pdw[0], pdw[1], pdw[2], pdw[3]))
+            if hit and _is_canonical_id(hit):
+                return hit, "base_quote_date_map"
     bqk = _to_dashed_base_quote(raw)
     if itype and bqk:
         hit = base_quote_map.get((v.upper(), itype, bqk[0]))
@@ -601,16 +738,26 @@ def resolve_canonical(
     marker_base: dict[str, str],
     itype_infer: dict[tuple[str, str], str],
     base_quote_map: dict[tuple[str, str], str],
+    base_quote_date_map: dict[tuple[str, str, str, str, str, str], str],
 ) -> str | None:
     """Resolve a manifest row's (venue, itype, id, data_type, underlying) to its canonical id.
 
     The ONE shared resolver behind every Track-6 axis (thin wrapper over ``_resolve_full`` —
-    every catalogue path [wire-map, BASE-QUOTE SSOT map, marker-base, wrapped-peel] runs
-    BEFORE the narrow Kraken/underscore reconstruction and the chain bundle, so the
-    catalogue SSOT is never overridden). ``None`` = "leave the value alone" (honest).
+    every catalogue path [wire-map, dated-map, BASE-QUOTE SSOT map, marker-base, wrapped-peel]
+    runs BEFORE the narrow Kraken/underscore reconstruction, so the catalogue SSOT is never
+    overridden). ``None`` = "leave the value alone" (honest).
     """
     return _resolve_full(
-        venue, raw_itype, id_or_symbol, data_type, underlying, wire_map, marker_base, itype_infer, base_quote_map
+        venue,
+        raw_itype,
+        id_or_symbol,
+        data_type,
+        underlying,
+        wire_map,
+        marker_base,
+        itype_infer,
+        base_quote_map,
+        base_quote_date_map,
     )[0]
 
 
@@ -624,6 +771,7 @@ def _classify_tuple(
     marker_base: dict[str, str],
     itype_infer: dict[tuple[str, str], str],
     base_quote_map: dict[tuple[str, str], str],
+    base_quote_date_map: dict[tuple[str, str, str, str, str, str], str],
     catalog_ids: set[str],
     catalog_wires: set[tuple[str, str]],
 ) -> _Res:
@@ -639,14 +787,25 @@ def _classify_tuple(
     v, cur, dt = venue.strip(), iid.strip(), data_type.strip()
     norm_it = _normalize_itype(raw_itype)
 
-    canon, via = _resolve_full(v, raw_itype, cur, dt, underlying, wire_map, marker_base, itype_infer, base_quote_map)
+    canon, via = _resolve_full(
+        v, raw_itype, cur, dt, underlying, wire_map, marker_base, itype_infer, base_quote_map, base_quote_date_map
+    )
     if canon:
         return _Res("relabel", venue, canon, _itype_of(canon), "perp" if ":PERP:" in cur else via, "")
 
     if v.upper() == "OKX":
         for rv in _OKX_REMAP:
             rc = resolve_canonical(
-                rv, raw_itype, cur, dt, underlying, wire_map, marker_base, itype_infer, base_quote_map
+                rv,
+                raw_itype,
+                cur,
+                dt,
+                underlying,
+                wire_map,
+                marker_base,
+                itype_infer,
+                base_quote_map,
+                base_quote_date_map,
             )
             if rc:
                 return _Res("relabel", rv, rc, _itype_of(rc), "okx_remap", "")
@@ -677,6 +836,7 @@ def _canonicalize_blob(
     marker_base: dict[str, str],
     itype_infer: dict[tuple[str, str], str],
     base_quote_map: dict[tuple[str, str], str],
+    base_quote_date_map: dict[tuple[str, str, str, str, str, str], str],
     catalog_ids: set[str],
     catalog_wires: set[tuple[str, str]],
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, int]]:
@@ -698,12 +858,16 @@ def _canonicalize_blob(
         "perp_rewritten": 0,
         "okx_remapped": 0,
         "base_quote_resolved": 0,
+        "base_quote_date_resolved": 0,
+        "dated_itype_fixed": 0,
         "reconstructed": 0,
         "blank_id_kept": 0,
         "bundle_kept": 0,
         "blank_axis_kept": 0,
         "unresolved_kept": 0,
         "protected_captured": 0,
+        "bare_underlying_bundle": 0,
+        "bare_underlying_genuine": 0,
         "dropped_orphan": 0,
         "dropped_captured_with_data": 0,
     }
@@ -755,6 +919,7 @@ def _canonicalize_blob(
             marker_base,
             itype_infer,
             base_quote_map,
+            base_quote_date_map,
             catalog_ids,
             catalog_wires,
         )
@@ -807,6 +972,7 @@ def _canonicalize_blob(
     stats["perp_rewritten"] = int((via_ser == "perp").sum())
     stats["okx_remapped"] = int((via_ser == "okx_remap").sum())
     stats["base_quote_resolved"] = int((via_ser == "base_quote_map").sum())
+    stats["base_quote_date_resolved"] = int((via_ser == "base_quote_date_map").sum())
     stats["reconstructed"] = int((via_ser == "reconstructed").sum())
     stats["blank_id_kept"] = int((via_ser == "blank_id_kept").sum())
     stats["bundle_kept"] = int((via_ser == "bundle_kept").sum())
@@ -815,6 +981,22 @@ def _canonicalize_blob(
     stats["protected_captured"] = int(protected.sum())
     stats["dropped_orphan"] = int((drop_flag & (dclass_ser == "orphan")).sum())
     stats["dropped_captured_with_data"] = int((drop_flag & captured_data).sum())  # invariant: 0
+    # DATED-WIRE itype-fix (Option A): rows whose itype went PERPETUAL/blank -> FUTURE/OPTION.
+    dated_fix_mask = (
+        new_itype.isin({"FUTURE", "OPTION"})
+        & ((aliased_orig == "PERPETUAL") | ~aliased_orig.isin(_KEEP_ITYPES))
+        & (~drop_flag)
+    )
+    stats["dated_itype_fixed"] = int(dated_fix_mask.sum())
+    # piece 3: bare-underlying captured that stayed unresolved — bundle vs genuine split.
+    last_seg = orig_id.str.upper().str.rsplit(":", n=1).str[-1]
+    bare_asset = last_seg.str.fullmatch(r"[A-Z0-9]{1,6}").fillna(False) & ~last_seg.str.contains(
+        r"(?:USDT|USDC|USD|BUSD)$", regex=True
+    )
+    bare_unres = (intent_ser != "relabel") & captured & bare_asset & (orig_id.str.strip() != "")
+    chain_dt = df["data_type"].astype(str).str.upper().isin(_BUNDLE_DATA_TYPES)
+    stats["bare_underlying_bundle"] = int((bare_unres & chain_dt).sum())
+    stats["bare_underlying_genuine"] = int((bare_unres & ~chain_dt).sum())
 
     # --- apply: reassign id/itype for every kept row; retarget okx-remap venues ---
     out = df.copy()
@@ -952,6 +1134,7 @@ def _verify_gate(
     marker_base: dict[str, str],
     itype_infer: dict[tuple[str, str], str],
     base_quote_map: dict[tuple[str, str], str],
+    base_quote_date_map: dict[tuple[str, str, str, str, str, str], str],
 ) -> int:
     """Post-apply: 0 further-resolvable captured rows, 0 eu/captured 5-col collisions, 0 dropped-with-data."""
     logger.info("Verifying post-apply gate on gs://%s ...", bucket)
@@ -976,7 +1159,12 @@ def _verify_gate(
             1
             for v, t, c, d, u in zip(venue, itype, cur, dt, und, strict=True)
             if not _is_canonical_id(c.strip())
-            and (nv := resolve_canonical(v, t, c, d, u, wire_map, marker_base, itype_infer, base_quote_map)) is not None
+            and (
+                nv := resolve_canonical(
+                    v, t, c, d, u, wire_map, marker_base, itype_infer, base_quote_map, base_quote_date_map
+                )
+            )
+            is not None
             and nv != c
         )
         residual_resolvable += still
@@ -1025,16 +1213,18 @@ def main(argv: list[str] | None = None) -> int:
     marker_base = _build_marker_base_map(cat)
     itype_infer = _build_itype_infer_map(cat)
     base_quote_map = _build_base_quote_map(cat)
+    base_quote_date_map = _build_base_quote_date_map(cat)
     catalog_ids = _catalog_id_set(cat)
     catalog_wires = _catalog_wire_set(cat)
     logger.info(
         "3-tuple wire map: %d forward keys, %d ambiguous; marker-base: %d bases; itype-infer: %d wires; "
-        "base-quote SSOT map: %d keys; catalogue: %d ids / %d wires.",
+        "base-quote SSOT map: %d keys; base-quote-DATE map: %d keys; catalogue: %d ids / %d wires.",
         len(wire_map.canonical_by_wire),
         len(wire_map.ambiguous_wire_keys),
         len(marker_base),
         len(itype_infer),
         len(base_quote_map),
+        len(base_quote_date_map),
         len(catalog_ids),
         len(catalog_wires),
     )
@@ -1090,7 +1280,7 @@ def main(argv: list[str] | None = None) -> int:
         before_exempt += be
 
         df, new_keys, stats = _canonicalize_blob(
-            df, wire_map, marker_base, itype_infer, base_quote_map, catalog_ids, catalog_wires
+            df, wire_map, marker_base, itype_infer, base_quote_map, base_quote_date_map, catalog_ids, catalog_wires
         )
         dfs[blob] = df
         if not new_keys.empty:
@@ -1100,21 +1290,19 @@ def main(argv: list[str] | None = None) -> int:
         if blob == INDEX_BLOB:
             main_candidates = stats["candidates"]
         logger.info(
-            "gs://%s/%s: candidates=%d relabeled=%d id_changed=%d itype_changed=%d itype_inferred=%d "
-            "perp=%d okx_remap=%d base_quote=%d reconstructed=%d blank_id_kept=%d bundle_kept=%d "
-            "unresolved_kept=%d protected_captured=%d dropped_orphan=%d",
+            "gs://%s/%s: candidates=%d relabeled=%d itype_changed=%d dated_itype_fixed=%d "
+            "base_quote=%d base_quote_date=%d perp=%d reconstructed=%d bundle_kept=%d "
+            "unresolved_kept=%d protected=%d dropped_orphan=%d",
             bucket,
             blob,
             stats["candidates"],
             stats["relabeled"],
-            stats["id_changed"],
             stats["itype_changed"],
-            stats["itype_inferred"],
-            stats["perp_rewritten"],
-            stats["okx_remapped"],
+            stats["dated_itype_fixed"],
             stats["base_quote_resolved"],
+            stats["base_quote_date_resolved"],
+            stats["perp_rewritten"],
             stats["reconstructed"],
-            stats["blank_id_kept"],
             stats["bundle_kept"],
             stats["unresolved_kept"],
             stats["protected_captured"],
@@ -1172,14 +1360,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     logger.info("  :PERP: -> :PERPETUAL:   : %d", totals.get("perp_rewritten", 0))
     logger.info("  bare-OKX remapped       : %d", totals.get("okx_remapped", 0))
-    logger.info("  --- base-quote SSOT recovery (coordinator CORRECTION 2026-07-18) ---")
+    logger.info("  --- DATED-WIRE itype-fix (operator Option A 2026-07-18 — the 41B-tick lever) ---")
     logger.info(
-        "  base-quote SSOT resolved: %d  (dashed bare-wire -> exact catalogue id via the id's BASE-QUOTE segment)",
+        "  itype -> FUTURE/OPTION   : %d  (from PERPETUAL/blank: dated-wire override [OKX mislabel] + chain-data_type inference)",
+        totals.get("dated_itype_fixed", 0),
+    )
+    logger.info(
+        "  base-quote-DATE resolved: %d  (dated FUTURE/OPTION the exact-wire-map missed -> exact catalogue id)",
+        totals.get("base_quote_date_resolved", 0),
+    )
+    logger.info("  --- base-quote SSOT recovery + rebrand ---")
+    logger.info(
+        "  base-quote SSOT resolved: %d  (dashed bare-wire -> exact catalogue id; incl. MATIC->POL rebrand)",
         totals.get("base_quote_resolved", 0),
     )
     logger.info(
         "  reconstructed           : %d  (Kraken slash + underscore ONLY — forms the catalogue does not key)",
         totals.get("reconstructed", 0),
+    )
+    logger.info(
+        "  bare-underlying split   : bundle=%d (chain shards, KEPT null-id) / genuine=%d (no-quote single instrument, honest-raw)",
+        totals.get("bare_underlying_bundle", 0),
+        totals.get("bare_underlying_genuine", 0),
     )
     logger.info("  --- KEEP (operator CORRECTIONS 2026-07-18 — nothing dropped bar genuine orphans) ---")
     logger.info(
@@ -1283,7 +1485,9 @@ def main(argv: list[str] | None = None) -> int:
         _write(storage, bucket, blob, out_df)
         logger.info("gs://%s/%s: written (%d rows).", bucket, blob, len(out_df))
 
-    rc = _verify_gate(storage, bucket, loaded_blobs, wire_map, marker_base, itype_infer, base_quote_map)
+    rc = _verify_gate(
+        storage, bucket, loaded_blobs, wire_map, marker_base, itype_infer, base_quote_map, base_quote_date_map
+    )
     if rc == 0:
         logger.info(
             "APPLY COMPLETE: id_changed=%d, itype_changed=%d, perp=%d, de-dup-collapsed=%d, eu-dropped=%d, "
