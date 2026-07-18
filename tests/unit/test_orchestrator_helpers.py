@@ -1010,3 +1010,37 @@ def test_split_by_instrument_type_canonicalizes_legacy_lowercase_aliases() -> No
     )
     groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
     assert groups == {"PERPETUAL": 2, "SPOT_PAIR": 1}
+
+
+def test_split_by_instrument_type_canonicalizes_extended_legacy_aliases() -> None:
+    """2026-07-18 extension: the additional legacy spellings measured live on
+    COINBASE-SPOT (``spot_pair``) and BYBIT (``futures_chain``/``perp``) also
+    canonicalise to their UAC ``InstrumentType`` value before grouping, landing in
+    the SAME manifest row_key as an already-canonical sibling instead of minting a
+    new permanently-duplicated key.
+    """
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
+
+    df = pd.DataFrame(
+        [
+            {"instrument_key": "AAPLX-USDT-1", "instrument_type": "spot_pair"},
+            {"instrument_key": "AAPLX-USDT-2", "instrument_type": "SPOT_PAIR"},
+            {"instrument_key": "BTC-FUT-1", "instrument_type": "futures_chain"},
+            {"instrument_key": "BTC-FUT-2", "instrument_type": "FUTURE"},
+            {"instrument_key": "ETH-PERP-1", "instrument_type": "perp"},
+        ]
+    )
+    groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
+    assert groups == {"SPOT_PAIR": 2, "FUTURE": 2, "PERPETUAL": 1}
+
+
+def test_split_by_instrument_type_blank_and_none_are_not_canonicalized() -> None:
+    """Blank/None stays the honest "" group key — the legacy-alias guard is
+    forward-only defense-in-depth against stray lowercase spellings, never a
+    fabricator of a type for a genuinely absent value (see the row_key-permanence
+    contract in ``_split_by_instrument_type``'s docstring)."""
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
+
+    df = pd.DataFrame([{"instrument_type": ""}, {"instrument_type": None}, {"instrument_type": "PERPETUAL"}])
+    groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
+    assert groups == {"": 2, "PERPETUAL": 1}

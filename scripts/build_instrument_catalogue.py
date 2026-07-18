@@ -607,6 +607,79 @@ def _venue_last_full_day(day_counts: dict[date, int]) -> date | None:
     return days[-1]
 
 
+#: Legacy lowercase → canonical UAC ``InstrumentType`` alias map applied by
+#: :func:`_canonicalize_instrument_type` when a catalogue row's ``instrument_type``
+#: is stamped from the raw per-date source value. Mirrors the documented legacy
+#: mapping in ``InstrumentType``'s own docstring (UAC
+#: ``unified_api_contracts._instrument_enums``) plus the additional lowercase
+#: spellings measured live in production (2026-07-18: COINBASE-SPOT/BYBIT by_date
+#: rows carry ``spot``/``spot_pair``/``perpetual``/``futures_chain`` alongside the
+#: canonical uppercase form — the manifest-writer alias guard at
+#: ``instruments_service.engine.orchestrator.writers._LEGACY_INSTRUMENT_TYPE_ALIASES``
+#: only intercepts ``perpetual``/``spot`` going forward, so historical + still-live
+#: variants outside that pair reach the roll-up unmapped). Keys are lowercased
+#: before lookup.
+_INSTRUMENT_TYPE_LEGACY_ALIASES: dict[str, str] = {
+    "spot": InstrumentType.SPOT_PAIR.value,
+    "spot_pair": InstrumentType.SPOT_PAIR.value,
+    "perp": InstrumentType.PERPETUAL.value,
+    "perpetual": InstrumentType.PERPETUAL.value,
+    "futures": InstrumentType.FUTURE.value,
+    "futures_chain": InstrumentType.FUTURE.value,
+    "future": InstrumentType.FUTURE.value,
+    "option": InstrumentType.OPTION.value,
+    "pool": InstrumentType.POOL.value,
+    "lending_market": InstrumentType.LENDING.value,
+    "lending": InstrumentType.LENDING.value,
+    "lst": InstrumentType.LST.value,
+    "yield": InstrumentType.YIELD_BEARING.value,
+    "etf": InstrumentType.ETF.value,
+}
+
+#: Honest-absence sentinel for a catalogue row whose source ``instrument_type`` is
+#: blank, missing, or the literal string ``"None"`` (a stray ``str(None)`` stamp
+#: from an upstream writer bug — measured live in production 2026-07-18).
+#: Deliberately NOT a member of :class:`InstrumentType` (the closed contract-
+#: mechanics vocabulary this roll-up otherwise canonicalises onto) — it is a
+#: roll-up-only marker meaning "no real type was ever fabricated here", mirroring
+#: the existing :data:`SPORTS_LEAGUE_ID_SENTINELS` "UNKNOWN" convention above.
+INSTRUMENT_TYPE_UNKNOWN = "UNKNOWN"
+
+
+def _canonicalize_instrument_type(raw: str | None) -> str:
+    """Canonicalise a raw per-date ``instrument_type`` value to the UAC vocabulary.
+
+    Deterministic + pure — applied at catalogue-row EMISSION time only (never
+    mutates ``agg.meta``, so every internal consumer that reads the raw meta value
+    — :func:`_canonicalize_cefi_future_id`, :func:`_canonicalize_cefi_perp_id`,
+    the perp-family checks — is unaffected; they already defensively
+    ``.strip().upper()`` at their own read sites):
+
+      1. blank / ``None`` / the literal string ``"None"`` → the single honest
+         :data:`INSTRUMENT_TYPE_UNKNOWN` sentinel (never fabricated, never the
+         literal ``"None"``);
+      2. a known legacy lowercase spelling (:data:`_INSTRUMENT_TYPE_LEGACY_ALIASES`,
+         case-insensitive) → its canonical UAC ``InstrumentType`` value;
+      3. anything else → uppercased unchanged (round-trips an already-canonical
+         value; preserves a genuinely new/unrecognised venue-side type for triage
+         instead of silently swallowing it into UNKNOWN).
+
+    SSOT: ``unified_api_contracts._instrument_enums.InstrumentType`` docstring
+    (legacy-value mapping) + measured live COINBASE-SPOT/BYBIT by_date rows
+    (2026-07-18): COINBASE-SPOT carried ``['', 'SPOT_PAIR', 'spot', 'spot_pair']``,
+    BYBIT carried ``['', 'FUTURE', 'PERPETUAL', 'SPOT_PAIR', 'futures_chain',
+    'perpetual']``, and the literal string ``'None'`` also appears.
+    """
+    text = (raw or "").strip()
+    if not text or text == "None":
+        return INSTRUMENT_TYPE_UNKNOWN
+    lowered = text.lower()
+    aliased = _INSTRUMENT_TYPE_LEGACY_ALIASES.get(lowered)
+    if aliased is not None:
+        return aliased
+    return text.upper()
+
+
 #: DeFi pool instrument_type values (lowercased) the dual-form id applies to.
 #: A pool's canonical manifest atom is ``pool_address.lower()``; the glued-pair
 #: id is the human-readable UI form. Other DeFi instrument_types (lending / lst /
@@ -959,6 +1032,55 @@ _CATALOGUE_KNOWN_CHAINS = frozenset(
     }
 )
 
+#: Venues dropped from the URDI adapter registry (operator ruling) — a live capture
+#: for one of these can no longer happen, but stale historical ``by_date`` rows
+#: persist in GCS and must not re-mint a catalogue row on every regen. Both the bare
+#: and the ``-SOLANA``-suffixed spelling are excluded (whichever form a given row's
+#: raw ``venue`` column happens to carry — checked upper-cased, exact match).
+#: SSOT: ``unified_api_contracts.registry.venue_adapter_keys`` — DRIFT/PACIFICA
+#: removed 2026-07-16, MANGO-SOLANA/ZETA-SOLANA/FLASH-SOLANA removed 2026-07-15
+#: (all Solana perp DEXes except Jupiter, which is not integrated; operator ruling).
+#: DRIFT alone carried 3,556 stale rows in the IS defi availability index as of
+#: 2026-07-18 (0 in MTDS — never had live market-data capture).
+_REMOVED_VENUES: frozenset[str] = frozenset(
+    {
+        "DRIFT",
+        "DRIFT-SOLANA",
+        "PACIFICA",
+        "PACIFICA-SOLANA",
+        "MANGO-SOLANA",
+        "MANGO",
+        "ZETA-SOLANA",
+        "ZETA",
+        "FLASH-SOLANA",
+        "FLASH",
+    }
+)
+
+#: Bare-vs-chain duplicate venue spellings collapsed to ONE canonical combined form —
+#: same protocol, two venue-column spellings measured live in the IS defi
+#: availability index (2026-07-18): JITO / JITO-SOLANA, RAYDIUM / RAYDIUM-SOLANA,
+#: MARINADE / MARINADE-SOLANA. Deliberately narrow (exact match, these 3 known pairs
+#: only) — NOT a blanket bare-venue-implies-Solana rule. Canonical form = the
+#: ``-SOLANA``-suffixed combined spelling: the registered ``venue_prefix`` convention
+#: in ``unified_api_contracts.registry.venue_adapter_keys`` only carries the suffixed
+#: form (``JITO-SOLANA`` / ``RAYDIUM-SOLANA`` / ``MARINADE-SOLANA``) — the bare
+#: spellings are NOT registered adapter keys at all.
+_DUPLICATE_VENUE_ALIASES: dict[str, str] = {
+    "JITO": "JITO-SOLANA",
+    "RAYDIUM": "RAYDIUM-SOLANA",
+    "MARINADE": "MARINADE-SOLANA",
+}
+
+
+def _is_removed_venue(venue: str) -> bool:
+    """True when ``venue`` (any case) is a registry-removed venue (bare or suffixed).
+
+    See :data:`_REMOVED_VENUES`. Pure; blank input is never "removed" (the caller
+    already treats blank venue as its own no-op path).
+    """
+    return venue.strip().upper() in _REMOVED_VENUES
+
 
 def _canonical_bare_venue_chain(venue: str, chain: str) -> tuple[str, str]:
     """Map any DeFi venue drift form ``(venue, chain)`` → canonical ``(bare_protocol, chain)``.
@@ -986,6 +1108,11 @@ def _canonical_bare_venue_chain(venue: str, chain: str) -> tuple[str, str]:
     c = str(chain).strip().upper()
     if not v:
         return v, c
+    # Bare-vs-chain duplicate venue collapse (JITO/RAYDIUM/MARINADE — see
+    # _DUPLICATE_VENUE_ALIASES) BEFORE the cefi/ghost-normalisation checks below, so
+    # a bare-spelling row with no separate chain column still resolves to the SAME
+    # (bare_protocol, chain) pair as its ``-SOLANA``-suffixed sibling.
+    v = _DUPLICATE_VENUE_ALIASES.get(v.upper(), v)
     if VENUE_TO_ASSET_GROUP.get(v) == "cefi":
         return v, c
     normed = canonicalize_defi_venue_combined(v)
@@ -1097,7 +1224,13 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
             return cached
         from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
 
-        canonical = canonicalize_defi_venue_combined(raw)
+        # Collapse the bare-vs-chain duplicate spelling BEFORE ghost-normalisation
+        # (see _DUPLICATE_VENUE_ALIASES) so JITO/JITO-SOLANA etc. share ONE liveness
+        # window key — otherwise the two spellings' §7.3 last-full-day anchors track
+        # independently even though _canonical_bare_venue_chain later emits the same
+        # (bare_protocol, chain) pair for both.
+        _aliased = _DUPLICATE_VENUE_ALIASES.get(raw.upper(), raw)
+        canonical = canonicalize_defi_venue_combined(_aliased)
         _canon_venue_cache[raw] = canonical
         return canonical
 
@@ -1111,6 +1244,11 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
             if iid is None:
                 continue
             _venue = str(row.get("venue") or "").strip()
+            if _venue and _is_removed_venue(_venue):
+                # Registry-removed venue (operator ruling) — stale historical rows
+                # must not re-mint a catalogue row on every regen. See
+                # _REMOVED_VENUES.
+                continue
             if _venue:
                 _canonical_v = _canonical_venue_key(_venue)
                 vc = venue_day_counts.setdefault(_canonical_v, {})
@@ -1242,7 +1380,11 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         rows.append(
             {
                 "instrument_id": canonical_id,
-                "instrument_type": agg.meta["instrument_type"] or "",
+                # Canonicalised at EMISSION only (see _canonicalize_instrument_type's
+                # docstring) — agg.meta itself stays raw so _canonicalize_cefi_rollup_id
+                # above (called with agg.meta, not this row dict) keeps its existing
+                # behaviour byte-for-byte.
+                "instrument_type": _canonicalize_instrument_type(agg.meta["instrument_type"]),
                 "venue": bare_venue,
                 "chain": chain,
                 "league_id": agg.meta["league_id"] or "",
