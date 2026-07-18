@@ -3093,6 +3093,18 @@ def test_cefi_equity_tags_classifier(rollup: ModuleType) -> None:
     # standalone / pre-IPO equity perp: in the universe (is_equity_perp True) but no
     # real-equity twin → tracks_equity "".
     assert r("PERPETUAL", "SPCX") == (True, "")  # SpaceX pre-IPO
+    # 2026-07-18 Binance full-listing widen (operator "get all the Binance
+    # listings, we can curate our end"): the 20 new TRADIFI_PERPETUAL bases tag
+    # is_equity_perp=True. tracks_equity stays "" (no wired Databento twin yet,
+    # exactly like SPCX above) until the tradfi DBEQ.BASIC leg is added.
+    assert r("PERPETUAL", "APP") == (True, "")  # AppLovin (US EQUITY)
+    assert r("PERPETUAL", "GEV") == (True, "")  # GE Vernova (US EQUITY)
+    assert r("PERPETUAL", "SNOW") == (True, "")  # Snowflake (US EQUITY)
+    assert r("PERPETUAL", "XBI") == (True, "")  # SPDR S&P Biotech ETF
+    assert r("PERPETUAL", "TENCENT") == (True, "")  # HK_EQUITY (new category)
+    assert r("PERPETUAL", "ZHIPU") == (True, "")  # HK_EQUITY (new category)
+    # tokenized-share spot form of a NEW base still rides base[:-1] membership
+    assert r("SPOT_PAIR", "SNOWX") == (True, "")  # SNOWX → SNOW ∈ equity universe
     # crypto perps → not equity (not in the equity universe)
     assert r("PERPETUAL", "BTC") == (False, "")
     assert r("PERPETUAL", "0G") == (False, "")
