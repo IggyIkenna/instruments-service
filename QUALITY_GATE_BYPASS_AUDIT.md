@@ -14,7 +14,13 @@ All active QG exceptions are documented here. Each entry must have a reason and 
 
 ### 1.2 Inline Suppressions
 
-None. No `# type: ignore`, `# noqa`, or basedpyright baseline errors.
+No `# type: ignore`, `# noqa`, or basedpyright baseline errors.
+
+**Broad-except (`# broad-except-ok`)** — one-off migration script only:
+
+| Location                                                       | Lines                                          | Reason                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/complete_cefi_manifest_canonical_dedup_2026_07_17.py` | pass-1 per-VM shard load + `_verify_gate` load | **Per-object isolation for a transient per-VM shard.** A live backfill VM's `_index/per_vm/*.parquet` shard can be consolidated + DELETED between the `list_blobs` snapshot and the `download_bytes` (observed 404). The main index MUST load (re-raised); a vanished per-VM shard is skipped with a warning. One-off migration (`# Lifecycle: oneoff`), deleted after the cutover drain. Same pattern as the sibling `canonicalize_cefi_defi_instrument_type_2026_07_17.py`. |
 
 ### 1.3 Pragma No-Cover
 
