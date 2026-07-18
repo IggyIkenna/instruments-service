@@ -10,7 +10,7 @@ Provenance: plans/active/issues/_cefi_canonical_blueprint_2026_07_17.md § 3 "SC
 Manifest completion + de-dup (instruments-service)". Fork of
 ``relabel_cefi_tardis_raw_symbol_to_canonical_2026_07_15.py``.
 
-WHAT THIS FIXES (three deltas vs the fork base):
+WHAT THIS FIXES (four deltas vs the fork base):
 
   (i)  KEY OFF THE ROLLED-UP CATALOGUE VIA THE UAC 3-TUPLE MAP. The fork built a
        2-tuple ``(venue, raw_symbol)`` map from the ``instrument_availability/by_date``
@@ -35,10 +35,46 @@ WHAT THIS FIXES (three deltas vs the fork base):
        (WITH ``pipeline_mode``), keeping the best ``capture_status`` via ``_STATUS_RANK``
        (captured > empty_confirmed > attempted_failed > expected_unattempted).
 
+  (iv) NON-CANONICAL ENUMERATION AXES (Track 6, operator rulings 2026-07-18). The
+       fork+deltas (i)-(iii) canonicalise the ``instrument_id`` COLUMN of already-
+       ``{venue}:``-prefixed captured rows only. The 2026-07-18 enumeration audit
+       (``market-tick-data-service/scripts/audit_cefi_manifest_noncanonical_enumeration_2026_07_18.py``)
+       found three further axes Scripts 1-3-as-forked do NOT touch, all of which the
+       cutover ``--apply`` must align to the catalogue SSOT or "canonical" is a lie:
+         * ``instrument_type`` COLUMN drift — 3.19M BLANK + lowercase/aliased
+           (``perpetual``/``spot``/``spot_pair``/``future``) + ``None`` +
+           data-type-leaked (``futures_chain``/``options_chain`` written as the itype).
+           BLANK itype is the ROOT: ~986k bare-wire rows fail 3-tuple resolution ONLY
+           because their itype key is blank. Fixing the itype UNBLOCKS them.
+         * ``:PERP:`` shorthand ids (``ASTER:PERP:CLUSDT``) — decompose the wire +
+           force ``PERPETUAL`` -> ``ASTER:PERPETUAL:CL-USDT@LIN``.
+         * orphans — rows whose (venue, instrument) the catalogue SSOT does not know.
+       These are all served by the ONE shared ``resolve_canonical`` resolver below,
+       which normalises/infers the itype, extracts the wire symbol from ANY id form,
+       and forward-resolves via the same ``CeFiWireCanonicalMap``. It runs over EVERY
+       row (not just captured), so the de-dup + eu-reconcile keys align across the
+       normalised itype.
+
 The fork's expected_unattempted reconcile pass is RETAINED (drops eu rows in the main
 index whose 5-col shard key now matches a relabeled ``captured`` key — the 5-col key
 deliberately excludes ``pipeline_mode`` so a ``batch_tardis`` eu skeleton reconciles
 against the canonical ``captured`` twin regardless of which lane fulfilled it).
+
+ORPHAN handling (operator ruling 2026-07-18) — DROP a row whose (venue, instrument) is
+NOT in the catalogue and does not resolve. Concretely: ``KALSHI-PERP`` / ``POLYMARKET-PERP``
+(operator-verified 100% ``empty_confirmed``, ``row_count=0``, blank id — no real data);
+blank venue / id / data_type; bare-``OKX`` (remap to ``OKX-SWAP``/``-SPOT``/``-FUTURES``
+where the symbol resolves, else drop). ``COMBO`` is CANONICAL (catalogue has 138,544 COMBO
+rows) — combos migrate, never drop.
+
+  DATA-CORRECTNESS CARVE-OUT (HARD RULE, this script): a row that would DROP is PROTECTED
+  (kept honest-unresolved, itype-normalised) when it is ``captured`` with ``row_count > 0``
+  — dropping such a row destroys real tick data. Measured 2026-07-18: the naive drop set
+  held 12,825 captured rows carrying ~7.27B tick rows (bare underlyings ``DERIBIT:ETH``,
+  Kraken slash-wires ``XBT/USDT``, BITGET letter-month futures ``BTCUSDH``) — the
+  "missing-quote / nc:other" class a DEDICATED decompose script (Track 6 P1) must recover,
+  NOT this one. Only non-captured (or captured-empty) bookkeeping orphans actually drop.
+  ``_verify_gate`` asserts ZERO captured-with-data rows were dropped.
 
 Scope: ``asset_group=cefi`` (the whole cefi tick manifest). Inputs: the main
 ``_index/availability_index.parquet`` + every ``_index/per_vm/*.parquet`` shard.
@@ -46,12 +82,16 @@ Scope: ``asset_group=cefi`` (the whole cefi tick manifest). Inputs: the main
 SNAPSHOT-FIRST: every blob this script rewrites gets a pre-write copy under
 ``_index/snapshots/pre_d4_<ts>/`` before any write. Default mode is DRY-RUN (read-only);
 ``--apply`` mutates and is GATED by the Phase -1 catalogue verify gate (0 ``:PERP:`` ids,
-0 ``instrument_id != canonical_instrument_id`` in the cefi catalogue).
+0 ``instrument_id != canonical_instrument_id`` in the cefi catalogue). The dry-run reads
+only the classification/de-dup columns (memory-bounded); ``--apply`` reads the full schema
+to rewrite it.
 
-STOP-ON-SURPRISE: the raw-captured candidate population (captured rows whose
-``instrument_id`` is not yet ``{venue}:``-prefixed) must land in the ~490k band
-(``[_CANDIDATE_MIN, _CANDIDATE_MAX]``) — the pre-rebuild ~490k raw remainder is the
-upper bound. Halt outside the band and diagnose before ``--apply``.
+STOP-ON-SURPRISE bands (halt + diagnose before ``--apply``):
+  * raw-captured candidate population in ``[_CANDIDATE_MIN, _CANDIDATE_MAX]``.
+  * ``:PERP:`` rewrites in ``[_PERP_MIN, _PERP_MAX]`` (a crash to ~0 = the perp venues
+    fell out of the catalogue).
+  * total dropped rows <= ``_MAX_TOTAL_DROPPED``.
+  * ZERO captured-with-data rows in the drop set (data-loss invariant).
 
 Usage::
 
@@ -62,7 +102,8 @@ Usage::
       CLOUD_PROVIDER=gcp CLOUD_MOCK_MODE=false \\
       .venv/bin/python scripts/complete_cefi_manifest_canonical_dedup_2026_07_17.py
 
-    # apply (snapshot + relabel + de-dup + eu-reconcile + verify gate) — DRAIN-GATED
+    # apply (snapshot + relabel + itype/:PERP:/orphan align + de-dup + eu-reconcile +
+    # verify gate) — DRAIN-GATED
     GCP_PROJECT_ID=central-element-323112 DEPLOYMENT_ENV=prod \\
       CLOUD_PROVIDER=gcp CLOUD_MOCK_MODE=false \\
       .venv/bin/python scripts/complete_cefi_manifest_canonical_dedup_2026_07_17.py --apply
@@ -73,10 +114,13 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import re
 import sys
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 import pandas as pd
+import pyarrow.parquet as pq
 from unified_api_contracts import CeFiWireCanonicalMap
 from unified_trading_library import get_storage_client, resolve_bucket_name
 
@@ -94,6 +138,23 @@ PIN_ATOM = ["date", "venue", "data_type", "instrument_type", "instrument_id", "p
 # twin written by another (native on-chain vs batch_tardis).
 SHARD_KEY_COLS = ["date", "venue", "data_type", "instrument_type", "instrument_id"]
 
+# The minimal column set the dry-run needs (classification + de-dup + eu-reconcile +
+# the captured-data drop-gate). ``--apply`` reads the FULL schema to rewrite it. The load
+# projects to the INTERSECTION with the blob's real schema: the per-VM ``_legacy_seed``
+# shard physically lacks ``pipeline_mode``/``row_count`` (they are backfilled on read by
+# ``read_availability_index``, not stored), so ``_ensure_cols`` re-materialises them.
+_DRYRUN_COLS = [
+    "date",
+    "venue",
+    "data_type",
+    "instrument_type",
+    "instrument_id",
+    "pipeline_mode",
+    "capture_status",
+    "row_count",
+    "instrument_count",
+]
+
 # Best-status wins on a shard-atom collision.
 _STATUS_RANK = {"captured": 0, "empty_confirmed": 1, "attempted_failed": 2, "expected_unattempted": 3}
 
@@ -103,6 +164,59 @@ _STATUS_RANK = {"captured": 0, "empty_confirmed": 1, "attempted_failed": 2, "exp
 # => 558,050 total. Bound generously around the total; halt outside.
 _CANDIDATE_MIN = 400_000
 _CANDIDATE_MAX = 700_000
+
+# STOP-ON-SURPRISE: :PERP: rewrite band. Measured 2026-07-18 = 374,227 (matches the
+# enumeration audit's 374,272 :PERP: rows). A crash toward 0 means the on-chain perp
+# venues (ASTER/LIGHTER/EXTENDED/HYPERLIQUID) fell out of the catalogue.
+_PERP_MIN = 250_000
+_PERP_MAX = 500_000
+
+# STOP-ON-SURPRISE: an upper bound on total dropped rows (blank/orphan/okx/drop-venue,
+# captured-with-data EXCLUDED). Measured 2026-07-18 = ~231k. A blow-past means a
+# catalogue regression made a huge population look like orphans.
+_MAX_TOTAL_DROPPED = 400_000
+
+# ---------------------------------------------------------------------------
+# Track-6 canonical-form constants (operator rulings 2026-07-18).
+# ---------------------------------------------------------------------------
+
+# Canonical instrument_id shape (mirrors the enumeration audit's _CANON_RE) + a COMBO arm
+# (operator ruling #4: COMBO is canonical). VENUE:ITYPE:BASE-QUOTE[@LIN|@INV][-YYYYMMDD][-STRIKE-C|P].
+_CANON_ID_RE = re.compile(
+    r"^[A-Z0-9._-]+:(PERPETUAL|FUTURE|OPTION|SPOT_PAIR):[A-Z0-9]+-[A-Z0-9]+"
+    r"(@(LIN|INV))?(-\d{8})?(-\d+(\.\d+)?-[CP])?$"
+)
+_COMBO_ID_RE = re.compile(r"^[A-Z0-9._-]+:COMBO:.+$")
+# A trailing YYMMDD (``_210326``/``-210326``) or YYYYMMDD (``-20260401``) date = a dated future.
+_DATED_RE = re.compile(r"(?:[-_]\d{6}|-\d{8})$")
+
+# itype casing + alias + data-type-leak normalization (operator ruling #1). The keys are
+# already ``.strip().upper()``-ed at call time.
+_ITYPE_ALIASES: dict[str, str] = {
+    "SWAP": "PERPETUAL",
+    "SPOT": "SPOT_PAIR",
+    "FUTURES": "FUTURE",
+    "OPTIONS": "OPTION",
+    "PERP": "PERPETUAL",
+    # data_type leaked into the instrument_type column:
+    "FUTURES_CHAIN": "FUTURE",
+    "OPTIONS_CHAIN": "OPTION",
+}
+_KEEP_ITYPES = frozenset({"PERPETUAL", "FUTURE", "OPTION", "SPOT_PAIR", "COMBO"})
+
+# Bare (un-suffixed) venues that are derivatives-only — a LAST-RESORT itype-infer
+# fallback used ONLY when the catalogue 2-tuple map has no unique itype for the wire.
+# BYBIT/OKX are DELIBERATELY absent (mixed spot+deriv → cannot infer from the venue).
+_DERIV_VENUES = frozenset({"DERIBIT", "BINANCE-DELIVERY", "BITMEX"})
+
+# Orphan venues operator-verified 2026-07-18 to carry NO real data (100% empty_confirmed,
+# row_count=0, blank id) → DROP.
+_DROP_VENUES = frozenset({"KALSHI-PERP", "POLYMARKET-PERP"})
+
+# bare-``OKX`` remap candidates (operator ruling #2: try each, keep the one that resolves).
+_OKX_REMAP = ("OKX-SWAP", "OKX-SPOT", "OKX-FUTURES")
+
+_KEY_SEP = "\x1f"
 
 # Majors that the 2-tuple 2026-07-16 relabel left RAW — the dry-run confirms these now
 # resolve through the 3-tuple map (review blocking-risk #1).
@@ -114,6 +228,24 @@ _MAJORS_CHECK: list[tuple[str, str, str]] = [
     ("BINANCE-FUTURES", "PERPETUAL", "BTCUSDT"),
     ("BINANCE-FUTURES", "PERPETUAL", "ETHUSDT"),
 ]
+
+
+class _Res(NamedTuple):
+    """The per-(venue, itype, id, data_type)-tuple resolution decision.
+
+    intent: ``relabel`` (id/itype/venue rewritten to ``iid``/``itype``/``venue``),
+        ``keep`` (in-catalogue but unresolved — id kept, itype normalised), or
+        ``drop`` (orphan/blank/okx/drop-venue — subject to the captured-data carve-out).
+    via: a tag for the summary counters.
+    dclass: the drop class (``blank``/``orphan``/``okx``/``drop_venue``), else "".
+    """
+
+    intent: str
+    venue: str
+    iid: str
+    itype: str
+    via: str
+    dclass: str
 
 
 def _load_catalog(storage: object, inst_bucket: str) -> pd.DataFrame:
@@ -156,6 +288,39 @@ def _build_marker_base_map(cat: pd.DataFrame) -> dict[str, str]:
     return base_to_id
 
 
+def _build_itype_infer_map(cat: pd.DataFrame) -> dict[tuple[str, str], str]:
+    """Map ``(venue, raw_symbol) -> instrument_type`` when the catalogue is UNAMBIGUOUS.
+
+    The blank-itype inference primary path (operator ruling #1): a bare-wire manifest row
+    whose itype key is blank recovers its type from the catalogue's OWN (venue, wire) ->
+    type mapping. A wire that maps to >1 type (a spot/perp clash) is EXCLUDED (the caller
+    falls back to venue-suffix inference), never guessed. Keys are ``.upper()``-ed to
+    match ``CeFiWireCanonicalMap``'s case-insensitive lookup.
+    """
+    cols = cat[["venue", "raw_symbol", "instrument_type"]].fillna("").astype(str)
+    by_wire: dict[tuple[str, str], set[str]] = {}
+    for venue, raw, itype in zip(cols["venue"], cols["raw_symbol"], cols["instrument_type"], strict=True):
+        vv, rr, ii = venue.strip().upper(), raw.strip().upper(), itype.strip().upper()
+        if vv and rr and ii:
+            by_wire.setdefault((vv, rr), set()).add(ii)
+    return {k: next(iter(s)) for k, s in by_wire.items() if len(s) == 1}
+
+
+def _catalog_id_set(cat: pd.DataFrame) -> set[str]:
+    """Upper-cased set of every catalogue ``instrument_id`` — the 'in the catalogue' test."""
+    return {s.strip().upper() for s in cat["instrument_id"].fillna("").astype(str) if s.strip()}
+
+
+def _catalog_wire_set(cat: pd.DataFrame) -> set[tuple[str, str]]:
+    """Upper-cased ``(venue, raw_symbol)`` set — the wire-level 'in the catalogue' test."""
+    cols = cat[["venue", "raw_symbol"]].fillna("").astype(str)
+    return {
+        (venue.strip().upper(), raw.strip().upper())
+        for venue, raw in zip(cols["venue"], cols["raw_symbol"], strict=True)
+        if venue.strip() and raw.strip()
+    }
+
+
 def _catalogue_gate(cat: pd.DataFrame) -> tuple[bool, int, int]:
     """Phase -1 verify gate: 0 ``:PERP:`` ids, 0 ``instrument_id != canonical_instrument_id``."""
     iid = cat["instrument_id"].fillna("").astype(str)
@@ -165,95 +330,306 @@ def _catalogue_gate(cat: pd.DataFrame) -> tuple[bool, int, int]:
     return (n_perp == 0 and n_mismatch == 0), n_perp, n_mismatch
 
 
-def _normalize_id(
+# ---------------------------------------------------------------------------
+# The SHARED RESOLVER (Track-6 core). Pure, catalogue-keyed, honest-None.
+# ---------------------------------------------------------------------------
+
+
+def _is_canonical_id(cur: str) -> bool:
+    """True when ``cur`` already matches the canonical id shape (incl. COMBO)."""
+    return bool(_CANON_ID_RE.match(cur) or _COMBO_ID_RE.match(cur))
+
+
+def _itype_of(canon: str) -> str:
+    """Parse the instrument_type segment out of a canonical id (``VENUE:ITYPE:...``)."""
+    parts = canon.split(":", 2)
+    return parts[1] if len(parts) >= 2 else ""
+
+
+def _normalize_itype(raw_itype: str) -> str:
+    """Casing + alias normalisation ONLY (no inference). Blank stays blank (honest)."""
+    it = raw_itype.strip().upper()
+    return _ITYPE_ALIASES.get(it, it)
+
+
+def _extract_raw(cur: str) -> tuple[str, str, str | None]:
+    """Classify an id form + extract its wire symbol (resolver step 2).
+
+    Returns ``(kind, raw_symbol, forced_itype)`` where ``kind`` is one of
+    ``canonical`` (already canonical — return as-is), ``perp`` (``VENUE:PERP:SYM`` — raw is
+    ``SYM``, itype forced ``PERPETUAL``), ``wrapped`` (``VENUE:ITYPE:TAIL`` — raw is
+    ``TAIL``), or ``bare`` (the id IS the wire symbol).
+    """
+    if _is_canonical_id(cur):
+        return "canonical", cur, None
+    if ":PERP:" in cur:
+        return "perp", cur.split(":PERP:", 1)[1], "PERPETUAL"
+    if cur.count(":") >= 2:
+        return "wrapped", cur.split(":", 2)[2], None
+    return "bare", cur, None
+
+
+def _resolve_itype(
     venue: str,
-    instrument_type: str,
-    current: str,
+    raw_itype: str,
+    raw_symbol: str,
+    data_type: str,
+    itype_infer: dict[tuple[str, str], str],
+) -> str | None:
+    """Resolver steps 1 + 1b — normalise the itype, INFER when blank/unknown.
+
+    Step 1: casing/alias/data-type-leak normalise; keep a canonical member as-is.
+    Step 1b (operator ruling #1, MOST AGGRESSIVE): a blank/``None``/``INDEX``/unknown itype
+    is inferred from (a) the catalogue 2-tuple ``(venue, wire) -> type`` map, else (b) the
+    row's own chain-bundle ``data_type`` (``futures_chain`` -> ``FUTURE`` / ``options_chain``
+    -> ``OPTION``), else (c) the venue suffix (``-SPOT`` -> ``SPOT_PAIR``;
+    ``-FUTURES``/``-SWAP``/``-PERP`` or a bare derivatives venue -> ``FUTURE`` when the wire
+    is dated else ``PERPETUAL``). A bare mixed venue (bare ``BYBIT``/``OKX``) returns ``None``.
+    """
+    it = _ITYPE_ALIASES.get(raw_itype.strip().upper(), raw_itype.strip().upper())
+    if it in _KEEP_ITYPES:
+        return it
+    vu = venue.strip().upper()
+    inferred = itype_infer.get((vu, raw_symbol.strip().upper()))
+    if inferred:
+        return inferred
+    dtu = data_type.strip().upper()
+    if dtu == "FUTURES_CHAIN":
+        return "FUTURE"
+    if dtu == "OPTIONS_CHAIN":
+        return "OPTION"
+    if vu.endswith("-SPOT"):
+        return "SPOT_PAIR"
+    if vu.endswith(("-FUTURES", "-SWAP", "-PERP")) or vu in _DERIV_VENUES:
+        return "FUTURE" if _DATED_RE.search(raw_symbol) else "PERPETUAL"
+    return None
+
+
+def resolve_canonical(
+    venue: str,
+    raw_itype: str,
+    id_or_symbol: str,
+    data_type: str,
     wire_map: CeFiWireCanonicalMap,
     marker_base: dict[str, str],
+    itype_infer: dict[tuple[str, str], str],
 ) -> str | None:
-    """Resolve ``current`` (bare-wire / wrapped-wire / no-marker) to the catalogue id, or None.
+    """Resolve a manifest row's (venue, itype, id, data_type) to its canonical id, or ``None``.
 
-    Three ordered paths; a miss on all three returns None (honest — left as-is):
-      1. FORWARD wire lookup: ``canonical_for(venue, itype, current)`` — recovers bare
-         and colon-wire symbols (``BTCUSDT``, ``ADAF0:USTF0``) including the majors.
-      2. MARKER-BASE: strip ``@marker`` and match the catalogue base — normalizes a
-         legacy no-marker canonical spelling onto its marker-bearing catalogue id.
-      3. WRAPPED-WIRE: peel ``VENUE:TYPE:`` and forward-resolve the raw tail — recovers
-         ``BITFINEX-FUTURES:PERPETUAL:ADAF0:USTF0`` / ``BYBIT:SPOT_PAIR:BTCUSDT``.
+    The ONE shared resolver behind every Track-6 axis:
+      * step 2 (``_extract_raw``) short-circuits an already-canonical id (returned as-is,
+        incl. COMBO), decomposes a ``:PERP:`` shorthand, or peels a wrapped ``VENUE:ITYPE:``.
+      * steps 1+1b (``_resolve_itype``) normalise / infer the itype (blank is the ROOT of
+        the ~986k unresolved bare-wire rows).
+      * step 3 forward-resolves the wire via the 3-tuple ``CeFiWireCanonicalMap``, then the
+        marker-base (no-marker legacy spelling), then a wrapped-wire peel — first hit wins.
+    ``None`` = "leave the value alone" (honest), NEVER a licence to invent an id.
     """
-    fwd = wire_map.canonical_for(venue, instrument_type, current)
-    if fwd:
-        return fwd
-    base = current.split("@", 1)[0]
-    mb = marker_base.get(base)
+    v = venue.strip()
+    cur = id_or_symbol.strip()
+    if not v or not cur:
+        return None
+    kind, raw, forced_itype = _extract_raw(cur)
+    if kind == "canonical":
+        return cur
+    itype = forced_itype or _resolve_itype(v, raw_itype, raw, data_type, itype_infer)
+    if itype:
+        fwd = wire_map.canonical_for(v, itype, raw)
+        if fwd and _is_canonical_id(fwd):
+            return fwd
+    mb = marker_base.get(cur.split("@", 1)[0])
     if mb:
         return mb
-    if current.count(":") >= 2:
-        return wire_map.canonical_for(venue, instrument_type, current.split(":", 2)[2])
+    if itype and cur.count(":") >= 2:
+        fwd = wire_map.canonical_for(v, itype, cur.split(":", 2)[2])
+        if fwd and _is_canonical_id(fwd):
+            return fwd
     return None
+
+
+def _classify_tuple(
+    venue: str,
+    raw_itype: str,
+    iid: str,
+    data_type: str,
+    wire_map: CeFiWireCanonicalMap,
+    marker_base: dict[str, str],
+    itype_infer: dict[tuple[str, str], str],
+    catalog_ids: set[str],
+    catalog_wires: set[tuple[str, str]],
+) -> _Res:
+    """Decide the ``_Res`` for one distinct (venue, itype, id, data_type) tuple.
+
+    The captured-data drop-gate is applied PER ROW downstream (it needs capture_status +
+    row_count), so a ``drop`` here still carries a normalised itype for the protected case.
+    """
+    v, cur, dt = venue.strip(), iid.strip(), data_type.strip()
+    norm_it = _normalize_itype(raw_itype)
+    if not v or not cur or not dt:
+        return _Res("drop", venue, iid, norm_it, "drop", "blank")
+    if v.upper() in _DROP_VENUES:
+        return _Res("drop", venue, iid, norm_it, "drop", "drop_venue")
+
+    canon = resolve_canonical(v, raw_itype, cur, dt, wire_map, marker_base, itype_infer)
+    if canon:
+        kind, _raw, _forced = _extract_raw(cur)
+        via = "perp" if ":PERP:" in cur else ("already_canon" if kind == "canonical" else "resolved")
+        return _Res("relabel", venue, canon, _itype_of(canon), via, "")
+
+    if v.upper() == "OKX":
+        for rv in _OKX_REMAP:
+            rc = resolve_canonical(rv, raw_itype, cur, dt, wire_map, marker_base, itype_infer)
+            if rc:
+                return _Res("relabel", rv, rc, _itype_of(rc), "okx_remap", "")
+        return _Res("drop", venue, iid, norm_it, "drop", "okx")
+
+    _kind, raw, _forced = _extract_raw(cur)
+    in_cat = (cur.upper() in catalog_ids) or ((v.upper(), raw.strip().upper()) in catalog_wires)
+    # An unresolvable but in-catalogue row keeps its id; its itype is best-effort normalised
+    # (inference may still land even when the id does not resolve).
+    kept_it = _resolve_itype(v, raw_itype, raw, dt, itype_infer) or norm_it
+    if in_cat:
+        return _Res("keep", venue, iid, kept_it, "unresolved_kept", "")
+    return _Res("drop", venue, iid, kept_it, "drop", "orphan")
 
 
 def _empty_keys() -> pd.DataFrame:
     return pd.DataFrame(columns=SHARD_KEY_COLS)
 
 
-def _relabel_blob(
+def _canonicalize_blob(
     df: pd.DataFrame,
     wire_map: CeFiWireCanonicalMap,
     marker_base: dict[str, str],
+    itype_infer: dict[tuple[str, str], str],
+    catalog_ids: set[str],
+    catalog_wires: set[tuple[str, str]],
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, int]]:
-    """Normalize ``captured`` rows' ``instrument_id`` to canonical. Returns (df, new_keys, stats).
+    """Canonicalise the instrument_id + instrument_type columns; drop safe orphans.
 
-    ``candidates`` = captured rows whose id is not yet ``{venue}:``-prefixed (the ~490k
-    raw population). ``relabeled`` = candidates that resolved. ``unresolved`` = the honest
-    remainder (delisted/ambiguous — left as-is + counted). ``normalized_extra`` = already
-    ``{venue}:``-prefixed captured rows whose no-marker/wrapped spelling was normalized to
-    the catalogue id (feeds the de-dup collapse).
+    Operates over EVERY row (not just captured) so the de-dup + eu-reconcile keys align on
+    the normalised itype. Returns ``(df_after_drops, new_captured_keys, stats)`` where
+    ``new_captured_keys`` are the post-relabel 5-col keys of CAPTURED rows whose id changed
+    (drives the retained eu-reconcile pass).
     """
-    zero = {"candidates": 0, "relabeled": 0, "unresolved": 0, "normalized_extra": 0}
-    required = {"capture_status", "venue", "instrument_type", "instrument_id", *SHARD_KEY_COLS}
+    zero: dict[str, int] = {
+        "candidates": 0,
+        "relabeled": 0,
+        "unresolved": 0,
+        "normalized_extra": 0,
+        "id_changed": 0,
+        "itype_changed": 0,
+        "itype_inferred": 0,
+        "perp_rewritten": 0,
+        "okx_remapped": 0,
+        "unresolved_kept": 0,
+        "protected_captured": 0,
+        "dropped_blank": 0,
+        "dropped_orphan": 0,
+        "dropped_okx": 0,
+        "dropped_drop_venue": 0,
+        "dropped_captured_with_data": 0,
+    }
+    required = {
+        "capture_status",
+        "row_count",
+        "venue",
+        "instrument_type",
+        "instrument_id",
+        "data_type",
+        *SHARD_KEY_COLS,
+    }
     if not required.issubset(df.columns):
         return df, _empty_keys(), zero
 
-    captured = df["capture_status"] == "captured"
-    if not bool(captured.any()):
-        return df, _empty_keys(), zero
+    kdf = df[["venue", "instrument_type", "instrument_id", "data_type"]].fillna("").astype(str)
+    orig_venue = kdf["venue"]
+    orig_itype = kdf["instrument_type"]
+    orig_id = kdf["instrument_id"]
+    keyser = orig_venue + _KEY_SEP + orig_itype + _KEY_SEP + orig_id + _KEY_SEP + kdf["data_type"]
 
-    venue = df["venue"].fillna("").astype(str)
-    itype = df["instrument_type"].fillna("").astype(str)
-    cur = df["instrument_id"].fillna("").astype(str)
+    uniq = kdf.drop_duplicates()
+    intent_by: dict[str, str] = {}
+    venue_by: dict[str, str] = {}
+    id_by: dict[str, str] = {}
+    itype_by: dict[str, str] = {}
+    via_by: dict[str, str] = {}
+    dclass_by: dict[str, str] = {}
+    for venue, itype, iid, dtype in uniq.itertuples(index=False):
+        key = f"{venue}{_KEY_SEP}{itype}{_KEY_SEP}{iid}{_KEY_SEP}{dtype}"
+        res = _classify_tuple(venue, itype, iid, dtype, wire_map, marker_base, itype_infer, catalog_ids, catalog_wires)
+        intent_by[key] = res.intent
+        venue_by[key] = res.venue
+        id_by[key] = res.iid
+        itype_by[key] = res.itype
+        via_by[key] = res.via
+        dclass_by[key] = res.dclass
 
-    cap_idx = df.index[captured]
-    triples = list(zip(venue.loc[cap_idx], itype.loc[cap_idx], cur.loc[cap_idx], strict=True))
-    memo: dict[tuple[str, str, str], str | None] = {}
-    for tr in set(triples):
-        memo[tr] = _normalize_id(tr[0], tr[1], tr[2], wire_map, marker_base)
-    new_vals = [memo[tr] for tr in triples]
+    intent_ser = keyser.map(intent_by)
+    via_ser = keyser.map(via_by)
+    dclass_ser = keyser.map(dclass_by)
+    new_id = keyser.map(id_by)
+    new_itype = keyser.map(itype_by)
 
-    prefixed_cap = [c.upper().startswith(v.upper() + ":") for v, _t, c in triples]
-    resolved_cap = [(nv is not None and nv != c) for nv, (_v, _t, c) in zip(new_vals, triples, strict=True)]
+    captured = df["capture_status"].astype(str) == "captured"
+    row_count = pd.to_numeric(df["row_count"], errors="coerce").fillna(0)
+    captured_data = captured & (row_count > 0)
 
-    candidates = sum(1 for p in prefixed_cap if not p)
-    relabeled = sum(1 for p, r in zip(prefixed_cap, resolved_cap, strict=True) if (not p) and r)
-    unresolved = candidates - relabeled
-    normalized_extra = sum(1 for p, r in zip(prefixed_cap, resolved_cap, strict=True) if p and r)
+    # DATA-CORRECTNESS carve-out: a drop-intent row that is captured-with-data is PROTECTED
+    # (kept, itype normalised) rather than dropped.
+    drop_intent = intent_ser == "drop"
+    drop_flag = drop_intent & (~captured_data)
+    protected = drop_intent & captured_data
 
-    df = df.copy()
-    changed_idx = [ix for ix, r in zip(cap_idx, resolved_cap, strict=True) if r]
-    changed_vals = [nv for nv, r in zip(new_vals, resolved_cap, strict=True) if r]
-    df.loc[changed_idx, "instrument_id"] = pd.Series(changed_vals, index=changed_idx, dtype="object")
+    # --- counters (computed BEFORE the id/itype columns are reassigned) ---
+    # venue-prefixed = the id's first ':'-segment equals the venue (case-insensitive).
+    id_first_seg = orig_id.str.upper().str.split(":", n=1).str[0]
+    prefixed = orig_id.str.contains(":", regex=False) & (id_first_seg == orig_venue.str.upper())
+    cand_mask = captured & (~prefixed)
+    id_changed_mask = (new_id != orig_id) & (~drop_flag)
+    itype_changed_mask = (new_itype != orig_itype) & (~drop_flag)
+    # "inferred" = the ORIGINAL itype was genuinely blank/None/unknown (NOT merely a
+    # casing/alias fix) AND a canonical member was recovered. Aliases are applied before
+    # the KEEP test so a lowercase ``perpetual`` / ``spot`` counts as a casing fix, not an
+    # inference.
+    aliased_orig = orig_itype.str.strip().str.upper().replace(_ITYPE_ALIASES)
+    blank_itype_orig = ~aliased_orig.isin(_KEEP_ITYPES)
+    inferred_mask = blank_itype_orig & new_itype.isin(_KEEP_ITYPES) & (~drop_flag)
+
+    stats: dict[str, int] = dict(zero)
+    stats["candidates"] = int(cand_mask.sum())
+    stats["relabeled"] = int((cand_mask & (intent_ser == "relabel")).sum())
+    stats["unresolved"] = int(stats["candidates"] - stats["relabeled"])
+    stats["normalized_extra"] = int((captured & prefixed & id_changed_mask).sum())
+    stats["id_changed"] = int(id_changed_mask.sum())
+    stats["itype_changed"] = int(itype_changed_mask.sum())
+    stats["itype_inferred"] = int(inferred_mask.sum())
+    stats["perp_rewritten"] = int((via_ser == "perp").sum())
+    stats["okx_remapped"] = int((via_ser == "okx_remap").sum())
+    stats["unresolved_kept"] = int((intent_ser == "keep").sum())
+    stats["protected_captured"] = int(protected.sum())
+    stats["dropped_blank"] = int((drop_flag & (dclass_ser == "blank")).sum())
+    stats["dropped_orphan"] = int((drop_flag & (dclass_ser == "orphan")).sum())
+    stats["dropped_okx"] = int((drop_flag & (dclass_ser == "okx")).sum())
+    stats["dropped_drop_venue"] = int((drop_flag & (dclass_ser == "drop_venue")).sum())
+    stats["dropped_captured_with_data"] = int((drop_flag & captured_data).sum())  # invariant: 0
+
+    # --- apply: reassign id/itype for every kept row; retarget okx-remap venues ---
+    out = df.copy()
+    out["instrument_id"] = new_id
+    out["instrument_type"] = new_itype
+    okx_mask = via_ser == "okx_remap"
+    if bool(okx_mask.any()):
+        out.loc[okx_mask, "venue"] = keyser[okx_mask].map(venue_by)
 
     new_keys = (
-        df.loc[changed_idx, SHARD_KEY_COLS].drop_duplicates().reset_index(drop=True) if changed_idx else _empty_keys()
+        out.loc[captured & id_changed_mask, SHARD_KEY_COLS].drop_duplicates().reset_index(drop=True)
+        if bool((captured & id_changed_mask).any())
+        else _empty_keys()
     )
-    stats = {
-        "candidates": candidates,
-        "relabeled": relabeled,
-        "unresolved": unresolved,
-        "normalized_extra": normalized_extra,
-    }
-    return df, new_keys, stats
+
+    out = out.loc[~drop_flag].copy()
+    return out, new_keys, stats
 
 
 def _dedup_blob(df: pd.DataFrame) -> tuple[pd.DataFrame, int, dict[str, int]]:
@@ -302,9 +678,42 @@ def _canon_captured(df: pd.DataFrame) -> tuple[int, int]:
     return prefixed, len(cap)
 
 
-def _load(storage: object, bucket: str, blob: str) -> pd.DataFrame:
+def _load(storage: object, bucket: str, blob: str, columns: list[str] | None = None) -> pd.DataFrame:
+    """Read a manifest blob. ``columns`` (dry-run) projects to the classification subset.
+
+    The projection is the INTERSECTION of ``columns`` with the blob's real schema — a
+    requested column absent from THIS blob (e.g. ``pipeline_mode`` on ``_legacy_seed``)
+    is skipped here and re-materialised by ``_ensure_cols``, not a hard read failure.
+    """
     raw = storage.download_bytes(bucket, blob)  # pyright: ignore[reportAttributeAccessIssue]
-    return pd.read_parquet(io.BytesIO(raw))
+    if columns is None:
+        return pd.read_parquet(io.BytesIO(raw))
+    present = set(pq.read_schema(io.BytesIO(raw)).names)
+    proj = [c for c in columns if c in present]
+    return pd.read_parquet(io.BytesIO(raw), columns=proj)
+
+
+def _ensure_cols(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Re-materialise ``pipeline_mode`` / ``row_count`` when a blob does not store them.
+
+    Mirrors ``read_availability_index``'s read-side backfill: ``pipeline_mode`` -> "" and
+    ``row_count`` -> ``instrument_count`` (the index-side materialised written row count).
+    Returns ``(df, added_cols)`` so ``--apply`` can DROP the synthesised columns before
+    write, preserving the blob's on-disk schema.
+    """
+    added: list[str] = []
+    out = df
+    if "pipeline_mode" not in out.columns:
+        out = out.assign(pipeline_mode="")
+        added.append("pipeline_mode")
+    if "row_count" not in out.columns:
+        if "instrument_count" in out.columns:
+            base = pd.to_numeric(out["instrument_count"], errors="coerce").fillna(0).astype("int64")
+        else:
+            base = pd.Series(0, index=out.index, dtype="int64")
+        out = out.assign(row_count=base)
+        added.append("row_count")
+    return out, added
 
 
 def _write(storage: object, bucket: str, blob: str, df: pd.DataFrame) -> None:
@@ -327,8 +736,9 @@ def _verify_gate(
     blobs: list[str],
     wire_map: CeFiWireCanonicalMap,
     marker_base: dict[str, str],
+    itype_infer: dict[tuple[str, str], str],
 ) -> int:
-    """Post-apply: 0 further-resolvable captured rows and 0 eu/captured 5-col collisions remain."""
+    """Post-apply: 0 further-resolvable captured rows, 0 eu/captured 5-col collisions, 0 dropped-with-data."""
     logger.info("Verifying post-apply gate on gs://%s ...", bucket)
     residual_resolvable = 0
     for blob in blobs:
@@ -339,10 +749,13 @@ def _verify_gate(
         venue = cap["venue"].fillna("").astype(str)
         itype = cap["instrument_type"].fillna("").astype(str)
         cur = cap["instrument_id"].fillna("").astype(str)
+        dt = cap["data_type"].fillna("").astype(str) if "data_type" in cap.columns else pd.Series([""] * len(cap))
         still = sum(
             1
-            for v, t, c in zip(venue, itype, cur, strict=True)
-            if (nv := _normalize_id(v, t, c, wire_map, marker_base)) is not None and nv != c
+            for v, t, c, d in zip(venue, itype, cur, dt, strict=True)
+            if not _is_canonical_id(c.strip())
+            and (nv := resolve_canonical(v, t, c, d, wire_map, marker_base, itype_infer)) is not None
+            and nv != c
         )
         residual_resolvable += still
         if still:
@@ -367,7 +780,9 @@ def _verify_gate(
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument(
-        "--apply", action="store_true", help="Relabel + de-dup + reconcile (snapshot first). Default: dry-run."
+        "--apply",
+        action="store_true",
+        help="Relabel + itype/:PERP:/orphan align + de-dup + reconcile (snapshot first). Default: dry-run.",
     )
     p.add_argument("--bucket", default=None, help="Override the cefi market-data bucket.")
     p.add_argument("--instruments-bucket", default=None, help="Override the cefi instruments-store bucket.")
@@ -386,11 +801,18 @@ def main(argv: list[str] | None = None) -> int:
     cat = _load_catalog(storage, inst_bucket)
     wire_map = _build_wire_map(cat)
     marker_base = _build_marker_base_map(cat)
+    itype_infer = _build_itype_infer_map(cat)
+    catalog_ids = _catalog_id_set(cat)
+    catalog_wires = _catalog_wire_set(cat)
     logger.info(
-        "3-tuple wire map: %d forward keys, %d ambiguous (honest-unresolved); marker-base map: %d bases.",
+        "3-tuple wire map: %d forward keys, %d ambiguous; marker-base: %d bases; itype-infer: %d wires; "
+        "catalogue: %d ids / %d wires.",
         len(wire_map.canonical_by_wire),
         len(wire_map.ambiguous_wire_keys),
         len(marker_base),
+        len(itype_infer),
+        len(catalog_ids),
+        len(catalog_wires),
     )
 
     gate_ok, n_perp, n_mismatch = _catalogue_gate(cat)
@@ -414,38 +836,51 @@ def main(argv: list[str] | None = None) -> int:
         if meta.name.endswith(".parquet") and "/snapshots/" not in meta.name
     ]
     blobs = [INDEX_BLOB, *per_vm_names]
+    load_cols = None if args.apply else _DRYRUN_COLS
 
     dfs: dict[str, pd.DataFrame] = {}
+    added_cols: dict[str, list[str]] = {}
     all_new_keys: list[pd.DataFrame] = []
-    totals = {"candidates": 0, "relabeled": 0, "unresolved": 0, "normalized_extra": 0}
+    totals: dict[str, int] = {}
     main_candidates = 0
     total_collapsed = 0
     collapse_breakdown: dict[str, int] = {}
     before_pref = before_cap = 0
 
-    # Pass 1 — relabel captured rows off the 3-tuple map, per blob; collect new canonical keys.
+    # Pass 1 — canonicalise id + itype off the resolver, per blob; collect new canonical keys.
     for blob in blobs:
-        df = _load(storage, bucket, blob)
+        df = _load(storage, bucket, blob, columns=load_cols)
+        df, added_cols[blob] = _ensure_cols(df)
         bp, bc = _canon_captured(df)
         before_pref += bp
         before_cap += bc
 
-        df, new_keys, stats = _relabel_blob(df, wire_map, marker_base)
+        df, new_keys, stats = _canonicalize_blob(df, wire_map, marker_base, itype_infer, catalog_ids, catalog_wires)
         dfs[blob] = df
         if not new_keys.empty:
             all_new_keys.append(new_keys)
-        for k in totals:
-            totals[k] += stats[k]
+        for k, val in stats.items():
+            totals[k] = totals.get(k, 0) + val
         if blob == INDEX_BLOB:
             main_candidates = stats["candidates"]
         logger.info(
-            "gs://%s/%s: candidates=%d relabeled=%d unresolved=%d normalized_extra=%d",
+            "gs://%s/%s: candidates=%d relabeled=%d id_changed=%d itype_changed=%d itype_inferred=%d "
+            "perp=%d okx_remap=%d unresolved_kept=%d protected_captured=%d dropped(blank=%d orphan=%d okx=%d dropv=%d)",
             bucket,
             blob,
             stats["candidates"],
             stats["relabeled"],
-            stats["unresolved"],
-            stats["normalized_extra"],
+            stats["id_changed"],
+            stats["itype_changed"],
+            stats["itype_inferred"],
+            stats["perp_rewritten"],
+            stats["okx_remapped"],
+            stats["unresolved_kept"],
+            stats["protected_captured"],
+            stats["dropped_blank"],
+            stats["dropped_orphan"],
+            stats["dropped_okx"],
+            stats["dropped_drop_venue"],
         )
 
     # Pass 2 — RETAINED fork eu-reconcile: drop eu twins of relabeled captured rows (main only).
@@ -466,70 +901,137 @@ def main(argv: list[str] | None = None) -> int:
 
     before_frac = 100.0 * before_pref / before_cap if before_cap else 0.0
     after_frac = 100.0 * after_pref / after_cap if after_cap else 0.0
+    total_dropped = (
+        totals.get("dropped_blank", 0)
+        + totals.get("dropped_orphan", 0)
+        + totals.get("dropped_okx", 0)
+        + totals.get("dropped_drop_venue", 0)
+    )
 
     logger.info("=" * 78)
     logger.info("SUMMARY across %d blob(s):", len(blobs))
     logger.info(
         "  raw-captured candidates : %d  (main index=%d + per-VM=%d)",
-        totals["candidates"],
+        totals.get("candidates", 0),
         main_candidates,
-        totals["candidates"] - main_candidates,
+        totals.get("candidates", 0) - main_candidates,
     )
-    logger.info("  relabeled (majors etc.) : %d", totals["relabeled"])
-    logger.info("  honest-unresolved       : %d  (delisted/ambiguous, left as-is)", totals["unresolved"])
+    logger.info("  captured relabeled      : %d", totals.get("relabeled", 0))
     logger.info(
-        "  normalized_extra        : %d  (already-prefixed no-marker/wrapped -> catalogue id)",
-        totals["normalized_extra"],
+        "  captured honest-unres.  : %d  (delisted/ambiguous candidates, left as-is)", totals.get("unresolved", 0)
     )
+    logger.info(
+        "  normalized_extra        : %d  (already-prefixed captured no-marker/wrapped -> catalogue id)",
+        totals.get("normalized_extra", 0),
+    )
+    logger.info("  --- Track-6 axes (ALL rows) ---")
+    logger.info("  instrument_id changed   : %d", totals.get("id_changed", 0))
+    logger.info(
+        "  instrument_type changed : %d  (of which blank/unknown -> inferred: %d)",
+        totals.get("itype_changed", 0),
+        totals.get("itype_inferred", 0),
+    )
+    logger.info("  :PERP: -> :PERPETUAL:   : %d", totals.get("perp_rewritten", 0))
+    logger.info("  bare-OKX remapped       : %d", totals.get("okx_remapped", 0))
+    logger.info("  unresolved kept (in-cat): %d", totals.get("unresolved_kept", 0))
+    logger.info(
+        "  PROTECTED captured-data : %d  (would-drop orphans/blanks carrying real ticks -> KEPT honest-unresolved for the Track-6 P1 decompose)",
+        totals.get("protected_captured", 0),
+    )
+    logger.info(
+        "  DROPPED                 : %d  (blank=%d orphan=%d okx=%d drop-venue=%d; captured-with-data in set=%d [MUST be 0])",
+        total_dropped,
+        totals.get("dropped_blank", 0),
+        totals.get("dropped_orphan", 0),
+        totals.get("dropped_okx", 0),
+        totals.get("dropped_drop_venue", 0),
+        totals.get("dropped_captured_with_data", 0),
+    )
+    logger.info("  --- reconcile + de-dup ---")
     logger.info(
         "  eu-reconcile dropped    : %d  (main index only, 5-col twin of a relabeled captured row)", n_eu_dropped
     )
     logger.info("  de-dup collapsed        : %d  by status: %s", total_collapsed, collapse_breakdown)
-    logger.info("      (captured collapse = coexisting-spelling of ONE instrument; empty/eu collapse is dominated")
-    logger.info("       by pre-existing exact-atom manifest dupes, safe under keep-best-status)")
-    logger.info(
-        "  eu rows removed (total) : %d  (reconcile %d + de-dup %d)",
-        n_eu_dropped + collapse_breakdown.get("expected_unattempted", 0),
-        n_eu_dropped,
-        collapse_breakdown.get("expected_unattempted", 0),
-    )
     logger.info("  canonical-fraction      : %.2f%% -> %.2f%% (captured venue-prefixed)", before_frac, after_frac)
     logger.info("=" * 78)
 
-    if not (_CANDIDATE_MIN <= totals["candidates"] <= _CANDIDATE_MAX):
+    # STOP-ON-SURPRISE guards.
+    surprised = False
+    if not (_CANDIDATE_MIN <= totals.get("candidates", 0) <= _CANDIDATE_MAX):
         logger.error(
-            "STOP-ON-SURPRISE: raw-captured candidate count %d outside band [%d, %d]. Diagnose before --apply.",
-            totals["candidates"],
+            "STOP-ON-SURPRISE: raw-captured candidate count %d outside band [%d, %d].",
+            totals.get("candidates", 0),
             _CANDIDATE_MIN,
             _CANDIDATE_MAX,
         )
+        surprised = True
+    if not (_PERP_MIN <= totals.get("perp_rewritten", 0) <= _PERP_MAX):
+        logger.error(
+            "STOP-ON-SURPRISE: :PERP: rewrite count %d outside band [%d, %d] — perp venues may have left the catalogue.",
+            totals.get("perp_rewritten", 0),
+            _PERP_MIN,
+            _PERP_MAX,
+        )
+        surprised = True
+    if total_dropped > _MAX_TOTAL_DROPPED:
+        logger.error(
+            "STOP-ON-SURPRISE: total dropped %d exceeds cap %d — a catalogue regression may be over-orphaning.",
+            total_dropped,
+            _MAX_TOTAL_DROPPED,
+        )
+        surprised = True
+    if totals.get("dropped_captured_with_data", 0) != 0:
+        logger.error(
+            "STOP-ON-SURPRISE (DATA LOSS): %d captured-with-data rows are in the drop set — the carve-out failed.",
+            totals.get("dropped_captured_with_data", 0),
+        )
+        surprised = True
+    if surprised:
+        logger.error("Diagnose before --apply.")
         return 1
 
     if not args.apply:
         logger.info(
-            "DRY-RUN (default) — no write. --apply would relabel %d, collapse %d dupes, drop %d eu rows (snapshot-first).",
-            totals["relabeled"],
+            "DRY-RUN (default) — no write. --apply would relabel %d, change %d itypes, rewrite %d :PERP:, "
+            "collapse %d dupes, drop %d eu rows + %d orphans (snapshot-first).",
+            totals.get("relabeled", 0),
+            totals.get("itype_changed", 0),
+            totals.get("perp_rewritten", 0),
             total_collapsed,
             n_eu_dropped,
+            total_dropped,
         )
         return 0
 
-    if totals["relabeled"] == 0 and total_collapsed == 0 and n_eu_dropped == 0:
+    if (
+        totals.get("id_changed", 0) == 0
+        and totals.get("itype_changed", 0) == 0
+        and total_collapsed == 0
+        and n_eu_dropped == 0
+        and total_dropped == 0
+    ):
         logger.info("Nothing to change.")
         return 0
 
     for blob in blobs:
         _snapshot(storage, bucket, blob, run_ts)
-        _write(storage, bucket, blob, dfs[blob])
-        logger.info("gs://%s/%s: written (%d rows).", bucket, blob, len(dfs[blob]))
+        # Drop any column synthesised by _ensure_cols to preserve the blob's on-disk schema.
+        drop_synth = [c for c in added_cols.get(blob, []) if c in dfs[blob].columns]
+        out_df = dfs[blob].drop(columns=drop_synth) if drop_synth else dfs[blob]
+        _write(storage, bucket, blob, out_df)
+        logger.info("gs://%s/%s: written (%d rows).", bucket, blob, len(out_df))
 
-    rc = _verify_gate(storage, bucket, blobs, wire_map, marker_base)
+    rc = _verify_gate(storage, bucket, blobs, wire_map, marker_base, itype_infer)
     if rc == 0:
         logger.info(
-            "APPLY COMPLETE: relabeled=%d, de-dup-collapsed=%d, eu-dropped=%d, canonical-fraction %.2f%%->%.2f%%.",
-            totals["relabeled"],
+            "APPLY COMPLETE: id_changed=%d, itype_changed=%d, perp=%d, de-dup-collapsed=%d, eu-dropped=%d, "
+            "orphans-dropped=%d, canonical-fraction %.2f%%->%.2f%%.",
+            totals.get("id_changed", 0),
+            totals.get("itype_changed", 0),
+            totals.get("perp_rewritten", 0),
             total_collapsed,
             n_eu_dropped,
+            total_dropped,
             before_frac,
             after_frac,
         )
