@@ -335,6 +335,76 @@ async def _run_per_fixture_enrichment(
     )
 
 
+async def _read_captured_per_entity_league(
+    *,
+    bucket: str,
+    date: str,
+    per_fixture_entities: list[tuple[str, Callable[[int], Awaitable[Sequence[object]]]]],
+    fixture_ids: list[int],
+    af_fid_to_league: dict[str, str],
+    redo_all: bool,
+) -> dict[tuple[str, str], frozenset[int]]:
+    """Pre-fetch skip: read existing per-league parquet for each (entity, league)
+    cell on this date, build the set of af_fixture_ids already captured, so the
+    caller can skip api_football calls for those fixtures. Returns ``{}`` when
+    ``redo_all`` or there's no league mapping to work from.
+
+    Why this exists: today's manifest is keyed on (date, data_type, league_id)
+    — it tracks "the cell is captured" but NOT which fixtures within the cell
+    are captured. So the cell-level pre-flight (at orchestrator entry) can't
+    tell "5 of 10 fixtures already done" from "all 10 already done." The fix:
+    at fetch-time, read the per-league parquet (which IS keyed at
+    af_fixture_id row granularity) and skip api calls for fixtures already
+    represented. Generalises to any future per-fixture entity recovery —
+    e.g. when downstream of recovered FIXTURES, only the genuinely-missing
+    fixtures get re-fetched, not the entire cell.
+
+    Concurrency (api_football_backfill_chronological_scan_never_reaches_pending_tail_2026_07_18.md):
+    ``_read_existing_per_league_fixture_ids`` is blocking GCS I/O
+    (``blob.exists()`` + ``download_bytes()``). Measured evidence: a
+    long-running historical backfill spent ~27s/date re-confirming
+    already-fully-resolved dates, at a rate that would take ~16.7h/entity to
+    ever reach the genuinely-pending tail — dominated by one blocking
+    round-trip PER (entity, league) run SEQUENTIALLY. Fan every (entity,
+    league) lookup for this date out CONCURRENTLY via ``asyncio.to_thread``
+    instead — same result set, same per-cell semantics (no change to what
+    counts as "already captured"), but N round-trips overlap instead of
+    serializing one after another.
+    """
+    if redo_all or not af_fid_to_league:
+        return {}
+
+    lookup_keys: list[tuple[str, str]] = []
+    for entity_name, _ in per_fixture_entities:
+        entity_leagues_seen: set[str] = set()
+        for fid in fixture_ids:
+            canonical_league = af_fid_to_league.get(str(fid))
+            if not canonical_league:
+                continue
+            canonical_league = _orch._canonical_league_id(canonical_league)
+            if canonical_league in entity_leagues_seen:
+                continue
+            entity_leagues_seen.add(canonical_league)
+            lookup_keys.append((entity_name, canonical_league))
+
+    if not lookup_keys:
+        return {}
+
+    captured_sets = await _orch.asyncio.gather(
+        *[
+            _orch.asyncio.to_thread(
+                _orch._read_existing_per_league_fixture_ids,
+                bucket=bucket,
+                date=date,
+                entity_name=entity_name,
+                canonical_league_id=canonical_league,
+            )
+            for entity_name, canonical_league in lookup_keys
+        ]
+    )
+    return dict(zip(lookup_keys, captured_sets, strict=True))
+
+
 async def _gather_per_fixture_rows(
     *,
     per_fixture_entities: list[tuple[str, Callable[[int], Awaitable[Sequence[object]]]]],
@@ -408,40 +478,17 @@ async def _gather_per_fixture_rows(
                 )
             # Throttle handled by adapter's _get_with_retry + rate limit headers
 
-    # Pre-fetch skip: read existing per-league parquet for each (entity, league)
-    # cell on this date, build the set of af_fixture_ids already captured, and
-    # skip api_football calls for those fixtures. Bypassed when ``redo_all`` is
-    # True (i.e. the operator passed --force, explicitly asking to re-fetch
-    # everything).
-    #
-    # Why this exists: today's manifest is keyed on (date, data_type, league_id)
-    # — it tracks "the cell is captured" but NOT which fixtures within the cell
-    # are captured. So the cell-level pre-flight (at orchestrator entry) can't
-    # tell "5 of 10 fixtures already done" from "all 10 already done." The fix:
-    # at fetch-time, read the per-league parquet (which IS keyed at
-    # af_fixture_id row granularity) and skip api calls for fixtures already
-    # represented. Generalises to any future per-fixture entity recovery —
-    # e.g. when downstream of recovered FIXTURES, only the genuinely-missing
-    # fixtures get re-fetched, not the entire cell.
-    captured_per_entity_league: dict[tuple[str, str], frozenset[int]] = {}
-    if not redo_all and af_fid_to_league:
-        for entity_name, _ in per_fixture_entities:
-            _entity_leagues_seen: set[str] = set()
-            for fid in fixture_ids:
-                canonical_league = af_fid_to_league.get(str(fid))
-                if not canonical_league:
-                    continue
-                canonical_league = _orch._canonical_league_id(canonical_league)
-                if canonical_league in _entity_leagues_seen:
-                    continue
-                _entity_leagues_seen.add(canonical_league)
-                captured_set = _orch._read_existing_per_league_fixture_ids(
-                    bucket=bucket,
-                    date=date,
-                    entity_name=entity_name,
-                    canonical_league_id=canonical_league,
-                )
-                captured_per_entity_league[(entity_name, canonical_league)] = captured_set
+    # Pre-fetch skip (see _read_captured_per_entity_league docstring): read
+    # existing per-league parquets CONCURRENTLY and skip api_football calls
+    # for fixtures already represented. Bypassed when ``redo_all`` is True.
+    captured_per_entity_league = await _read_captured_per_entity_league(
+        bucket=bucket,
+        date=date,
+        per_fixture_entities=per_fixture_entities,
+        fixture_ids=fixture_ids,
+        af_fid_to_league=af_fid_to_league,
+        redo_all=redo_all,
+    )
 
     # Build all tasks: N entities x M fixtures (only missing entities)
     #
