@@ -1303,3 +1303,111 @@ class TestGwFalseEmptyWritePath20260714:
         assert mock_manifest.record_empty.call_count == 0, (
             "presence probe failed — no empty_confirmed rows may be stamped (fail-safe)"
         )
+
+
+# ---------------------------------------------------------------------------
+# _gather_per_fixture_rows — concurrent pre-fetch-skip lookups
+# (api_football_backfill_chronological_scan_never_reaches_pending_tail_2026_07_18.md)
+# ---------------------------------------------------------------------------
+
+
+class TestGatherPerFixtureRowsConcurrentPreFetchSkip:
+    """Regression: the per-(entity, league) pre-fetch-skip read
+    (``_read_existing_per_league_fixture_ids``) is blocking GCS I/O and used
+    to run SEQUENTIALLY, one league at a time, inside ``_gather_per_fixture_rows``.
+    On a long historical backfill this made each already-fully-resolved date
+    cost ~N_leagues round-trips serialized — measured at ~27s/date, on track
+    to take ~16.7h/entity to ever reach the genuinely-pending tail. The fix
+    fans these lookups out concurrently via ``asyncio.to_thread`` +
+    ``asyncio.gather`` instead of a sequential ``for`` loop — same result set,
+    wall-clock bounded by ONE round-trip's latency instead of N.
+    """
+
+    @pytest.mark.asyncio
+    async def test_per_league_lookups_run_concurrently_not_sequentially(self) -> None:
+        """5 distinct leagues' pre-fetch-skip reads must overlap: total wall-clock
+        stays close to ONE simulated round-trip, not 5x that (which is what a
+        sequential for-loop would cost — the exact O(total_window_days x leagues)
+        scan shape this issue doc root-caused)."""
+        import time
+
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _gather_per_fixture_rows,
+        )
+
+        round_trip_delay_sec = 0.2
+        n_leagues = 5
+
+        # Each fixture belongs to a distinct league so the dedup logic in
+        # _gather_per_fixture_rows produces N_LEAGUES distinct lookup keys.
+        fixture_ids = list(range(1, n_leagues + 1))
+        af_fid_to_league = {str(fid): f"LEAGUE_{fid}" for fid in fixture_ids}
+
+        async def _noop_fetch(_fid: int) -> list[object]:
+            return []
+
+        def _blocking_lookup(*, bucket: str, date: str, entity_name: str, canonical_league_id: str) -> frozenset[int]:
+            # Simulates the real function's blocking GCS round-trip
+            # (blob.exists() + download_bytes()) — a genuine OS-thread sleep,
+            # not an event-loop-blocking one, so this only proves concurrency
+            # if the calls actually run on separate threads.
+            time.sleep(round_trip_delay_sec)
+            return frozenset()
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._read_existing_per_league_fixture_ids",
+                side_effect=_blocking_lookup,
+            ) as mock_lookup,
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+        ):
+            started = time.monotonic()
+            _entity_rows, _entity_failures, _pre_captured = await _gather_per_fixture_rows(
+                per_fixture_entities=[("fixture_events", _noop_fetch)],
+                date="2020-06-06",
+                bucket="test-bucket",
+                fixture_ids=fixture_ids,
+                af_fid_to_league=af_fid_to_league,
+                redo_all=False,
+            )
+            elapsed = time.monotonic() - started
+
+        assert mock_lookup.call_count == n_leagues, (
+            f"expected one pre-fetch-skip lookup per distinct league ({n_leagues}), got {mock_lookup.call_count}"
+        )
+        # Sequential would cost >= n_leagues * delay (1.0s here); concurrent
+        # execution stays well under 2x a single round-trip regardless of N.
+        sequential_floor = n_leagues * round_trip_delay_sec
+        assert elapsed < sequential_floor / 2, (
+            f"per-league pre-fetch-skip lookups ran sequentially (elapsed={elapsed:.2f}s, "
+            f"sequential_floor={sequential_floor:.2f}s) — the O(total_window_days x leagues) "
+            "chronological-scan regression is back"
+        )
+
+    @pytest.mark.asyncio
+    async def test_redo_all_skips_lookups_entirely(self) -> None:
+        """redo_all=True bypasses the pre-fetch-skip path — zero lookups, exact
+        pre-existing behaviour, unaffected by the concurrency change."""
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _gather_per_fixture_rows,
+        )
+
+        async def _noop_fetch(_fid: int) -> list[object]:
+            return []
+
+        with patch(
+            "instruments_service.engine.orchestrator._read_existing_per_league_fixture_ids",
+        ) as mock_lookup:
+            await _gather_per_fixture_rows(
+                per_fixture_entities=[("fixture_events", _noop_fetch)],
+                date="2020-06-06",
+                bucket="test-bucket",
+                fixture_ids=[1, 2, 3],
+                af_fid_to_league={"1": "LEAGUE_1", "2": "LEAGUE_2", "3": "LEAGUE_3"},
+                redo_all=True,
+            )
+
+        assert mock_lookup.call_count == 0, "redo_all must bypass the pre-fetch-skip lookup entirely"
