@@ -2874,6 +2874,52 @@ def _to_parquet_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+def _shrink_drop_diagnostics(new_df: pd.DataFrame, prev_df: pd.DataFrame) -> dict[str, object]:
+    """Describe WHICH instruments a rejected new catalogue drops vs the current one.
+
+    Turns an opaque ``CATALOGUE_SHRINK_BLOCKED`` into a reviewable report: an operator
+    can see exactly what a ``--allow-catalogue-shrink`` would delete BEFORE deciding.
+    Returns counts by venue / instrument_type, an active-vs-delisted split, and a small
+    id sample.
+
+    Root cause of the recurring shrink class (F8, measured 2026-07-18): a ``--mode full``
+    rebuild UNDER-produces the CUMULATIVE all-instruments-ever set the incremental frozen
+    tail preserves — the dropped rows are dominated by DELISTED instruments (``available_to``
+    set) that a fresh full aggregation no longer surfaces (e.g. a full defi rebuild dropped
+    2,378 rows, 2,346 of them delisted DeFi pools/tokens). This is the SAME class as the
+    2026-07-15 sports incident; the durable fix is to reuse the frozen-tail merge
+    (:func:`_merge_incremental`) for full-mode too so a rebuild never silently loses the
+    cumulative set. Until then the guard + this diagnostic keep full-mode SAFE (blocks +
+    reports rather than silently shrinking).
+    """
+    if "instrument_id" not in new_df.columns or "instrument_id" not in prev_df.columns:
+        return {"error": "no instrument_id column on one side"}
+    new_ids = set(new_df["instrument_id"].astype(str))
+    prev_ids = set(prev_df["instrument_id"].astype(str))
+    dropped_ids = prev_ids - new_ids
+    dropped = prev_df[prev_df["instrument_id"].astype(str).isin(dropped_ids)]
+
+    def _top(col: str, n: int = 15) -> dict[str, int]:
+        if col not in dropped.columns:
+            return {}
+        return {str(k): int(v) for k, v in dropped[col].astype(str).value_counts().head(n).items()}
+
+    active = delisted = 0
+    if "available_to" in dropped.columns:
+        available_to = pd.to_datetime(dropped["available_to"], errors="coerce")
+        delisted = int(available_to.notna().sum())
+        active = int(available_to.isna().sum())
+    return {
+        "dropped": len(dropped_ids),
+        "added": len(new_ids - prev_ids),
+        "dropped_active": active,
+        "dropped_delisted": delisted,
+        "dropped_by_venue": _top("venue"),
+        "dropped_by_instrument_type": _top("instrument_type"),
+        "dropped_sample_ids": sorted(dropped_ids)[:10],
+    }
+
+
 def promote_catalogue(
     storage: StorageClient,
     bucket: str,
@@ -2898,6 +2944,17 @@ def promote_catalogue(
     )
 
     if not decision.accept:
+        # Diagnose WHICH instruments the rejected catalogue would drop, so the block is
+        # reviewable rather than opaque (F8 2026-07-18). Best-effort: the diagnostic must
+        # never mask the block itself, and it pays one extra GCS read only on a (rare) block.
+        drop_diagnostics: dict[str, object] = {}
+        previous = _load_previous_catalogue(storage, bucket, canonical_blob)
+        if previous is not None:
+            try:
+                drop_diagnostics = _shrink_drop_diagnostics(df, previous[0])
+                logger.error("CATALOGUE_SHRINK_BLOCKED drop-list: %s", drop_diagnostics)
+            except (KeyError, ValueError, TypeError) as exc:
+                logger.warning("shrink drop-diagnostics failed (block still stands): %s", exc)
         # Real event-log emission (was best-effort logger.info-only via _emit_event —
         # cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md). CRITICAL
         # severity + this event name route through UAC's DP-CATALOG-002 rule to
@@ -2910,6 +2967,7 @@ def promote_catalogue(
                 "env": env,
                 "new_count": new_count,
                 "current_count": current_count,
+                "drop_diagnostics": drop_diagnostics,
                 "hint": "re-run a complete regeneration, or pass --allow-catalogue-shrink for a corrective shrink",
             },
         )
