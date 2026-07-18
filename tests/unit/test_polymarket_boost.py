@@ -354,7 +354,22 @@ class TestBuildSportsId:
     """
 
     def test_valid_league_returns_tuple(self) -> None:
+        from instruments_service.reference_data.adapters.prediction.fixture_match import (
+            PredictionFixtureResolver,
+        )
+
         adapter = _make_adapter()
+        # Phase-E Leg-1: the soccer path now resolves af_fixture_id off the FIXTURES
+        # parquet — inject a hermetic (no-network) resolver so this unit test never
+        # touches GCS. The returned canonical_instrument_id (result[2]) is unaffected.
+
+        class _NoNetworkClient:
+            def download_bytes(self, bucket: str, path: str) -> bytes | None:
+                return None
+
+        adapter._fixture_match_resolver_instance = PredictionFixtureResolver(  # type: ignore[attr-defined]
+            storage_client=_NoNetworkClient(), bucket="test-bucket"
+        )
 
         mock_market = MagicMock()
         mock_market.series_slug = "epl-matches-2026"
