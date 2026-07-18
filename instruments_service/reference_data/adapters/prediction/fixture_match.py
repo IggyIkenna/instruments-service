@@ -39,6 +39,7 @@ distinguishable from a genuine null.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -53,6 +54,7 @@ __all__ = [
     "PredictionFixtureResolver",
     "fixture_match_for_instrument_key",
     "football_league_for_sports_underlying",
+    "parse_kalshi_soccer_participants",
     "register_fixture_match",
     "reset_fixture_match_registry",
 ]
@@ -139,6 +141,67 @@ def football_league_for_sports_underlying(sports_underlying: str) -> tuple[str, 
     if league_def is None or league_def.sport != "FOOTBALL":
         return None
     return league_def.league_id, league_def.api_football_id
+
+
+# ── Kalshi soccer title → (home, away) participant parser ────────────────────
+# Kalshi encodes a soccer GAME market's two clubs in the human ``title``, NOT in
+# a team registry — the market ticker's team segment is a concatenation of
+# variable-width 2-4 char codes (``LFCBRE`` = Liverpool+Brentford) that is NOT
+# reliably splittable (measured live 2026-07-18 vs
+# api.elections.kalshi.com/.../markets?series_ticker=KX{LEAGUE}GAME). The title
+# is the deterministic participant source, but it carries a market-type suffix
+# the club names must be stripped of before they can canonicalise through the
+# SAME ``validate_team_resolution`` alias index the Polymarket path uses:
+#   * ``"Liverpool vs Brentford Winner?"``            (EPL/BUN/LALIGA/SERIEA/LIGUE1 GAME)
+#   * ``"Egnatia Rrogozhine vs NK Celje: Regulation Time Moneyline"`` (colon-suffixed)
+# Splitting on " vs " and stripping that suffix turns Kalshi soccer titles from
+# 0% team-matching into the alias-index namespace (E2 / Phase-E Leg-2).
+_KALSHI_VS_SPLIT: re.Pattern[str] = re.compile(r"\s+vs\.?\s+|\s+v\.?\s+", re.IGNORECASE)
+_KALSHI_MARKET_TYPE_SUFFIX: re.Pattern[str] = re.compile(
+    r"\s*(?:winner|moneyline|regulation\s+time(?:\s+moneyline)?|result|to\s+win|"
+    r"match|draw\s+no\s+bet|both\s+teams\s+to\s+score|btts)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_kalshi_market_suffix(name: str) -> str:
+    """Trim a Kalshi market-type qualifier (``Winner?`` / ``Moneyline`` / ``?``)
+    off a title-derived club name so only the club token remains.
+    """
+    trimmed = name.strip().rstrip("?").strip()
+    # Strip once, drop a possible bare ``?`` the suffix left, then strip again to
+    # cover ``"… Winner?"`` (word before the ``?``) in a single pass-pair.
+    trimmed = _KALSHI_MARKET_TYPE_SUFFIX.sub("", trimmed).strip().rstrip("?").strip()
+    return _KALSHI_MARKET_TYPE_SUFFIX.sub("", trimmed).strip()
+
+
+def parse_kalshi_soccer_participants(title: str | None) -> tuple[str, str] | None:
+    """Extract the two clubs ``(home, away)`` from a Kalshi soccer market title.
+
+    Returns ``None`` (→ caller keeps honest-absence ``UNRESOLVED_TEAM_NAME``) when
+    the title is blank, carries no ``" vs "`` participant split, or either side is
+    empty after the market-type suffix is stripped. The returned names are the raw
+    venue renderings ("Liverpool", "Brentford") — canonicalisation to the shared
+    alias namespace is the resolver's job (``validate_team_resolution``), so a
+    Kalshi rendering that isn't in the alias index stays honestly unresolved
+    rather than being force-slugged.
+
+    Home/away order follows the title's left-to-right order (Kalshi soccer GAME
+    titles render "Home vs Away"); the resolver's fixture lookup is keyed on that
+    order, mirroring the Polymarket path.
+    """
+    if not title:
+        return None
+    # Drop a trailing ``": Regulation Time Moneyline"`` clause, then split on vs.
+    cleaned = title.split(":", 1)[0].strip()
+    parts = _KALSHI_VS_SPLIT.split(cleaned, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    home = _strip_kalshi_market_suffix(parts[0])
+    away = _strip_kalshi_market_suffix(parts[1])
+    if not home or not away:
+        return None
+    return home, away
 
 
 class PredictionFixtureResolver:
