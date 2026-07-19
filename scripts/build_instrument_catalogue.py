@@ -1889,7 +1889,20 @@ def build_prediction_catalogue_dataframe(
             # model_dump(), just never read here before this fix. Per-conditionId
             # grain only (see _PredLifecycle docstring for why the cqg grain skips them).
             raw_symbol = _str_field(row, "raw_symbol")
-            base_asset = _str_field(row, "base_asset")
+            # Strip leading/trailing whitespace on ``base_asset`` at the writer.
+            # Prediction ``base_asset`` can carry a fixed-length-truncated market
+            # TITLE with a trailing pad space (e.g.
+            # ``"Will the highest temperature in Jeddah be 23 degrees C or "``),
+            # producing whitespace-only-distinct variants in prod (measured 2026-07-18:
+            # 125,914 rows / 209 distinct values that collapse on ``.strip()``).
+            # ``base_asset`` is a DISPLAY/reference field (NOT the shard-atom identity,
+            # which is ``(venue, conditionId, data_type)``), so this is pure hygiene —
+            # strip HERE, BEFORE the ``_merge_lifecycle`` (venue, conditionId) dedup
+            # below, so the lifecycle accumulator stores ONE clean value per market and
+            # whitespace-only variants of the same market collapse instead of racing on
+            # "most-recent observation". PREDICTION path only (cefi/tradfi/defi/sports
+            # roll up through ``build_catalogue_dataframe`` / their own producers).
+            base_asset = _str_field(row, "base_asset").strip()
             # underlying / canonical_instrument_id (prediction_canonical_identity_
             # migration_2026_07_08.md todos 1 + 5): real, adapter-populated fields as
             # of the 2026-07-09 underlying/fixture_id fix — "" (honest absence) for
