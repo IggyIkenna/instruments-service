@@ -232,6 +232,41 @@ def _read_per_league_entity_df(
     return _orch.pd.concat(frames, ignore_index=True) if frames else None
 
 
+def _read_fixtures_entity_with_schedule_fallback(
+    bucket: str,
+    date: str,
+    *,
+    max_results: int | None = 100,
+    inject_league_id: bool = False,
+) -> _orch.pd.DataFrame | None:
+    """Read the FIXTURES status/schedule data for a date, preferring the current entity.
+
+    The ``254fb843`` entity-split (2026-06-24) moved schedule + status columns
+    (incl. ``status_short``/``status_long``) to ``entity=fixtures_schedule/`` and
+    stopped writing the legacy bare ``entity=fixtures/`` entity entirely —
+    ``_write_fixtures_per_league`` has no fallback write to the old entity. Every
+    caller here that still read ``entity=fixtures`` directly (this function's
+    prior form, ``_find_stale_fixture_leagues_for_date``,
+    ``_build_fixture_league_map_from_gcs``) was therefore reading a path frozen
+    at whatever it last held before the migration for any date not re-fetched
+    before 2026-06-24 — a re-fetch (even ``--force``) writes the CORRECT status
+    to ``fixtures_schedule`` but never touches the now-dead ``fixtures`` blob, so
+    those callers saw no change no matter how many times the date was
+    refreshed. Issue:
+    api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19.
+    Falls back to the legacy ``fixtures`` entity for dates never re-touched
+    since the migration (pre-2026-06-24 data that still lives there).
+    """
+    df = _orch._read_per_league_entity_df(
+        bucket, date, "fixtures_schedule", max_results=max_results, inject_league_id=inject_league_id
+    )
+    if df is not None:
+        return df
+    return _orch._read_per_league_entity_df(
+        bucket, date, "fixtures", max_results=max_results, inject_league_id=inject_league_id
+    )
+
+
 def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
     """Read completed fixture IDs from existing GCS fixtures parquet.
 
@@ -241,10 +276,12 @@ def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
     FIXTURES are written per-league (see ``_read_per_league_entity_df``) —
     prior to 2026-07-08 this probed a single bare ``entity=fixtures/fixtures.parquet``
     blob that no writer has populated since the per-league migration, so this
-    always silently returned ``[]`` for any post-migration date.
+    always silently returned ``[]`` for any post-migration date. Reads
+    ``fixtures_schedule`` (current status source) with a legacy ``fixtures``
+    fallback — see ``_read_fixtures_entity_with_schedule_fallback``.
     """
     try:
-        df = _orch._read_per_league_entity_df(bucket, date, "fixtures")
+        df = _read_fixtures_entity_with_schedule_fallback(bucket, date)
         if df is None:
             _orch.logger.debug("No fixtures parquets found for date=%s", date)
             return []
@@ -268,12 +305,13 @@ def _find_stale_fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
     ``TERMINAL_FIXTURE_STATUSES`` — i.e. it was captured before the match
     concluded (typically ``NS``) and has never been re-fetched to pick up
     the real final status. Reads only THIS date's already-captured
-    per-league FIXTURES parquet via ``_read_per_league_entity_df`` (single
-    date, no whole-corpus walk). A date with no captured fixtures at all
+    per-league FIXTURES status (``fixtures_schedule``, with a legacy
+    ``fixtures`` fallback — see ``_read_fixtures_entity_with_schedule_fallback``;
+    single date, no whole-corpus walk). A date with no captured fixtures at all
     returns an empty set — a missing capture is a different (backfill-gap)
     problem, not a stale-status one.
     """
-    df = _orch._read_per_league_entity_df(bucket, date, "fixtures", max_results=None, inject_league_id=True)
+    df = _read_fixtures_entity_with_schedule_fallback(bucket, date, max_results=None, inject_league_id=True)
     if df is None or "status_short" not in df.columns or "league_id" not in df.columns:
         return set()
     stale_mask = ~df["status_short"].isin(TERMINAL_FIXTURE_STATUSES)
@@ -650,7 +688,7 @@ def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]
             _af_league_to_canonical[league_def.api_football_id] = league_def.league_id
 
     try:
-        df = _orch._read_per_league_entity_df(bucket, date, "fixtures", max_results=None)
+        df = _read_fixtures_entity_with_schedule_fallback(bucket, date, max_results=None)
         if df is None:
             _orch.logger.debug("No fixtures parquets found for date=%s for league mapping", date)
             return {}
