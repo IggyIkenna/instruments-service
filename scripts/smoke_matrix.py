@@ -64,6 +64,7 @@ from unified_trading_library import (
     get_bucket_name,
     get_project_id,
     get_storage_client,
+    resolve_bucket_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -281,7 +282,27 @@ def _enumerate_sports_cells(
 
 
 def resolve_test_bucket(asset_group: str, project_id: str | None = None) -> str:
-    """Return the ``-test-`` bucket name for instruments-service + asset group."""
+    """Return the ``-test-`` bucket name for instruments-service + asset group.
+
+    Prediction's instruments store is a DEDICATED flat yaml kind
+    (``instruments-store-prediction`` -> ``instruments-store-pred-${DEPLOYMENT_ENV_SHORT}-
+    ${pid}`` — the abbreviated ``pred`` token), NOT a ``PREDICTION`` entry in the
+    per-asset_group ``instruments-store`` dict. So it MUST resolve via its own flat kind
+    with ``deployment_env="test"`` — EXACTLY like the IS write path
+    (``engine/orchestrator/catalogue.py::_get_instruments_bucket`` via
+    ``resolve_instruments_store_kind``) and the MTDS harness's ``_test_bucket``. The
+    generic ``get_bucket_name(...)+`.replace('-{pid}','-test-{pid}')`` path below yields
+    the non-existent LONG ``instruments-store-prediction-test-{pid}`` (it uses ``prediction``
+    verbatim as the asset_group suffix and never abbreviates to ``pred``), which 404s — the
+    same string-mangle anti-pattern the real ``get_write_bucket_name`` fix already retired.
+    Non-prediction asset_groups (cefi/tradfi/defi/sports) are byte-unchanged.
+    """
+    if asset_group.lower() == "prediction":
+        return resolve_bucket_name(
+            cloud="gcp",
+            kind="instruments-store-prediction",
+            deployment_env="test",
+        )
     pid = project_id or get_project_id()
     prod = get_bucket_name("instruments", asset_group, pid)
     return prod.replace(f"-{pid}", f"-test-{pid}")
