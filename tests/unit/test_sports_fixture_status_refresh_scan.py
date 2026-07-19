@@ -18,6 +18,7 @@ import pandas as pd
 from instruments_service.engine.orchestrator.sports_fixtures import (
     TERMINAL_FIXTURE_STATUSES,
     _find_stale_fixture_leagues_for_date,
+    _read_fixtures_entity_with_schedule_fallback,
 )
 
 
@@ -114,3 +115,49 @@ def test_missing_status_short_column_returns_empty_set() -> None:
         result = _find_stale_fixture_leagues_for_date("bucket", "2026-06-24")
 
     assert result == set()
+
+
+def test_schedule_fallback_prefers_fixtures_schedule() -> None:
+    """Regression pin for api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19:
+    the 254fb843 entity-split (2026-06-24) moved status data to fixtures_schedule and
+    _write_fixtures_per_league never writes the legacy fixtures entity again — the
+    fallback helper must check fixtures_schedule FIRST and use it when present."""
+    schedule_df = pd.DataFrame({"af_fixture_id": [1], "status_short": ["FT"]})
+
+    def _read(bucket: str, date: str, entity_name: str, **kwargs: object) -> pd.DataFrame | None:
+        assert entity_name == "fixtures_schedule", "must try fixtures_schedule first"
+        return schedule_df
+
+    with patch("instruments_service.engine.orchestrator._read_per_league_entity_df", _read):
+        result = _read_fixtures_entity_with_schedule_fallback("bucket", "2026-07-01")
+
+    assert result is schedule_df
+
+
+def test_schedule_fallback_falls_back_to_legacy_fixtures_when_schedule_absent() -> None:
+    """A date never re-touched since the 2026-06-24 entity-split has no fixtures_schedule
+    data at all — fall back to the legacy fixtures entity rather than returning None."""
+    legacy_df = pd.DataFrame({"af_fixture_id": [1], "status_short": ["FT"]})
+    calls: list[str] = []
+
+    def _read(bucket: str, date: str, entity_name: str, **kwargs: object) -> pd.DataFrame | None:
+        calls.append(entity_name)
+        if entity_name == "fixtures_schedule":
+            return None
+        return legacy_df
+
+    with patch("instruments_service.engine.orchestrator._read_per_league_entity_df", _read):
+        result = _read_fixtures_entity_with_schedule_fallback("bucket", "2020-06-10")
+
+    assert calls == ["fixtures_schedule", "fixtures"]
+    assert result is legacy_df
+
+
+def test_schedule_fallback_returns_none_when_neither_entity_exists() -> None:
+    with patch(
+        "instruments_service.engine.orchestrator._read_per_league_entity_df",
+        return_value=None,
+    ):
+        result = _read_fixtures_entity_with_schedule_fallback("bucket", "2099-01-01")
+
+    assert result is None
