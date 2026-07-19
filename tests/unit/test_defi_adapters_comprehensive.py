@@ -2444,7 +2444,8 @@ class TestEigenLayerAdapter:
         results = await adapter.get_instruments()
         assert len(results) == 1
         assert results[0].base_asset == "EIGEN"
-        assert results[0].instrument_type == InstrumentType.SPOT_PAIR
+        # Single on-chain governance token → SPOT_ASSET (operator ruling 2026-07-18).
+        assert results[0].instrument_type == InstrumentType.SPOT_ASSET
 
     @pytest.mark.asyncio
     async def test_get_instruments_governance_token_type(self) -> None:
@@ -2635,7 +2636,8 @@ class TestEthFiGovernanceAdapter:
         results = await adapter.get_instruments()
         assert len(results) == 1
         assert results[0].base_asset == "ETHFI"
-        assert results[0].instrument_type == InstrumentType.SPOT_PAIR
+        # Single on-chain governance token → SPOT_ASSET (operator ruling 2026-07-18).
+        assert results[0].instrument_type == InstrumentType.SPOT_ASSET
 
     @pytest.mark.asyncio
     async def test_get_instruments_governance_token_type(self) -> None:
