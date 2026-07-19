@@ -176,6 +176,31 @@ def test_resolve_test_bucket_honours_category(smoke: ModuleType, monkeypatch: py
     assert smoke.resolve_test_bucket("CEFI") == "instruments-store-cefi-test-test-project"
 
 
+def test_resolve_test_bucket_prediction_uses_flat_kind(smoke: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prediction MUST resolve the dedicated flat kind (``instruments-store-prediction``
+    -> abbreviated ``instruments-store-pred-{env}-{pid}``) via ``resolve_bucket_name`` with
+    ``deployment_env="test"`` — NOT the generic ``get_bucket_name``+string-mangle path,
+    which produced the non-existent long ``instruments-store-prediction-test-{pid}`` (404).
+    """
+    calls: list[dict[str, object]] = []
+
+    def _fake_resolve(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return "instruments-store-pred-test-central-element-323112"
+
+    monkeypatch.setattr(smoke, "resolve_bucket_name", _fake_resolve)
+    # get_bucket_name must NOT be reached for prediction — make it explode if it is.
+    monkeypatch.setattr(
+        smoke,
+        "get_bucket_name",
+        lambda *a, **k: pytest.fail("prediction must not fall through to get_bucket_name string-mangle"),
+    )
+    out = smoke.resolve_test_bucket("prediction", "central-element-323112")
+    assert out == "instruments-store-pred-test-central-element-323112"
+    assert "-prediction-test-" not in out  # the old 404 long form
+    assert calls == [{"cloud": "gcp", "kind": "instruments-store-prediction", "deployment_env": "test"}]
+
+
 def test_expected_write_prefix_sports_uses_sports_reference(smoke: ModuleType) -> None:
     # Provider-routed SPORTS cell (as actually emitted by _enumerate_sports_cells —
     # sports_provider is always set alongside venue for these) -> sports_reference/.
