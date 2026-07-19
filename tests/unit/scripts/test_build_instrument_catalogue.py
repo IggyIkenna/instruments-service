@@ -1561,6 +1561,58 @@ def test_prediction_rollup_threads_underlying_from_per_date_row(rollup: ModuleTy
     assert row["underlying"] == "BTC"
 
 
+def test_prediction_rollup_strips_base_asset_whitespace(rollup: ModuleType) -> None:
+    """A ``base_asset`` carrying a fixed-length-truncated title with a trailing pad
+    space is stored STRIPPED at the writer (prod hygiene: 209 whitespace-only-distinct
+    values collapsed on ``.strip()``). Applies to prediction only."""
+    d1 = date(2026, 6, 24)
+    padded = "Will the highest temperature in Jeddah be 23 degrees C or "
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "0xjeddah",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "base_asset": padded,
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["base_asset"] == padded.strip()
+    assert row["base_asset"] == "Will the highest temperature in Jeddah be 23 degrees C or"
+
+
+def test_prediction_rollup_base_asset_whitespace_variants_collapse_before_dedup(
+    rollup: ModuleType,
+) -> None:
+    """Two per-date observations of the SAME conditionId whose ``base_asset`` differs
+    ONLY by trailing whitespace collapse to ONE clean stored value — the strip happens
+    BEFORE the ``(venue, conditionId)`` lifecycle dedup, so the accumulator never races
+    between a padded and an unpadded spelling of the same market."""
+    d1, d2 = date(2026, 6, 24), date(2026, 6, 25)
+    base = "Oscars Best Picture 2026"
+    snapshots = [
+        (d1, "POLYMARKET", "", _pred_snap([{"instrument_key": "0xoscars", "venue": "POLYMARKET", "base_asset": base}])),
+        (
+            d2,
+            "POLYMARKET",
+            "",
+            _pred_snap([{"instrument_key": "0xoscars", "venue": "POLYMARKET", "base_asset": base + "   "}]),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    values = {r["base_asset"] for r in df.to_dict("records") if r["instrument_id"] == "0xoscars"}
+    assert values == {base}
+
+
 def test_prediction_rollup_emits_question_column(rollup: ModuleType) -> None:
     """A real, adapter-populated ``question`` on the per-date row survives into the
     catalogue's ``question`` column (uac@c1de078a InstrumentRecord.question)."""
