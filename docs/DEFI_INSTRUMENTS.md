@@ -26,8 +26,10 @@ batch-vs-live swap-capture split.
 - **Lending**: Aave_V3, Spark, Compound_V3, Morpho, Euler_V2, Fluid, Radiant, Venus, Benqi.
 - **Yield-bearing / LST / restaking**: Lido, EtherFi, Ethena, RocketPool, Renzo, KelpDAO, Puffer, Symbiotic, Karak,
   Convex, Idle, Yearn(\_V3), Beefy, Pendle, EigenLayer.
-- **On-chain-perp DEXes**: Hyperliquid, Aster, Extended-Starknet, Lighter-Zksync. (Pacifica-Solana removed
-  2026-07-16 -- operator ruling: all Solana perp DEXes dropped except Jupiter, not integrated.)
+- **On-chain-perp CLOBs** — classified `asset_group=cefi`, NOT `defi` (they trade the perp/hedge leg, not the DeFi
+  long/stake/lend/AMM leg; see the cefi-vs-defi boundary in `defi-canonical-naming-ssot.md`); documented here only for
+  the on-chain instrument-definition overlap: Hyperliquid, Aster, Extended-Starknet, Lighter-Zksync. (Pacifica-Solana
+  removed 2026-07-16 -- operator ruling: all Solana perp DEXes dropped except Jupiter, not integrated.)
 
 **Out of scope** (covered in other consolidated docs / not yet written up anywhere): Solana-native AMMs and perps
 (Raydium, Orca, Phoenix, Jupiter, Meteora, Lifinity, Kamino, Camino -- Drift removed 2026-07-16, operator ruling: all
@@ -451,7 +453,9 @@ per group:
   `canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08.md`): both adapters' `get_instruments(instrument_type=...)`
   guard only matched the literal strings `"GOVERNANCE_TOKEN"`/`"governance_token"`, so filtering by the adapters' own
   field value silently returned `[]`; the guard now accepts the enum too (plus the legacy strings, back-compat).
-  Target before/after:
+  **SHIPPED (`instruments-service@c31d37c3` + UAC `@e319864f`, 2026-07-18)** — no longer migration-pending: both key and
+  field are now `SPOT_ASSET` (`eigenlayer.py`/`ethfi.py` route through `build_canonical_instrument_id`, and the UAC entry
+  point hard-rejects a single-token `SPOT_PAIR`). Before/after:
   `EIGENLAYER-ETHEREUM:GOVERNANCE_TOKEN:EIGEN` → `EIGENLAYER-ETHEREUM:SPOT_ASSET:EIGEN`,
   `ETHERFI-GOV-ETHEREUM:GOVERNANCE_TOKEN:ETHFI` → `ETHERFI-GOV-ETHEREUM:SPOT_ASSET:ETHFI`.
 - **COMPOUND_V3's `SUPPLY`/`BORROW` key segments — migrated 2026-07-13** (supersedes the 2026-07-09 "deliberately
@@ -469,9 +473,9 @@ per group:
   kamino, marinade) carry a type mismatch, but it is NOT uniformly the `SPOT`-vs-`SPOT_PAIR` shorthand — the correct
   target type depends on what each venue actually is:
   - **meteora, lifinity, kamino** are Solana AMM-DEX / liquidity pools — an AMM spot pool is **never** `SPOT_PAIR`;
-    the canonical type is `DEX_POOL`/`SOLANA_AMM_POOL` (e.g. `meteora.py` currently keys `:SPOT:` against
-    `instrument_type=InstrumentType.SPOT_PAIR`, which is doubly wrong — the shorthand AND the AMM-as-`SPOT_PAIR`
-    classification).
+    the canonical type is `DEX_POOL`/`SOLANA_AMM_POOL`. **meteora + lifinity SHIPPED `SOLANA_AMM_POOL`
+    (`instruments-service@c31d37c3`, e.g. `METEORA-SOLANA:SOLANA_AMM_POOL:SOL-USDC`)** — no longer the pre-fix
+    `:SPOT:`/`SPOT_PAIR` mismatch; kamino's reclass is the remaining follow-up.
   - **marinade** is a Solana LST/staking protocol — its single staked-SOL token is `STAKING`/`LST`, not `SPOT_PAIR`.
   - **phoenix** (an on-chain orderbook DEX) and **jupiter** (an aggregator quoting a two-token market) are
     legitimately `SPOT_PAIR` — a two-token quoted market — once the `:SPOT:`→`:SPOT_PAIR:` key shorthand is fixed.
@@ -905,9 +909,12 @@ All 3 axes are **derived**, not hand-curated literals, so the rule can never sil
   mint a phantom expected-but-never-captured cell.
 - **Instrument types**: every real `InstrumentType` value a live adapter actually
   emits — `POOL`, `A_TOKEN`, `DEBT_TOKEN`, `LST`, `YIELD_BEARING`, `PERPETUAL`, `SPOT_PAIR`, `SPOT_ASSET`, `STAKING`,
-  plus `DEX_POOL`/`SOLANA_AMM_POOL` for Solana spot-DEX (AMM) shards (verified against live adapter code). Legacy flat
-  `LENDING` is **retired** — all 9 lending protocols emit the `A_TOKEN`/`DEBT_TOKEN` split (see the lending table
-  above), so `LENDING` is no longer an emitted type. `DEX_POOL`/`SOLANA_AMM_POOL` is a **real** classification for
+  plus `DEX_POOL`/`SOLANA_AMM_POOL` for Solana spot-DEX (AMM) shards (verified against live adapter code). No
+  instruments-service reference adapter emits the market-level `LENDING` type — all 9 lending protocols emit the
+  `A_TOKEN`/`DEBT_TOKEN` split (see the lending table above), so `LENDING` is not an IS-reference-emitted type.
+  (`LENDING`/`SOLANA_LENDING` DO remain valid `InstrumentType` members, still keyed by MTDS market/event lending
+  data_types on an interim basis — PM `issues/canonical_closeout_open_questions_2026_07_18.md` § D — NOT globally
+  retired.) `DEX_POOL`/`SOLANA_AMM_POOL` is a **real** classification for
   Solana spot-DEX (AMM) pools, not a never-real placeholder — its scarcity in captured data is a downstream symptom
   of the Solana AMM-DEX-as-`SPOT_PAIR` misclassification (see "Remaining known limitation" above), not evidence the
   type is fictional.
