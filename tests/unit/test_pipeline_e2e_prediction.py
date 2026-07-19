@@ -112,7 +112,11 @@ def test_canonical_cell_passes_on_canonical_rows(monkeypatch) -> None:
     monkeypatch.setattr(
         m,
         "_read_instruments_parquet_rows",
-        lambda bucket, prefix: (["POLYMARKET:PREDICTION_MARKET:0xa"], ["PREDICTION_MARKET"], ["MATCHED"]),
+        lambda bucket, prefix, smoke_date, venue: (
+            ["POLYMARKET:PREDICTION_MARKET:0xa"],
+            ["PREDICTION_MARKET"],
+            ["MATCHED"],
+        ),
     )
     result = m._run_prediction_canonical_cell(_FakeCell("PREDICTION", "POLYMARKET"), "2026-07-01", "p")
     assert result.status == "passed", result.reason
@@ -127,7 +131,7 @@ def test_canonical_cell_fails_on_noncanonical_rows(monkeypatch) -> None:
     monkeypatch.setattr(
         m,
         "_read_instruments_parquet_rows",
-        lambda bucket, prefix: (["POLYMARKET:PREDICTION_MARKET:0xa"], ["prediction"], [None]),
+        lambda bucket, prefix, smoke_date, venue: (["POLYMARKET:PREDICTION_MARKET:0xa"], ["prediction"], [None]),
     )
     result = m._run_prediction_canonical_cell(_FakeCell("PREDICTION", "POLYMARKET"), "2026-07-01", "p")
     assert result.status == "failed"
@@ -138,7 +142,7 @@ def test_canonical_cell_fails_honestly_when_no_parquet(monkeypatch) -> None:
     m = _load()
     monkeypatch.setattr(m, "resolve_test_bucket", lambda ag, pid: "fake-bucket")
     monkeypatch.setattr(m, "expected_write_prefix", lambda cell, day: "prefix/")
-    monkeypatch.setattr(m, "_read_instruments_parquet_rows", lambda bucket, prefix: None)
+    monkeypatch.setattr(m, "_read_instruments_parquet_rows", lambda bucket, prefix, smoke_date, venue: None)
     result = m._run_prediction_canonical_cell(_FakeCell("PREDICTION", "KALSHI"), "2026-07-01", "p")
     assert result.status == "failed"
     assert "canonical_no_instruments_parquet_at" in result.reason

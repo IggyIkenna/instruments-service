@@ -223,6 +223,85 @@ def test_expected_write_prefix_venue_routed_sports_uses_instrument_availability(
     assert prefix == "instrument_availability/by_date/day=2026-04-20/venue=BETFAIR/"
 
 
+def test_expected_write_prefix_prediction_uses_cqg_base_list_prefix(smoke: ModuleType) -> None:
+    """PREDICTION writes the CQG-FIRST layout (``canonical_question_group=`` precedes
+    ``day=``/``venue=``), so no day-first literal prefix can match — ``expected_write_prefix``
+    returns the coarse base ``by_date/`` tree that day+venue substring-scoping lists under."""
+    cell = smoke.SmokeCell(asset_group="PREDICTION", venue="POLYMARKET", data_type="prediction")
+    prefix = smoke.expected_write_prefix(cell, "2026-07-15")
+    assert prefix == "instrument_availability/by_date/"
+    assert "day=" not in prefix and "venue=" not in prefix
+
+
+def test_verify_prediction_parquet_written_scoped_by_day_venue(smoke: ModuleType) -> None:
+    """The prediction write-verify counts ONLY the CQG-first ``instruments.parquet`` objects
+    for THIS day+venue, and skips other-day / other-venue / non-instruments objects. It also
+    proves the day-first prefix the other asset_groups use would match ZERO of them."""
+    day, venue = "2026-07-15", "POLYMARKET"
+    base = "instrument_availability/by_date"
+    hit_a = f"{base}/canonical_question_group=BTC_UP_DOWN_DAILY/day={day}/venue={venue}/instruments.parquet"
+    hit_b = f"{base}/canonical_question_group=ETH_UP_DOWN_DAILY/day={day}/venue={venue}/instruments.parquet"
+    other_day = f"{base}/canonical_question_group=BTC_UP_DOWN_DAILY/day=2026-07-14/venue={venue}/instruments.parquet"
+    other_venue = f"{base}/canonical_question_group=BTC_UP_DOWN_DAILY/day={day}/venue=KALSHI/instruments.parquet"
+    not_instruments = (
+        f"{base}/canonical_question_group=BTC_UP_DOWN_DAILY/day={day}/venue={venue}/market_lifecycle.parquet"
+    )
+    client = _FakeStorageClient(
+        parquet_blobs=[
+            _FakeBlob(hit_a),
+            _FakeBlob(hit_b),
+            _FakeBlob(other_day),
+            _FakeBlob(other_venue),
+            _FakeBlob(not_instruments),
+        ]
+    )
+    ok, n = smoke.verify_prediction_parquet_written("bkt", day, venue, client)
+    assert ok is True
+    assert n == 2  # only the two THIS-day THIS-venue instruments.parquet objects
+
+    # A GCS prefix-listing under the day-first prefix (what verify_parquet_written uses for
+    # cefi/tradfi/defi/sports) would return zero of these CQG-first objects — the exact bug.
+    day_first_prefix = f"instrument_availability/by_date/day={day}/venue={venue}/"
+    assert not any(name.startswith(day_first_prefix) for name in (hit_a, hit_b))
+
+
+def test_run_cell_prediction_passes_via_cqg_first_verify(
+    smoke: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end run_cell for a prediction venue cell: the CQG-first write-verify + manifest
+    row both resolve, so the cell passes (before the fix, the day-first prefix found 0)."""
+    monkeypatch.setattr(smoke, "get_project_id", lambda: "central-element-323112")
+    monkeypatch.setattr(
+        smoke,
+        "resolve_bucket_name",
+        lambda **kwargs: "instruments-store-pred-test-central-element-323112",
+    )
+    cell = smoke.SmokeCell(asset_group="PREDICTION", venue="POLYMARKET", data_type="prediction")
+    smoke_date = "2026-07-15"
+    cqg_obj = (
+        "instrument_availability/by_date/canonical_question_group=BTC_UP_DOWN_DAILY/"
+        f"day={smoke_date}/venue=POLYMARKET/instruments.parquet"
+    )
+    client = _FakeStorageClient(
+        parquet_blobs=[_FakeBlob(cqg_obj)],
+        manifest_blob=_FakeBlob(
+            "_index/availability_index.parquet",
+            exists_flag=True,
+            payload=_make_manifest_bytes(smoke_date, "PREDICTION", "POLYMARKET", "prediction"),
+        ),
+    )
+    result = smoke.run_cell(
+        cell=cell,
+        smoke_date=smoke_date,
+        subprocess_runner=lambda *a, **k: _FakeCompleted(rc=0),
+        storage_client=client,
+    )
+    assert result.status == "passed", f"expected passed, got {result.status} ({result.reason})"
+    assert result.parquet_count == 1
+    assert result.manifest_status == "captured"
+
+
 def test_build_cli_args_venue_routed_sports_uses_venues_flag(smoke: ModuleType) -> None:
     """A sports_provider=None SPORTS cell (bare BETFAIR) must build --venues BETFAIR,
     not silently omit any venue selector (which would run the full default SPORTS set)."""
