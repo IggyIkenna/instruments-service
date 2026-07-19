@@ -2,7 +2,14 @@
 
 Discovers Meteora DLMM (Dynamic Liquidity Market Maker) pools on Solana via
 the Meteora public API. Pools are returned as InstrumentRecord with
-instrument_type=SPOT (AMM liquidity pools).
+instrument_type=SOLANA_AMM_POOL — a Meteora pool is an AMM/DEX liquidity pool,
+NOT a two-token quoted SPOT_PAIR (operator ruling 2026-07-18,
+defi_consolidated_closeout_2026_07_18.md "SPOT_ASSET vs SPOT_PAIR vs POOL":
+a Solana AMM pool is `SOLANA_AMM_POOL`, mirroring how MTDS types orca/raydium
+DEX-pool tick data). Routed through `build_canonical_instrument_id` so the
+emitted `instrument_key` TYPE segment is correct AT MINT TIME
+(`METEORA-SOLANA:SOLANA_AMM_POOL:SOL-USDC`), not the pre-fix `:SPOT:` shorthand
+that mismatched the `SPOT_PAIR` field.
 
 Data source: Meteora API (https://app.meteora.ag/api/) — public, no auth required.
 Program ID: LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo (Meteora Dynamic Liquidity)
@@ -16,7 +23,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -56,7 +63,7 @@ class MeteoraReferenceDataAdapter(BaseReferenceDataAdapter):
 
     Uses the public Meteora API (https://app.meteora.ag/api/pools)
     which requires no auth and returns active DLMM pools.
-    Each Meteora pool produces one SPOT instrument (liquidity pair).
+    Each Meteora pool produces one SOLANA_AMM_POOL instrument (AMM liquidity pool).
     Meteora pools use various quote assets (USDC, SOL, etc.).
     """
 
@@ -105,8 +112,8 @@ class MeteoraReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Meteora DLMM pools as instruments."""
-        if instrument_type not in (None, InstrumentType.SPOT_PAIR, "spot"):
-            logger.info("Meteora only supports SPOT instruments; requested %s", instrument_type)
+        if instrument_type not in (None, InstrumentType.SOLANA_AMM_POOL, "spot"):
+            logger.info("Meteora only supports SOLANA_AMM_POOL instruments; requested %s", instrument_type)
             return []
 
         pools = await self._fetch_pools()
@@ -162,7 +169,13 @@ class MeteoraReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # Use pool address as unique identifier if available
         raw_symbol = pool_address if pool_address else pool_name
-        instrument_key = f"{self.venue}:SPOT:{base_asset}-{quote_asset}"
+        # Route through the shared canonical builder so the emitted TYPE segment
+        # is the real InstrumentType enum value (SOLANA_AMM_POOL), not the old
+        # `:SPOT:` shorthand that mismatched the field. venue already carries the
+        # composed VENUE-CHAIN token, so passthrough=True reproduces the exact id.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, self.venue, InstrumentType.SOLANA_AMM_POOL, f"{base_asset}-{quote_asset}", passthrough=True
+        )
 
         # Pool TVL or liquidity as proxy for volume
         tick_size_raw = pool.get("bin_step") or pool.get("tickSize") or "1"
@@ -180,7 +193,7 @@ class MeteoraReferenceDataAdapter(BaseReferenceDataAdapter):
             canonical_instrument_id=instrument_key,
             venue=self.venue,
             raw_symbol=raw_symbol,
-            instrument_type=InstrumentType.SPOT_PAIR,
+            instrument_type=InstrumentType.SOLANA_AMM_POOL,
             base_asset=base_asset,
             quote_asset=quote_asset,
             settle_asset=quote_asset,
