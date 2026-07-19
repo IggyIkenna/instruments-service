@@ -426,6 +426,26 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     "away_team_name",
     "venue_name",
     "round",
+    # PREDICTION soccer-fixture linkage fields (uac InstrumentRecord af_league_id /
+    # home_team_canonical_id / away_team_canonical_id / fixture_date / af_fixture_id /
+    # af_fixture_match_status — internal/reference/instrument.py). Populated only by
+    # the PREDICTION rollup (build_prediction_catalogue_dataframe) for a Polymarket/
+    # Kalshi soccer market the adapter matched to an API-Football fixture; carried
+    # straight through from the per-conditionId InstrumentRecord and emitted onto the
+    # per-market prediction rows. FORWARD-ONLY / honest-None: the IS
+    # ``_records_to_dataframe`` parquet JOIN that materialises these is downstream +
+    # deferred (uac note, plan prediction_consolidated_closeout_2026_07_18 A4), so on
+    # a by_date snapshot that lacks the columns these stay None (never fabricated) and
+    # the ``pd.DataFrame(rows, columns=CATALOG_COLUMNS)`` reindex leaves them None on
+    # every non-prediction / non-soccer row (cefi/tradfi/defi/sports). Distinct axis
+    # from the sports-CATALOGUE block above: those are the sports asset_group's own
+    # ``entity=fixtures`` roll-up columns; these ride the prediction rows only.
+    "af_league_id",
+    "home_team_canonical_id",
+    "away_team_canonical_id",
+    "fixture_date",
+    "af_fixture_id",
+    "af_fixture_match_status",
 )
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
@@ -1730,6 +1750,23 @@ class _PredLifecycle:
     #: field is genuinely absent, not blank), so this stays ``None`` rather than "".
     #: Per-conditionId grain only — a cqg spans many markets with distinct questions.
     question: str | None = None
+    #: Soccer-fixture linkage carried straight through from the per-date
+    #: InstrumentRecord (uac af_league_id / home_team_canonical_id /
+    #: away_team_canonical_id / fixture_date / af_fixture_id /
+    #: af_fixture_match_status). Populated only for a Polymarket/Kalshi soccer
+    #: market the adapter matched to an API-Football fixture; honest ``None`` for
+    #: every non-soccer market AND for any per-date row captured before the IS
+    #: ``_records_to_dataframe`` parquet JOIN materialises these columns (deferred —
+    #: uac internal/reference/instrument.py note; plan
+    #: prediction_consolidated_closeout_2026_07_18 A4). ``af_fixture_id`` is a
+    #: nullable int upstream, stringified here by ``_opt_field`` (same as the numeric
+    #: ``league_id``). Per-conditionId grain only, same reasoning as ``question``.
+    af_league_id: str | None = None
+    home_team_canonical_id: str | None = None
+    away_team_canonical_id: str | None = None
+    fixture_date: str | None = None
+    af_fixture_id: str | None = None
+    af_fixture_match_status: str | None = None
 
 
 def _merge_lifecycle(
@@ -1745,6 +1782,12 @@ def _merge_lifecycle(
     underlying: str = "",
     canonical_instrument_id: str = "",
     question: str | None = None,
+    af_league_id: str | None = None,
+    home_team_canonical_id: str | None = None,
+    away_team_canonical_id: str | None = None,
+    fixture_date: str | None = None,
+    af_fixture_id: str | None = None,
+    af_fixture_match_status: str | None = None,
 ) -> None:
     """Fold one (entity, day) observation into the lifecycle accumulator."""
     cur = acc.get(key)
@@ -1761,6 +1804,12 @@ def _merge_lifecycle(
             underlying=underlying,
             canonical_instrument_id=canonical_instrument_id,
             question=question,
+            af_league_id=af_league_id,
+            home_team_canonical_id=home_team_canonical_id,
+            away_team_canonical_id=away_team_canonical_id,
+            fixture_date=fixture_date,
+            af_fixture_id=af_fixture_id,
+            af_fixture_match_status=af_fixture_match_status,
         )
         return
     if day < cur.first_day:
@@ -1782,6 +1831,18 @@ def _merge_lifecycle(
             cur.canonical_instrument_id = canonical_instrument_id
         if question:
             cur.question = question
+        if af_league_id:
+            cur.af_league_id = af_league_id
+        if home_team_canonical_id:
+            cur.home_team_canonical_id = home_team_canonical_id
+        if away_team_canonical_id:
+            cur.away_team_canonical_id = away_team_canonical_id
+        if fixture_date:
+            cur.fixture_date = fixture_date
+        if af_fixture_id:
+            cur.af_fixture_id = af_fixture_id
+        if af_fixture_match_status:
+            cur.af_fixture_match_status = af_fixture_match_status
     else:
         # An earlier day's row may be the only one carrying a value (e.g. a market's
         # last snapshot before delisting had a transiently-blank field) — backfill
@@ -1796,6 +1857,18 @@ def _merge_lifecycle(
             cur.canonical_instrument_id = canonical_instrument_id
         if not cur.question and question:
             cur.question = question
+        if not cur.af_league_id and af_league_id:
+            cur.af_league_id = af_league_id
+        if not cur.home_team_canonical_id and home_team_canonical_id:
+            cur.home_team_canonical_id = home_team_canonical_id
+        if not cur.away_team_canonical_id and away_team_canonical_id:
+            cur.away_team_canonical_id = away_team_canonical_id
+        if not cur.fixture_date and fixture_date:
+            cur.fixture_date = fixture_date
+        if not cur.af_fixture_id and af_fixture_id:
+            cur.af_fixture_id = af_fixture_id
+        if not cur.af_fixture_match_status and af_fixture_match_status:
+            cur.af_fixture_match_status = af_fixture_match_status
     if created and (cur.created is None or created < cur.created):
         cur.created = created
     if settled and (cur.settled is None or settled > cur.settled):
@@ -1916,6 +1989,20 @@ def build_prediction_catalogue_dataframe(
             # predates the field or the adapter resolved none — FORWARD-ONLY, never
             # fabricated. Per-conditionId grain only (a cqg has no single question).
             question = _opt_field(row, "question")
+            # Soccer-fixture linkage (uac InstrumentRecord af_league_id /
+            # home_team_canonical_id / away_team_canonical_id / fixture_date /
+            # af_fixture_id / af_fixture_match_status): carried through honest-None via
+            # _opt_field — None on any snapshot that predates the IS
+            # ``_records_to_dataframe`` parquet JOIN (deferred), on a non-soccer
+            # market, or on an unmatched fixture. Never fabricated. ``af_fixture_id``
+            # is a nullable int upstream, stringified by _opt_field (as league_id is).
+            # Per-conditionId grain only, same reasoning as question above.
+            af_league_id = _opt_field(row, "af_league_id")
+            home_team_canonical_id = _opt_field(row, "home_team_canonical_id")
+            away_team_canonical_id = _opt_field(row, "away_team_canonical_id")
+            fixture_date = _opt_field(row, "fixture_date")
+            af_fixture_id = _opt_field(row, "af_fixture_id")
+            af_fixture_match_status = _opt_field(row, "af_fixture_match_status")
             cqg_itype = cqg_itype or itype
             if created and (cqg_created is None or created < cqg_created):
                 cqg_created = created
@@ -1934,6 +2021,12 @@ def build_prediction_catalogue_dataframe(
                 underlying,
                 canonical_instrument_id,
                 question,
+                af_league_id,
+                home_team_canonical_id,
+                away_team_canonical_id,
+                fixture_date,
+                af_fixture_id,
+                af_fixture_match_status,
             )
         # cqg grain only when the writer emits a cqg (249-b, gated on decision
         # 338). Currently always empty → no cqg rows, conditionId grain only.
@@ -2069,6 +2162,22 @@ def build_prediction_catalogue_dataframe(
                 "quote_asset_contract_address": "",
                 "atoken_address": "",
                 "debt_token_address": "",
+                # Soccer-fixture linkage (uac InstrumentRecord af_league_id / team
+                # canonical ids / fixture_date / af_fixture_id / af_fixture_match_status)
+                # threaded straight through from the per-conditionId row. honest-None
+                # for a non-soccer market or a snapshot predating the parquet JOIN —
+                # never fabricated. NOTE the separate ``league_id`` column above stays
+                # hardcoded "" (the prediction rollup has no bookmaker/exchange league
+                # axis); ``af_league_id`` is the API-Football soccer league id, a
+                # distinct axis emitted honest-None here for every non-soccer row.
+                # cqg-grain rows never carry these (a family has no single fixture) —
+                # the cqg accumulator is never fed them (per-conditionId grain only).
+                "af_league_id": lc.af_league_id,
+                "home_team_canonical_id": lc.home_team_canonical_id,
+                "away_team_canonical_id": lc.away_team_canonical_id,
+                "fixture_date": lc.fixture_date,
+                "af_fixture_id": lc.af_fixture_id,
+                "af_fixture_match_status": lc.af_fixture_match_status,
             }
         )
 
