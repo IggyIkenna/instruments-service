@@ -52,6 +52,15 @@ logger = logging.getLogger(__name__)
 _BUCKET_KIND = "instruments-store"
 _FIXTURES_PREFIX = "sports_reference/by_date/"
 _BACKUP_SUFFIX = ".pre_round_backfill.bak"
+#: The LIVE fixtures entity. This script originally targeted ``entity=fixtures``, which
+#: STOPPED being written at the 2026-05-23 schedule/outcomes split — so it was walking a
+#: frozen corpus and its writes would never have reached the live read path (same
+#: consumer-migration bug as the catalogue, sports_features_layer_findings_sweep § R).
+#: ``round`` is a SCHEDULE field, so ``fixtures_schedule`` is the correct leg.
+#: NOTE the ``endswith`` guard matters: the § Q derivation left ``*.pre_round_derive.bak``
+#: snapshots beside every live parquet, and those must never be ingested as inputs.
+_ENTITY_SEG = "/entity=fixtures_schedule/"
+_ENTITY_FILE = "fixtures_schedule.parquet"
 _SECRET_NAME = "api-football-api-key"
 
 
@@ -76,7 +85,7 @@ def _league_blob_index(bucket: str) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for b in get_storage_client().list_blobs(bucket, prefix=_FIXTURES_PREFIX):
         name = str(getattr(b, "name", b))
-        if "/entity=fixtures/" not in name or not name.endswith("fixtures.parquet"):
+        if _ENTITY_SEG not in name or not name.endswith(_ENTITY_FILE):
             continue
         marker = "/league="
         i = name.find(marker)
