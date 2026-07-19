@@ -234,6 +234,22 @@ class BaseSportsReferenceAdapter(ABC):
         """
         return [(fx, {}) for fx in await self.get_fixtures(date, league_ids=league_ids)]
 
+    async def get_fixtures_by_ids(
+        self,
+        fixture_ids: list[int],
+    ) -> list[tuple[CanonicalFixture, dict[str, object]]]:
+        """Fetch specific fixtures directly by provider fixture id, regardless of date.
+
+        Only the api-football adapter overrides this (its provider supports a
+        direct ``ids=`` lookup) — used by ``sports.fixtures.status_refresh`` to
+        recover a fixture the date-filtered season-cache lookup can't find
+        because it was POSTPONED/RESCHEDULED to a different date after
+        capture. The base default returns an empty list (no fixtures
+        recovered) for any source that doesn't support by-id lookup, keeping
+        the caller's fallback a no-op rather than an error.
+        """
+        return []
+
     @abstractmethod
     async def get_leagues(self) -> list[CanonicalLeague]:
         """Fetch all available leagues.

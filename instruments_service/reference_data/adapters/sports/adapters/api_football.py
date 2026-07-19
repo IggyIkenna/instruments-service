@@ -384,6 +384,58 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         )
         return result
 
+    async def get_fixtures_by_ids(
+        self,
+        fixture_ids: list[int],
+    ) -> list[tuple[CanonicalFixture, dict[str, object]]]:
+        """Fetch specific fixtures directly by ``af_fixture_id``, regardless of date/league.
+
+        API endpoint: ``GET /fixtures?ids=<id>-<id>-...`` (hyphen-joined, max 20
+        ids per call per api-football's documented limit -- batched here).
+
+        Root-cause fix for the api_football season-cache date-filter miss
+        (``api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19.md``,
+        the "648 season fixtures, 0 matches for a flagged date" anomaly):
+        a fixture captured under date ``D`` can be POSTPONED/RESCHEDULED by
+        the league to a different real-world date after capture. The season
+        cache (``_fetch_season_fixtures_with_raw``) always reflects the
+        CURRENT live schedule, so ``fx.kickoff_utc.date().isoformat() == D``
+        filtering can never find that fixture under its original date again
+        -- not a bug in the season fetch or the league resolution, just a
+        genuinely different real-world date. This direct by-id lookup is the
+        only way to get a rescheduled fixture's current status without
+        already knowing its new date.
+
+        Returns:
+            ``[(canonical_fixture, raw_af_item), ...]`` for every fixture id
+            that still resolves (api-football silently omits an id from the
+            response if it's invalid/removed -- callers should not assume
+            the result count matches the input count).
+        """
+        if not fixture_ids:
+            return []
+
+        url = f"{_BASE_URL}/fixtures"
+        paired: list[tuple[CanonicalFixture, dict[str, object]]] = []
+        batch_size = 20  # api-football's documented max ids-per-call.
+        for i in range(0, len(fixture_ids), batch_size):
+            batch = fixture_ids[i : i + batch_size]
+            params: dict[str, str] = {"ids": "-".join(str(fid) for fid in batch)}
+            try:
+                raw_rows = await self._fetch_and_extract(url, params)
+            except Exception as exc:
+                error_code = self._classify_error(exc)
+                self._emit_fetch_failed(error_code, exc)
+                raise
+            paired.extend(_parse_fixture_list_with_raw(raw_rows))
+
+        logger.info(
+            "Fetched %d/%d fixture(s) by direct id lookup",
+            len(paired),
+            len(fixture_ids),
+        )
+        return paired
+
     async def get_fixtures(
         self,
         date: str,
