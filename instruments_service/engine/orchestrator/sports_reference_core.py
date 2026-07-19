@@ -260,14 +260,27 @@ def _close_stale_enrichment_expected_unattempted_cells(
          COVERAGE``. This is a provider-capability fact, independent of whether a fixture
          existed that date, so it is always safe.
       2. Else, the FIXTURES entity's OWN manifest row for the SAME (date, league) is
-         ``empty_confirmed`` (i.e. FIXTURES *itself* already proved no fixture existed there
+         ``empty_confirmed`` with an ``EXPECTED_*`` reason (i.e. FIXTURES *itself* already
+         proved — via a calendar/coverage fact, not a live fetch — no fixture existed there
          that date) → mirror that SAME reason (``EXPECTED_PAUSED_LEAGUE``/``EXPECTED_NO_
-         FIXTURE``) onto the enrichment cell. This never guesses; it reuses an already-proven
-         fact from the corpus.
-      3. Otherwise (coverage says yes AND FIXTURES shows ``captured`` or is itself still
-         pending) → **do not touch the cell**. It is left ``expected_unattempted`` exactly as
-         it is today — a genuine pending-fetch gap that needs a real re-fetch, not a
-         classification.
+         FIXTURE``/etc.) onto the enrichment cell. This never guesses; it reuses an
+         already-proven fact from the corpus. ``SOURCE_RETURNED_ZERO`` is explicitly EXCLUDED
+         from this mirror: per
+         ``unified_api_contracts.canonical.crosscutting._honest_coverage_empty_reasons``'s own
+         documented design, ``SOURCE_RETURNED_ZERO`` is data-type-aware — "resolved" only for a
+         schedule-DEFINING data_type (FIXTURES itself); for an ENRICHMENT data_type it "stays a
+         within-window gap (its zero may be real)". Mirroring it here would also violate the
+         manifest writer's Phase-1 KEYSTONE honest-absence gate
+         (``record_empty(reason=SOURCE_RETURNED_ZERO)`` requires real ``FetchEvidence`` proving
+         a fresh 200+empty fetch, which this classification-only closer never has — confirmed
+         live 2026-07-19: a first `--apply` attempt hard-crashed on
+         ``UnprovenHonestAbsenceError`` for exactly this case, `date=2024-12-24,
+         data_type=FIXTURE_EVENTS, league_id=DANISH_1ST_DIVISION`; 36 of ~5,300 mirror
+         candidates carry this reason).
+      3. Otherwise (coverage says yes AND FIXTURES shows ``captured``/``SOURCE_RETURNED_ZERO``,
+         or is itself still pending) → **do not touch the cell**. It is left
+         ``expected_unattempted`` exactly as it is today — a genuine pending-fetch gap that
+         needs a real re-fetch, not a classification.
 
     Args:
         manifest: Writer for the ``record_empty`` calls emitted per closeable league.
@@ -302,7 +315,12 @@ def _close_stale_enrichment_expected_unattempted_cells(
                 _closed += 1
                 continue
             _fixtures_reason = fixtures_empty_reason_by_date_league.get((_date_str, _lid))
-            if _fixtures_reason:
+            # SOURCE_RETURNED_ZERO is data-type-aware (see docstring above) — mirroring it onto
+            # an ENRICHMENT entity is neither semantically safe nor writer-permitted (no
+            # FetchEvidence exists for this classification-only closer). Every OTHER
+            # empty_confirmed reason on FIXTURES is an EXPECTED_* calendar/coverage fact, safe
+            # to mirror unconditionally.
+            if _fixtures_reason and _fixtures_reason != _orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO.value:
                 manifest.record_empty(
                     row_key={"date": _date_str, "data_type": _dt_str, "league_id": _lid},
                     attempted_at=_attempt_ts,
@@ -311,8 +329,9 @@ def _close_stale_enrichment_expected_unattempted_cells(
                     source=_orch._sports_ref_source(_dt_str.lower()),
                 )
                 _closed += 1
-            # else: FIXTURES shows captured (or is itself still pending) for this
-            # (date, league) — a genuine pending-fetch gap. Leave untouched.
+            # else: FIXTURES shows captured, is itself still pending, or is empty_confirmed via
+            # SOURCE_RETURNED_ZERO (no provable evidence for THIS entity) — a genuine
+            # pending-fetch gap. Leave untouched.
         if _closed:
             counts[f"{_date_str}/{_dt_str}"] = _closed
     return counts
