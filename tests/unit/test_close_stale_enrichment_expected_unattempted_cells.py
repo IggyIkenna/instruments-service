@@ -137,6 +137,61 @@ class TestGenuinePendingFetchGapIsNeverTouched:
         assert manifest.record_empty.call_args.kwargs["row_key"]["league_id"] == "SOME_OFF_SEASON_LEAGUE"
 
 
+class TestSourceReturnedZeroIsNeverMirrored:
+    """Regression pin for the live `--apply` crash (2026-07-19,
+    `date=2024-12-24, data_type=FIXTURE_EVENTS, league_id=DANISH_1ST_DIVISION`):
+    mirroring a FIXTURES `SOURCE_RETURNED_ZERO` row onto an enrichment entity
+    violates the manifest writer's Phase-1 KEYSTONE honest-absence gate (no
+    FetchEvidence exists for this classification-only closer) and is also
+    semantically wrong — SOURCE_RETURNED_ZERO is data-type-aware; it only means
+    "resolved" for the schedule-defining FIXTURES entity itself."""
+
+    def test_source_returned_zero_reason_is_left_untouched(self) -> None:
+        manifest = MagicMock()
+        stuck = _stuck_df([("2024-12-24", "FIXTURE_EVENTS", "DANISH_1ST_DIVISION")])
+
+        with patch(
+            "instruments_service.engine.orchestrator.is_league_entity_covered",
+            return_value=True,
+        ):
+            counts = close_stale_cells(
+                manifest=manifest,
+                stuck_cells=stuck,
+                fixtures_empty_reason_by_date_league={
+                    ("2024-12-24", "DANISH_1ST_DIVISION"): "SOURCE_RETURNED_ZERO",
+                },
+            )
+
+        assert counts == {}
+        manifest.record_empty.assert_not_called()
+
+    def test_mixed_group_skips_source_returned_zero_but_closes_expected_reasons(self) -> None:
+        manifest = MagicMock()
+        stuck = _stuck_df(
+            [
+                ("2020-06-14", "FIXTURE_STATS", "DANISH_1ST_DIVISION"),  # SOURCE_RETURNED_ZERO — leave alone
+                ("2020-06-14", "FIXTURE_STATS", "SOME_OFF_SEASON_LEAGUE"),  # EXPECTED_* — safe to close
+            ]
+        )
+
+        with patch(
+            "instruments_service.engine.orchestrator.is_league_entity_covered",
+            return_value=True,
+        ):
+            counts = close_stale_cells(
+                manifest=manifest,
+                stuck_cells=stuck,
+                fixtures_empty_reason_by_date_league={
+                    ("2020-06-14", "DANISH_1ST_DIVISION"): "SOURCE_RETURNED_ZERO",
+                    ("2020-06-14", "SOME_OFF_SEASON_LEAGUE"): "EXPECTED_NO_FIXTURE",
+                },
+            )
+
+        assert counts == {"2020-06-14/FIXTURE_STATS": 1}
+        manifest.record_empty.assert_called_once()
+        assert manifest.record_empty.call_args.kwargs["row_key"]["league_id"] == "SOME_OFF_SEASON_LEAGUE"
+
+
 class TestEmptyInput:
     def test_empty_stuck_cells_returns_empty_counts(self) -> None:
         manifest = MagicMock()
