@@ -240,6 +240,73 @@ async def test_league_with_no_af_id_skipped(mock_adapter: MagicMock, patch_facto
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_raw_numeric_league_id_resolves_via_af_id_fallback(mock_adapter: MagicMock, patch_factory: Any) -> None:
+    """A legacy raw-numeric league_id (e.g. "129") that get_league() can't resolve directly
+    still gets re-fetched via the get_league_by_api_football_id fallback — the silent-drop
+    bug fixed in api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19.md."""
+    from instruments_service.triggers.sports_fixture_status_refresh import (
+        run_sports_fixture_status_refresh,
+    )
+
+    def _stale_for_date(bucket: str, day_str: str) -> set[str]:
+        return {"129"} if day_str == "2026-06-24" else set()
+
+    with (
+        patch(f"{MODULE}.find_stale_fixture_leagues_for_date", side_effect=_stale_for_date),
+        patch(f"{MODULE}.get_league", return_value=None),
+        patch(f"{MODULE}.get_league_by_api_football_id", return_value=_mock_league(129)),
+        patch(f"{MODULE}.ManifestWriter", return_value=MagicMock()),
+        patch(f"{MODULE}.write_fixtures_per_league"),
+        patch(f"{MODULE}.sports_ref_sink_for", return_value=MagicMock()),
+    ):
+        result = await run_sports_fixture_status_refresh(
+            today=date(2026, 7, 1),
+            api_key="test-key",
+            bucket="test-sports-bucket",
+            min_age_days=2,
+            lookback_days=10,
+        )
+
+    assert mock_adapter.get_fixtures_with_raw.call_count == 1
+    call_args = mock_adapter.get_fixtures_with_raw.call_args
+    assert call_args.kwargs["league_ids"] == [129]
+    assert result != {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_unresolvable_numeric_league_id_skipped_and_logged(mock_adapter: MagicMock, patch_factory: Any) -> None:
+    """A raw-numeric league_id that resolves via NEITHER get_league() NOR the api_football-id
+    fallback is skipped (not fetched) — but unlike before the fix, this is now logged loudly
+    instead of silently dropped."""
+    from instruments_service.triggers.sports_fixture_status_refresh import (
+        run_sports_fixture_status_refresh,
+    )
+
+    with (
+        patch(f"{MODULE}.find_stale_fixture_leagues_for_date", return_value={"999999"}),
+        patch(f"{MODULE}.get_league", return_value=None),
+        patch(f"{MODULE}.get_league_by_api_football_id", return_value=None),
+        patch(f"{MODULE}.ManifestWriter", return_value=MagicMock()),
+        patch(f"{MODULE}.logger") as mock_logger,
+    ):
+        result = await run_sports_fixture_status_refresh(
+            today=date(2026, 7, 1),
+            api_key="test-key",
+            bucket="test-sports-bucket",
+            min_age_days=2,
+            lookback_days=1,
+        )
+
+    assert result == {}
+    mock_adapter.get_fixtures_with_raw.assert_not_called()
+    assert mock_logger.warning.called
+    warn_args = mock_logger.warning.call_args
+    assert "999999" in str(warn_args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_scan_error_isolated_per_day(mock_adapter: MagicMock, patch_factory: Any) -> None:
     """A scan exception for one day is caught + classified; the loop still checks other days."""
     from instruments_service.triggers.sports_fixture_status_refresh import (
