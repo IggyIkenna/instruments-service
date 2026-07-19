@@ -308,20 +308,78 @@ def resolve_test_bucket(asset_group: str, project_id: str | None = None) -> str:
     return prod.replace(f"-{pid}", f"-test-{pid}")
 
 
+# PREDICTION writes ``instruments.parquet`` under the CQG-FIRST availability layout
+# ``instrument_availability/by_date/canonical_question_group={CQG}/day={day}/venue={venue}/``
+# (``engine/orchestrator/process_write.py::_write_prediction_venue``, partition
+# ``{day, venue, canonical_question_group}`` — the sink orders the segments CQG-first). The
+# data-dependent CQG segment PRECEDES ``day=``/``venue=``, so NO single literal day-first prefix
+# (the shape every other asset_group uses) can ever match a prediction object. The prediction
+# write-verify therefore lists under the base ``by_date/`` tree and substring-scopes by
+# day+venue — mirrors MTDS ``_verify_write_scoped_to_data_type``. The filter is deliberately
+# layout-agnostic (it also matches legacy day-first prediction objects), so it stays correct
+# across the writer's CQG migration.
+_PREDICTION_INSTRUMENTS_LIST_PREFIX = "instrument_availability/by_date/"
+_PREDICTION_INSTRUMENTS_FILENAME = "instruments.parquet"
+
+
+def is_prediction_venue_cell(cell: SmokeCell) -> bool:
+    """True for a prediction venue-routed cell (POLYMARKET/KALSHI), whose writer lands the
+    CQG-first availability layout. ``sports_provider`` cells never reach that writer, so they
+    are excluded defensively (prediction never sets ``sports_provider`` anyway)."""
+    return cell.asset_group.upper() == "PREDICTION" and not cell.sports_provider
+
+
+def prediction_instruments_object_matches(name: str, smoke_date: str, venue: str) -> bool:
+    """True iff a GCS object name is a prediction ``instruments.parquet`` for (smoke_date,
+    venue), under EITHER the CQG-first or a legacy day-first availability layout — the
+    substring test a day-first single-prefix listing cannot express."""
+    return (
+        name.endswith(_PREDICTION_INSTRUMENTS_FILENAME) and f"day={smoke_date}/" in name and f"venue={venue}/" in name
+    )
+
+
+def list_prediction_instruments_objects(
+    bucket: str,
+    smoke_date: str,
+    venue: str,
+    storage_client: object | None = None,
+) -> list[str]:
+    """Sorted GCS object names of the prediction ``instruments.parquet`` files for
+    (smoke_date, venue) under the CQG-first availability layout — the single, shared
+    day+venue-scoped enumeration every prediction verify/read path reuses (write-verify,
+    skip-fingerprint, canonical read) so they all match the SAME object set."""
+    client = storage_client if storage_client is not None else get_storage_client()
+    blobs = client.list_blobs(  # pyright: ignore[reportAttributeAccessIssue]
+        bucket=bucket, prefix=_PREDICTION_INSTRUMENTS_LIST_PREFIX
+    )
+    return sorted(
+        getattr(b, "name", "")
+        for b in blobs
+        if prediction_instruments_object_matches(getattr(b, "name", ""), smoke_date, venue)
+    )
+
+
 def expected_write_prefix(cell: SmokeCell, smoke_date: str) -> str:
     """Return the GCS prefix under which the CLI is expected to land parquet(s).
 
     Provider-routed SPORTS cells (``cell.sports_provider`` set — API_FOOTBALL +
     T1 enrichment) write ``sports_reference/by_date/day=...`` via
-    ``_fetch_sports_reference_data`` (NOT ``instrument_availability/``). Every
-    other cell — including venue-routed SPORTS (bare BETFAIR) — flows through
-    the generic per-venue instrument-catalog writer (``_write_venue`` /
-    ``_write_all_venues``, ``instruments_service/engine/orchestrator/writers.py``),
-    which always lands under ``instrument_availability/by_date/day={date}/
-    venue={venue}/`` regardless of asset_group.
+    ``_fetch_sports_reference_data`` (NOT ``instrument_availability/``). PREDICTION
+    venue cells land ``instruments.parquet`` under the CQG-FIRST availability layout
+    (``instrument_availability/by_date/canonical_question_group={CQG}/day={day}/
+    venue={venue}/``); the CQG segment is data-dependent and precedes day/venue, so the
+    coarsest literal ancestor is the base ``instrument_availability/by_date/`` tree — the
+    day+venue scope is applied by ``verify_prediction_parquet_written``'s substring filter,
+    NOT by this prefix. Every other cell — including venue-routed SPORTS (bare BETFAIR) —
+    flows through the generic per-venue instrument-catalog writer (``_write_venue`` /
+    ``_write_all_venues``, ``instruments_service/engine/orchestrator/writers.py``), which
+    always lands under ``instrument_availability/by_date/day={date}/venue={venue}/``
+    regardless of asset_group.
     """
     if cell.sports_provider:
         return f"sports_reference/by_date/day={smoke_date}/"
+    if is_prediction_venue_cell(cell):
+        return _PREDICTION_INSTRUMENTS_LIST_PREFIX
     return f"instrument_availability/by_date/day={smoke_date}/venue={cell.venue}/"
 
 
@@ -335,6 +393,24 @@ def verify_parquet_written(
     blobs = list(client.list_blobs(bucket=bucket, prefix=prefix))  # pyright: ignore[reportAttributeAccessIssue]
     parquet_blobs = [b for b in blobs if getattr(b, "name", "").endswith(".parquet")]
     return (bool(parquet_blobs), len(parquet_blobs))
+
+
+def verify_prediction_parquet_written(
+    bucket: str,
+    smoke_date: str,
+    venue: str,
+    storage_client: object | None = None,
+) -> tuple[bool, int]:
+    """PREDICTION Step-2 write-verify against the CQG-FIRST availability layout.
+
+    Lists under ``instrument_availability/by_date/`` and counts ``instruments.parquet``
+    objects whose path carries BOTH ``day={smoke_date}/`` AND ``venue={venue}/`` (see
+    ``prediction_instruments_object_matches``). The day-first single-prefix listing
+    ``verify_parquet_written`` uses for cefi/tradfi/defi/sports can NEVER match prediction's
+    CQG-first objects — the CQG segment precedes day/venue — so it reports n=0 even when real
+    objects exist; prediction needs this substring post-filter instead."""
+    names = list_prediction_instruments_objects(bucket, smoke_date, venue, storage_client)
+    return (bool(names), len(names))
 
 
 def verify_manifest_row(
@@ -492,9 +568,14 @@ def run_cell(
         result.reason = f"cli_nonzero_rc={completed.returncode}"
         return _finalise(result, started)
 
-    # Step 2: verify parquet written.
+    # Step 2: verify parquet written. PREDICTION writes the CQG-FIRST availability layout
+    # (CQG segment precedes day/venue), so it lists the base by_date/ tree + substring-scopes
+    # by day+venue rather than the day-first single-prefix listing the other asset_groups use.
     try:
-        ok_parquet, count = verify_parquet_written(bucket, prefix, storage_client)
+        if is_prediction_venue_cell(cell):
+            ok_parquet, count = verify_prediction_parquet_written(bucket, smoke_date, cell.venue, storage_client)
+        else:
+            ok_parquet, count = verify_parquet_written(bucket, prefix, storage_client)
     except Exception as exc:  # pragma: no cover — storage transport failure
         result.reason = f"gcs_list_error:{type(exc).__name__}"
         return _finalise(result, started)
