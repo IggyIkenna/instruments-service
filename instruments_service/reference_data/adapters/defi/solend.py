@@ -118,7 +118,20 @@ class SolendReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch the primary Solend market's reserves as supply/debt instruments."""
-        if instrument_type not in (None, InstrumentType.LENDING):
+        # ``instrument_type`` is a call-level GUARD (accept the whole fetch or reject
+        # it with []), not a per-record filter. Each Solend reserve MINTS the A_TOKEN
+        # (supply) + DEBT_TOKEN (borrow) split PLUS a SPOT_ASSET sibling (P4-B, see
+        # ``_build_reserve_records`` / defi_lending_atoken_debttoken_instrument_split_
+        # 2026_07_07.md) — so accept exactly those three minted types (+ None =
+        # unfiltered). The pre-split ``LENDING`` literal is no longer minted; the stale
+        # guard rejected the real minted type, silently returning [] (a capture gap
+        # masquerading as empty).
+        if instrument_type not in (
+            None,
+            InstrumentType.A_TOKEN,
+            InstrumentType.DEBT_TOKEN,
+            InstrumentType.SPOT_ASSET,
+        ):
             return []
 
         url = f"{_BASE_URL}{_MARKETS_CONFIG_PATH}"
