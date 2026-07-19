@@ -17,6 +17,7 @@ import pandas as pd
 
 from instruments_service.engine.orchestrator.sports_fixtures import (
     TERMINAL_FIXTURE_STATUSES,
+    _find_stale_fixture_ids_for_date,
     _find_stale_fixture_leagues_for_date,
     _read_fixtures_entity_with_schedule_fallback,
 )
@@ -115,6 +116,45 @@ def test_missing_status_short_column_returns_empty_set() -> None:
         result = _find_stale_fixture_leagues_for_date("bucket", "2026-06-24")
 
     assert result == set()
+
+
+def test_find_stale_fixture_ids_returns_only_nonterminal_rows() -> None:
+    """Fixture-level sibling of _find_stale_fixture_leagues_for_date: returns the
+    actual af_fixture_ids, not just the league, so the trigger's reschedule
+    fallback knows exactly which fixtures to re-fetch by id."""
+    df = pd.DataFrame({"af_fixture_id": [1498613, 1498614, 2], "status_short": ["NS", "NS", "FT"]})
+    mock_blob = _mock_blob("ARGENTINA_PRIMERA_NACIONAL")
+    mock_storage = MagicMock()
+    mock_storage.list_blobs.return_value = [mock_blob]
+    mock_storage.download_bytes.return_value = _parquet_bytes(df)
+
+    with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+        result = _find_stale_fixture_ids_for_date("bucket", "2026-06-27")
+
+    assert result == {"ARGENTINA_PRIMERA_NACIONAL": [1498613, 1498614]}
+
+
+def test_find_stale_fixture_ids_empty_when_all_terminal() -> None:
+    df = pd.DataFrame({"af_fixture_id": [1, 2], "status_short": ["FT", "AET"]})
+    mock_blob = _mock_blob("EPL")
+    mock_storage = MagicMock()
+    mock_storage.list_blobs.return_value = [mock_blob]
+    mock_storage.download_bytes.return_value = _parquet_bytes(df)
+
+    with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+        result = _find_stale_fixture_ids_for_date("bucket", "2026-06-24")
+
+    assert result == {}
+
+
+def test_find_stale_fixture_ids_no_captured_fixtures_returns_empty_dict() -> None:
+    mock_storage = MagicMock()
+    mock_storage.list_blobs.return_value = []
+
+    with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+        result = _find_stale_fixture_ids_for_date("bucket", "2026-06-24")
+
+    assert result == {}
 
 
 def test_schedule_fallback_prefers_fixtures_schedule() -> None:
