@@ -827,6 +827,64 @@ class TestV2ByVenueInstrumentType:
         assert coverage["by_venue_instrument_type"]["cefi"] == {}
 
 
+class TestChainEnumeration:
+    """by_chain aggregation (chain-enum 2026-07-18) — the distinct chains present
+    per asset_group, keys UN-collapsed so canonical-drift stays visible."""
+
+    def test_by_chain_present_and_keyed_by_raw_chain(self, mod: ModuleType) -> None:
+        """by_chain[ag] keys are the raw distinct chain values, counts per status."""
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "AAVE_V3",
+                    "data_type": "lending_indices",
+                    "date": "2026-06-28",
+                    "instrument_type": "LENDING",
+                    "chain": "ETHEREUM",
+                },
+                {
+                    "capture_status": "captured",
+                    "venue": "UNISWAP_V3",
+                    "data_type": "dex_pool_state",
+                    "date": "2026-06-28",
+                    "instrument_type": "POOL",
+                    "chain": "ETHEREUM",
+                },
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "KAMINO",
+                    "data_type": "lending_indices",
+                    "date": "2026-06-28",
+                    "instrument_type": "SOLANA_LENDING",
+                    # lower-case drift value — MUST survive uncollapsed
+                    "chain": "solana",
+                },
+            ]
+        )
+        coverage = _compute_coverage_with_stub(mod, {"defi": df})
+
+        assert "by_chain" in coverage
+        defi_chains = coverage["by_chain"]["defi"]
+        assert set(defi_chains.keys()) == {"ETHEREUM", "solana"}
+        assert defi_chains["ETHEREUM"]["captured"] == 2
+        assert defi_chains["ETHEREUM"]["total"] == 2
+        assert defi_chains["solana"]["expected_unattempted"] == 1
+        assert defi_chains["solana"]["captured"] == 0
+
+    def test_by_chain_empty_when_column_absent(self, mod: ModuleType) -> None:
+        """A bucket parquet without a chain column yields an empty by_chain[ag]."""
+        df = pd.DataFrame(
+            [
+                {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades", "date": "2026-06-28"},
+            ]
+        )
+        coverage = _compute_coverage_with_stub(mod, {"cefi": df})
+
+        assert "by_chain" in coverage
+        assert coverage["by_chain"]["cefi"] == {}
+
+
 class TestV2ByVenueInstrumentTypeDataType:
     """by_venue_instrument_type_data_type aggregation."""
 
