@@ -1668,6 +1668,93 @@ def test_prediction_rollup_question_honest_none_when_absent(rollup: ModuleType) 
     assert row["question"] is None
 
 
+def test_prediction_rollup_threads_soccer_fixture_fields(rollup: ModuleType) -> None:
+    """A per-date row carrying the uac soccer-fixture linkage fields (af_league_id /
+    home_team_canonical_id / away_team_canonical_id / fixture_date / af_fixture_id /
+    af_fixture_match_status) surfaces them on the emitted per-conditionId catalogue
+    rows. ``af_fixture_id`` is a nullable int upstream → stringified by _opt_field."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xsoccer",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "af_league_id": "39",
+                        "home_team_canonical_id": "arsenal",
+                        "away_team_canonical_id": "chelsea",
+                        "fixture_date": "2026-06-24",
+                        "af_fixture_id": 868031,  # nullable int upstream
+                        "af_fixture_match_status": "MATCHED",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    for col in (
+        "af_league_id",
+        "home_team_canonical_id",
+        "away_team_canonical_id",
+        "fixture_date",
+        "af_fixture_id",
+        "af_fixture_match_status",
+    ):
+        assert col in df.columns
+    # Both per-conditionId grains carry the fixture linkage.
+    for dt in ("trades", "market_lifecycle"):
+        row = next(r for r in df.to_dict("records") if r["data_type"] == dt)
+        assert row["af_league_id"] == "39"
+        assert row["home_team_canonical_id"] == "arsenal"
+        assert row["away_team_canonical_id"] == "chelsea"
+        assert row["fixture_date"] == "2026-06-24"
+        # int upstream, stringified honest (same convention as the numeric league_id).
+        assert row["af_fixture_id"] == "868031"
+        assert row["af_fixture_match_status"] == "MATCHED"
+
+
+def test_prediction_rollup_soccer_fixture_fields_honest_none_when_absent(rollup: ModuleType) -> None:
+    """FORWARD-ONLY: a per-date row with NONE of the soccer-fixture columns (the
+    real snapshot shape until the IS ``_records_to_dataframe`` parquet JOIN lands,
+    or a non-soccer market) yields honest ``None`` for all six — never fabricated,
+    and safe when the columns are entirely absent from the frame."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXBTCD",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    for col in (
+        "af_league_id",
+        "home_team_canonical_id",
+        "away_team_canonical_id",
+        "fixture_date",
+        "af_fixture_id",
+        "af_fixture_match_status",
+    ):
+        assert col in df.columns
+        assert row[col] is None
+
+
 def test_prediction_rollup_cross_venue_mapping_matches_same_market(rollup: ModuleType) -> None:
     """A real Kalshi<->Polymarket BTC UP_DOWN pair on the SAME settlement date gets
     the SAME canonical_instrument_id on BOTH sides (todo 2's cross-venue join,
