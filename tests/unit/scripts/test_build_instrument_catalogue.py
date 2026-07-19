@@ -2138,6 +2138,16 @@ def test_sports_could_exist_denominator_never_shrinks(rollup: ModuleType) -> Non
 # ---------------------------------------------------------------------------
 
 
+#: Track the LIVE fixtures entity rather than hardcoding it. These tests pin
+#: "real-shaped paths", so they must follow the constant the rollup actually reads: the
+#: 2026-05-23 schedule/outcomes split moved the writer to ``entity=fixtures_schedule`` and a
+#: hardcoded ``"fixtures"`` here would keep asserting green against a corpus that stopped
+#: being written (sports_features_layer_findings_sweep § R).
+_FIXTURE_ENTITY: str = str(
+    _load_script_module("build_instrument_catalogue.py", "_cat_fixture_entity_probe").SPORTS_FIXTURE_ENTITY
+)
+
+
 def _sports_blob(day: str, entity: str, league: str, rows: list[dict[str, object]]) -> tuple[str, pd.DataFrame]:
     """Build a ``(blob_path, frame)`` pair matching the real GCS shape."""
     path = (
@@ -2167,7 +2177,7 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
         [
             _sports_blob(
                 d1,
-                "fixtures",
+                _FIXTURE_ENTITY,
                 "EPL",
                 [{"af_fixture_id": 1, "date": d1, "af_home_name": "Arsenal", "af_away_name": "Chelsea"}],
             ),
@@ -2195,14 +2205,17 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
             ),
             # Sentinel league_id must never roll up into a row.
             _sports_blob(
-                d1, "fixtures", "UNKNOWN", [{"af_fixture_id": 2, "date": d1, "af_home_name": "X", "af_away_name": "Y"}]
+                d1,
+                _FIXTURE_ENTITY,
+                "UNKNOWN",
+                [{"af_fixture_id": 2, "date": d1, "af_home_name": "X", "af_away_name": "Y"}],
             ),
             # De-registered / non-LEAGUE_REGISTRY league_ids (2026-07-13 ruling):
             # their GCS data objects remain in place, but the FTP walk must not
             # re-mint catalogue rows for them — raw numeric long-tail id + the
             # SCOTTISH_LEAGUE_CUP_185 alias both excluded.
             _sports_blob(
-                d1, "fixtures", "110", [{"af_fixture_id": 3, "date": d1, "af_home_name": "A", "af_away_name": "B"}]
+                d1, _FIXTURE_ENTITY, "110", [{"af_fixture_id": 3, "date": d1, "af_home_name": "A", "af_away_name": "B"}]
             ),
             _sports_blob(
                 d1,
@@ -2292,7 +2305,7 @@ def test_sports_attr_str_collapses_missing_and_stringified_sentinels(rollup: Mod
 
 def test_ftp_rollup_carries_fixture_kickoff_status_and_display_fields(rollup: ModuleType) -> None:
     d1 = "2026-03-22"
-    path, frame = _sports_blob(d1, "fixtures", "EPL", [_fixture_snapshot_row()])
+    path, frame = _sports_blob(d1, _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row()])
     storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records"))})
 
     df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
@@ -2315,8 +2328,8 @@ def test_ftp_rollup_fixture_status_takes_the_latest_snapshot(rollup: ModuleType)
     carry the NEWEST observation; a stale "NS" on a played fixture is a lie."""
     d1, d2 = "2026-03-22", "2026-03-23"
     # Same fixture (date stays d1) re-observed on d2 with a settled status.
-    p1, f1 = _sports_blob(d1, "fixtures", "EPL", [_fixture_snapshot_row(status_short="NS")])
-    p2, f2 = _sports_blob(d2, "fixtures", "EPL", [_fixture_snapshot_row(status_short="FT")])
+    p1, f1 = _sports_blob(d1, _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row(status_short="NS")])
+    p2, f2 = _sports_blob(d2, _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row(status_short="FT")])
     storage = _FakeStorage({p1: _parquet_bytes(f1.to_dict("records")), p2: _parquet_bytes(f2.to_dict("records"))})
 
     df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
@@ -2331,7 +2344,9 @@ def test_ftp_rollup_fixture_status_takes_the_latest_snapshot(rollup: ModuleType)
 def test_ftp_rollup_missing_optional_fixture_fields_are_blank_not_none_strings(rollup: ModuleType) -> None:
     """A snapshot with a None venue_name/round (common in the real data) must
     yield "" — never the string "None"."""
-    path, frame = _sports_blob("2026-03-22", "fixtures", "EPL", [_fixture_snapshot_row(venue_name=None, round=None)])
+    path, frame = _sports_blob(
+        "2026-03-22", _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row(venue_name=None, round=None)]
+    )
     storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records"))})
 
     df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
@@ -2348,7 +2363,7 @@ def test_ftp_rollup_team_and_player_grains_get_no_fixture_display_fields(rollup:
     d1 = "2026-03-22"
     blobs = dict(
         [
-            _sports_blob(d1, "fixtures", "EPL", [_fixture_snapshot_row()]),
+            _sports_blob(d1, _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row()]),
             _sports_blob(d1, "teams", "EPL", [{"team_id": "ARSENAL", "name": "Arsenal", "league_id": "EPL"}]),
             _sports_blob(d1, "injuries", "EPL", [{"player_id": 1, "player_name": "Bukayo Saka", "league_id": 39}]),
         ]
@@ -2380,7 +2395,7 @@ def test_ftp_rollup_rows_never_treated_as_league_by_v2_enumerator(rollup: Module
         for p, f in [
             _sports_blob(
                 d1,
-                "fixtures",
+                _FIXTURE_ENTITY,
                 "EPL",
                 [{"af_fixture_id": 1, "date": d1, "af_home_name": "Arsenal", "af_away_name": "Chelsea"}],
             )
@@ -2470,7 +2485,7 @@ def test_sports_ftp_frozen_tail_keeps_row_that_aged_off_the_window(rollup: Modul
         [
             _sports_blob(
                 d,
-                "fixtures",
+                _FIXTURE_ENTITY,
                 "USL_CHAMPIONSHIP",
                 [{"af_fixture_id": 1, "date": d, "af_home_name": "Miami FC", "af_away_name": "Indy Eleven"}],
             ),
