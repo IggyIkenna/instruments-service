@@ -4,17 +4,18 @@ Discovers the EIGEN token on Ethereum mainnet. EIGEN is the governance and resta
 token of the EigenLayer protocol. It is staked on EigenLayer and earns weekly rewards
 from AVS operators.
 
-Returned as InstrumentRecord with instrument_type=SPOT_PAIR (EIGEN priced against
-its ETH quote asset). The `instrument_key`'s middle TYPE segment matches (fixed
-2026-07-09 — it previously said the shorthand `GOVERNANCE_TOKEN`, which is not a
-real `InstrumentType` enum member, while the field already correctly said
-`SPOT_PAIR`; same class of fix as the LST-vs-VAULT key/field mismatches — see
-`karak.py`'s module docstring for the general rationale). The `get_instruments`
-type-filter guard is fixed alongside it: it previously only matched the literal
-strings `"GOVERNANCE_TOKEN"`/`"governance_token"`, so filtering by the adapter's
-own real canonical `InstrumentType.SPOT_PAIR` value silently returned `[]` — the
-same P0 casing-mismatch bug class as
-`canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08.md`.
+Returned as InstrumentRecord with instrument_type=SPOT_ASSET — EIGEN is a SINGLE
+on-chain governance token (its data need is oracle-price / transfer / governance),
+NOT a two-token quoted market, so it is a `SPOT_ASSET`, not a `SPOT_PAIR`
+(operator ruling 2026-07-18, defi_consolidated_closeout_2026_07_18.md
+"SPOT_ASSET vs SPOT_PAIR vs POOL": for asset_group=defi a `SPOT_PAIR` REQUIRES a
+two-token `BASE-QUOTE` symbol; a single on-chain token is a `SPOT_ASSET`).
+Routed through `build_canonical_instrument_id` so the emitted `instrument_key`
+TYPE segment is correct AT MINT TIME (`EIGENLAYER-ETHEREUM:SPOT_ASSET:EIGEN`) —
+the UAC entry point now hard-rejects a single-token `SPOT_PAIR`. The
+`get_instruments` type-filter guard accepts the adapter's own
+`InstrumentType.SPOT_ASSET` value (plus the legacy
+`"GOVERNANCE_TOKEN"`/`"governance_token"` back-compat strings).
 
 Contract address: see ``_EIGEN_ADDRESS`` below (EIGEN on Ethereum mainnet; Etherscan-verified).
 Reference: https://docs.eigenlayer.xyz/eigenlayer/restaking-guides/restaking-user-guide
@@ -95,7 +96,7 @@ class EigenLayerReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return EIGEN governance token as an instrument record."""
-        if instrument_type not in (None, InstrumentType.SPOT_PAIR, "GOVERNANCE_TOKEN", "governance_token"):
+        if instrument_type not in (None, InstrumentType.SPOT_ASSET, "GOVERNANCE_TOKEN", "governance_token"):
             return []
 
         results: list[InstrumentRecord] = []
@@ -107,7 +108,7 @@ class EigenLayerReferenceDataAdapter(BaseReferenceDataAdapter):
             underlying = token["underlying"]
 
             instrument_key = build_canonical_instrument_id(
-                AssetGroup.DEFI, venue_tag, InstrumentType.SPOT_PAIR, symbol, passthrough=True
+                AssetGroup.DEFI, venue_tag, InstrumentType.SPOT_ASSET, symbol, passthrough=True
             )
             results.append(
                 InstrumentRecord(
@@ -117,7 +118,7 @@ class EigenLayerReferenceDataAdapter(BaseReferenceDataAdapter):
                     canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
-                    instrument_type=InstrumentType.SPOT_PAIR,
+                    instrument_type=InstrumentType.SPOT_ASSET,
                     base_asset=symbol,
                     quote_asset=underlying,
                     tick_size=Decimal("0.000001"),

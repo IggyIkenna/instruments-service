@@ -69,9 +69,12 @@ def test_build_pool_record_sol_usdc() -> None:
     assert record is not None
     assert isinstance(record, InstrumentRecord)
     assert record.venue == "METEORA-SOLANA"
-    assert record.instrument_key == "METEORA-SOLANA:SPOT:SOL-USDC"
+    # Solana AMM pool → SOLANA_AMM_POOL, minted through build_canonical_instrument_id
+    # so the key TYPE segment matches the field (was the `:SPOT:` shorthand vs the
+    # SPOT_PAIR field — operator ruling 2026-07-18, meteora/lifinity → AMM_POOL).
+    assert record.instrument_key == "METEORA-SOLANA:SOLANA_AMM_POOL:SOL-USDC"
     assert record.raw_symbol == "2SF1Xba1ug7WNF3o7Xs4NNmVp4jNGWQcZnZLqxSbmfe"
-    assert record.instrument_type == InstrumentType.SPOT_PAIR
+    assert record.instrument_type == InstrumentType.SOLANA_AMM_POOL
     assert record.base_asset == "SOL"
     assert record.quote_asset == "USDC"
     assert record.settle_asset == "USDC"
@@ -135,7 +138,7 @@ async def test_get_instruments_returns_all_active() -> None:
     ):
         results = await adapter.get_instruments()
         assert len(results) == 3
-        assert all(r.instrument_type == InstrumentType.SPOT_PAIR for r in results)
+        assert all(r.instrument_type == InstrumentType.SOLANA_AMM_POOL for r in results)
 
 
 @pytest.mark.asyncio

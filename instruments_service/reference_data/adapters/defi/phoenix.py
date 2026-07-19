@@ -2,7 +2,11 @@
 
 Discovers Phoenix Central Limit Order Book (CLOB) markets on Solana via
 the Phoenix public API. Markets are returned as InstrumentRecord with
-instrument_type=SPOT (CLOB-based spot trading pairs).
+instrument_type=SPOT_PAIR (CLOB-based two-token spot trading pairs). The
+`instrument_key` is built via `build_canonical_instrument_id` so its middle
+TYPE segment is the real `InstrumentType.SPOT_PAIR` enum value
+(`PHOENIX-SOLANA:SPOT_PAIR:SOL-USDC`), not the pre-fix `:SPOT:` shorthand
+literal that mismatched the `SPOT_PAIR` field.
 
 Data source: Phoenix API (https://api.phoenix.trade/) — public, no auth required.
 Program ID: PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY (Phoenix Markets)
@@ -16,7 +20,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -175,7 +179,14 @@ class PhoenixReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         raw_symbol = market_address if market_address else market_name
-        instrument_key = f"{self.venue}:SPOT:{base_asset}-{quote_asset}"
+        # Route through the shared canonical builder so the emitted TYPE segment
+        # is the real InstrumentType enum value (SPOT_PAIR), not the old `:SPOT:`
+        # shorthand that mismatched the field. A Phoenix CLOB market is a two-token
+        # quoted pair, so it passes the DeFi SPOT_PAIR two-token validator. venue
+        # already carries the composed VENUE-CHAIN token → passthrough=True.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, self.venue, InstrumentType.SPOT_PAIR, f"{base_asset}-{quote_asset}", passthrough=True
+        )
 
         # Phoenix tick size in lot sizes
         raw_tick = market.get("tick_size_in_quote_atoms_per_base_unit") or market.get("tickSize") or "1"
