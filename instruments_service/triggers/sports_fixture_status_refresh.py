@@ -42,7 +42,7 @@ from datetime import date as _date
 
 import pandas as pd
 from unified_api_contracts import PipelineMode
-from unified_api_contracts.sports import get_league, get_league_by_api_football_id
+from unified_api_contracts.sports import CanonicalFixture, get_league, get_league_by_api_football_id
 from unified_trading_library import ManifestWriter, classify_and_emit_error, resolve_bucket_name
 
 from instruments_service.engine.orchestrator import (
@@ -61,9 +61,13 @@ from instruments_service.engine.orchestrator import (
 # Not re-exported from the orchestrator package (that __init__.py is at the
 # 900-line file-size cap) — import directly from the cohesion module.
 from instruments_service.engine.orchestrator.sports_fixtures import (
+    _find_stale_fixture_ids_for_date as find_stale_fixture_ids_for_date,  # pyright: ignore[reportPrivateUsage]
+)
+from instruments_service.engine.orchestrator.sports_fixtures import (
     _find_stale_fixture_leagues_for_date as find_stale_fixture_leagues_for_date,  # pyright: ignore[reportPrivateUsage]
 )
 from instruments_service.reference_data import create_sports_reference_adapter
+from instruments_service.reference_data.adapters.sports.adapters.base import BaseSportsReferenceAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +125,80 @@ def _resolve_stale_league(lid: str) -> int | None:
         if numeric_league is not None:
             return numeric_league.api_football_id
     return None
+
+
+def _resolve_stale_league_af_ids(stale_leagues: set[str], day_str: str) -> list[int]:
+    """Resolve every stale ``league_id`` for ``day_str`` to an api_football id.
+
+    Split out of :func:`run_sports_fixture_status_refresh` to keep that
+    function under the module-level function-size gate. Logs (not raises) on
+    a partial resolution failure — an unresolved league is still recovered
+    below via the by-id reschedule fallback, which needs no league at all.
+    """
+    af_ids: list[int] = []
+    unresolved: list[str] = []
+    for lid in sorted(stale_leagues):
+        af_id = _resolve_stale_league(lid)
+        if af_id is not None:
+            af_ids.append(af_id)
+        else:
+            unresolved.append(lid)
+    if unresolved:
+        logger.warning(
+            "sports.fixtures.status_refresh: date=%s could not resolve %d stale league_id(s) to an "
+            "api_football id — will still attempt a direct by-id re-fetch below: %s",
+            day_str,
+            len(unresolved),
+            unresolved,
+        )
+    return af_ids
+
+
+async def _reschedule_fallback_fetch(
+    adapter: BaseSportsReferenceAdapter,
+    sports_bucket: str,
+    day_str: str,
+    fixtures_with_raw: list[tuple[CanonicalFixture, dict[str, object]]],
+) -> list[tuple[CanonicalFixture, dict[str, object]]]:
+    """Recover stale fixtures the date-filtered season-cache lookup couldn't find.
+
+    A fixture captured as stale on ``day_str`` may have been POSTPONED/
+    RESCHEDULED by the league to a different real-world date since capture.
+    The season cache always reflects the CURRENT live schedule, so it can
+    never find a rescheduled fixture under its OLD date again — not a bug in
+    the season fetch or league resolution, the match genuinely isn't
+    scheduled for ``day_str`` anymore. This also recovers any fixture whose
+    league_id couldn't be resolved above, since a direct by-id lookup needs
+    no league resolution at all. Root-cause fix for the "648 season
+    fixtures, 0 matches for the flagged date" anomaly in
+    ``api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19.md``.
+    """
+    found_ids = {(raw.get("fixture") or {}).get("id") for _fx, raw in fixtures_with_raw}
+    stale_ids_by_league = find_stale_fixture_ids_for_date(sports_bucket, day_str)
+    all_stale_ids = {fid for fids in stale_ids_by_league.values() for fid in fids}
+    missing_ids = sorted(all_stale_ids - found_ids)
+    if not missing_ids:
+        return fixtures_with_raw
+
+    logger.info(
+        "sports.fixtures.status_refresh: date=%s has %d stale fixture(s) not found by the "
+        "date-filtered season-cache lookup (likely postponed/rescheduled, or an unresolved "
+        "league_id) — re-fetching by id directly: %s",
+        day_str,
+        len(missing_ids),
+        missing_ids,
+    )
+    try:
+        by_id_pairs = await adapter.get_fixtures_by_ids(missing_ids)
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="sports_fixture_status_refresh_reschedule_fetch",
+            shard=day_str,
+        )
+        return fixtures_with_raw
+    return fixtures_with_raw + by_id_pairs
 
 
 async def run_sports_fixture_status_refresh(
@@ -207,46 +285,37 @@ async def run_sports_fixture_status_refresh(
         if not stale_leagues:
             continue
 
-        af_ids: list[int] = []
-        unresolved: list[str] = []
-        for lid in sorted(stale_leagues):
-            af_id = _resolve_stale_league(lid)
-            if af_id is not None:
-                af_ids.append(af_id)
-            else:
-                unresolved.append(lid)
-        if unresolved:
-            logger.warning(
-                "sports.fixtures.status_refresh: date=%s could not resolve %d stale league_id(s) to an "
-                "api_football id — skipped, not re-fetched: %s",
-                day_str,
-                len(unresolved),
-                unresolved,
-            )
-        if not af_ids:
-            continue
+        af_ids = _resolve_stale_league_af_ids(stale_leagues, day_str)
 
-        logger.info(
-            "sports.fixtures.status_refresh: date=%s has %d stale league(s) — re-fetching",
-            day_str,
-            len(af_ids),
-        )
-        try:
-            fixtures_with_raw = await adapter.get_fixtures_with_raw(day_str, league_ids=af_ids)
-        except Exception as exc:
-            classify_and_emit_error(
-                exc,
-                service_name="instruments-service",
-                operation="sports_fixture_status_refresh_fetch",
-                shard=day_str,
+        fixtures_with_raw: list[tuple[CanonicalFixture, dict[str, object]]] = []
+        if af_ids:
+            logger.info(
+                "sports.fixtures.status_refresh: date=%s has %d stale league(s) — re-fetching",
+                day_str,
+                len(af_ids),
             )
-            manifest.record_failed(
-                row_key={"date": day_str, "data_type": "FIXTURES"},
-                error=str(exc),
-                attempted_at=datetime.now(UTC),
-                pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
-            )
-            continue
+            try:
+                fixtures_with_raw = await adapter.get_fixtures_with_raw(day_str, league_ids=af_ids)
+            except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="sports_fixture_status_refresh_fetch",
+                    shard=day_str,
+                )
+                manifest.record_failed(
+                    row_key={"date": day_str, "data_type": "FIXTURES"},
+                    error=str(exc),
+                    attempted_at=datetime.now(UTC),
+                    pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                )
+                continue
+
+        # Reschedule fallback — recovers a stale fixture the date-filtered
+        # season-cache lookup above couldn't find (postponed/rescheduled to
+        # a different date, or an unresolved league_id). See
+        # _reschedule_fallback_fetch's docstring for the root-cause context.
+        fixtures_with_raw = await _reschedule_fallback_fetch(adapter, sports_bucket, day_str, fixtures_with_raw)
 
         if not fixtures_with_raw:
             # A stale-but-since-cancelled/removed fixture set is not this

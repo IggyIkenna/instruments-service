@@ -318,6 +318,39 @@ def _find_stale_fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
     return {str(lid) for lid in df.loc[stale_mask, "league_id"].dropna().unique() if str(lid)}
 
 
+def _find_stale_fixture_ids_for_date(bucket: str, date: str) -> dict[str, list[int]]:
+    """Return ``{league_id: [af_fixture_id, ...]}`` for every stale row captured on ``date``.
+
+    Fixture-level sibling of :func:`_find_stale_fixture_leagues_for_date` (same
+    staleness definition + single-date read) — used by
+    ``run_sports_fixture_status_refresh`` to fall back to a direct by-id
+    re-fetch (:meth:`ApiFootballAdapter.get_fixtures_by_ids`) for any fixture
+    the targeted ``league_ids=`` season-cache re-fetch can't find under this
+    date, because the real-world match was POSTPONED/RESCHEDULED to a
+    different date after capture (the season cache always reflects the
+    CURRENT live schedule, so a date-filtered lookup can never find a
+    rescheduled fixture under its original date again — see
+    ``api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19.md``).
+    """
+    df = _read_fixtures_entity_with_schedule_fallback(bucket, date, max_results=None, inject_league_id=True)
+    if (
+        df is None
+        or "status_short" not in df.columns
+        or "league_id" not in df.columns
+        or "af_fixture_id" not in df.columns
+    ):
+        return {}
+    stale_mask = ~df["status_short"].isin(TERMINAL_FIXTURE_STATUSES)
+    stale_df = df.loc[stale_mask, ["league_id", "af_fixture_id"]].dropna()
+    out: dict[str, list[int]] = {}
+    for lid, fixture_df in stale_df.groupby("league_id"):
+        lid_str = str(lid)
+        if not lid_str:
+            continue
+        out[lid_str] = fixture_df["af_fixture_id"].astype(int).tolist()
+    return out
+
+
 def _write_fixtures_per_league(
     sink: _orch.DataSink,
     fixture_df: _orch.pd.DataFrame,
