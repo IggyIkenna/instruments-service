@@ -144,7 +144,11 @@ from smoke_matrix import (
     SmokeCell,
     enumerate_cells,
     expected_write_prefix,
+    is_prediction_venue_cell,
+    list_prediction_instruments_objects,
+    prediction_instruments_object_matches,
     resolve_test_bucket,
+    verify_prediction_parquet_written,
 )
 
 logger = logging.getLogger(__name__)
@@ -422,6 +426,18 @@ def _representative_parquet_uri(bucket: str, prefix: str) -> str | None:
     return f"gs://{bucket}/{blobs[0].name}"
 
 
+def _representative_prediction_parquet_uri(bucket: str, day: str, venue: str) -> str | None:
+    """PREDICTION analogue of :func:`_representative_parquet_uri`: the deterministic
+    (lowest-name) ``instruments.parquet`` for (day, venue) under the CQG-FIRST availability
+    layout, or ``None``. Reuses ``list_prediction_instruments_objects`` so the skip-leg
+    fingerprint compares the SAME day+venue-scoped object the write-verify counted — a plain
+    listing under prediction's coarse base prefix would fingerprint an arbitrary other
+    day/venue's parquet (the CQG segment precedes day/venue, so no literal day-first prefix
+    scopes it)."""
+    names = list_prediction_instruments_objects(bucket, day, venue)
+    return f"gs://{bucket}/{names[0]}" if names else None
+
+
 # ---------------------------------------------------------------------------
 # Per-shard-leg runner (launch -> verify write -> verify manifest -> [skip-signal] ->
 # [fingerprint]) — shard-level isolation: every step below is wrapped so a single
@@ -444,6 +460,10 @@ def _run_leg(
     started = datetime.now(UTC)
     bucket = resolve_test_bucket(cell.asset_group, project_id)
     prefix = expected_write_prefix(cell, day)
+    # PREDICTION lands the CQG-FIRST availability layout, which prefix (the coarse base
+    # by_date/ tree) cannot scope on its own — every write-verify / fingerprint touchpoint
+    # below routes through the shared day+venue substring helpers for prediction instead.
+    is_prediction = is_prediction_venue_cell(cell)
     match = _manifest_match(cell)
     force = leg == "force"
     is_skip_leg = leg == "skip"
@@ -466,7 +486,11 @@ def _run_leg(
     fp_before: str | None = None
     if is_skip_leg:
         try:
-            uri_before = _representative_parquet_uri(bucket, prefix)
+            uri_before = (
+                _representative_prediction_parquet_uri(bucket, day, cell.venue)
+                if is_prediction
+                else _representative_parquet_uri(bucket, prefix)
+            )
             fp_before = object_signature(uri_before) if uri_before else None
         except Exception as exc:  # pragma: no cover — storage transport failure
             logger.warning("pre-skip fingerprint read failed for %s/%s: %s", cell.asset_group, cell.venue, exc)
@@ -496,7 +520,10 @@ def _run_leg(
         return result
 
     try:
-        write_ok, parquet_count = verify_write(bucket, [prefix])
+        if is_prediction:
+            write_ok, parquet_count = verify_prediction_parquet_written(bucket, day, cell.venue)
+        else:
+            write_ok, parquet_count = verify_write(bucket, [prefix])
     except Exception as exc:  # pragma: no cover — storage transport failure
         result.reason = f"write_verify_error:{type(exc).__name__}:{exc}"
         result.duration_sec = (datetime.now(UTC) - started).total_seconds()
@@ -505,7 +532,11 @@ def _run_leg(
     result.parquet_count = parquet_count
     if write_ok:
         try:
-            found_uri = _representative_parquet_uri(bucket, prefix)
+            found_uri = (
+                _representative_prediction_parquet_uri(bucket, day, cell.venue)
+                if is_prediction
+                else _representative_parquet_uri(bucket, prefix)
+            )
             result.parquet_uri = found_uri or ""
         except Exception as exc:  # pragma: no cover — storage transport failure
             logger.warning("parquet_uri lookup failed for %s/%s: %s", cell.asset_group, cell.venue, exc)
@@ -553,7 +584,11 @@ def _run_leg(
 
         fp_after: str | None = None
         try:
-            uri_after = _representative_parquet_uri(bucket, prefix)
+            uri_after = (
+                _representative_prediction_parquet_uri(bucket, day, cell.venue)
+                if is_prediction
+                else _representative_parquet_uri(bucket, prefix)
+            )
             fp_after = object_signature(uri_after) if uri_after else None
         except Exception as exc:  # pragma: no cover — storage transport failure
             logger.warning("post-skip fingerprint read failed for %s/%s: %s", cell.asset_group, cell.venue, exc)
@@ -716,10 +751,16 @@ def _assert_prediction_records_canonical(
     return checked, canonical, violations
 
 
-def _read_instruments_parquet_rows(bucket: str, prefix: str) -> tuple[list[str], list[str], list[str | None]] | None:
+def _read_instruments_parquet_rows(
+    bucket: str, prefix: str, smoke_date: str, venue: str
+) -> tuple[list[str], list[str], list[str | None]] | None:
     """Read (canonical_instrument_id, instrument_type, af_fixture_match_status) across every
-    ``instruments.parquet`` written under this shard-day's prefix (one per
-    ``canonical_question_group`` subfolder). Returns ``None`` when nothing is readable.
+    ``instruments.parquet`` written for (smoke_date, venue) under the CQG-FIRST availability
+    layout (one object per ``canonical_question_group`` subfolder). ``prefix`` is the coarse
+    base ``by_date/`` tree (``expected_write_prefix`` cannot express the CQG-first scope as a
+    literal prefix), so the read is scoped to THIS day+venue via
+    ``prediction_instruments_object_matches`` — without it the canonical check would read every
+    day+venue accumulated in the ``-test-`` bucket. Returns ``None`` when nothing is readable.
     """
     from io import BytesIO
 
@@ -729,7 +770,7 @@ def _read_instruments_parquet_rows(bucket: str, prefix: str) -> tuple[list[str],
     frames: list[pd.DataFrame] = []
     want = ["canonical_instrument_id", "instrument_type", "af_fixture_match_status"]
     for blob in client.list_blobs(bucket=bucket, prefix=prefix):
-        if not blob.name.endswith(".parquet"):
+        if not prediction_instruments_object_matches(blob.name, smoke_date, venue):
             continue
         try:
             df = pd.read_parquet(BytesIO(blob.download_as_bytes()))
@@ -777,7 +818,7 @@ def _run_prediction_canonical_cell(cell: SmokeCell, day: str, project_id: str) -
     bucket = resolve_test_bucket(cell.asset_group, project_id)
     prefix = expected_write_prefix(cell, day)
     try:
-        rows = _read_instruments_parquet_rows(bucket, prefix)
+        rows = _read_instruments_parquet_rows(bucket, prefix, day, cell.venue)
     except Exception as exc:  # pragma: no cover — shard-level isolation, no raise
         return ShardCheckResult(
             shard_label=f"PREDICTION/{cell.venue}/{day}",
@@ -792,7 +833,7 @@ def _run_prediction_canonical_cell(cell: SmokeCell, day: str, project_id: str) -
             shard_label=f"PREDICTION/{cell.venue}/{day}",
             leg="canonical",
             status="failed",
-            reason=f"canonical_no_instruments_parquet_at:gs://{bucket}/{prefix}",
+            reason=f"canonical_no_instruments_parquet_at:gs://{bucket}/{prefix} (day={day} venue={cell.venue})",
             attempt_ts=attempt_ts,
             manifest_bucket=bucket,
         )
