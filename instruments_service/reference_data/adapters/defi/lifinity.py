@@ -2,7 +2,14 @@
 
 Discovers Lifinity proactive market-making (PMM) pools on Solana via
 the Lifinity public API. Pools are returned as InstrumentRecord with
-instrument_type=SPOT.
+instrument_type=SOLANA_AMM_POOL — a Lifinity PMM pool is an AMM/DEX liquidity
+pool, NOT a two-token quoted SPOT_PAIR (operator ruling 2026-07-18,
+defi_consolidated_closeout_2026_07_18.md "SPOT_ASSET vs SPOT_PAIR vs POOL":
+a Solana AMM pool is `SOLANA_AMM_POOL`, mirroring how MTDS types orca/raydium
+DEX-pool tick data). Routed through `build_canonical_instrument_id` so the
+emitted `instrument_key` TYPE segment is correct AT MINT TIME
+(`LIFINITY-SOLANA:SOLANA_AMM_POOL:SOL-USDC`), not the pre-fix `:SPOT:` shorthand
+that mismatched the `SPOT_PAIR` field.
 
 Lifinity uses a proactive market-making model (unlike reactive AMMs like Raydium/Orca),
 concentrating liquidity at oracle-derived prices to reduce impermanent loss.
@@ -19,7 +26,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -59,7 +66,7 @@ class LifinityReferenceDataAdapter(BaseReferenceDataAdapter):
 
     Uses the public Lifinity API (https://api.lifinity.io/pools)
     which requires no auth and returns active pools.
-    Each Lifinity pool produces one SPOT instrument (proactive market-making pair).
+    Each Lifinity pool produces one SOLANA_AMM_POOL instrument (proactive market-making pool).
     """
 
     def __init__(
@@ -107,8 +114,8 @@ class LifinityReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Lifinity PMM pools as instruments."""
-        if instrument_type not in (None, InstrumentType.SPOT_PAIR, "spot"):
-            logger.info("Lifinity only supports SPOT instruments; requested %s", instrument_type)
+        if instrument_type not in (None, InstrumentType.SOLANA_AMM_POOL, "spot"):
+            logger.info("Lifinity only supports SOLANA_AMM_POOL instruments; requested %s", instrument_type)
             return []
 
         pools = await self._fetch_pools()
@@ -168,7 +175,13 @@ class LifinityReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         raw_symbol = pool_address if pool_address else pool_name
-        instrument_key = f"{self.venue}:SPOT:{base_asset}-{quote_asset}"
+        # Route through the shared canonical builder so the emitted TYPE segment
+        # is the real InstrumentType enum value (SOLANA_AMM_POOL), not the old
+        # `:SPOT:` shorthand that mismatched the field. venue already carries the
+        # composed VENUE-CHAIN token, so passthrough=True reproduces the exact id.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, self.venue, InstrumentType.SOLANA_AMM_POOL, f"{base_asset}-{quote_asset}", passthrough=True
+        )
 
         tick_size_raw = pool.get("tickSize") or pool.get("price_increment") or "0.0001"
         try:
@@ -183,7 +196,7 @@ class LifinityReferenceDataAdapter(BaseReferenceDataAdapter):
             canonical_instrument_id=instrument_key,
             venue=self.venue,
             raw_symbol=raw_symbol,
-            instrument_type=InstrumentType.SPOT_PAIR,
+            instrument_type=InstrumentType.SOLANA_AMM_POOL,
             base_asset=base_asset,
             quote_asset=quote_asset,
             settle_asset=quote_asset,
