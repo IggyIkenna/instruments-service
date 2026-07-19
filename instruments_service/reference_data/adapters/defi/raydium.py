@@ -20,7 +20,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import build_pool_identity, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import SOLANA_DEFI_PROTOCOLS, get_solana_protocol_url
 from unified_trading_library import log_event
@@ -285,12 +285,19 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         resolved by batch_resolve_creation_timestamps() in the caller.
         """
         venue_tag = self.venue
-        instrument_key = f"{venue_tag}:POOL:{pool_id}:Historical"
+        # Canonical 3-segment glued pool id -- the historical marker is folded INTO the symbol
+        # segment hyphen-glued (...:POOL:<pool_id>-Historical), NEVER a 4th colon (Wave B
+        # convergence, defi_consolidated_closeout_2026_07_18). The pool_id is a case-sensitive
+        # Solana base58 address, preserved verbatim as BOTH the symbol and the machine id
+        # (raw_symbol / pool_address); the pair is unknown for on-chain-discovered pools, so
+        # build_pool_identity's address-lowercasing pair fallback is intentionally NOT used here.
+        instrument_key = f"{venue_tag}:POOL:{pool_id}-Historical"
 
         return InstrumentRecord(
             instrument_key=instrument_key,
             # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
-            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key (the
+            # symbolic 3-seg glued id); the pool ADDRESS is the separate machine id (raw_symbol).
             canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=pool_id,
@@ -353,13 +360,27 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         venue_tag = self.venue
+        # Canonical 3-segment glued pool id (VENUE-CHAIN:POOL:BASE-QUOTE[-DISC]) built via
+        # the UAC SSOT builder -- the Raydium pool-type (Standard / Concentrated) is folded
+        # INTO the symbol segment hyphen-glued (...:SOL-USDC-Standard), NEVER a 4th colon
+        # (Wave B convergence, defi_consolidated_closeout_2026_07_18). instrument_id stays the
+        # pool ADDRESS (raw_symbol / pool_address, case-preserved -- base/quote are set, so the
+        # builder's address-lowercasing fallback never touches the glued symbol).
         pool_type = str(pool.get("type", "Standard"))
-        instrument_key = f"{venue_tag}:POOL:{base}-{quote}:{pool_type}"
+        instrument_key = build_pool_identity(
+            venue=venue_tag,
+            chain=self._chain,
+            pool_address=str(pool_id),
+            base_asset=base,
+            quote_asset=quote,
+            fee=pool_type or None,
+        ).glued_pair_id
 
         return InstrumentRecord(
             instrument_key=instrument_key,
             # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
-            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key (the
+            # symbolic 3-seg glued id); the pool ADDRESS is the separate machine id (raw_symbol).
             canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=str(pool_id),
