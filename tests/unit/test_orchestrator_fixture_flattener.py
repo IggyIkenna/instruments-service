@@ -24,6 +24,7 @@ import pandas as pd
 from instruments_service.engine.orchestrator import (
     _af_id_from_canonical,
     _flatten_canonical_fixture_for_disk,
+    _status_from_af_response,
 )
 
 
@@ -196,6 +197,42 @@ def test_flattener_round_defaults_empty_string_when_missing() -> None:
     fx = _make_canonical_fixture()
     out = _flatten_canonical_fixture_for_disk(fx, "2024-08-17")
     assert out["round"] == ""
+
+
+def test_status_from_af_response_extracts_short_and_long() -> None:
+    """Regression pin for api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19:
+    the raw af_response carries the true status the whole time — read it, don't default."""
+    af_response = {"fixture": {"status": {"short": "FT", "long": "Match Finished"}}}
+    short, long_ = _status_from_af_response(af_response)
+    assert short == "FT"
+    assert long_ == "Match Finished"
+
+
+def test_status_from_af_response_empty_on_missing_blocks() -> None:
+    assert _status_from_af_response(None) == ("", "")
+    assert _status_from_af_response({}) == ("", "")
+    assert _status_from_af_response({"fixture": {}}) == ("", "")
+    assert _status_from_af_response({"fixture": {"status": {}}}) == ("", "")
+
+
+def test_flattener_uses_af_response_status_over_fx_status_default() -> None:
+    """The bug: CanonicalFixture has no ``status`` attribute, so ``getattr(fx, "status", None)``
+    always misses and every row was persisted "NS" regardless of the real outcome — even
+    though ``fx`` here (like the real CanonicalFixture) happens to expose a truthy
+    ``.status`` for other reasons, the af_response-derived value must win when present."""
+    fx = _make_canonical_fixture()
+    af_response = {"fixture": {"status": {"short": "FT", "long": "Match Finished"}}}
+    out = _flatten_canonical_fixture_for_disk(fx, "2024-08-17", af_response=af_response)
+    assert out["status_short"] == "FT"
+    assert out["status_long"] == "Match Finished"
+
+
+def test_flattener_status_falls_back_to_fx_status_without_af_response() -> None:
+    """No af_response supplied (legacy callers / non-api-football sources): preserve the
+    pre-existing fx.status fallback behavior — same pattern as _round_from_af_response."""
+    fx = _make_canonical_fixture()
+    out = _flatten_canonical_fixture_for_disk(fx, "2024-08-17")
+    assert out["status_short"] == "FT"  # from the SimpleNamespace mock's fx.status="FT"
 
 
 def test_flattener_dataframe_assemblable() -> None:
