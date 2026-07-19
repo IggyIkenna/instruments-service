@@ -195,6 +195,45 @@ def _lifecycle_columns_from_af_response(af_response: dict[str, object]) -> dict[
     }
 
 
+def _status_from_af_response(af_response: dict[str, object] | None) -> tuple[str, str]:
+    """Extract API-Football's ``fixture.status.{short,long}`` from the raw fixture response.
+
+    Returns ``(status_short, status_long)`` — e.g. ``("FT", "Match Finished")``. The
+    ``CanonicalFixture`` model does NOT carry a ``status`` attribute at all (same gap
+    already fixed for ``round`` via ``_round_from_af_response`` — see that function's
+    docstring), so the previous ``getattr(fx, "status", None) or "NS"`` ALWAYS hit the
+    default: every FIXTURES row ever written via this path was persisted with
+    ``status_short="NS"`` regardless of the real match outcome, even fixtures that had
+    already finished. This is NOT a staleness/re-fetch problem (a forced live re-fetch
+    reproduces the identical "NS" write) — the raw response used to build the row already
+    carries the correct status the whole time, it was simply never read. Downstream,
+    ``instruments_service/engine/orchestrator/sports_fixtures.py::_read_fixture_ids_from_gcs``
+    filters on ``status_short in {FT,AET,PEN}`` to find fixtures eligible for per-fixture
+    enrichment (events/lineups/stats/player_stats) — with every row permanently "NS",
+    enrichment could never resolve ANY date written via this path, however many times the
+    backfill fleet relaunched. Issue:
+    api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19
+    (correction — the issue doc's original title/summary attributed this to stale caching;
+    the actual mechanism is this simple missing-field read). Empty strings on any absence
+    (no raw / no fixture block / no status block) — honest blank, never a fabricated
+    placeholder; callers already default those to ``("NS", "Unknown")`` same as before.
+    """
+    if not af_response:
+        return "", ""
+    fixture = af_response.get("fixture")
+    if not isinstance(fixture, dict):
+        return "", ""
+    status = fixture.get("status")
+    if not isinstance(status, dict):
+        return "", ""
+    short = status.get("short")
+    long_ = status.get("long")
+    return (
+        str(short).strip() if short is not None else "",
+        str(long_).strip() if long_ is not None else "",
+    )
+
+
 def _round_from_af_response(af_response: dict[str, object] | None) -> str:
     """Extract API-Football's ``league.round`` from the raw fixture response.
 
@@ -291,6 +330,8 @@ def _flatten_canonical_fixture_for_disk(
     else:
         lifecycle_cols = _orch._empty_lifecycle_columns()
 
+    status_short_raw, status_long_raw = _status_from_af_response(af_response)
+
     row: dict[str, object] = {
         "af_fixture_id": af_fixture_id,
         "referee_name": getattr(referee, "name", None) if referee is not None else None,
@@ -301,8 +342,8 @@ def _flatten_canonical_fixture_for_disk(
         "venue_id": _orch._af_id_from_canonical(venue) if venue is not None else None,
         "venue_name": getattr(venue, "name", None) if venue is not None else None,
         "venue_city": getattr(venue, "city", None) if venue is not None else None,
-        "status_long": getattr(fx, "status", None) or "Unknown",
-        "status_short": getattr(fx, "status", None) or "NS",
+        "status_long": status_long_raw or getattr(fx, "status", None) or "Unknown",
+        "status_short": status_short_raw or getattr(fx, "status", None) or "NS",
         "status_elapsed_time": None,
         "af_league_id": _orch._af_id_from_canonical(league) if league is not None else None,
         "season": season_int,

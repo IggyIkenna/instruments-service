@@ -515,6 +515,9 @@ from instruments_service.engine.orchestrator.sports import (
 from instruments_service.engine.orchestrator.sports import (
     _should_skip_date_for_per_league as _should_skip_date_for_per_league,
 )
+from instruments_service.engine.orchestrator.sports import (
+    _status_from_af_response as _status_from_af_response,
+)
 from instruments_service.engine.orchestrator.sports_fixtures import (
     _build_fixture_league_map_from_gcs as _build_fixture_league_map_from_gcs,
 )
