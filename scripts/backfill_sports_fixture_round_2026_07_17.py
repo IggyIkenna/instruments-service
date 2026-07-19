@@ -44,6 +44,7 @@ import argparse
 import asyncio
 import io
 import logging
+from pathlib import Path
 
 import pandas as pd
 
@@ -177,6 +178,21 @@ async def main_async(args: argparse.Namespace) -> int:
         universe = dict(sorted(universe.items())[: args.max_leagues])
     seasons = [int(s) for s in args.seasons.split(",")] if args.seasons else list(range(2019, 2027))
 
+    pair_seasons: dict[int, set[int]] | None = None
+    if args.pairs_file:
+        pair_seasons = {}
+        for line in Path(args.pairs_file).read_text().splitlines():
+            entry = line.strip()
+            if not entry or entry.startswith("#"):
+                continue
+            lg_txt, _, se_txt = entry.partition(":")
+            pair_seasons.setdefault(int(lg_txt), set()).add(int(se_txt))
+        logger.info(
+            "[pairs-file] scoped to %d (league, season) pairs across %d leagues",
+            sum(len(v) for v in pair_seasons.values()),
+            len(pair_seasons),
+        )
+
     mode = "APPLY" if args.apply else "DRY-RUN"
     logger.info("[%s] indexing fixtures corpus (single walk)...", mode)
     blob_index = _league_blob_index(bucket)
@@ -193,7 +209,16 @@ async def main_async(args: argparse.Namespace) -> int:
         blobs = blob_index.get(cid, [])
         if not blobs:
             continue
-        rounds = await _rounds_for_league(adapter, af, seasons)
+        # Exact (league, season) scoping. --leagues x --seasons is a CROSS PRODUCT: the
+        # 194 in-window pairs that actually hold blanks span ~100 leagues x 8 seasons, so
+        # the cross product would spend ~800 api-football calls to do 194 pairs' work.
+        # A pairs-file spends one call per pair. (issue sweep § T)
+        seasons_for = seasons
+        if pair_seasons is not None:
+            if af not in pair_seasons:
+                continue
+            seasons_for = sorted(pair_seasons[af])
+        rounds = await _rounds_for_league(adapter, af, seasons_for)
         if not rounds:
             logger.info("%-26s no rounds fetched (out-of-coverage seasons?) — %d parquet(s) untouched", cid, len(blobs))
             continue
@@ -233,6 +258,15 @@ def main() -> int:
     p.add_argument("--leagues", default=None, help="Comma-sep canonical league_ids to scope (pilot).")
     p.add_argument("--seasons", default=None, help="Comma-sep seasons. Default 2019..2026.")
     p.add_argument("--max-leagues", type=int, default=None, help="Cap league count (pilot).")
+    p.add_argument(
+        "--pairs-file",
+        default=None,
+        help=(
+            "Path to a file of exact 'af_league_id:season' pairs (one per line, # comments "
+            "allowed). Spends ONE api-football call per pair instead of the "
+            "--leagues x --seasons cross product."
+        ),
+    )
     return asyncio.run(main_async(p.parse_args()))
 
 
