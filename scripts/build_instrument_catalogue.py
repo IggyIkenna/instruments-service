@@ -866,6 +866,36 @@ def _fee_from_instrument_key(instrument_key: str) -> str:
     return ""
 
 
+def _pool_symbol_discriminator(instrument_key: str, base: str, quote: str) -> str:
+    """Extract the discriminator hyphen-glued into a 3-segment POOL key's symbol.
+
+    ``ORCA-SOLANA:POOL:SOL-USDC-WP64`` (base=SOL, quote=USDC) → ``WP64`` (Whirlpool
+    tick-spacing); ``RAYDIUM-SOLANA:POOL:SOL-USDC-Standard`` → ``Standard`` (pool
+    type). Peels the leading ``{base}-{quote}-`` off the symbol segment; returns ""
+    when the key is not a 3-segment POOL key, when base/quote are blank, or when the
+    symbol is a plain ``{base}-{quote}`` (no trailing discriminator).
+
+    Complements :func:`_fee_from_instrument_key` (legacy 4th-colon form) for the
+    Solana-AMM adapters that converged the discriminator into the symbol
+    hyphen-glued (Wave B, orca/raydium — ``defi_consolidated_closeout_2026_07_18``):
+    it lets that discriminator survive into the re-derived ``glued_pair_id`` so the
+    two symbolic columns (passthrough ``canonical_instrument_id`` +
+    re-derived ``glued_pair_id``) stay byte-identical. Only consulted AFTER the
+    structured ``pool_fee_tier`` column (uniswap/balancer are unaffected — they carry
+    a real bps fee there). Pure + idempotent.
+    """
+    if not base or not quote:
+        return ""
+    parts = instrument_key.split(":")
+    if len(parts) != 3 or parts[1] != "POOL":
+        return ""
+    prefix = f"{base}-{quote}-"
+    symbol = parts[2]
+    if symbol.startswith(prefix):
+        return symbol[len(prefix) :]
+    return ""
+
+
 def _pool_address_of(meta: dict[str, str | None]) -> str:
     """Return the canonical pool address for a row's meta, or "" when not a pool.
 
@@ -1284,15 +1314,29 @@ def _defi_pool_dual_form(
 
     venue_raw = meta.get("venue") or ""
     chain_raw = meta.get("chain") or ""
-    # The legacy glued ``instrument_key`` carries the faithful raw fee token; the
-    # by_date ``pool_fee_tier`` is bps. Prefer the key's fee for the UI id, else bps.
-    fee = _fee_from_instrument_key(meta.get("instrument_key") or "") or (meta.get("pool_fee_tier") or "")
+    base_raw = meta.get("base_asset") or ""
+    quote_raw = meta.get("quote_asset") or ""
+    key_raw = meta.get("instrument_key") or ""
+    # Fee/discriminator precedence for the re-derived UI ``glued_pair_id``:
+    #   1. legacy 4th-colon fee token (``...:POOL:PAIR:FEE``) — the faithful raw fee;
+    #   2. the structured ``pool_fee_tier`` bps column (uniswap/balancer);
+    #   3. the discriminator hyphen-glued into a canonical 3-seg symbol
+    #      (``...:POOL:SOL-USDC-WP64`` / ``-Standard``) for the Solana-AMM adapters
+    #      that fold tick-spacing / pool-type into the symbol (Wave B, orca/raydium).
+    # (3) keeps the re-derived ``glued_pair_id`` byte-identical to the passthrough
+    # ``canonical_instrument_id`` for those pools without touching uniswap/balancer
+    # (which resolve at step 2).
+    fee = (
+        _fee_from_instrument_key(key_raw)
+        or (meta.get("pool_fee_tier") or "")
+        or _pool_symbol_discriminator(key_raw, base_raw, quote_raw)
+    )
     identity = build_pool_identity(
         venue=venue_raw,
         chain=chain_raw,
         pool_address=pool_address,
-        base_asset=meta.get("base_asset") or "",
-        quote_asset=meta.get("quote_asset") or "",
+        base_asset=base_raw,
+        quote_asset=quote_raw,
         fee=fee or None,
     )
     return (
