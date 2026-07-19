@@ -28,6 +28,7 @@ else:  # pragma: no cover - runtime namespace indirection
 
 __all__ = [
     "_build_fixture_league_map_from_gcs",
+    "_find_stale_fixture_leagues_for_date",
     "_merge_with_existing_per_league_parquet",
     "_per_league_fixtures_data_unchanged",
     "_read_existing_per_league_fixture_ids",
@@ -43,6 +44,15 @@ __all__ = [
     "_write_fixtures_per_league",
     "_write_team_mapping",
 ]
+
+# Terminal api-football ``status_short`` values — a captured FIXTURES row in
+# one of these states reflects the match's final outcome and never needs a
+# status re-fetch. Superset of the narrower {"FT","AET","PEN"} "completed"
+# set ``_read_fixture_ids_from_gcs`` uses to gate per-fixture enrichment:
+# CANC/AWD/PST/ABD are also terminal (the fixture will never produce
+# stats/events/lineups) but are not "completed" for enrichment purposes.
+# SSOT for this set: the api_football stale-NS issue doc (2026-07-19).
+TERMINAL_FIXTURE_STATUSES: frozenset[str] = frozenset({"FT", "AET", "PEN", "CANC", "AWD", "PST", "ABD"})
 
 
 def _sports_ref_pm(entity_name: str) -> str:
@@ -249,6 +259,25 @@ def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
     except Exception as exc:
         _orch.logger.debug("Failed to read fixtures from GCS for date=%s: %s", date, exc)
         return []
+
+
+def _find_stale_fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
+    """Return canonical ``league_id``s whose captured FIXTURES rows for ``date`` are stale.
+
+    "Stale" = at least one row's ``status_short`` is NOT in
+    ``TERMINAL_FIXTURE_STATUSES`` — i.e. it was captured before the match
+    concluded (typically ``NS``) and has never been re-fetched to pick up
+    the real final status. Reads only THIS date's already-captured
+    per-league FIXTURES parquet via ``_read_per_league_entity_df`` (single
+    date, no whole-corpus walk). A date with no captured fixtures at all
+    returns an empty set — a missing capture is a different (backfill-gap)
+    problem, not a stale-status one.
+    """
+    df = _orch._read_per_league_entity_df(bucket, date, "fixtures", max_results=None, inject_league_id=True)
+    if df is None or "status_short" not in df.columns or "league_id" not in df.columns:
+        return set()
+    stale_mask = ~df["status_short"].isin(TERMINAL_FIXTURE_STATUSES)
+    return {str(lid) for lid in df.loc[stale_mask, "league_id"].dropna().unique() if str(lid)}
 
 
 def _write_fixtures_per_league(
