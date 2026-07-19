@@ -153,6 +153,10 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     mode = "APPLY" if args.apply else "DRY-RUN"
+    if args.apply:  # fail fast, not 50 minutes into the walk
+        from unified_trading_library.cloud_interface import gcs_copy_object  # noqa: qg-deep-import,F401
+
+        logger.info("[APPLY] pre-flight OK: write-path imports resolve")
     logger.info("[%s] single-walk of %s%s ...", mode, args.bucket, _PREFIX)
 
     by_day: dict[str, list[str]] = defaultdict(list)
@@ -187,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             if amb or nosib:
                 residual_days.add(day)
             if filled and args.apply:
-                from unified_trading_library import gcs_copy_object  # noqa: qg-inside-import
+                from unified_trading_library.cloud_interface import gcs_copy_object  # noqa: qg-deep-import
 
                 gcs_copy_object(f"gs://{args.bucket}/{name}", f"gs://{args.bucket}/{name}{_BACKUP_SUFFIX}")
                 buf = io.BytesIO()
