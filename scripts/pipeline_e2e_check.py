@@ -36,6 +36,20 @@ shard, never a separate shard key, so this script collapses ``smoke_matrix.py``'
 ``(asset_group, venue, data_type)`` cells down to unique ``(asset_group, venue)`` targets
 before driving anything (see :func:`_dedupe_shard_targets`).
 
+PREDICTION Phase-D adaptation (``prediction_consolidated_closeout_2026_07_18.md``,
+prediction-scoped — non-prediction behavior is byte-unchanged): the ``(asset_group, venue)``
+atom above collapses away two IS-PRODUCED prediction reference grains, so this script adds,
+for prediction cells only, (A) a ``canonical`` regression cell asserting the freshly-written
+instruments parquet's ``canonical_instrument_id`` / ``instrument_type`` / soccer
+``af_fixture_match_status`` are canonical (:func:`_run_prediction_canonical_cell`), and
+(B) force/skip smoke cells for the CQG cluster bundle
+(``data_type=prediction_canonical_question_group``, a manifest-only bundle) and
+``market_lifecycle`` (the market-id lifecycle parquet), both written by the SAME prediction
+backfill VM the force/skip legs already launch (:func:`_run_prediction_grain_cells`). MTDS
+cannot smoke these two grains — it only reads ``market_lifecycle`` and re-derives the CQG
+bundle at manifest rebuild, never on the tick backfill — so their coverage lives here, on
+their genuine producer.
+
 Known infra gaps discovered while building this adapter (NOT fixable from this file —
 flagged for the launcher-diff / setup-script owners):
 
@@ -94,7 +108,7 @@ import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from unified_api_contracts import VENUE_TO_ADAPTER_KEY, VenueMapping
+from unified_api_contracts import VENUE_TO_ADAPTER_KEY, InstrumentType, VenueMapping
 from unified_api_contracts.canonical.crosscutting.mvp_scope import (
     MVP_SCOPE,
     CeFiMvpRule,
@@ -115,6 +129,7 @@ from unified_trading_library import (
     get_storage_client,
     launch_vm_and_wait,
     object_signature,
+    read_availability_index,
     render_markdown,
     verify_manifest_row,
     verify_write,
@@ -141,12 +156,57 @@ _REPORT_SERVICE_SLUG = "data_pipeline_e2e_check_is"
 _DEFAULT_TIMEOUT_SEC = 1800
 _DEFAULT_POLL_INTERVAL_SEC = 30
 _GCE_NAME_MAX = 63
-_VALID_LEGS = frozenset({"force", "skip", "live"})
+# ``canonical`` is a PREDICTION-only regression cell (prediction_consolidated_closeout_
+# 2026_07_18.md Phase-D, item A) that reads the freshly-written instruments parquet and
+# asserts the canonical prediction shape — it records ``skipped`` for every non-prediction
+# cell (mirroring the MTDS engine's tradfi-only canonical leg), so it is safe to request
+# alongside force/skip/live for any asset_group. It launches NO VM (it verifies the force
+# leg's write). ``canonical`` is NOT in the default ``--legs`` (force,skip,live), so a
+# default run is byte-unchanged for every asset_group.
+_VALID_LEGS = frozenset({"force", "skip", "live", "canonical"})
 _LIVE_LEG_CAVEAT = (
     " [NOTE: routed via launch-instruments-backfill-vm.sh, which currently always runs "
     "--mode batch under setup-data-pipeline-vm.sh -- this leg does not yet prove the "
     "true --mode live code path; see script module docstring]"
 )
+
+# ---------------------------------------------------------------------------
+# PREDICTION Phase-D adaptation (prediction_consolidated_closeout_2026_07_18.md):
+#   (A) a canonical regression cell over the freshly-written instruments parquet, and
+#   (B) force/skip smoke coverage for the two IS-PRODUCED prediction reference grains the
+#       generic ``(asset_group, venue)`` shard atom collapses away — the CQG cluster bundle
+#       (data_type=prediction_canonical_question_group, a manifest-only bundle written by
+#       ``engine/orchestrator/process_write.py``) and ``market_lifecycle`` (the market-id
+#       lifecycle parquet at ``market_lifecycle/by_canonical_group/…`` written by
+#       ``engine/orchestrator/writers.py::_write_market_lifecycle``). Both grains are
+#       produced by the SAME prediction backfill VM the force/skip legs already launch, so
+#       these cells verify that VM's writes — they launch no extra VM.
+# ---------------------------------------------------------------------------
+# The ONE canonical prediction instrument_type (UAC SSOT). A per-CID prediction row whose
+# ``instrument_type`` is anything else is an A0 non-canonical target: lowercase dupes
+# (``prediction``/``prediction_market``), underlying-asset LEAKAGE, or ``''``.
+_CANONICAL_PREDICTION_INSTRUMENT_TYPE = InstrumentType.PREDICTION_MARKET.value
+# Underlying-asset leakage tokens (A0-enumerated 2026-07-18) — used only to LABEL a
+# violation; the canonical gate is the ``== PREDICTION_MARKET`` equality any leakage fails.
+_PREDICTION_UNDERLYING_LEAKAGE_TYPES = frozenset(
+    {"BTC", "ETH", "SPX", "DJIA", "NDX", "GOLD", "SILVER", "CRUDE_OIL", "DOGE", "XRP", "BNB", "HYPE", "OTHER"}
+)
+# Soccer fixture-match closed set — mirrors instruments-service
+# ``reference_data/adapters/prediction/fixture_match.py::FixtureMatchStatus`` (the writer of
+# the ``af_fixture_match_status`` column). A stamped (non-null) value MUST be one of these.
+_AF_FIXTURE_MATCH_STATUS_CLOSED_SET = frozenset({"MATCHED", "UNRESOLVED_TEAM_NAME", "NO_FIXTURE_DATA"})
+_PRED_WHITESPACE_RE = re.compile(r"\s")
+# A canonical canonical_question_group value is an UPPERCASE snake token (A0: "81 canonical
+# UPPERCASE values, no dupes") — this shape check needs no deep enum import.
+_CANONICAL_CQG_RE = re.compile(r"^[A-Z0-9_]+$")
+_CQG_BUNDLE_DATA_TYPE = "prediction_canonical_question_group"
+# The lifecycle manifest data_type spellings seen in the wild (the writer stamps
+# ``prediction_market_lifecycle``; UAC's DATA_TYPES_BY_ASSET_GROUP carries
+# ``market_lifecycle``/``MARKET_LIFECYCLE`` — accept any so the cell is robust to that
+# A0-flagged naming drift instead of failing on it).
+_MARKET_LIFECYCLE_DATA_TYPES = ("prediction_market_lifecycle", "market_lifecycle", "MARKET_LIFECYCLE")
+_MARKET_LIFECYCLE_PREFIX_TPL = "market_lifecycle/by_canonical_group/day={day}/"
+_MARKET_LIFECYCLE_OBJECT_SUFFIX = "market_lifecycle.parquet"
 
 # VM-name prefix stub per the registered `VM_PREFIX_TO_BUCKET` entries
 # (`deployment-service/scripts/vm/vm_zombie_watchdog.py`) — note PREDICTION's stub is the
@@ -594,6 +654,308 @@ def _force_consolidate_test_buckets(buckets: set[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# PREDICTION Phase-D — (A) canonical regression cell + (B) CQG/lifecycle grain cells
+# ---------------------------------------------------------------------------
+
+
+def _assert_prediction_records_canonical(
+    ids: list[str], types: list[str], fixture_statuses: list[str | None]
+) -> tuple[int, int, list[str]]:
+    """Prediction canonical assertion over instruments-parquet rows (Phase-D item A).
+
+    A canonical prediction instrument row has ``instrument_type == PREDICTION_MARKET``
+    (the ONE canonical value — this single equality catches every A0 drift: lowercase
+    ``prediction``/``prediction_market`` dupes, underlying-asset LEAKAGE, and ``''``) and a
+    ``canonical_instrument_id`` that is non-empty, whitespace-free, and — when it carries the
+    ``VENUE:TYPE:SYMBOL`` shape — embeds ``PREDICTION_MARKET`` as its TYPE segment. For a
+    SOCCER row (a stamped, non-null ``af_fixture_match_status``) the status must be one of
+    the closed-set values ``MATCHED``/``UNRESOLVED_TEAM_NAME``/``NO_FIXTURE_DATA``.
+
+    Returns ``(checked, canonical, violations_sample)`` (violations bounded at 50), mirroring
+    the tradfi/MTDS helpers' convention.
+    """
+    if not (len(ids) == len(types) == len(fixture_statuses)):
+        msg = f"ids/types/fixture_statuses must be the same length, got {len(ids)}/{len(types)}/{len(fixture_statuses)}"
+        raise ValueError(msg)
+
+    checked = 0
+    canonical = 0
+    violations: list[str] = []
+    for row_id, declared_type, fixture_status in zip(ids, types, fixture_statuses, strict=True):
+        checked += 1
+        reasons: list[str] = []
+        if declared_type != _CANONICAL_PREDICTION_INSTRUMENT_TYPE:
+            if declared_type.strip().lower() in ("prediction", "prediction_market"):
+                reasons.append(f"lowercase-instrument_type:{declared_type!r}")
+            elif declared_type.strip().upper() in _PREDICTION_UNDERLYING_LEAKAGE_TYPES:
+                reasons.append(f"underlying-leakage-instrument_type:{declared_type!r}")
+            else:
+                reasons.append(f"noncanonical-instrument_type:{declared_type!r}")
+        if not row_id:
+            reasons.append("empty-id")
+        else:
+            if _PRED_WHITESPACE_RE.search(row_id):
+                reasons.append("whitespace")
+            parts = row_id.split(":", 2)
+            id_type = parts[1].strip() if len(parts) >= 2 else ""
+            if len(parts) >= 3 and id_type != _CANONICAL_PREDICTION_INSTRUMENT_TYPE:
+                if id_type.lower() in ("prediction", "prediction_market"):
+                    reasons.append(f"lowercase-id-type:{id_type}")
+                elif id_type.upper() in _PREDICTION_UNDERLYING_LEAKAGE_TYPES:
+                    reasons.append(f"underlying-leakage-id-type:{id_type}")
+                else:
+                    reasons.append(f"noncanonical-id-type:{id_type}")
+        # Soccer rows only: a STAMPED (non-null / non-empty) status must be in the closed set.
+        if fixture_status not in (None, "") and str(fixture_status) not in _AF_FIXTURE_MATCH_STATUS_CLOSED_SET:
+            reasons.append(f"noncanonical-af_fixture_match_status:{fixture_status!r}")
+        if reasons:
+            if len(violations) < 50:
+                violations.append(f"{row_id} [{declared_type}]: {', '.join(reasons)}")
+        else:
+            canonical += 1
+    return checked, canonical, violations
+
+
+def _read_instruments_parquet_rows(bucket: str, prefix: str) -> tuple[list[str], list[str], list[str | None]] | None:
+    """Read (canonical_instrument_id, instrument_type, af_fixture_match_status) across every
+    ``instruments.parquet`` written under this shard-day's prefix (one per
+    ``canonical_question_group`` subfolder). Returns ``None`` when nothing is readable.
+    """
+    from io import BytesIO
+
+    import pandas as pd
+
+    client = get_storage_client()
+    frames: list[pd.DataFrame] = []
+    want = ["canonical_instrument_id", "instrument_type", "af_fixture_match_status"]
+    for blob in client.list_blobs(bucket=bucket, prefix=prefix):
+        if not blob.name.endswith(".parquet"):
+            continue
+        try:
+            df = pd.read_parquet(BytesIO(blob.download_as_bytes()))
+        except Exception as exc:  # pragma: no cover — storage/parquet transport failure
+            logger.warning("instruments parquet read failed %s: %s", blob.name, exc)
+            continue
+        cols = [c for c in want if c in df.columns]
+        if "canonical_instrument_id" not in cols and "instrument_id" in df.columns:
+            df = df.rename(columns={"instrument_id": "canonical_instrument_id"})
+            cols = [c for c in want if c in df.columns]
+        if cols:
+            frames.append(df[cols])
+    if not frames:
+        return None
+    merged = pd.concat(frames, ignore_index=True)
+    ids = [str(v) for v in merged.get("canonical_instrument_id", pd.Series([], dtype=str)).tolist()]
+    types = (
+        [str(v) for v in merged["instrument_type"].tolist()]
+        if "instrument_type" in merged.columns
+        else ["" for _ in ids]
+    )
+    if "af_fixture_match_status" in merged.columns:
+        statuses: list[str | None] = [
+            None if pd.isna(v) else str(v) for v in merged["af_fixture_match_status"].tolist()
+        ]
+    else:
+        statuses = [None for _ in ids]
+    return ids, types, statuses
+
+
+def _run_prediction_canonical_cell(cell: SmokeCell, day: str, project_id: str) -> ShardCheckResult:
+    """(A) PREDICTION canonical regression cell — asserts the freshly-written instruments
+    parquet's ``canonical_instrument_id`` / ``instrument_type`` / soccer
+    ``af_fixture_match_status`` are canonical. Records ``skipped`` for non-prediction cells
+    (mirrors the MTDS engine's tradfi-only canonical leg). Launches no VM."""
+    attempt_ts = datetime.now(UTC).isoformat()
+    if cell.asset_group.upper() != "PREDICTION":
+        return ShardCheckResult(
+            shard_label=f"{cell.asset_group}/{cell.venue}/{day}",
+            leg="canonical",
+            status="skipped",
+            reason="canonical_shape_check_is_prediction_only",
+            attempt_ts=attempt_ts,
+        )
+    bucket = resolve_test_bucket(cell.asset_group, project_id)
+    prefix = expected_write_prefix(cell, day)
+    try:
+        rows = _read_instruments_parquet_rows(bucket, prefix)
+    except Exception as exc:  # pragma: no cover — shard-level isolation, no raise
+        return ShardCheckResult(
+            shard_label=f"PREDICTION/{cell.venue}/{day}",
+            leg="canonical",
+            status="failed",
+            reason=f"canonical_read_error:{type(exc).__name__}:{exc}",
+            attempt_ts=attempt_ts,
+            manifest_bucket=bucket,
+        )
+    if rows is None:
+        return ShardCheckResult(
+            shard_label=f"PREDICTION/{cell.venue}/{day}",
+            leg="canonical",
+            status="failed",
+            reason=f"canonical_no_instruments_parquet_at:gs://{bucket}/{prefix}",
+            attempt_ts=attempt_ts,
+            manifest_bucket=bucket,
+        )
+    ids, types, statuses = rows
+    checked, canonical, violations = _assert_prediction_records_canonical(ids, types, statuses)
+    if checked == 0:
+        return ShardCheckResult(
+            shard_label=f"PREDICTION/{cell.venue}/{day}",
+            leg="canonical",
+            status="passed",
+            reason="no prediction rows in this shard (vacuous)",
+            attempt_ts=attempt_ts,
+            manifest_ok=True,
+            parquet_bucket=bucket,
+        )
+    passed = checked == canonical
+    reason = f"checked={checked} canonical={canonical} raw={checked - canonical}"
+    if violations:
+        reason += f"; e.g. {violations[0]}"
+    return ShardCheckResult(
+        shard_label=f"PREDICTION/{cell.venue}/{day}",
+        leg="canonical",
+        status="passed" if passed else "failed",
+        reason=reason,
+        attempt_ts=attempt_ts,
+        parquet_count=checked,
+        manifest_ok=passed,
+        parquet_bucket=bucket,
+    )
+
+
+def _noncanonical_cqg_values(bucket: str, venue: str, day: str) -> list[str]:
+    """Best-effort: return any non-canonical ``canonical_question_group`` value (carried in
+    the CQG bundle row's ``instrument_id``) for this (venue, day). Empty list = all canonical
+    or unreadable (presence is proven separately via ``verify_manifest_row``)."""
+    try:
+        frame = read_availability_index(bucket, columns=["date", "venue", "data_type", "instrument_id"])
+    except Exception:  # pragma: no cover — best-effort canonicality only
+        return []
+    if frame is None or frame.empty or "instrument_id" not in frame.columns:
+        return []
+    mask = (
+        (frame["venue"].astype(str).str.upper() == venue.upper())
+        & (frame["data_type"].astype(str) == _CQG_BUNDLE_DATA_TYPE)
+        & (frame["date"].astype(str).str[:10] == day)
+    )
+    bad: list[str] = []
+    for cqg in (str(v) for v in frame[mask]["instrument_id"].tolist()):
+        if not _CANONICAL_CQG_RE.match(cqg):
+            bad.append(cqg)
+    return bad[:5]
+
+
+def _list_market_lifecycle_objects(bucket: str, day: str, venue: str) -> list[str]:
+    """Return the ``market_lifecycle.parquet`` object names for this (venue, day) — the
+    venue-partitioned objects when present, else the legacy venue-less ones (both resolve;
+    the venue level was added 2026-07-14 — see ``writers.py::_write_market_lifecycle``)."""
+    client = get_storage_client()
+    prefix = _MARKET_LIFECYCLE_PREFIX_TPL.format(day=day)
+    names = [
+        b.name
+        for b in client.list_blobs(bucket=bucket, prefix=prefix)
+        if b.name.endswith(_MARKET_LIFECYCLE_OBJECT_SUFFIX)
+    ]
+    venue_scoped = [n for n in names if f"venue={venue}/" in n]
+    return venue_scoped or names
+
+
+def _manifest_row_present_any_dt(bucket: str, venue: str, day: str, data_types: tuple[str, ...]) -> bool:
+    """True iff a manifest row exists for (PREDICTION, venue, day) under ANY of ``data_types``
+    (robust to the ``market_lifecycle`` naming drift A0 flagged)."""
+    for dt in data_types:
+        try:
+            ok, _status = verify_manifest_row(
+                bucket, {"asset_group": "PREDICTION", "venue": venue, "data_type": dt}, day
+            )
+        except Exception:  # pragma: no cover — manifest read failure, try next spelling
+            continue
+        if ok:
+            return True
+    return False
+
+
+def _run_prediction_grain_cells(
+    cell: SmokeCell, day: str, leg: str, main_result: ShardCheckResult, project_id: str
+) -> list[ShardCheckResult]:
+    """(B) Force/skip smoke coverage for the two IS-produced prediction reference grains the
+    ``(asset_group, venue)`` shard atom collapses away — emitted as distinct cells, verified
+    against the SAME force/skip VM the main leg launched (no extra VM).
+
+    * CQG cluster grain (``data_type=prediction_canonical_question_group``): a MANIFEST-ONLY
+      bundle (UTL ``MANIFEST_ONLY_BUNDLE_DATA_TYPES`` — no GCS object), so its proof is the
+      manifest bundle row's presence + the bundle key (``instrument_id`` = the CQG value)
+      being canonical.
+    * ``market_lifecycle`` grain: an object-backed parquet at
+      ``market_lifecycle/by_canonical_group/…`` + a manifest row.
+
+    Force leg → prove written. Skip leg → prove still-present AND the main leg's skip signal
+    fired (the grains ride the same skipped VM, so an unchanged main parquet + fired skip
+    signal means the grains were not re-fetched either)."""
+    attempt_ts = datetime.now(UTC).isoformat()
+    bucket = resolve_test_bucket(cell.asset_group, project_id)
+    is_skip = leg == "skip"
+    skip_ok = bool(main_result.skip_signal_found)
+    cells: list[ShardCheckResult] = []
+
+    # --- CQG cluster grain (manifest-only bundle) ---
+    cqg_reasons: list[str] = []
+    try:
+        cqg_present = _manifest_row_present_any_dt(bucket, cell.venue, day, (_CQG_BUNDLE_DATA_TYPE,))
+        noncanon = _noncanonical_cqg_values(bucket, cell.venue, day)
+    except Exception as exc:  # pragma: no cover — shard-level isolation
+        cqg_present, noncanon = False, []
+        cqg_reasons.append(f"cqg_read_error:{type(exc).__name__}:{exc}")
+    if not cqg_present:
+        cqg_reasons.append("cqg_bundle_manifest_row_missing")
+    if noncanon:
+        cqg_reasons.append(f"noncanonical_cqg_values:{noncanon}")
+    if is_skip and not skip_ok:
+        cqg_reasons.append("skip_signal_not_found")
+    cells.append(
+        ShardCheckResult(
+            shard_label=f"PREDICTION/{cell.venue}/prediction_canonical_question_group/{day}",
+            leg=leg,
+            status="failed" if cqg_reasons else "passed",
+            reason="; ".join(cqg_reasons) if cqg_reasons else "cqg_bundle_present_and_canonical",
+            attempt_ts=attempt_ts,
+            manifest_bucket=bucket,
+            skip_proof=("genuine" if (is_skip and not cqg_reasons) else "not_applicable"),
+        )
+    )
+
+    # --- market_lifecycle grain (object-backed) ---
+    lc_reasons: list[str] = []
+    try:
+        lc_objects = _list_market_lifecycle_objects(bucket, day, cell.venue)
+        lc_manifest = _manifest_row_present_any_dt(bucket, cell.venue, day, _MARKET_LIFECYCLE_DATA_TYPES)
+    except Exception as exc:  # pragma: no cover — shard-level isolation
+        lc_objects, lc_manifest = [], False
+        lc_reasons.append(f"lifecycle_read_error:{type(exc).__name__}:{exc}")
+    if not lc_objects:
+        lc_reasons.append("no_market_lifecycle_parquet")
+    if not lc_manifest:
+        lc_reasons.append("market_lifecycle_manifest_row_missing")
+    if is_skip and not skip_ok:
+        lc_reasons.append("skip_signal_not_found")
+    cells.append(
+        ShardCheckResult(
+            shard_label=f"PREDICTION/{cell.venue}/market_lifecycle/{day}",
+            leg=leg,
+            status="failed" if lc_reasons else "passed",
+            reason="; ".join(lc_reasons) if lc_reasons else f"market_lifecycle_present ({len(lc_objects)} object(s))",
+            attempt_ts=attempt_ts,
+            parquet_bucket=bucket,
+            manifest_bucket=bucket,
+            parquet_count=len(lc_objects),
+            skip_proof=("genuine" if (is_skip and not lc_reasons) else "not_applicable"),
+        )
+    )
+    return cells
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -641,7 +1003,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--legs",
         default="force,skip,live",
-        help="Comma list of legs to run: force,skip,live (default: all three).",
+        help="Comma list of legs to run: force,skip,live,canonical (default: force,skip,live). "
+        "'canonical' is a PREDICTION-only regression cell (skipped for other asset_groups); a "
+        "prediction Phase-D run uses --legs force,skip,canonical.",
     )
     parser.add_argument(
         "--report-dir",
@@ -758,6 +1122,34 @@ def main(argv: list[str] | None = None) -> int:
                 result.status,
                 result.reason,
                 result.duration_sec,
+            )
+            # (B) PREDICTION-only: the same force/skip VM also produced the two
+            # IS-domain reference grains the (asset_group, venue) atom collapses away
+            # (CQG cluster bundle + market_lifecycle) — emit them as distinct cells.
+            if cell.asset_group.upper() == "PREDICTION":
+                for extra in _run_prediction_grain_cells(cell, day, leg, result, project_id):
+                    pipeline_report.record(extra)
+                    logger.info(
+                        "[%s/%s leg=%s] grain=%s status=%s reason=%s",
+                        cell.asset_group,
+                        cell.venue,
+                        leg,
+                        extra.shard_label,
+                        extra.status,
+                        extra.reason,
+                    )
+
+        # (A) PREDICTION-only canonical regression cell over the freshly-written
+        # instruments parquet (records skipped for non-prediction cells; launches no VM).
+        if "canonical" in legs:
+            canonical_result = _run_prediction_canonical_cell(cell, day, project_id)
+            pipeline_report.record(canonical_result)
+            logger.info(
+                "[%s/%s leg=canonical] status=%s reason=%s",
+                cell.asset_group,
+                cell.venue,
+                canonical_result.status,
+                canonical_result.reason,
             )
 
         if "live" in legs:
