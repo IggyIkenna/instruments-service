@@ -63,6 +63,11 @@ _SAMPLE_TOKENS: list[dict[str, object]] = [
 
 _EXPECTED_DEPLOY_DATE = datetime(2023, 7, 1, tzinfo=UTC)
 
+#: mint address → decimals, as ``_fetch_bank_and_token_caches`` joins the caches.
+_TOKEN_DECIMALS: dict[str, int] = {
+    str(tok["address"]): d for tok in _SAMPLE_TOKENS if isinstance((d := tok["decimals"]), int)
+}
+
 
 def test_venue() -> None:
     assert MarginfiReferenceDataAdapter().venue == "MARGINFI-SOLANA"
@@ -72,6 +77,37 @@ def test_venue() -> None:
 async def test_get_instruments_wrong_type_returns_empty() -> None:
     adapter = MarginfiReferenceDataAdapter()
     assert await adapter.get_instruments(instrument_type="PERPETUAL") == []
+
+
+@pytest.mark.asyncio
+async def test_split_types_accepted_stale_lending_rejected() -> None:
+    """Guard regression (instruments_service_defi_lending_type_guard_fix_2026_07_18):
+    MarginFi mints the A_TOKEN (supply) + DEBT_TOKEN (borrow) split, so its call-level
+    guard must ACCEPT either canonical minted value — returning the WHOLE supply+debt
+    fetch, not a per-type slice — and REJECT the pre-split ``LENDING`` literal, which
+    the stale guard used to whitelist while silently dropping the real minted type (a
+    capture gap masquerading as empty). Mirrors morpho.py's guard.
+    """
+    adapter = MarginfiReferenceDataAdapter()
+    with (
+        patch.object(adapter, "_fetch_bank_and_token_caches", return_value=(_SAMPLE_BANKS, _TOKEN_DECIMALS)),
+        patch(
+            "instruments_service.reference_data.adapters.defi.marginfi.batch_resolve_creation_timestamps",
+            return_value={},
+        ),
+    ):
+        unfiltered = await adapter.get_instruments()
+        a_tokens = await adapter.get_instruments(instrument_type=InstrumentType.A_TOKEN)
+        debt_tokens = await adapter.get_instruments(instrument_type=InstrumentType.DEBT_TOKEN)
+        stale_lending = await adapter.get_instruments(instrument_type=InstrumentType.LENDING)
+
+    assert unfiltered, "fixture is broken — unfiltered fetch returned no records"
+    assert {r.instrument_type for r in unfiltered} == {InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN}
+    # A canonical minted value is a call-level GUARD → the WHOLE fetch, both types.
+    assert a_tokens == unfiltered
+    assert debt_tokens == unfiltered
+    # The no-longer-minted LENDING literal must now filter to [].
+    assert stale_lending == []
 
 
 @pytest.mark.asyncio

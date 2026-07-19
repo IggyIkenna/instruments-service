@@ -77,7 +77,15 @@ class EulerV2ReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch all instruments from the venue."""
-        if instrument_type not in (None, InstrumentType.LENDING):
+        # ``instrument_type`` is a call-level GUARD (accept the whole fetch or reject
+        # it with []), not a per-record filter. This adapter MINTS the A_TOKEN (supply)
+        # + DEBT_TOKEN (borrow) split per vault (see ``_build_market_records`` /
+        # defi_lending_atoken_debttoken_instrument_split_2026_07_07.md), mirroring
+        # morpho.py — so accept exactly those minted types (+ None = unfiltered). The
+        # pre-split ``LENDING`` literal is no longer minted; the stale guard rejected
+        # the real minted type, silently returning [] (a capture gap masquerading as
+        # empty).
+        if instrument_type not in (None, InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN):
             return []
 
         venue_tag = f"EULER_V2-{self._chain}"

@@ -11,6 +11,7 @@ coverage at multiple aggregation levels:
   - per (asset_group, venue, instrument_type)                 [NEW v2]
   - per (asset_group, venue, instrument_type, data_type)      [NEW v2]
   - per (asset_group, date)                                   [NEW v2]
+  - per (asset_group, chain)                                  [chain-enum]
 
 Also computes Layer-1 enumeration-completeness (instrument denominator audit)
 via check_enumeration_completeness.py and adds a top-level ``layer_1`` block
@@ -180,6 +181,15 @@ _CAPTURE_STATUSES = ("captured", "empty_confirmed", "attempted_failed", "expecte
 _INDEX_BLOB_PATH = "_index/availability_index.parquet"
 # v2: added "instrument_type" for the new projections; "instrument_id" for dedup shard key.
 # Legacy buckets that lack either column degrade gracefully (see _read_parquet_safe).
+# chain-enum (2026-07-18): "chain" is the FIRST-tried superset column so the nightly
+# coverage.json can enumerate the distinct chains present per asset_group (the
+# deployment-api ``/data-status/distinct-values`` drift panel reads ``by_chain``'s
+# keys). ``chain`` is a shard axis only for defi (UAC SHARD_AXIS_MATRIX) but is read
+# for every AG so residual cross-AG chain drift (e.g. cefi CLOB-perp venue names
+# leaking a ``chain=SOLANA`` row) stays visible; the raw values are NOT collapsed.
+# A bucket whose parquet lacks ``chain`` cleanly falls through to _READ_COLUMNS (the
+# 6-col v2 read) so nothing else degrades — see _read_parquet_safe's tier order.
+_READ_COLUMNS_WITH_CHAIN = ["capture_status", "venue", "data_type", "date", "instrument_id", "instrument_type", "chain"]
 _READ_COLUMNS = ["capture_status", "venue", "data_type", "date", "instrument_id", "instrument_type"]
 # Preferred shard key (instrument-level dedup); fallback used when instrument_id absent.
 _READ_COLUMNS_FALLBACK = ["capture_status", "venue", "data_type", "date", "instrument_type"]
@@ -246,21 +256,30 @@ def _read_parquet_safe(
 ) -> pd.DataFrame | None:
     """Read the availability index parquet for a bucket, returning None on failure.
 
-    v2: attempts to read all 6 columns (capture_status, venue, data_type, date,
-    instrument_id, instrument_type). Falls back progressively:
-      1. All 6 columns (preferred — v2 full)
+    v2: attempts to read all 7 columns (capture_status, venue, data_type, date,
+    instrument_id, instrument_type, chain). Falls back progressively:
+      0. All 7 columns incl. chain (preferred — chain-enum)
+      1. 6 columns without chain (v2 full — buckets whose parquet predates chain)
       2. 5 columns without instrument_id (older pre-iid buckets)
       3. 4 columns without instrument_type (legacy pre-v2 buckets)
       4. 3 columns minimal (oldest buckets — no date/iid/itype)
-    A warning is logged for each degraded mode.
+    A warning is logged for each degraded mode. Tier 0 -> tier 1 is a SILENT
+    fall-through (a missing ``chain`` column is expected on any bucket written
+    before the chain axis existed and costs nothing beyond an empty by_chain).
     """
     uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
     try:
-        # Preferred: all 6 columns incl. instrument_id + instrument_type (v2).
+        # Preferred: all 7 columns incl. chain (chain-enum, 2026-07-18).
         # read_dictionary preserves the parquet's on-disk PLAIN_DICTIONARY
         # encoding as pandas `category` dtype instead of expanding every row
         # into a python-object string — the memory-bounded read (see the
         # _READ_COLUMNS comment above for the measured ~38.6x reduction).
+        return pd.read_parquet(uri, columns=_READ_COLUMNS_WITH_CHAIN, read_dictionary=_READ_COLUMNS_WITH_CHAIN)
+    except Exception:
+        pass  # bucket parquet lacks `chain` — fall through to the 6-col v2 read
+
+    try:
+        # v2 full: 6 columns incl. instrument_id + instrument_type, no chain.
         df = pd.read_parquet(uri, columns=_READ_COLUMNS, read_dictionary=_READ_COLUMNS)
         return df
     except Exception:
@@ -312,7 +331,13 @@ def _read_parquet_eu_only(bucket_name: str) -> pd.DataFrame | None:
     """
     uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
     eu_filter = [("capture_status", "==", "expected_unattempted")]
-    for cols in (_READ_COLUMNS, _READ_COLUMNS_FALLBACK, _READ_COLUMNS_LEGACY, _READ_COLUMNS_MIN):
+    for cols in (
+        _READ_COLUMNS_WITH_CHAIN,
+        _READ_COLUMNS,
+        _READ_COLUMNS_FALLBACK,
+        _READ_COLUMNS_LEGACY,
+        _READ_COLUMNS_MIN,
+    ):
         try:
             # read_dictionary: same column-prune hardening as _read_parquet_safe
             # (category dtype instead of python-object strings) — this read is
@@ -593,6 +618,7 @@ def _compute_coverage(
       by_venue_instrument_type       — ag → venue → itype → counts
       by_venue_instrument_type_data_type — ag → venue → itype → dt → counts
       by_day                         — ag → date → counts
+      by_chain                       — ag → chain → counts  [chain-enum 2026-07-18]
 
     New v2 top-level block:
       layer_1                        — AgLayer1Result per AG
@@ -611,6 +637,12 @@ def _compute_coverage(
     by_venue_instrument_type: dict[str, dict[str, dict[str, object]]] = {}
     by_venue_instrument_type_data_type: dict[str, dict[str, dict[str, dict[str, object]]]] = {}
     by_day: dict[str, dict[str, object]] = {}
+    # chain-enum (2026-07-18): distinct chains present per asset_group. Its KEYS are
+    # the raw ``chain`` values the manifest actually carries — the enumeration the
+    # deployment-api ``/data-status/distinct-values`` drift panel badges against the
+    # UAC canonical chain set. Raw + uncollapsed by design (case/spelling drift must
+    # survive). Empty for AGs whose bucket parquet lacks the ``chain`` column.
+    by_chain: dict[str, dict[str, object]] = {}
 
     # Layer-1 check (enumeration completeness)
     layer_1_by_ag: dict[str, object] = {}
@@ -683,6 +715,19 @@ def _compute_coverage(
             logger.warning("  [%s] date column absent — by_day will be empty", ag)
         by_day[ag] = day_group
 
+        # level 7 — per (ag, chain) [chain-enum 2026-07-18]
+        # observed=True mirrors the by_venue projection (chain can be `category`
+        # dtype from the read_dictionary hardening). Guarded on column presence so
+        # a bucket whose parquet predates the chain axis yields an empty {} rather
+        # than raising — that AG simply has no enumerable chains.
+        chain_group: dict[str, object] = {}
+        if "chain" in df_l2.columns:
+            for chain_val, cdf in df_l2.groupby("chain", observed=True):
+                chain_group[str(chain_val)] = _count_statuses(cdf)
+        else:
+            logger.info("  [%s] chain column absent — by_chain will be empty", ag)
+        by_chain[ag] = chain_group
+
         # Layer-1 enumeration completeness check — uses the UNFILTERED df so
         # stray tuples (writer emissions UAC doesn't sanction) remain visible.
         logger.info("  Running Layer-1 completeness check for %s …", ag)
@@ -725,6 +770,7 @@ def _compute_coverage(
         "by_venue_instrument_type": by_venue_instrument_type,
         "by_venue_instrument_type_data_type": by_venue_instrument_type_data_type,
         "by_day": by_day,
+        "by_chain": by_chain,
         "layer_1": {"by_asset_group": layer_1_by_ag},
     }
 
