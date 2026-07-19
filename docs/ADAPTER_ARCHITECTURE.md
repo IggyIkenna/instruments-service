@@ -313,9 +313,13 @@ build_canonical_instrument_id(AssetGroup.CEFI, "bybit", InstrumentType.PERPETUAL
 
 # DeFi (VENUE-CHAIN composition) — lending protocols emit two InstrumentRecords
 # per position-bearing reserve/market: supply side (A_TOKEN) + borrow side
-# (DEBT_TOKEN). LENDING is not a real InstrumentType member (see the grammar
-# below) — the shared builder is passed the already on-chain-cased supply/debt
-# symbol verbatim, matching aave_v3.py's real a_symbol/debt_symbol construction.
+# (DEBT_TOKEN). instruments-service lending ADAPTERS do NOT emit the market-level
+# LENDING type — HOLDINGS use the A_TOKEN/DEBT_TOKEN split (the operator-ruled
+# reference SSOT). (LENDING / SOLANA_LENDING ARE real InstrumentType members,
+# still keyed by MTDS market/event lending data_types — lending_indices etc. —
+# on an interim basis; see PM issues/canonical_closeout_open_questions § D.) The
+# shared builder is passed the already on-chain-cased supply/debt symbol verbatim,
+# matching aave_v3.py's real a_symbol/debt_symbol construction.
 build_canonical_instrument_id(AssetGroup.DEFI, "aave_v3", InstrumentType.A_TOKEN, "AUSDC", chain="arbitrum")
 # → "AAVE_V3-ARBITRUM:A_TOKEN:AUSDC"
 build_canonical_instrument_id(AssetGroup.DEFI, "aave_v3", InstrumentType.DEBT_TOKEN, "DEBTUSDC", chain="arbitrum")
