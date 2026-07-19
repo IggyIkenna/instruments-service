@@ -91,7 +91,9 @@ def test_build_feed_record_sol_usd() -> None:
     assert record is not None
     assert isinstance(record, InstrumentRecord)
     assert record.venue == "PYTH-SOLANA"
-    assert record.instrument_key == "PYTH-SOLANA:SPOT:SOL-USD"
+    # Key TYPE segment is the real SPOT_PAIR enum value (minted via
+    # build_canonical_instrument_id), not the pre-fix `:SPOT:` shorthand.
+    assert record.instrument_key == "PYTH-SOLANA:SPOT_PAIR:SOL-USD"
     # raw_symbol is the Pyth feed ID
     assert record.raw_symbol == _SOL_FEED_ID
     assert record.instrument_type == InstrumentType.SPOT_PAIR

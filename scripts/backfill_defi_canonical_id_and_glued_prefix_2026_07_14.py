@@ -12,16 +12,26 @@ This script performs the SAME two fixes a full rebuild would have applied,
 directly on the live `prod/catalog.parquet`, without touching `by_date` or
 re-deriving any row from scratch:
 
-1. ``canonical_instrument_id`` backfill — blank -> ``instrument_id``. This is
-   always correct by construction, not an approximation: for non-pool rows
-   the catalog's own ``instrument_id`` already IS the resolved instrument_key
-   form (canonical_instrument_id_cefi_defi_backfill_2026_07_14.md policy:
-   canonical_instrument_id := instrument_key); for POOL rows, the catalog's
-   ``instrument_id`` is BY DEFINITION ``pool_address.lower()``
-   (build_instrument_catalogue.py::_defi_pool_dual_form's docstring), which is
-   also exactly what canonical_instrument_id is defined to be for a pool row.
-   So ``catalog.instrument_id == canonical_instrument_id`` holds for every
-   row, pool or not — no recomputation needed, just a copy.
+1. ``canonical_instrument_id`` backfill — blank -> ``instrument_id`` for
+   NON-POOL rows ONLY. For a non-pool row the catalog's own ``instrument_id``
+   already IS the resolved instrument_key form
+   (canonical_instrument_id_cefi_defi_backfill_2026_07_14.md policy:
+   canonical_instrument_id := instrument_key), so the two CONVERGE and the
+   blank-fill copy is correct by construction.
+
+   POOL rows are the Option-A exception (operator ruling 2026-07-18, the
+   DeFi two-id model): they legitimately DIVERGE — the machine
+   ``instrument_id`` is ``pool_address.lower()`` (the manifest + MTDS
+   content-join key), while the symbolic ``canonical_instrument_id`` is the
+   glued ``VENUE-CHAIN:POOL:BASE-QUOTE[-FEE_BPS]`` key (the ``glued_pair_id``
+   column), NOT the address. So this script must NOT converge a POOL row by
+   copying its address-form ``instrument_id`` into a blank
+   ``canonical_instrument_id`` — that would overwrite the correct symbolic id
+   with the pool address. POOL rows are therefore EXCLUDED from the blank-fill
+   (identified by a non-blank ``glued_pair_id``); their canonical id is left
+   as-is for the Option-A catalogue rollup / the Wave-D reclass. The code does
+   NOT enforce convergence on POOL rows — pinned by
+   ``tests/unit/scripts/test_backfill_defi_canonical_id_pool_divergence_2026_07_14.py``.
 
 2. ``glued_pair_id`` venue-prefix fix — for POOL rows, the venue-chain prefix
    (everything before the first ``:``) gets the SAME idempotent regex
@@ -82,16 +92,27 @@ def migrate(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     """Return the patched dataframe + a summary of rows touched."""
     out = df.copy()
 
+    # Blank-fill canonical_instrument_id := instrument_id for NON-POOL rows only —
+    # those CONVERGE by construction (canonical := instrument_key := instrument_id).
+    # POOL rows legitimately DIVERGE (Option A, two-id model): their symbolic
+    # canonical_instrument_id is the glued key (the ``glued_pair_id`` column), NOT
+    # the pool address that lives in ``instrument_id``. Converging a POOL row here
+    # would overwrite the correct symbolic id with the address, so POOL rows —
+    # identified by a non-blank ``glued_pair_id`` — are EXCLUDED from the copy.
+    # This is why the code does NOT enforce convergence on POOL rows.
+    glued = out["glued_pair_id"].fillna("")
+    is_pool = glued != ""
     canonical_blank = out["canonical_instrument_id"].fillna("") == ""
-    out.loc[canonical_blank, "canonical_instrument_id"] = out.loc[canonical_blank, "instrument_id"]
+    nonpool_canonical_blank = canonical_blank & ~is_pool
+    out.loc[nonpool_canonical_blank, "canonical_instrument_id"] = out.loc[nonpool_canonical_blank, "instrument_id"]
 
-    glued_nonblank = out["glued_pair_id"].fillna("") != ""
+    glued_nonblank = is_pool
     fixed_prefix = out.loc[glued_nonblank, "glued_pair_id"].map(_fix_glued_prefix)
     prefix_changed_count = int((fixed_prefix != out.loc[glued_nonblank, "glued_pair_id"]).sum())
     out.loc[glued_nonblank, "glued_pair_id"] = fixed_prefix
 
     summary = {
-        "canonical_instrument_id_backfilled": int(canonical_blank.sum()),
+        "canonical_instrument_id_backfilled": int(nonpool_canonical_blank.sum()),
         "glued_pair_id_prefix_fixed": prefix_changed_count,
         "rows_total": len(out),
     }
