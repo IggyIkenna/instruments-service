@@ -344,7 +344,10 @@ def test_rollup_defi_pool_emits_dual_form_ids(rollup: ModuleType) -> None:
     assert row["instrument_id"] == "0x45dda9cb7c25131df268515131f647d726f50608"
     assert row["venue"] == "UNISWAP_V3"
     assert row["chain"] == "POLYGON"
-    assert row["glued_pair_id"] == "UNISWAP_V3-POLYGON:POOL:USDC-WETH:500"
+    # glued_pair_id is the canonical 3-segment form (fee hyphen-glued INTO the symbol
+    # segment, never a 4th colon) after the UAC POOL-key 4→3-seg convergence
+    # (operator ruling 2026-07-18); the retired `…:USDC-WETH:500` shape is gone.
+    assert row["glued_pair_id"] == "UNISWAP_V3-POLYGON:POOL:USDC-WETH-500"
     assert row["pool_address"] == "0x45dda9cb7c25131df268515131f647d726f50608"
 
 

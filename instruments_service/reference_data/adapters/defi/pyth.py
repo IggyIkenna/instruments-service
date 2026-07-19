@@ -1,8 +1,12 @@
 """Pyth Network oracle price adapter — Solana on-chain price feed discovery.
 
 Discovers Pyth price feed accounts for major Solana asset pairs. Returns oracle
-price feeds as InstrumentRecord with instrument_type=SPOT, capturing confidence
-intervals and publish_time from the Hermes batch endpoint.
+price feeds as InstrumentRecord with instrument_type=SPOT_PAIR (each feed is a
+two-token quoted pair, e.g. `SOL-USD`), capturing confidence intervals and
+publish_time from the Hermes batch endpoint. The `instrument_key` is built via
+`build_canonical_instrument_id` so its middle TYPE segment is the real
+`InstrumentType.SPOT_PAIR` enum value (`PYTH-SOLANA:SPOT_PAIR:SOL-USD`), not the
+pre-fix `:SPOT:` shorthand literal that mismatched the `SPOT_PAIR` field.
 
 Pyth is UNBANNED for Solana on-chain price feeds (CLAUDE.md 2026-05-06).
 Solana-only; other chains use Chainlink.
@@ -32,7 +36,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -242,7 +246,14 @@ class PythOracleReferenceDataAdapter(BaseReferenceDataAdapter):
         base_asset = parts[0].strip().upper()
         quote_asset = parts[1].strip().upper()
 
-        instrument_key = f"{self.venue}:SPOT:{base_asset}-{quote_asset}"
+        # Route through the shared canonical builder so the emitted TYPE segment
+        # is the real InstrumentType enum value (SPOT_PAIR), not the old `:SPOT:`
+        # shorthand that mismatched the field. A Pyth feed is a two-token quoted
+        # pair, so it passes the DeFi SPOT_PAIR two-token validator. venue already
+        # carries the composed VENUE-CHAIN token → passthrough=True keeps the id.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, self.venue, InstrumentType.SPOT_PAIR, f"{base_asset}-{quote_asset}", passthrough=True
+        )
 
         return InstrumentRecord(
             instrument_key=instrument_key,
