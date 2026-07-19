@@ -206,7 +206,16 @@ SPORTS_PLAYER_INSTRUMENT_TYPE = "player"
 #: roll-up reads — ONE combined by_date walk covers all three (single-walk
 #: discipline, codex/02-data/availability-manifest-and-data-status.md: a
 #: separate whole-corpus walk per entity is review-blocking).
-SPORTS_FIXTURE_ENTITY = "fixtures"
+# The LIVE fixtures entity. The 2026-05-23 split moved the writer to
+# `entity=fixtures_schedule` (+ `entity=fixtures_outcomes` for scores/results) but left
+# consumers pinned to the old `entity=fixtures`, which STOPPED being written on that date.
+# The catalogue was therefore rolling up a ~2-month-frozen corpus: measured 2026-07-19,
+# `entity=fixtures` newest write 2026-05-23 vs `fixtures_schedule` 2026-07-18. That is why
+# `round` read 0.7% in the catalogue while raw sat at 90-99% — a CONSUMER-migration bug, not
+# a capture gap. This rollup reads only SCHEDULE fields (af_home_name / af_away_name / date /
+# timestamp / round), all 100% populated on the schedule leg, so no outcomes join is needed.
+# SSOT: sports_features_layer_findings_sweep_2026_07_18 section R.
+SPORTS_FIXTURE_ENTITY = "fixtures_schedule"
 SPORTS_TEAM_ENTITY = "teams"
 #: Real captured per-player source. API-Football ``entity=injuries`` rows carry
 #: a real ``player_id``/``player_name``/``team_id`` (verified against real prod
