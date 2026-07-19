@@ -42,7 +42,7 @@ from datetime import date as _date
 
 import pandas as pd
 from unified_api_contracts import PipelineMode
-from unified_api_contracts.sports import get_league
+from unified_api_contracts.sports import get_league, get_league_by_api_football_id
 from unified_trading_library import ManifestWriter, classify_and_emit_error, resolve_bucket_name
 
 from instruments_service.engine.orchestrator import (
@@ -96,6 +96,31 @@ def _resolve_today(today: _date | str | None) -> _date:
 def _status_refresh_window(today: _date, min_age_days: int, lookback_days: int) -> list[_date]:
     """Return the trailing window ``[today - min_age_days - lookback_days, today - min_age_days]``."""
     return [today - timedelta(days=i) for i in range(min_age_days, min_age_days + lookback_days)]
+
+
+def _resolve_stale_league(lid: str) -> int | None:
+    """Resolve a ``_find_stale_fixture_leagues_for_date`` entry to an api_football id.
+
+    That scan's ``league_id`` values come from whatever the captured parquet
+    carries: a canonical string (``"EPL"``) for rows written after the
+    ``_canonical_league_id`` (CF-7) normalization landed, OR a raw numeric
+    partition-derived string (``"129"``) for legacy blobs whose ``league_id``
+    column predates it (path-injection fallback in
+    ``_read_per_league_entity_df``, see
+    ``api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19.md``).
+    ``get_league()`` only accepts canonical strings — a raw-numeric entry
+    silently resolved to ``None`` and was dropped from every re-fetch,
+    forever, with no error. Mirrors ``_canonical_league_id``'s own numeric
+    resolution pass.
+    """
+    league = get_league(lid)
+    if league is not None:
+        return league.api_football_id
+    if lid.isdigit():
+        numeric_league = get_league_by_api_football_id(int(lid))
+        if numeric_league is not None:
+            return numeric_league.api_football_id
+    return None
 
 
 async def run_sports_fixture_status_refresh(
@@ -183,10 +208,21 @@ async def run_sports_fixture_status_refresh(
             continue
 
         af_ids: list[int] = []
+        unresolved: list[str] = []
         for lid in sorted(stale_leagues):
-            ld = get_league(lid)
-            if ld is not None and ld.api_football_id is not None:
-                af_ids.append(ld.api_football_id)
+            af_id = _resolve_stale_league(lid)
+            if af_id is not None:
+                af_ids.append(af_id)
+            else:
+                unresolved.append(lid)
+        if unresolved:
+            logger.warning(
+                "sports.fixtures.status_refresh: date=%s could not resolve %d stale league_id(s) to an "
+                "api_football id — skipped, not re-fetched: %s",
+                day_str,
+                len(unresolved),
+                unresolved,
+            )
         if not af_ids:
             continue
 
