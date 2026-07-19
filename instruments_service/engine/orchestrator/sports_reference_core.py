@@ -32,6 +32,7 @@ else:  # pragma: no cover - runtime namespace indirection
 
 __all__ = [
     "_AfManifestHooks",
+    "_close_stale_enrichment_expected_unattempted_cells",
     "_fetch_injuries",
     "_fetch_teams_and_standings",
     "_list_present_parquet_leagues",
@@ -225,6 +226,96 @@ class _AfManifestHooks:
                 pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
                 source=_orch._sports_ref_source(data_type.lower()),
             )
+
+
+def _close_stale_enrichment_expected_unattempted_cells(
+    *,
+    manifest: _orch.ManifestWriter,
+    stuck_cells: _orch.pd.DataFrame,
+    fixtures_empty_reason_by_date_league: dict[tuple[str, str], str],
+) -> dict[str, int]:
+    """Close residual ``expected_unattempted`` cells for the 4 per-fixture ENRICHMENT
+    entities (FIXTURE_EVENTS/FIXTURE_LINEUPS/FIXTURE_STATS/PLAYER_STATS) — but ONLY the
+    subset that is provably an honest off-season/no-fixture/no-coverage absence, never a
+    genuine pending-fetch gap.
+
+    Live spot-check (this issue doc, 2026-07-19): a naive mirror of ``process_write.py``'s
+    ``_expected_af_lids - _captured_lids`` FIXTURES closer is UNSAFE here. Sampled 3 stuck
+    FIXTURE_STATS cells (date=2020-06-14, AUSTRIAN_2_LIGA/AUSTRIAN_BUNDESLIGA/
+    GREEK_SUPER_LEAGUE) — for ALL three, ``is_league_entity_covered(league, "FIXTURE_STATS")``
+    is ``True`` (so a naive closer would fall through to ``get_league_fixture_calendar`` and
+    stamp ``EXPECTED_NO_FIXTURE``), yet the manifest shows FIXTURES ``captured`` for the SAME
+    (date, league) on 2 of the 3, and for GREEK_SUPER_LEAGUE the SIBLING FIXTURE_EVENTS/
+    FIXTURE_LINEUPS entities are ALSO ``captured`` for the identical cell — i.e. a real
+    fixture demonstrably existed and was even successfully enriched by sibling entities;
+    FIXTURE_STATS specifically was simply never attempted (a genuine pending-fetch gap, most
+    likely from a historical backfill run whose ``entities_to_fetch`` scope excluded
+    FIXTURE_STATS). Stamping ``EXPECTED_NO_FIXTURE`` there would be false-empty corruption —
+    the exact failure mode this codebase has already paid to fix elsewhere (see
+    ``sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14``).
+
+    Safety design: a cell is closed ONLY when the classification is independently provable
+    without assuming absence:
+      1. ``is_league_entity_covered(league, entity)`` is ``False`` → ``EXPECTED_NO_PROVIDER_
+         COVERAGE``. This is a provider-capability fact, independent of whether a fixture
+         existed that date, so it is always safe.
+      2. Else, the FIXTURES entity's OWN manifest row for the SAME (date, league) is
+         ``empty_confirmed`` (i.e. FIXTURES *itself* already proved no fixture existed there
+         that date) → mirror that SAME reason (``EXPECTED_PAUSED_LEAGUE``/``EXPECTED_NO_
+         FIXTURE``) onto the enrichment cell. This never guesses; it reuses an already-proven
+         fact from the corpus.
+      3. Otherwise (coverage says yes AND FIXTURES shows ``captured`` or is itself still
+         pending) → **do not touch the cell**. It is left ``expected_unattempted`` exactly as
+         it is today — a genuine pending-fetch gap that needs a real re-fetch, not a
+         classification.
+
+    Args:
+        manifest: Writer for the ``record_empty`` calls emitted per closeable league.
+        stuck_cells: Slim manifest rows (``date``, ``data_type``, ``league_id`` columns)
+            already filtered by the caller to genuinely-stuck cells for the 4 enrichment
+            entities (``capture_status == "expected_unattempted"``, blank ``error_reason`` —
+            same pending_fetch definition as ``query_api_football_pending_clusters_2026_07_18.py``).
+        fixtures_empty_reason_by_date_league: ``{(date, league_id): error_reason}`` for every
+            FIXTURES row that is ``empty_confirmed`` — the caller's single manifest read
+            already covers this alongside ``stuck_cells`` (no extra corpus walk).
+
+    Returns:
+        ``{f"{date}/{data_type}": n_leagues_closed}`` per (date, entity) group that had at
+        least one league closed. Leagues left untouched (genuine pending-fetch gaps) are
+        NOT counted — they remain visible to the standard pending_fetch gate.
+    """
+    counts: dict[str, int] = {}
+    for (date, data_type), group in stuck_cells.groupby(["date", "data_type"]):
+        _date_str = str(date)
+        _dt_str = str(data_type)
+        _attempt_ts = _orch.datetime.now(_orch.UTC)
+        _closed = 0
+        for _lid in sorted({str(lid) for lid in group["league_id"].dropna().unique() if str(lid)}):
+            if not _orch.is_league_entity_covered(_lid, _dt_str):
+                manifest.record_empty(
+                    row_key={"date": _date_str, "data_type": _dt_str, "league_id": _lid},
+                    attempted_at=_attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_NO_PROVIDER_COVERAGE,
+                    pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source(_dt_str.lower()),
+                )
+                _closed += 1
+                continue
+            _fixtures_reason = fixtures_empty_reason_by_date_league.get((_date_str, _lid))
+            if _fixtures_reason:
+                manifest.record_empty(
+                    row_key={"date": _date_str, "data_type": _dt_str, "league_id": _lid},
+                    attempted_at=_attempt_ts,
+                    reason=_fixtures_reason,
+                    pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source(_dt_str.lower()),
+                )
+                _closed += 1
+            # else: FIXTURES shows captured (or is itself still pending) for this
+            # (date, league) — a genuine pending-fetch gap. Leave untouched.
+        if _closed:
+            counts[f"{_date_str}/{_dt_str}"] = _closed
+    return counts
 
 
 async def _fetch_teams_and_standings(
