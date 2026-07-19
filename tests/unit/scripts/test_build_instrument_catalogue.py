@@ -387,6 +387,57 @@ def test_rollup_defi_pool_dual_form_round_trips_via_converter(rollup: ModuleType
     assert parsed.fee == "100"
 
 
+def test_rollup_solana_amm_pool_discriminator_survives_into_glued_pair_id(rollup: ModuleType) -> None:
+    """Solana-AMM POOL (orca/raydium, Wave B): the tick-spacing / pool-type discriminator
+    folded into the 3-seg symbol (``…:SOL-USDC-WP64``) survives into the re-derived
+    ``glued_pair_id``, so it stays byte-identical to the passthrough
+    ``canonical_instrument_id`` — even with NO structured ``pool_fee_tier`` column."""
+    d1 = date(2024, 1, 1)
+    addr = "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ"
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "ORCA-SOLANA:POOL:SOL-USDC-WP64",
+                            "canonical_instrument_id": "ORCA-SOLANA:POOL:SOL-USDC-WP64",
+                            "venue": "ORCA-SOLANA",
+                            "instrument_type": "POOL",
+                            "raw_symbol": addr,
+                            "pool_address": addr,
+                            "base_asset": "SOL",
+                            "quote_asset": "USDC",
+                            "pool_fee_tier": None,
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    # machine id = pool_address.lower(); symbolic columns keep the WP64 discriminator + agree.
+    assert row["instrument_id"] == addr.lower()
+    assert row["venue"] == "ORCA"
+    assert row["chain"] == "SOLANA"
+    assert row["glued_pair_id"] == "ORCA-SOLANA:POOL:SOL-USDC-WP64"
+    assert row["canonical_instrument_id"] == "ORCA-SOLANA:POOL:SOL-USDC-WP64"
+    assert row["glued_pair_id"] == row["canonical_instrument_id"]
+
+
+def test_pool_symbol_discriminator_helper(rollup: ModuleType) -> None:
+    """``_pool_symbol_discriminator`` peels the trailing hyphen-glued discriminator off a
+    3-seg POOL symbol, and returns "" for plain pairs / non-POOL / blank-pair keys."""
+    f = rollup._pool_symbol_discriminator
+    assert f("ORCA-SOLANA:POOL:SOL-USDC-WP64", "SOL", "USDC") == "WP64"
+    assert f("RAYDIUM-SOLANA:POOL:SOL-USDC-Standard", "SOL", "USDC") == "Standard"
+    assert f("UNISWAP_V3-ARBITRUM:POOL:USDC-WETH", "USDC", "WETH") == ""  # plain pair, no disc
+    assert f("UNISWAP_V3-ARBITRUM:POOL:USDC-WETH:500", "USDC", "WETH") == ""  # legacy 4-seg
+    assert f("BINANCE:PERPETUAL:BTC-USD", "BTC", "USD") == ""  # non-POOL
+    assert f("ORCA-SOLANA:POOL:SOL-USDC-WP64", "", "") == ""  # blank base/quote
+
+
 def test_rollup_defi_pool_spelling_variants_collapse_to_one_open_lifecycle(rollup: ModuleType) -> None:
     """Phase 2 premature-delisting fix: the SAME physical pool seen under two venue
     spellings (``UNISWAPV3`` early, ``UNISWAP_V3`` later — the ~2026-05-08 adapter

@@ -864,6 +864,34 @@ class TestRaydiumAdapter:
         adapter = RaydiumReferenceDataAdapter()
         assert adapter._build_pool_record({"id": "x", "mintA": {}, "mintB": {}}) is None
 
+    def test_build_pool_record_canonical_id_is_3seg_pool_type_folded(self) -> None:
+        """Wave B: canonical id is the 3-seg glued form (pool-type hyphen-glued, NOT a 4th colon).
+
+        Two-id model: canonical_instrument_id is symbolic (2 colons); the machine id
+        (raw_symbol / pool_address) is the case-preserved Solana pool address.
+        """
+        from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
+
+        adapter = RaydiumReferenceDataAdapter()
+        address = "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2"
+        record = adapter._build_pool_record(
+            {
+                "id": address,
+                "mintA": {"symbol": "SOL", "decimals": 9},
+                "mintB": {"symbol": "USDC", "decimals": 6},
+                "tvl": 50000,
+                "openTime": "1677000000",
+                "type": "Standard",
+            }
+        )
+        assert record is not None
+        assert record.canonical_instrument_id == "RAYDIUM-SOLANA:POOL:SOL-USDC-Standard"
+        assert record.instrument_key == record.canonical_instrument_id
+        assert record.canonical_instrument_id.count(":") == 2  # 3-seg, never a 4th colon
+        # machine id stays the case-preserved Solana address (NOT lowercased / colon-split)
+        assert record.raw_symbol == address
+        assert record.pool_address == address
+
     def test_extract_token_symbol_dict(self) -> None:
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
@@ -899,11 +927,19 @@ class TestRaydiumAdapter:
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        record = adapter._build_historical_pool_record("pool_123abc")
+        pool_id = "9Wm8Ugm2c1Cq4pFY8kAY8SjZ6d3ppM8ZpvVmwHkQ7Bx"
+        record = adapter._build_historical_pool_record(pool_id)
         assert record is not None
         assert record.status == InstrumentStatus.DELISTED
         assert record.base_asset == "UNKNOWN"
+        # Wave B: 3-seg glued form — the historical marker is hyphen-glued into the symbol,
+        # NEVER a 4th colon; the Solana pool_id is case-preserved as symbol + machine id.
+        assert record.instrument_key == f"RAYDIUM-SOLANA:POOL:{pool_id}-Historical"
+        assert record.instrument_key.count(":") == 2
         assert "Historical" in record.instrument_key
+        assert record.canonical_instrument_id == record.instrument_key
+        assert record.raw_symbol == pool_id
+        assert record.pool_address == pool_id
 
     @pytest.mark.asyncio
     async def test_get_instruments_with_historical(self) -> None:
@@ -1559,6 +1595,33 @@ class TestOrcaAdapter:
             }
         )
         assert result is None
+
+    def test_build_pool_record_canonical_id_is_3seg_tick_spacing_folded(self) -> None:
+        """Wave B: canonical id is the 3-seg glued form (tick-spacing hyphen-glued, NOT a 4th colon).
+
+        Two-id model: canonical_instrument_id is symbolic (2 colons); the machine id
+        (raw_symbol / pool_address) is the case-preserved Solana pool address.
+        """
+        from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
+
+        adapter = OrcaReferenceDataAdapter()
+        address = "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ"
+        record = adapter._build_pool_record(
+            {
+                "address": address,
+                "tokenA": {"symbol": "SOL", "decimals": 9},
+                "tokenB": {"symbol": "USDC", "decimals": 6},
+                "tvl": 50000,
+                "tickSpacing": 64,
+            }
+        )
+        assert record is not None
+        assert record.canonical_instrument_id == "ORCA-SOLANA:POOL:SOL-USDC-WP64"
+        assert record.instrument_key == record.canonical_instrument_id
+        assert record.canonical_instrument_id.count(":") == 2  # 3-seg, never a 4th colon
+        # machine id stays the case-preserved Solana address (NOT lowercased / colon-split)
+        assert record.raw_symbol == address
+        assert record.pool_address == address
 
     def test_classify_orca_error(self) -> None:
         from instruments_service.reference_data.adapters.defi.orca import _classify_orca_error
