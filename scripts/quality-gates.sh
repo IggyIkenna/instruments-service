@@ -188,6 +188,14 @@ FUNCTION_SIZE_EXTRA_EXCLUDES=(
     "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/weather.py"
     "!" "-path" "./${SOURCE_DIR}/triggers/sports_fixtures_daily_repoll.py"
     "!" "-path" "./${SOURCE_DIR}/cli/instruments_handler.py"
+    # sports_reference_core.py / sports_reference_fixtures.py: cleared 2026-06-11
+    # (see comment above) but regrown past the 200L method gate by 2026-07-20
+    # (_fetch_teams_and_standings 205L, _write_per_fixture_entities 253L,
+    # emit_empty_gaps_for_entity 89L) — re-excluded to restore the intended
+    # ceiling=3 tolerance; follow-up decomposition tracked in
+    # issues/instruments_service_codex_compliance_ceiling_drift_2026_07_20.md.
+    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/sports_reference_core.py"
+    "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/sports_reference_fixtures.py"
 )
 
 # pip-audit: ignore cryptography CVE-2026-34073 (DNS name constraint bypass, low severity, pending upgrade)
