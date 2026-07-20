@@ -30,6 +30,7 @@ from .adapters.defi.balancer import BalancerReferenceDataAdapter
 from .adapters.defi.beefy import BeefyReferenceDataAdapter
 from .adapters.defi.benqi import BenqiReferenceDataAdapter
 from .adapters.defi.cbeth import CbethReferenceDataAdapter
+from .adapters.defi.chainlink import ChainlinkOracleReferenceDataAdapter
 from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.defi.convex import ConvexReferenceDataAdapter
 from .adapters.defi.curve import CurveReferenceDataAdapter
@@ -166,6 +167,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "phoenix": PhoenixReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "polymarket_perp": PolymarketPerpReferenceDataAdapter,
+    "chainlink": ChainlinkOracleReferenceDataAdapter,
     "pyth": PythOracleReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
     "puffer": PufferReferenceDataAdapter,
@@ -250,9 +252,15 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "meteora": "",
     "lifinity": "",
     "phoenix": "",
-    # Pyth Network oracle — Hermes REST + on-chain, no API key needed
-    # (CHAINLINK-* stays out of this table: no adapter class exists yet, see
-    # factory._ADAPTERS + venue_adapter_keys.py, 2026-07-20 BLK-0c7b82fe).
+    # Pyth Network / Chainlink oracles — Hermes REST + on-chain reads, no API key needed.
+    # BLK-0c7b82fe RESOLVED (2026-07-20): the "no adapter class exists yet" precondition that kept
+    # CHAINLINK out of this table no longer holds — ChainlinkOracleReferenceDataAdapter now exists and
+    # is registered in _ADAPTERS above. Registration alone does NOT move the defi denominator:
+    # _build_defi_venues() derives from _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX + _STATIC_DEFI_VENUES +
+    # _SOLANA_DEFI_VENUES, NOT from _ADAPTERS, so the strict set-equality drift guard stays 93 == 93.
+    # Declaring CHAINLINK-* live in UAC (phase=live + VENUE_TO_ADAPTER_KEY) and adding it to
+    # _STATIC_DEFI_VENUES is the REMAINING coordinated step — adapter first, declaration second.
+    "chainlink": "",
     "pyth": "",
     # Solana lending adapters (2026-07-09) — public REST/JSON APIs, no API key needed.
     "solend": "",
@@ -355,6 +363,7 @@ _DEFI_GRAPH_ADAPTERS: frozenset[str] = frozenset(
         "lifinity",
         "phoenix",
         "pyth",
+        "chainlink",
         # Multi-chain LST/LRT/restaking adapters (2026-05-12 latent fix —
         # these were registered for multiple canonical venues earlier in the
         # session but were missing from this set, so non-Ethereum venues
