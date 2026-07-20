@@ -98,6 +98,18 @@ Usage::
     # Per-day corpus: full real sweep (all real day/venue files)
     .venv/bin/python scripts/canonicalize_tradfi_catalogue_usd_lin_2026_07_18.py \\
         --by-day --apply --by-day-full-sweep --workers 40
+
+    # Per-day corpus: SHARDED full sweep — the only way to actually go faster.
+    # The per-row canonicalization is pure Python and therefore GIL-bound: --workers saturates
+    # ~1.3 cores no matter how high it is set. MEASURED 2026-07-20 on an in-region e2-standard-16
+    # with --workers 64: 130%% of 1600%% CPU, 86%% idle, ~1.0 files/s => ~7.4h for the 27.1k-file
+    # sweep — statistically indistinguishable from the cross-region laptop run it was supposed to
+    # beat, because GCS latency was never the bottleneck. Run one PROCESS per core over disjoint
+    # shards instead (16 shards x --workers 8 on a 16-vCPU box):
+    for i in $(seq 0 15); do
+        .venv/bin/python scripts/canonicalize_tradfi_catalogue_usd_lin_2026_07_18.py \\
+            --by-day --apply --by-day-full-sweep --workers 8 --shard-of 16 --shard-index "$i" &
+    done; wait
 """
 
 from __future__ import annotations
@@ -573,6 +585,25 @@ def _resolve_venue_dirs(bucket, prefix: str) -> list[str]:  # Bucket (avoid deep
     return resolved
 
 
+def shard_slice(files: list[str], *, shard_of: int, shard_index: int) -> list[str]:
+    """Return this process's disjoint slice of ``files`` (stride partition).
+
+    Public (no leading underscore) because it is the unit under test for the
+    disjoint-AND-exhaustive property that makes an N-process ``--apply`` fan-out safe:
+    every path lands in EXACTLY one shard, so two concurrent shards can never
+    read-modify-write the same object and race each other's rewrite.
+
+    Striding (``files[i::n]``) rather than contiguous blocks (``files[i*k:(i+1)*k]``)
+    also spreads the large CME/CBOE files — which dominate per-file runtime — evenly
+    across shards instead of piling them onto whichever shard owns that block.
+    """
+    if shard_of < 1:
+        raise ValueError(f"shard_of must be >= 1 (got {shard_of})")
+    if not 0 <= shard_index < shard_of:
+        raise ValueError(f"shard_index must satisfy 0 <= index < shard_of={shard_of} (got {shard_index})")
+    return files[shard_index::shard_of]
+
+
 def _list_by_date_files(
     storage_client, bucket_name: str
 ) -> list[str]:  # StorageClient (avoid deep-import for type-only use)
@@ -671,13 +702,25 @@ def _migrate_one_by_day_file(  # StorageClient (avoid deep-import for type-only 
     return summary
 
 
-def _migrate_by_day(*, apply: bool, full_sweep: bool, sample_size: int, workers: int) -> int:
+def _migrate_by_day(
+    *, apply: bool, full_sweep: bool, sample_size: int, workers: int, shard_of: int = 1, shard_index: int = 0
+) -> int:
     bucket_name = _bucket_name()
     storage_client = get_storage_client()
     files = _list_by_date_files(storage_client, bucket_name)
     logger.info("Real per-day-per-venue files found (single delimited listing): %d", len(files))
 
     scope = files if full_sweep else files[:sample_size]
+    if shard_of > 1:
+        before = len(scope)
+        scope = shard_slice(scope, shard_of=shard_of, shard_index=shard_index)
+        logger.info(
+            "Shard %d/%d: %d of %d file(s) in this process's disjoint slice.",
+            shard_index,
+            shard_of,
+            len(scope),
+            before,
+        )
     logger.info(
         "%s %d file(s) (%s) with %d workers...",
         "Migrating" if apply else "Analyzing (DRY-RUN, no writes)",
@@ -755,13 +798,19 @@ def _migrate_by_day(*, apply: bool, full_sweep: bool, sample_size: int, workers:
 
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     env = _deployment_env()
-    quarantine_path = f"{env}/backups/by_date_usdlin_quarantine_{ts}.json"
+    # Shard-qualified so N concurrent shard PROCESSES each land their own sidecar instead of
+    # racing one object name (two shards finishing in the same second would otherwise have one
+    # silently overwrite the other's quarantine record). Unsharded runs keep the original name.
+    shard_suffix = "" if shard_of <= 1 else f"_shard{shard_index}of{shard_of}"
+    quarantine_path = f"{env}/backups/by_date_usdlin_quarantine_{ts}{shard_suffix}.json"
     _upload_json_report(
         bucket_name,
         quarantine_path,
         {
             "generated_at": ts,
             "surface": "instrument_availability/by_date",
+            "shard_of": shard_of,
+            "shard_index": shard_index,
             "files_scanned": n_scanned,
             "files_touched": n_touched,
             "status_counts": total_status_counts,
@@ -803,7 +852,28 @@ def main() -> int:
     )
     parser.add_argument("--by-day-full-sweep", action="store_true", help="Per-day corpus: process ALL real files.")
     parser.add_argument("--workers", type=int, default=40, help="Thread-pool concurrency for per-day corpus ops.")
+    parser.add_argument(
+        "--shard-of",
+        type=int,
+        default=1,
+        help=(
+            "Total PROCESS shard count for the per-day sweep (default 1 = unsharded). The per-row "
+            "canonicalization is pure-Python and therefore GIL-bound, so --workers alone saturates ~1.3 "
+            "cores no matter how high it is set (MEASURED 2026-07-20 on an e2-standard-16: 130%% of 1600%% "
+            "CPU, 86%% idle, ~1.0 files/s => ~7.4h for the full 27.1k-file sweep). Real speed-up comes from "
+            "running N SEPARATE PROCESSES over disjoint shards. Mirrors the --shard-of/--shard-index "
+            "convention of market_tick_data_service.scripts.migrate_tradfi_canonical_2026_07."
+        ),
+    )
+    parser.add_argument(
+        "--shard-index", type=int, default=0, help="0-based index of THIS process's shard (see --shard-of)."
+    )
     args = parser.parse_args()
+
+    if args.shard_of < 1:
+        parser.error("--shard-of must be >= 1")
+    if not 0 <= args.shard_index < args.shard_of:
+        parser.error(f"--shard-index must satisfy 0 <= index < --shard-of ({args.shard_of})")
 
     _self_check()
 
@@ -813,6 +883,8 @@ def main() -> int:
             full_sweep=args.by_day_full_sweep,
             sample_size=args.by_day_sample,
             workers=args.workers,
+            shard_of=args.shard_of,
+            shard_index=args.shard_index,
         )
     return _migrate_catalog(
         apply=args.apply,
