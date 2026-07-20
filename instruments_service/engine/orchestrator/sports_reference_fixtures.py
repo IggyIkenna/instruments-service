@@ -220,13 +220,25 @@ async def _fetch_fixture_ids_via_api(
                 with _orch.contextlib.suppress(ValueError, TypeError):
                     fid_int = int(raw_id)
                     fixture_ids.append(fid_int)
-                    # Map AF ID -> league from the fixture's league object
-                    if hasattr(fx, "league") and hasattr(fx.league, "league_id"):
+                    # Map AF ID -> league. NUMERIC api_football_id FIRST: it is the only
+                    # thing that yields a canonical LEAGUE_REGISTRY slug. `fx.league.
+                    # league_id` comes from `build_league_id(country, name)`, which falls
+                    # back to a bare `_slug(name)` when country is empty -- so it emits raw
+                    # display names (`PREMIER_LEAGUE`) that no consumer joins on, and six
+                    # of those names are ambiguous across two real leagues each
+                    # (CHAMPIONSHIP = English + Scottish, SERIE_A = Italian + Brasileirao,
+                    # ...). This precedence used to be reversed, which made the numeric
+                    # branch DEAD CODE -- `CanonicalLeague` always carries `league_id`, so
+                    # the first branch always won. Measured + fixed 2026-07-20; see
+                    # plans/active/issues/sports_league_id_namespace_migration_2026_07_20.md.
+                    _af_lid = getattr(getattr(fx, "league", None), "api_football_id", None)
+                    _canon = _af_id_to_canonical_league.get(_af_lid) if isinstance(_af_lid, int) else None
+                    if _canon is not None:
+                        _af_fid_to_league[str(fid_int)] = _canon
+                    elif hasattr(fx, "league") and hasattr(fx.league, "league_id"):
+                        # Unregistered league: keep the raw value so the fixture still
+                        # captures (honest absence) rather than vanishing from the map.
                         _af_fid_to_league[str(fid_int)] = str(fx.league.league_id)
-                    elif hasattr(fx, "league") and hasattr(fx.league, "api_football_id"):
-                        af_lid = fx.league.api_football_id
-                        if af_lid in _af_id_to_canonical_league:
-                            _af_fid_to_league[str(fid_int)] = _af_id_to_canonical_league[af_lid]
             elif fx.status in {"PST", "CANC"}:
                 _reason = (
                     _orch.EmptyConfirmedReason.EXPECTED_FIXTURE_POSTPONED
