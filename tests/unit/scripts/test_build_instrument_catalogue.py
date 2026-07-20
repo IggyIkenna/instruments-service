@@ -2983,6 +2983,42 @@ def test_iter_by_date_walk_parses_day_and_reads_frames(rollup: ModuleType) -> No
     assert all(not f.empty for _, f in out)
 
 
+def test_iter_by_date_walk_excludes_non_instruments_parquet_litter(rollup: ModuleType) -> None:
+    """The walk reads ONLY ``instruments.parquet`` — never co-located non-snapshot parquets.
+
+    Regression for tradfi_catalogue_rollup_ingests_sweep_bak_backups_2026_07_20: the
+    id-canonicalization sweeps write a pre-sweep RAW-id backup next to the file they
+    rewrite (``instruments.usdlin.<ts>.bak.parquet`` / ``instruments.okxmarginfix.*``),
+    and the sibling ``futures_contracts.parquet`` (no instrument id column) sits in the
+    same dir. A bare ``endswith('.parquet')`` swept all three in, re-deriving raw+canonical
+    TWINS from the swept snapshot AND its raw backup. Only ``instruments.parquet`` is a
+    real instrument snapshot the roll-up must aggregate.
+    """
+    blobs = {
+        # the ONLY file that should be read
+        "instrument_availability/by_date/day=2024-01-01/venue=CME/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": "CME:FUTURE:CRUDE-USD@LIN-20240115", "venue": "CME"}]
+        ),
+        # sweep pre-sweep RAW backups — MUST be excluded (else raw twins reappear)
+        "instrument_availability/by_date/day=2024-01-01/venue=CME/instruments.usdlin.20260718-140236.bak.parquet": _parquet_bytes(
+            [{"instrument_key": "CME:FUTURE:CLF4", "venue": "CME"}]
+        ),
+        "instrument_availability/by_date/day=2024-01-01/venue=OKX/instruments.okxmarginfix.20260709-113120.bak.parquet": _parquet_bytes(
+            [{"instrument_key": "OKX:PERP:BTC", "venue": "OKX"}]
+        ),
+        # sibling lifecycle-dates file (no instrument id) — MUST be excluded
+        "instrument_availability/by_date/day=2024-01-01/venue=CME/futures_contracts.parquet": _parquet_bytes(
+            [{"root": "CL", "contract_symbol": "CLF4", "venue": "CME"}]
+        ),
+    }
+    out = list(rollup._iter_by_date_snapshots(_FakeStorage(blobs), "bkt", "instrument_availability/by_date"))
+    assert len(out) == 1  # only instruments.parquet was read
+    (_, frame) = out[0]
+    ids = frame["instrument_key"].astype(str).tolist()
+    assert ids == ["CME:FUTURE:CRUDE-USD@LIN-20240115"]  # canonical only — no raw backup twin
+    assert not any("CLF4" in i or "OKX:PERP" in i for i in ids)
+
+
 def test_iter_by_date_max_blobs_truncates(rollup: ModuleType) -> None:
     blobs = {
         f"instrument_availability/by_date/day=2024-01-0{i}/venue=V/instruments.parquet": _parquet_bytes(
