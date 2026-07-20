@@ -1102,6 +1102,31 @@ def main(argv: list[str] | None = None) -> int:
     # guard exists for is bounded here — a documented, deliberate simplification
     # for this smoke-test tool, not a blanket recommendation for production reads.
     os.environ.setdefault("MANIFEST_ALLOW_STALE_FALLBACK", "true")
+
+    # FAIL FAST on a bad DEPLOYMENT_ENV (2026-07-19) — mirrors the MTDS checker. Every VM
+    # this check launches goes through `launch-instruments-backfill-vm.sh`, which
+    # hard-validates `prod|staging|dev` and exits 1 on anything else. Without this
+    # pre-check that rejection surfaces only as N identical per-cell
+    # `launcher_script_nonzero_rc=1` rows with no hint of the cause. The trap: the SHORT
+    # form `prd` is correct elsewhere (it is the bucket-name form via
+    # DEPLOYMENT_ENV_SHORT, e.g. instruments-store-cefi-prd-*), so `prd` looks right and
+    # fails everywhere.
+    _env = (os.environ.get("DEPLOYMENT_ENV") or "").strip()
+    _valid_envs = ("prod", "staging", "dev")
+    if _env and _env not in _valid_envs:
+        _hint = (
+            "  (you likely meant DEPLOYMENT_ENV=prod — 'prd' is DEPLOYMENT_ENV_SHORT, the "
+            "bucket-name form, not the launcher's env)"
+            if _env in ("prd", "prdn", "production")
+            else ""
+        )
+        print(
+            f"DEPLOYMENT_ENV={_env!r} is invalid — launch-instruments-backfill-vm.sh accepts "
+            f"only {'/'.join(_valid_envs)} and exits 1 on anything else, so EVERY cell would "
+            f"fail with launcher_script_nonzero_rc=1.\n{_hint}",
+        )
+        return 2
+
     project_id = args.project or get_project_id()
     code_bucket = f"deployment-scripts-{project_id}"
     launcher_path = Path(args.launcher_path).resolve() if args.launcher_path else _default_launcher_path()

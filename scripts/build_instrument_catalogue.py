@@ -1368,8 +1368,23 @@ def _defi_pool_dual_form(
     )
 
 
-def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) -> pd.DataFrame:
+def build_catalogue_dataframe(
+    snapshots: Iterable[tuple[date, pd.DataFrame]],
+    *,
+    asset_group: str | None = None,
+) -> pd.DataFrame:
     """Roll the per-date instrument definitions up into one lifecycle catalogue.
+
+    ``asset_group`` gates the DeFi ``available_to`` carve-out (default ``None`` =
+    legacy last-seen delisting). When ``asset_group == "defi"`` a drop-out NEVER
+    stamps a last-seen ``available_to``: DeFi instruments are on-chain-perpetual,
+    so absence from capture is a TVL/top-N/source-set drop, not a delisting
+    (codex ``instruments-foundation-and-catalogue-completeness`` §1.3 —
+    below-threshold is ``EXPECTED_NOT_ENOUGH_TVL``, not a delisting). Genuine
+    removals still close via the ``delisted_at`` / ``expiry`` truth branches (the
+    truth-gate seam for a future on-chain factory/RPC probe, ``defi-completeness-
+    oracle`` §12). cefi/tradfi (``asset_group`` ``None``/``"cefi"``/``"tradfi"``)
+    keep the last-seen delisting fallback unchanged.
 
     Args:
         snapshots: iterable of ``(day, frame)`` pairs — one per
@@ -1524,6 +1539,8 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         #   2. dated FUTURE/OPTION/COMBO ``expiry`` (the contract expiry) — venue truth.
         #   3. else perp/spot: ACTIVE (None) iff present on its OWN venue's last FULL
         #      trading day; else last-seen (a genuine delisting, not a thin-day artefact).
+        #   3b. DeFi (asset_group=="defi"): NEVER last-seen delist — on-chain-perpetual,
+        #      a drop-out is a TVL/source-set gap (codex §1.3), so stay ACTIVE (None).
         _raw_venue = str(agg.meta.get("venue") or "").strip()
         # venue_last_full is keyed on CANONICAL venue names (ghost-normalised);
         # the aggregate's meta venue may still be the old ghost form if the
@@ -1536,6 +1553,13 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         elif agg.expiry is not None:
             available_to = agg.expiry.isoformat()
         elif _venue_full_day is not None and agg.last_day >= _venue_full_day:
+            available_to = None
+        elif asset_group == "defi":
+            # DeFi instrument dropped below its venue's last full day. It did NOT
+            # delist — DeFi pools/markets/tokens are on-chain-perpetual; the drop
+            # is a below-TVL/top-N or subgraph/seed pool-set change. Stay active
+            # (None); the below-threshold days resolve to EXPECTED_NOT_ENOUGH_TVL
+            # on capture. A genuine removal still closes via branches 1-2 above.
             available_to = None
         else:
             available_to = agg.last_day.isoformat()
@@ -3695,6 +3719,11 @@ def _merge_incremental(
         tail_venues = tail["venue"].fillna("").astype(str).map(_merge_canonical_venue)
         active = tail["available_to"].isna() | (tail["available_to"].astype(str).str.strip() == "")
         newly_delisted = active & tail_venues.isin(window_venues)
+        if asset_group == "defi":
+            # DeFi drop-outs NEVER delist (on-chain-perpetual; codex §1.3) — keep the
+            # incremental close in lockstep with build_catalogue_dataframe's carve-out,
+            # or full-rebuild vs incremental diverge (test_incremental_matches_full_rebuild_defi).
+            newly_delisted = pd.Series(data=False, index=newly_delisted.index)
         n_delisted = int(newly_delisted.sum())
         if n_delisted:
             close_day = (window_start - timedelta(days=1)).isoformat()
@@ -4051,7 +4080,8 @@ def run_rollup(
                 _tee_day_counts(
                     _iter_by_date_snapshots(storage, bucket, by_date_prefix, since=window_start, max_blobs=max_blobs),
                     window_day_counts,
-                )
+                ),
+                asset_group=asset_group,
             )
         if window_df.empty:
             logger.warning(
@@ -4069,7 +4099,9 @@ def run_rollup(
             _iter_prediction_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs)
         )
     else:
-        df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
+        df = build_catalogue_dataframe(
+            _iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs), asset_group=asset_group
+        )
 
     # F8 (2026-07-18): a --mode full rebuild is CUMULATIVE-preserving — merge the
     # fresh full walk onto the previous catalogue's frozen tail so a previously
