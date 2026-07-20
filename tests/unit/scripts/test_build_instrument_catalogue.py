@@ -262,6 +262,104 @@ def test_rollup_genuine_delisting_still_stamped(rollup: ModuleType) -> None:
     assert all(by_id[f"K{i}"]["available_to"] is None for i in range(10))
 
 
+def test_rollup_defi_dropout_stays_active_but_truth_gate_closes(rollup: ModuleType) -> None:
+    """DeFi carve-out (Option A, codex instruments-foundation-and-catalogue-completeness §1.3).
+
+    For ``asset_group="defi"`` a pool/market drop-out is a TVL/source-set gap, NOT a
+    delisting → it stays active (``available_to=None``). A genuine venue-declared
+    ``delisted_at`` STILL closes it (truth-gate seam preserved). The SAME drop-out under
+    a non-defi run (``asset_group="cefi"``) delists via last-seen — proving the gate is
+    asset_group-scoped, not instrument_type-scoped (the clustered false-delistings were
+    SPOT_ASSET/LENDING/A_TOKEN rows, not POOL rows). Covers full-rebuild + incremental.
+    """
+    d1, d2, d3 = date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)
+    venue = "UNISWAP_V3-ARBITRUM"
+    addr_gone = "0x" + "a" * 40
+    addr_truth = "0x" + "b" * 40
+    # 10 always-present filler pools so every day is a FULL venue day.
+    filler = [
+        {
+            "instrument_key": f"{venue}:POOL:TOK{i}",
+            "venue": venue,
+            "instrument_type": "POOL",
+            "raw_symbol": f"0x{i:040x}",
+            "pool_address": f"0x{i:040x}",
+        }
+        for i in range(10)
+    ]
+    gone = {
+        "instrument_key": f"{venue}:POOL:GONE",
+        "venue": venue,
+        "instrument_type": "POOL",
+        "raw_symbol": addr_gone,
+        "pool_address": addr_gone,
+    }
+    # Present on every day but carries a venue-declared delisted_at (truth-gate).
+    truth = {
+        **gone,
+        "instrument_key": f"{venue}:POOL:TRUTH",
+        "raw_symbol": addr_truth,
+        "pool_address": addr_truth,
+        "delisted_at": "2026-06-02",
+    }
+    # GONE present only d1; d2/d3 are FULL without it → a drop-out. TRUTH present all days.
+    snapshots = [
+        (d1, _snapshot([*filler, gone, truth])),
+        (d2, _snapshot([*filler, truth])),
+        (d3, _snapshot([*filler, truth])),
+    ]
+
+    # DeFi run: drop-out stays active (None); delisted_at truth still closes.
+    defi = {
+        r["instrument_id"]: r
+        for r in rollup.build_catalogue_dataframe(snapshots, asset_group="defi").to_dict("records")
+    }
+    assert defi[addr_gone]["available_to"] is None, "DeFi drop-out must stay active (None), not delisted"
+    assert defi[addr_truth]["available_to"] == "2026-06-02", "delisted_at truth-gate must still close a DeFi pool"
+    assert all(defi[f"0x{i:040x}"]["available_to"] is None for i in range(10))
+
+    # Discrimination: the SAME drop-out under a non-defi run delists via last-seen.
+    cefi = {
+        r["instrument_id"]: r
+        for r in rollup.build_catalogue_dataframe(snapshots, asset_group="cefi").to_dict("records")
+    }
+    assert cefi[addr_gone]["available_to"] == "2026-06-01", "non-defi drop-out must still delist (last-seen)"
+
+    # Incremental path parity: a DeFi pool absent from the window must also stay active.
+    prev = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id=addr_gone,
+                instrument_type="POOL",
+                venue=venue,
+                pool_address=addr_gone,
+                available_from="2026-06-01",
+                available_to=None,
+            )
+        ]
+    )
+    window = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id="0x" + "c" * 40,
+                instrument_type="POOL",
+                venue=venue,
+                pool_address="0x" + "c" * 40,
+                available_from="2026-06-03",
+                available_to=None,
+            )
+        ]
+    ).drop(columns=["mvp"])
+    merged = {
+        r["instrument_id"]: r
+        for r in rollup._merge_incremental(prev, window, window_start=d3, asset_group="defi").to_dict("records")
+    }
+    gone_to = merged[addr_gone]["available_to"]
+    assert gone_to is None or gone_to == "" or pd.isna(gone_to), (
+        f"incremental DeFi drop-out must stay active (None), got {gone_to!r}"
+    )
+
+
 def test_rollup_metadata_follows_most_recent_snapshot(rollup: ModuleType) -> None:
     """Metadata (venue/type/chain) is taken from the instrument's most-recent definition."""
     d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
@@ -3301,6 +3399,11 @@ def test_rollup_ghost_venue_liveness_merges_into_canonical_window(rollup: Module
         for i in range(1, 21)  # 20 canonical pools — makes d_old/d_stop/d_now full days
     ]
 
+    # NOTE: asset_group is intentionally omitted (defaults to None = legacy last-seen
+    # delisting) so this test ISOLATES the ghost→canonical liveness-MERGE mechanic via
+    # the observable delist. Under a real defi run (asset_group="defi") the DeFi
+    # carve-out keeps addr_stopped active (None) regardless of the merge; that carve-out
+    # is covered by test_rollup_defi_dropout_stays_active_but_truth_gate_closes.
     df = rollup.build_catalogue_dataframe(
         [
             (d_old, _snapshot([ghost_stopped, ghost_active, *full_canon])),
@@ -4013,8 +4116,13 @@ def test_merge_defi_pool_keys_on_dual_form_identity(rollup: ModuleType) -> None:
     assert len(merged) == 2
     by_chain = {r["chain"]: r for r in merged.to_dict("records")}
     assert by_chain["POLYGON"]["available_from"] == "2024-03-01"  # updated, af carried
-    # ARBITRUM pool absent from window but venue present → closed (genuine per-pool absence).
-    assert by_chain["ARBITRUM"]["available_to"] == "2026-06-11"
+    # Option A (codex §1.3): a DeFi pool absent from the window does NOT delist —
+    # on-chain-perpetual, so its drop-out is a TVL/source-set gap, not a removal.
+    # It stays active (available_to unchanged = None), unlike a cefi/tradfi drop-out.
+    arb_to = by_chain["ARBITRUM"]["available_to"]
+    assert arb_to is None or arb_to == "" or pd.isna(arb_to), (
+        f"DeFi pool absent from window must stay active (None), got {arb_to!r}"
+    )
 
 
 def test_merge_empty_window_preserves_catalogue(rollup: ModuleType) -> None:
@@ -4065,12 +4173,16 @@ def _parity_frames(rollup: ModuleType, all_snapshots: list, prev_age_days: int =
     """
     today = _datetime.now(tz=_UTC).date()
     prev_cutoff = today - _timedelta(days=prev_age_days)
-    prev_df = rollup.build_catalogue_dataframe([(d, f) for d, f in all_snapshots if d <= prev_cutoff])
+    prev_df = rollup.build_catalogue_dataframe(
+        [(d, f) for d, f in all_snapshots if d <= prev_cutoff], asset_group=asset_group
+    )
     prev_mtime = _datetime(prev_cutoff.year, prev_cutoff.month, prev_cutoff.day, 1, 0, tzinfo=_UTC)
     window_start = rollup.compute_window_start(today, prev_mtime)
-    window_df = rollup.build_catalogue_dataframe([(d, f) for d, f in all_snapshots if d >= window_start])
+    window_df = rollup.build_catalogue_dataframe(
+        [(d, f) for d, f in all_snapshots if d >= window_start], asset_group=asset_group
+    )
     incremental = rollup._merge_incremental(prev_df, window_df, window_start=window_start, asset_group=asset_group)
-    full = rollup.build_catalogue_dataframe(all_snapshots)
+    full = rollup.build_catalogue_dataframe(all_snapshots, asset_group=asset_group)
     return full, incremental
 
 
