@@ -360,6 +360,69 @@ def test_rollup_defi_dropout_stays_active_but_truth_gate_closes(rollup: ModuleTy
     )
 
 
+def test_apply_defi_removals_closes_only_blank_rows_in_map(rollup: ModuleType) -> None:
+    """Option B: `_apply_defi_removals` sets available_to for a confirmed-gone row (blank +
+    in the removal map), leaves a not-in-map row live, and NEVER overrides an already-set
+    available_to (a delisted_at/expiry truth or an existing close)."""
+    df = pd.DataFrame(
+        [
+            {"instrument_id": "0xgone", "raw_symbol": "0xgone", "pool_address": "0xgone", "available_to": None},
+            {"instrument_id": "0xlive", "raw_symbol": "0xlive", "pool_address": "0xlive", "available_to": None},
+            {
+                "instrument_id": "0xtruth",
+                "raw_symbol": "0xtruth",
+                "pool_address": "0xtruth",
+                "available_to": "2026-05-01",
+            },
+        ]
+    )
+    removal_map = {"0xgone": "2026-06-15", "0xtruth": "2026-09-09"}
+    out = {r["instrument_id"]: r for r in rollup._apply_defi_removals(df, removal_map).to_dict("records")}
+    assert out["0xgone"]["available_to"] == "2026-06-15"  # confirmed gone → closed
+    live_to = out["0xlive"]["available_to"]
+    assert live_to is None or live_to == "" or pd.isna(live_to)  # not in map → stays live
+    assert out["0xtruth"]["available_to"] == "2026-05-01"  # already closed → NOT overridden
+
+
+def test_rollup_defi_removal_probe_closes_confirmed_gone_pool(
+    rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Option B end-to-end via build_catalogue_dataframe: a DeFi pool present on the venue's
+    latest full day is kept live by Option A (available_to=None), UNLESS the on-chain removal
+    probe confirmed it gone — then available_to is closed at the removal date. A pool not in the
+    removal artifact stays live. Proves the preserved delisted_at seam is wired to the probe."""
+    addr = "0x" + "a" * 40
+    venue = "UNISWAP_V3-ARBITRUM"
+    filler = [
+        {
+            "instrument_key": f"{venue}:POOL:TOK{i}",
+            "venue": venue,
+            "instrument_type": "POOL",
+            "raw_symbol": f"0x{i:040x}",
+            "pool_address": f"0x{i:040x}",
+        }
+        for i in range(5)
+    ]
+    gone = {
+        "instrument_key": f"{venue}:POOL:GONE",
+        "venue": venue,
+        "instrument_type": "POOL",
+        "raw_symbol": addr,
+        "pool_address": addr,
+    }
+    d1, d2 = date(2026, 6, 1), date(2026, 6, 2)
+    snapshots = [(d1, _snapshot([*filler, gone])), (d2, _snapshot([*filler, gone]))]
+    # Removal artifact confirms `addr` is gone on-chain as of 2026-06-02.
+    monkeypatch.setattr(rollup, "_load_defi_removal_map", lambda: {addr: "2026-06-02"})
+    by_id = {
+        r["instrument_id"]: r
+        for r in rollup.build_catalogue_dataframe(snapshots, asset_group="defi").to_dict("records")
+    }
+    assert by_id[addr]["available_to"] == "2026-06-02", "on-chain-confirmed removal must close the pool (Option B)"
+    filler0 = f"0x{0:040x}"
+    assert by_id[filler0]["available_to"] is None, "a pool NOT in the removal artifact stays live (Option A)"
+
+
 def test_rollup_metadata_follows_most_recent_snapshot(rollup: ModuleType) -> None:
     """Metadata (venue/type/chain) is taken from the instrument's most-recent definition."""
     d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
@@ -2918,6 +2981,42 @@ def test_iter_by_date_walk_parses_day_and_reads_frames(rollup: ModuleType) -> No
     days = sorted(str(d) for d, _ in out)
     assert days == ["2024-01-01", "2024-01-02"]  # non-parquet skipped
     assert all(not f.empty for _, f in out)
+
+
+def test_iter_by_date_walk_excludes_non_instruments_parquet_litter(rollup: ModuleType) -> None:
+    """The walk reads ONLY ``instruments.parquet`` — never co-located non-snapshot parquets.
+
+    Regression for tradfi_catalogue_rollup_ingests_sweep_bak_backups_2026_07_20: the
+    id-canonicalization sweeps write a pre-sweep RAW-id backup next to the file they
+    rewrite (``instruments.usdlin.<ts>.bak.parquet`` / ``instruments.okxmarginfix.*``),
+    and the sibling ``futures_contracts.parquet`` (no instrument id column) sits in the
+    same dir. A bare ``endswith('.parquet')`` swept all three in, re-deriving raw+canonical
+    TWINS from the swept snapshot AND its raw backup. Only ``instruments.parquet`` is a
+    real instrument snapshot the roll-up must aggregate.
+    """
+    blobs = {
+        # the ONLY file that should be read
+        "instrument_availability/by_date/day=2024-01-01/venue=CME/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": "CME:FUTURE:CRUDE-USD@LIN-20240115", "venue": "CME"}]
+        ),
+        # sweep pre-sweep RAW backups — MUST be excluded (else raw twins reappear)
+        "instrument_availability/by_date/day=2024-01-01/venue=CME/instruments.usdlin.20260718-140236.bak.parquet": _parquet_bytes(
+            [{"instrument_key": "CME:FUTURE:CLF4", "venue": "CME"}]
+        ),
+        "instrument_availability/by_date/day=2024-01-01/venue=OKX/instruments.okxmarginfix.20260709-113120.bak.parquet": _parquet_bytes(
+            [{"instrument_key": "OKX:PERP:BTC", "venue": "OKX"}]
+        ),
+        # sibling lifecycle-dates file (no instrument id) — MUST be excluded
+        "instrument_availability/by_date/day=2024-01-01/venue=CME/futures_contracts.parquet": _parquet_bytes(
+            [{"root": "CL", "contract_symbol": "CLF4", "venue": "CME"}]
+        ),
+    }
+    out = list(rollup._iter_by_date_snapshots(_FakeStorage(blobs), "bkt", "instrument_availability/by_date"))
+    assert len(out) == 1  # only instruments.parquet was read
+    (_, frame) = out[0]
+    ids = frame["instrument_key"].astype(str).tolist()
+    assert ids == ["CME:FUTURE:CRUDE-USD@LIN-20240115"]  # canonical only — no raw backup twin
+    assert not any("CLF4" in i or "OKX:PERP" in i for i in ids)
 
 
 def test_iter_by_date_max_blobs_truncates(rollup: ModuleType) -> None:

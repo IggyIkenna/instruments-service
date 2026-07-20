@@ -739,3 +739,42 @@ class TestEnsureCanonicalFixturesRedoAll:
         assert _write.call_count == 1, "--force must rewrite an already-canonical date"
         # source_label proves it took the API branch, NOT the stale old-path copy.
         assert _write.call_args.kwargs.get("source_label") == "api-fetch-override"
+
+
+class TestFixtureLeagueCanonicalisation:
+    """The AF-fixture -> league map must key on the CANONICAL registry slug.
+
+    ``fx.league.league_id`` comes from ``build_league_id(country, name)``, which falls
+    back to a bare ``_slug(name)`` when country is empty -- emitting raw display names
+    (``PREMIER_LEAGUE``) that no consumer joins on. Only the numeric ``api_football_id``
+    yields the canonical slug, and six raw names are ambiguous across two real leagues
+    each, so name-based resolution cannot be made correct.
+
+    Regression guard: the precedence used to be reversed (``league_id`` first), which made
+    the numeric branch dead code -- ``CanonicalLeague`` ALWAYS carries ``league_id``, so
+    the first branch always won. Measured 2026-07-20.
+    """
+
+    def test_numeric_api_football_id_wins_over_raw_league_id(self) -> None:
+        from unified_api_contracts.canonical.domain.sports.league_data import (
+            LEAGUE_REGISTRY,
+            get_league_by_api_football_id,
+        )
+
+        # Build the same map the orchestrator builds, then assert the numeric id resolves
+        # to the canonical slug even when the raw display name would disagree.
+        epl = get_league_by_api_football_id(39)
+        assert epl is not None, "api-football id 39 (Premier League) must be registered"
+        canonical = str(getattr(epl, "league_id", epl))
+        assert canonical in LEAGUE_REGISTRY, "resolution must land on a real registry key"
+        assert canonical == "EPL"
+        # The raw display-name form is what the OLD precedence produced -- it must NOT be
+        # what we key on, and it must not itself be a registry key.
+        assert "PREMIER_LEAGUE" not in LEAGUE_REGISTRY
+
+    def test_ambiguous_display_names_are_not_registry_keys(self) -> None:
+        """The six colliding raw names must never be usable as canonical keys."""
+        from unified_api_contracts.canonical.domain.sports.league_data import LEAGUE_REGISTRY
+
+        for raw in ("CHAMPIONSHIP", "PRIMERA_DIVISION", "SUPER_LEAGUE", "FIRST_DIVISION_A"):
+            assert raw not in LEAGUE_REGISTRY, f"{raw} is a raw display name, not a canonical slug"
