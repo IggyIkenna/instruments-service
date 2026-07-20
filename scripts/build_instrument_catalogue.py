@@ -306,6 +306,19 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # match. Blank for prediction/sports (no exchange-native symbol there).
     "raw_symbol",
     "base_asset",
+    # Human-readable security / issuer name for an instrument whose canonical
+    # ``instrument_id`` is an opaque coded symbol (uac InstrumentRecord.name). TODAY
+    # populated for the KRX (Korea Exchange) single-stock equities, whose id is the
+    # bare 6-digit KRX code (``KRX:EQUITY:005930`` = Samsung Electronics). Stamped
+    # on-the-fly by ``_add_instrument_name`` from the UAC ``KRX_EQUITY_NAMES`` registry
+    # (keyed on ``base_asset`` = the bare code) — the SAME self-healing pattern as
+    # ``mvp`` / ``tracks_equity`` / ``force_include`` (never baked, re-derived every
+    # rebuild), so the name populates on the next roll-up with no re-capture needed.
+    # Also carries through any adapter-populated ``InstrumentRecord.name`` present on a
+    # per-date row (forward-only). Blank for rows with no display name (the vast
+    # majority — their instrument_id is already human-readable). Plan: krx_name +
+    # tradfi_catalogue deliverables 2026-07-20.
+    "name",
     # Human-readable market question/title (uac InstrumentRecord.question). TODAY
     # populated only by the PREDICTION adapters (Polymarket ``question`` / Kalshi
     # ``title — yes_sub_title``) and emitted onto the per-market prediction roll-up
@@ -3470,6 +3483,60 @@ def _add_equity_tags(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
     return out
 
 
+def _add_instrument_name(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
+    """Stamp the human-readable ``name`` display column for opaque-coded instruments.
+
+    TODAY the KRX (Korea Exchange) single-stock equities (``venue == "KRX"``), whose
+    canonical ``instrument_id`` is the bare 6-digit KRX code (``KRX:EQUITY:005930``):
+    the code is the stable/unique official ticker and stays the SSOT id, but it is
+    unreadable, so the issuer name ("Samsung Electronics") rides alongside in its own
+    column. Derived on-the-fly from the UAC SSOT ``KRX_EQUITY_NAMES`` (keyed on
+    ``base_asset`` = the bare code), mirroring the :func:`_add_mvp_column` /
+    :func:`_add_equity_tags` / :func:`_add_force_include` self-healing pattern so the
+    name re-derives on every rebuild rather than depending on a re-capture (a rebuild
+    from the existing by_date corpus, which predates ``InstrumentRecord.name``, would
+    otherwise leave it blank forever).
+
+    Any adapter-populated ``name`` already on the frame (a forward-only round-trip from
+    ``InstrumentRecord.name`` once by_date rows carry it) is the FLOOR — the registry
+    only fills blanks. The blank-safe coercion is vectorised and the registry fill loops
+    only over the (tiny) KRX row set, never the whole 1M+-row frame, so this stays cheap
+    regardless of asset_group size. Blank for every row with no display name (the vast
+    majority — their instrument_id is already human-readable).
+    """
+    out = df.copy()
+    if df.empty:
+        out["name"] = pd.Series([], dtype="object")
+        return out
+
+    def _blank_safe(col_name: str) -> pd.Series[object]:
+        """The column as blank-safe strings ("" for NaN/None), or all-"" if absent."""
+        if col_name not in out.columns:
+            return pd.Series("", index=out.index, dtype="object")
+        col = out[col_name]
+        return col.where(col.notna(), other="").astype(str)
+
+    names = _blank_safe("name")
+
+    # KRX display names live only in the tradfi catalogue — skip the registry work for
+    # every other asset group (their ``name`` floor is whatever the adapter populated,
+    # today none). Loop only over the handful of KRX rows, filling a blank name from the
+    # bare-code -> issuer-name SSOT.
+    if asset_group == "tradfi":
+        venue = _blank_safe("venue")
+        base = _blank_safe("base_asset")
+        krx_index = names.index[venue == "KRX"]
+        if len(krx_index):
+            from unified_api_contracts.registry import KRX_EQUITY_NAMES  # noqa: imports-inside-functions
+
+            for idx in krx_index:
+                if names.at[idx] == "":
+                    names.at[idx] = KRX_EQUITY_NAMES.get(base.at[idx], "")
+
+    out["name"] = names
+    return out
+
+
 def _add_force_include(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
     """Stamp the TVL-exempt ``force_include`` marker (IS R2c availability-denominator honesty).
 
@@ -4145,6 +4212,13 @@ def run_rollup(
     df = _add_equity_tags(df, asset_group)
     _eq_count = int(df["is_equity_perp"].sum()) if not df.empty else 0
     logger.info("Equity-tagged catalogue: %d / %d rows flagged is_equity_perp", _eq_count, len(df))
+
+    # Human-readable display name for opaque-coded instruments (KRX single-stock
+    # equities: bare 6-digit code -> issuer name). Derived on-the-fly from the UAC
+    # KRX_EQUITY_NAMES registry (see _add_instrument_name / CATALOG_COLUMNS "name").
+    df = _add_instrument_name(df, asset_group)
+    _named_count = int((df["name"].astype(str).str.strip() != "").sum()) if not df.empty else 0
+    logger.info("Display-name-tagged catalogue: %d / %d rows carry a name", _named_count, len(df))
 
     # TVL-exempt force-include marker (IS R2c): distinguish a FORCED governance-token
     # inclusion (EIGEN/ETHFI, tracked regardless of TVL) from coincidental DEX liquidity,
