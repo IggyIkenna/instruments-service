@@ -2766,7 +2766,29 @@ def _iter_by_date_snapshots(
     targets: list[tuple[date, str]] = []
     for blob in blob_iter:
         name = str(getattr(blob, "name", ""))
-        if not name.endswith(".parquet"):
+        # Read ONLY the canonical per-(day, venue) ``instruments.parquet`` snapshot —
+        # the exact leaf the IS writer emits (engine/orchestrator/writers.py:205,
+        # process_write.py:277/420) and the sole grain this roll-up aggregates.
+        # A bare ``endswith(".parquet")`` also swept in TWO classes of co-located
+        # NON-snapshot parquets that a --mode full walk then aggregated:
+        #   1. Migration BACKUP litter — the id-canonicalization sweeps write a
+        #      pre-sweep backup NEXT TO the file they rewrite
+        #      (``instruments.usdlin.<ts>.bak.parquet`` from the 2026-07-18 tradfi
+        #      USD@LIN sweep; ``instruments.okxmarginfix.*``/``…binancefix.*`` on
+        #      cefi). Those carry the OLD RAW ids, so a full walk re-derived
+        #      raw+canonical TWINS from the swept snapshot AND its raw backup —
+        #      measured 82.90%→~50% F/O-canonical regression on tradfi with the
+        #      backups present vs 100% reading instruments.parquet alone (issue
+        #      plans/active/issues/tradfi_catalogue_rollup_ingests_sweep_bak_backups_2026_07_20.md).
+        #   2. The sibling ``futures_contracts.parquet`` (CanonicalFuturesContract
+        #      lifecycle-dates, writers.py:381) which carries NO instrument_key /
+        #      instrument_id column, so build_catalogue_dataframe already dropped
+        #      every one of its rows (_row_id → None) — excluding it here is a
+        #      strict no-op for catalogue content and makes the walk deterministic.
+        # Prediction (own iterator) already filters ``instruments.parquet``; sports
+        # uses its own iterators. Blast-radius verified for cefi/defi/tradfi
+        # 2026-07-20: instruments.parquet is the only instrument-bearing snapshot.
+        if not name.endswith("/instruments.parquet"):
             continue
         match = _DAY_RE.search(name)
         if match is None:
