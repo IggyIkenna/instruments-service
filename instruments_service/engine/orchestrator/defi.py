@@ -130,6 +130,16 @@ _STATIC_DEFI_VENUES: list[str] = [
     "COINBASE-ETHEREUM",
     "BINANCE-ETHEREUM",
     "BINANCE-BSC",
+    # Chainlink oracle price feeds (chainlink.py, 2026-07-20 — resolves
+    # BLK-0c7b82fe). Multi-chain via factory._DEFI_GRAPH_ADAPTERS chain
+    # parsing; 45 curated aggregator addresses, verified subset of MTDS's
+    # production _oracle_prices_constants.py. UAC flips these to phase="live"
+    # in lockstep (denominator drift guard).
+    "CHAINLINK-ETHEREUM",
+    "CHAINLINK-ARBITRUM",
+    "CHAINLINK-BASE",
+    "CHAINLINK-OPTIMISM",
+    "CHAINLINK-POLYGON",
 ]
 
 
@@ -160,6 +170,18 @@ _SOLANA_DEFI_VENUES: list[str] = [
     "SOLBLAZE-SOLANA",
     "JITORESTAKING-SOLANA",
     "SOLANA-NATIVE-SOLANA",
+    # Solana DEX pools + oracle (2026-07-20 DeFi catalogue canonicalization —
+    # meteora.py / lifinity.py / phoenix.py / pyth.py adapters existed with
+    # working fetch logic but were never wired into factory._ADAPTERS nor
+    # requested here, exactly like the 2026-07-18 LST/restaking finding above.
+    # UAC flips these to phase="live" in lockstep (denominator drift guard).
+    # CHAINLINK-* stays phase="pipeline" in UAC — no chainlink.py adapter
+    # exists yet, so it is deliberately NOT listed here (2026-07-20
+    # gate-failure remediation, BLK-0c7b82fe).
+    "METEORA-SOLANA",
+    "LIFINITY-SOLANA",
+    "PHOENIX-SOLANA",
+    "PYTH-SOLANA",
 ]
 # NOTE: LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp CLOBs classified
 # as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, same as HYPERLIQUID/ASTER). They

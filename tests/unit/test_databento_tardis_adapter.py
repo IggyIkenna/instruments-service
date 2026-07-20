@@ -1417,6 +1417,27 @@ class TestKRXStaticRecords:
                 f"KRX record has wrong instrument_key prefix: {rec.instrument_key!r}"
             )
 
+    def test_krx_records_carry_human_readable_name(self) -> None:
+        """Every KRX static record carries a human-readable issuer ``name`` (from the
+        UAC ``KRX_EQUITIES`` registry) so the opaque 6-digit code (``KRX:EQUITY:005930``)
+        surfaces a readable label downstream (catalogue ``name`` column, data-status
+        Catalogue Explorer). Deliverable: krx_name 2026-07-20."""
+        from unified_api_contracts.registry import KRX_EQUITY_NAMES
+
+        from instruments_service.reference_data.adapters.tradfi.databento.adapter import (
+            DatabentoReferenceDataAdapter,
+        )
+
+        records = DatabentoReferenceDataAdapter()._create_krx_equity_records()
+        by_symbol = {rec.base_asset: rec for rec in records}
+        # Samsung Electronics is the canonical worked example (KRX:EQUITY:005930).
+        assert by_symbol["005930"].name == "Samsung Electronics"
+        for rec in records:
+            assert rec.name, f"KRX record {rec.instrument_key} has no display name"
+            assert rec.name == KRX_EQUITY_NAMES[rec.base_asset], (
+                f"KRX record {rec.instrument_key} name {rec.name!r} != registry SSOT"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Tradfi instruments-foundation G1 regression guards (2026-06-25, slot-3).
