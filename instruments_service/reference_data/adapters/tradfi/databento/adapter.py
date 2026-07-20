@@ -642,6 +642,10 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     instrument_type=InstrumentType.EQUITY,
                     raw_symbol=eq.yahoo_ticker,
                     base_asset=eq.symbol,
+                    # Human-readable issuer name (Samsung Electronics, …) so the opaque
+                    # 6-digit KRX code carries a readable label everywhere the record
+                    # is displayed. SSOT = the UAC ``KRX_EQUITIES`` registry.
+                    name=eq.name,
                     quote_asset="KRW",
                     tick_size=Decimal("1"),
                     min_size=Decimal("1"),
