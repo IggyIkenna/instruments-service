@@ -3726,6 +3726,47 @@ def test_add_force_include_non_defi_and_empty_typed(rollup: ModuleType) -> None:
     assert out_empty["force_include"].dtype == bool
 
 
+def test_add_instrument_name_stamps_krx_issuer_names(rollup: ModuleType) -> None:
+    """_add_instrument_name stamps a human-readable ``name`` on a KRX equity row from
+    the UAC ``KRX_EQUITY_NAMES`` SSOT (keyed on base_asset = the bare 6-digit code) and
+    leaves a non-KRX tradfi row blank. Deliverable: krx_name 2026-07-20."""
+    from unified_api_contracts.registry import KRX_EQUITY_NAMES
+
+    df = pd.DataFrame(
+        [
+            {"instrument_id": "KRX:EQUITY:005930", "venue": "KRX", "base_asset": "005930"},
+            {"instrument_id": "KRX:EQUITY:000660", "venue": "KRX", "base_asset": "000660"},
+            {"instrument_id": "CME:FUTURE:ESZ5", "venue": "CME", "base_asset": "SP500"},
+        ]
+    )
+    out = rollup._add_instrument_name(df, "tradfi")
+    by_id = {row["instrument_id"]: row for row in out.to_dict("records")}
+    assert by_id["KRX:EQUITY:005930"]["name"] == "Samsung Electronics" == KRX_EQUITY_NAMES["005930"]
+    assert by_id["KRX:EQUITY:000660"]["name"] == KRX_EQUITY_NAMES["000660"]
+    # Non-KRX tradfi row: honest-blank (its instrument_id is already readable).
+    assert by_id["CME:FUTURE:ESZ5"]["name"] == ""
+    assert "name" in rollup.CATALOG_COLUMNS
+
+
+def test_add_instrument_name_preserves_existing_and_skips_non_tradfi(rollup: ModuleType) -> None:
+    """An adapter-populated ``name`` already on the frame is the floor (registry only
+    fills blanks); non-tradfi asset groups get an all-blank ``name`` column; the empty
+    frame keeps a typed object column."""
+    # Existing name is preserved even for a KRX-looking row (round-trip floor wins).
+    df = pd.DataFrame([{"venue": "KRX", "base_asset": "005930", "name": "Custom Override"}])
+    out = rollup._add_instrument_name(df, "tradfi")
+    assert out["name"].iloc[0] == "Custom Override"
+
+    # A KRX-shaped row under a non-tradfi asset group is NOT registry-filled.
+    cefi = pd.DataFrame([{"venue": "KRX", "base_asset": "005930"}])
+    out_cefi = rollup._add_instrument_name(cefi, "cefi")
+    assert out_cefi["name"].iloc[0] == ""
+
+    empty = rollup.build_catalogue_dataframe([])
+    out_empty = rollup._add_instrument_name(empty, "tradfi")
+    assert out_empty["name"].dtype == object
+
+
 # ---------------------------------------------------------------------------
 # Incremental (trailing-window + frozen-tail) engine —
 # plans/active/instruments_catalogue_incremental_rollup_2026_06_29.md
