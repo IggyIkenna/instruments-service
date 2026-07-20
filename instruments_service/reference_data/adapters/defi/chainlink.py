@@ -56,59 +56,239 @@ CHAINLINK_CHAINS: tuple[str, ...] = ("ETHEREUM", "ARBITRUM", "BASE", "OPTIMISM",
 # enumerated universe matches the set MTDS's oracle_prices handler fetches.
 _CHAINLINK_FEEDS_BY_CHAIN: dict[str, dict[str, tuple[str, str, str]]] = {
     "ETHEREUM": {
-        "ETH/USD": ("0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419", "ETH", "USD"),
-        "stETH/USD": ("0xCfE54B5cD566aB89272946F602D76Ea879CAb4a8", "stETH", "USD"),
-        "stETH/ETH": ("0x86392dC19c0b719886221c78AB11eb8Cf5c52812", "stETH", "ETH"),
-        "cbETH/ETH": ("0xF017fcB346A1885194689bA23Eff2fE6fA5C483b", "cbETH", "ETH"),
-        "rETH/ETH": ("0x536218f9E9Eb48863970252233c8F271f554C2d0", "rETH", "ETH"),
-        "BTC/USD": ("0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c", "BTC", "USD"),
-        "WBTC/BTC": ("0xfdFD9C85aD200c506Cf9e21F1FD8dd01932FBB23", "WBTC", "BTC"),
-        "USDC/USD": ("0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6", "USDC", "USD"),
-        "USDT/USD": ("0x3E7d1eAB13ad0104d2750B8863b489D65364e32D", "USDT", "USD"),
-        "DAI/USD": ("0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9", "DAI", "USD"),
-        "AAVE/USD": ("0x547a514d5e3769680Ce22B2361c10Ea13619e8a9", "AAVE", "USD"),
-        "COMP/USD": ("0xdbd020CAeF83eFd542f4De03e3cF0C28A4428bd5", "COMP", "USD"),
-        "LINK/USD": ("0x2c1d072e956AFFC0D435Cb7AC38EF18d24d9127c", "LINK", "USD"),
-        "UNI/USD": ("0x553303d460EE0afB37EdFf9bE42922D8FF63220e", "UNI", "USD"),
-        "CRV/USD": ("0xCd627aA160A6fA45Eb793D19Ef54f5062F20f33f", "CRV", "USD"),
-        "MKR/USD": ("0xec1D1B3b0443256cc3860e24a46F108e699484Aa", "MKR", "USD"),
-        "SNX/USD": ("0xDC3EA94CD0AC27d9A86C180091e7f78C683d3699", "SNX", "USD"),
-        "BAL/USD": ("0xdF2917806E30300537aEB49A7663062F4d1F2b5F", "BAL", "USD"),
-        "LDO/ETH": ("0x4e844125952D32AcdF339BE976c98E22F6F318dB", "LDO", "ETH"),
-        "SOL/USD": ("0x4ffC43a60e009B551865A93d232E33Fce9f01507", "SOL", "USD"),
-        "MATIC/USD": ("0x7bAC85A8a13A4BcD8abb3eB7d6b4d632c5a57676", "MATIC", "USD"),
-        "AVAX/USD": ("0xFF3EEb22B5E3dE6e705b44749C2559d704923FD7", "AVAX", "USD"),
-        "BNB/USD": ("0x14E613Ac691a42f21B17961bA18c6e35CC2Da893", "BNB", "USD"),
+        "ETH/USD": (
+            "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
+            "ETH",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "stETH/USD": (
+            "0xCfE54B5cD566aB89272946F602D76Ea879CAb4a8",
+            "stETH",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "stETH/ETH": (
+            "0x86392dC19c0b719886221c78AB11eb8Cf5c52812",
+            "stETH",
+            "ETH",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "cbETH/ETH": (
+            "0xF017fcB346A1885194689bA23Eff2fE6fA5C483b",
+            "cbETH",
+            "ETH",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "rETH/ETH": (
+            "0x536218f9E9Eb48863970252233c8F271f554C2d0",
+            "rETH",
+            "ETH",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "BTC/USD": (
+            "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c",
+            "BTC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "WBTC/BTC": (
+            "0xfdFD9C85aD200c506Cf9e21F1FD8dd01932FBB23",
+            "WBTC",
+            "BTC",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "USDC/USD": (
+            "0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6",
+            "USDC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "USDT/USD": (
+            "0x3E7d1eAB13ad0104d2750B8863b489D65364e32D",
+            "USDT",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "DAI/USD": (
+            "0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9",
+            "DAI",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "AAVE/USD": (
+            "0x547a514d5e3769680Ce22B2361c10Ea13619e8a9",
+            "AAVE",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "COMP/USD": (
+            "0xdbd020CAeF83eFd542f4De03e3cF0C28A4428bd5",
+            "COMP",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "LINK/USD": (
+            "0x2c1d072e956AFFC0D435Cb7AC38EF18d24d9127c",
+            "LINK",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "UNI/USD": (
+            "0x553303d460EE0afB37EdFf9bE42922D8FF63220e",
+            "UNI",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "CRV/USD": (
+            "0xCd627aA160A6fA45Eb793D19Ef54f5062F20f33f",
+            "CRV",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "MKR/USD": (
+            "0xec1D1B3b0443256cc3860e24a46F108e699484Aa",
+            "MKR",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "SNX/USD": (
+            "0xDC3EA94CD0AC27d9A86C180091e7f78C683d3699",
+            "SNX",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "BAL/USD": (
+            "0xdF2917806E30300537aEB49A7663062F4d1F2b5F",
+            "BAL",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "LDO/ETH": (
+            "0x4e844125952D32AcdF339BE976c98E22F6F318dB",
+            "LDO",
+            "ETH",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "SOL/USD": (
+            "0x4ffC43a60e009B551865A93d232E33Fce9f01507",
+            "SOL",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "MATIC/USD": (
+            "0x7bAC85A8a13A4BcD8abb3eB7d6b4d632c5a57676",
+            "MATIC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "AVAX/USD": (
+            "0xFF3EEb22B5E3dE6e705b44749C2559d704923FD7",
+            "AVAX",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
+        "BNB/USD": (
+            "0x14E613Ac691a42f21B17961bA18c6e35CC2Da893",
+            "BNB",
+            "USD",
+        ),  # DERIVED 2026-07-20 from ethereum docs.chain.link (Chainlink feed)
     },
     "ARBITRUM": {
-        "ETH/USD": ("0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612", "ETH", "USD"),
-        "BTC/USD": ("0x6ce185860a4963106506C203335A2910413708e9", "BTC", "USD"),
-        "USDC/USD": ("0x50834F3163758fcC1Df9973b6e91f0F0F0434aD3", "USDC", "USD"),
-        "USDT/USD": ("0x3f3f5dF88dC9F13eac63DF89EC16ef6e7E25DdE7", "USDT", "USD"),
-        "LINK/USD": ("0x86E53CF1B870786351Da77A57575e79CB55812Cb", "LINK", "USD"),
-        "ARB/USD": ("0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D6", "ARB", "USD"),
+        "ETH/USD": (
+            "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612",
+            "ETH",
+            "USD",
+        ),  # DERIVED 2026-07-20 from arbitrum docs.chain.link (Chainlink feed)
+        "BTC/USD": (
+            "0x6ce185860a4963106506C203335A2910413708e9",
+            "BTC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from arbitrum docs.chain.link (Chainlink feed)
+        "USDC/USD": (
+            "0x50834F3163758fcC1Df9973b6e91f0F0F0434aD3",
+            "USDC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from arbitrum docs.chain.link (Chainlink feed)
+        "USDT/USD": (
+            "0x3f3f5dF88dC9F13eac63DF89EC16ef6e7E25DdE7",
+            "USDT",
+            "USD",
+        ),  # DERIVED 2026-07-20 from arbitrum docs.chain.link (Chainlink feed)
+        "LINK/USD": (
+            "0x86E53CF1B870786351Da77A57575e79CB55812Cb",
+            "LINK",
+            "USD",
+        ),  # DERIVED 2026-07-20 from arbitrum docs.chain.link (Chainlink feed)
+        "ARB/USD": (
+            "0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D6",
+            "ARB",
+            "USD",
+        ),  # DERIVED 2026-07-20 from arbitrum docs.chain.link (Chainlink feed)
     },
     "BASE": {
-        "ETH/USD": ("0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70", "ETH", "USD"),
-        "BTC/USD": ("0xCCADC697c55bbB68dc5bCdf8d3CBe83CdD4E071E", "BTC", "USD"),
-        "USDC/USD": ("0x7e860098F58bBFC8648a4311b374B1D669a2bc6B", "USDC", "USD"),
-        "cbETH/ETH": ("0x868a501e68F3D1E89CfC0D22F6b22E8dabce5F04", "cbETH", "ETH"),
+        "ETH/USD": (
+            "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70",
+            "ETH",
+            "USD",
+        ),  # DERIVED 2026-07-20 from base docs.chain.link (Chainlink feed)
+        "BTC/USD": (
+            "0xCCADC697c55bbB68dc5bCdf8d3CBe83CdD4E071E",
+            "BTC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from base docs.chain.link (Chainlink feed)
+        "USDC/USD": (
+            "0x7e860098F58bBFC8648a4311b374B1D669a2bc6B",
+            "USDC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from base docs.chain.link (Chainlink feed)
+        "cbETH/ETH": (
+            "0x868a501e68F3D1E89CfC0D22F6b22E8dabce5F04",
+            "cbETH",
+            "ETH",
+        ),  # DERIVED 2026-07-20 from base docs.chain.link (Chainlink feed)
     },
     "OPTIMISM": {
-        "ETH/USD": ("0x13e3Ee699D1909E989722E753853AE30b17e08c5", "ETH", "USD"),
-        "BTC/USD": ("0xD702DD976Fb76Fffc2D3963D037dfDae5b04E593", "BTC", "USD"),
-        "USDC/USD": ("0x16a9FA2FDa030272Ce99B29CF780dFA30361E0f3", "USDC", "USD"),
-        "LINK/USD": ("0xCc232dcFAAE6354cE191Bd574108c1aD03f86229", "LINK", "USD"),
-        "OP/USD": ("0x0D276FC14719f9292D5C1eA2198673d1f4269246", "OP", "USD"),
+        "ETH/USD": (
+            "0x13e3Ee699D1909E989722E753853AE30b17e08c5",
+            "ETH",
+            "USD",
+        ),  # DERIVED 2026-07-20 from optimism docs.chain.link (Chainlink feed)
+        "BTC/USD": (
+            "0xD702DD976Fb76Fffc2D3963D037dfDae5b04E593",
+            "BTC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from optimism docs.chain.link (Chainlink feed)
+        "USDC/USD": (
+            "0x16a9FA2FDa030272Ce99B29CF780dFA30361E0f3",
+            "USDC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from optimism docs.chain.link (Chainlink feed)
+        "LINK/USD": (
+            "0xCc232dcFAAE6354cE191Bd574108c1aD03f86229",
+            "LINK",
+            "USD",
+        ),  # DERIVED 2026-07-20 from optimism docs.chain.link (Chainlink feed)
+        "OP/USD": (
+            "0x0D276FC14719f9292D5C1eA2198673d1f4269246",
+            "OP",
+            "USD",
+        ),  # DERIVED 2026-07-20 from optimism docs.chain.link (Chainlink feed)
     },
     "POLYGON": {
-        "ETH/USD": ("0xF9680D99D6C9589e2a93a78A04A279e509205945", "ETH", "USD"),
-        "BTC/USD": ("0xc907E116054Ad103354f2D350FD2514433D57F6f", "BTC", "USD"),
-        "MATIC/USD": ("0xAB594600376Ec9fD91F8e8dC44E4fb146AD26832", "MATIC", "USD"),
-        "USDC/USD": ("0xfE4A8cc5b5B2366C1B58Bea3858e81843583ee2e", "USDC", "USD"),
-        "USDT/USD": ("0x0A6513e40db6EB1b165753AD52E80663aeA50545", "USDT", "USD"),
-        "LINK/USD": ("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665", "LINK", "USD"),
-        "AAVE/USD": ("0x72484B12719E23115761D5DA1646945632979bB6", "AAVE", "USD"),
+        "ETH/USD": (
+            "0xF9680D99D6C9589e2a93a78A04A279e509205945",
+            "ETH",
+            "USD",
+        ),  # DERIVED 2026-07-20 from polygon docs.chain.link (Chainlink feed)
+        "BTC/USD": (
+            "0xc907E116054Ad103354f2D350FD2514433D57F6f",
+            "BTC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from polygon docs.chain.link (Chainlink feed)
+        "MATIC/USD": (
+            "0xAB594600376Ec9fD91F8e8dC44E4fb146AD26832",
+            "MATIC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from polygon docs.chain.link (Chainlink feed)
+        "USDC/USD": (
+            "0xfE4A8cc5b5B2366C1B58Bea3858e81843583ee2e",
+            "USDC",
+            "USD",
+        ),  # DERIVED 2026-07-20 from polygon docs.chain.link (Chainlink feed)
+        "USDT/USD": (
+            "0x0A6513e40db6EB1b165753AD52E80663aeA50545",
+            "USDT",
+            "USD",
+        ),  # DERIVED 2026-07-20 from polygon docs.chain.link (Chainlink feed)
+        "LINK/USD": (
+            "0xd9FFdb71EbE7496cC440152d43986Aae0AB76665",
+            "LINK",
+            "USD",
+        ),  # DERIVED 2026-07-20 from polygon docs.chain.link (Chainlink feed)
+        "AAVE/USD": (
+            "0x72484B12719E23115761D5DA1646945632979bB6",
+            "AAVE",
+            "USD",
+        ),  # DERIVED 2026-07-20 from polygon docs.chain.link (Chainlink feed)
     },
 }
 
