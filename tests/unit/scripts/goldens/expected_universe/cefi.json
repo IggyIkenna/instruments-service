@@ -1,6 +1,6 @@
 {
   "asset_group": "cefi",
-  "captured_at": "2026-07-16",
+  "captured_at": "2026-07-20",
   "tuple_count": 72,
   "tuples": [
     ["ASTER", "perpetual", "derivative_ticker"],

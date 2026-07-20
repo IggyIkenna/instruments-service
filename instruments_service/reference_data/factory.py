@@ -46,12 +46,16 @@ from .adapters.defi.kamino import KaminoReferenceDataAdapter
 from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
+from .adapters.defi.lifinity import LifinityReferenceDataAdapter
 from .adapters.defi.marginfi import MarginfiReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
+from .adapters.defi.meteora import MeteoraReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
 from .adapters.defi.pendle import PendleReferenceDataAdapter
+from .adapters.defi.phoenix import PhoenixReferenceDataAdapter
 from .adapters.defi.puffer import PufferReferenceDataAdapter
+from .adapters.defi.pyth import PythOracleReferenceDataAdapter
 from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
 from .adapters.defi.renzo import RenzoReferenceDataAdapter
@@ -154,11 +158,15 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "kalshi_perp": KalshiPerpReferenceDataAdapter,
     "lighter": LighterReferenceDataAdapter,
     "lido": LidoReferenceDataAdapter,
+    "lifinity": LifinityReferenceDataAdapter,
+    "meteora": MeteoraReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
     "orca": OrcaReferenceDataAdapter,
     "pendle": PendleReferenceDataAdapter,
+    "phoenix": PhoenixReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "polymarket_perp": PolymarketPerpReferenceDataAdapter,
+    "pyth": PythOracleReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
     "puffer": PufferReferenceDataAdapter,
     "raydium": RaydiumReferenceDataAdapter,
@@ -237,6 +245,15 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "orca": "",
     "marinade": "",
     "jito": "",
+    # Solana DEX pools (2026-07-20 catalogue canonicalization) — public REST
+    # APIs (meteora.ag / lifinity.io / phoenix.trade), no API key needed.
+    "meteora": "",
+    "lifinity": "",
+    "phoenix": "",
+    # Pyth Network oracle — Hermes REST + on-chain, no API key needed
+    # (CHAINLINK-* stays out of this table: no adapter class exists yet, see
+    # factory._ADAPTERS + venue_adapter_keys.py, 2026-07-20 BLK-0c7b82fe).
+    "pyth": "",
     # Solana lending adapters (2026-07-09) — public REST/JSON APIs, no API key needed.
     "solend": "",
     "marginfi": "",
@@ -332,6 +349,12 @@ _DEFI_GRAPH_ADAPTERS: frozenset[str] = frozenset(
         "orca",
         "marinade",
         "jito",
+        # Solana DEX pools / oracle (2026-07-20 catalogue canonicalization) —
+        # Solana-only, ctor accepts chain= like kamino/raydium/orca above.
+        "meteora",
+        "lifinity",
+        "phoenix",
+        "pyth",
         # Multi-chain LST/LRT/restaking adapters (2026-05-12 latent fix —
         # these were registered for multiple canonical venues earlier in the
         # session but were missing from this set, so non-Ethereum venues
