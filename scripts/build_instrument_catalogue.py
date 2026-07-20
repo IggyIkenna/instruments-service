@@ -1381,6 +1381,43 @@ def _defi_pool_dual_form(
     )
 
 
+def _load_defi_removal_map() -> dict[str, str]:
+    """On-chain removal side-artifact (Option B truth-gate) → ``{key_lower: delisted_at_iso}``.
+
+    Empty on ANY failure (artifact absent / no GCS in tests / import error) → the roll-up
+    degrades to Option A (every DeFi drop-out stays live). Lazy import keeps the probe's
+    aiohttp stack off the cefi/tradfi path. The artifact is written by the daily
+    ``run_defi_removal_probe`` job, which records a removal ONLY on a positive on-chain
+    ``eth_getCode``-absent confirmation — so this can never re-introduce a false delisting."""
+    try:
+        from instruments_service.oracle import load_removal_delisted_at_map  # noqa: imports-inside-functions
+
+        return load_removal_delisted_at_map()
+    except Exception:  # pragma: no cover — pure degrade-to-Option-A guard
+        return {}
+
+
+def _apply_defi_removals(df: pd.DataFrame, removal_map: dict[str, str]) -> pd.DataFrame:
+    """Set ``available_to`` from the on-chain removal side-artifact (Option B) for any still-live
+    DeFi row the probe confirmed gone. Applied to the FINAL frame of BOTH the full rebuild and
+    the incremental merge, so the two never disagree (the seam-parity invariant). Idempotent —
+    only fills a BLANK ``available_to`` (never overrides a ``delisted_at``/``expiry`` truth or an
+    already-set removal). Keyed by ``instrument_id`` / ``raw_symbol`` / ``pool_address`` (lower)."""
+    id_cols = [c for c in ("instrument_id", "raw_symbol", "pool_address") if c in df.columns]
+    if not removal_map or df.empty or "available_to" not in df.columns or not id_cols:
+        return df
+    out = df.copy()
+    blank = out["available_to"].isna() | (out["available_to"].astype(str).str.strip() == "")
+    resolved = pd.Series(data=pd.NA, index=out.index, dtype="object")
+    for col in id_cols:
+        mapped = out[col].astype(str).str.strip().str.lower().map(removal_map)
+        resolved = resolved.where(resolved.notna(), mapped)
+    apply_mask = blank & resolved.notna()
+    if bool(apply_mask.any()):
+        out.loc[apply_mask, "available_to"] = resolved[apply_mask]
+    return out
+
+
 def build_catalogue_dataframe(
     snapshots: Iterable[tuple[date, pd.DataFrame]],
     *,
@@ -1677,7 +1714,13 @@ def build_catalogue_dataframe(
             }
         )
 
-    return pd.DataFrame(rows, columns=list(CATALOG_COLUMNS))
+    frame = pd.DataFrame(rows, columns=list(CATALOG_COLUMNS))
+    if asset_group == "defi":
+        # Option B: an on-chain-probe-confirmed removal closes a genuinely-gone contract
+        # even though Option A keeps every capture/TVL drop-out live. No-op when the
+        # removal artifact is absent (→ pure Option A).
+        frame = _apply_defi_removals(frame, _load_defi_removal_map())
+    return frame
 
 
 def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
@@ -3811,6 +3854,11 @@ def _merge_incremental(
         len(fresh),
         len(tail),
     )
+    if asset_group == "defi":
+        # Same Option B removal application as the full rebuild, over the MERGED frame
+        # (incl. the frozen tail), so full-rebuild and incremental never disagree on a
+        # confirmed on-chain removal. Idempotent + no-op when the artifact is absent.
+        merged = _apply_defi_removals(merged, _load_defi_removal_map())
     return merged
 
 
