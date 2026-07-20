@@ -225,10 +225,11 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 # Dedup'd (asset_group, venue) shard-target counts (measured 2026-07-20 against the live UAC
-# registry — DEFI 89->93: +4 for METEORA-SOLANA/LIFINITY-SOLANA/PHOENIX-SOLANA/PYTH-SOLANA newly
-# wired into factory._ADAPTERS; CHAINLINK-* stays UAC phase="pipeline", not yet IS-producible,
-# see BLK-0c7b82fe). The prediction adaptation must not change any other AG's enumerated target set.
-_PER_AG_TARGET_COUNTS = {"CEFI": 25, "DEFI": 93, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
+# registry — DEFI 89->98: +4 for METEORA-SOLANA/LIFINITY-SOLANA/PHOENIX-SOLANA/PYTH-SOLANA +
+# +5 for CHAINLINK-{ETHEREUM,ARBITRUM,BASE,OPTIMISM,POLYGON}, all newly wired into
+# factory._ADAPTERS (BLK-0c7b82fe resolved). The prediction adaptation must not change any
+# other AG's enumerated target set.
+_PER_AG_TARGET_COUNTS = {"CEFI": 25, "DEFI": 98, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:

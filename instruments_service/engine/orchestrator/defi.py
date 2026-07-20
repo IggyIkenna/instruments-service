@@ -130,6 +130,16 @@ _STATIC_DEFI_VENUES: list[str] = [
     "COINBASE-ETHEREUM",
     "BINANCE-ETHEREUM",
     "BINANCE-BSC",
+    # Chainlink oracle price feeds (chainlink.py, 2026-07-20 — resolves
+    # BLK-0c7b82fe). Multi-chain via factory._DEFI_GRAPH_ADAPTERS chain
+    # parsing; 45 curated aggregator addresses, verified subset of MTDS's
+    # production _oracle_prices_constants.py. UAC flips these to phase="live"
+    # in lockstep (denominator drift guard).
+    "CHAINLINK-ETHEREUM",
+    "CHAINLINK-ARBITRUM",
+    "CHAINLINK-BASE",
+    "CHAINLINK-OPTIMISM",
+    "CHAINLINK-POLYGON",
 ]
 
 
