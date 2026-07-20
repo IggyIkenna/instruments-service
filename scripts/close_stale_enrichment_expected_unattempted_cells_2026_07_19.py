@@ -91,7 +91,13 @@ def _read_manifest_slices(bucket: str) -> tuple[pd.DataFrame, dict[tuple[str, st
 def _dry_run_report(
     stuck_cells: pd.DataFrame, fixtures_empty_reason_by_date_league: dict[tuple[str, str], str]
 ) -> None:
-    """Read-only preview — reports what WOULD close without writing anything."""
+    """Read-only preview — reports what WOULD close without writing anything.
+
+    Mirrors ``_close_stale_enrichment_expected_unattempted_cells``'s exact decision logic
+    (including the ``SOURCE_RETURNED_ZERO`` exclusion — see that function's docstring) so this
+    preview never overstates what ``--apply`` will actually do.
+    """
+    from unified_api_contracts import EmptyConfirmedReason
     from unified_api_contracts.registry import is_league_entity_covered
 
     no_coverage = 0
@@ -101,14 +107,17 @@ def _dry_run_report(
         for lid in {str(lid) for lid in group["league_id"].dropna().unique() if str(lid)}:
             if not is_league_entity_covered(lid, str(data_type)):
                 no_coverage += 1
-            elif (str(_date), lid) in fixtures_empty_reason_by_date_league:
+                continue
+            _reason = fixtures_empty_reason_by_date_league.get((str(_date), lid))
+            if _reason and _reason != EmptyConfirmedReason.SOURCE_RETURNED_ZERO.value:
                 no_fixture_mirror += 1
             else:
                 left_untouched += 1
     logger.info(
         "DRY-RUN: %d cell(s) would close as EXPECTED_NO_PROVIDER_COVERAGE, "
         "%d would close mirroring FIXTURES' own empty reason, "
-        "%d left untouched (genuine pending-fetch gaps, not this script's concern)",
+        "%d left untouched (genuine pending-fetch gaps or SOURCE_RETURNED_ZERO — not this "
+        "script's concern)",
         no_coverage,
         no_fixture_mirror,
         left_untouched,
