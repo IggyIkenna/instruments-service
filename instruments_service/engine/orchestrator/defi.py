@@ -140,6 +140,12 @@ _STATIC_DEFI_VENUES: list[str] = [
     "CHAINLINK-BASE",
     "CHAINLINK-OPTIMISM",
     "CHAINLINK-POLYGON",
+    # AAVE on-chain oracle price (aave_oracle.py, 2026-07-21 — lst_rate_honest_coverage
+    # plan Phase 1). Extends the already-existing AAVE-ETHEREUM venue (governance_events
+    # remains pipeline; oracle_prices is the new IS-producible leg). Ethereum-only —
+    # the Phase-0 verification pass covered mainnet reserves only. UAC flips this to
+    # phase="live" in lockstep (denominator drift guard, unified-api-contracts@6bdbc31d).
+    "AAVE-ETHEREUM",
 ]
 
 

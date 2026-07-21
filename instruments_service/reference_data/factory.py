@@ -25,6 +25,7 @@ from .adapters.cefi.kalshi_perp import KalshiPerpReferenceDataAdapter
 from .adapters.cefi.lighter import LighterReferenceDataAdapter
 from .adapters.cefi.polymarket_perp import PolymarketPerpReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
+from .adapters.defi.aave_oracle import AaveOracleReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
 from .adapters.defi.beefy import BeefyReferenceDataAdapter
@@ -119,6 +120,7 @@ _CANONICAL_VENUE_TO_CCXT_EXCHANGE: dict[str, str] = {
 }
 
 _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
+    "aave_oracle": AaveOracleReferenceDataAdapter,
     "aave_v3": AaveV3ReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
     "aster": AsterReferenceDataAdapter,
@@ -261,6 +263,11 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     # Declaring CHAINLINK-* live in UAC (phase=live + VENUE_TO_ADAPTER_KEY) and adding it to
     # _STATIC_DEFI_VENUES is the REMAINING coordinated step — adapter first, declaration second.
     "chainlink": "",
+    # AAVE on-chain oracle (AaveOracle.getAssetPrice) — on-chain reads via RPC,
+    # no API key needed (mirrors chainlink/pyth). lst_rate_honest_coverage
+    # plan Phase 1: AaveOracleReferenceDataAdapter now exists and is
+    # registered in _ADAPTERS above.
+    "aave_oracle": "",
     "pyth": "",
     # Solana lending adapters (2026-07-09) — public REST/JSON APIs, no API key needed.
     "solend": "",

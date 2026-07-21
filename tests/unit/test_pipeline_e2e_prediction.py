@@ -233,7 +233,11 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # OKX-SWAP cefi venues (+ deregistered legacy DERIBIT-COMBO) — an already-committed,
 # clean UAC change (not from this session's diff); this test's frozen count needed to
 # catch up. Pre-existing drift, verified via `git stash` to reproduce on a clean tree.
-_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 98, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
+# DEFI 98→99 (2026-07-21): unified-api-contracts@6bdbc31d registered the AAVE-ETHEREUM
+# oracle_prices leg (aave_oracle adapter key) — lst_rate_honest_coverage plan Phase 1;
+# AaveOracleReferenceDataAdapter now exists (factory._ADAPTERS + orchestrator/defi.py
+# _STATIC_DEFI_VENUES landed in the same commit as this test update).
+_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 99, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:
