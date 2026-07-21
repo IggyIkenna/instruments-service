@@ -473,6 +473,78 @@ def test_defi_v2_pool_seeds_canonical_pool_address_id_and_lowercase_type() -> No
     assert row.chain == "ARBITRUM"  # populated chain
 
 
+def test_defi_v2_solana_amm_pool_capture_flips_expected_unattempted_to_captured() -> None:
+    """F6 vocab-desync regression (defi_dex_pools_delete_order_stale_2026_07_20 / direction A).
+
+    A Solana AMM pool now stamps ``instrument_type=SOLANA_AMM_POOL`` (raydium/orca reference
+    adapters) — lowercased to ``solana_amm_pool`` by the writer + the enumerator. For the
+    ``expected_unattempted`` seed to CONVERT when MTDS captures the pool, all three coordinated
+    edits must hold together:
+      * C.1 adapter stamps ``SOLANA_AMM_POOL`` (this catalogue entry mirrors that),
+      * C.2 UAC ``valid_data_types_for_venue_instrument_type`` narrows RAYDIUM+solana_amm_pool to
+        the protocol's real ``dex_pool_state`` (else the cell is over-seeded / never emitted here),
+      * C.3 ``_ADDRESS_KEYED_ITYPES`` includes ``solana_amm_pool`` so the seed re-keys to the
+        base58 ``pool_address.lower()`` (the MTDS per-pool capture atom).
+
+    This asserts the FLIP on the SAME ``(venue, chain, data_type, instrument_id, day)`` atom: a
+    capture recorded under that atom removes the ``expected_unattempted`` seed (→ captured), and an
+    empty capture leaves it dangling. Skip any of C.1/C.2/C.3 and this test fails.
+    """
+    # 43-char Solana base58 pool address (matches _is_onchain_addr: 32<=len<=44 and isalnum).
+    pool_addr = "22WrmyTj8x2TRVQen3fxxi2r4Rn6JDHWoMTpsSmn8RUd"
+    entry = _make_defi_entry(
+        instrument_id="RAYDIUM-SOLANA:POOL:SOL-USDC:5",  # glued composite (catalogue form)
+        instrument_type="SOLANA_AMM_POOL",  # C.1 adapter stamp (uppercase catalogue form)
+        venue="RAYDIUM",
+        chain="SOLANA",
+        available_from="2024-01-01",
+        available_to=None,
+    )._replace(raw_symbol=pool_addr)
+    dates = _date_axis("2024-06-01")
+    present_cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+
+    # (a) Nothing captured → a dangling expected_unattempted seed on the CANONICAL atom.
+    uncaptured = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [entry], dates, ["dex_pool_state"], present_set=set(), present_cols=present_cols
+            )
+        )
+    )
+    assert len(uncaptured) == 1, "C.2 dropped dex_pool_state (over-seed / no emit) — UAC narrowing missing"
+    seed = uncaptured[0]
+    assert seed.capture_status == "expected_unattempted"
+    assert seed.data_type == "dex_pool_state"
+    assert seed.instrument_type == "solana_amm_pool"  # lowercased to the writer grain
+    assert seed.instrument_id == pool_addr.lower()  # C.3 re-key to pool_address, NOT the glued id
+    assert seed.venue == "RAYDIUM"
+    assert seed.chain == "SOLANA"
+
+    # (b) Capture the SAME atom → the seed flips to captured (no expected_unattempted emitted).
+    captured_atom = tuple(
+        {
+            "venue": seed.venue,
+            "chain": seed.chain,
+            "data_type": seed.data_type,
+            "instrument_type": seed.instrument_type,
+            "instrument_id": seed.instrument_id,
+            "league_id": "",
+            "date": seed.date,
+        }[c]
+        for c in present_cols
+    )
+    flipped = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [entry], dates, ["dex_pool_state"], present_set={captured_atom}, present_cols=present_cols
+            )
+        )
+    )
+    assert not [r for r in flipped if r.capture_status == "expected_unattempted"], (
+        "a solana_amm_pool capture on the canonical atom must flip the seed to captured (F6 desync)"
+    )
+
+
 def test_defi_v2_acquisition_pending_venue_yields_typed_empty_not_dangling() -> None:
     """IS R2c residual reconciliation: an IS-listed instrument on a venue whose MTDS
     acquisition has NOT landed (in UAC DEFI_INSTRUMENTS_NOT_YET_COLLECTED) becomes a
@@ -507,6 +579,40 @@ def test_defi_v2_acquisition_pending_venue_yields_typed_empty_not_dangling() -> 
         assert row.reason == EmptyConfirmedReason.EXPECTED_ACQUISITION_PENDING.value
         assert row.venue == "SANCTUM"
         assert row.chain == "SOLANA"
+
+
+def test_defi_v2_reference_only_itype_yields_typed_empty_not_dangling() -> None:
+    """defi_nonpool_per_instrument_eu_has_no_reconciliation_path_2026_07_20: a
+    SPOT_ASSET/A_TOKEN/DEBT_TOKEN reference-only row has no per-day capture path by
+    construction, so it seeds empty_confirmed[EXPECTED_REFERENCE_ONLY_NO_CAPTURE_PATH]
+    directly (not a dangling expected_unattempted) even on a fully acquired venue.
+    """
+    from unified_api_contracts import EmptyConfirmedReason
+
+    a_token = _make_defi_entry(
+        instrument_id="AAVE_V3-ARBITRUM:A_TOKEN:USDC",
+        instrument_type="A_TOKEN",
+        venue="AAVE_V3",
+        chain="ARBITRUM",
+        available_from="2022-01-01",
+        available_to=None,
+    )._replace(raw_symbol="0x" + "1" * 40)
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [a_token],
+                _date_axis("2024-06-01"),
+                ["lending_indices"],
+                present_set=set(),  # nothing captured — would otherwise dangle expected_unattempted
+                present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+            )
+        )
+    )
+    assert rows, "expected a residual row for the reference-only instrument_type"
+    for row in rows:
+        assert row.capture_status == "empty_confirmed"
+        assert row.reason == EmptyConfirmedReason.EXPECTED_REFERENCE_ONLY_NO_CAPTURE_PATH.value
+        assert row.instrument_type == "a_token"
 
 
 def test_defi_v2_acquired_venue_stays_expected_unattempted() -> None:

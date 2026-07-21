@@ -1,7 +1,7 @@
 """Raydium reference data adapter -- instrument discovery via REST + RPC.
 
 Discovers Raydium CLMM and standard AMM pools on Solana.
-Pools are returned as InstrumentRecord with instrument_type="POOL".
+Pools are returned as InstrumentRecord with instrument_type="SOLANA_AMM_POOL".
 
 Data sources:
   - REST API (https://api-v3.raydium.io) -- currently active pools with metadata
@@ -77,7 +77,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
     """Raydium reference data: pool discovery from REST API.
 
     Discovers CLMM and standard AMM pools. Each pool produces one instrument
-    with instrument_type="POOL" and symbol=f"{tokenA}/{tokenB}".
+    with instrument_type="SOLANA_AMM_POOL" and symbol=f"{tokenA}/{tokenB}".
     """
 
     def __init__(
@@ -127,14 +127,14 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch Raydium pools as instruments.
 
         Args:
-            instrument_type: Filter by instrument type (only POOL supported).
+            instrument_type: Filter by instrument type (only SOLANA_AMM_POOL supported).
             include_historical: If True, also discover historical pools via
                 on-chain RPC (getProgramAccounts). Disabled by default — the
                 704K+ historical pools are overwhelmingly dead meme coin pools
                 with zero liquidity. The REST API set (~994 active pools) is
                 the tradeable universe.
         """
-        if instrument_type not in (None, InstrumentType.POOL):
+        if instrument_type not in (None, InstrumentType.SOLANA_AMM_POOL):
             return []
 
         # Phase 1: Fetch active pools from REST API
@@ -302,7 +302,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             venue=venue_tag,
             raw_symbol=pool_id,
             pool_address=pool_id,
-            instrument_type=InstrumentType.POOL,
+            instrument_type=InstrumentType.SOLANA_AMM_POOL,
             base_asset="UNKNOWN",
             quote_asset="UNKNOWN",
             tick_size=Decimal("0.000001"),
@@ -385,7 +385,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             venue=venue_tag,
             raw_symbol=str(pool_id),
             pool_address=str(pool_id),
-            instrument_type=InstrumentType.POOL,
+            instrument_type=InstrumentType.SOLANA_AMM_POOL,
             base_asset=base,
             quote_asset=quote,
             tick_size=Decimal("0.000001"),

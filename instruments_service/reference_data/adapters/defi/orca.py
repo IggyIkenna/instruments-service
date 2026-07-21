@@ -1,7 +1,7 @@
 """Orca Whirlpool reference data adapter -- instrument discovery via REST API.
 
 Discovers Orca concentrated liquidity (Whirlpool) pools on Solana.
-Pools are returned as InstrumentRecord with instrument_type="POOL".
+Pools are returned as InstrumentRecord with instrument_type="SOLANA_AMM_POOL".
 
 Data source: Orca Whirlpool API (https://api.mainnet.orca.so).
 Reference: https://docs.orca.so/
@@ -50,7 +50,7 @@ def _classify_orca_error(exc: Exception, status: int | None = None) -> str:
 class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
     """Orca Whirlpool reference data: concentrated liquidity pool discovery.
 
-    Each Orca Whirlpool produces one instrument with instrument_type="POOL"
+    Each Orca Whirlpool produces one instrument with instrument_type="SOLANA_AMM_POOL"
     and symbol=f"{tokenA}/{tokenB}".
     """
 
@@ -98,7 +98,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Orca Whirlpool pools as instruments."""
-        if instrument_type not in (None, InstrumentType.POOL):
+        if instrument_type not in (None, InstrumentType.SOLANA_AMM_POOL):
             return []
 
         url = f"{_BASE_URL}/v1/whirlpool/list"
@@ -217,7 +217,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
             venue=venue_tag,
             raw_symbol=str(address),
             pool_address=str(address),
-            instrument_type=InstrumentType.POOL,
+            instrument_type=InstrumentType.SOLANA_AMM_POOL,
             base_asset=base,
             quote_asset=quote,
             tick_size=Decimal("0.000001"),

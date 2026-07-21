@@ -116,6 +116,7 @@ _LEGACY_INSTRUMENT_TYPE_ALIASES: dict[str, str] = {
     "futures": "FUTURE",
     "futures_chain": "FUTURE",
     "option": "OPTION",
+    "options_chain": "OPTION",
     "pool": "POOL",
     "lending_market": "LENDING",
     "lst": "LST",
