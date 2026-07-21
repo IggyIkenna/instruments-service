@@ -25,6 +25,7 @@ from .adapters.cefi.kalshi_perp import KalshiPerpReferenceDataAdapter
 from .adapters.cefi.lighter import LighterReferenceDataAdapter
 from .adapters.cefi.polymarket_perp import PolymarketPerpReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
+from .adapters.defi.aave_oracle import AaveOracleReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
 from .adapters.defi.beefy import BeefyReferenceDataAdapter
@@ -119,6 +120,7 @@ _CANONICAL_VENUE_TO_CCXT_EXCHANGE: dict[str, str] = {
 }
 
 _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
+    "aave_oracle": AaveOracleReferenceDataAdapter,
     "aave_v3": AaveV3ReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
     "aster": AsterReferenceDataAdapter,
@@ -262,6 +264,9 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     # _STATIC_DEFI_VENUES is the REMAINING coordinated step — adapter first, declaration second.
     "chainlink": "",
     "pyth": "",
+    # AAVE on-chain oracle (aave_oracle.py, 2026-07-21 — lst_rate_honest_coverage_2026_07_21.md
+    # Phase 1) — static reserve enumeration, no API key needed (prices fetched by MTDS via RPC).
+    "aave_oracle": "",
     # Solana lending adapters (2026-07-09) — public REST/JSON APIs, no API key needed.
     "solend": "",
     "marginfi": "",
