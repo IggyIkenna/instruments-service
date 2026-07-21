@@ -312,8 +312,19 @@ class TestCompletenessMetrics:
             assert len(result.missing_tuples) > 0
 
     def test_completeness_pct_is_correct_fraction(self, mod: ModuleType) -> None:
-        """completeness_pct = |EXPECTED ∩ ENUMERATED| / |EXPECTED| * 100."""
-        expected = mod._build_expected_tuples("cefi")
+        """completeness_pct = |EXPECTED ∩ ENUMERATED| / |EXPECTED| * 100.
+
+        Uses the ALIGNED (canonical-key-deduped) expected set, not the raw
+        ``_build_expected_tuples()`` output — since unified-api-contracts@11adf279
+        (2026-07-21, already-committed, clean, unrelated to this session's diff)
+        registered OKX-FUTURES, whose (instrument_type, data_type) tuples
+        canonical-key-collide with pre-existing bare "OKX" tuples (both denote the
+        same underlying capability), the raw count (76) now exceeds the aligned
+        count (71) the function actually computes internally. Comparing against
+        the raw set risked double-counting a colliding key across `half`.
+        """
+        expected_by_key = mod._canonicalise_tuple_set("cefi", mod._build_expected_tuples("cefi"))
+        expected = list(expected_by_key.values())
         if not expected:
             pytest.skip("Empty EXPECTED — cannot compute pct")
 
@@ -336,7 +347,13 @@ class TestCompletenessMetrics:
         )
 
     def test_missing_instrument_type_column_yields_empty_enumerated(self, mod: ModuleType) -> None:
-        """If the 'instrument_type' column is absent, ENUMERATED = empty → all expected missing."""
+        """If the 'instrument_type' column is absent, ENUMERATED = empty → all expected missing.
+
+        Compares against the ALIGNED expected-key count, not the raw
+        ``_build_expected_tuples()`` count — see
+        ``test_completeness_pct_is_correct_fraction`` for why they now differ
+        (unified-api-contracts@11adf279 OKX-FUTURES/OKX canonical-key collision).
+        """
         df = pd.DataFrame(
             [
                 {"capture_status": "captured", "venue": "DERIBIT", "data_type": "trades"},
@@ -344,9 +361,9 @@ class TestCompletenessMetrics:
         )
         result = mod.check_enumeration_completeness("cefi", df)
         # Without instrument_type, ENUMERATED is empty → all expected are holes
-        expected = mod._build_expected_tuples("cefi")
-        if expected:
-            assert len(result.missing_tuples) == len(expected)
+        expected_by_key = mod._canonicalise_tuple_set("cefi", mod._build_expected_tuples("cefi"))
+        if expected_by_key:
+            assert len(result.missing_tuples) == len(expected_by_key)
             assert not result.denominator_complete
 
 
