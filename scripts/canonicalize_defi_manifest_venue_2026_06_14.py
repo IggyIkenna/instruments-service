@@ -24,7 +24,14 @@ This one-shot migration rewrites the stored ``venue`` column to the canonical id
 using the SAME resolution the readers use (``VenueMapping.normalize_defi_venue``
 with a direct ``venue-chain`` concat preferred when it is already canonical, so
 classic-vs-versioned forks like ``SUSHISWAP`` + ``ARBITRUM`` →
-``SUSHISWAP-ARBITRUM`` are not force-mapped to ``SUSHISWAP_V3``).
+``SUSHISWAP-ARBITRUM`` are not force-mapped to ``SUSHISWAP_V3``) UNLESS a
+``factory_address`` column resolves the exact version (operator ruling
+2026-07-21, ``defi_consolidated_closeout_2026_07_18.md`` "bare SUSHISWAP/UNISWAP
+version" — derive from the deploying factory contract address, not
+"undecidable"; see ``instruments_service.reference_data.adapters.defi.
+_dex_factory_registry`` for the static address map + the verified finding that
+NO currently-captured row carries this column yet, so this is forward-looking
+wiring, not a live rewrite today).
 
 Idempotent: a row whose venue is already canonical is left unchanged; a bucket
 with zero changes is skipped. Dry-run by default; ``--apply --confirm`` writes
@@ -57,23 +64,51 @@ from unified_api_contracts.registry import ALL_DEFI_VENUES
 from unified_api_contracts.registry.venue_mapping import VenueMapping
 from unified_trading_library import get_storage_client, resolve_bucket_name
 
+from instruments_service.reference_data.adapters.defi._dex_factory_registry import (
+    resolve_dex_version_from_factory,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 LIVE_BLOB = "_index/availability_index.parquet"
 PROJECTION_BLOB = "_index/audit/projected_index_defi.parquet"
 
+# Forward-looking contract (operator ruling 2026-07-21): the column name a
+# captured-pool row would carry its deploying factory address under, IF any
+# adapter/writer ever populates one. Verified absent from every currently-
+# captured row (see _dex_factory_registry module docstring) — reading it here
+# is a no-op today and becomes live the day capture starts recording it.
+FACTORY_ADDRESS_COLUMN = "factory_address"
 
-def _canonical_venue(vm: VenueMapping, canon: frozenset[str], venue: str, chain: str) -> str:
-    """Resolve ``(venue, chain)`` to its canonical DeFi venue id.
 
-    Prefers a direct ``venue-chain`` concat when that is already canonical
+def _canonical_venue(vm: VenueMapping, canon: frozenset[str], venue: str, chain: str, factory_address: str = "") -> str:
+    """Resolve ``(venue, chain[, factory_address])`` to its canonical DeFi venue id.
+
+    Factory-address resolution (operator ruling 2026-07-21 —
+    ``defi_consolidated_closeout_2026_07_18.md`` "bare SUSHISWAP/UNISWAP version") is
+    tried FIRST when ``factory_address`` is non-empty: a known (chain, factory_address)
+    pair resolves the exact protocol version, and the constructed ``{version}-{chain}``
+    is only used if it is ALREADY a registered ``ALL_DEFI_VENUES`` member — this never
+    mints an unregistered venue string (e.g. SushiSwap-on-Arbitrum has no registered
+    versioned venue at all today; see the module's residual note). An unresolved factory
+    address (unknown contract, or wrong chain) falls through to the pre-existing behavior
+    unchanged.
+
+    Absent that, prefers a direct ``venue-chain`` concat when that is already canonical
     (classic-vs-versioned forks), else ``normalize_defi_venue`` (bare/ghost/alias
     forms). Returns the input unchanged for non-DeFi / unresolvable rows so they
     are surfaced honestly rather than silently remapped. Mirrors the reader's
-    ``DefiStatusMixin._canonical_defi_venue_id`` exactly."""
+    ``DefiStatusMixin._canonical_defi_venue_id`` exactly (module docstring is unaffected —
+    the factory-resolution addition is additive and only fires with real factory data)."""
     venue = str(venue)
     chain = str(chain)
+    if factory_address and chain.strip():
+        version_tag = resolve_dex_version_from_factory(factory_address, chain)
+        if version_tag:
+            versioned = f"{version_tag}-{chain}"
+            if versioned in canon:
+                return versioned
     if chain.strip() and "-" not in venue:
         direct = f"{venue}-{chain}"
         if direct in canon:
@@ -86,17 +121,30 @@ def _canonical_venue(vm: VenueMapping, canon: frozenset[str], venue: str, chain:
 
 def canonicalise_venue_column(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     """Return ``(df_with_canonical_venue, n_rows_changed)``. No-op if no
-    ``venue``/``chain`` columns. Idempotent on already-canonical frames."""
+    ``venue``/``chain`` columns. Idempotent on already-canonical frames.
+
+    When a ``factory_address`` column is present (forward-looking — absent from
+    every row captured today, see module docstring), it is consulted per-row via
+    ``_canonical_venue`` so two rows sharing a bare venue/chain but carrying
+    DIFFERENT factory addresses (e.g. genuinely different pools) resolve
+    independently rather than collapsing to one dedup key."""
     if "venue" not in df.columns or "chain" not in df.columns or df.empty:
         return df, 0
     vm = VenueMapping()
     canon = frozenset(ALL_DEFI_VENUES)
-    pairs = df[["venue", "chain"]].drop_duplicates()
-    mapping: dict[tuple[str, str], str] = {}
-    for v, c in zip(pairs["venue"].astype(str), pairs["chain"].astype(str), strict=True):
-        mapping[(v, c)] = _canonical_venue(vm, canon, v, c)
+    has_factory_col = FACTORY_ADDRESS_COLUMN in df.columns
+    factory_series = (
+        df[FACTORY_ADDRESS_COLUMN].astype(str) if has_factory_col else pd.Series([""] * len(df), index=df.index)
+    )
+    keyed = pd.DataFrame(
+        {"venue": df["venue"].astype(str), "chain": df["chain"].astype(str), "factory": factory_series}
+    )
+    pairs = keyed.drop_duplicates()
+    mapping: dict[tuple[str, str, str], str] = {}
+    for v, c, f in zip(pairs["venue"], pairs["chain"], pairs["factory"], strict=True):
+        mapping[(v, c, f)] = _canonical_venue(vm, canon, v, c, f)
     orig = df["venue"].astype(str)
-    new_venue = [mapping.get((str(v), str(c)), str(v)) for v, c in zip(orig, df["chain"].astype(str), strict=True)]
+    new_venue = [mapping.get((v, c, f), v) for v, c, f in zip(orig, keyed["chain"], keyed["factory"], strict=True)]
     n_changed = int((pd.Series(new_venue, index=df.index) != orig).sum())
     out = df.copy()
     out["venue"] = new_venue
