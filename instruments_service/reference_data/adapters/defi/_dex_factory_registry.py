@@ -75,7 +75,7 @@ from unified_api_contracts.registry.dex_router_addresses import UNISWAP_V3_FACTO
 # market-tick-data-service/market_tick_data_service/market_interface/adapters/defi/uniswapv2_adapter.py)
 # ---------------------------------------------------------------------------
 UNISWAP_V2_FACTORY_BY_CHAIN: dict[str, str] = {
-    "ETHEREUM": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
+    "ETHEREUM": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",  # DERIVED 2026-07-18 from ethereum etherscan (see Source/Cross-checked block above)
 }
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ UNISWAP_V2_FACTORY_BY_CHAIN: dict[str, str] = {
 # Cross-checked: https://etherscan.io/address/0x000000000004444c5dc75cb358380d2e3de08a90
 # ---------------------------------------------------------------------------
 UNISWAP_V4_POOL_MANAGER_BY_CHAIN: dict[str, str] = {
-    "ETHEREUM": "0x000000000004444c5dc75cB358380D2e3dE08A90",
+    "ETHEREUM": "0x000000000004444c5dc75cB358380D2e3dE08A90",  # DERIVED 2026-07-18 from ethereum etherscan (see Source/Cross-checked block above)
 }
 
 # ---------------------------------------------------------------------------
@@ -104,12 +104,12 @@ UNISWAP_V4_POOL_MANAGER_BY_CHAIN: dict[str, str] = {
 #   protocol fee/volume tracking — an independently-audited public source)
 # ---------------------------------------------------------------------------
 SUSHISWAP_V2_FACTORY_BY_CHAIN: dict[str, str] = {
-    "ETHEREUM": "0xC0AEe478e3658e2610c5F7A4A2E1777cE9e4f2Ac",
-    "ARBITRUM": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
-    "POLYGON": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
-    "AVALANCHE": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
-    "OPTIMISM": "0xFbc12984689e5f15626Bad03Ad60160Fe98B303C",
-    "BASE": "0x71524B4f93c58fcbF659783284E38825f0622859",
+    "ETHEREUM": "0xC0AEe478e3658e2610c5F7A4A2E1777cE9e4f2Ac",  # DERIVED 2026-07-18 from ethereum DefiLlama dimension-adapters/sushiswap-classic.ts
+    "ARBITRUM": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",  # DERIVED 2026-07-18 from arbitrum DefiLlama dimension-adapters/sushiswap-classic.ts
+    "POLYGON": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",  # DERIVED 2026-07-18 from polygon DefiLlama dimension-adapters/sushiswap-classic.ts
+    "AVALANCHE": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",  # DERIVED 2026-07-18 from avalanche DefiLlama dimension-adapters/sushiswap-classic.ts
+    "OPTIMISM": "0xFbc12984689e5f15626Bad03Ad60160Fe98B303C",  # DERIVED 2026-07-18 from optimism DefiLlama dimension-adapters/sushiswap-classic.ts
+    "BASE": "0x71524B4f93c58fcbF659783284E38825f0622859",  # DERIVED 2026-07-18 from base DefiLlama dimension-adapters/sushiswap-classic.ts
 }
 
 # ---------------------------------------------------------------------------
@@ -134,10 +134,10 @@ SUSHISWAP_V2_FACTORY_BY_CHAIN: dict[str, str] = {
 #   https://github.com/DefiLlama/dimension-adapters/blob/master/dexs/sushiswap-v3.ts
 # ---------------------------------------------------------------------------
 SUSHISWAP_V3_FACTORY_BY_CHAIN: dict[str, str] = {
-    "ETHEREUM": "0xbACEB8eC6b9355Dfc0269C18bac9d6E2Bdc29C4f",
-    "BASE": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
-    "ARBITRUM": "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e",
-    "AVALANCHE": "0x3e603C14aF37EBdaD31709C4f848Fc6aD5BEc715",
+    "ETHEREUM": "0xbACEB8eC6b9355Dfc0269C18bac9d6E2Bdc29C4f",  # DERIVED 2026-07-18 from ethereum etherscan name-tag "SushiSwap V3: Factory"
+    "BASE": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",  # DERIVED 2026-07-18 from base basescan name-tag "SushiSwap V3: Factory"
+    "ARBITRUM": "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e",  # DERIVED 2026-07-18 from arbitrum arbiscan name-tag "SushiSwap V3: Factory"
+    "AVALANCHE": "0x3e603C14aF37EBdaD31709C4f848Fc6aD5BEc715",  # DERIVED 2026-07-18 from avalanche DefiLlama dimension-adapters/sushiswap-v3.ts
 }
 
 # Combined (chain -> {factory_address.lower(): version_tag}) lookup, built once

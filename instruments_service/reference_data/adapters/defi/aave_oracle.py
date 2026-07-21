@@ -61,31 +61,31 @@ _AAVE_RESERVES: tuple[dict[str, str], ...] = (
     {
         "symbol": "wsteth",
         "base_asset": "wstETH",
-        "contract_address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+        "contract_address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",  # DERIVED 2026-07-21 from ethereum eth_call getAssetPrice (wf_f629fbb4-7da)
         "protocol": "LIDO",
     },
     {
         "symbol": "weeth",
         "base_asset": "weETH",
-        "contract_address": "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee",
+        "contract_address": "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee",  # DERIVED 2026-07-21 from ethereum eth_call getAssetPrice (wf_f629fbb4-7da)
         "protocol": "ETHERFI",
     },
     {
         "symbol": "reth",
         "base_asset": "rETH",
-        "contract_address": "0xae78736Cd615f374D3085123A210448E74Fc6393",
+        "contract_address": "0xae78736Cd615f374D3085123A210448E74Fc6393",  # DERIVED 2026-07-21 from ethereum eth_call getAssetPrice (wf_f629fbb4-7da)
         "protocol": "ROCKETPOOL",
     },
     {
         "symbol": "cbeth",
         "base_asset": "cbETH",
-        "contract_address": "0xBe9895146f7AF43049ca1c1AE358B0541Ea49704",
+        "contract_address": "0xBe9895146f7AF43049ca1c1AE358B0541Ea49704",  # DERIVED 2026-07-21 from ethereum eth_call getAssetPrice (wf_f629fbb4-7da)
         "protocol": "COINBASE",
     },
     {
         "symbol": "rseth",
         "base_asset": "rsETH",
-        "contract_address": "0xA1290d69c65A6Fe4DF752f95823fAe25cB99e5A7",
+        "contract_address": "0xA1290d69c65A6Fe4DF752f95823fAe25cB99e5A7",  # DERIVED 2026-07-21 from ethereum eth_call getAssetPrice (wf_f629fbb4-7da)
         "protocol": "KELPDAO",
     },
     {
@@ -93,7 +93,7 @@ _AAVE_RESERVES: tuple[dict[str, str], ...] = (
         # excluded (see module docstring).
         "symbol": "ezeth",
         "base_asset": "ezETH",
-        "contract_address": "0xbf5495Efe5DB9ce00f80364C8B423567e58d2110",
+        "contract_address": "0xbf5495Efe5DB9ce00f80364C8B423567e58d2110",  # DERIVED 2026-07-21 from ethereum eth_call getAssetPrice (wf_f629fbb4-7da)
         "protocol": "RENZO",
     },
 )
