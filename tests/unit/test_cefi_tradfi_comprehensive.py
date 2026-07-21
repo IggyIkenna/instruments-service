@@ -2680,6 +2680,15 @@ class TestAsterUnsupportedCapabilityGuard:
 # Phase 4: DeribitComboReferenceDataAdapter
 # =============================================================================
 
+# reason: DERIBIT-COMBO deregistered from VENUE_TO_ADAPTER_KEY by unified-api-contracts@11adf279
+# (2026-07-21, already-committed, clean, unrelated to this session's diff) pending the leg-aware
+# signed-weight spec rework -- see 'Combo cross-AG hand-off' P2 in defi_consolidated_closeout_2026_07_18.md
+# Track 1. Re-enable once DERIBIT-COMBO routing is re-registered under that work.
+_DERIBIT_COMBO_DEREGISTERED_SKIP_REASON = (
+    "DERIBIT-COMBO deregistered from VENUE_TO_ADAPTER_KEY by unified-api-contracts@11adf279 -- "
+    "see 'Combo cross-AG hand-off' P2 in defi_consolidated_closeout_2026_07_18.md Track 1."
+)
+
 
 class TestDeribitComboAdapter:
     """Tests for DeribitComboReferenceDataAdapter."""
@@ -2957,6 +2966,7 @@ class TestDeribitComboAdapter:
             results = await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
         assert results == []
 
+    @pytest.mark.skip(reason=_DERIBIT_COMBO_DEREGISTERED_SKIP_REASON)
     def test_factory_contains_deribit_combo(self) -> None:
         """DERIBIT-COMBO is registered in the factory adapter map. Batch/default
         routes to Tardis (historical combo universe); the live-only REST

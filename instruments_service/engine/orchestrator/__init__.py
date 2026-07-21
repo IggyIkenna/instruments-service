@@ -87,6 +87,7 @@ from unified_api_contracts.sports import (
     canonicalize_league_id as _uac_canonicalize_league_id,
 )
 from unified_trading_library import (
+    DEFAULT_AS_OF_COLUMNS,
     CaptureStatus,
     DataSink,
     DomainValidationService,
@@ -202,9 +203,11 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
 # raises TimestampAlignmentError which per-shard try/except should catch and
 # route to manifest.record_failed. Flip to ``strict`` once warn-mode volume
 # baselines clean across sports adapters (see
-# ``plans/active/instruments_service_write_gate_validation_2026_04_22.md``).
+# ``plans/active/instruments_service_write_gate_validation_2026_04_22.md``). ``available_at``
+# EXCLUDED 2026-07-21 (write-time fetch_completed_at, not lookahead) — issue doc available_at_fetch_completed_at_mismatch
 # ---------------------------------------------------------------------------
-_WRITE_GATE = InstrumentsWriteGate(mode="strict")
+_INSTRUMENTS_SERVICE_AS_OF_COLUMNS: tuple[str, ...] = tuple(c for c in DEFAULT_AS_OF_COLUMNS if c != "available_at")
+_WRITE_GATE = InstrumentsWriteGate(mode="strict", check_columns=_INSTRUMENTS_SERVICE_AS_OF_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
