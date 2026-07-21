@@ -1274,7 +1274,16 @@ def _enumerate_v2_cefi(
 # so the seed atom matches the MTDS per-instrument capture (pool_address / underlying-asset /
 # market / reserve address). See the re-key block in _enumerate_v2_defi.
 _ADDRESS_KEYED_ITYPES: frozenset[str] = frozenset(
-    {"pool", "lending", "a_token", "debt_token", "lending_market", "solana_lending"}
+    {
+        "pool",
+        "solana_amm_pool",
+        "solana_vault",
+        "lending",
+        "a_token",
+        "debt_token",
+        "lending_market",
+        "solana_lending",
+    }
 )
 
 # REFERENCE-ONLY DeFi instrument_types (defi_nonpool_per_instrument_eu_has_no_reconciliation_
