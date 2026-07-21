@@ -87,6 +87,7 @@ from unified_api_contracts.sports import (
     canonicalize_league_id as _uac_canonicalize_league_id,
 )
 from unified_trading_library import (
+    DEFAULT_AS_OF_COLUMNS,
     CaptureStatus,
     DataSink,
     DomainValidationService,
@@ -203,8 +204,29 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
 # route to manifest.record_failed. Flip to ``strict`` once warn-mode volume
 # baselines clean across sports adapters (see
 # ``plans/active/instruments_service_write_gate_validation_2026_04_22.md``).
+#
+# ``available_at`` is excluded from the scanned columns: unlike valuation_date /
+# as_of_date / kickoff_utc / event_time / computed_at (the row's OWN value-date,
+# which must never be from the future relative to the batch partition),
+# ``available_at`` records WHEN the row was captured/ingested — every generic
+# instrument-universe write (``writers.py::_write_venue``, CeFi/DeFi/TradFi/
+# Prediction) stamps it with real wall-clock ``datetime.now(UTC)`` by design
+# (``stamp_available_at_explicit``), which is always later than a historical
+# backfill's ``day=`` partition. That's not a data-crime, it's the intended
+# ingestion-timestamp semantics (see plan's "Out of scope: External-venue
+# adapters" — this gate was never meant to cover available_at's own direction).
+# Scanning it under the same "no-lookahead" rule as the value columns made
+# every historical backfill/test through this path fail unconditionally once
+# UTL's DEFAULT_AS_OF_COLUMNS carried the real ``available_at`` name instead of
+# the never-matching legacy ``data_available_at`` (unified-trading-library
+# fix(instruments-write-gate) commit `9064dd2a`, 2026-07-21). The presence/
+# non-null check on ``available_at`` (``assert_available_at_present`` above,
+# in ``sink.py``) is unaffected — this only narrows the alignment SCAN.
 # ---------------------------------------------------------------------------
-_WRITE_GATE = InstrumentsWriteGate(mode="strict")
+_WRITE_GATE = InstrumentsWriteGate(
+    mode="strict",
+    check_columns=tuple(col for col in DEFAULT_AS_OF_COLUMNS if col != "available_at"),
+)
 
 
 # ---------------------------------------------------------------------------
