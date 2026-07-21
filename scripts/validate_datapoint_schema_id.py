@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -100,6 +101,12 @@ _ID_LESS_FILENAMES = frozenset({"ticks.parquet"})
 # How many validated objects to buffer before rewriting the per-VM shard, so the
 # fleet monitor observes a GROWING results-row count (not one write at the end).
 _DEFAULT_FLUSH_EVERY = 500
+
+# Minimum wall-clock seconds between day-frontier-triggered flushes to the SAME
+# per-VM results object — GCS's object-mutation rate limit is ~1 write/sec
+# sustained to one object, and a sparse-data corpus can cross many day=
+# partitions per second (see the day-frontier flush call site in _run).
+_MIN_FLUSH_INTERVAL_SECONDS = 2.0
 
 _Record = dict[str, object]
 
@@ -385,7 +392,14 @@ def _run(client: StorageClient, args: argparse.Namespace) -> int:
     flush_every = int(args.flush_every)
     limit = int(args.limit)
 
-    data_bucket = resolve_bucket_name(cloud="gcp", kind="market-data", asset_group=asset_group)
+    if asset_group.lower() == "prediction":
+        # Prediction market-data is a dedicated flat yaml kind (no per-asset_group row
+        # under the shared "market-data" dict, unlike cefi/defi/tradfi/sports) — mirrors
+        # market-tick-data-service/scripts/rebuild_mtds_manifest.py:42 and
+        # canonicalize_prediction_manifest_2026_07_18.py:952.
+        data_bucket = resolve_bucket_name(cloud="gcp", kind="market-data-tick-prediction")
+    else:
+        data_bucket = resolve_bucket_name(cloud="gcp", kind="market-data", asset_group=asset_group)
     results_bucket = resolve_bucket_name(cloud="gcp", kind="datapoint-validation")
     logger.info("Tier-2 validate: ag=%s corpus=%s results=%s", asset_group, data_bucket, results_bucket)
 
@@ -394,7 +408,16 @@ def _run(client: StorageClient, args: argparse.Namespace) -> int:
 
     validated = 0
     last_day = ""
-    # THE single walk — one enumeration of the corpus for this asset_group.
+    last_flush_at = 0.0
+    # GCS caps sustained writes to a SINGLE object (~1/sec, "object mutation rate
+    # limit" — not project/bucket-wide); a sparse-data corpus (e.g. cefi's early
+    # 2019 days) can cross many day= partitions per second, so day-frontier flushing
+    # alone can exceed that cap long before `flush_every` count is reached. Found
+    # 2026-07-21 (first real launch-run): all-day-crossings flushing 429'd on cefi/
+    # defi/prediction within seconds. Throttle the day-frontier flush to at most
+    # once per _MIN_FLUSH_INTERVAL_SECONDS; the flush_every count-based flush below
+    # and the unconditional final flush are unaffected (so nothing is lost, only
+    # the per-day-crossing cadence is capped).
     for blob in client.list_blobs(data_bucket, prefix=walk_prefix):
         object_path = blob.name
         if _should_skip_object(object_path) or object_path in done:
@@ -404,17 +427,22 @@ def _run(client: StorageClient, args: argparse.Namespace) -> int:
         validated += 1
 
         day = _parse_axes_from_path(object_path)["day"]
+        now = time.monotonic()
         if day and day != last_day:
             last_day = day
             # Day-frontier advance: flush so results are durable + the fleet
             # write-progress monitor observes a growing per-VM shard. Resume is
             # presence-skip idempotent (a re-run skips already-validated objects),
-            # so no separate PROGRESS.json day-checkpoint is required.
-            _flush_shard(client, results_bucket, vm_name, rows)
-            logger.info("day-frontier advanced to %s (%d validated)", day, validated)
+            # so no separate PROGRESS.json day-checkpoint is required. Throttled to
+            # respect GCS's per-object write-rate limit (see comment above).
+            if now - last_flush_at >= _MIN_FLUSH_INTERVAL_SECONDS:
+                _flush_shard(client, results_bucket, vm_name, rows)
+                last_flush_at = now
+                logger.info("day-frontier advanced to %s (%d validated)", day, validated)
 
         if validated % flush_every == 0:
             _flush_shard(client, results_bucket, vm_name, rows)
+            last_flush_at = time.monotonic()
             logger.info("progress: %d validated (flushed shard)", validated)
         if limit and validated >= limit:
             logger.info("--limit %d reached — stopping the walk (canary scope)", limit)
