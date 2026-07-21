@@ -1018,6 +1018,12 @@ def test_split_by_instrument_type_canonicalizes_extended_legacy_aliases() -> Non
     canonicalise to their UAC ``InstrumentType`` value before grouping, landing in
     the SAME manifest row_key as an already-canonical sibling instead of minting a
     new permanently-duplicated key.
+
+    2026-07-20 extension (distinct_values_noncanonical_audit_2026_07_20.md): added
+    ``options_chain`` for parity with ``futures_chain`` — CME emits both bundle-grain
+    spellings (``DERIBIT``/``CME``: ``futures_chain``/``options_chain``), and only the
+    FUTURE half had an alias entry, leaving OPTION-side rows to mint their own
+    duplicate row_key.
     """
     from instruments_service.engine.orchestrator import _split_by_instrument_type
 
@@ -1028,10 +1034,12 @@ def test_split_by_instrument_type_canonicalizes_extended_legacy_aliases() -> Non
             {"instrument_key": "BTC-FUT-1", "instrument_type": "futures_chain"},
             {"instrument_key": "BTC-FUT-2", "instrument_type": "FUTURE"},
             {"instrument_key": "ETH-PERP-1", "instrument_type": "perp"},
+            {"instrument_key": "BTC-OPT-1", "instrument_type": "options_chain"},
+            {"instrument_key": "BTC-OPT-2", "instrument_type": "OPTION"},
         ]
     )
     groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
-    assert groups == {"SPOT_PAIR": 2, "FUTURE": 2, "PERPETUAL": 1}
+    assert groups == {"SPOT_PAIR": 2, "FUTURE": 2, "PERPETUAL": 1, "OPTION": 2}
 
 
 def test_split_by_instrument_type_blank_and_none_are_not_canonicalized() -> None:
