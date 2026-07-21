@@ -137,6 +137,87 @@ class _AfManifestHooks:
             source=_orch._sports_ref_source(data_type.lower()),
         )
 
+    def _presence_guarded_captured_leagues(self, data_type: str, captured_league_ids: set[str]) -> set[str] | None:
+        """Union any league with an EXISTING per-league parquet for ``(date, entity)``
+        into ``captured_league_ids`` — absence classification is presence-based,
+        never this-run-only (protects the zero-fixture-day and ``redo_all`` paths
+        where the pre-fetch skip tracker is bypassed). Returns ``None`` when the
+        presence probe itself fails (caller must abort emission — see the
+        FAIL-SAFE note below), else the unioned set.
+
+        Issue: ``sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14``.
+        """
+        if not self.bucket:
+            return captured_league_ids
+        try:
+            _present = _orch._list_present_parquet_leagues(self.bucket, self.date, data_type.lower())
+        except Exception as exc:
+            # FAIL-SAFE: if presence cannot be verified, absence cannot be
+            # honestly stamped — skip the empty emission entirely (cells
+            # stay pending and are re-attempted later) rather than risk
+            # stamping empty_confirmed over data we could not see.
+            _orch.logger.warning(
+                "%s presence probe failed for date=%s (%s) — skipping empty-gap emission "
+                "(cannot prove absence without presence)",
+                data_type,
+                self.date,
+                exc,
+            )
+            return None
+        _rescued = _present - captured_league_ids
+        if _rescued:
+            _orch.logger.warning(
+                "%s presence-guard: %d league(s) have an existing per-league parquet for "
+                "date=%s but no captured rows this run (%s%s) — NOT stamping empty_confirmed "
+                "over present data",
+                data_type,
+                len(_rescued),
+                self.date,
+                ", ".join(sorted(_rescued)[:10]),
+                ", ..." if len(_rescued) > 10 else "",
+            )
+        return captured_league_ids | _present
+
+    def _emit_empty_gap_for_league(self, data_type: str, exp_lid: str) -> None:
+        """Classify + stamp one expected league's absence (the per-league body of
+        :meth:`emit_empty_gaps_for_entity`'s loop). See that method's docstring for
+        the 3-way classification contract."""
+        _canon_lid = _orch._canonical_league_id(exp_lid)
+        if not _orch.is_league_entity_covered(_canon_lid, data_type):
+            # Provider has no coverage for this (league, entity) — honest,
+            # uncollectable absence (excluded from the gap denominator).
+            self.manifest.record_empty(
+                row_key={"date": self.date, "data_type": data_type, "league_id": exp_lid},
+                attempted_at=self.attempt_ts,
+                reason=_orch.EmptyConfirmedReason.EXPECTED_NO_PROVIDER_COVERAGE,
+                pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                source=_orch._sports_ref_source(data_type.lower()),
+            )
+            return
+        if not _orch.get_league_fixture_calendar(exp_lid, self.date, self.date):
+            # Off-season for this league (SEASON_BY_COUNTRY) — a real,
+            # typed absence, NOT "nothing to say". Previously this
+            # silently skipped the cell (no manifest write at all),
+            # leaving it permanently blank-reason expected_unattempted
+            # (2026-07-14 GW verification: A_LEAGUE's Oct-Apr season
+            # left every September date off-season, producing 30
+            # blank INJURIES cells that never resolved on re-fetch).
+            self.manifest.record_empty(
+                row_key={"date": self.date, "data_type": data_type, "league_id": exp_lid},
+                attempted_at=self.attempt_ts,
+                reason=_orch.EmptyConfirmedReason.EXPECTED_PAUSED_LEAGUE,
+                pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                source=_orch._sports_ref_source(data_type.lower()),
+            )
+            return
+        self.manifest.record_empty(
+            row_key={"date": self.date, "data_type": data_type, "league_id": exp_lid},
+            attempted_at=self.attempt_ts,
+            reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+            pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+            source=_orch._sports_ref_source(data_type.lower()),
+        )
+
     def emit_empty_gaps_for_entity(self, data_type: str, captured_league_ids: set[str]) -> None:
         """Emit empty_confirmed per expected league with no captured rows (same contract as FIXTURES).
 
@@ -150,82 +231,18 @@ class _AfManifestHooks:
         (the fixture exists but the entity is uncollectable there). SSOT:
         ``unified_api_contracts.registry.sports_league_entity_coverage``.
 
-        PRESENCE guard (2026-07-14 GW verification RED): before stamping ANY
-        empty reason, leagues whose per-league parquet already EXISTS for
-        ``(date, entity)`` are unioned into ``captured_league_ids`` — absence
-        classification is presence-based, never this-run-only. This protects
-        every caller path, including the zero-fixture-day and ``redo_all``
-        paths where the pre-fetch skip tracker is bypassed. Issue:
-        ``sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14``.
+        PRESENCE guard (2026-07-14 GW verification RED): see
+        :meth:`_presence_guarded_captured_leagues`.
         """
         if self.manifest is None:
             return
-        if self.bucket:
-            try:
-                _present = _orch._list_present_parquet_leagues(self.bucket, self.date, data_type.lower())
-            except Exception as exc:
-                # FAIL-SAFE: if presence cannot be verified, absence cannot be
-                # honestly stamped — skip the empty emission entirely (cells
-                # stay pending and are re-attempted later) rather than risk
-                # stamping empty_confirmed over data we could not see.
-                _orch.logger.warning(
-                    "%s presence probe failed for date=%s (%s) — skipping empty-gap emission "
-                    "(cannot prove absence without presence)",
-                    data_type,
-                    self.date,
-                    exc,
-                )
-                return
-            _rescued = _present - captured_league_ids
-            if _rescued:
-                _orch.logger.warning(
-                    "%s presence-guard: %d league(s) have an existing per-league parquet for "
-                    "date=%s but no captured rows this run (%s%s) — NOT stamping empty_confirmed "
-                    "over present data",
-                    data_type,
-                    len(_rescued),
-                    self.date,
-                    ", ".join(sorted(_rescued)[:10]),
-                    ", ..." if len(_rescued) > 10 else "",
-                )
-            captured_league_ids = captured_league_ids | _present
+        guarded = self._presence_guarded_captured_leagues(data_type, captured_league_ids)
+        if guarded is None:
+            return
+        captured_league_ids = guarded
         _expected = {lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")}
         for _exp_lid in sorted(_expected - captured_league_ids):
-            _canon_lid = _orch._canonical_league_id(_exp_lid)
-            if not _orch.is_league_entity_covered(_canon_lid, data_type):
-                # Provider has no coverage for this (league, entity) — honest,
-                # uncollectable absence (excluded from the gap denominator).
-                self.manifest.record_empty(
-                    row_key={"date": self.date, "data_type": data_type, "league_id": _exp_lid},
-                    attempted_at=self.attempt_ts,
-                    reason=_orch.EmptyConfirmedReason.EXPECTED_NO_PROVIDER_COVERAGE,
-                    pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-                    source=_orch._sports_ref_source(data_type.lower()),
-                )
-                continue
-            if not _orch.get_league_fixture_calendar(_exp_lid, self.date, self.date):
-                # Off-season for this league (SEASON_BY_COUNTRY) — a real,
-                # typed absence, NOT "nothing to say". Previously this
-                # silently skipped the cell (no manifest write at all),
-                # leaving it permanently blank-reason expected_unattempted
-                # (2026-07-14 GW verification: A_LEAGUE's Oct-Apr season
-                # left every September date off-season, producing 30
-                # blank INJURIES cells that never resolved on re-fetch).
-                self.manifest.record_empty(
-                    row_key={"date": self.date, "data_type": data_type, "league_id": _exp_lid},
-                    attempted_at=self.attempt_ts,
-                    reason=_orch.EmptyConfirmedReason.EXPECTED_PAUSED_LEAGUE,
-                    pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-                    source=_orch._sports_ref_source(data_type.lower()),
-                )
-                continue
-            self.manifest.record_empty(
-                row_key={"date": self.date, "data_type": data_type, "league_id": _exp_lid},
-                attempted_at=self.attempt_ts,
-                reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
-                pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-                source=_orch._sports_ref_source(data_type.lower()),
-            )
+            self._emit_empty_gap_for_league(data_type, _exp_lid)
 
 
 def _close_stale_enrichment_expected_unattempted_cells(
@@ -337,28 +354,14 @@ def _close_stale_enrichment_expected_unattempted_cells(
     return counts
 
 
-async def _fetch_teams_and_standings(
-    *,
-    adapter: BaseSportsReferenceAdapter,
-    date: str,
-    bucket: str,
-    hooks: _AfManifestHooks,
-    counts: dict[str, int],
-) -> None:
-    """Teams + standings — for every api_football-covered league (cached across dates).
+async def _fetch_and_cache_teams(
+    *, adapter: BaseSportsReferenceAdapter, hooks: _AfManifestHooks
+) -> tuple[_orch.pd.DataFrame | None, list[int]]:
+    """Fetch (or reuse cached) TEAMS rows for every api_football-covered league.
 
-    UAC ``SPORTS_ENTITY_LEAGUE_COVERAGE["TEAMS"]`` / ``["STANDINGS"]`` are both
-    ``None`` ("expected on all fixture dates" — i.e. all leagues, not just
-    Prediction-tier). The league source here MUST match the enumerator's
-    denominator (``get_expected_leagues_for_source("api_football")``, the
-    same call ``hooks.emit_empty_gaps_for_entity`` already uses for the
-    STANDINGS honest-absence emission below) — looping the narrower
-    Prediction-tier ``get_prediction_leagues()`` here silently starved 61 of
-    94 expected leagues of any per-league TEAMS/STANDINGS capture ever
-    (2026-07-13 root-cause: a classification-filter mismatch between this
-    writer and the enumerator, not a real per-league data gap).
-    """
-    manifest = hooks.manifest
+    Returns ``(teams_df, prediction_league_ids)`` — the latter feeds the STANDINGS
+    fetch (:func:`_fetch_and_cache_standings`): only leagues teams were fetched
+    for get standings looked up."""
     teams_df = _orch._cached_teams_df
     prediction_league_ids: list[int] = []
     if teams_df is None:
@@ -397,80 +400,93 @@ async def _fetch_teams_and_standings(
     else:
         prediction_league_ids = _orch._cached_prediction_league_ids
         _orch.logger.info("Sports reference: %d teams from cache (0 API calls)", len(teams_df))
-    if teams_df is not None:
-        # Write per-league partitioned team files + per-league manifest rows.
-        # The bare-path fallback was retired in sports_manifest_single_ssot_2026_04_30
-        # — TEAMS is a league-axis data type and MUST always carry league_id.
-        #
-        # 2026-07-13 root-cause addendum: this loop always wrote the correct
-        # per-league GCS parquet, but until now NEVER called
-        # ``manifest.record_captured`` itself — the only manifest bookkeeping
-        # for TEAMS came from ``process_enrichment.py``'s blanket
-        # ``record_captured_from_counts(row_key={"date": date, "data_type":
-        # "TEAMS"})`` fallback (fires because "teams" was absent from that
-        # call's ``_self_manifested`` exclusion set), which writes ONE
-        # blank-league_id "captured" row per date summing all leagues. That
-        # blanket call is the CONFIRMED LIVE source of the blank-league_id
-        # bulk bundle (verified still growing through 2026-07-13, not legacy
-        # residue as an earlier pass guessed) — mirrored by an identical bug
-        # for STANDINGS (which already self-manifests per-league below but
-        # was never excluded from the blanket call either). Fixed here (own
-        # per-league record_captured, matching STANDINGS) + in
-        # ``process_enrichment.py`` (added "teams"/"standings" to
-        # ``_self_manifested`` so the blanket call stops firing for both) —
-        # together these make per-league TEAMS/STANDINGS manifest rows the
-        # sole, canonical source of truth going forward.
-        if "league_id" in teams_df.columns:
-            _teams_captured: set[str] = set()
-            for _t_lid, _t_league_df in teams_df.groupby("league_id"):
-                _t_lid_str = str(_t_lid)
-                _t_canon = _orch._canonical_league_id(_t_lid_str)
-                # WRITE-UNIVERSE gate (incident 2026-06-24, mirrored from the
-                # STANDINGS write below): never write a captured teams row for
-                # a league outside our tracked api_football set.
-                if not _orch._is_in_canonical_write_universe(_t_canon):
-                    continue
-                _teams_captured.add(_t_canon)
-                _t_stamped = _orch.stamp_available_at_explicit(_t_league_df, when=_orch.datetime.now(_orch.UTC))
-                _orch._gated_sink_write(
-                    _orch._sports_ref_sink_for(bucket, date, "teams"),
-                    data=_t_stamped,
-                    partition={"entity": "teams", "league": _t_canon},
-                    filename="teams.parquet",
-                    venue="api_football",
-                    entity="teams",
-                )
-                if manifest is not None:
-                    manifest.record_captured(  # QG-allow: emission-policy-not-applicable
-                        row_key={"date": date, "data_type": "TEAMS", "league_id": _t_canon},
-                        df=_t_stamped,
-                        asset_group="sports",
-                        instrument_type="",
-                        data_type="TEAMS",
-                        league_id=_t_canon,
-                        pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-                        source=_orch._sports_ref_source("teams"),
-                        service_emission_state=None,
-                    )
-            if manifest is not None:
-                hooks.emit_empty_gaps_for_entity("TEAMS", _teams_captured)
-        else:
-            _orch.logger.warning(
-                "TEAMS bare-path fallback triggered for date=%s — data shape regression: "
-                "teams_df missing league_id column (rows=%d). Skipping write to keep manifest honest.",
-                date,
-                len(teams_df),
+    return teams_df, prediction_league_ids
+
+
+def _write_teams_and_venues(
+    *, teams_df: _orch.pd.DataFrame, bucket: str, date: str, hooks: _AfManifestHooks, counts: dict[str, int]
+) -> None:
+    """Write per-league partitioned TEAMS files + per-league manifest rows, then
+    extract + write the global venues.parquet from the fetched teams.
+
+    The bare-path fallback was retired in sports_manifest_single_ssot_2026_04_30
+    — TEAMS is a league-axis data type and MUST always carry league_id.
+
+    2026-07-13 root-cause addendum: this loop always wrote the correct
+    per-league GCS parquet, but until now NEVER called
+    ``manifest.record_captured`` itself — the only manifest bookkeeping
+    for TEAMS came from ``process_enrichment.py``'s blanket
+    ``record_captured_from_counts(row_key={"date": date, "data_type":
+    "TEAMS"})`` fallback (fires because "teams" was absent from that
+    call's ``_self_manifested`` exclusion set), which writes ONE
+    blank-league_id "captured" row per date summing all leagues. That
+    blanket call is the CONFIRMED LIVE source of the blank-league_id
+    bulk bundle (verified still growing through 2026-07-13, not legacy
+    residue as an earlier pass guessed) — mirrored by an identical bug
+    for STANDINGS (which already self-manifests per-league below but
+    was never excluded from the blanket call either). Fixed here (own
+    per-league record_captured, matching STANDINGS) + in
+    ``process_enrichment.py`` (added "teams"/"standings" to
+    ``_self_manifested`` so the blanket call stops firing for both) —
+    together these make per-league TEAMS/STANDINGS manifest rows the
+    sole, canonical source of truth going forward.
+    """
+    manifest = hooks.manifest
+    if "league_id" in teams_df.columns:
+        _teams_captured: set[str] = set()
+        for _t_lid, _t_league_df in teams_df.groupby("league_id"):
+            _t_lid_str = str(_t_lid)
+            _t_canon = _orch._canonical_league_id(_t_lid_str)
+            # WRITE-UNIVERSE gate (incident 2026-06-24, mirrored from the
+            # STANDINGS write below): never write a captured teams row for
+            # a league outside our tracked api_football set.
+            if not _orch._is_in_canonical_write_universe(_t_canon):
+                continue
+            _teams_captured.add(_t_canon)
+            _t_stamped = _orch.stamp_available_at_explicit(_t_league_df, when=_orch.datetime.now(_orch.UTC))
+            _orch._gated_sink_write(
+                _orch._sports_ref_sink_for(bucket, date, "teams"),
+                data=_t_stamped,
+                partition={"entity": "teams", "league": _t_canon},
+                filename="teams.parquet",
+                venue="api_football",
+                entity="teams",
             )
-        counts["teams"] = len(teams_df)
+            if manifest is not None:
+                manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                    row_key={"date": date, "data_type": "TEAMS", "league_id": _t_canon},
+                    df=_t_stamped,
+                    asset_group="sports",
+                    instrument_type="",
+                    data_type="TEAMS",
+                    league_id=_t_canon,
+                    pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source("teams"),
+                    service_emission_state=None,
+                )
+        if manifest is not None:
+            hooks.emit_empty_gaps_for_entity("TEAMS", _teams_captured)
+    else:
+        _orch.logger.warning(
+            "TEAMS bare-path fallback triggered for date=%s — data shape regression: "
+            "teams_df missing league_id column (rows=%d). Skipping write to keep manifest honest.",
+            date,
+            len(teams_df),
+        )
+    counts["teams"] = len(teams_df)
 
-        # Extract venues from teams and write a global venues.parquet.
-        # The features-sports-service reads this at:
-        #   sports_reference/venues/venues.parquet
-        # Venue coordinates come from the UAC static registry (enriched
-        # by _parse_team_item when get_teams() is called).
-        _orch._write_venues_from_teams(teams_df, bucket)
+    # Extract venues from teams and write a global venues.parquet.
+    # The features-sports-service reads this at:
+    #   sports_reference/venues/venues.parquet
+    # Venue coordinates come from the UAC static registry (enriched
+    # by _parse_team_item when get_teams() is called).
+    _orch._write_venues_from_teams(teams_df, bucket)
 
-    # Standings — for each prediction league (cached across dates)
+
+async def _fetch_and_cache_standings(
+    *, adapter: BaseSportsReferenceAdapter, hooks: _AfManifestHooks, prediction_league_ids: list[int]
+) -> _orch.pd.DataFrame | None:
+    """Fetch (or reuse cached) STANDINGS rows for every league TEAMS was fetched for."""
     standings_df = _orch._cached_standings_df
     if standings_df is None:
         all_standings: list[dict[str, object]] = []
@@ -494,54 +510,91 @@ async def _fetch_teams_and_standings(
             _orch.logger.info("Sports reference: %d standing rows fetched (API calls — will cache)", len(standings_df))
     else:
         _orch.logger.info("Sports reference: %d standings from cache (0 API calls)", len(standings_df))
-    if standings_df is not None:
-        # Write per-league partitioned standings files + per-league manifest rows.
-        if "league_id" in standings_df.columns:
-            _std_captured: set[str] = set()
-            for _s_lid, _s_league_df in standings_df.groupby("league_id"):
-                _s_lid_str = str(_s_lid)
-                _s_canon = _orch._canonical_league_id(_s_lid_str)
-                # WRITE-UNIVERSE gate (incident 2026-06-24): never write a captured
-                # standings row for a league outside our tracked api_football set —
-                # un-canonicalisable leagues stay numeric-keyed and split the schema.
-                if not _orch._is_in_canonical_write_universe(_s_canon):
-                    continue
-                _std_captured.add(_s_canon)
-                _stamped_std_df = _orch.stamp_available_at_explicit(_s_league_df, when=_orch.datetime.now(_orch.UTC))
-                _orch._gated_sink_write(
-                    _orch._sports_ref_sink_for(bucket, date, "standings"),
-                    data=_stamped_std_df,
-                    partition={"entity": "standings", "league": _orch._canonical_league_id(_s_lid_str)},
-                    filename="standings.parquet",
-                    venue="api_football",
-                    entity="standings",
-                )
-                if manifest is not None:
-                    manifest.record_captured(  # QG-allow: emission-policy-not-applicable
-                        row_key={
-                            "date": date,
-                            "data_type": "STANDINGS",
-                            "league_id": _orch._canonical_league_id(_s_lid_str),
-                        },
-                        df=_stamped_std_df,
-                        asset_group="sports",
-                        instrument_type="",
-                        data_type="STANDINGS",
-                        league_id=_orch._canonical_league_id(_s_lid_str),
-                        pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-                        source=_orch._sports_ref_source("standings"),
-                        service_emission_state=None,
-                    )
-            if manifest is not None:
-                hooks.emit_empty_gaps_for_entity("STANDINGS", _std_captured)
-        else:
-            _orch.logger.warning(
-                "STANDINGS bare-path fallback triggered for date=%s — data shape regression: "
-                "standings_df missing league_id column (rows=%d). Skipping write to keep manifest honest.",
-                date,
-                len(standings_df),
+    return standings_df
+
+
+def _write_standings_per_league(
+    *, standings_df: _orch.pd.DataFrame, bucket: str, date: str, hooks: _AfManifestHooks, counts: dict[str, int]
+) -> None:
+    """Write per-league partitioned STANDINGS files + per-league manifest rows."""
+    manifest = hooks.manifest
+    if "league_id" in standings_df.columns:
+        _std_captured: set[str] = set()
+        for _s_lid, _s_league_df in standings_df.groupby("league_id"):
+            _s_lid_str = str(_s_lid)
+            _s_canon = _orch._canonical_league_id(_s_lid_str)
+            # WRITE-UNIVERSE gate (incident 2026-06-24): never write a captured
+            # standings row for a league outside our tracked api_football set —
+            # un-canonicalisable leagues stay numeric-keyed and split the schema.
+            if not _orch._is_in_canonical_write_universe(_s_canon):
+                continue
+            _std_captured.add(_s_canon)
+            _stamped_std_df = _orch.stamp_available_at_explicit(_s_league_df, when=_orch.datetime.now(_orch.UTC))
+            _orch._gated_sink_write(
+                _orch._sports_ref_sink_for(bucket, date, "standings"),
+                data=_stamped_std_df,
+                partition={"entity": "standings", "league": _orch._canonical_league_id(_s_lid_str)},
+                filename="standings.parquet",
+                venue="api_football",
+                entity="standings",
             )
-        counts["standings"] = len(standings_df)
+            if manifest is not None:
+                manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                    row_key={
+                        "date": date,
+                        "data_type": "STANDINGS",
+                        "league_id": _orch._canonical_league_id(_s_lid_str),
+                    },
+                    df=_stamped_std_df,
+                    asset_group="sports",
+                    instrument_type="",
+                    data_type="STANDINGS",
+                    league_id=_orch._canonical_league_id(_s_lid_str),
+                    pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source("standings"),
+                    service_emission_state=None,
+                )
+        if manifest is not None:
+            hooks.emit_empty_gaps_for_entity("STANDINGS", _std_captured)
+    else:
+        _orch.logger.warning(
+            "STANDINGS bare-path fallback triggered for date=%s — data shape regression: "
+            "standings_df missing league_id column (rows=%d). Skipping write to keep manifest honest.",
+            date,
+            len(standings_df),
+        )
+    counts["standings"] = len(standings_df)
+
+
+async def _fetch_teams_and_standings(
+    *,
+    adapter: BaseSportsReferenceAdapter,
+    date: str,
+    bucket: str,
+    hooks: _AfManifestHooks,
+    counts: dict[str, int],
+) -> None:
+    """Teams + standings — for every api_football-covered league (cached across dates).
+
+    UAC ``SPORTS_ENTITY_LEAGUE_COVERAGE["TEAMS"]`` / ``["STANDINGS"]`` are both
+    ``None`` ("expected on all fixture dates" — i.e. all leagues, not just
+    Prediction-tier). The league source here MUST match the enumerator's
+    denominator (``get_expected_leagues_for_source("api_football")``, the
+    same call ``hooks.emit_empty_gaps_for_entity`` already uses for the
+    STANDINGS honest-absence emission below) — looping the narrower
+    Prediction-tier ``get_prediction_leagues()`` here silently starved 61 of
+    94 expected leagues of any per-league TEAMS/STANDINGS capture ever
+    (2026-07-13 root-cause: a classification-filter mismatch between this
+    writer and the enumerator, not a real per-league data gap).
+    """
+    teams_df, prediction_league_ids = await _fetch_and_cache_teams(adapter=adapter, hooks=hooks)
+    if teams_df is not None:
+        _write_teams_and_venues(teams_df=teams_df, bucket=bucket, date=date, hooks=hooks, counts=counts)
+    standings_df = await _fetch_and_cache_standings(
+        adapter=adapter, hooks=hooks, prediction_league_ids=prediction_league_ids
+    )
+    if standings_df is not None:
+        _write_standings_per_league(standings_df=standings_df, bucket=bucket, date=date, hooks=hooks, counts=counts)
 
 
 async def _fetch_injuries(
