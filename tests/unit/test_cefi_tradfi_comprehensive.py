@@ -2958,15 +2958,17 @@ class TestDeribitComboAdapter:
         assert results == []
 
     def test_factory_contains_deribit_combo(self) -> None:
-        """DERIBIT-COMBO is registered in the factory adapter map. Batch/default
-        routes to Tardis (historical combo universe); the live-only REST
-        adapter (deribit_combo) is still registered in _ADAPTERS and used via
-        the mode="live" seam in get_adapter_for_canonical_venue — see
-        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14)."""
+        """DERIBIT-COMBO was deregistered from UAC's VENUE_TO_ADAPTER_KEY
+        2026-07-21 (operator decision: legacy venue, migrated to split
+        venue+instrument_type — unified-api-contracts@11adf279; superseding
+        this test's prior "still registered, routes to Tardis" assertion from
+        cefi_layer1_denominator_gaps_2026_07_03.md, NEW FINDING 2026-07-14).
+        instruments-service's own adapter-class registration (_ADAPTERS) is
+        retained pending the instruments-service-side purge follow-up that
+        commit flagged as out-of-scope for the UAC repo."""
         from unified_api_contracts.registry import VENUE_TO_ADAPTER_KEY
 
         from instruments_service.reference_data.factory import _ADAPTERS
 
-        assert "DERIBIT-COMBO" in VENUE_TO_ADAPTER_KEY
-        assert VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"] == "tardis"
+        assert "DERIBIT-COMBO" not in VENUE_TO_ADAPTER_KEY
         assert "deribit_combo" in _ADAPTERS

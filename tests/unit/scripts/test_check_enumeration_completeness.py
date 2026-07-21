@@ -312,12 +312,22 @@ class TestCompletenessMetrics:
             assert len(result.missing_tuples) > 0
 
     def test_completeness_pct_is_correct_fraction(self, mod: ModuleType) -> None:
-        """completeness_pct = |EXPECTED ∩ ENUMERATED| / |EXPECTED| * 100."""
+        """completeness_pct = |EXPECTED ∩ ENUMERATED| / |EXPECTED| * 100, on the
+        POST-ALIGNMENT canonical-key grain (see the VOCABULARY/GRAIN ALIGNMENT
+        HARD RULE docstring on check_enumeration_completeness). The raw
+        pre-align tuple count and the aligned key count are NOT guaranteed
+        equal — two raw tuples can canonicalise to the same key — so the
+        denominator here must be computed via ``_canonicalise_tuple_set``,
+        the same helper the function under test uses, not the raw count."""
         expected = mod._build_expected_tuples("cefi")
         if not expected:
             pytest.skip("Empty EXPECTED — cannot compute pct")
+        exp_keys = set(mod._canonicalise_tuple_set("cefi", expected))
+        if not exp_keys:
+            pytest.skip("Empty aligned EXPECTED — cannot compute pct")
 
-        # Take half the expected tuples
+        # Take half the RAW expected tuples as manifest content, but measure
+        # the pct on the ALIGNED keys the production code intersects on.
         half = list(expected)[: len(expected) // 2]
         rows = [
             {
@@ -330,13 +340,15 @@ class TestCompletenessMetrics:
         ]
         df = _make_manifest(rows)
         result = mod.check_enumeration_completeness("cefi", df)
-        expected_pct = round(len(half) / len(expected) * 100, 2)
+        half_keys = set(mod._canonicalise_tuple_set("cefi", set(half))) & exp_keys
+        expected_pct = round(len(half_keys) / len(exp_keys) * 100, 2)
         assert abs(result.completeness_pct - expected_pct) < 0.1, (
             f"completeness_pct {result.completeness_pct} != expected {expected_pct}"
         )
 
     def test_missing_instrument_type_column_yields_empty_enumerated(self, mod: ModuleType) -> None:
-        """If the 'instrument_type' column is absent, ENUMERATED = empty → all expected missing."""
+        """If the 'instrument_type' column is absent, ENUMERATED = empty → all
+        (post-alignment canonical-key) expected tuples are holes."""
         df = pd.DataFrame(
             [
                 {"capture_status": "captured", "venue": "DERIBIT", "data_type": "trades"},
@@ -345,8 +357,9 @@ class TestCompletenessMetrics:
         result = mod.check_enumeration_completeness("cefi", df)
         # Without instrument_type, ENUMERATED is empty → all expected are holes
         expected = mod._build_expected_tuples("cefi")
-        if expected:
-            assert len(result.missing_tuples) == len(expected)
+        exp_keys = set(mod._canonicalise_tuple_set("cefi", expected))
+        if exp_keys:
+            assert len(result.missing_tuples) == len(exp_keys)
             assert not result.denominator_complete
 
 

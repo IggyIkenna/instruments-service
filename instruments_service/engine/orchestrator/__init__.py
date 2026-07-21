@@ -196,15 +196,18 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Write-gate: fail-loud guard against §5 data-crimes at write time.
-# ``warn`` mode (default) emits DATA_ALIGNMENT_VIOLATION and proceeds; ``strict``
-# raises TimestampAlignmentError which per-shard try/except should catch and
-# route to manifest.record_failed. Flip to ``strict`` once warn-mode volume
-# baselines clean across sports adapters (see
+# Write-gate: fail-loud guard against §5 data-crimes at write time; strict
+# mode raises, caught per-shard and routed to manifest.record_failed (see
 # ``plans/active/instruments_service_write_gate_validation_2026_04_22.md``).
-# ---------------------------------------------------------------------------
-_WRITE_GATE = InstrumentsWriteGate(mode="strict")
+# ``available_at`` is EXCLUDED here, overriding UTL's DEFAULT_AS_OF_COLUMNS:
+# every writer stamps it via ``stamp_available_at_explicit(when=now())`` for
+# snapshot sources (catalog refreshes, FIXTURES schedule) — capture time, not
+# a fact's as-of date, so it's always > batch_date on a historical backfill
+# by design. See ``instruments_write_gate_available_at_semantic_conflict_2026_07_21.md``.
+_WRITE_GATE = InstrumentsWriteGate(
+    mode="strict",
+    check_columns=("as_of_date", "valuation_date", "kickoff_utc", "event_time", "computed_at"),
+)
 
 
 # ---------------------------------------------------------------------------
