@@ -1,7 +1,7 @@
 """Kamino reference data adapter -- instrument discovery via REST API.
 
 Discovers Kamino liquidity vaults on Solana. Each vault is an automated
-LP position on Raydium/Orca CLMM pools, returned as instrument_type="POOL".
+LP position on Raydium/Orca CLMM pools, returned as instrument_type="SOLANA_VAULT".
 
 Data source: Kamino REST API (https://api.kamino.finance/strategies).
 Reference: https://docs.kamino.finance/
@@ -79,7 +79,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
     """Kamino reference data: liquidity vault discovery from REST API.
 
     Discovers Kamino automated LP vaults (CLMM positions on Raydium/Orca).
-    Each vault produces one instrument with instrument_type="POOL".
+    Each vault produces one instrument with instrument_type="SOLANA_VAULT".
     Only LIVE vaults with at least one major-asset token are included.
     """
 
@@ -127,7 +127,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Kamino liquidity vaults as instruments."""
-        if instrument_type not in (None, InstrumentType.POOL):
+        if instrument_type not in (None, InstrumentType.SOLANA_VAULT):
             return []
 
         url = f"{_BASE_URL}/strategies"
@@ -203,7 +203,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
             venue=venue_tag,
             raw_symbol=address,
             pool_address=address,
-            instrument_type=InstrumentType.POOL,
+            instrument_type=InstrumentType.SOLANA_VAULT,
             base_asset=sym_a,
             quote_asset=sym_b,
             tick_size=Decimal("0.000001"),
