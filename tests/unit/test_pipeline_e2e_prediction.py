@@ -233,7 +233,11 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # OKX-SWAP cefi venues (+ deregistered legacy DERIBIT-COMBO) — an already-committed,
 # clean UAC change (not from this session's diff); this test's frozen count needed to
 # catch up. Pre-existing drift, verified via `git stash` to reproduce on a clean tree.
-_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 98, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
+# DEFI 98→99 (2026-07-21): +1 for AAVE-ETHEREUM (aave_oracle.py, registered in
+# factory._ADAPTERS + orchestrator/defi.py's _STATIC_DEFI_VENUES — this session's
+# lst_rate_honest_coverage_2026_07_21.md Phase 1 IS todo). Dedup is per (asset_group,
+# venue), so exactly one new static venue == exactly +1 target.
+_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 99, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:
