@@ -509,6 +509,40 @@ def test_defi_v2_acquisition_pending_venue_yields_typed_empty_not_dangling() -> 
         assert row.chain == "SOLANA"
 
 
+def test_defi_v2_reference_only_itype_yields_typed_empty_not_dangling() -> None:
+    """defi_nonpool_per_instrument_eu_has_no_reconciliation_path_2026_07_20: a
+    SPOT_ASSET/A_TOKEN/DEBT_TOKEN reference-only row has no per-day capture path by
+    construction, so it seeds empty_confirmed[EXPECTED_REFERENCE_ONLY_NO_CAPTURE_PATH]
+    directly (not a dangling expected_unattempted) even on a fully acquired venue.
+    """
+    from unified_api_contracts import EmptyConfirmedReason
+
+    a_token = _make_defi_entry(
+        instrument_id="AAVE_V3-ARBITRUM:A_TOKEN:USDC",
+        instrument_type="A_TOKEN",
+        venue="AAVE_V3",
+        chain="ARBITRUM",
+        available_from="2022-01-01",
+        available_to=None,
+    )._replace(raw_symbol="0x" + "1" * 40)
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [a_token],
+                _date_axis("2024-06-01"),
+                ["lending_indices"],
+                present_set=set(),  # nothing captured — would otherwise dangle expected_unattempted
+                present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+            )
+        )
+    )
+    assert rows, "expected a residual row for the reference-only instrument_type"
+    for row in rows:
+        assert row.capture_status == "empty_confirmed"
+        assert row.reason == EmptyConfirmedReason.EXPECTED_REFERENCE_ONLY_NO_CAPTURE_PATH.value
+        assert row.instrument_type == "a_token"
+
+
 def test_defi_v2_acquired_venue_stays_expected_unattempted() -> None:
     """A live/acquired venue (NOT in DEFI_INSTRUMENTS_NOT_YET_COLLECTED) keeps the
     dangling-until-captured expected_unattempted seed — the R2c reconciliation is
