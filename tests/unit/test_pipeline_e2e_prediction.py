@@ -229,7 +229,11 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # +5 for CHAINLINK-{ETHEREUM,ARBITRUM,BASE,OPTIMISM,POLYGON}, all newly wired into
 # factory._ADAPTERS (BLK-0c7b82fe resolved). The prediction adaptation must not change any
 # other AG's enumerated target set.
-_PER_AG_TARGET_COUNTS = {"CEFI": 25, "DEFI": 98, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
+# CEFI 25→26 (2026-07-21): unified-api-contracts@11adf279 registered OKX-FUTURES/
+# OKX-SWAP cefi venues (+ deregistered legacy DERIBIT-COMBO) — an already-committed,
+# clean UAC change (not from this session's diff); this test's frozen count needed to
+# catch up. Pre-existing drift, verified via `git stash` to reproduce on a clean tree.
+_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 98, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:
