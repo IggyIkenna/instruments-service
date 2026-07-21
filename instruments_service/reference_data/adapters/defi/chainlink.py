@@ -61,6 +61,15 @@ _CHAINLINK_FEEDS_BY_CHAIN: dict[str, dict[str, tuple[str, str, str]]] = {
         "stETH/ETH": ("0x86392dC19c0b719886221c78AB11eb8Cf5c52812", "stETH", "ETH"),  # DERIVED 2026-07-20 chain.link
         "cbETH/ETH": ("0xF017fcB346A1885194689bA23Eff2fE6fA5C483b", "cbETH", "ETH"),  # DERIVED 2026-07-20 chain.link
         "rETH/ETH": ("0x536218f9E9Eb48863970252233c8F271f554C2d0", "rETH", "ETH"),  # DERIVED 2026-07-20 chain.link
+        # weETH/ETH + ezETH/ETH: VERIFIED live (2026-07-21, wf_f629fbb4-7da eth_call
+        # probe) — real RefPrice aggregators, added per lst_rate_honest_coverage plan
+        # Phase 1 (codex: lst-exchange-rate-surfaces.md surface #3). Mirrors MTDS
+        # ``_oracle_prices_constants.py`` dict entry — the invariant test asserts
+        # the two stay in sync. rsETH/wstETH deliberately NOT added: rsETH's only
+        # on-chain feed is an Exchange-Rate feed (not a price aggregator); wstETH
+        # only has a Calculated-USD feed (operator decision pending) — see the plan.
+        "weETH/ETH": ("0x5c9C449BbC9a6075A2c061dF312a35fd1E05fF22", "weETH", "ETH"),  # DERIVED 2026-07-21 eth_call
+        "ezETH/ETH": ("0x636A000262F6aA9e1F094ABF0aD8f645C44f641C", "ezETH", "ETH"),  # DERIVED 2026-07-21 eth_call
         "BTC/USD": ("0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c", "BTC", "USD"),  # DERIVED 2026-07-20 chain.link
         "WBTC/BTC": ("0xfdFD9C85aD200c506Cf9e21F1FD8dd01932FBB23", "WBTC", "BTC"),  # DERIVED 2026-07-20 chain.link
         "USDC/USD": ("0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6", "USDC", "USD"),  # DERIVED 2026-07-20 chain.link
