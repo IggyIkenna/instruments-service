@@ -995,6 +995,32 @@ def _tradfi_mtds_tick_manifest_data_types() -> list[str]:
     ]
 
 
+# Defunct / folded / MVP-descoped cefi venues that MUST NOT be seeded into the cefi
+# expected-universe (so the data-status Axis Value Census reads clean). These stay
+# REGISTERED in UAC ``VENUES_BY_ASSET_GROUP["cefi"]`` (routing/adapter keys unchanged) —
+# this is the "descope from MVP backfill, keep the UAC registration" reconciliation
+# (operator ruling 2026-07-18, plan cefi_consolidated_closeout_2026_07_18.md §431):
+#   * BINANCE-DELIVERY — live COIN-M product but non-MVP; ZERO captured cefi tick rows
+#     (operator: keep registered, do NOT enumerate as should-exist).
+#   * OKX (bare)       — folds to the qualified OKX-SPOT / OKX-SWAP / OKX-FUTURES /
+#     OKX-OPTIONS venues; bare-OKX has no distinct real capture (venue_constants.py:382).
+#   * DERIBIT-COMBO    — folded out of the venue axis by the 2026-07-20 manifest v2 pass.
+#     ⚠ CONTRADICTS the 2026-07-18 "DERIBIT-COMBO is a canonical distinct venue" ruling
+#     (plan §314) + the live ``deribit_combo`` adapter — OPERATOR-GATED: only fold it out
+#     here in lock-step with the manifest v2 ``--deribit-combo`` decision.
+#   * COINBASE (bare)  — RE-KEYED to COINBASE-SPOT/-FUTURES/-CDE (migration 2026-07-06);
+#     already absent from VENUES_BY_ASSET_GROUP but STALE rows persist in the expected-
+#     universe manifest (measured 2026-07-20: 2 rows) + any stale catalogue rows the
+#     per-instrument pass would re-emit — this exact-match guard sweeps both.
+#   * PACIFICA-SOLANA  — Solana-perp cull (operator 2026-07-16); already absent from the
+#     venue list but 3,155 stale expected-universe rows remain (measured 2026-07-20).
+# All stay REGISTERED where UAC still declares them; this guard only stops the ENUMERATOR
+# seeding them. A consolidated-cache regen then sweeps the pre-existing stale rows.
+_CEFI_EXPECTED_UNIVERSE_EXCLUDED_VENUES: frozenset[str] = frozenset(
+    {"BINANCE-DELIVERY", "OKX", "DERIBIT-COMBO", "COINBASE", "PACIFICA-SOLANA", "PACIFICA"}
+)
+
+
 def _yield_v2_cefi_pre_venue_launch_rows(
     date_axis: list[date],
     data_types: list[str],
@@ -1020,6 +1046,10 @@ def _yield_v2_cefi_pre_venue_launch_rows(
         return
     for venue in venues:
         venue_str = str(venue)
+        # Defunct / folded / MVP-descoped venues: registered in UAC but never seeded as
+        # should-exist (keeps the Axis Value Census clean). See the exclusion-set comment.
+        if venue_str in _CEFI_EXPECTED_UNIVERSE_EXCLUDED_VENUES:
+            continue
         launch_str = CEFI_VENUE_LAUNCH_DATES.get(venue_str)
         if launch_str is None:
             continue
@@ -1085,6 +1115,11 @@ def _enumerate_v2_cefi(
     # shared UAC predicate needs; computed once over the catalog list.
     _perp_bases = _cefi_perp_bases(catalog)
     for instr in catalog:
+        # Defunct / folded / MVP-descoped venues: never seed per-instrument expected rows
+        # either (the catalogue still carries e.g. 68k DERIBIT-COMBO instruments). Same
+        # exclusion set as the venue-grain pass above — keeps the Axis Census clean.
+        if instr.venue in _CEFI_EXPECTED_UNIVERSE_EXCLUDED_VENUES:
+            continue
         # Skip cells outside the MVP capture universe (prefer the pre-tagged ``mvp``
         # column; fall back to the shared predicate — same SSOT).
         if not _cefi_entry_in_mvp_universe(instr, _perp_bases):
@@ -1241,6 +1276,12 @@ def _enumerate_v2_cefi(
 _ADDRESS_KEYED_ITYPES: frozenset[str] = frozenset(
     {"pool", "lending", "a_token", "debt_token", "lending_market", "solana_lending"}
 )
+
+# REFERENCE-ONLY DeFi instrument_types (defi_nonpool_per_instrument_eu_has_no_reconciliation_
+# path_2026_07_20): derived siblings of a parent POOL/LENDING row's on-chain token leg with NO
+# per-day market-data capture path, by construction. See EmptyConfirmedReason.
+# EXPECTED_REFERENCE_ONLY_NO_CAPTURE_PATH (unified_api_contracts) for the full rationale.
+_REFERENCE_ONLY_ITYPES: frozenset[str] = frozenset({"spot_asset", "a_token", "debt_token"})
 
 
 def _yield_v2_defi_pre_launch_rows(
@@ -1431,6 +1472,12 @@ def _enumerate_v2_defi(
         _acq_pending = (
             bool(chain_upper) and f"{canonical_venue}-{chain_upper}".upper() in DEFI_INSTRUMENTS_NOT_YET_COLLECTED
         )
+        # Reference-only holdings (SPOT_ASSET/A_TOKEN/DEBT_TOKEN) have no per-day capture
+        # path by construction — known ahead of fetch, so seed the typed reason directly
+        # rather than waiting for a dangling expected_unattempted. Takes priority over
+        # _acq_pending: the cell is permanently uncapturable regardless of the venue's
+        # MTDS acquisition-pipeline status (EXPECTED_REFERENCE_ONLY_NO_CAPTURE_PATH).
+        _is_reference_only = canonical_itype in _REFERENCE_ONLY_ITYPES
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -1477,7 +1524,22 @@ def _enumerate_v2_defi(
                         for c in _pcols
                     )
                     if row_key not in present_set:
-                        if _acq_pending:
+                        if _is_reference_only:
+                            # SPOT_ASSET/A_TOKEN/DEBT_TOKEN: no per-day capture path by
+                            # construction — typed empty_confirmed at seed time, WITHIN
+                            # the honest-coverage window (see _REFERENCE_ONLY_ITYPES).
+                            yield ExpectedRow(
+                                asset_group="defi",
+                                venue=canonical_venue,
+                                chain=chain_upper,
+                                data_type=dt,
+                                instrument_type=canonical_itype,
+                                instrument_id=canonical_instrument_id,
+                                league_id="",
+                                date=iso,
+                                reason=EmptyConfirmedReason.EXPECTED_REFERENCE_ONLY_NO_CAPTURE_PATH.value,
+                            )
+                        elif _acq_pending:
                             # IS-listed, MTDS acquisition pending → typed empty_confirmed,
                             # not a dangling expected_unattempted (IS R2c). Out-of-window,
                             # self-heals to ``captured`` when the MTDS pipeline ships.
