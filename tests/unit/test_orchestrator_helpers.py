@@ -838,6 +838,7 @@ class TestWriteVenueCanonicalPartition:
         with (
             patch("instruments_service.engine.orchestrator._gated_sink_write", side_effect=_capture),
             patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=MagicMock()),
             patch(
                 "instruments_service.engine.orchestrator.stamp_available_at_explicit",
                 side_effect=lambda d, when: d,
