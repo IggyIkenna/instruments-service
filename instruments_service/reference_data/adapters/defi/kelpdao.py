@@ -1,9 +1,14 @@
 """KelpDAO reference data adapter — instrument discovery for the rsETH LRT.
 
 Discovers the KelpDAO liquid restaking token (rsETH) on Ethereum.
-Token is returned as InstrumentRecord with instrument_type="LST" (fixed
-2026-07-08 — key/field mismatch, same class as PERP-vs-PERPETUAL; see
-`lido.py`'s module docstring for the full rationale).
+Token is returned as InstrumentRecord with instrument_type=RESTAKING (operator
+decision 2026-07-20/22, distinct_values_noncanonical_audit_2026_07_20.md — rsETH
+carries EigenLayer AVS slashing risk stacked on base ETH staking slashing,
+distinct from a plain LST; was InstrumentType.LST until this classification
+landed). The ``instrument_key``/``canonical_instrument_id`` string keeps its
+legacy ``:LST:`` segment deliberately unchanged — this is a values-only
+reclassification of the ``instrument_type`` column, not an id/GCS-partition-path
+rename.
 
 References:
 - https://www.kelpdao.xyz/
@@ -74,7 +79,12 @@ class KelpDaoReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return KelpDAO LRT tokens as yield-bearing instruments."""
-        if instrument_type not in (None, InstrumentType.LST, InstrumentType.YIELD_BEARING):
+        if instrument_type not in (
+            None,
+            InstrumentType.LST,
+            InstrumentType.YIELD_BEARING,
+            InstrumentType.RESTAKING,
+        ):
             return []
 
         results: list[InstrumentRecord] = []
@@ -100,7 +110,7 @@ class KelpDaoReferenceDataAdapter(BaseReferenceDataAdapter):
                     canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
-                    instrument_type=InstrumentType.LST,
+                    instrument_type=InstrumentType.RESTAKING,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000001"),
