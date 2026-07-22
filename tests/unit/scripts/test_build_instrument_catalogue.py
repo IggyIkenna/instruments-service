@@ -4628,3 +4628,237 @@ def test_coverage_horizon_warns_on_sharp_count_drop(rollup: ModuleType) -> None:
         assert any(e == "CATALOGUE_STALE_BY_DATE" and kw.get("reason") == "no_window_data" for e, kw in events)
     finally:
         rollup._emit_event = orig
+
+
+# ---------------------------------------------------------------------------
+# _wire_symbol_expiry_date / _dedup_cefi_expiry_off_by_one — ambiguous-wire-key
+# expiry off-by-one artifact (cefi_ambiguous_wire_key_expiry_off_by_one_2026_07_22).
+#
+# Concrete example rows below are the EXACT shapes measured live against the prod
+# cefi catalogue 2026-07-22 (venue=DERIBIT, key=(DERIBIT, OPTION, ETH-17JUL26-2200-P)):
+# two rows whose ``instrument_id`` differ ONLY in the embedded expiry date
+# (...20260717... vs ...20260718...), all other columns byte-identical.
+# ---------------------------------------------------------------------------
+
+
+class TestWireSymbolExpiryDate:
+    def test_parses_deribit_dated_option_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date("ETH-17JUL26-2200-P") == date(2026, 7, 17)
+
+    def test_parses_bybit_underscore_future_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date("MNTUSDT-17JUL26") == date(2026, 7, 17)
+
+    def test_parses_deribit_usdc_linear_future_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date("XRP_USDC-16JUL26") == date(2026, 7, 16)
+
+    def test_none_for_non_dated_symbol(self, rollup: ModuleType) -> None:
+        """A perp/spot wire symbol carries no DDMonYY token -> honest None."""
+        assert rollup._wire_symbol_expiry_date("BTCUSDT") is None
+
+    def test_none_for_yymmdd_numeric_wire_symbol(self, rollup: ModuleType) -> None:
+        """BINANCE-DELIVERY/BINANCE-FUTURES/KRAKEN-FUTURES/some OKX-FUTURES rows embed
+        a numeric YYMMDD date (``ETHUSD_260626``), NOT DERIBIT/BYBIT's DDMonYY shape —
+        deliberately out of scope for this helper (see _dedup_cefi_expiry_off_by_one's
+        docstring: these venues' ambiguous keys must stay untouched by this fix)."""
+        assert rollup._wire_symbol_expiry_date("ETHUSD_260626") is None
+
+
+def _off_by_one_option_rows() -> list[dict[str, object]]:
+    """The real DERIBIT (venue, instrument_type, raw_symbol) 3-tuple that maps to two
+    catalogue rows differing only in the embedded expiry date (measured 2026-07-22)."""
+    base = {
+        "venue": "DERIBIT",
+        "instrument_type": "OPTION",
+        "raw_symbol": "ETH-17JUL26-2200-P",
+        "base_asset": "ETH",
+        "margin_type": "inverse",
+        "available_from": "2026-07-15",
+    }
+    correct = {
+        **base,
+        "instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P",
+        "canonical_instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P",
+        "expiry": "2026-07-17",
+        "available_to": "2026-07-17",
+    }
+    off_by_one = {
+        **base,
+        "instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260718-2200-P",
+        "canonical_instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260718-2200-P",
+        "expiry": "2026-07-18",
+        "available_to": "2026-07-18",
+    }
+    return [correct, off_by_one]
+
+
+class TestDedupCefiExpiryOffByOne:
+    def test_collapses_confirmed_off_by_one_pair_keeping_wire_matching_row(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_off_by_one_option_rows())
+        out = rollup._dedup_cefi_expiry_off_by_one(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["instrument_id"] == "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P"
+        assert kept["expiry"] == "2026-07-17"
+        assert kept["available_to"] == "2026-07-17"
+
+    def test_kept_row_available_from_is_min_across_group(self, rollup: ModuleType) -> None:
+        rows = _off_by_one_option_rows()
+        rows[1]["available_from"] = "2026-07-10"  # the "wrong" row observed earlier
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["available_from"] == "2026-07-10"
+
+    def test_three_row_group_with_a_literal_duplicate_still_collapses_to_one(self, rollup: ModuleType) -> None:
+        """Real shape (DERIBIT, FUTURE, XRP_USDC-16JUL26): 3 rows, 2 distinct expiries,
+        one expiry value repeated verbatim across 2 of the 3 rows."""
+        rows = _off_by_one_option_rows()
+        rows.append(dict(rows[1]))  # duplicate of the off-by-one row
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["expiry"] == "2026-07-17"
+
+    def test_leaves_real_ambiguity_untouched_when_margin_type_differs(self, rollup: ModuleType) -> None:
+        """BITGET-FUTURES/OKX-SWAP shape: same wire symbol, genuinely different
+        margin_type (linear vs inverse) — NOT this artifact, must stay excluded."""
+        rows = [
+            {
+                "venue": "BITGET-FUTURES",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "UNIUSD_CM",
+                "instrument_id": "BITGET-FUTURES:PERPETUAL:UNI-USD@INV",
+                "canonical_instrument_id": "BITGET-FUTURES:PERPETUAL:UNI-USD@INV",
+                "base_asset": "UNI",
+                "margin_type": "inverse",
+                "available_from": "2026-04-28",
+                "expiry": None,
+                "available_to": None,
+            },
+            {
+                "venue": "BITGET-FUTURES",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "UNIUSD_CM",
+                "instrument_id": "BITGET-FUTURES:PERPETUAL:UNI-USD@LIN",
+                "canonical_instrument_id": "BITGET-FUTURES:PERPETUAL:UNI-USD@LIN",
+                "base_asset": "UNI",
+                "margin_type": "linear",
+                "available_from": "2026-04-28",
+                "expiry": None,
+                "available_to": "2026-07-11",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2  # untouched — real ambiguity (margin_type differs)
+
+    def test_leaves_untouched_when_expiries_more_than_one_day_apart(self, rollup: ModuleType) -> None:
+        rows = _off_by_one_option_rows()
+        rows[1]["instrument_id"] = "DERIBIT:OPTION:ETH-USD@INV-20260720-2200-P"
+        rows[1]["expiry"] = "2026-07-20"
+        rows[1]["available_to"] = "2026-07-20"
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2  # 3 days apart — not this artifact, left alone
+
+    def test_leaves_untouched_when_wire_symbol_has_no_matching_date(self, rollup: ModuleType) -> None:
+        """A numeric-YYMMDD-wire venue (BINANCE-DELIVERY/BINANCE-FUTURES/KRAKEN-
+        FUTURES/some OKX-FUTURES) fits the off-by-one shape but this helper's wire
+        parser only recognises DDMonYY — must degrade to a no-op, never guess."""
+        rows = [
+            {
+                "venue": "BINANCE-DELIVERY",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "ETHUSD_260626",
+                "instrument_id": "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260626",
+                "canonical_instrument_id": "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260626",
+                "base_asset": "ETH",
+                "margin_type": "inverse",
+                "available_from": "2026-06-01",
+                "expiry": "2026-06-26",
+                "available_to": "2026-06-26",
+            },
+            {
+                "venue": "BINANCE-DELIVERY",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "ETHUSD_260626",
+                "instrument_id": "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260627",
+                "canonical_instrument_id": "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260627",
+                "base_asset": "ETH",
+                "margin_type": "inverse",
+                "available_from": "2026-06-01",
+                "expiry": "2026-06-27",
+                "available_to": "2026-06-27",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2  # left ambiguous — a follow-up, not this fix's scope
+
+    def test_leaves_untouched_when_another_column_genuinely_differs(self, rollup: ModuleType) -> None:
+        rows = _off_by_one_option_rows()
+        rows[1]["base_asset"] = "BTC"  # a real difference unrelated to the artifact
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2
+
+    def test_is_idempotent(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_off_by_one_option_rows())
+        once = rollup._dedup_cefi_expiry_off_by_one(df)
+        twice = rollup._dedup_cefi_expiry_off_by_one(once)
+        assert len(once) == len(twice) == 1
+
+    def test_noop_on_empty_frame(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(columns=list(rollup.CATALOG_COLUMNS))
+        out = rollup._dedup_cefi_expiry_off_by_one(df)
+        assert out.empty
+
+    def test_noop_when_required_columns_absent(self, rollup: ModuleType) -> None:
+        """Prediction/sports-shaped frames carry no raw_symbol/expiry -> pass through."""
+        df = pd.DataFrame([{"instrument_id": "X", "venue": "KALSHI"}])
+        out = rollup._dedup_cefi_expiry_off_by_one(df)
+        assert len(out) == 1
+
+    def test_end_to_end_through_build_catalogue_dataframe(self, rollup: ModuleType) -> None:
+        """The bug in context: two per-date snapshot rows for the SAME wire contract,
+        whose per-date instrument_id embeds a different (off-by-one) expiry day, mint
+        TWO separate lifecycle rows out of build_catalogue_dataframe today — feeding
+        that straight through _dedup_cefi_expiry_off_by_one (mirroring run_rollup's
+        Phase D) collapses them back to one."""
+        d1 = date(2026, 7, 15)
+        d2 = date(2026, 7, 16)
+        snapshots = [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P",
+                            "canonical_instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P",
+                            "venue": "DERIBIT",
+                            "instrument_type": "OPTION",
+                            "raw_symbol": "ETH-17JUL26-2200-P",
+                            "base_asset": "ETH",
+                            "margin_type": "inverse",
+                            "expiry": "2026-07-17",
+                        }
+                    ]
+                ),
+            ),
+            (
+                d2,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "DERIBIT:OPTION:ETH-USD@INV-20260718-2200-P",
+                            "canonical_instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260718-2200-P",
+                            "venue": "DERIBIT",
+                            "instrument_type": "OPTION",
+                            "raw_symbol": "ETH-17JUL26-2200-P",
+                            "base_asset": "ETH",
+                            "margin_type": "inverse",
+                            "expiry": "2026-07-18",
+                        }
+                    ]
+                ),
+            ),
+        ]
+        raw = rollup.build_catalogue_dataframe(snapshots)
+        assert len(raw) == 2, "confirms the pre-fix bug: 2 separate rows for one instrument"
+        deduped = rollup._dedup_cefi_expiry_off_by_one(raw)
+        assert len(deduped) == 1
+        assert deduped.to_dict("records")[0]["instrument_id"] == "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P"
