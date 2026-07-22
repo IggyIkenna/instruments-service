@@ -1,9 +1,21 @@
-"""EtherFi reference data adapter — instrument discovery for LST tokens.
+"""EtherFi reference data adapter — instrument discovery for LRT tokens.
 
-Discovers EtherFi liquid staking token (weETH) on Ethereum.
-Token is returned as InstrumentRecord with instrument_type="LST" (fixed
-2026-07-08 — key/field mismatch, same class as PERP-vs-PERPETUAL; see
-`lido.py`'s module docstring for the full rationale).
+Discovers EtherFi's liquid RESTAKING token weETH (Wrapped eETH) on Ethereum.
+weETH is minted when ETH is deposited into ether.fi's liquid pool and restaked
+via ether.fi's node operators into EigenLayer — the same EigenLayer-AVS-slashing-
+stacked-on-base-staking-slashing risk shape as Renzo/KelpDAO/Puffer, not a plain
+LST (operator decision 2026-07-20/22, distinct_values_noncanonical_audit_2026_07_20.md
+— confirmed by mechanism, not by name: eETH is the rebasing receipt token, weETH
+is its non-rebasing DeFi-composable wrapper; only weETH is discovered here — IS
+does not enumerate the unwrapped eETH as a separate instrument, and only the
+wrapped form is accepted as AAVE/Morpho collateral). Token is returned as
+InstrumentRecord with instrument_type=RESTAKING (was InstrumentType.LST until
+this classification landed — fixed 2026-07-08 as LST for the key/field mismatch,
+same class as PERP-vs-PERPETUAL; see `lido.py`'s module docstring for that
+rationale). The ``instrument_key``/``canonical_instrument_id`` string keeps its
+legacy ``:LST:`` segment deliberately unchanged — this is a values-only
+reclassification of the ``instrument_type`` column, not an id/GCS-partition-path
+rename.
 
 Reference: https://www.ether.fi/
 """
@@ -71,7 +83,12 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return EtherFi weETH as a yield-bearing instrument."""
-        if instrument_type not in (None, InstrumentType.LST, InstrumentType.YIELD_BEARING):
+        if instrument_type not in (
+            None,
+            InstrumentType.LST,
+            InstrumentType.YIELD_BEARING,
+            InstrumentType.RESTAKING,
+        ):
             return []
 
         results: list[InstrumentRecord] = []
@@ -97,7 +114,7 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
                     venue=venue_tag,
                     raw_symbol=address,
                     base_asset_contract_address=address,
-                    instrument_type=InstrumentType.LST,
+                    instrument_type=InstrumentType.RESTAKING,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000001"),
