@@ -849,7 +849,6 @@ class TestWriteVenueCanonicalPartition:
                 "instruments_service.engine.orchestrator.stamp_available_at_explicit",
                 side_effect=lambda d, when: d,
             ),
-            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=MagicMock()),
         ):
             _write_venue(venue_in, df, "2026-05-03", "bkt", MagicMock(), {}, sampler, manifest=None)
         return captured
