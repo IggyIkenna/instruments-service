@@ -82,6 +82,11 @@ from unified_trading_library import (
     setup_events,
 )
 
+# Reused (not reimplemented) for the numeric-YYMMDD wire-date fallback in
+# _wire_symbol_expiry_date_numeric_yymmdd — same established intra-repo pattern as
+# scripts/canonicalize_bybit_kraken_futures_catalog_2026_07_09.py.
+from instruments_service.reference_data.adapters.cefi.tardis import parsing as tardis_parsing
+
 #: Real event-log wiring for CATALOGUE_SHRINK_BLOCKED (cefi_monotonicity_guard_alerting_
 #: and_dark_venues_2026_07_07.md) — mirrors scripts/cross_asset_rescan.py's batch-mode
 #: GcsEventSink pattern. setup_events() is called once in main() (the sole real CLI entry
@@ -4116,6 +4121,36 @@ def _wire_symbol_expiry_date(raw_symbol: str) -> date | None:
         return None
 
 
+def _wire_symbol_expiry_date_numeric_yymmdd(raw_symbol: str) -> date | None:
+    """Parse the numeric-YYMMDD expiry embedded in a CeFi wire symbol.
+
+    A second, DISTINCT wire-date encoding from :func:`_wire_symbol_expiry_date`'s
+    alphabetic ``DDMonYY`` token: OKX-FUTURES dated futures embed a dash-separated
+    trailing 6-digit date (``BTC-USDT-200103``), while BINANCE-DELIVERY /
+    BINANCE-FUTURES / KRAKEN-FUTURES embed an underscore-separated one
+    (``BTCUSD_260626`` / ``FF_XBTUSD_260717``) — live-verified 2026-07-22 against
+    the prod cefi catalogue. Deliberately kept SEPARATE from
+    :func:`_wire_symbol_expiry_date` rather than folded into it: that function's
+    own test suite (``test_none_for_yymmdd_numeric_wire_symbol``) asserts ``None``
+    for this exact shape, so extending it in place would be a silent behaviour
+    change for any other caller — this is instead consumed ONLY as an explicit
+    check #4 fallback in :func:`_dedup_cefi_expiry_off_by_one`.
+
+    Reuses (does not reimplement) the CeFi Tardis adapter's own
+    ``_parse_yymmdd_symbol_expiry`` / ``_parse_underscore_yymmdd_symbol_expiry``
+    (``reference_data/adapters/cefi/tardis/parsing.py``) — the same
+    proven-and-tested BASE-QUOTE-YYMMDD / ``..._YYMMDD`` segment splitters the
+    live adapter already ships, not a new guess. Returns ``None`` when neither
+    parser resolves a date (perpetuals / unrecognised shapes). Pure,
+    degrade-never-guess.
+    """
+    upper = raw_symbol.strip().upper()
+    parsed = tardis_parsing._parse_yymmdd_symbol_expiry(upper)
+    if parsed is None:
+        parsed = tardis_parsing._parse_underscore_yymmdd_symbol_expiry(upper)
+    return parsed.date() if parsed is not None else None
+
+
 #: Catalogue columns the off-by-one artifact itself legitimately touches — NOT
 #: required to match across a candidate group (see :func:`_dedup_cefi_expiry_off_by_one`).
 #: Every other :data:`CATALOG_COLUMNS` entry must be byte-identical for the collapse
@@ -4142,15 +4177,30 @@ def _dedup_cefi_expiry_off_by_one(df: pd.DataFrame) -> pd.DataFrame:
     ``CeFiWireCanonicalMap.from_rows`` excludes as an "ambiguous wire key" (honest-
     unresolved), making the instrument silently unresolvable at read time.
 
-    Live-verified fit for this EXACT shape (2026-07-22): 802/802 DERIBIT, 4/4
-    BINANCE-DELIVERY, 2/2 BINANCE-FUTURES, 2/2 KRAKEN-FUTURES, and 76/146
-    OKX-FUTURES ambiguous ``(venue, instrument_type, raw_symbol)`` wire keys. The
-    other OKX-FUTURES rows and every BYBIT (39) / BITGET-FUTURES (18) / OKX-SWAP (5)
-    ambiguous key are a REAL, different ambiguity (a genuinely different
-    ``margin_type``/``base_asset`` under the same wire symbol — e.g. the
-    linear-vs-inverse BITGET-FUTURES/OKX-SWAP perp clash, or BYBIT's
-    base-asset-parsing clash) and correctly fail the strict checks below, so they
-    stay excluded exactly as today.
+    Live-verified fit for this EXACT shape (2026-07-22): 802/802 DERIBIT. The
+    remaining venues encode their wire expiry NUMERICALLY (``YYMMDD``) rather than
+    DERIBIT/BYBIT's alphabetic ``DDMonYY`` — check #4 originally only recognised the
+    alphabetic form (:func:`_wire_symbol_expiry_date`), so they fit checks #1-3 but
+    fell through untouched. A follow-up investigation (2026-07-22, re-run live
+    against the same prod snapshot) added :func:`_wire_symbol_expiry_date_numeric_yymmdd`
+    as an OR'd fallback for check #4 — a strict, safe superset extension (it only
+    ever runs on a group ALREADY confirmed ambiguous by checks #1-3, so it can only
+    additionally COLLAPSE an already-flagged duplicate, never newly flag one). This
+    resolves 4/4 BINANCE-DELIVERY, 2/2 BINANCE-FUTURES, 2/2 KRAKEN-FUTURES, and
+    76/146 OKX-FUTURES ambiguous ``(venue, instrument_type, raw_symbol)`` wire keys
+    (the OKX-FUTURES pure numeric-off-by-one sub-pattern only — see below).
+
+    The other 70/146 OKX-FUTURES rows and every BYBIT (39) / BITGET-FUTURES (18) /
+    OKX-SWAP (5) ambiguous key are a REAL, DIFFERENT ambiguity — a genuinely
+    different ``margin_type``/``base_asset`` under the same wire symbol (e.g. the
+    linear-vs-inverse OKX-FUTURES/OKX-SWAP perp-family margin-mislabeling clash, or
+    BYBIT's base-asset-parsing clash) — and correctly fail check #3 (``margin_type``
+    IS a compared column, never on the ignore-list), so they stay excluded exactly
+    as today regardless of whether check #4 would otherwise resolve a wire date for
+    them. That margin_type-driven collapse is a SEPARATE, NOT-YET-IMPLEMENTED
+    follow-up (it would contradict this very docstring's prior classification of
+    that shape as a real ambiguity — a decision this fix deliberately leaves
+    untouched pending explicit operator/team review, not silently overridden here).
 
     This is a NARROW, VERIFIED collapse — never a general "drop duplicates" rule.
     A group of rows sharing one normalised ``(venue, instrument_type, raw_symbol)``
@@ -4162,9 +4212,10 @@ def _dedup_cefi_expiry_off_by_one(df: pd.DataFrame) -> pd.DataFrame:
       3. every OTHER catalogue column (:data:`CATALOG_COLUMNS` minus
          :data:`_EXPIRY_DEDUP_IGNORE_COLUMNS`) is byte-identical across every row
          in the group;
-      4. the wire symbol's OWN embedded expiry date
-         (:func:`_wire_symbol_expiry_date`) matches EXACTLY ONE of the 2 candidate
-         dates.
+      4. the wire symbol's OWN embedded expiry date — alphabetic
+         (:func:`_wire_symbol_expiry_date`) OR numeric-YYMMDD
+         (:func:`_wire_symbol_expiry_date_numeric_yymmdd`) — matches EXACTLY ONE of
+         the 2 candidate dates.
 
     Any group failing ANY check is LEFT UNTOUCHED — a real ambiguity, not this
     artifact, stays excluded from the wire-canonical map exactly as today.
@@ -4214,7 +4265,8 @@ def _dedup_cefi_expiry_off_by_one(df: pd.DataFrame) -> pd.DataFrame:
             continue
         if group_df[compare_cols].nunique(dropna=False).gt(1).any():
             continue
-        wire_date = _wire_symbol_expiry_date(group_df["raw_symbol"].iloc[0])
+        raw_symbol0 = group_df["raw_symbol"].iloc[0]
+        wire_date = _wire_symbol_expiry_date(raw_symbol0) or _wire_symbol_expiry_date_numeric_yymmdd(raw_symbol0)
         if wire_date is None or wire_date.isoformat() not in distinct:
             continue
         keep_expiry = wire_date.isoformat()

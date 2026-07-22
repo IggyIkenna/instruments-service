@@ -4658,9 +4658,38 @@ class TestWireSymbolExpiryDate:
     def test_none_for_yymmdd_numeric_wire_symbol(self, rollup: ModuleType) -> None:
         """BINANCE-DELIVERY/BINANCE-FUTURES/KRAKEN-FUTURES/some OKX-FUTURES rows embed
         a numeric YYMMDD date (``ETHUSD_260626``), NOT DERIBIT/BYBIT's DDMonYY shape —
-        deliberately out of scope for this helper (see _dedup_cefi_expiry_off_by_one's
-        docstring: these venues' ambiguous keys must stay untouched by this fix)."""
+        deliberately out of scope for THIS helper (see
+        _wire_symbol_expiry_date_numeric_yymmdd for the dedicated numeric parser
+        _dedup_cefi_expiry_off_by_one's check #4 also falls back to)."""
         assert rollup._wire_symbol_expiry_date("ETHUSD_260626") is None
+
+
+class TestWireSymbolExpiryDateNumericYymmdd:
+    """The numeric-YYMMDD wire-date fallback (check #4's OR'd second parser) —
+    OKX-FUTURES's dash-separated encoding + BINANCE-DELIVERY/BINANCE-FUTURES/
+    KRAKEN-FUTURES's underscore-separated encoding (live-verified 2026-07-22)."""
+
+    def test_parses_okx_futures_dash_separated_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("BTC-USDT-200103") == date(2020, 1, 3)
+
+    def test_parses_binance_delivery_underscore_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("BTCUSD_260626") == date(2026, 6, 26)
+
+    def test_parses_binance_futures_underscore_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("BTCUSDT_260626") == date(2026, 6, 26)
+
+    def test_parses_kraken_futures_underscore_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("FF_XBTUSD_260717") == date(2026, 7, 17)
+
+    def test_none_for_bare_perpetual_symbol(self, rollup: ModuleType) -> None:
+        """No trailing YYMMDD digit run on a perpetual -> honest None."""
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("BTC-USD-SWAP") is None
+
+    def test_none_for_alphabetic_deribit_symbol(self, rollup: ModuleType) -> None:
+        """DERIBIT/BYBIT's DDMonYY shape has no 6-digit numeric tail -> honest None
+        (this parser is a DISTINCT encoding from _wire_symbol_expiry_date, not a
+        superset of it)."""
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("ETH-17JUL26-2200-P") is None
 
 
 def _off_by_one_option_rows() -> list[dict[str, object]]:
@@ -4757,10 +4786,11 @@ class TestDedupCefiExpiryOffByOne:
         out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
         assert len(out) == 2  # 3 days apart — not this artifact, left alone
 
-    def test_leaves_untouched_when_wire_symbol_has_no_matching_date(self, rollup: ModuleType) -> None:
-        """A numeric-YYMMDD-wire venue (BINANCE-DELIVERY/BINANCE-FUTURES/KRAKEN-
-        FUTURES/some OKX-FUTURES) fits the off-by-one shape but this helper's wire
-        parser only recognises DDMonYY — must degrade to a no-op, never guess."""
+    def test_collapses_binance_delivery_numeric_wire_date_off_by_one(self, rollup: ModuleType) -> None:
+        """BINANCE-DELIVERY's numeric-YYMMDD wire encoding (``ETHUSD_260626``) fits
+        the off-by-one shape and is now resolved via
+        _wire_symbol_expiry_date_numeric_yymmdd's check #4 fallback (previously left
+        ambiguous — see the superseded test this replaces in git history)."""
         rows = [
             {
                 "venue": "BINANCE-DELIVERY",
@@ -4782,13 +4812,163 @@ class TestDedupCefiExpiryOffByOne:
                 "canonical_instrument_id": "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260627",
                 "base_asset": "ETH",
                 "margin_type": "inverse",
-                "available_from": "2026-06-01",
+                "available_from": "2026-06-02",
                 "expiry": "2026-06-27",
                 "available_to": "2026-06-27",
             },
         ]
         out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
-        assert len(out) == 2  # left ambiguous — a follow-up, not this fix's scope
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["instrument_id"] == "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260626"
+        assert kept["expiry"] == "2026-06-26"
+        assert kept["available_from"] == "2026-06-01"  # MIN across the group
+
+    def test_collapses_binance_futures_numeric_wire_date_off_by_one(self, rollup: ModuleType) -> None:
+        rows = [
+            {
+                "venue": "BINANCE-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTCUSDT_260626",
+                "instrument_id": "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260626",
+                "canonical_instrument_id": "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260626",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2026-01-01",
+                "expiry": "2026-06-26",
+                "available_to": "2026-06-26",
+            },
+            {
+                "venue": "BINANCE-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTCUSDT_260626",
+                "instrument_id": "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260627",
+                "canonical_instrument_id": "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260627",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2026-01-01",
+                "expiry": "2026-06-27",
+                "available_to": "2026-06-27",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["instrument_id"] == "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260626"
+
+    def test_collapses_kraken_futures_numeric_wire_date_off_by_one(self, rollup: ModuleType) -> None:
+        rows = [
+            {
+                "venue": "KRAKEN-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_XBTUSD_260717",
+                "instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260717",
+                "canonical_instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260717",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2026-07-10",
+                "expiry": "2026-07-17",
+                "available_to": "2026-07-17",
+            },
+            {
+                "venue": "KRAKEN-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_XBTUSD_260717",
+                "instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260718",
+                "canonical_instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260718",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2026-07-10",
+                "expiry": "2026-07-18",
+                "available_to": "2026-07-18",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["instrument_id"] == "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260717"
+
+    def test_collapses_okx_futures_dash_numeric_wire_date_off_by_one(self, rollup: ModuleType) -> None:
+        """OKX-FUTURES sub-pattern A (pure off-by-one, margin_type identical): the
+        dash-separated numeric wire encoding (``BTC-USDT-200103``) is resolved the
+        same way as the underscore-separated venues above."""
+        rows = [
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USDT-200103",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200103",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200103",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2019-12-20",
+                "expiry": "2020-01-03",
+                "available_to": "2020-01-03",
+            },
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USDT-200103",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200104",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200104",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2019-12-21",
+                "expiry": "2020-01-04",
+                "available_to": "2020-01-04",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["instrument_id"] == "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200103"
+
+    def test_leaves_okx_futures_margin_type_collision_untouched_even_with_numeric_wire_date(
+        self, rollup: ModuleType
+    ) -> None:
+        """OKX-FUTURES sub-pattern B (70/146): margin_type AND expiry both differ,
+        correlated — a margin-mislabeling collision, NOT this artifact. Left
+        untouched via check #3 (margin_type is a compared column) even though the
+        numeric wire-date fallback WOULD otherwise resolve a candidate expiry here —
+        this shape is a deliberately separate, not-yet-implemented follow-up (see
+        _dedup_cefi_expiry_off_by_one's docstring)."""
+        rows = [
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USD-200103",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2019-12-20",
+                "expiry": "2020-01-04",
+                "available_to": "2020-01-04",
+            },
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USD-200103",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103",
+                "base_asset": "BTC",
+                "margin_type": "inverse",
+                "available_from": "2019-12-21",
+                "expiry": "2020-01-03",
+                "available_to": "2020-01-03",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2  # untouched — margin_type differs (real ambiguity, not this artifact)
+
+    def test_leaves_untouched_when_wire_symbol_has_no_matching_date_in_either_encoding(
+        self, rollup: ModuleType
+    ) -> None:
+        """A wire symbol with no dated-expiry token in EITHER supported shape
+        (alphabetic DDMonYY or numeric YYMMDD) — e.g. a bare perpetual marker — must
+        degrade to a no-op, never guess, even though the rest of the group fits the
+        off-by-one shape on checks #1-3."""
+        rows = _off_by_one_option_rows()
+        rows[0]["raw_symbol"] = rows[1]["raw_symbol"] = "BTC-USD-SWAP"
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2
 
     def test_leaves_untouched_when_another_column_genuinely_differs(self, rollup: ModuleType) -> None:
         rows = _off_by_one_option_rows()
