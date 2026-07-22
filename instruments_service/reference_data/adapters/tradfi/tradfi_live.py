@@ -136,16 +136,32 @@ class TradFiLiveReferenceDataAdapter(BaseReferenceDataAdapter):
         return [r for r in results if r.expiry is None or r.expiry >= now]
 
     def _read_most_recent_gcs_snapshot(self) -> list[InstrumentRecord] | None:
-        """Try the last N days of GCS snapshots, return the first hit."""
+        """Try the last N days of GCS snapshots, return the first hit.
+
+        Layout-tolerant across the instrument_availability full-hive cutover
+        (operator R2, 2026-07-21): a day-scoped listing is matched against the
+        ``/venue={V}/instruments.parquet`` tail regardless of what sits between
+        ``day=`` and ``venue=`` (nothing, pre-cutover flat; or
+        ``pipeline_mode=.../asset_group=.../``, post-cutover hive) — an exact
+        flat-path ``download_bytes`` would silently miss every day written after
+        the cutover and fall through to the (working but heavier) Databento path
+        on every live refresh. See
+        instrument_availability_hive_canonicalisation_2026_07_21.md.
+        """
         try:
             storage = get_storage_client()
             bucket = get_bucket_name("instruments", "tradfi")
             venue = self._venue_filter or ""
+            tail = f"/venue={venue}/instruments.parquet"
 
             today = date.today()
             for days_ago in range(_GCS_LOOKBACK_DAYS):
                 target_day = (today - timedelta(days=days_ago)).isoformat()
-                blob_path = f"instrument_availability/by_date/day={target_day}/venue={venue}/instruments.parquet"
+                day_prefix = f"instrument_availability/by_date/day={target_day}/"
+                candidates = [b.name for b in storage.list_blobs(bucket, prefix=day_prefix) if b.name.endswith(tail)]
+                if not candidates:
+                    continue
+                blob_path = sorted(candidates)[0]
                 data: bytes | None = storage.download_bytes(bucket, blob_path)
                 if data:
                     df = pd.read_parquet(io.BytesIO(data))
