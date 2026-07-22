@@ -135,3 +135,25 @@ def test_build_cells_groups_by_day_dt_league_and_splits_definitions() -> None:
     assert matches_cell.source == "footystats"
     assert all(not m[0].startswith("gs://") for c in cells for m in c.members)  # bucket prefix stripped
     assert len(definition_rows) == 1 and definition_rows[0]["venue"] == "BETFAIR"
+
+
+def test_split_pre_floor_excludes_fixtures_schedule_before_2020_06_06() -> None:
+    # Regression for sports_pre_floor_fixtures_orphan_misclassification_2026_07_22.md —
+    # a pre-floor FIXTURES_SCHEDULE/FIXTURES_OUTCOMES row must never reach record_captured.
+    # Before the uac@46d865df fix, is_pre_launch_date() silently returned False for these
+    # two data_types regardless of date (they had no SPORTS_DATA_TYPE_TO_SOURCE entry).
+    rows = [
+        _row("a.parquet", data_type="FIXTURES_SCHEDULE", day="2019-01-01"),
+        _row("b.parquet", data_type="FIXTURES_OUTCOMES", day="2018-06-15"),
+        _row("c.parquet", data_type="FIXTURES_SCHEDULE", day="2021-01-01"),
+        _row("d.parquet", data_type="MATCHES", day="2021-06-01"),  # post-floor -> legitimate
+    ]
+    legit, pre_floor = _mod.split_pre_floor(rows)
+    assert {(r["data_type"], r["day"]) for r in pre_floor} == {
+        ("FIXTURES_SCHEDULE", "2019-01-01"),
+        ("FIXTURES_OUTCOMES", "2018-06-15"),
+    }
+    assert {(r["data_type"], r["day"]) for r in legit} == {
+        ("FIXTURES_SCHEDULE", "2021-01-01"),
+        ("MATCHES", "2021-06-01"),
+    }
