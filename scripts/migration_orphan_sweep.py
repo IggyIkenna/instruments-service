@@ -63,6 +63,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import TypedDict, cast
 
 from unified_api_contracts import ShardKey, canonical_path_templates, is_valid_shard_key
 
@@ -594,12 +595,175 @@ def _resolve_bucket(asset_group: str, cloud: str = "gcp") -> str:
     return resolve_bucket_name(cloud=cloud, kind=kind, asset_group=ag_arg)
 
 
+_CHECKPOINT_BATCH_INTERVAL = 100
+"""Batches (of _SWEEP_BATCH_SIZE objects, i.e. ~200K objects) between full checkpoint
+writes. Bounds the write-amplification of re-uploading the growing actionable parquet —
+writing it every 2000-object batch would reproduce the exact per-object-overhead
+pathology this sweep was fixed for (migration_orphan_sweep_performance_decay_2026_07_22.md
+todo 4). Found 2026-07-22: a preempted SPOT VM today loses 100% of its in-memory
+orphan-E finds (defi hit this TWICE: 1.25M then 3.4M objects of discovery discarded) —
+this checkpoint is the fix."""
+
+
+@dataclass
+class _Checkpoint:
+    """Resumable walk state: enough to reseed every in-memory accumulator + the GCS
+    ``start_offset`` to resume the lexicographically-ordered walk exactly where a
+    preempted run left off."""
+
+    last_name: str
+    seen: int
+    class_counts: dict[str, int]
+    prefix_taxonomy: dict[str, int]
+    sizing_by_cell: dict[str, list[int]]
+
+
+def _checkpoint_state_path(asset_group: str) -> str:
+    return f"_index/audit/_orphan_sweep_ckpt_{asset_group}_state.json"
+
+
+def _checkpoint_actionable_path(asset_group: str) -> str:
+    return f"_index/audit/_orphan_sweep_ckpt_{asset_group}_actionable.parquet"
+
+
+class _CheckpointStateDict(TypedDict):
+    """The on-disk shape of the checkpoint state JSON (see :func:`_write_checkpoint`)."""
+
+    last_name: str
+    seen: int
+    class_counts: dict[str, int]
+    prefix_taxonomy: dict[str, int]
+    sizing_by_cell: dict[str, list[int]]
+
+
+def _load_checkpoint(client: object, bucket: str, asset_group: str) -> _Checkpoint | None:
+    """Load the checkpoint state (not the actionable rows — see
+    :func:`_read_actionable_parquet`), or ``None`` if absent/unreadable (the safe side:
+    an unreadable checkpoint starts the walk fresh rather than resuming from bad state)."""
+    import json
+
+    state_path = _checkpoint_state_path(asset_group)
+    if not client.blob_exists(bucket, state_path):  # type: ignore[attr-defined]
+        return None
+    try:
+        raw_bytes = client.download_bytes(bucket, state_path)  # type: ignore[attr-defined]
+        state = cast(_CheckpointStateDict, json.loads(raw_bytes))
+        return _Checkpoint(
+            last_name=state["last_name"],
+            seen=state["seen"],
+            class_counts=dict(state["class_counts"]),
+            prefix_taxonomy=dict(state["prefix_taxonomy"]),
+            sizing_by_cell={k: list(v) for k, v in state["sizing_by_cell"].items()},
+        )
+    except Exception:
+        logger.warning("orphan-sweep %s: checkpoint state unreadable — starting fresh", asset_group)
+        return None
+
+
+class _ActionableRowDict(TypedDict):
+    """The on-disk row shape of the actionable checkpoint/report parquet (mirrors
+    ``vars(SweptObject)`` — see :func:`_write_report`)."""
+
+    uri: str
+    asset_group: str
+    obj_class: str
+    venue: str
+    chain: str
+    instrument_type: str
+    data_type: str
+    day: str
+    pipeline_mode: str
+    source: str
+    size_bytes: int
+    crc32c: str
+    reason: str
+
+
+def _read_actionable_parquet(client: object, bucket: str, asset_group: str) -> list[SweptObject]:
+    """Load the checkpoint's actionable (class-B + class-E) rows written so far."""
+    import io
+
+    import pandas as pd
+
+    path = _checkpoint_actionable_path(asset_group)
+    if not client.blob_exists(bucket, path):  # type: ignore[attr-defined]
+        return []
+    raw = client.download_bytes(bucket, path)  # type: ignore[attr-defined]
+    df = pd.read_parquet(io.BytesIO(raw))
+    rows = cast(list[_ActionableRowDict], df.to_dict("records"))
+    return [
+        SweptObject(
+            uri=r["uri"],
+            asset_group=r["asset_group"],
+            obj_class=ObjectClass(r["obj_class"]),
+            venue=r["venue"],
+            chain=r["chain"],
+            instrument_type=r["instrument_type"],
+            data_type=r["data_type"],
+            day=r["day"],
+            pipeline_mode=r["pipeline_mode"],
+            source=r["source"],
+            size_bytes=r["size_bytes"],
+            crc32c=r["crc32c"],
+            reason=r["reason"],
+        )
+        for r in rows
+    ]
+
+
+def _write_checkpoint(
+    client: object,
+    bucket: str,
+    asset_group: str,
+    *,
+    last_name: str,
+    seen: int,
+    class_counts: Counter[str],
+    prefix_taxonomy: Counter[str],
+    sizing: SizingRollup,
+    actionable: list[SweptObject],
+) -> None:
+    """Write the resumable checkpoint: a small state JSON (bounded size — counters, not
+    per-object rows) plus the actionable parquet accumulated so far (reuses
+    :func:`_write_report`'s writer — same schema the final report + CF-21 cleanup read)."""
+    import io
+    import json
+
+    state = {
+        "last_name": last_name,
+        "seen": seen,
+        "class_counts": dict(class_counts),
+        "prefix_taxonomy": dict(prefix_taxonomy),
+        "sizing_by_cell": {"\x1f".join(cell): agg for cell, agg in sizing.by_cell.items()},
+    }
+    client.upload_from_file_obj(  # type: ignore[attr-defined]
+        bucket, _checkpoint_state_path(asset_group), io.BytesIO(json.dumps(state).encode())
+    )
+    _write_actionable_parquet(client, bucket, _checkpoint_actionable_path(asset_group), actionable)
+    logger.info(
+        "orphan-sweep %s: checkpoint written — %d objects swept, %d actionable rows, resume point %r",
+        asset_group,
+        seen,
+        len(actionable),
+        last_name,
+    )
+
+
+def _delete_checkpoint(client: object, bucket: str, asset_group: str) -> None:
+    """Delete the checkpoint (state + actionable parquet) — called on a genuinely clean
+    full-walk completion, marking there is nothing left to resume."""
+    for path in (_checkpoint_state_path(asset_group), _checkpoint_actionable_path(asset_group)):
+        if client.blob_exists(bucket, path):  # type: ignore[attr-defined]
+            client.delete_blob(bucket, path)  # type: ignore[attr-defined]
+
+
 def run_sweep(
     asset_group: str,
     *,
     cloud: str = "gcp",
     workers: int = 32,
     limit: int | None = None,
+    resume: bool = True,
 ) -> tuple[Counter[str], Counter[str], SizingRollup, list[SweptObject]]:
     """Walk the AG bucket once, classify every object, roll up sizing + the prefix
     taxonomy. Returns (class_counts, prefix_taxonomy, sizing, orphan_E_objects).
@@ -611,6 +775,12 @@ def run_sweep(
     ``_footer_verify_pending``): a sequential per-object read is what caused the
     2026-07-22 throughput collapse on defi/prediction (documented in
     ``migration_orphan_sweep_performance_decay_2026_07_22.md``).
+
+    ``resume`` (default True): if a checkpoint exists, seed every accumulator from it and
+    resume the walk via GCS ``start_offset`` instead of starting over — a preempted SPOT
+    VM (confirmed 2026-07-22 on defi, twice) otherwise loses 100% of its in-memory finds.
+    Pass ``resume=False`` (``--force`` on the CLI) to ignore/discard any existing
+    checkpoint and start fresh.
     """
     from unified_trading_library import get_storage_client
 
@@ -624,11 +794,42 @@ def run_sweep(
     prefix_taxonomy: Counter[str] = Counter()
     sizing = SizingRollup.empty()
     actionable: list[SweptObject] = []  # class-B (legacy twins for CF-21 cleanup) + class-E (orphans)
+    start_offset = ""
+    seen_base = 0
+    skip_boundary = ""  # GCS start_offset is INCLUSIVE — the resumed walk re-yields this name once
+    if resume:
+        ckpt = _load_checkpoint(client, bucket, asset_group)
+        if ckpt is not None:
+            actionable = _read_actionable_parquet(client, bucket, asset_group)
+            class_counts = Counter(ckpt.class_counts)
+            prefix_taxonomy = Counter(ckpt.prefix_taxonomy)
+            for cell_key, agg in ckpt.sizing_by_cell.items():
+                cell = tuple(cell_key.split("\x1f"))
+                sizing.by_cell[cell] = list(agg)  # type: ignore[index]
+            start_offset, seen_base, skip_boundary = ckpt.last_name, ckpt.seen, ckpt.last_name
+            logger.info(
+                "orphan-sweep %s: RESUMING from checkpoint — %d objects already swept, %d actionable rows loaded, "
+                "resuming after %r",
+                asset_group,
+                seen_base,
+                len(actionable),
+                ckpt.last_name,
+            )
+    else:
+        _delete_checkpoint(client, bucket, asset_group)
+
     batch: list[tuple[str, object, ObjectClass, ShardKey, str]] = []
     pending: list[tuple[int, str]] = []  # (index within batch, name) needing a footer read
+    batches_since_checkpoint = 0
     t0 = time.time()
-    for seen, blob in enumerate(client.list_blobs(bucket), start=1):
+    seen = seen_base
+    for blob in client.list_blobs(bucket, start_offset=start_offset):
         name = blob.name
+        if skip_boundary:
+            skip_boundary = ""
+            if name == start_offset:
+                continue
+        seen += 1
         prefix_taxonomy[_taxonomy_label(name)] += 1
         is_parquet = name.endswith(".parquet")
         cls, key, reason = classify_object(name, asset_group, manifested, is_parquet=is_parquet, row_count=None)
@@ -649,12 +850,42 @@ def run_sweep(
                 sizing=sizing,
                 actionable=actionable,
             )
+            last_name = batch[-1][0]
             batch, pending = [], []
+            batches_since_checkpoint += 1
+            if batches_since_checkpoint >= _CHECKPOINT_BATCH_INTERVAL:
+                _write_checkpoint(
+                    client,
+                    bucket,
+                    asset_group,
+                    last_name=last_name,
+                    seen=seen,
+                    class_counts=class_counts,
+                    prefix_taxonomy=prefix_taxonomy,
+                    sizing=sizing,
+                    actionable=actionable,
+                )
+                batches_since_checkpoint = 0
         if seen % 50000 == 0:
-            logger.info("  %d objects swept (%.0f/s)", seen, seen / max(0.01, time.time() - t0))
+            logger.info("  %d objects swept (%.0f/s)", seen, (seen - seen_base) / max(0.01, time.time() - t0))
         if limit is not None and seen >= limit:
             logger.info("  --limit %d reached — stopping walk", limit)
             break
+    else:
+        # loop completed WITHOUT a --limit break — a genuinely full, clean walk.
+        if batch:
+            footer_rows = _footer_verify_pending(client, bucket, pending, workers=workers)
+            _finalize_swept_batch(
+                batch,
+                footer_rows,
+                bucket=bucket,
+                asset_group=asset_group,
+                class_counts=class_counts,
+                sizing=sizing,
+                actionable=actionable,
+            )
+        _delete_checkpoint(client, bucket, asset_group)
+        return class_counts, prefix_taxonomy, sizing, actionable
     if batch:
         footer_rows = _footer_verify_pending(client, bucket, pending, workers=workers)
         _finalize_swept_batch(
@@ -734,6 +965,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="stop after N objects (smoke / partial sweep)")
     parser.add_argument("--dry-run", action="store_true", help="scan + report only; never write/delete (default)")
     parser.add_argument("--report-out", type=str, default="", help="gs:// URI to write the orphan_sweep parquet")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="ignore + delete any existing checkpoint, start the walk over from scratch",
+    )
     args = parser.parse_args(argv)
 
     # Sports dispatches via its own UAC candidate_parquet_paths SSOT — canonical_path_
@@ -743,7 +979,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     class_counts, prefix_taxonomy, sizing, actionable = run_sweep(
-        args.asset_group, cloud=args.cloud, workers=args.workers, limit=args.limit
+        args.asset_group, cloud=args.cloud, workers=args.workers, limit=args.limit, resume=not args.force
     )
     code = _print_report(args.asset_group, class_counts, prefix_taxonomy, sizing, actionable)
     if args.report_out:
@@ -755,21 +991,31 @@ def main(argv: list[str] | None = None) -> int:
     return code
 
 
-def _write_report(report_out: str, actionable: list[SweptObject]) -> None:
-    """Write the actionable objects (class-E orphans + class-B legacy twins) to a parquet
-    at ``report_out`` (gs:// URI). The CF-21 cleanup reads class-B from here."""
+def _write_actionable_parquet(client: object, bucket: str, blob_path: str, actionable: list[SweptObject]) -> None:
+    """Serialize ``actionable`` to parquet and upload via the given ``client`` — the
+    shared writer both the final ``--report-out`` (:func:`_write_report`) and the
+    resumable checkpoint (:func:`_write_checkpoint`) use, so a checkpoint write never
+    silently reaches for a DIFFERENT live storage client than the one the walk itself is
+    using."""
     import io
 
     import pandas as pd
-    from unified_trading_library import get_storage_client
 
     df = pd.DataFrame([{**vars(o), "obj_class": o.obj_class.value} for o in actionable])
     buf = io.BytesIO()
     df.to_parquet(buf, index=False)
     buf.seek(0)
+    client.upload_from_file_obj(bucket, blob_path, buf)  # type: ignore[attr-defined]
+
+
+def _write_report(report_out: str, actionable: list[SweptObject]) -> None:
+    """Write the actionable objects (class-E orphans + class-B legacy twins) to a parquet
+    at ``report_out`` (gs:// URI). The CF-21 cleanup reads class-B from here."""
+    from unified_trading_library import get_storage_client
+
     assert report_out.startswith("gs://")
     bucket, _sep, blob_path = report_out[len("gs://") :].partition("/")
-    get_storage_client().upload_from_file_obj(bucket, blob_path, buf)  # type: ignore[attr-defined]
+    _write_actionable_parquet(get_storage_client(), bucket, blob_path, actionable)
     n_e = sum(1 for o in actionable if o.obj_class == ObjectClass.ORPHAN_REAL)
     n_b = sum(1 for o in actionable if o.obj_class == ObjectClass.LEGACY_DUPLICATE)
     logger.info("wrote %d actionable rows (%d orphan-E + %d legacy-B) to %s", len(actionable), n_e, n_b, report_out)
