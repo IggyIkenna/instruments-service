@@ -760,8 +760,10 @@ def _row_data_types(
     # correctly stays off for tradfi; this is a SEPARATE, missing gate: the
     # MVP-cut narrowing cefi gets above). Added 2026-07-14
     # (tradfi_eu_not_draining_source_axis_drift_2026_06_24.md #2 root-cause
-    # fix): tradfi's MVP_SCOPE data_types is {ohlcv_1m} for the CME
-    # futures/options complex (operator 2026-06-27 decision #7) and
+    # fix): tradfi's MVP_SCOPE data_types is {ohlcv_1m, ohlcv_1s} for the CME
+    # futures/options complex (operator 2026-06-27 decision #7, revised
+    # 2026-07-22 — the 2026-07-21/22 backfill fleet captured both grains, so
+    # the predicate now matches what was actually captured) and
     # {ohlcv_24h} for the KRX equity-basis carve-out — never the full raw
     # capability set. Before this gate, an MVP-scoped CME OPTION bundle
     # (options_chain, valid_data_types={trades, ohlcv_1m, options_chain} per
@@ -921,11 +923,12 @@ def _tradfi_mvp_data_types(instr: InstrumentCatalogEntry) -> frozenset[str]:
     ``TradFiMvpRule`` handling:
 
       * EQUITY/ETF at a basis-universe venue (NASDAQ/NYSE/ARCA/AMEX/BATS) →
-        the flat MVP set (``{ohlcv_1m}``); at KRX → the narrower
+        the flat MVP set (``{ohlcv_1m, ohlcv_1s}``); at KRX → the narrower
         ``{ohlcv_24h}`` carve-out (operator 2026-07-12, Yahoo-sourced KRX has
         no reliable intraday backfill).
       * Everything else (the CME/CBOE futures/options complex) → the flat
-        MVP set (``{ohlcv_1m}``, operator 2026-06-27 decision #7).
+        MVP set (``{ohlcv_1m, ohlcv_1s}``, operator 2026-06-27 decision #7,
+        revised 2026-07-22).
 
     Deliberately does NOT re-check ``base_ccy``/underlier — that axis is
     already resolved by the caller's :func:`_tradfi_entry_in_mvp_universe`
