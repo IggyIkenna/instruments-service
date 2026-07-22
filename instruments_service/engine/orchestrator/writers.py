@@ -206,35 +206,19 @@ def _market_lifecycle_sink_for(
     )
 
 
-def _write_venue(
-    venue_str: str,
-    df: _orch.pd.DataFrame,
-    date: str,
-    bucket: str,
-    sink: _orch.DataSink,
-    counts: dict[str, int],
-    sampler: _orch.SamplingService,
-    manifest: _orch.ManifestWriter | None = None,
-) -> None:
-    """Write one venue's DataFrame to storage, catalogue, and CSV sample.
+def _classify_venue_write(venue_str: str) -> tuple[str, str, str, str, str, _orch.PipelineMode, bool]:
+    """Canonicalize + classify a venue for ``_write_venue``.
 
-    Retries transient GCS/network errors up to 3 times with exponential backoff
-    (1s, 2s) to avoid wasting the expensive fetch work that produced this data.
+    Split out of ``_write_venue`` (2026-07-22, function-size gate) — pure
+    classification logic with no I/O, computed once BEFORE the write so the
+    full-hive sink prefix and the manifest row_key use the SAME
+    asset_group/pipeline_mode/venue-split.
 
-    If ``manifest`` is provided, adds the catalogue record to the shared writer
-    (caller flushes once after all venues). Otherwise uses the per-venue
-    ``_write_catalogue_record`` path.
-
-    ``sink`` is accepted for call-site compatibility with the shared per-bucket
-    sink threaded through ``_WriteOutcome``/retry paths but is NOT the write
-    target — the full-hive prefix (operator R2, 2026-07-21) needs a fresh
-    per-shard ``DataSink`` built by ``_instrument_availability_sink_for`` below,
-    since ``day``/``pipeline_mode``/``asset_group``/``venue`` differ per call and
-    cannot go through the ``write()`` partition dict (alphabetical-sort trap —
-    see that helper's docstring).
+    Returns ``(venue_str, manifest_data_type, manifest_venue, manifest_chain,
+    asset_group, pipeline_mode, is_sports_ref)`` — ``venue_str`` is returned
+    because DeFi canonicalization may rewrite it (AAVEV3-ARBITRUM ->
+    AAVE_V3-ARBITRUM).
     """
-    import time as _time
-
     # Canonicalize the combined DeFi venue partition BEFORE any write so the parquet
     # path (venue=...) matches the canonical manifest venue. Previously the parquet was
     # written under the raw glued caller form (e.g. AAVEV3-ARBITRUM) while the manifest
@@ -258,9 +242,6 @@ def _write_venue(
         if _canonical_venue != venue_str:
             venue_str = _canonical_venue
 
-    # Classify BEFORE the write (moved up from the post-write manifest branch that used
-    # to duplicate this) — both the full-hive sink prefix and the manifest row_key need
-    # the SAME asset_group/pipeline_mode/venue-split, computed once.
     # v4: Sports reference entities write data_type (not venue).
     #     API_FOOTBALL → data_type=FIXTURES, venue=""
     #     API_FOOTBALL_INJURIES → data_type=INJURIES, venue=""
@@ -311,6 +292,42 @@ def _write_venue(
         # served the snapshot is the adapter's routing concern, not a
         # per-row manifest tag for producer rows.
         _venue_pm = _orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE
+
+    return venue_str, manifest_data_type, manifest_venue, manifest_chain, _cat, _venue_pm, is_sports_ref
+
+
+def _write_venue(
+    venue_str: str,
+    df: _orch.pd.DataFrame,
+    date: str,
+    bucket: str,
+    sink: _orch.DataSink,
+    counts: dict[str, int],
+    sampler: _orch.SamplingService,
+    manifest: _orch.ManifestWriter | None = None,
+) -> None:
+    """Write one venue's DataFrame to storage, catalogue, and CSV sample.
+
+    Retries transient GCS/network errors up to 3 times with exponential backoff
+    (1s, 2s) to avoid wasting the expensive fetch work that produced this data.
+
+    If ``manifest`` is provided, adds the catalogue record to the shared writer
+    (caller flushes once after all venues). Otherwise uses the per-venue
+    ``_write_catalogue_record`` path.
+
+    ``sink`` is accepted for call-site compatibility with the shared per-bucket
+    sink threaded through ``_WriteOutcome``/retry paths but is NOT the write
+    target — the full-hive prefix (operator R2, 2026-07-21) needs a fresh
+    per-shard ``DataSink`` built by ``_instrument_availability_sink_for`` below,
+    since ``day``/``pipeline_mode``/``asset_group``/``venue`` differ per call and
+    cannot go through the ``write()`` partition dict (alphabetical-sort trap —
+    see that helper's docstring).
+    """
+    import time as _time
+
+    venue_str, manifest_data_type, manifest_venue, manifest_chain, _cat, _venue_pm, is_sports_ref = (
+        _classify_venue_write(venue_str)
+    )
 
     _hive_sink = _instrument_availability_sink_for(
         bucket,
