@@ -4063,6 +4063,184 @@ def _merge_sports_ftp_with_frozen_tail(
     return _merge_incremental(prev_ftp_df, window_df, window_start=since, asset_group="sports")
 
 
+#: Exchange-native dated-derivative expiry token embedded in a CeFi wire symbol —
+#: ``<D><Mon><YY>`` (e.g. ``17JUL26`` in ``BTC-17JUL26-61000-C`` / ``MNTUSDT-17JUL26``
+#: / ``XRP_USDC-16JUL26``). Bounded on both sides by a non-alnum char (or a string
+#: edge) so it never partial-matches inside a longer token. Universal across every
+#: CeFi dated-derivative venue's raw wire symbol — verified live against the prod
+#: cefi catalogue 2026-07-22 (DERIBIT/BYBIT/OKX-FUTURES/BINANCE-FUTURES/
+#: BINANCE-DELIVERY/KRAKEN-FUTURES all embed this exact shape).
+_WIRE_EXPIRY_TOKEN_RE = re.compile(r"(?<![A-Z0-9])(\d{1,2})([A-Z]{3})(\d{2})(?![A-Z0-9])")
+
+#: 3-letter month abbreviation -> month number, for :func:`_wire_symbol_expiry_date`.
+_WIRE_EXPIRY_MONTHS: dict[str, int] = {
+    "JAN": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "APR": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AUG": 8,
+    "SEP": 9,
+    "OCT": 10,
+    "NOV": 11,
+    "DEC": 12,
+}
+
+
+def _wire_symbol_expiry_date(raw_symbol: str) -> date | None:
+    """Parse the expiry DATE embedded in a CeFi dated-derivative wire symbol.
+
+    E.g. ``BTC-25SEP20-10000-C`` -> ``date(2020, 9, 25)``; ``MNTUSDT-17JUL26`` ->
+    ``date(2026, 7, 17)``. This is the single most-authoritative expiry signal
+    available for a dated contract: it is LITERALLY what the venue puts on the
+    tape, independent of any downstream date-arithmetic the capture adapter
+    performs to also populate the structured ``expiry`` column (see
+    :func:`_dedup_cefi_expiry_off_by_one`, whose tie-break relies on this).
+
+    Returns ``None`` when no ``<D><Mon><YY>`` token is found (non-dated types —
+    SPOT_PAIR / marker-less PERPETUAL — or an unrecognised symbol shape) or the
+    token doesn't parse to a real calendar date. Pure, degrade-never-guess.
+    """
+    match = _WIRE_EXPIRY_TOKEN_RE.search(raw_symbol.strip().upper())
+    if not match:
+        return None
+    day_s, mon_s, yr_s = match.groups()
+    month = _WIRE_EXPIRY_MONTHS.get(mon_s)
+    if month is None:
+        return None
+    try:
+        return date(2000 + int(yr_s), month, int(day_s))
+    except ValueError:
+        return None
+
+
+#: Catalogue columns the off-by-one artifact itself legitimately touches — NOT
+#: required to match across a candidate group (see :func:`_dedup_cefi_expiry_off_by_one`).
+#: Every other :data:`CATALOG_COLUMNS` entry must be byte-identical for the collapse
+#: to apply; a real difference anywhere else means a genuine ambiguity, not this artifact.
+_EXPIRY_DEDUP_IGNORE_COLUMNS = frozenset(
+    {"instrument_id", "expiry", "available_to", "available_from", "canonical_instrument_id"}
+)
+
+
+def _dedup_cefi_expiry_off_by_one(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse CeFi dated-derivative rows split by an off-by-one-DAY expiry artifact.
+
+    ROOT CAUSE (confirmed against the live prod cefi catalogue, 2026-07-22 — a live
+    measurement found 1,018 ambiguous ``CeFiWireCanonicalMap`` wire keys, 802 (79%)
+    DERIBIT): a dated FUTURE/OPTION's raw wire symbol embeds its OWN expiry date
+    (e.g. ``BTC-17JUL26-61000-C``), but the capture adapter's SEPARATE structured
+    ``expiry`` column is derived from the venue's settlement timestamp by
+    date-arithmetic that occasionally lands one calendar day off. Because the
+    roll-up's aggregate identity for a non-perp-family CeFi row is the per-date
+    ``instrument_id`` (which EMBEDS the parsed ``expiry`` date —
+    :func:`_canonicalize_cefi_rollup_id`), two snapshot days whose adapter run
+    resolved a different calendar day for the SAME wire contract mint TWO SEPARATE
+    catalogue rows for what is one instrument — exactly the class
+    ``CeFiWireCanonicalMap.from_rows`` excludes as an "ambiguous wire key" (honest-
+    unresolved), making the instrument silently unresolvable at read time.
+
+    Live-verified fit for this EXACT shape (2026-07-22): 802/802 DERIBIT, 4/4
+    BINANCE-DELIVERY, 2/2 BINANCE-FUTURES, 2/2 KRAKEN-FUTURES, and 76/146
+    OKX-FUTURES ambiguous ``(venue, instrument_type, raw_symbol)`` wire keys. The
+    other OKX-FUTURES rows and every BYBIT (39) / BITGET-FUTURES (18) / OKX-SWAP (5)
+    ambiguous key are a REAL, different ambiguity (a genuinely different
+    ``margin_type``/``base_asset`` under the same wire symbol — e.g. the
+    linear-vs-inverse BITGET-FUTURES/OKX-SWAP perp clash, or BYBIT's
+    base-asset-parsing clash) and correctly fail the strict checks below, so they
+    stay excluded exactly as today.
+
+    This is a NARROW, VERIFIED collapse — never a general "drop duplicates" rule.
+    A group of rows sharing one normalised ``(venue, instrument_type, raw_symbol)``
+    3-tuple (the same key ``CeFiWireCanonicalMap`` builds on) collapses to ONE row
+    ONLY when ALL of the following hold:
+
+      1. exactly 2 distinct non-blank ``expiry`` values across the group;
+      2. those 2 dates are exactly ONE calendar day apart;
+      3. every OTHER catalogue column (:data:`CATALOG_COLUMNS` minus
+         :data:`_EXPIRY_DEDUP_IGNORE_COLUMNS`) is byte-identical across every row
+         in the group;
+      4. the wire symbol's OWN embedded expiry date
+         (:func:`_wire_symbol_expiry_date`) matches EXACTLY ONE of the 2 candidate
+         dates.
+
+    Any group failing ANY check is LEFT UNTOUCHED — a real ambiguity, not this
+    artifact, stays excluded from the wire-canonical map exactly as today.
+
+    Tie-break (kept row): the row whose ``expiry`` matches the wire-embedded date —
+    the exchange's own declared settlement day is definitionally correct, never a
+    coin-flip. The kept row's ``available_from`` is set to the MIN across the whole
+    group (the two erroneous aggregates are one continuous lifecycle that was
+    wrongly split — the same "keep the earliest observed" semantics
+    :func:`build_catalogue_dataframe`'s BUG#4 rule already uses elsewhere).
+
+    Pure + idempotent (a frame with none of this pattern round-trips unchanged; a
+    frame missing the required columns — prediction/sports carry no
+    ``raw_symbol``/``expiry`` in this shape — is returned unchanged).
+    """
+    required = {"venue", "instrument_type", "raw_symbol", "expiry", "available_to", "available_from", "instrument_id"}
+    if df.empty or not required.issubset(df.columns):
+        return df
+
+    venue = df["venue"].fillna("").astype(str).str.strip().str.upper()
+    itype = df["instrument_type"].fillna("").astype(str).str.strip().str.upper()
+    raw = df["raw_symbol"].fillna("").astype(str).str.strip().str.upper()
+    has_symbol = raw != ""
+    if not has_symbol.any():
+        return df
+    key = venue + "\x1f" + itype + "\x1f" + raw
+    sub_key = key[has_symbol]
+    groups = sub_key.groupby(sub_key).groups
+
+    compare_cols = [c for c in CATALOG_COLUMNS if c in df.columns and c not in _EXPIRY_DEDUP_IGNORE_COLUMNS]
+
+    drop_idx: list[object] = []
+    kept_available_from: dict[object, str] = {}
+    for _group_key, idx in groups.items():
+        if len(idx) < 2:
+            continue
+        group_df = df.loc[idx]
+        expiries = group_df["expiry"].fillna("").astype(str)
+        distinct = sorted({e for e in expiries if e})
+        if len(distinct) != 2:
+            continue
+        try:
+            d0, d1 = date.fromisoformat(distinct[0]), date.fromisoformat(distinct[1])
+        except ValueError:
+            continue
+        if abs((d1 - d0).days) != 1:
+            continue
+        if group_df[compare_cols].nunique(dropna=False).gt(1).any():
+            continue
+        wire_date = _wire_symbol_expiry_date(group_df["raw_symbol"].iloc[0])
+        if wire_date is None or wire_date.isoformat() not in distinct:
+            continue
+        keep_expiry = wire_date.isoformat()
+        keep_candidates = [i for i in idx if expiries.loc[i] == keep_expiry]
+        if not keep_candidates:
+            continue  # defensive — should be unreachable given the membership check above
+        keep_idx = keep_candidates[0]
+        drop_idx.extend(i for i in idx if i != keep_idx)
+        kept_available_from[keep_idx] = group_df["available_from"].astype(str).min()
+
+    if not drop_idx:
+        return df
+
+    out = df.drop(index=drop_idx)
+    for idx, min_from in kept_available_from.items():
+        if idx in out.index:
+            out.at[idx, "available_from"] = min_from
+    logger.info(
+        "CeFi expiry off-by-one dedup: collapsed %d row(s) across %d confirmed group(s) "
+        "(off-by-one-day artifact — see _dedup_cefi_expiry_off_by_one docstring)",
+        len(drop_idx),
+        len(kept_available_from),
+    )
+    return out.reset_index(drop=True)
+
+
 def run_rollup(
     asset_group: str,
     *,
@@ -4267,6 +4445,11 @@ def run_rollup(
             )
 
     # Phase D: dedup / row-count
+    if asset_group == "cefi":
+        # Ambiguous-wire-key expiry off-by-one collapse (see
+        # _dedup_cefi_expiry_off_by_one's docstring) — scoped to cefi (the only
+        # asset_group whose rows carry this dated-derivative wire-symbol shape).
+        df = _dedup_cefi_expiry_off_by_one(df)
     print(f"[BISECT-D] dedup complete rows={len(df)} asset_group={asset_group}", flush=True)
     logger.info("Rolled up %d catalogue rows", len(df))
 
