@@ -466,3 +466,191 @@ class TestFooterVerifyConcurrency:
         assert class_counts[OC.ORPHAN_REAL.value] == 1
         assert len(actionable) == 1
         assert actionable[0].obj_class == OC.ORPHAN_REAL
+
+
+class _FakeBlob:
+    def __init__(self, name: str, size: int = 100, crc32c: str = "x") -> None:
+        self.name = name
+        self.size = size
+        self.crc32c = crc32c
+
+
+class _FakeStorageClient:
+    """In-memory GCS stand-in — credential-free, mirrors just the surface the sweep's
+    checkpoint helpers + ``run_sweep`` touch (blob_exists/download_bytes/
+    upload_from_file_obj/delete_blob/list_blobs, incl. GCS's INCLUSIVE start_offset)."""
+
+    def __init__(self, object_names: list[str] | None = None) -> None:
+        self._blobs: dict[tuple[str, str], bytes] = {}
+        self._objects = sorted(object_names or [])
+
+    def blob_exists(self, bucket: str, path: str) -> bool:
+        return (bucket, path) in self._blobs
+
+    def download_bytes(self, bucket: str, path: str) -> bytes:
+        return self._blobs[(bucket, path)]
+
+    def upload_from_file_obj(self, bucket: str, path: str, file_obj) -> None:
+        self._blobs[(bucket, path)] = file_obj.read()
+
+    def delete_blob(self, bucket: str, path: str) -> bool:
+        return self._blobs.pop((bucket, path), None) is not None
+
+    def list_blobs(self, bucket: str, prefix: str = "", delimiter=None, max_results=None, start_offset: str = ""):
+        for name in self._objects:
+            if start_offset and name < start_offset:
+                continue
+            if name.startswith(prefix):
+                yield _FakeBlob(name)
+
+
+class TestCheckpointRoundTrip:
+    """Regression for migration_orphan_sweep_performance_decay_2026_07_22.md todo 4 — a
+    preempted SPOT VM lost 100% of its in-memory orphan-E finds (defi hit this TWICE).
+    These prove the checkpoint state + actionable rows survive a write/load round trip
+    without a live GCS/credentials dependency."""
+
+    def test_load_checkpoint_returns_none_when_absent(self) -> None:
+        client = _FakeStorageClient()
+        assert _mod._load_checkpoint(client, "bkt", "cefi") is None
+        assert _mod._read_actionable_parquet(client, "bkt", "cefi") == []
+
+    def test_checkpoint_round_trip_state_and_actionable_rows(self) -> None:
+        client = _FakeStorageClient()
+        key = _mod.ShardKey(
+            asset_group="cefi", venue="BINANCE-FUTURES", chain="", instrument_type="perpetual", data_type="trades"
+        )
+        obj = _mod.SweptObject(
+            uri="gs://bkt/x.parquet",
+            asset_group="cefi",
+            obj_class=OC.ORPHAN_REAL,
+            venue=key.venue,
+            chain=key.chain,
+            instrument_type=key.instrument_type,
+            data_type=key.data_type,
+            day="2024-07-01",
+            pipeline_mode="batch_tardis",
+            source="tardis",
+            size_bytes=123,
+            crc32c="abc",
+            reason="real data (rows>0) with NO manifest row — backfill record_captured",
+        )
+        _mod._write_checkpoint(
+            client,
+            "bkt",
+            "cefi",
+            last_name="x.parquet",
+            seen=1,
+            class_counts=_mod.Counter({OC.ORPHAN_REAL.value: 1}),
+            prefix_taxonomy=_mod.Counter({"service-data": 1}),
+            sizing=_mod.SizingRollup.empty(),
+            actionable=[obj],
+        )
+        ckpt = _mod._load_checkpoint(client, "bkt", "cefi")
+        assert ckpt is not None
+        assert ckpt.last_name == "x.parquet"
+        assert ckpt.seen == 1
+        assert ckpt.class_counts == {OC.ORPHAN_REAL.value: 1}
+        assert ckpt.prefix_taxonomy == {"service-data": 1}
+        loaded = _mod._read_actionable_parquet(client, "bkt", "cefi")
+        assert len(loaded) == 1
+        assert loaded[0].uri == obj.uri
+        assert loaded[0].obj_class == OC.ORPHAN_REAL
+        assert loaded[0].size_bytes == 123
+
+    def test_delete_checkpoint_removes_state_and_actionable(self) -> None:
+        client = _FakeStorageClient()
+        _mod._write_checkpoint(
+            client,
+            "bkt",
+            "cefi",
+            last_name="x.parquet",
+            seen=1,
+            class_counts=_mod.Counter(),
+            prefix_taxonomy=_mod.Counter(),
+            sizing=_mod.SizingRollup.empty(),
+            actionable=[],
+        )
+        assert client.blob_exists("bkt", _mod._checkpoint_state_path("cefi"))
+        _mod._delete_checkpoint(client, "bkt", "cefi")
+        assert not client.blob_exists("bkt", _mod._checkpoint_state_path("cefi"))
+        assert not client.blob_exists("bkt", _mod._checkpoint_actionable_path("cefi"))
+        # idempotent — deleting an already-clean checkpoint must not raise.
+        _mod._delete_checkpoint(client, "bkt", "cefi")
+
+
+def _orphan_path(day: str, leaf: str) -> str:
+    return (
+        f"raw_tick_data/by_date/day={day}/pipeline_mode=batch_tardis/asset_group=cefi/"
+        f"venue=BINANCE-FUTURES/instrument_type=perpetual/data_type=trades/{leaf}.parquet"
+    )
+
+
+class TestRunSweepResume:
+    """``run_sweep`` resuming from a checkpoint must seed every accumulator AND resume
+    the GCS walk via the (inclusive) ``start_offset`` without double-counting or
+    double-writing the one boundary object — the exact off-by-one this feature lives or
+    dies on."""
+
+    def _patch_sweep_deps(self, monkeypatch, client: _FakeStorageClient) -> None:
+        import unified_trading_library
+
+        monkeypatch.setattr(unified_trading_library, "get_storage_client", lambda: client)
+        monkeypatch.setattr(_mod, "_resolve_bucket", lambda asset_group, cloud="gcp": "bkt")
+
+    def test_resume_seeds_counters_and_skips_boundary_object(self, monkeypatch) -> None:
+        n1, n2, n3, n4 = (_orphan_path(f"2024-07-0{i}", c) for i, c in enumerate("abcd", start=1))
+        client = _FakeStorageClient([n1, n2, n3, n4])
+        self._patch_sweep_deps(monkeypatch, client)
+
+        # Seed a checkpoint as if a prior (preempted) run already swept n1 + n2.
+        obj1 = _mod.SweptObject(
+            uri=f"gs://bkt/{n1}",
+            asset_group="cefi",
+            obj_class=OC.ORPHAN_REAL,
+            venue="BINANCE-FUTURES",
+            chain="",
+            instrument_type="perpetual",
+            data_type="trades",
+            day="2024-07-01",
+            pipeline_mode="batch_tardis",
+            source="tardis",
+            size_bytes=100,
+            crc32c="x",
+            reason="real data (rows>0) with NO manifest row — backfill record_captured",
+        )
+        obj2 = _mod.SweptObject(**{**vars(obj1), "uri": f"gs://bkt/{n2}", "day": "2024-07-02"})
+        _mod._write_checkpoint(
+            client,
+            "bkt",
+            "cefi",
+            last_name=n2,
+            seen=2,
+            class_counts=_mod.Counter({OC.ORPHAN_REAL.value: 2}),
+            prefix_taxonomy=_mod.Counter({"service-data": 2}),
+            sizing=_mod.SizingRollup.empty(),
+            actionable=[obj1, obj2],
+        )
+
+        class_counts, _prefix_taxonomy, _sizing, actionable = _mod.run_sweep("cefi", workers=2)
+
+        # n1 + n2 came from the checkpoint, n3 + n4 are newly swept — n2 must NOT be
+        # double-counted despite GCS start_offset being inclusive of it.
+        assert class_counts[OC.ORPHAN_REAL.value] == 4
+        assert sorted(o.uri for o in actionable) == sorted(f"gs://bkt/{n}" for n in (n1, n2, n3, n4))
+        # a genuinely clean full-walk completion deletes the checkpoint.
+        assert not client.blob_exists("bkt", _mod._checkpoint_state_path("cefi"))
+        assert not client.blob_exists("bkt", _mod._checkpoint_actionable_path("cefi"))
+
+    def test_limit_triggered_stop_preserves_checkpoint_for_a_future_resume(self, monkeypatch) -> None:
+        n1, n2, n3 = (_orphan_path(f"2024-08-0{i}", c) for i, c in enumerate("abc", start=1))
+        client = _FakeStorageClient([n1, n2, n3])
+        self._patch_sweep_deps(monkeypatch, client)
+        monkeypatch.setattr(_mod, "_SWEEP_BATCH_SIZE", 1)
+        monkeypatch.setattr(_mod, "_CHECKPOINT_BATCH_INTERVAL", 1)
+
+        _mod.run_sweep("cefi", workers=2, limit=1)
+
+        # a --limit-triggered stop is NOT a clean completion — the checkpoint written at
+        # the batch boundary must survive for a later resume, not be deleted.
+        assert client.blob_exists("bkt", _mod._checkpoint_state_path("cefi"))
