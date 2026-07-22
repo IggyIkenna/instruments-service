@@ -821,6 +821,12 @@ class TestWriteVenueCanonicalPartition:
     matches the canonical manifest venue and deployment-ui pool-breakdown can
     resolve the parquet. SSOT:
     plans/active/issues/defi_coverage_capability_alignment_2026_05_22.md Bug 5.
+
+    ``_write_venue`` builds its own per-shard hive sink internally
+    (``_instrument_availability_sink_for``, operator R2 2026-07-21) rather than using
+    the ``sink`` argument directly, so ``get_data_sink`` is patched — mirrors the
+    established pattern in ``test_orchestrator_process.py::TestWriteVenue`` and
+    ``test_orchestrator_futures_contracts.py``.
     """
 
     def _run(self, venue_in: str) -> dict[str, object]:
@@ -843,6 +849,7 @@ class TestWriteVenueCanonicalPartition:
                 "instruments_service.engine.orchestrator.stamp_available_at_explicit",
                 side_effect=lambda d, when: d,
             ),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=MagicMock()),
         ):
             _write_venue(venue_in, df, "2026-05-03", "bkt", MagicMock(), {}, sampler, manifest=None)
         return captured
