@@ -481,7 +481,10 @@ def test_write_venue_no_venue_column_uses_all():
     mock_sampler.enable_sampling = False
     counts: dict[str, int] = {}
 
-    with patch("instruments_service.engine.orchestrator._write_catalogue_record"):
+    with (
+        patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+        patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+    ):
         _write_venue("all", df, "2026-03-22", "test-bucket", mock_sink, counts, mock_sampler)
 
     assert counts.get("all") == 1
