@@ -2810,10 +2810,11 @@ class TestEtherFiAdapter:
 
         adapter = EtherFiReferenceDataAdapter()
         results = await adapter.get_instruments()
-        # 1 LST + 1 SPOT_ASSET sibling (weETH itself — P4-B) = 2.
+        # 1 RESTAKING + 1 SPOT_ASSET sibling (weETH itself — P4-B) = 2.
         assert len(results) == 2
-        # 2026-07-08: field fixed to match the `:LST:` key segment.
-        assert results[0].instrument_type == InstrumentType.LST
+        # Operator decision 2026-07-20/22 (distinct_values_noncanonical_audit_2026_07_20.md):
+        # weETH is a liquid RESTAKING token, not a plain LST — see etherfi.py docstring.
+        assert results[0].instrument_type == InstrumentType.RESTAKING
         assert results[0].base_asset == "ETH"
         assert "WEETH" in results[0].instrument_key
         spot_asset = next(r for r in results if r.instrument_type == InstrumentType.SPOT_ASSET)
@@ -2829,6 +2830,16 @@ class TestEtherFiAdapter:
 
         adapter = EtherFiReferenceDataAdapter()
         results = await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_restaking_type(self) -> None:
+        """RESTAKING is weETH's real canonical type (2026-07-20/22 reclassification) —
+        a caller filtering on it must not be rejected."""
+        from instruments_service.reference_data.adapters.defi.etherfi import EtherFiReferenceDataAdapter
+
+        adapter = EtherFiReferenceDataAdapter()
+        results = await adapter.get_instruments(instrument_type=InstrumentType.RESTAKING)
         assert len(results) == 2
 
     @pytest.mark.asyncio

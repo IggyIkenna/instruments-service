@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 from unified_api_contracts import PipelineMode
@@ -497,9 +497,14 @@ class TestWriteMarketLifecycle:
       - path shape: ``market_lifecycle/by_canonical_group/group={g}/day={d}/market_lifecycle.parquet``
       - columns consumed: ``market_id``, ``market_created_at``, ``settlement_time``
 
-    IS writer ``_write_market_lifecycle`` uses:
-      - sink prefix: ``market_lifecycle/by_canonical_group`` (via ``lifecycle_sink``)
-      - partition: ``{"group": canonical_group_str, "day": date}``
+    IS writer ``_write_market_lifecycle`` uses (full-hive, operator R2 2026-07-21 —
+    see ``_market_lifecycle_sink_for``):
+      - sink prefix (built internally from ``bucket``, NOT the ``sink``/``lifecycle_sink``
+        args): ``market_lifecycle/by_canonical_group/day={d}/pipeline_mode={pm}/
+        asset_group=prediction/venue={V}``
+      - partition: ``{"group": canonical_group_str}`` (the ONLY remaining key — day/
+        pipeline_mode/asset_group/venue moved into the prefix to dodge the UTL sink's
+        alphabetical partition-dict sort, protocol_impls.py:26)
       - filename: ``market_lifecycle.parquet``
       - output columns: ``market_id``, ``canonical_question_group``, ``market_created_at``,
                           ``resolution_time``, ``settlement_time``, ``status``, ``available_at``
@@ -511,6 +516,7 @@ class TestWriteMarketLifecycle:
     _GROUP = CanonicalQuestionGroup.BTC_UP_DOWN_DAILY.value
     _DATE = "2026-03-26"
     _VENUE = "POLYMARKET"
+    _BUCKET = "instruments-store-prediction-test"
 
     def _run_write(
         self,
@@ -521,27 +527,31 @@ class TestWriteMarketLifecycle:
         sink = _FakeSink()
         manifest = MagicMock()
         group_df = _make_group_df(market_ids, from_dts, to_dts)
-        _write_market_lifecycle(
-            sink=sink,  # type: ignore[arg-type]
-            group_df=group_df,
-            canonical_group_str=self._GROUP,
-            date=self._DATE,
-            manifest_venue=self._VENUE,
-            manifest=manifest,
-            pipeline_mode=PipelineMode.BATCH_POLYMARKET_GAMMA_API,
-        )
+        with patch("instruments_service.engine.orchestrator.get_data_sink", return_value=sink) as mock_get_data_sink:
+            _write_market_lifecycle(
+                sink=sink,  # type: ignore[arg-type]
+                group_df=group_df,
+                canonical_group_str=self._GROUP,
+                date=self._DATE,
+                manifest_venue=self._VENUE,
+                manifest=manifest,
+                pipeline_mode=PipelineMode.BATCH_POLYMARKET_GAMMA_API,
+                bucket=self._BUCKET,
+            )
+        sink._get_data_sink_calls = mock_get_data_sink.call_args_list  # type: ignore[attr-defined]
         return sink, manifest
 
     def test_gcs_path_matches_mtds_reader_expectation(self) -> None:
-        """Partition key + filename together construct the path
-        ``market_lifecycle/by_canonical_group/day={d}/group={g}/venue={V}/market_lifecycle.parquet``
-        (alphabetical key ordering) that ``_load_market_lifecycle_for_date`` searches for.
+        """The full-hive prefix (built via ``get_data_sink``) + partition + filename
+        together construct
+        ``market_lifecycle/by_canonical_group/day={d}/pipeline_mode={pm}/
+        asset_group=prediction/venue={V}/group={g}/market_lifecycle.parquet`` — the
+        shape ``_load_market_lifecycle_for_date`` searches for (day-scoped prefix +
+        ``market_lifecycle.parquet`` suffix match, tolerant of intervening segments).
 
         The venue level (2026-07-14, Root Cause #5) prevents the second venue's write for
         the same (day, group) from clobbering the first — POLYMARKET wiped KALSHI's
-        1,365 lifecycle rows on day=2026-07-09 before this. The MTDS reader
-        suffix-matches market_lifecycle.parquet under a day-scoped prefix, so the
-        extra level stays compatible.
+        1,365 lifecycle rows on day=2026-07-09 before this.
         """
         created = datetime(2026, 3, 25, 9, 0, 0, tzinfo=UTC)
         settlement = datetime(2026, 3, 26, 13, 0, 0, tzinfo=UTC)
@@ -549,9 +559,19 @@ class TestWriteMarketLifecycle:
 
         assert len(sink.writes) == 1
         write = sink.writes[0]
-        # Partition produces path segments group={g}/day={d}
-        assert write["partition"] == {"group": self._GROUP, "day": self._DATE, "venue": self._VENUE}
+        # day/pipeline_mode/asset_group/venue now live in the hive sink PREFIX —
+        # only the bundle's `group` key remains in the partition dict.
+        assert write["partition"] == {"group": self._GROUP}
         assert write["filename"] == "market_lifecycle.parquet"
+
+        get_data_sink_calls = sink._get_data_sink_calls  # type: ignore[attr-defined]
+        assert len(get_data_sink_calls) == 1
+        sink_call_kwargs = get_data_sink_calls[0].kwargs
+        assert sink_call_kwargs["bucket"] == self._BUCKET
+        assert sink_call_kwargs["prefix"] == (
+            "market_lifecycle/by_canonical_group/day=2026-03-26/pipeline_mode=batch_polymarket_gamma_api/"
+            f"asset_group=prediction/venue={self._VENUE}"
+        )
 
     def test_output_columns_superset_of_mtds_reader_required_cols(self) -> None:
         """MTDS reader reads ``market_id``, ``market_created_at``, ``settlement_time``.

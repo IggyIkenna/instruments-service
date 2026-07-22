@@ -244,6 +244,13 @@ class TestProcessInstruments:
 
 
 class TestWriteVenue:
+    """``_write_venue`` builds its OWN per-shard hive sink internally (full-hive
+    instrument_availability, operator R2 2026-07-21 —
+    ``_instrument_availability_sink_for``) rather than using the ``sink`` argument
+    directly, so every test patches ``get_data_sink`` to return the same mock the
+    caller passed in — mirrors the established pattern for the sports-lane
+    ``_sports_ref_sink_for`` sink-builder tests elsewhere in this suite."""
+
     def test_write_success(self) -> None:
         import pandas as pd
 
@@ -253,7 +260,10 @@ class TestWriteVenue:
         mock_sampler.enable_sampling = False
         counts: dict[str, int] = {}
 
-        with patch("instruments_service.engine.orchestrator._write_catalogue_record"):
+        with (
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+        ):
             _write_venue("BINANCE-SPOT", df, "2026-03-22", "test-bucket", mock_sink, counts, mock_sampler)
 
         assert counts["BINANCE-SPOT"] == 1
@@ -269,7 +279,10 @@ class TestWriteVenue:
         mock_sampler.enable_sampling = False
         counts: dict[str, int] = {}
 
-        with patch("instruments_service.engine.orchestrator.log_event"):
+        with (
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+        ):
             _write_venue("BINANCE-SPOT", df, "2026-03-22", "test-bucket", mock_sink, counts, mock_sampler)
 
         assert "BINANCE-SPOT" not in counts  # not written due to error
@@ -283,7 +296,10 @@ class TestWriteVenue:
         mock_sampler.enable_sampling = True
         counts: dict[str, int] = {}
 
-        with patch("instruments_service.engine.orchestrator._write_catalogue_record"):
+        with (
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+        ):
             _write_venue("BINANCE-SPOT", df, "2026-03-22", "test-bucket", mock_sink, counts, mock_sampler)
 
         mock_sampler.generate_csv_sample.assert_called_once()
@@ -309,16 +325,17 @@ class TestWriteVenue:
         mock_manifest = MagicMock()
         counts: dict[str, int] = {}
 
-        _write_venue(
-            "BINANCE-SPOT",
-            df,
-            "2026-07-06",
-            "test-bucket",
-            mock_sink,
-            counts,
-            mock_sampler,
-            manifest=mock_manifest,
-        )
+        with patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink):
+            _write_venue(
+                "BINANCE-SPOT",
+                df,
+                "2026-07-06",
+                "test-bucket",
+                mock_sink,
+                counts,
+                mock_sampler,
+                manifest=mock_manifest,
+            )
 
         mock_manifest.record_captured.assert_called_once()
         call_kwargs = mock_manifest.record_captured.call_args.kwargs
@@ -342,16 +359,17 @@ class TestWriteVenue:
         mock_manifest = MagicMock()
         counts: dict[str, int] = {}
 
-        _write_venue(
-            "AAVE_V3-ETHEREUM",
-            df,
-            "2026-07-06",
-            "test-bucket",
-            mock_sink,
-            counts,
-            mock_sampler,
-            manifest=mock_manifest,
-        )
+        with patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink):
+            _write_venue(
+                "AAVE_V3-ETHEREUM",
+                df,
+                "2026-07-06",
+                "test-bucket",
+                mock_sink,
+                counts,
+                mock_sampler,
+                manifest=mock_manifest,
+            )
 
         mock_manifest.record_captured.assert_called_once()
         call_kwargs = mock_manifest.record_captured.call_args.kwargs

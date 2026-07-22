@@ -653,6 +653,7 @@ class TestWriteMarketLifecycle:
                 side_effect=lambda df, **kw: df,
             ),
             patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
         ):
             _write_market_lifecycle(
                 sink=mock_sink,
@@ -662,6 +663,7 @@ class TestWriteMarketLifecycle:
                 manifest_venue="POLYMARKET",
                 manifest=mock_manifest,
                 pipeline_mode=MagicMock(),
+                bucket="test-bucket",
             )
 
         mock_manifest.record_captured_from_counts.assert_called_once()
@@ -680,6 +682,7 @@ class TestWriteMarketLifecycle:
             manifest_venue="POLYMARKET",
             manifest=mock_manifest,
             pipeline_mode=MagicMock(),
+            bucket="test-bucket",
         )
 
         mock_manifest.record_captured_from_counts.assert_not_called()
@@ -705,6 +708,7 @@ class TestWriteMarketLifecycle:
                 manifest_venue="POLYMARKET",
                 manifest=mock_manifest,
                 pipeline_mode=MagicMock(),
+                bucket="test-bucket",
             )
 
     def test_settled_rows_get_settled_status(self) -> None:
