@@ -176,17 +176,24 @@ _SOLANA_DEFI_VENUES: list[str] = [
     "SOLBLAZE-SOLANA",
     "JITORESTAKING-SOLANA",
     "SOLANA-NATIVE-SOLANA",
-    # Solana DEX pools + oracle (2026-07-20 DeFi catalogue canonicalization —
-    # meteora.py / lifinity.py / phoenix.py / pyth.py adapters existed with
-    # working fetch logic but were never wired into factory._ADAPTERS nor
-    # requested here, exactly like the 2026-07-18 LST/restaking finding above.
-    # UAC flips these to phase="live" in lockstep (denominator drift guard).
-    # CHAINLINK-* stays phase="pipeline" in UAC — no chainlink.py adapter
-    # exists yet, so it is deliberately NOT listed here (2026-07-20
-    # gate-failure remediation, BLK-0c7b82fe).
-    "METEORA-SOLANA",
-    "LIFINITY-SOLANA",
-    "PHOENIX-SOLANA",
+    # Solana oracle (2026-07-20 DeFi catalogue canonicalization — pyth.py
+    # adapter, Hermes upstream measured healthy). UAC keeps this phase="live"
+    # (denominator drift guard).
+    #
+    # METEORA-SOLANA / LIFINITY-SOLANA / PHOENIX-SOLANA deliberately NOT listed
+    # here (narrowed back out 2026-07-22): meteora.py/lifinity.py/phoenix.py
+    # adapters are wired + registered in factory._ADAPTERS, but all 3
+    # upstreams are measurably dead (app.meteora.ag/api/pools -> 404,
+    # api.lifinity.io/pools -> no response/522, api.phoenix.trade -> NXDOMAIN;
+    # re-verified 2026-07-22, same result as the original 2026-07-20 finding),
+    # so requesting them here would enumerate 0-instrument venues and pollute
+    # honest-coverage as expected-but-always-empty. UAC's DEFI_VENUE_PHASE for
+    # these 3 is "pipeline" in lockstep (denominator drift guard) — re-add
+    # here in the SAME commit an upstream migration/replacement makes the
+    # adapter produce >=1 real instrument again. SSOT: unified-trading-pm/
+    # plans/active/issues/uac_is_defi_oracle_dex_adapter_drift_2026_07_20.md.
+    # CHAINLINK-* stays phase="live" via a separate per-chain adapter (not
+    # Solana-listed here).
     "PYTH-SOLANA",
 ]
 # NOTE: LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp CLOBs classified
