@@ -62,11 +62,21 @@ def _make_mock_sink() -> MagicMock:
 @pytest.mark.unit
 @patch("instruments_service.engine.orchestrator.log_event")
 @patch("instruments_service.engine.orchestrator._WRITE_GATE")
-def test_write_futures_contracts_basic(mock_gate: MagicMock, mock_log_event: MagicMock) -> None:
-    """Basic: one ESH26 future → _gated_sink_write called with futures_contracts.parquet."""
+@patch("instruments_service.engine.orchestrator.get_data_sink")
+def test_write_futures_contracts_basic(
+    mock_get_data_sink: MagicMock, mock_gate: MagicMock, mock_log_event: MagicMock
+) -> None:
+    """Basic: one ESH26 future → _gated_sink_write called with futures_contracts.parquet.
+
+    ``_write_futures_contracts`` builds its own per-shard hive sink internally
+    (full-hive instrument_availability, operator R2 2026-07-21 —
+    ``_instrument_availability_sink_for``) rather than using the ``sink`` argument
+    directly, so ``get_data_sink`` is patched to return the same mock.
+    """
     expiry_dt = datetime(2026, 3, 20, 8, 30, 0, tzinfo=UTC)
     records = [_make_future("ESH26", expiry=expiry_dt)]
     sink = _make_mock_sink()
+    mock_get_data_sink.return_value = sink
 
     _write_futures_contracts(
         venue_str="CME",
@@ -80,9 +90,18 @@ def test_write_futures_contracts_basic(mock_gate: MagicMock, mock_log_event: Mag
     mock_gate.validate_and_write.assert_called_once()
     call_kwargs = mock_gate.validate_and_write.call_args.kwargs
     assert call_kwargs["filename"] == "futures_contracts.parquet"
-    assert call_kwargs["partition"]["venue"] == "CME"
-    assert call_kwargs["partition"]["day"] == "2026-03-01"
+    # day/pipeline_mode/asset_group/venue now live in the hive sink PREFIX
+    # (operator R2, 2026-07-21), never the partition dict (alphabetical-sort
+    # trap) — partition carries no keys for this writer.
+    assert call_kwargs["partition"] == {}
     assert call_kwargs["entity"] == "futures_contracts"
+    mock_get_data_sink.assert_called_once()
+    sink_call_kwargs = mock_get_data_sink.call_args.kwargs
+    assert sink_call_kwargs["bucket"] == "mock-instruments-bucket"
+    assert sink_call_kwargs["prefix"] == (
+        "instrument_availability/by_date/day=2026-03-01/pipeline_mode=batch_instruments_service/"
+        "asset_group=tradfi/venue=CME"
+    )
 
     # No error events
     mock_log_event.assert_not_called()
@@ -91,11 +110,15 @@ def test_write_futures_contracts_basic(mock_gate: MagicMock, mock_log_event: Mag
 @pytest.mark.unit
 @patch("instruments_service.engine.orchestrator.log_event")
 @patch("instruments_service.engine.orchestrator._WRITE_GATE")
-def test_write_futures_contracts_df_contains_required_fields(mock_gate: MagicMock, mock_log_event: MagicMock) -> None:
+@patch("instruments_service.engine.orchestrator.get_data_sink")
+def test_write_futures_contracts_df_contains_required_fields(
+    mock_get_data_sink: MagicMock, mock_gate: MagicMock, mock_log_event: MagicMock
+) -> None:
     """DataFrame passed to sink contains all 5 lifecycle date fields + lifecycle_phase."""
     expiry_dt = datetime(2026, 6, 19, 8, 30, 0, tzinfo=UTC)
     records = [_make_future("ESM26", expiry=expiry_dt)]
     sink = _make_mock_sink()
+    mock_get_data_sink.return_value = sink
 
     _write_futures_contracts(
         venue_str="CME",
@@ -160,11 +183,15 @@ def test_write_futures_contracts_no_expiry_records_skips_write(mock_gate: MagicM
 @pytest.mark.unit
 @patch("instruments_service.engine.orchestrator.log_event")
 @patch("instruments_service.engine.orchestrator._WRITE_GATE")
-def test_write_futures_contracts_write_failure_is_isolated(mock_gate: MagicMock, mock_log_event: MagicMock) -> None:
+@patch("instruments_service.engine.orchestrator.get_data_sink")
+def test_write_futures_contracts_write_failure_is_isolated(
+    mock_get_data_sink: MagicMock, mock_gate: MagicMock, mock_log_event: MagicMock
+) -> None:
     """If _WRITE_GATE.validate_and_write raises, error is logged but not propagated."""
     expiry_dt = datetime(2026, 6, 19, 0, 0, 0, tzinfo=UTC)
     records = [_make_future("ESM26", expiry=expiry_dt)]
     sink = _make_mock_sink()
+    mock_get_data_sink.return_value = sink
 
     mock_gate.validate_and_write.side_effect = OSError("GCS write failed")
 
@@ -187,7 +214,10 @@ def test_write_futures_contracts_write_failure_is_isolated(mock_gate: MagicMock,
 @pytest.mark.unit
 @patch("instruments_service.engine.orchestrator.log_event")
 @patch("instruments_service.engine.orchestrator._WRITE_GATE")
-def test_write_futures_contracts_multiple_records(mock_gate: MagicMock, mock_log_event: MagicMock) -> None:
+@patch("instruments_service.engine.orchestrator.get_data_sink")
+def test_write_futures_contracts_multiple_records(
+    mock_get_data_sink: MagicMock, mock_gate: MagicMock, mock_log_event: MagicMock
+) -> None:
     """Three futures → DataFrame has three rows."""
     records = [
         _make_future("ESH26", expiry=datetime(2026, 3, 20, 0, 0, 0, tzinfo=UTC)),
@@ -195,6 +225,7 @@ def test_write_futures_contracts_multiple_records(mock_gate: MagicMock, mock_log
         _make_future("ESU26", expiry=datetime(2026, 9, 18, 0, 0, 0, tzinfo=UTC)),
     ]
     sink = _make_mock_sink()
+    mock_get_data_sink.return_value = sink
 
     _write_futures_contracts(
         venue_str="CME",
@@ -211,11 +242,15 @@ def test_write_futures_contracts_multiple_records(mock_gate: MagicMock, mock_log
 @pytest.mark.unit
 @patch("instruments_service.engine.orchestrator.log_event")
 @patch("instruments_service.engine.orchestrator._WRITE_GATE")
-def test_write_futures_contracts_physical_delivery_cl(mock_gate: MagicMock, mock_log_event: MagicMock) -> None:
+@patch("instruments_service.engine.orchestrator.get_data_sink")
+def test_write_futures_contracts_physical_delivery_cl(
+    mock_get_data_sink: MagicMock, mock_gate: MagicMock, mock_log_event: MagicMock
+) -> None:
     """CL physical delivery: first_notice_date != expiry_date in output."""
     expiry_dt = datetime(2026, 5, 20, 0, 0, 0, tzinfo=UTC)
     records = [_make_future("CLM26", expiry=expiry_dt)]
     sink = _make_mock_sink()
+    mock_get_data_sink.return_value = sink
 
     _write_futures_contracts(
         venue_str="CME",

@@ -821,6 +821,12 @@ class TestWriteVenueCanonicalPartition:
     matches the canonical manifest venue and deployment-ui pool-breakdown can
     resolve the parquet. SSOT:
     plans/active/issues/defi_coverage_capability_alignment_2026_05_22.md Bug 5.
+
+    ``_write_venue`` builds its own per-shard hive sink internally
+    (``_instrument_availability_sink_for``, operator R2 2026-07-21) rather than using
+    the ``sink`` argument directly, so ``get_data_sink`` is patched — mirrors the
+    established pattern in ``test_orchestrator_process.py::TestWriteVenue`` and
+    ``test_orchestrator_futures_contracts.py``.
     """
 
     def _run(self, venue_in: str) -> dict[str, object]:
@@ -838,6 +844,7 @@ class TestWriteVenueCanonicalPartition:
         with (
             patch("instruments_service.engine.orchestrator._gated_sink_write", side_effect=_capture),
             patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=MagicMock()),
             patch(
                 "instruments_service.engine.orchestrator.stamp_available_at_explicit",
                 side_effect=lambda d, when: d,
@@ -847,22 +854,26 @@ class TestWriteVenueCanonicalPartition:
         return captured
 
     def test_glued_defi_venue_partition_canonicalized(self) -> None:
+        # partition is now {} — day/pipeline_mode/asset_group/venue live in the
+        # hive sink PREFIX (operator R2, 2026-07-21), never the partition dict
+        # (alphabetical-sort trap); the canonicalized venue is asserted via the
+        # explicit `venue=` kwarg instead.
         captured = self._run("AAVEV3-ARBITRUM")
-        assert captured["partition"]["venue"] == "AAVE_V3-ARBITRUM"  # type: ignore[index]
+        assert captured["partition"] == {}
         assert captured["venue"] == "AAVE_V3-ARBITRUM"
 
     def test_already_canonical_defi_venue_unchanged(self) -> None:
         captured = self._run("AAVE_V3-ARBITRUM")
-        assert captured["partition"]["venue"] == "AAVE_V3-ARBITRUM"  # type: ignore[index]
+        assert captured["venue"] == "AAVE_V3-ARBITRUM"
 
     def test_glued_uniswap_v3_canonicalized(self) -> None:
         captured = self._run("UNISWAPV3-ETHEREUM")
-        assert captured["partition"]["venue"] == "UNISWAP_V3-ETHEREUM"  # type: ignore[index]
+        assert captured["venue"] == "UNISWAP_V3-ETHEREUM"
 
     def test_non_defi_venue_passes_through(self) -> None:
         # CeFi venue (no DeFi chain) must NOT be rewritten.
         captured = self._run("BINANCE")
-        assert captured["partition"]["venue"] == "BINANCE"  # type: ignore[index]
+        assert captured["venue"] == "BINANCE"
 
 
 # ---------------------------------------------------------------------------

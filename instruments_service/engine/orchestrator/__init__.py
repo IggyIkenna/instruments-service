@@ -660,6 +660,9 @@ from instruments_service.engine.orchestrator.writers import (
     _canonical_manifest_venue_chain as _canonical_manifest_venue_chain,
 )
 from instruments_service.engine.orchestrator.writers import (
+    _instrument_availability_sink_for as _instrument_availability_sink_for,
+)
+from instruments_service.engine.orchestrator.writers import (
     _split_by_instrument_type as _split_by_instrument_type,
 )
 from instruments_service.engine.orchestrator.writers import (
@@ -769,6 +772,7 @@ __all__ = [
     "_get_manifest_high_watermarks",
     "_get_or_fetch_defi_universe",
     "_get_venue_epoch",
+    "_instrument_availability_sink_for",
     "_is_in_canonical_write_universe",
     "_lifecycle_columns_from_af_response",
     "_list_present_parquet_leagues",

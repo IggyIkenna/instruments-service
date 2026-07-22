@@ -30,6 +30,8 @@ else:  # pragma: no cover - runtime namespace indirection
 __all__ = [
     "_build_market_lifecycle_df",
     "_canonical_manifest_venue_chain",
+    "_instrument_availability_sink_for",
+    "_market_lifecycle_sink_for",
     "_write_futures_contracts",
     "_write_market_lifecycle",
     "_write_venue",
@@ -150,27 +152,73 @@ def _split_by_instrument_type(df: _orch.pd.DataFrame) -> list[tuple[str, _orch.p
     return [(str(_itype), _sub_df) for _itype, _sub_df in df.groupby(col)]
 
 
-def _write_venue(
-    venue_str: str,
-    df: _orch.pd.DataFrame,
-    date: str,
+def _instrument_availability_sink_for(
     bucket: str,
-    sink: _orch.DataSink,
-    counts: dict[str, int],
-    sampler: _orch.SamplingService,
-    manifest: _orch.ManifestWriter | None = None,
-) -> None:
-    """Write one venue's DataFrame to storage, catalogue, and CSV sample.
+    *,
+    date: str,
+    pipeline_mode: str,
+    asset_group: str,
+    venue: str,
+) -> _orch.DataSink:
+    """Per-shard DataSink for instrument_availability + futures_contracts writes.
 
-    Retries transient GCS/network errors up to 3 times with exponential backoff
-    (1s, 2s) to avoid wasting the expensive fetch work that produced this data.
-
-    If ``manifest`` is provided, adds the catalogue record to the shared writer
-    (caller flushes once after all venues). Otherwise uses the per-venue
-    ``_write_catalogue_record`` path.
+    Full canonical hive (operator HARD RULE R2, 2026-07-21): ``day`` / ``pipeline_mode``
+    / ``asset_group`` / ``venue`` are baked into the PREFIX, in that order, NEVER into the
+    ``write()`` partition dict — the UTL sink sorts partition-dict keys ALPHABETICALLY
+    (``protocol_impls.py:26``, ``for k, v in sorted(partition.items())``), which would
+    silently reorder the hive to ``asset_group=.../day=.../pipeline_mode=.../venue=...``
+    (``day`` not first) if these four keys were passed through ``partition`` instead —
+    this exact trap already bit market_lifecycle once. Mirrors the sports-lane pattern
+    (``sports_fixtures._sports_ref_sink_for``). SSOT:
+    ``plans/active/issues/instrument_availability_hive_canonicalisation_2026_07_21.md``.
     """
-    import time as _time
+    return _orch.get_data_sink(
+        bucket=bucket,
+        prefix=(
+            f"instrument_availability/by_date/day={date}/pipeline_mode={pipeline_mode}/"
+            f"asset_group={asset_group}/venue={venue}"
+        ),
+    )
 
+
+def _market_lifecycle_sink_for(
+    bucket: str,
+    *,
+    date: str,
+    pipeline_mode: str,
+    venue: str,
+) -> _orch.DataSink:
+    """Per-shard DataSink for market_lifecycle writes — full canonical hive.
+
+    ``asset_group`` is always ``"prediction"`` (only POLYMARKET/KALSHI call this writer).
+    Same alphabetical-sort trap as ``_instrument_availability_sink_for`` above — see that
+    docstring. The root segment name (``by_canonical_group``, not ``by_date``) is an
+    intentional, separately-established bundling convention and is NOT renamed by this
+    fix; only the missing ``pipeline_mode=``/``asset_group=`` keys are inserted, in
+    canonical order, ahead of the caller's remaining ``group=`` partition key.
+    """
+    return _orch.get_data_sink(
+        bucket=bucket,
+        prefix=(
+            f"market_lifecycle/by_canonical_group/day={date}/pipeline_mode={pipeline_mode}/"
+            f"asset_group=prediction/venue={venue}"
+        ),
+    )
+
+
+def _classify_venue_write(venue_str: str) -> tuple[str, str, str, str, str, _orch.PipelineMode, bool]:
+    """Canonicalize + classify a venue for ``_write_venue``.
+
+    Split out of ``_write_venue`` (2026-07-22, function-size gate) — pure
+    classification logic with no I/O, computed once BEFORE the write so the
+    full-hive sink prefix and the manifest row_key use the SAME
+    asset_group/pipeline_mode/venue-split.
+
+    Returns ``(venue_str, manifest_data_type, manifest_venue, manifest_chain,
+    asset_group, pipeline_mode, is_sports_ref)`` — ``venue_str`` is returned
+    because DeFi canonicalization may rewrite it (AAVEV3-ARBITRUM ->
+    AAVE_V3-ARBITRUM).
+    """
     # Canonicalize the combined DeFi venue partition BEFORE any write so the parquet
     # path (venue=...) matches the canonical manifest venue. Previously the parquet was
     # written under the raw glued caller form (e.g. AAVEV3-ARBITRUM) while the manifest
@@ -194,64 +242,118 @@ def _write_venue(
         if _canonical_venue != venue_str:
             venue_str = _canonical_venue
 
+    # v4: Sports reference entities write data_type (not venue).
+    #     API_FOOTBALL → data_type=FIXTURES, venue=""
+    #     API_FOOTBALL_INJURIES → data_type=INJURIES, venue=""
+    #     Other asset groups keep venue as-is.
+    _sports_prefixes = ("API_FOOTBALL", "TRANSFERMARKT", "FOOTYSTATS", "SFI", "UNDERSTAT", "WEATHER")
+    is_sports_ref = venue_str.startswith(_sports_prefixes)
+    if is_sports_ref:
+        # Extract data_type: API_FOOTBALL_INJURIES → INJURIES, API_FOOTBALL → FIXTURES
+        if venue_str == "API_FOOTBALL":
+            manifest_data_type = "FIXTURES"
+        elif "_" in venue_str:
+            # Strip the provider prefix: API_FOOTBALL_INJURIES → INJURIES
+            for pfx in _sports_prefixes:
+                if venue_str.startswith(pfx + "_"):
+                    manifest_data_type = venue_str[len(pfx) + 1 :]
+                    break
+            else:
+                manifest_data_type = venue_str
+        else:
+            manifest_data_type = venue_str
+        manifest_venue = ""
+        manifest_chain = ""
+        _cat = "sports"
+        try:
+            _venue_pm = _orch._pipeline_mode_for_sports_data_type(manifest_data_type)
+        except KeyError:
+            _venue_pm = _orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE
+    else:
+        manifest_data_type = ""
+        # DeFi: split AAVE_V3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM per the
+        # canonical v5 shard-key matrix (DeFi axis is `chain`, not packed
+        # into venue). The path-based legacy writer at the bottom of this
+        # module already does this; the batched manifest writer used here
+        # was missing the split, so DeFi rows from the orchestrator landed
+        # as `venue=AAVE_V3-ETHEREUM, chain=''` and were filtered out by the
+        # coverage-summary's legacy-row drop, hiding recent DeFi captures.
+        # Shared canonical split (DeFi PROTOCOL-CHAIN → venue=PROTOCOL +
+        # chain=CHAIN) — the SAME helper the EU seeder uses, so a seed and a
+        # later capture key-match exactly. No-op for cefi/tradfi.
+        manifest_venue, manifest_chain = _canonical_manifest_venue_chain(venue_str)
+        _cat = "defi" if manifest_chain else (VENUE_TO_ASSET_GROUP.get(venue_str, "cefi"))
+        # NOTE: instrument-definition rows are PRODUCER-emitted
+        # (pipeline_mode=BATCH_INSTRUMENTS_SERVICE). Per the C-#6
+        # source⇔pipeline_mode contract (2026-06-07) a BATCH row's
+        # explicit source must equal source_string_for(pipeline_mode),
+        # so we do NOT stamp the vendor (massive/databento) here — the
+        # source auto-resolves (blank/instruments_service). Which vendor
+        # served the snapshot is the adapter's routing concern, not a
+        # per-row manifest tag for producer rows.
+        _venue_pm = _orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE
+
+    return venue_str, manifest_data_type, manifest_venue, manifest_chain, _cat, _venue_pm, is_sports_ref
+
+
+def _write_venue(
+    venue_str: str,
+    df: _orch.pd.DataFrame,
+    date: str,
+    bucket: str,
+    sink: _orch.DataSink,
+    counts: dict[str, int],
+    sampler: _orch.SamplingService,
+    manifest: _orch.ManifestWriter | None = None,
+) -> None:
+    """Write one venue's DataFrame to storage, catalogue, and CSV sample.
+
+    Retries transient GCS/network errors up to 3 times with exponential backoff
+    (1s, 2s) to avoid wasting the expensive fetch work that produced this data.
+
+    If ``manifest`` is provided, adds the catalogue record to the shared writer
+    (caller flushes once after all venues). Otherwise uses the per-venue
+    ``_write_catalogue_record`` path.
+
+    ``sink`` is accepted for call-site compatibility with the shared per-bucket
+    sink threaded through ``_WriteOutcome``/retry paths but is NOT the write
+    target — the full-hive prefix (operator R2, 2026-07-21) needs a fresh
+    per-shard ``DataSink`` built by ``_instrument_availability_sink_for`` below,
+    since ``day``/``pipeline_mode``/``asset_group``/``venue`` differ per call and
+    cannot go through the ``write()`` partition dict (alphabetical-sort trap —
+    see that helper's docstring).
+    """
+    import time as _time
+
+    venue_str, manifest_data_type, manifest_venue, manifest_chain, _cat, _venue_pm, is_sports_ref = (
+        _classify_venue_write(venue_str)
+    )
+
+    _hive_sink = _instrument_availability_sink_for(
+        bucket,
+        date=date,
+        pipeline_mode=str(_venue_pm),
+        asset_group=_cat,
+        venue=venue_str,
+    )
+
     max_attempts = 3
     # Stamp available_at before any write so the parquet carries the column.
     _stamped_df = _orch.stamp_available_at_explicit(df, when=_orch.datetime.now(_orch.UTC))
     for attempt in range(max_attempts):
         try:
             _orch._gated_sink_write(
-                sink,
+                _hive_sink,
                 data=_stamped_df,
-                partition={"day": date, "venue": venue_str},
+                partition={},
                 filename="instruments.parquet",
                 venue=venue_str,
                 entity="instruments",
             )
-            # Add to batched manifest writer (flushed by caller) or legacy per-venue write
-            # v4: Sports reference entities write data_type (not venue).
-            #     API_FOOTBALL → data_type=FIXTURES, venue=""
-            #     API_FOOTBALL_INJURIES → data_type=INJURIES, venue=""
-            #     Other asset groups keep venue as-is.
-            _sports_prefixes = ("API_FOOTBALL", "TRANSFERMARKT", "FOOTYSTATS", "SFI", "UNDERSTAT", "WEATHER")
-            is_sports_ref = venue_str.startswith(_sports_prefixes)
-            if is_sports_ref:
-                # Extract data_type: API_FOOTBALL_INJURIES → INJURIES, API_FOOTBALL → FIXTURES
-                if venue_str == "API_FOOTBALL":
-                    manifest_data_type = "FIXTURES"
-                elif "_" in venue_str:
-                    # Strip the provider prefix: API_FOOTBALL_INJURIES → INJURIES
-                    for pfx in _sports_prefixes:
-                        if venue_str.startswith(pfx + "_"):
-                            manifest_data_type = venue_str[len(pfx) + 1 :]
-                            break
-                    else:
-                        manifest_data_type = venue_str
-                else:
-                    manifest_data_type = venue_str
-                manifest_venue = ""
-            else:
-                manifest_venue = venue_str
-                manifest_data_type = ""
-            # DeFi: split AAVE_V3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM per the
-            # canonical v5 shard-key matrix (DeFi axis is `chain`, not packed
-            # into venue). The path-based legacy writer at the bottom of this
-            # module already does this; the batched manifest writer used here
-            # was missing the split, so DeFi rows from the orchestrator landed
-            # as `venue=AAVE_V3-ETHEREUM, chain=''` and were filtered out by the
-            # coverage-summary's legacy-row drop, hiding recent DeFi captures.
-            manifest_chain = ""
-            if not is_sports_ref:
-                # Shared canonical split (DeFi PROTOCOL-CHAIN → venue=PROTOCOL +
-                # chain=CHAIN) — the SAME helper the EU seeder uses, so a seed and a
-                # later capture key-match exactly. No-op for cefi/tradfi.
-                manifest_venue, manifest_chain = _canonical_manifest_venue_chain(venue_str)
+            # Add to batched manifest writer (flushed by caller) or legacy per-venue write.
             if manifest is not None:
                 _stamped_venue_df = _stamped_df
                 if is_sports_ref:
-                    try:
-                        _venue_pm = _orch._pipeline_mode_for_sports_data_type(manifest_data_type)
-                    except KeyError:
-                        _venue_pm = _orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE
                     manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": manifest_data_type},
                         df=_stamped_venue_df,
@@ -262,15 +364,6 @@ def _write_venue(
                         service_emission_state=None,
                     )
                 else:
-                    _cat = "defi" if manifest_chain else (VENUE_TO_ASSET_GROUP.get(venue_str, "cefi"))
-                    # NOTE: instrument-definition rows are PRODUCER-emitted
-                    # (pipeline_mode=BATCH_INSTRUMENTS_SERVICE). Per the C-#6
-                    # source⇔pipeline_mode contract (2026-06-07) a BATCH row's
-                    # explicit source must equal source_string_for(pipeline_mode),
-                    # so we do NOT stamp the vendor (massive/databento) here — the
-                    # source auto-resolves (blank/instruments_service). Which vendor
-                    # served the snapshot is the adapter's routing concern, not a
-                    # per-row manifest tag for producer rows.
                     # v9 instrument_type column (Audit §K): one manifest row PER
                     # distinct instrument_type in this venue x date shard (never
                     # blended) — a single-type venue (ASTER, HYPERLIQUID, ...)
@@ -301,7 +394,10 @@ def _write_venue(
                             service_emission_state=None,
                         )
             else:
-                path = f"instrument_availability/by_date/day={date}/venue={venue_str}/instruments.parquet"
+                path = (
+                    f"instrument_availability/by_date/day={date}/pipeline_mode={_venue_pm!s}/"
+                    f"asset_group={_cat}/venue={venue_str}/instruments.parquet"
+                )
                 _orch._write_catalogue_record(bucket, path, date, len(df))
             # CSV sample in dev mode — generate_csv_sample is the SamplingService API
             if sampler.enable_sampling:
@@ -355,8 +451,14 @@ def _write_futures_contracts(
     first_notice_date, delivery_date, settlement_date) from the single expiry timestamp
     that Databento provides.
 
-    Output path mirrors the instruments.parquet partition:
-        instrument_availability/by_date/day={date}/venue={venue}/futures_contracts.parquet
+    Output path mirrors the instruments.parquet full-hive prefix (operator R2,
+    2026-07-21 — see ``_instrument_availability_sink_for``):
+        instrument_availability/by_date/day={date}/pipeline_mode={pm}/asset_group=tradfi/
+        venue={venue}/futures_contracts.parquet
+    ``asset_group`` is always ``"tradfi"`` — this writer is only invoked for TradFi
+    futures venues (the ``VENUE_TO_ASSET_GROUP.get(venue_str) == "tradfi"`` guard at
+    the call site). ``sink`` is accepted for call-site compatibility (see
+    ``_write_venue``'s docstring) but is not the write target.
 
     Shard-level isolation: errors are logged but never propagate — a failure here
     does not abort the instruments.parquet write that already succeeded.
@@ -375,10 +477,17 @@ def _write_futures_contracts(
             return
         rows = [c.model_dump(mode="json") for c in contracts]
         df = _orch.stamp_available_at_explicit(_orch.pd.DataFrame(rows), when=_orch.datetime.now(_orch.UTC))
+        _hive_sink = _instrument_availability_sink_for(
+            bucket,
+            date=date,
+            pipeline_mode=str(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+            asset_group="tradfi",
+            venue=venue_str,
+        )
         _orch._gated_sink_write(
-            sink,
+            _hive_sink,
             data=df,
-            partition={"day": date, "venue": venue_str},
+            partition={},
             filename="futures_contracts.parquet",
             venue=venue_str,
             entity="futures_contracts",
@@ -467,17 +576,23 @@ def _write_market_lifecycle(
     manifest_venue: str,
     manifest: _orch.ManifestWriter,
     pipeline_mode: _orch.PipelineMode,
+    bucket: str,
 ) -> None:
     """Write MARKET_LIFECYCLE parquet alongside instruments.parquet for a prediction group.
 
-    Output: market_lifecycle/by_canonical_group/day={d}/group={g}/venue={V}/market_lifecycle.parquet
-    (partition keys are path-ordered alphabetically by the sink). The venue level was
-    added 2026-07-14 — without it BOTH prediction venues wrote the SAME (day, group)
-    object and the second writer clobbered the first (POLYMARKET wiped KALSHI's 1,365
-    lifecycle rows on day=2026-07-09, verified live — Root Cause #5,
-    prediction_universe_capture_dead_since_07_01_2026_07_06.md). The MTDS reader
-    lists the day-scoped prefix and suffix-matches market_lifecycle.parquet, so both
-    the old venue-less objects and the new venue-partitioned ones resolve.
+    Output (full canonical hive, operator R2 2026-07-21 — see
+    ``_market_lifecycle_sink_for``):
+        market_lifecycle/by_canonical_group/day={d}/pipeline_mode={pm}/asset_group=prediction/
+        venue={V}/group={g}/market_lifecycle.parquet
+    ``sink`` is accepted for call-site compatibility (see ``_write_venue``'s
+    docstring) but is not the write target — ``bucket`` builds the per-shard hive
+    sink instead. The venue level was added 2026-07-14 — without it BOTH prediction
+    venues wrote the SAME (day, group) object and the second writer clobbered the
+    first (POLYMARKET wiped KALSHI's 1,365 lifecycle rows on day=2026-07-09, verified
+    live — Root Cause #5, prediction_universe_capture_dead_since_07_01_2026_07_06.md).
+    The MTDS reader lists the day-scoped prefix and suffix-matches
+    market_lifecycle.parquet, so both the old venue-less objects and the new
+    venue-partitioned ones resolve.
     Shard-level isolation: errors are logged but do not abort the instruments write.
     Plan: predictions_master.md Phase 3 L618.
     """
@@ -493,10 +608,16 @@ def _write_market_lifecycle(
             )
             return
         out_df = _orch.stamp_available_at_explicit(out_df, when=now)
+        _hive_sink = _market_lifecycle_sink_for(
+            bucket,
+            date=date,
+            pipeline_mode=str(pipeline_mode),
+            venue=manifest_venue,
+        )
         _orch._gated_sink_write(
-            sink,
+            _hive_sink,
             data=out_df,
-            partition={"group": canonical_group_str, "day": date, "venue": manifest_venue},
+            partition={"group": canonical_group_str},
             filename="market_lifecycle.parquet",
             venue=manifest_venue,
             entity="market_lifecycle",
