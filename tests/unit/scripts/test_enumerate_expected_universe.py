@@ -470,13 +470,19 @@ def test_row_data_types_cme_options_chain_mvp_narrows_to_ohlcv_1m() -> None:
     assert row_dts == ["ohlcv_1m"], f"MVP gate must narrow CME options_chain to ['ohlcv_1m']; got {row_dts}"
 
 
-def test_row_data_types_cme_futures_chain_mvp_narrows_to_ohlcv_1m() -> None:
+def test_row_data_types_cme_futures_chain_mvp_narrows_to_ohlcv_1m_and_1s() -> None:
     """An MVP-scoped CME futures_chain bundle (underlier=ES) narrows the same
-    way — the MVP data_type set is not OPTION-specific."""
+    way — the MVP data_type set is not OPTION-specific. MVP_SCOPE for CME
+    admits BOTH ohlcv_1m and ohlcv_1s (operator 2026-06-27 decision #7,
+    revised 2026-07-22 — the 2026-07-21/22 backfill fleet captured both
+    grains, so the predicate now matches what was actually captured); tbbo
+    stays excluded (billing-gated L1/L2 microstructure, not MVP)."""
     tradfi_dts = ["trades", "ohlcv_1s", "ohlcv_1m", "tbbo"]
     entry = _tradfi_entry("CME", "futures_chain", underlying="ES", base_asset="ES", mvp=True)
     row_dts = enumerator_module._row_data_types("tradfi", entry, tradfi_dts)
-    assert row_dts == ["ohlcv_1m"], f"MVP gate must narrow CME futures_chain to ['ohlcv_1m']; got {row_dts}"
+    assert row_dts == ["ohlcv_1s", "ohlcv_1m"], (
+        f"MVP gate must narrow CME futures_chain to ['ohlcv_1s', 'ohlcv_1m']; got {row_dts}"
+    )
 
 
 def test_row_data_types_krx_equity_mvp_narrows_to_ohlcv_24h() -> None:
