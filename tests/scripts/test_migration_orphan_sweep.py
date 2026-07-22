@@ -404,3 +404,65 @@ class TestLegacyInstrumentTypeCanonicalisation:
         )
         cls, _key, _reason = _mod.classify_object(obj, "tradfi", index, is_parquet=True, row_count=10)
         assert cls == OC.CANONICAL_MANIFESTED
+
+
+class TestFooterVerifyConcurrency:
+    """Regression for migration_orphan_sweep_performance_decay_2026_07_22.md — the
+    sweep's ``workers`` parameter was threaded through but never used, so every
+    footer-read ran sequentially. These prove the batched/concurrent path preserves
+    the exact per-object semantics the old inline call had."""
+
+    def test_footer_verify_pending_empty_returns_empty_dict(self) -> None:
+        assert _mod._footer_verify_pending(object(), "bucket", [], workers=8) == {}
+
+    def test_footer_verify_pending_maps_batch_index_to_row_count(self, monkeypatch) -> None:
+        # index in the returned dict is the BATCH index (first tuple element), not
+        # the pending-list position — the two coincide here only because every
+        # object in the batch needed a footer read.
+        rows_by_name = {"a.parquet": 0, "b.parquet": 5, "c.parquet": None}
+        monkeypatch.setattr(_mod, "_footer_row_count", lambda _client, _bucket, name: rows_by_name[name])
+        pending = [(0, "a.parquet"), (3, "b.parquet"), (7, "c.parquet")]
+        result = _mod._footer_verify_pending(object(), "bucket", pending, workers=4)
+        assert result == {0: 0, 3: 5, 7: None}
+
+    def test_finalize_swept_batch_demotes_zero_row_to_junk_and_drops_from_actionable(self) -> None:
+        key = _mod.ShardKey(
+            asset_group="cefi", venue="BINANCE-FUTURES", chain="", instrument_type="perpetual", data_type="trades"
+        )
+        blob = type("Blob", (), {"size": 100, "crc32c": "abc"})()
+        batch = [("day=2024-01-01/x.parquet", blob, OC.ORPHAN_REAL, key, "real data (rows>0)")]
+        class_counts, sizing, actionable = _mod.Counter(), _mod.SizingRollup.empty(), []
+        _mod._finalize_swept_batch(
+            batch,
+            {0: 0},
+            bucket="bkt",
+            asset_group="cefi",
+            class_counts=class_counts,
+            sizing=sizing,
+            actionable=actionable,
+        )
+        assert class_counts[OC.JUNK.value] == 1
+        assert class_counts[OC.ORPHAN_REAL.value] == 0
+        assert actionable == []
+
+    def test_finalize_swept_batch_keeps_orphan_real_without_a_footer_result(self) -> None:
+        # large objects (>=256KB) never get a pending entry at all — footer_rows.get
+        # returns None (not 0), so classification must NOT be demoted.
+        key = _mod.ShardKey(
+            asset_group="cefi", venue="BINANCE-FUTURES", chain="", instrument_type="perpetual", data_type="trades"
+        )
+        blob = type("Blob", (), {"size": 5_000_000, "crc32c": "def"})()
+        batch = [("day=2024-01-01/y.parquet", blob, OC.ORPHAN_REAL, key, "real data (rows>0)")]
+        class_counts, sizing, actionable = _mod.Counter(), _mod.SizingRollup.empty(), []
+        _mod._finalize_swept_batch(
+            batch,
+            {},
+            bucket="bkt",
+            asset_group="cefi",
+            class_counts=class_counts,
+            sizing=sizing,
+            actionable=actionable,
+        )
+        assert class_counts[OC.ORPHAN_REAL.value] == 1
+        assert len(actionable) == 1
+        assert actionable[0].obj_class == OC.ORPHAN_REAL

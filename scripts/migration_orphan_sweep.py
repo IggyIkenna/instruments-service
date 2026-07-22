@@ -511,6 +511,71 @@ def _footer_row_count(client: object, bucket: str, name: str) -> int | None:
         return None
 
 
+def _footer_verify_pending(
+    client: object, bucket: str, pending: list[tuple[int, str]], *, workers: int
+) -> dict[int, int | None]:
+    """Footer-read every ``(batch_index, name)`` candidate IN PARALLEL (mirrors
+    ``backfill_orphan_class_e_sports.footer_verify``'s pool pattern). Found 2026-07-22
+    (``migration_orphan_sweep_performance_decay_2026_07_22.md``): the sweep's own
+    ``workers`` parameter was threaded through the CLI/``run_sweep`` signature but never
+    actually used — every footer read ran sequentially, and a bucket region dense with
+    small would-be-orphan candidates turned the walk's cumulative throughput from
+    ~11,000 objects/s into ~50/s (each read is a real network round-trip). Batching
+    footer reads across a bounded window (see ``_SWEEP_BATCH_SIZE``) and running them
+    concurrently closes that gap without buffering the whole bucket in memory."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not pending:
+        return {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        rows_list = list(pool.map(lambda t: _footer_row_count(client, bucket, t[1]), pending))
+    return {idx: rows for (idx, _name), rows in zip(pending, rows_list, strict=True)}
+
+
+_SWEEP_BATCH_SIZE = 2000
+"""Bounded window for the footer-verify concurrency batch (see _footer_verify_pending)
+— keeps peak memory flat regardless of total bucket size, unlike buffering the whole
+walk before verifying."""
+
+
+def _finalize_swept_batch(
+    batch: list[tuple[str, object, ObjectClass, ShardKey, str]],
+    footer_rows: dict[int, int | None],
+    *,
+    bucket: str,
+    asset_group: str,
+    class_counts: Counter[str],
+    sizing: SizingRollup,
+    actionable: list[SweptObject],
+) -> None:
+    """Apply any footer-verify results, then build + roll up every object in one batch."""
+    for idx, (name, blob, cls, key, reason) in enumerate(batch):
+        if footer_rows.get(idx) == 0:
+            cls, reason = ObjectClass.JUNK, "zero-row object with no manifest row (footer-read)"
+        class_counts[cls.value] += 1
+        segs = parse_hive_segments(name)
+        pm = segs.get("pipeline_mode", "")
+        obj = SweptObject(
+            uri=f"gs://{bucket}/{name}",
+            asset_group=asset_group,
+            obj_class=cls,
+            venue=key.venue,
+            chain=key.chain,
+            instrument_type=key.instrument_type,
+            data_type=key.data_type,
+            day=segs.get("day", ""),
+            pipeline_mode=pm,
+            source=_source_from_pipeline_mode(pm),
+            size_bytes=int(getattr(blob, "size", 0) or 0),
+            crc32c=str(getattr(blob, "crc32c", "") or ""),
+            reason=reason,
+        )
+        if name.endswith(".parquet") and cls != ObjectClass.NON_DATA:
+            sizing.add(obj)
+        if cls in (ObjectClass.ORPHAN_REAL, ObjectClass.LEGACY_DUPLICATE):
+            actionable.append(obj)
+
+
 def _resolve_bucket(asset_group: str, cloud: str = "gcp") -> str:
     """Resolve the canonical raw-tick bucket for an asset_group via the bucket-name SSOT.
     Mirrors ``reconcile_phantom_manifest_rows_all._BUCKET_KIND_MAP``."""
@@ -541,7 +606,11 @@ def run_sweep(
 
     The full GCS read uses ``get_storage_client().list_blobs`` (paginated; size + crc32c
     come free from the blob metadata). Class-(E) candidates' footer row_count is read
-    lazily ONLY for the no-manifest-row subset (cheap) to split (D) zero-row from (E).
+    ONLY for the no-manifest-row subset (cheap) to split (D) zero-row from (E) — batched
+    every ``_SWEEP_BATCH_SIZE`` objects and footer-read CONCURRENTLY (``workers``, see
+    ``_footer_verify_pending``): a sequential per-object read is what caused the
+    2026-07-22 throughput collapse on defi/prediction (documented in
+    ``migration_orphan_sweep_performance_decay_2026_07_22.md``).
     """
     from unified_trading_library import get_storage_client
 
@@ -555,49 +624,48 @@ def run_sweep(
     prefix_taxonomy: Counter[str] = Counter()
     sizing = SizingRollup.empty()
     actionable: list[SweptObject] = []  # class-B (legacy twins for CF-21 cleanup) + class-E (orphans)
+    batch: list[tuple[str, object, ObjectClass, ShardKey, str]] = []
+    pending: list[tuple[int, str]] = []  # (index within batch, name) needing a footer read
     t0 = time.time()
     for seen, blob in enumerate(client.list_blobs(bucket), start=1):
         name = blob.name
         prefix_taxonomy[_taxonomy_label(name)] += 1
         is_parquet = name.endswith(".parquet")
         cls, key, reason = classify_object(name, asset_group, manifested, is_parquet=is_parquet, row_count=None)
-        # The lazy footer read the docstring promises (implemented R1 close-out
-        # 2026-06-11): a would-be-(E) object with no row evidence may be a 0-row
-        # schema shell (e.g. weekend equity days — footer num_rows=0, ~4KB), which
-        # is class (D) junk, not a backfill target. Only small objects can be
-        # 0-row shells, so the read is bounded to <256KB candidates — large
-        # objects are certainly rows>0 and stay (E) without a read.
+        # A would-be-(E) object with no row evidence may be a 0-row schema shell (e.g.
+        # weekend equity days), which is class (D) junk, not a backfill target. Only
+        # small objects can be 0-row shells, so the candidate set is bounded to <256KB.
         if cls is ObjectClass.ORPHAN_REAL and int(getattr(blob, "size", 0) or 0) < 262144:
-            rows = _footer_row_count(client, bucket, name)
-            if rows == 0:
-                cls, reason = ObjectClass.JUNK, "zero-row object with no manifest row (footer-read)"
-        class_counts[cls.value] += 1
-        segs = parse_hive_segments(name)
-        pm = segs.get("pipeline_mode", "")
-        obj = SweptObject(
-            uri=f"gs://{bucket}/{name}",
-            asset_group=asset_group,
-            obj_class=cls,
-            venue=key.venue,
-            chain=key.chain,
-            instrument_type=key.instrument_type,
-            data_type=key.data_type,
-            day=segs.get("day", ""),
-            pipeline_mode=pm,
-            source=_source_from_pipeline_mode(pm),
-            size_bytes=int(getattr(blob, "size", 0) or 0),
-            crc32c=str(getattr(blob, "crc32c", "") or ""),
-            reason=reason,
-        )
-        if is_parquet and cls != ObjectClass.NON_DATA:
-            sizing.add(obj)
-        if cls in (ObjectClass.ORPHAN_REAL, ObjectClass.LEGACY_DUPLICATE):
-            actionable.append(obj)
+            pending.append((len(batch), name))
+        batch.append((name, blob, cls, key, reason))
+        if len(batch) >= _SWEEP_BATCH_SIZE:
+            footer_rows = _footer_verify_pending(client, bucket, pending, workers=workers)
+            _finalize_swept_batch(
+                batch,
+                footer_rows,
+                bucket=bucket,
+                asset_group=asset_group,
+                class_counts=class_counts,
+                sizing=sizing,
+                actionable=actionable,
+            )
+            batch, pending = [], []
         if seen % 50000 == 0:
             logger.info("  %d objects swept (%.0f/s)", seen, seen / max(0.01, time.time() - t0))
         if limit is not None and seen >= limit:
             logger.info("  --limit %d reached — stopping walk", limit)
             break
+    if batch:
+        footer_rows = _footer_verify_pending(client, bucket, pending, workers=workers)
+        _finalize_swept_batch(
+            batch,
+            footer_rows,
+            bucket=bucket,
+            asset_group=asset_group,
+            class_counts=class_counts,
+            sizing=sizing,
+            actionable=actionable,
+        )
     return class_counts, prefix_taxonomy, sizing, actionable
 
 
