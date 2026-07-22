@@ -381,6 +381,7 @@ def _write_prediction_venue(
     manifest: _orch.ManifestWriter,
     counts: dict[str, int],
     sampler: _orch.SamplingService,
+    bucket: str,
 ) -> None:
     """PREDICTION: bundle by canonical_question_group per the UAC SSOT.
 
@@ -394,6 +395,9 @@ def _write_prediction_venue(
     Polymarket + Kalshi share this path: both prediction venues classify per
     the UAC ``classify_*_to_canonical_group`` SSOT and bundle on the same axis
     so MTDS reads + features compute apply identically.
+
+    ``sink``/``lifecycle_sink`` are call-site compatibility only — the full-hive
+    prefix (R2, 2026-07-21) writes via ``_instrument_availability_sink_for(bucket, ...)``.
     """
     _pred_df = venue_df.copy()
     _pred_df["_canonical_group"] = _pred_df.apply(
@@ -404,23 +408,6 @@ def _write_prediction_venue(
     for _group_raw, _group_df in _pred_df.groupby("_canonical_group"):
         _group_str = str(_group_raw)
         _group_df_clean = _group_df.drop(columns=["_canonical_group"])
-        # Manifest row: data_type=prediction_canonical_question_group
-        # (the bundled data_type per UAC BUNDLED_DATA_TYPES SSOT),
-        # underlying=<canonical_group> (the per-bundle cluster
-        # identity, mirroring options_chain root-bucketing).
-        _stamped_group_df = _orch.stamp_available_at_explicit(_group_df_clean, when=_orch.datetime.now(_orch.UTC))
-        _orch._gated_sink_write(
-            sink,
-            data=_stamped_group_df,
-            partition={
-                "day": date,
-                "venue": venue_str,
-                "canonical_question_group": _group_str,
-            },
-            filename="instruments.parquet",
-            venue=venue_str,
-            entity="instruments",
-        )
         # The cqg manifest data_type (prediction_canonical_question_group) is MULTI-source
         # in UAC SOURCE_PRIORITY (polymarket_clob + kalshi) → record_captured REQUIRES an
         # explicit venue-derived source=. Resolve a cqg-specific pipeline_mode whose source
@@ -435,6 +422,22 @@ def _write_prediction_venue(
             _orch.PipelineMode.BATCH_POLYMARKET_CLOB
             if _manifest_venue == "POLYMARKET"
             else _orch.PipelineMode.BATCH_KALSHI
+        )
+        # Manifest row: data_type=prediction_canonical_question_group
+        # (the bundled data_type per UAC BUNDLED_DATA_TYPES SSOT),
+        # underlying=<canonical_group> (the per-bundle cluster
+        # identity, mirroring options_chain root-bucketing).
+        _stamped_group_df = _orch.stamp_available_at_explicit(_group_df_clean, when=_orch.datetime.now(_orch.UTC))
+        _hive_sink = _orch._instrument_availability_sink_for(
+            bucket, date=date, pipeline_mode=str(_cqg_pm), asset_group="prediction", venue=venue_str
+        )
+        _orch._gated_sink_write(
+            _hive_sink,
+            data=_stamped_group_df,
+            partition={"canonical_question_group": _group_str},
+            filename="instruments.parquet",
+            venue=venue_str,
+            entity="instruments",
         )
         manifest.record_captured(  # QG-allow: emission-policy-not-applicable
             row_key={
@@ -482,6 +485,7 @@ def _write_prediction_venue(
             manifest_venue=_manifest_venue,
             manifest=manifest,
             pipeline_mode=_pred_pm,
+            bucket=bucket,
         )
 
 
@@ -683,6 +687,7 @@ def _write_all_venues(
                     manifest=_v_manifest,
                     counts=counts,
                     sampler=sampler,
+                    bucket=_v_bucket,
                 )
             elif venue_str in _non_trading_tradfi:
                 # Non-trading day for this TradFi venue: the adapter returned records
