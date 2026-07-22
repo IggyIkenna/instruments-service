@@ -852,19 +852,23 @@ class TestRaydiumAdapter:
         ):
             await adapter.get_instruments()
 
-    def test_build_pool_record_missing_id(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_missing_id(self) -> None:
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        assert adapter._build_pool_record({}) is None
+        assert await adapter._build_pool_record({}) is None
 
-    def test_build_pool_record_missing_symbols(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_missing_symbols(self) -> None:
+        """Both mints blank AND unresolvable (no address at all) -> honest None."""
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        assert adapter._build_pool_record({"id": "x", "mintA": {}, "mintB": {}}) is None
+        assert await adapter._build_pool_record({"id": "x", "mintA": {}, "mintB": {}}) is None
 
-    def test_build_pool_record_canonical_id_is_3seg_pool_type_folded(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_canonical_id_is_3seg_pool_type_folded(self) -> None:
         """Wave B: canonical id is the 3-seg glued form (pool-type hyphen-glued, NOT a 4th colon).
 
         Two-id model: canonical_instrument_id is symbolic (2 colons); the machine id
@@ -874,7 +878,7 @@ class TestRaydiumAdapter:
 
         adapter = RaydiumReferenceDataAdapter()
         address = "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2"
-        record = adapter._build_pool_record(
+        record = await adapter._build_pool_record(
             {
                 "id": address,
                 "mintA": {"symbol": "SOL", "decimals": 9},
@@ -892,25 +896,58 @@ class TestRaydiumAdapter:
         assert record.raw_symbol == address
         assert record.pool_address == address
 
-    def test_extract_token_symbol_dict(self) -> None:
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_dict(self) -> None:
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        result = adapter._extract_token_symbol({"mintA": {"symbol": "sol"}}, "mintA")
+        result = await adapter._extract_token_symbol({"mintA": {"symbol": "sol"}}, "mintA")
         assert result == "SOL"
 
-    def test_extract_token_symbol_flat_field(self) -> None:
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_flat_field(self) -> None:
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        result = adapter._extract_token_symbol({"mintSymbolA": "USDC"}, "mintA")
+        result = await adapter._extract_token_symbol({"mintSymbolA": "USDC"}, "mintA")
         assert result == "USDC"
 
-    def test_extract_token_symbol_missing(self) -> None:
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_missing(self) -> None:
+        """No nested dict, no flat field -> no address to resolve either -> "" (honest)."""
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        result = adapter._extract_token_symbol({}, "mintA")
+        result = await adapter._extract_token_symbol({}, "mintA")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_blank_resolver_succeeds(self) -> None:
+        """Nested dict present, symbol blank, mint address resolves via UTL resolver (NEW behavior)."""
+        from instruments_service.reference_data.adapters.defi import raydium as raydium_module
+        from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
+
+        adapter = RaydiumReferenceDataAdapter()
+        with patch.object(
+            raydium_module,
+            "resolve_solana_token_symbol",
+            AsyncMock(return_value="jup"),
+        ) as mock_resolve:
+            result = await adapter._extract_token_symbol(
+                {"mintA": {"address": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"}}, "mintA"
+            )
+        assert result == "JUP"
+        mock_resolve.assert_awaited_once_with("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN")
+
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_blank_resolver_also_fails(self) -> None:
+        """Nested dict present, symbol blank, resolver ALSO returns None -> honest "" (no fabrication)."""
+        from instruments_service.reference_data.adapters.defi import raydium as raydium_module
+        from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
+
+        adapter = RaydiumReferenceDataAdapter()
+        with patch.object(raydium_module, "resolve_solana_token_symbol", AsyncMock(return_value=None)):
+            result = await adapter._extract_token_symbol({"mintA": {"address": "SomeRuggedMint111"}}, "mintA")
         assert result == ""
 
     def test_classify_raydium_error(self) -> None:
@@ -1570,24 +1607,28 @@ class TestOrcaAdapter:
         ):
             await adapter.get_instruments()
 
-    def test_build_pool_record_no_address(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_no_address(self) -> None:
         from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
 
         adapter = OrcaReferenceDataAdapter()
-        assert adapter._build_pool_record({}) is None
+        assert await adapter._build_pool_record({}) is None
 
-    def test_build_pool_record_non_dict_tokens(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_non_dict_tokens(self) -> None:
         from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
 
         adapter = OrcaReferenceDataAdapter()
-        result = adapter._build_pool_record({"address": "addr", "tokenA": "bad", "tokenB": "bad"})
+        result = await adapter._build_pool_record({"address": "addr", "tokenA": "bad", "tokenB": "bad"})
         assert result is None
 
-    def test_build_pool_record_empty_symbols(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_empty_symbols(self) -> None:
+        """Both tokens blank AND unresolvable (no mint field at all) -> honest None."""
         from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
 
         adapter = OrcaReferenceDataAdapter()
-        result = adapter._build_pool_record(
+        result = await adapter._build_pool_record(
             {
                 "address": "addr",
                 "tokenA": {"symbol": ""},
@@ -1596,7 +1637,46 @@ class TestOrcaAdapter:
         )
         assert result is None
 
-    def test_build_pool_record_canonical_id_is_3seg_tick_spacing_folded(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_blank_symbol_resolver_succeeds(self) -> None:
+        """tokenA has a mint but no symbol; the UTL Solana resolver names it (NEW behavior)."""
+        from instruments_service.reference_data.adapters.defi import orca as orca_module
+        from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
+
+        adapter = OrcaReferenceDataAdapter()
+        with patch.object(orca_module, "resolve_solana_token_symbol", AsyncMock(return_value="jup")) as mock_resolve:
+            result = await adapter._build_pool_record(
+                {
+                    "address": "addr",
+                    "tokenA": {"mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", "decimals": 6},
+                    "tokenB": {"symbol": "USDC", "decimals": 6},
+                    "tvl": 50000,
+                }
+            )
+        assert result is not None
+        assert result.base_asset == "JUP" or result.quote_asset == "JUP"
+        mock_resolve.assert_awaited_once_with("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN")
+
+    @pytest.mark.asyncio
+    async def test_build_pool_record_blank_symbol_resolver_also_fails(self) -> None:
+        """tokenA has a mint but no symbol AND the resolver has no answer -> honest None."""
+        from instruments_service.reference_data.adapters.defi import orca as orca_module
+        from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
+
+        adapter = OrcaReferenceDataAdapter()
+        with patch.object(orca_module, "resolve_solana_token_symbol", AsyncMock(return_value=None)):
+            result = await adapter._build_pool_record(
+                {
+                    "address": "addr",
+                    "tokenA": {"mint": "SomeRuggedMint111", "decimals": 6},
+                    "tokenB": {"symbol": "USDC", "decimals": 6},
+                    "tvl": 50000,
+                }
+            )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_build_pool_record_canonical_id_is_3seg_tick_spacing_folded(self) -> None:
         """Wave B: canonical id is the 3-seg glued form (tick-spacing hyphen-glued, NOT a 4th colon).
 
         Two-id model: canonical_instrument_id is symbolic (2 colons); the machine id
@@ -1606,7 +1686,7 @@ class TestOrcaAdapter:
 
         adapter = OrcaReferenceDataAdapter()
         address = "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ"
-        record = adapter._build_pool_record(
+        record = await adapter._build_pool_record(
             {
                 "address": address,
                 "tokenA": {"symbol": "SOL", "decimals": 9},
@@ -2114,11 +2194,12 @@ class TestBalancerAdapter:
             results = await adapter.get_instruments()
         assert results == []
 
-    def test_pool_to_record_valid(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_valid(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        record = adapter._pool_to_record(
+        record = await adapter._pool_to_record(
             {
                 "address": "0xaddr",
                 "name": "Test Pool",
@@ -2132,29 +2213,33 @@ class TestBalancerAdapter:
         assert record is not None
         assert record.underlying == "Test Pool"
 
-    def test_pool_to_record_missing_address(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_missing_address(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        assert adapter._pool_to_record({"poolTokens": []}) is None
+        assert await adapter._pool_to_record({"poolTokens": []}) is None
 
-    def test_pool_to_record_too_few_tokens(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_too_few_tokens(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        assert adapter._pool_to_record({"address": "0x1", "poolTokens": [{"symbol": "WETH"}]}) is None
+        assert await adapter._pool_to_record({"address": "0x1", "poolTokens": [{"symbol": "WETH"}]}) is None
 
-    def test_pool_to_record_not_list_tokens(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_not_list_tokens(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        assert adapter._pool_to_record({"address": "0x1", "poolTokens": "bad"}) is None
+        assert await adapter._pool_to_record({"address": "0x1", "poolTokens": "bad"}) is None
 
-    def test_pool_to_record_no_name(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_no_name(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        record = adapter._pool_to_record(
+        record = await adapter._pool_to_record(
             {
                 "address": "0xaddr",
                 "name": "",
@@ -2166,6 +2251,101 @@ class TestBalancerAdapter:
         )
         assert record is not None
         assert record.underlying is None
+
+    @pytest.mark.asyncio
+    async def test_pool_to_record_blank_symbol_resolver_succeeds(self) -> None:
+        """A pool token has an address but no symbol; the UTL EVM resolver names it (NEW behavior)."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+        from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
+
+        adapter = BalancerReferenceDataAdapter(chain="ethereum")
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value="weth")) as mock_resolve:
+            record = await adapter._pool_to_record(
+                {
+                    "address": "0xaddr",
+                    "name": "Test Pool",
+                    "poolTokens": [
+                        {"address": "0xt0000000000000000000000000000000000000", "decimals": "18"},
+                        {"address": "0xt1", "symbol": "USDC", "decimals": "6"},
+                    ],
+                    "createTime": 1677000000,
+                }
+            )
+        assert record is not None
+        assert record.base_asset == "WETH"
+        assert record.quote_asset == "USDC"
+        mock_resolve.assert_awaited_once_with("ETHEREUM", "0xt0000000000000000000000000000000000000")
+
+    @pytest.mark.asyncio
+    async def test_pool_to_record_blank_symbol_resolver_also_fails(self) -> None:
+        """A pool token has an address but no symbol AND the resolver has no answer -> honest UNKNOWN."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+        from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
+
+        adapter = BalancerReferenceDataAdapter(chain="ethereum")
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value=None)):
+            record = await adapter._pool_to_record(
+                {
+                    "address": "0xaddr",
+                    "name": "Test Pool",
+                    "poolTokens": [
+                        {"address": "0xrugged", "decimals": "18"},
+                        {"address": "0xt1", "symbol": "USDC", "decimals": "6"},
+                    ],
+                    "createTime": 1677000000,
+                }
+            )
+        assert record is not None
+        assert record.base_asset == "UNKNOWN"
+        assert record.quote_asset == "USDC"
+
+    @pytest.mark.asyncio
+    async def test_pool_to_record_colon_laden_symbol_resolved_on_chain(self) -> None:
+        """A malformed subgraph symbol carrying ':' (real live-data finding, 2026-07-21) is
+        NOT trusted verbatim -- it would crash UAC's build_instrument_id (its own id delimiter)
+        -- so it is treated like a blank symbol and resolved on-chain instead."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+        from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
+
+        adapter = BalancerReferenceDataAdapter(chain="ethereum")
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value="dai")) as mock_resolve:
+            record = await adapter._pool_to_record(
+                {
+                    "address": "0xaddr",
+                    "name": "Test Pool",
+                    "poolTokens": [
+                        {"address": "0xdai", "symbol": "DAI-UYYVDAI:1:2023-5-21", "decimals": "18"},
+                        {"address": "0xt1", "symbol": "USDC", "decimals": "6"},
+                    ],
+                    "createTime": 1677000000,
+                }
+            )
+        assert record is not None
+        assert record.base_asset == "DAI"
+        mock_resolve.assert_awaited_once_with("ETHEREUM", "0xdai")
+
+    @pytest.mark.asyncio
+    async def test_pool_to_record_colon_laden_symbol_resolver_also_fails(self) -> None:
+        """Colon-laden symbol AND the resolver has no answer -> honest UNKNOWN, never the raw
+        malformed string (which would crash the canonical-id builder downstream)."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+        from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
+
+        adapter = BalancerReferenceDataAdapter(chain="ethereum")
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value=None)):
+            record = await adapter._pool_to_record(
+                {
+                    "address": "0xaddr",
+                    "name": "Test Pool",
+                    "poolTokens": [
+                        {"address": "0xdai", "symbol": "DAI-UYYVDAI:1:2023-5-21", "decimals": "18"},
+                        {"address": "0xt1", "symbol": "USDC", "decimals": "6"},
+                    ],
+                    "createTime": 1677000000,
+                }
+            )
+        assert record is not None
+        assert record.base_asset == "UNKNOWN"
 
 
 # ── MarinadeReferenceDataAdapter ──────────────────────────────────────────────
