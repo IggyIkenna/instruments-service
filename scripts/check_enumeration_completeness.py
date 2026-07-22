@@ -40,6 +40,7 @@ from types import ModuleType
 
 import pandas as pd
 from unified_api_contracts import bundle_instrument_type_for_leaf
+from unified_api_contracts.registry import CEFI_VENUE_FOLD
 from unified_api_contracts.registry.venue_mapping import VenueMapping
 
 logger = logging.getLogger(__name__)
@@ -148,49 +149,18 @@ def _canon_instrument_type(asset_group: str, venue: str, instrument_type: str) -
 
 
 # CeFi venue-dialect fold (honest_coverage_uac_writer_matrix_reconciliation
-# Decision 6, implemented as the todo's "check folds suffixes" option): the
-# writer captures under Tardis-grain suffixed venues (OKX-SWAP/-FUTURES from
-# expand_cefi_tardis_endpoints; legacy raw Tardis exchange ids on older rows)
-# while UAC keys those venues at the bare canonical grain (OKX). Fold BOTH
-# sides to the UAC-canonical venue so a suffix dialect can never manufacture a
-# false hole or a false stray. Venues that are themselves UAC-canonical
-# suffixed forms (OKX-SPOT, BYBIT-SPOT, KRAKEN-FUTURES, BITFINEX-*, …) are
-# deliberately NOT folded — OKX-SPOT was REMOVED from this table 2026-07-10
-# (Option A follow-through, unified-api-contracts declares OKX-SPOT its own
-# cefi venue with its own EXPECTED entry now; folding it to bare OKX would
-# make real captured OKX-SPOT rows compare against the wrong EXPECTED tuple
-# now that bare-OKX SPOT_PAIR is gone). COINBASE is the exception: the
-# canonical EXPECTED token for spot Coinbase is COINBASE-SPOT (not bare
-# COINBASE), so that entry folds legacy bare-COINBASE writer/EXPECTED tokens
-# UP instead of down — see the inline comment on that entry.
-_CEFI_VENUE_FOLD: dict[str, str] = {
-    # Tardis-grain splits emitted by expand_cefi_tardis_endpoints()
-    # "OKX-SPOT" REMOVED (Option A, 2026-07-10 operator decision — mirrors
-    # BYBIT-SPOT, which was never folded): OKX-SPOT is now its own declared
-    # cefi venue (VENUES_BY_ASSET_GROUP["cefi"]) with its own EXPECTED
-    # tuples, so real captured OKX-SPOT rows must compare directly against
-    # OKX-SPOT EXPECTED, not get folded up to bare OKX (which no longer
-    # carries SPOT_PAIR capability at all — folding would silently zero
-    # real captured OKX spot data back out of Layer-1/Layer-2 again). See
-    # instruments_service_cefi_qg_red_on_ldr_head_2026_07_08.md.
-    "OKX-SWAP": "OKX",
-    "OKX-FUTURES": "OKX",
-    # INVERTED (coinbase_bare_name_migration_2026_07_06 S1): COINBASE-SPOT is
-    # now the canonical EXPECTED token (UAC drops bare COINBASE in S3 of that
-    # plan); legacy manifest rows that stamped bare COINBASE fold UP to
-    # COINBASE-SPOT so they still match EXPECTED instead of landing in the
-    # stray bucket.
-    "COINBASE": "COINBASE-SPOT",
-    # Writer-side names for venues UAC keys differently
-    "BYBIT-FUTURES": "BYBIT",
-    "COINBASE-INTERNATIONAL": "COINBASE-FUTURES",
-    # Legacy raw Tardis exchange ids (pre-canonicalisation manifest rows)
-    "OKEX": "OKX",
-    "OKEX-SWAP": "OKX",
-    "OKEX-FUTURES": "OKX",
-    "CRYPTOFACILITIES": "KRAKEN-FUTURES",
-    "BITFINEX-DERIVATIVES": "BITFINEX-FUTURES",
-}
+# Decision 6): the writer captures under Tardis-grain suffixed venues
+# (OKX-SWAP/-FUTURES from expand_cefi_tardis_endpoints; legacy raw Tardis
+# exchange ids on older rows) while UAC keys those venues at the bare
+# canonical grain (OKX). Fold BOTH sides to the UAC-canonical venue so a
+# suffix dialect can never manufacture a false hole or a false stray.
+# MOVED to UAC (audit follow-up 2026-07-22, distinct-values D2) so
+# deployment-api's distinct-values detector can share this exact mapping
+# instead of being blind to it — see `unified_api_contracts.registry
+# .CEFI_VENUE_FOLD` for the full per-entry rationale (OKX-SPOT exclusion,
+# COINBASE inversion, etc.) and
+# `plans/active/distinct_values_noncanonical_audit_2026_07_20.md` "D2".
+_CEFI_VENUE_FOLD: dict[str, str] = CEFI_VENUE_FOLD
 
 
 def _canon_venue(asset_group: str, venue: str) -> str:
