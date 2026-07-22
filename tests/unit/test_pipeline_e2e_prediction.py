@@ -237,7 +237,12 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # factory._ADAPTERS + orchestrator/defi.py's _STATIC_DEFI_VENUES — this session's
 # lst_rate_honest_coverage_2026_07_21.md Phase 1 IS todo). Dedup is per (asset_group,
 # venue), so exactly one new static venue == exactly +1 target.
-_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 99, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
+# DEFI 99→96 (2026-07-22): -3 for METEORA-SOLANA/LIFINITY-SOLANA/PHOENIX-SOLANA, narrowed
+# back OUT of _SOLANA_DEFI_VENUES (orchestrator/defi.py) — all 3 upstreams are measurably
+# dead (404/522/NXDOMAIN, re-verified 2026-07-22, same as the original 2026-07-20 finding),
+# so phase="live" manufactured an unattainable honest-coverage numerator. SSOT:
+# unified-trading-pm/plans/active/issues/uac_is_defi_oracle_dex_adapter_drift_2026_07_20.md.
+_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 96, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:
