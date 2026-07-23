@@ -63,6 +63,7 @@ from unified_api_contracts import (
     CEFI_EQUITY_PERP_BASE_UNIVERSE,
     TRADFI_ROOTS,
     VENUE_TO_ASSET_GROUP,
+    TardisInstrumentDetail,
     build_pool_identity,
     is_defi_force_include,
     is_in_mvp_capture_universe,
@@ -4282,16 +4283,23 @@ def _dedup_cefi_expiry_off_by_one(df: pd.DataFrame) -> pd.DataFrame:
     (the OKX-FUTURES pure numeric-off-by-one sub-pattern only — see below).
 
     The other 70/146 OKX-FUTURES rows and every BITGET-FUTURES (18) / OKX-SWAP (5)
-    ambiguous key are a REAL, DIFFERENT ambiguity — a genuinely different
-    ``margin_type`` under the same wire symbol (the linear-vs-inverse
-    OKX-FUTURES/OKX-SWAP perp-family margin-mislabeling clash) — and correctly
-    fail check #3 (``margin_type`` IS a compared column, never on the
-    ignore-list), so they stay excluded exactly as today regardless of whether
-    check #4 would otherwise resolve a wire date for them. That margin_type-driven
-    collapse is a SEPARATE, NOT-YET-IMPLEMENTED follow-up (it would contradict
-    this very docstring's prior classification of that shape as a real
-    ambiguity — a decision this fix deliberately leaves untouched pending
-    explicit operator/team review, not silently overridden here).
+    ambiguous key have a genuinely different ``margin_type`` under the same wire
+    symbol (the linear-vs-inverse OKX-FUTURES/OKX-SWAP/BITGET-FUTURES perp-family
+    margin-mislabeling clash) and so correctly fail check #3 here (``margin_type``
+    IS a compared column, never on the ignore-list) — this function stays
+    unopinionated about that shape regardless of whether check #4 would otherwise
+    resolve a wire date for them. **CORRECTED 2026-07-23** (operator ruling,
+    ``cefi_okx_margin_type_wire_key_ambiguity_reclassification_2026_07_22.md``):
+    an earlier version of this docstring classified that margin_type clash as "a
+    REAL, different ambiguity ... stay excluded" and left it as a deliberately
+    NOT-YET-IMPLEMENTED follow-up pending review. A follow-up investigation found
+    zero-exception evidence (all 93 pairs) that it is instead a STALE MISLABEL
+    ARTIFACT of two now-fixed historical bugs (OKX bare-symbol margin inversion,
+    fixed 2026-07-09; Bitget coin-margined fallthrough, fixed 2026-07-14
+    commit ``75bdf02d``) — not a real ambiguity. The operator ruled to build the
+    fix: see :func:`_dedup_cefi_margin_type_mislabel`, a dedicated Phase-D dedup
+    (disjoint from this function by construction — see that function's docstring
+    for the verified non-overlap) that collapses those 93 rows.
 
     BYBIT's 39 ambiguous keys are a THIRD, DISTINCT shape handled by a dedicated
     upstream dedup instead of this one: 36 FUTURE keys are a base-asset PARSING
@@ -4391,6 +4399,163 @@ def _dedup_cefi_expiry_off_by_one(df: pd.DataFrame) -> pd.DataFrame:
         "(off-by-one-day artifact — see _dedup_cefi_expiry_off_by_one docstring)",
         len(drop_idx),
         len(kept_available_from),
+    )
+    return out.reset_index(drop=True)
+
+
+#: Catalogue ``venue`` -> Tardis ``exchange`` string, scoped STRICTLY to the 3 venues
+#: :func:`_dedup_cefi_margin_type_mislabel` covers (mirrors
+#: ``unified_api_contracts.VenueMapping().get_tardis_exchange_for_venue`` for exactly
+#: these 3 keys — verified 2026-07-23: ``get_tardis_exchange_for_venue("OKX-FUTURES")``
+#: -> ``"okex-futures"``, ``("OKX-SWAP")`` -> ``"okex-swap"``,
+#: ``("BITGET-FUTURES")`` -> ``"bitget-futures"``). A local, narrow mapping (not the
+#: full VenueMapping registry) matches this file's existing scoping convention (see
+#: :func:`_dedup_bybit_future_base_asset_parsing`'s hardcoded ``venue == "BYBIT"``).
+_MARGIN_MISLABEL_VENUE_TO_EXCHANGE: dict[str, str] = {
+    "OKX-FUTURES": "okex-futures",
+    "OKX-SWAP": "okex-swap",
+    "BITGET-FUTURES": "bitget-futures",
+}
+
+
+def _dedup_cefi_margin_type_mislabel(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse OKX-FUTURES/OKX-SWAP/BITGET-FUTURES rows split by a stale margin_type mislabel.
+
+    OPERATOR RULING (2026-07-23,
+    ``unified-trading-pm/plans/active/issues/cefi_okx_margin_type_wire_key_ambiguity_
+    reclassification_2026_07_22.md``): "build the fix delete the bad data formats,
+    migrate to canonical formats where possible" — this reclassifies the 93 ambiguous
+    ``(venue, instrument_type, raw_symbol)`` wire keys across these 3 venues as a STALE
+    MISLABEL ARTIFACT of two now-fixed historical bugs, OVERTURNING
+    :func:`_dedup_cefi_expiry_off_by_one`'s prior "REAL, different ambiguity ... stay
+    excluded" classification for this exact shape (see that function's docstring,
+    corrected alongside this one).
+
+    ROOT CAUSE (confirmed live 2026-07-22/23, zero-exception across all 93 real pairs
+    — the row matching TODAY's classifier is ALSO the row whose expiry, where
+    applicable, matches the wire-embedded date, an independent double-correlation):
+
+      * OKX-FUTURES (70 keys) + OKX-SWAP (5 keys): before a 2026-07-09 fix (see
+        :func:`instruments_service.reference_data.adapters.cefi.tardis.parsing.
+        _infer_margin_type`'s own docstring), a BARE (no ``_UM``/``_CM`` infix) OKX
+        wire symbol was unconditionally mislabeled the OPPOSITE of its true margin
+        type — every real OKX-SWAP/OKX-FUTURES derivative's ``margin_type`` was
+        backwards.
+      * BITGET-FUTURES (18 keys): before a 2026-07-14 fix (commit ``75bdf02d``), a
+        coin-margined (``_CM``-suffixed, USD-quote) Bitget Futures symbol fell
+        through to the generic LINEAR default instead of resolving INVERSE.
+
+    In every case the pre-fix (stale) row and the post-fix (correct) row for the SAME
+    ``raw_symbol`` persist forever side by side in the all-lifecycle catalogue rollup,
+    producing an "ambiguous wire key" ``CeFiWireCanonicalMap`` can never resolve at
+    read time.
+
+    Scoped STRICTLY to ``venue in`` :data:`_MARGIN_MISLABEL_VENUE_TO_EXCHANGE` (OKX-
+    FUTURES / OKX-SWAP / BITGET-FUTURES) — BYBIT's 3 genuinely-ambiguous PERPETUAL
+    wire keys (``BTCUSD``/``ETHUSD``/``XRPUSD``: a closed 2019-2020 linear market and
+    a separate still-active inverse market, confirmed two REAL different products,
+    explicitly excluded from this ruling) must never be touched here.
+
+    For each in-scope group, re-derive the authoritative ``margin_type`` by re-running
+    the SAME classifier pipeline the live Tardis adapter uses for every capture —
+    ``_resolve_base_quote`` (base/quote) then ``_infer_margin_type`` (margin type),
+    both REUSED verbatim from
+    :mod:`instruments_service.reference_data.adapters.cefi.tardis.parsing` — never
+    reimplemented, no per-venue "keep inverse" special-casing, ONE classifier call
+    path for all 3 venues (consistency + correctness, per the operator instruction).
+    The catalogue carries no ``quote_asset`` column, so ``_resolve_base_quote`` is
+    called with a minimal ``TardisInstrumentDetail(id=raw_symbol)`` stub (no
+    ``baseCurrency``/``quoteCurrency`` metadata) — this deliberately forces the SAME
+    symbol-splitting fallback path the live adapter takes for these bare OKX/Bitget
+    wire forms (which never carry that metadata either; live-verified 2026-07-23 this
+    reproduces the exact expected 93/93 split — 70 OKX-FUTURES + 5 OKX-SWAP + 18
+    BITGET-FUTURES). The row whose STORED ``margin_type`` matches this fresh call is
+    kept; the row whose ``margin_type`` does NOT match is the stale pre-fix artifact
+    and is dropped.
+
+    STOP-ON-SURPRISE (never silently guess): a group is left COMPLETELY UNTOUCHED —
+    not collapsed — when it doesn't fit this exact narrow shape: not exactly 2 rows,
+    ``instrument_type`` doesn't parse, the classifier resolves no opinion (non-
+    derivative type), or NEITHER/BOTH rows match the fresh classifier output. The
+    "both match" case is real and expected: an already-correct off-by-one-day pair
+    has IDENTICAL ``margin_type`` on both rows — that shape belongs to
+    :func:`_dedup_cefi_expiry_off_by_one`, not this function (live-measured 76 such
+    OKX-FUTURES groups round-trip here unchanged, confirming the two functions never
+    compete for the same group).
+
+    Order-independence vs the other two Phase-D CeFi dedups (VERIFIED, not assumed):
+    disjoint from :func:`_dedup_bybit_future_base_asset_parsing` by VENUE (BYBIT vs
+    these 3, no overlap possible); disjoint from :func:`_dedup_cefi_expiry_off_by_one`
+    by CONSTRUCTION — that function's check #3 requires ``margin_type`` identical
+    across the group (so any group THIS function would collapse, having a differing
+    ``margin_type``, already fails that function's check #3 and is left for this
+    function), and this function only ever collapses a group whose ``margin_type``
+    actually differs (so a group with identical ``margin_type`` — the shape the
+    expiry dedup targets — can never satisfy this function's match-count-of-exactly-1
+    requirement either: it is either 0 or 2, never 1). Live-verified 2026-07-23: of
+    169 real ambiguous ``(venue, instrument_type, raw_symbol)`` keys across these 3
+    venues, exactly 93 have differing ``margin_type`` (this function's target) and
+    the other 76 have identical ``margin_type`` with a 1-day expiry gap (the OTHER
+    function's target) — zero overlap, so Phase-D call order among all three CeFi
+    dedups genuinely does not matter.
+
+    Pure + idempotent (a frame with none of this pattern round-trips unchanged; a
+    frame missing the required columns is returned unchanged).
+    """
+    required = {"venue", "instrument_type", "raw_symbol", "margin_type"}
+    if df.empty or not required.issubset(df.columns):
+        return df
+
+    venue = df["venue"].fillna("").astype(str).str.strip().str.upper()
+    itype = df["instrument_type"].fillna("").astype(str).str.strip().str.upper()
+    raw = df["raw_symbol"].fillna("").astype(str).str.strip()
+    in_scope = venue.isin(_MARGIN_MISLABEL_VENUE_TO_EXCHANGE) & (raw != "")
+    if not in_scope.any():
+        return df
+
+    key = venue + "\x1f" + itype + "\x1f" + raw.str.upper()
+    scoped_key = key[in_scope]
+    groups = scoped_key.groupby(scoped_key).groups
+
+    drop_idx: list[object] = []
+    collapsed_groups = 0
+    for _group_key, idx in groups.items():
+        if len(idx) != 2:
+            continue  # compound / singleton shape — not this narrow pattern, leave untouched
+
+        group_df = df.loc[idx]
+        row_venue = str(group_df["venue"].iloc[0]).strip().upper()
+        exchange = _MARGIN_MISLABEL_VENUE_TO_EXCHANGE[row_venue]
+        raw_symbol = str(group_df["raw_symbol"].iloc[0]).strip()
+        itype_raw = str(group_df["instrument_type"].iloc[0]).strip().upper()
+        try:
+            instrument_type_enum = InstrumentType(itype_raw)
+        except ValueError:
+            continue  # unrecognised instrument_type string — surprise, not this shape
+
+        item = TardisInstrumentDetail(id=raw_symbol)
+        _base, quote = tardis_parsing._resolve_base_quote(item, raw_symbol, exchange)
+        authoritative = tardis_parsing._infer_margin_type(instrument_type_enum, quote, raw_symbol, exchange)
+        if authoritative is None:
+            continue  # non-derivative type — classifier has no opinion, leave untouched
+
+        group_margin = group_df["margin_type"].fillna("").astype(str).str.strip().str.lower()
+        matches = group_margin == authoritative.value
+        if matches.sum() != 1:
+            continue  # neither or both match — not the known mislabel shape, leave untouched
+
+        drop_idx.extend(i for i, keep in zip(idx, matches, strict=True) if not keep)
+        collapsed_groups += 1
+
+    if not drop_idx:
+        return df
+
+    out = df.drop(index=drop_idx)
+    logger.info(
+        "CeFi margin_type mislabel dedup: collapsed %d row(s) across %d confirmed group(s) "
+        "(stale pre-fix margin_type artifact — see _dedup_cefi_margin_type_mislabel docstring)",
+        len(drop_idx),
+        collapsed_groups,
     )
     return out.reset_index(drop=True)
 
@@ -4610,6 +4775,14 @@ def run_rollup(
         # _dedup_cefi_expiry_off_by_one's docstring) — scoped to cefi (the only
         # asset_group whose rows carry this dated-derivative wire-symbol shape).
         df = _dedup_cefi_expiry_off_by_one(df)
+        # OKX-FUTURES/OKX-SWAP/BITGET-FUTURES stale margin_type mislabel collapse
+        # (see _dedup_cefi_margin_type_mislabel's docstring — operator ruling
+        # 2026-07-23). Order vs the two dedups above is VERIFIED order-independent
+        # (disjoint venue scope vs the BYBIT dedup; disjoint by construction — never
+        # the same group — vs the expiry dedup, since margin_type is one of that
+        # function's compared columns), so placement here (after, not before) is
+        # for readability only, not a correctness dependency.
+        df = _dedup_cefi_margin_type_mislabel(df)
     print(f"[BISECT-D] dedup complete rows={len(df)} asset_group={asset_group}", flush=True)
     logger.info("Rolled up %d catalogue rows", len(df))
 
