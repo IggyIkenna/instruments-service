@@ -5288,3 +5288,293 @@ class TestDedupBybitFutureBaseAssetParsing:
         df = pd.DataFrame([{"instrument_id": "X", "venue": "KALSHI"}])
         out = rollup._dedup_bybit_future_base_asset_parsing(df)
         assert len(out) == 1
+
+
+# ---------------------------------------------------------------------------
+# _dedup_cefi_margin_type_mislabel — OKX-FUTURES/OKX-SWAP/BITGET-FUTURES stale
+# margin_type mislabel collapse (operator ruling 2026-07-23,
+# cefi_okx_margin_type_wire_key_ambiguity_reclassification_2026_07_22.md).
+#
+# Concrete rows below are the EXACT shapes measured live against the prod cefi
+# catalogue 2026-07-23 (independent fresh pull): 93/93 real collapsible pairs
+# split 70 OKX-FUTURES + 5 OKX-SWAP + 18 BITGET-FUTURES, and BYBIT's 3 real
+# PERPETUAL ambiguous keys are untouched (out of scope).
+# ---------------------------------------------------------------------------
+
+
+def _okx_futures_margin_mislabel_pair_rows() -> list[dict[str, object]]:
+    """Real (OKX-FUTURES, FUTURE, BTC-USD-200103) 2-row shape: a pre-2026-07-09-fix
+    stale LINEAR row + the correct INVERSE row a fresh ``_infer_margin_type`` call
+    resolves for this bare (no ``_UM``/``_CM`` infix) wire symbol."""
+    stale_linear = {
+        "venue": "OKX-FUTURES",
+        "instrument_type": "FUTURE",
+        "raw_symbol": "BTC-USD-200103",
+        "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104",
+        "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104",
+        "base_asset": "BTC",
+        "underlying": "BTC",
+        "margin_type": "linear",
+        "expiry": "2020-01-04",
+        "available_from": "2019-12-20",
+        "available_to": "2020-01-04",
+    }
+    correct_inverse = {
+        **stale_linear,
+        "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103",
+        "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103",
+        "margin_type": "inverse",
+        "expiry": "2020-01-03",
+        "available_to": "2020-01-03",
+    }
+    return [stale_linear, correct_inverse]
+
+
+def _okx_swap_margin_mislabel_pair_rows() -> list[dict[str, object]]:
+    """Real (OKX-SWAP, PERPETUAL, TRX-USD-SWAP) 2-row shape — the exact example
+    cited in the operator ruling doc: bare SWAP wire symbol, same pre-2026-07-09
+    OKX margin-inversion bug, no expiry (perpetual)."""
+    stale_linear = {
+        "venue": "OKX-SWAP",
+        "instrument_type": "PERPETUAL",
+        "raw_symbol": "TRX-USD-SWAP",
+        "instrument_id": "OKX-SWAP:PERPETUAL:TRX-USD",
+        "canonical_instrument_id": "OKX-SWAP:PERPETUAL:TRX-USD",
+        "base_asset": "TRX",
+        "underlying": "TRX",
+        "margin_type": "linear",
+        "expiry": None,
+        "available_from": "2019-03-30",
+        "available_to": "2025-08-16",
+    }
+    correct_inverse = {
+        **stale_linear,
+        "instrument_id": "OKX-SWAP:PERPETUAL:TRX-USD@INV",
+        "canonical_instrument_id": "OKX-SWAP:PERPETUAL:TRX-USD@INV",
+        "margin_type": "inverse",
+    }
+    return [stale_linear, correct_inverse]
+
+
+def _bitget_futures_margin_mislabel_pair_rows() -> list[dict[str, object]]:
+    """Real (BITGET-FUTURES, PERPETUAL, AAVEUSD_CM) 2-row shape: before the
+    2026-07-14 fix (commit 75bdf02d) this coin-margined (``_CM``-suffixed,
+    USD-quote) symbol fell through to the LINEAR default instead of INVERSE."""
+    stale_linear = {
+        "venue": "BITGET-FUTURES",
+        "instrument_type": "PERPETUAL",
+        "raw_symbol": "AAVEUSD_CM",
+        "instrument_id": "BITGET-FUTURES:PERPETUAL:AAVE-USD@LIN",
+        "canonical_instrument_id": "BITGET-FUTURES:PERPETUAL:AAVE-USD@LIN",
+        "base_asset": "AAVE",
+        "underlying": "AAVE",
+        "margin_type": "linear",
+        "expiry": None,
+        "available_from": "2026-04-28",
+        "available_to": "2026-07-11",
+    }
+    correct_inverse = {
+        **stale_linear,
+        "instrument_id": "BITGET-FUTURES:PERPETUAL:AAVE-USD@INV",
+        "canonical_instrument_id": "BITGET-FUTURES:PERPETUAL:AAVE-USD@INV",
+        "margin_type": "inverse",
+        "available_to": None,
+    }
+    return [stale_linear, correct_inverse]
+
+
+def _bybit_perpetual_real_different_products_rows() -> list[dict[str, object]]:
+    """BYBIT's 3 real PERPETUAL ambiguous wire keys, out of THIS ruling's scope
+    entirely (a different venue) — must round-trip with zero drops."""
+    rows: list[dict[str, object]] = []
+    for base in ("BTC", "ETH", "XRP"):
+        raw_symbol = f"{base}USD"
+        rows.append(
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": raw_symbol,
+                "instrument_id": f"BYBIT:PERPETUAL:{base}-USD",
+                "canonical_instrument_id": f"BYBIT:PERPETUAL:{base}-USD",
+                "base_asset": base,
+                "underlying": base,
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2019-11-07",
+                "available_to": "2020-03-08",
+            }
+        )
+        rows.append(
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": raw_symbol,
+                "instrument_id": f"BYBIT:PERPETUAL:{base}-USD@INV",
+                "canonical_instrument_id": f"BYBIT:PERPETUAL:{base}-USD@INV",
+                "base_asset": base,
+                "underlying": base,
+                "margin_type": "inverse",
+                "expiry": None,
+                "available_from": "2019-11-07",
+                "available_to": None,
+            }
+        )
+    return rows
+
+
+class TestDedupCefiMarginTypeMislabel:
+    def test_collapses_okx_futures_pair_keeping_correct_inverse_row(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_okx_futures_margin_mislabel_pair_rows())
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["margin_type"] == "inverse"
+        assert kept["instrument_id"] == "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103"
+
+    def test_collapses_okx_swap_pair_keeping_correct_inverse_row(self, rollup: ModuleType) -> None:
+        """The exact TRX-USD-SWAP example cited in the operator ruling doc."""
+        df = pd.DataFrame(_okx_swap_margin_mislabel_pair_rows())
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["margin_type"] == "inverse"
+        assert kept["instrument_id"] == "OKX-SWAP:PERPETUAL:TRX-USD@INV"
+
+    def test_collapses_bitget_futures_pair_keeping_correct_inverse_row(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_bitget_futures_margin_mislabel_pair_rows())
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["margin_type"] == "inverse"
+        assert kept["instrument_id"] == "BITGET-FUTURES:PERPETUAL:AAVE-USD@INV"
+
+    def test_bybit_perpetual_groups_are_completely_untouched(self, rollup: ModuleType) -> None:
+        """BYBIT is not in this ruling's venue scope at all -- out-of-scope venue,
+        never even considered, regardless of any margin_type ambiguity shape."""
+        rows = _bybit_perpetual_real_different_products_rows()
+        df = pd.DataFrame(rows)
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == len(rows) == 6
+        assert sorted(out["instrument_id"]) == sorted(r["instrument_id"] for r in rows)
+
+    def test_group_where_neither_row_matches_classifier_falls_through_safely(self, rollup: ModuleType) -> None:
+        """Both rows carry a margin_type the fresh classifier agrees with NEITHER of
+        (a synthetic surprise, not the known mislabel shape) -- never guess which to
+        drop; leave the whole group untouched."""
+        rows = [
+            {
+                "venue": "OKX-SWAP",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "TRX-USD-SWAP",
+                "instrument_id": "OKX-SWAP:PERPETUAL:TRX-USDC@LIN",
+                "canonical_instrument_id": "OKX-SWAP:PERPETUAL:TRX-USDC@LIN",
+                "base_asset": "TRX",
+                "underlying": "TRX",
+                # Fresh classifier resolves "inverse" for this bare USD-quote wire
+                # symbol -- neither row below carries that value.
+                "margin_type": "quanto",
+                "expiry": None,
+                "available_from": "2019-03-30",
+                "available_to": "2025-08-16",
+            },
+            {
+                "venue": "OKX-SWAP",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "TRX-USD-SWAP",
+                "instrument_id": "OKX-SWAP:PERPETUAL:TRX-USDC@LIN2",
+                "canonical_instrument_id": "OKX-SWAP:PERPETUAL:TRX-USDC@LIN2",
+                "base_asset": "TRX",
+                "underlying": "TRX",
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2019-03-30",
+                "available_to": "2025-08-16",
+            },
+        ]
+        df = pd.DataFrame(rows)
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 2, "neither row matches the fresh classifier -- must not guess"
+        assert sorted(out["instrument_id"]) == sorted(r["instrument_id"] for r in rows)
+
+    def test_already_matching_off_by_one_pair_falls_through_safely(self, rollup: ModuleType) -> None:
+        """A group whose margin_type is IDENTICAL on both rows (the off-by-one-day
+        expiry artifact, e.g. real BTC-USD-260717) is NOT this function's shape
+        (matches.sum() == 2, never 1) -- belongs to _dedup_cefi_expiry_off_by_one."""
+        rows = [
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USD-260717",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20260717",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20260717",
+                "base_asset": "BTC",
+                "underlying": "BTC",
+                "margin_type": "inverse",
+                "expiry": "2026-07-17",
+                "available_from": "2026-07-03",
+                "available_to": "2026-07-17",
+            },
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USD-260717",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20260718",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20260718",
+                "base_asset": "BTC",
+                "underlying": "BTC",
+                "margin_type": "inverse",
+                "expiry": "2026-07-18",
+                "available_from": "2026-07-03",
+                "available_to": "2026-07-18",
+            },
+        ]
+        df = pd.DataFrame(rows)
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 2, "both rows already agree with the classifier -- not this function's job"
+
+    def test_three_row_group_falls_through_untouched(self, rollup: ModuleType) -> None:
+        """More than 2 rows in a group is not this narrow pattern -- never guess."""
+        rows = _okx_futures_margin_mislabel_pair_rows()
+        extra = {**rows[0], "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104-DUP"}
+        df = pd.DataFrame([*rows, extra])
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 3
+
+    def test_order_independent_vs_the_other_two_cefi_dedups(self, rollup: ModuleType) -> None:
+        """Running this dedup BEFORE vs AFTER the other two Phase-D CeFi dedups
+        yields the identical surviving row set -- the three operate on disjoint
+        groups by construction (see this function's docstring)."""
+        rows = [
+            *_okx_futures_margin_mislabel_pair_rows(),
+            *_okx_swap_margin_mislabel_pair_rows(),
+            *_bitget_futures_margin_mislabel_pair_rows(),
+        ]
+        df = pd.DataFrame(rows)
+
+        after_first = rollup._dedup_cefi_margin_type_mislabel(df)
+        after_first = rollup._dedup_bybit_future_base_asset_parsing(after_first)
+        after_first = rollup._dedup_cefi_expiry_off_by_one(after_first)
+
+        after_last = rollup._dedup_bybit_future_base_asset_parsing(df)
+        after_last = rollup._dedup_cefi_expiry_off_by_one(after_last)
+        after_last = rollup._dedup_cefi_margin_type_mislabel(after_last)
+
+        assert len(after_first) == len(after_last) == 3
+        assert sorted(after_first["instrument_id"]) == sorted(after_last["instrument_id"])
+
+    def test_is_idempotent(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_okx_futures_margin_mislabel_pair_rows())
+        once = rollup._dedup_cefi_margin_type_mislabel(df)
+        twice = rollup._dedup_cefi_margin_type_mislabel(once)
+        assert len(once) == len(twice) == 1
+
+    def test_noop_on_empty_frame(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(columns=list(rollup.CATALOG_COLUMNS))
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert out.empty
+
+    def test_noop_when_required_columns_absent(self, rollup: ModuleType) -> None:
+        """Prediction/sports-shaped frames carry no raw_symbol/margin_type -> pass through."""
+        df = pd.DataFrame([{"instrument_id": "X", "venue": "KALSHI"}])
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 1
