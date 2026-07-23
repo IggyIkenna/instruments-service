@@ -836,9 +836,20 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
     Fixture note (2026-07-15): this class formerly used ``YAHOO_FINANCE`` — a
     legacy source-as-venue artifact that was REMOVED from every venue-shaped UAC
     registry that day (source-as-venue modeling error; Yahoo is a *source*, not
-    a *venue*). ``FX`` is now the sole ``NO_ADAPTER_YET`` venue in the tradfi
-    asset group (``VENUE_TO_ADAPTER_KEY["FX"] == NO_ADAPTER_YET``), so it is the
-    canonical fixture for the adapterless-tradfi-venue short-circuit under test.
+    a *venue*). ``FX`` was then the sole ``NO_ADAPTER_YET`` venue in the tradfi
+    asset group, so it was the canonical fixture for the adapterless-tradfi-venue
+    short-circuit under test.
+
+    Fixture note (2026-07-23): FX now HAS a real adapter (``FxReferenceDataAdapter``
+    — a static UAC ``FX_SPOT_PAIRS`` list, no vendor call needed;
+    ``VENUE_TO_ADAPTER_KEY["FX"] == "fx"``), so there is no longer any real tradfi
+    venue permanently declared ``NO_ADAPTER_YET`` to use as a live fixture. Rather
+    than couple this test to whichever venue happens to be adapterless-du-jour (a
+    real config gap gets FIXED, not preserved to keep a test's fixture alive), each
+    test now ``patch.dict``-overrides ``VENUE_TO_ADAPTER_KEY["FX"]`` back to
+    ``NO_ADAPTER_YET`` for its own scope — testing the genuine short-circuit branch
+    on a real, calendar-known tradfi venue name without asserting anything about
+    FX's actual current adapter status.
 
     What the short-circuit guards: ``_zero_records_non_sports`` filters every
     ``NO_ADAPTER_YET`` venue out of ``tradfi_active`` (``v not in
@@ -857,6 +868,9 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
     def test_sole_no_adapter_yet_venue_returns_zero_counts_cleanly(self) -> None:
         """FX alone in active_venues must return {"FX": 0} AND stamp an honest
         empty_confirmed manifest row (no silent absence, no RuntimeError)."""
+        from unified_api_contracts.registry import NO_ADAPTER_YET
+
+        from instruments_service.engine.orchestrator import process_zero_records
         from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
 
         _expected_empty_calls: list[dict[str, object]] = []
@@ -877,13 +891,14 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
             def write(self) -> None:
                 pass
 
-        # NO_ADAPTER_YET / VENUE_TO_ADAPTER_KEY come straight from the real UAC
-        # registry (FX is the sole tradfi NO_ADAPTER_YET venue), and the
-        # short-circuit returns before ever reaching the tradfi calendar path /
-        # the terminal RuntimeError. ManifestWriter/_get_instruments_bucket ARE
-        # patched here (the manifest-stamp behavior needs a real bucket/writer in
+        # FX now has a real adapter (2026-07-23) — override VENUE_TO_ADAPTER_KEY for
+        # this test's scope only, to exercise the genuine NO_ADAPTER_YET short-circuit
+        # without depending on any specific venue's live adapter status (see the class
+        # docstring's 2026-07-23 fixture note). ManifestWriter/_get_instruments_bucket
+        # ARE patched here (the manifest-stamp behavior needs a real bucket/writer in
         # production, not in a unit test).
         with (
+            patch.dict(process_zero_records.VENUE_TO_ADAPTER_KEY, {"FX": NO_ADAPTER_YET}),
             patch(
                 "instruments_service.engine.orchestrator.ManifestWriter",
                 side_effect=_CapManifest,
@@ -912,11 +927,15 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
         tradfi_active (never passed to is_non_trading_day) while the real venue
         still gets the normal calendar treatment.
         """
+        from unified_api_contracts.registry import NO_ADAPTER_YET
+
+        from instruments_service.engine.orchestrator import process_zero_records
         from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
 
         _checked_venues: list[str] = []
 
         with (
+            patch.dict(process_zero_records.VENUE_TO_ADAPTER_KEY, {"FX": NO_ADAPTER_YET}),
             patch(
                 "instruments_service.engine.orchestrator.is_non_trading_day",
                 side_effect=lambda v, _d: (_checked_venues.append(v), True)[1],

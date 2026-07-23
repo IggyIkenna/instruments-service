@@ -79,6 +79,7 @@ from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
 from .adapters.sports.adapters.api_football_reference import ApiFootballReferenceDataAdapter
 from .adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
+from .adapters.tradfi.fx import FxReferenceDataAdapter
 from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
 from .adapters.tradfi.massive import MassiveReferenceDataAdapter
 from .adapters.tradfi.tradfi_live import TradFiLiveReferenceDataAdapter
@@ -146,6 +147,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "etherfi": EtherFiReferenceDataAdapter,
     "euler_v2": EulerV2ReferenceDataAdapter,
     "fluid": FluidReferenceDataAdapter,
+    "fx": FxReferenceDataAdapter,
     "hyperliquid": HyperliquidReferenceDataAdapter,
     "idle": IdleReferenceDataAdapter,
     "jito": JitoReferenceDataAdapter,
@@ -204,6 +206,8 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "databento": "databento",
     "massive": "massive",
     "ibkr": "ibkr",
+    # Curated static FX_SPOT_PAIRS list (UAC registry) — no vendor call, no API key.
+    "fx": "",
     "polymarket": "polymarket",
     "kalshi": "kalshi",
     # Crypto-perp CLOBs — public REST endpoints for contract enumeration, no API key needed.
