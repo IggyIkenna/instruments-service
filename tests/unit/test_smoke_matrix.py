@@ -210,17 +210,30 @@ def test_expected_write_prefix_sports_uses_sports_reference(smoke: ModuleType) -
 
 
 def test_expected_write_prefix_non_sports_uses_instrument_availability(smoke: ModuleType) -> None:
+    """Full canonical hive (operator HARD RULE R2, 2026-07-21 —
+    instrument_availability_hive_canonicalisation_2026_07_21.md): day/pipeline_mode/
+    asset_group/venue, matching writers.py::_instrument_availability_sink_for exactly.
+    Verified against live GCS (2026-07-23): a real --test-run wrote parquets at exactly
+    this path shape; the old day/venue-only prefix this test asserted was stale and
+    caused every non-sports/non-prediction Phase-D smoke cell to false-fail."""
     cell = smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades")
     prefix = smoke.expected_write_prefix(cell, "2026-04-20")
-    assert prefix == "instrument_availability/by_date/day=2026-04-20/venue=BINANCE-FUTURES/"
+    assert prefix == (
+        "instrument_availability/by_date/day=2026-04-20/"
+        "pipeline_mode=batch_instruments_service/asset_group=cefi/venue=BINANCE-FUTURES/"
+    )
 
 
 def test_expected_write_prefix_venue_routed_sports_uses_instrument_availability(smoke: ModuleType) -> None:
     """Bare BETFAIR (sports_provider=None) writes through the generic per-venue
-    instrument-catalog path, NOT sports_reference/ (which is provider-only)."""
+    instrument-catalog path, NOT sports_reference/ (which is provider-only). Same
+    hive-canonicalisation fix as the CEFI case above."""
     cell = smoke.SmokeCell(asset_group="SPORTS", venue="BETFAIR", data_type="instruments")
     prefix = smoke.expected_write_prefix(cell, "2026-04-20")
-    assert prefix == "instrument_availability/by_date/day=2026-04-20/venue=BETFAIR/"
+    assert prefix == (
+        "instrument_availability/by_date/day=2026-04-20/"
+        "pipeline_mode=batch_instruments_service/asset_group=sports/venue=BETFAIR/"
+    )
 
 
 def test_expected_write_prefix_prediction_uses_cqg_base_list_prefix(smoke: ModuleType) -> None:
