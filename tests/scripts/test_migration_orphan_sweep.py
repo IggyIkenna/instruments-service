@@ -497,7 +497,13 @@ class _FakeStorageClient:
         return self._blobs.pop((bucket, path), None) is not None
 
     def list_blobs(self, bucket: str, prefix: str = "", delimiter=None, max_results=None, start_offset: str = ""):
-        for name in self._objects:
+        # Union of the seeded WALK data objects (self._objects) and anything actually
+        # uploaded via upload_from_file_obj (self._blobs, e.g. checkpoint shard/state
+        # files) — real GCS list_blobs would see both; a fake that only saw the seeded
+        # walk objects silently hid checkpoint shards from _delete_checkpoint's own
+        # prefix-based enumeration (found 2026-07-23 chasing a real test failure).
+        names = set(self._objects) | {k[1] for k in self._blobs if k[0] == bucket}
+        for name in sorted(names):
             if start_offset and name < start_offset:
                 continue
             if name.startswith(prefix):
@@ -507,21 +513,23 @@ class _FakeStorageClient:
 class TestCheckpointRoundTrip:
     """Regression for migration_orphan_sweep_performance_decay_2026_07_22.md todo 4 — a
     preempted SPOT VM lost 100% of its in-memory orphan-E finds (defi hit this TWICE).
-    These prove the checkpoint state + actionable rows survive a write/load round trip
-    without a live GCS/credentials dependency."""
+    These prove the checkpoint state + SHARDED actionable rows survive a write/load
+    round trip without a live GCS/credentials dependency. Sharding itself (found
+    2026-07-23: defi's e2-standard-4 VM was OOM-killed at 6.8M actionable rows resident
+    in memory — the original single-growing-file checkpoint never cleared them) is
+    covered by ``test_write_checkpoint_never_grows_a_single_actionable_file`` below."""
 
     def test_load_checkpoint_returns_none_when_absent(self) -> None:
         client = _FakeStorageClient()
         assert _mod._load_checkpoint(client, "bkt", "cefi") is None
-        assert _mod._read_actionable_parquet(client, "bkt", "cefi") == []
+        assert _mod._read_all_actionable_shards(client, "bkt", "cefi", 0) == []
 
-    def test_checkpoint_round_trip_state_and_actionable_rows(self) -> None:
-        client = _FakeStorageClient()
+    def _sample_obj(self, uri: str = "gs://bkt/x.parquet") -> object:
         key = _mod.ShardKey(
             asset_group="cefi", venue="BINANCE-FUTURES", chain="", instrument_type="perpetual", data_type="trades"
         )
-        obj = _mod.SweptObject(
-            uri="gs://bkt/x.parquet",
+        return _mod.SweptObject(
+            uri=uri,
             asset_group="cefi",
             obj_class=OC.ORPHAN_REAL,
             venue=key.venue,
@@ -535,7 +543,11 @@ class TestCheckpointRoundTrip:
             crc32c="abc",
             reason="real data (rows>0) with NO manifest row — backfill record_captured",
         )
-        _mod._write_checkpoint(
+
+    def test_checkpoint_round_trip_state_and_actionable_shard(self) -> None:
+        client = _FakeStorageClient()
+        obj = self._sample_obj()
+        new_shard_count = _mod._write_checkpoint(
             client,
             "bkt",
             "cefi",
@@ -544,23 +556,26 @@ class TestCheckpointRoundTrip:
             class_counts=_mod.Counter({OC.ORPHAN_REAL.value: 1}),
             prefix_taxonomy=_mod.Counter({"service-data": 1}),
             sizing=_mod.SizingRollup.empty(),
-            actionable=[obj],
+            actionable_since_last_checkpoint=[obj],
+            shard_index=0,
         )
+        assert new_shard_count == 1
         ckpt = _mod._load_checkpoint(client, "bkt", "cefi")
         assert ckpt is not None
         assert ckpt.last_name == "x.parquet"
         assert ckpt.seen == 1
         assert ckpt.class_counts == {OC.ORPHAN_REAL.value: 1}
         assert ckpt.prefix_taxonomy == {"service-data": 1}
-        loaded = _mod._read_actionable_parquet(client, "bkt", "cefi")
+        assert ckpt.shard_count == 1
+        loaded = _mod._read_all_actionable_shards(client, "bkt", "cefi", ckpt.shard_count)
         assert len(loaded) == 1
         assert loaded[0].uri == obj.uri
         assert loaded[0].obj_class == OC.ORPHAN_REAL
         assert loaded[0].size_bytes == 123
 
-    def test_delete_checkpoint_removes_state_and_actionable(self) -> None:
+    def test_write_checkpoint_with_no_new_rows_does_not_bump_shard_count(self) -> None:
         client = _FakeStorageClient()
-        _mod._write_checkpoint(
+        new_shard_count = _mod._write_checkpoint(
             client,
             "bkt",
             "cefi",
@@ -569,12 +584,79 @@ class TestCheckpointRoundTrip:
             class_counts=_mod.Counter(),
             prefix_taxonomy=_mod.Counter(),
             sizing=_mod.SizingRollup.empty(),
-            actionable=[],
+            actionable_since_last_checkpoint=[],
+            shard_index=0,
+        )
+        assert new_shard_count == 0
+        assert not client.blob_exists("bkt", _mod._checkpoint_actionable_shard_path("cefi", 0))
+
+    def test_write_checkpoint_never_grows_a_single_actionable_file(self) -> None:
+        """THE regression this shard design fixes: two checkpoint writes must each land
+        their OWN shard (bounded size), never accumulate into one ever-growing file."""
+        client = _FakeStorageClient()
+        shard_count = _mod._write_checkpoint(
+            client,
+            "bkt",
+            "cefi",
+            last_name="a.parquet",
+            seen=1,
+            class_counts=_mod.Counter(),
+            prefix_taxonomy=_mod.Counter(),
+            sizing=_mod.SizingRollup.empty(),
+            actionable_since_last_checkpoint=[self._sample_obj("gs://bkt/a.parquet")],
+            shard_index=0,
+        )
+        shard_count = _mod._write_checkpoint(
+            client,
+            "bkt",
+            "cefi",
+            last_name="b.parquet",
+            seen=2,
+            class_counts=_mod.Counter(),
+            prefix_taxonomy=_mod.Counter(),
+            sizing=_mod.SizingRollup.empty(),
+            actionable_since_last_checkpoint=[self._sample_obj("gs://bkt/b.parquet")],
+            shard_index=shard_count,
+        )
+        assert shard_count == 2
+        shard0 = _mod._read_actionable_parquet_at(client, "bkt", _mod._checkpoint_actionable_shard_path("cefi", 0))
+        shard1 = _mod._read_actionable_parquet_at(client, "bkt", _mod._checkpoint_actionable_shard_path("cefi", 1))
+        assert [o.uri for o in shard0] == ["gs://bkt/a.parquet"]
+        assert [o.uri for o in shard1] == ["gs://bkt/b.parquet"]
+        merged = _mod._read_all_actionable_shards(client, "bkt", "cefi", shard_count)
+        assert [o.uri for o in merged] == ["gs://bkt/a.parquet", "gs://bkt/b.parquet"]
+
+    def test_delete_checkpoint_removes_state_and_all_shards(self) -> None:
+        client = _FakeStorageClient()
+        shard_count = _mod._write_checkpoint(
+            client,
+            "bkt",
+            "cefi",
+            last_name="a.parquet",
+            seen=1,
+            class_counts=_mod.Counter(),
+            prefix_taxonomy=_mod.Counter(),
+            sizing=_mod.SizingRollup.empty(),
+            actionable_since_last_checkpoint=[self._sample_obj("gs://bkt/a.parquet")],
+            shard_index=0,
+        )
+        shard_count = _mod._write_checkpoint(
+            client,
+            "bkt",
+            "cefi",
+            last_name="b.parquet",
+            seen=2,
+            class_counts=_mod.Counter(),
+            prefix_taxonomy=_mod.Counter(),
+            sizing=_mod.SizingRollup.empty(),
+            actionable_since_last_checkpoint=[self._sample_obj("gs://bkt/b.parquet")],
+            shard_index=shard_count,
         )
         assert client.blob_exists("bkt", _mod._checkpoint_state_path("cefi"))
         _mod._delete_checkpoint(client, "bkt", "cefi")
         assert not client.blob_exists("bkt", _mod._checkpoint_state_path("cefi"))
-        assert not client.blob_exists("bkt", _mod._checkpoint_actionable_path("cefi"))
+        for i in range(shard_count):
+            assert not client.blob_exists("bkt", _mod._checkpoint_actionable_shard_path("cefi", i))
         # idempotent — deleting an already-clean checkpoint must not raise.
         _mod._delete_checkpoint(client, "bkt", "cefi")
 
@@ -629,18 +711,20 @@ class TestRunSweepResume:
             class_counts=_mod.Counter({OC.ORPHAN_REAL.value: 2}),
             prefix_taxonomy=_mod.Counter({"service-data": 2}),
             sizing=_mod.SizingRollup.empty(),
-            actionable=[obj1, obj2],
+            actionable_since_last_checkpoint=[obj1, obj2],
+            shard_index=0,
         )
 
         class_counts, _prefix_taxonomy, _sizing, actionable = _mod.run_sweep("cefi", workers=2)
 
-        # n1 + n2 came from the checkpoint, n3 + n4 are newly swept — n2 must NOT be
-        # double-counted despite GCS start_offset being inclusive of it.
+        # n1 + n2 came from the checkpoint's shard (merged in only at final completion —
+        # never held resident during the walk itself), n3 + n4 are newly swept — n2 must
+        # NOT be double-counted despite GCS start_offset being inclusive of it.
         assert class_counts[OC.ORPHAN_REAL.value] == 4
         assert sorted(o.uri for o in actionable) == sorted(f"gs://bkt/{n}" for n in (n1, n2, n3, n4))
-        # a genuinely clean full-walk completion deletes the checkpoint.
+        # a genuinely clean full-walk completion deletes the checkpoint + every shard.
         assert not client.blob_exists("bkt", _mod._checkpoint_state_path("cefi"))
-        assert not client.blob_exists("bkt", _mod._checkpoint_actionable_path("cefi"))
+        assert not client.blob_exists("bkt", _mod._checkpoint_actionable_shard_path("cefi", 0))
 
     def test_limit_triggered_stop_preserves_checkpoint_for_a_future_resume(self, monkeypatch) -> None:
         n1, n2, n3 = (_orphan_path(f"2024-08-0{i}", c) for i, c in enumerate("abc", start=1))
@@ -654,3 +738,33 @@ class TestRunSweepResume:
         # a --limit-triggered stop is NOT a clean completion — the checkpoint written at
         # the batch boundary must survive for a later resume, not be deleted.
         assert client.blob_exists("bkt", _mod._checkpoint_state_path("cefi"))
+
+    def test_multiple_checkpoints_never_accumulate_into_one_growing_shard(self, monkeypatch) -> None:
+        """THE regression this whole shard design exists for: defi's e2-standard-4 VM
+        was OOM-killed at 6.8M actionable rows resident in memory because the original
+        checkpoint fix wrote the WHOLE growing actionable list every interval and never
+        cleared it. Forces a checkpoint after every single object and spies on every
+        real ``_write_checkpoint`` call to prove each one only ever sees the ONE new row
+        since the last checkpoint — never a cumulative, ever-growing list."""
+        names = [_orphan_path(f"2024-09-0{i}", c) for i, c in enumerate("abcd", start=1)]
+        client = _FakeStorageClient(names)
+        self._patch_sweep_deps(monkeypatch, client)
+        monkeypatch.setattr(_mod, "_SWEEP_BATCH_SIZE", 1)
+        monkeypatch.setattr(_mod, "_CHECKPOINT_BATCH_INTERVAL", 1)
+
+        seen_batch_sizes: list[int] = []
+        real_write_checkpoint = _mod._write_checkpoint
+
+        def _spy_write_checkpoint(*args, **kwargs):
+            seen_batch_sizes.append(len(kwargs["actionable_since_last_checkpoint"]))
+            return real_write_checkpoint(*args, **kwargs)
+
+        monkeypatch.setattr(_mod, "_write_checkpoint", _spy_write_checkpoint)
+
+        class_counts, _prefix_taxonomy, _sizing, actionable = _mod.run_sweep("cefi", workers=2)
+
+        assert class_counts[OC.ORPHAN_REAL.value] == 4
+        assert len(actionable) == 4
+        # every checkpoint write saw exactly the ONE new row since the last one — never
+        # a growing cumulative count (1, 2, 3, 4 would mean the OOM bug is back).
+        assert seen_batch_sizes == [1, 1, 1, 1]
