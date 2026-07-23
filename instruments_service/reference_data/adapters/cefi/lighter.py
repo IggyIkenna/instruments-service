@@ -8,6 +8,7 @@ Returns all active perpetual markets as InstrumentRecord objects.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
@@ -27,6 +28,15 @@ from ...schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Lighter's /orderBookDetails carries a numeric ``market_id`` per market
+# ("wire ordinal") alongside its ``symbol``. GCS objects captured before
+# market_id -> symbol resolution existed carry the bare market_id as their
+# filename stem (e.g. "0", "133") instead of a wire symbol. This regex
+# recognises that bare-numeric-stem shape so get_instrument() can route it
+# through resolve_market_index() before falling back to the ordinary
+# raw_symbol lookup (2026-07-23 investigation: market_id -> symbol map).
+_MARKET_INDEX_RE = re.compile(r"^\d+$")
 
 _LIGHTER_API_BASE = "https://mainnet.zklighter.elliot.ai/api/v1"
 # Lighter zkSync mainnet launch (first perpetual markets live 2024-08-01).
@@ -59,6 +69,16 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
     Each market with market_type=perp becomes one InstrumentRecord with
     instrument_type=PERPETUAL, settle_asset=USDC.
     """
+
+    def __init__(self, project_id: str | None = None, api_key: str | None = None) -> None:
+        """Initialize adapter with an empty market_id -> symbol resolution map.
+
+        The map is populated as a side effect of get_instruments() (the same
+        single /orderBookDetails call already fetched there — no extra
+        network round trip) and consumed by resolve_market_index().
+        """
+        super().__init__(project_id=project_id, api_key=api_key)
+        self._market_index_map: dict[str, str] = {}
 
     @property
     def venue(self) -> str:
@@ -116,6 +136,16 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
             sym = str(m.get("symbol", "")).upper()
             if not sym:
                 continue
+            # Capture market_id -> symbol for resolve_market_index(), from the
+            # SAME single-pass loop over the already-fetched /orderBookDetails
+            # response (no extra API call). Every listed market is captured —
+            # including inactive ones (e.g. market_id=133 BIRB stays listed
+            # rather than disappearing) — so a numeric-stem object captured
+            # while a market was still active resolves honestly even after
+            # delisting.
+            market_id_raw = m.get("market_id")
+            if market_id_raw is not None:
+                self._market_index_map[str(market_id_raw)] = sym
             base_asset = sym.split("-")[0] if "-" in sym else sym
             lighter_instrument_key = build_instrument_id(
                 "LIGHTER-ZKSYNC", InstrumentType.PERPETUAL, f"{base_asset}-USDC@{_MARGIN_MARKER}"
@@ -166,10 +196,43 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
         logger.info("Lighter: fetched %d perp instruments", len(results))
         return results
 
+    async def resolve_market_index(self, market_index: str) -> str | None:
+        """Resolve a bare-numeric Lighter market_id wire-ordinal to its symbol.
+
+        ``market_index`` must be a bare-digit string (e.g. "0", "133") — any
+        other shape returns None immediately (it isn't a market_id). On a
+        digit string, ensures the market_id -> symbol map is fresh (via the
+        shared TTL-cached get_instruments_cached() — no live API call unless
+        the cache is stale) and looks it up.
+
+        Honest-absence contract: a market_id not present in the live
+        /orderBookDetails universe (never listed, or a typo) returns None.
+        This NEVER fabricates a symbol guess for an unrecognised index.
+        """
+        if not _MARKET_INDEX_RE.match(market_index):
+            return None
+        await self.get_instruments_cached()
+        return self._market_index_map.get(market_index)
+
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
-        """Fetch a single instrument by identifier."""
+        """Fetch a single instrument by identifier.
+
+        Accepts either the venue's raw wire symbol (e.g. "BTC") or a bare
+        numeric Lighter market_id wire-ordinal (e.g. "0") — objects captured
+        before market_id -> symbol resolution existed carry the bare
+        market_id as their filename stem instead of the symbol. The numeric
+        form is resolved via resolve_market_index() first; an unrecognised
+        market_id returns None (honest absence) rather than falling through
+        to a symbol-shaped comparison that could never legitimately match.
+        """
+        lookup_symbol = symbol
+        if _MARKET_INDEX_RE.match(symbol):
+            resolved = await self.resolve_market_index(symbol)
+            if resolved is None:
+                return None
+            lookup_symbol = resolved
         for inst in await self.get_instruments():
-            if inst.raw_symbol == symbol or inst.raw_symbol == symbol.upper():
+            if inst.raw_symbol == lookup_symbol or inst.raw_symbol == lookup_symbol.upper():
                 return inst
         return None
 
