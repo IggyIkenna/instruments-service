@@ -252,7 +252,11 @@ def main() -> int:
     )
 
     if args.apply_flips:
-        if os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower() not in ("1", "true", "yes"):
+        if os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower() not in (  # noqa: qg-empty-fallback — env-var check, membership test handles absence correctly
+            "1",
+            "true",
+            "yes",
+        ):
             logger.error("--apply-flips requires MANIFEST_PER_VM_SHARDS=true.")
             _emit_event("RECONCILER_FAILED", reason="missing_per_vm_shards_env")
             return 4
@@ -313,7 +317,7 @@ def main() -> int:
             writer.writerow(
                 [
                     orig_idx,
-                    row.get("asset_group", ""),
+                    row.get("asset_group", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
                     row.get("venue", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
                     row.get("data_type", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
                     row.get("date", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank

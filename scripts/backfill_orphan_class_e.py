@@ -615,6 +615,44 @@ def load_class_e(report_uri: str) -> list[dict[str, str]]:
     return e.to_dict("records")  # type: ignore[return-value]
 
 
+# The 34 known-affected (day, venue) combinations from the Solana dex_pools fake-history
+# recurrence -- CONFIRMED FINAL 2026-07-23, see
+# plans/active/issues/defi_solana_dex_pools_fake_history_recurrence_prd_bucket_2026_07_23.md.
+# Mirrors backfill_orphan_class_e_sports.py's split_pre_floor pattern: never let
+# record_captured touch these rows' FABRICATED day= partition (row timestamp resolves to
+# 2026-05-04/05, not the claimed 2025-01-XX day) -- the dedicated relabel-forward migration
+# (market-tick-data-service/scripts/relabel_solana_dex_pools_fake_history.py) owns them
+# instead, under their TRUE date. Naturally scoped to defi by the field values themselves
+# (no other asset_group's rows carry venue=ORCA/RAYDIUM + data_type=dex_pools); no
+# asset_group guard needed.
+_DEX_POOLS_FAKE_HISTORY_DAYS: frozenset[str] = frozenset(f"2025-01-{d:02d}" for d in range(1, 18))
+_DEX_POOLS_FAKE_HISTORY_VENUES: frozenset[str] = frozenset({"ORCA", "RAYDIUM"})
+
+
+def split_dex_pools_fake_history(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Split ``E_orphan_real`` rows into (legitimate, fake-history-excluded).
+
+    Found 2026-07-23 (``defi_solana_dex_pools_fake_history_recurrence_prd_bucket_2026_07_23.md``):
+    a legacy Orca/Raydium REST-collector recurrence back-dated one 2026-05-04/05 live snapshot
+    across every day=2025-01-01..17 partition. Never ``record_captured`` these under their
+    claimed day -- that is fabrication-by-construction, the same class of harm the sports
+    2020-06-floor guard exists to prevent. Operator ruled relabel-to-reality (not wipe); the
+    dedicated migration script handles that under the TRUE date, so these rows are excluded
+    from THIS backfill entirely, not merely deferred to an ESCALATED plan.
+    """
+    legit: list[dict[str, str]] = []
+    excluded: list[dict[str, str]] = []
+    for r in rows:
+        venue = str(r.get("venue", ""))
+        data_type = str(r.get("data_type", ""))
+        day = str(r.get("day", ""))
+        if venue in _DEX_POOLS_FAKE_HISTORY_VENUES and data_type == "dex_pools" and day in _DEX_POOLS_FAKE_HISTORY_DAYS:
+            excluded.append(r)
+        else:
+            legit.append(r)
+    return legit, excluded
+
+
 def reverify_against_index(
     asset_group: str, bucket: str, rows: list[dict[str, str]]
 ) -> tuple[list[dict[str, str]], int]:
@@ -910,8 +948,15 @@ def main(argv: list[str] | None = None) -> int:
     report_uri = args.report_uri or f"gs://{bucket}/_index/audit/orphan_sweep_{ag}.parquet"
 
     logger.info("backfill-orphan-E %s: bucket=%s report=%s", ag, bucket, report_uri)
-    e_rows = load_class_e(report_uri)
-    logger.info("report class-E rows: %d", len(e_rows))
+    e_rows_raw = load_class_e(report_uri)
+    e_rows, fake_history_rows = split_dex_pools_fake_history(e_rows_raw)
+    logger.info(
+        "report class-E rows: %d (%d legitimate, %d dex_pools-fake-history EXCLUDED — see "
+        "defi_solana_dex_pools_fake_history_recurrence_prd_bucket_2026_07_23.md)",
+        len(e_rows_raw),
+        len(e_rows),
+        len(fake_history_rows),
+    )
     still, covered = reverify_against_index(ag, bucket, e_rows)
     logger.info("re-verify vs LIVE index: already-covered=%d (class-B reclass), still-orphan=%d", covered, len(still))
     if args.limit is not None:
