@@ -255,14 +255,14 @@ gcloud projects add-iam-policy-binding <project-id> \
 
 ### 6.5 API key sources & pricing
 
-| Secret                               | Provider  | Get key from                  | Purpose          | Pricing                 |
-| ------------------------------------ | --------- | ----------------------------- | ---------------- | ----------------------- |
-| `tardis-api-key-full`                | Tardis    | https://tardis.dev            | CeFi crypto data | Subscription-based      |
-| `databento-api-key`                  | Databento | https://databento.com         | TradFi data      | Pay-per-use             |
-| `graph-api-key` / `thegraph-api-key` | The Graph | https://thegraph.com/studio   | DeFi subgraphs   | **$2 per 100k queries** |
-| `alchemy-api-key`                    | Alchemy   | https://dashboard.alchemy.com | DeFi RPC         | Pay-as-you-go           |
-| `aavescan-api-key`                   | AaveScan  | https://aavescan.com          | AAVE fallback    | Free                    |
-| `ibkr-account-credentials`           | IBKR      | (IBKR account portal)         | TradFi (IBKR)    | Brokerage account       |
+| Secret                                      | Provider  | Get key from                  | Purpose          | Pricing                 |
+| ------------------------------------------- | --------- | ----------------------------- | ---------------- | ----------------------- |
+| `tardis-api-key-full`                       | Tardis    | https://tardis.dev            | CeFi crypto data | Subscription-based      |
+| `databento-api-key`                         | Databento | https://databento.com         | TradFi data      | Pay-per-use             |
+| `thegraph-api-key` (9-key pool, `-2`..`-9`) | The Graph | https://thegraph.com/studio   | DeFi subgraphs   | **$2 per 100k queries** |
+| `alchemy-api-key`                           | Alchemy   | https://dashboard.alchemy.com | DeFi RPC         | Pay-as-you-go           |
+| `aavescan-api-key`                          | AaveScan  | https://aavescan.com          | AAVE fallback    | Free                    |
+| `ibkr-account-credentials`                  | IBKR      | (IBKR account portal)         | TradFi (IBKR)    | Brokerage account       |
 
 **The Graph billing**: free tier 100k queries/month; paid tier $2/100k queries, billed in GRT on Arbitrum One
 (top up your API key's wallet at https://thegraph.com/studio/billing/). Subgraphs used: Uniswap V2/V3/V4, AAVE V3,
