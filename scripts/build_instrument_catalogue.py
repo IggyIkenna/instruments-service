@@ -4151,6 +4151,97 @@ def _wire_symbol_expiry_date_numeric_yymmdd(raw_symbol: str) -> date | None:
     return parsed.date() if parsed is not None else None
 
 
+def _dedup_bybit_future_base_asset_parsing(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse BYBIT FUTURE rows split by a base-asset PARSING REGRESSION.
+
+    ROOT CAUSE (confirmed against the live prod cefi catalogue, 2026-07-22 — a
+    live measurement found 39 ambiguous BYBIT ``CeFiWireCanonicalMap`` wire
+    keys: 36 FUTURE, 3 PERPETUAL): an OLDER catalogue-build generation's generic
+    dash-split fallback did not recognise a quote glued into a Bybit dated
+    FUTURE's left segment (``BTCUSDT-25DEC26``) and fell through to
+    ``base=parts[0]`` verbatim — ``base_asset="BTCUSDT"`` instead of the
+    correct ``"BTC"``. The CURRENT parser,
+    :func:`instruments_service.reference_data.adapters.cefi.tardis.parsing.
+    _split_bybit_symbol`, already strips the quote suffix correctly (its own
+    docstring's worked example: ``BTCUSDT-25DEC26 -> (BTC, USDT)``). Both
+    generations' rows persist forever in the all-lifecycle catalogue rollup,
+    producing two permanent rows per real contract that are byte-identical on
+    every other :data:`CATALOG_COLUMNS` entry and differ ONLY in
+    ``base_asset``/``underlying`` (and the ids that embed them).
+
+    Scoped STRICTLY to ``venue == "BYBIT"`` and ``instrument_type ==
+    "FUTURE"`` — BYBIT's 3 genuinely ambiguous PERPETUAL wire keys
+    (``BTCUSD``/``ETHUSD``/``XRPUSD``: a closed 2019-2020 linear market and a
+    separate still-active inverse market sharing one un-marked wire spelling)
+    are two real, DIFFERENT products and must never be touched by this
+    function — verified by a dedicated test.
+
+    For each ``(venue, instrument_type, raw_symbol)`` group in scope, re-parse
+    ``raw_symbol`` with the SAME shipped ``_split_bybit_symbol`` the live
+    adapter uses (reused, not reimplemented) to get the one authoritative
+    ``base_asset``. A row whose ``base_asset`` does NOT match this fresh parse
+    is the stale parsing-regression artifact and is dropped; a row whose
+    ``base_asset`` DOES match is kept.
+
+    STOP-ON-SURPRISE (never silently guess): if ``_split_bybit_symbol`` fails
+    to resolve a base for an in-scope ``raw_symbol``, or resolves one that
+    matches NEITHER row in the group, this is not the known bug shape —
+    blindly applying the drop rule would silently delete every row in the
+    group. Raises ``ValueError`` instead so the surprise gets diagnosed rather
+    than a group quietly disappearing.
+
+    Deliberately run BEFORE :func:`_dedup_cefi_expiry_off_by_one` in
+    ``run_rollup``'s Phase D: 7 of the 36 FUTURE keys are 3-row COMPOUND
+    groups (the correct-base 2-row off-by-one-day pair PLUS one stale-base 3rd
+    row) — stripping the stale-base row here first leaves exactly the 2-row
+    off-by-one pair, which the expiry dedup's own next pass then collapses to
+    1 on its own.
+
+    Pure + idempotent (a frame with none of this pattern round-trips
+    unchanged; a frame missing the required columns is returned unchanged).
+    """
+    required = {"venue", "instrument_type", "raw_symbol", "base_asset"}
+    if df.empty or not required.issubset(df.columns):
+        return df
+
+    venue = df["venue"].fillna("").astype(str).str.strip().str.upper()
+    itype = df["instrument_type"].fillna("").astype(str).str.strip().str.upper()
+    raw = df["raw_symbol"].fillna("").astype(str).str.strip().str.upper()
+    in_scope = (venue == "BYBIT") & (itype == "FUTURE") & (raw != "")
+    if not in_scope.any():
+        return df
+
+    scoped_raw = raw[in_scope]
+    groups = scoped_raw.groupby(scoped_raw).groups
+
+    drop_idx: list[object] = []
+    for raw_symbol, idx in groups.items():
+        if len(idx) < 2:
+            continue
+        authoritative_base, _authoritative_quote = tardis_parsing._split_bybit_symbol(raw_symbol)
+        group_base = df.loc[idx, "base_asset"].fillna("").astype(str).str.strip().str.upper()
+        matches = group_base == authoritative_base
+        if not authoritative_base or not matches.any():
+            raise ValueError(
+                f"STOP-ON-SURPRISE: BYBIT FUTURE raw_symbol={raw_symbol!r} re-parsed via "
+                f"_split_bybit_symbol to base_asset={authoritative_base!r}, which matches NONE "
+                f"of the group's {len(idx)} row(s) (base_asset values: {sorted(set(group_base))}) "
+                "— this is not the known parsing-regression shape; diagnose before dropping."
+            )
+        drop_idx.extend(i for i, keep in zip(idx, matches, strict=True) if not keep)
+
+    if not drop_idx:
+        return df
+
+    out = df.drop(index=drop_idx)
+    logger.info(
+        "BYBIT FUTURE base-asset parsing-regression dedup: dropped %d stale row(s) "
+        "(see _dedup_bybit_future_base_asset_parsing docstring)",
+        len(drop_idx),
+    )
+    return out.reset_index(drop=True)
+
+
 #: Catalogue columns the off-by-one artifact itself legitimately touches — NOT
 #: required to match across a candidate group (see :func:`_dedup_cefi_expiry_off_by_one`).
 #: Every other :data:`CATALOG_COLUMNS` entry must be byte-identical for the collapse
@@ -4190,17 +4281,28 @@ def _dedup_cefi_expiry_off_by_one(df: pd.DataFrame) -> pd.DataFrame:
     76/146 OKX-FUTURES ambiguous ``(venue, instrument_type, raw_symbol)`` wire keys
     (the OKX-FUTURES pure numeric-off-by-one sub-pattern only — see below).
 
-    The other 70/146 OKX-FUTURES rows and every BYBIT (39) / BITGET-FUTURES (18) /
-    OKX-SWAP (5) ambiguous key are a REAL, DIFFERENT ambiguity — a genuinely
-    different ``margin_type``/``base_asset`` under the same wire symbol (e.g. the
-    linear-vs-inverse OKX-FUTURES/OKX-SWAP perp-family margin-mislabeling clash, or
-    BYBIT's base-asset-parsing clash) — and correctly fail check #3 (``margin_type``
-    IS a compared column, never on the ignore-list), so they stay excluded exactly
-    as today regardless of whether check #4 would otherwise resolve a wire date for
-    them. That margin_type-driven collapse is a SEPARATE, NOT-YET-IMPLEMENTED
-    follow-up (it would contradict this very docstring's prior classification of
-    that shape as a real ambiguity — a decision this fix deliberately leaves
-    untouched pending explicit operator/team review, not silently overridden here).
+    The other 70/146 OKX-FUTURES rows and every BITGET-FUTURES (18) / OKX-SWAP (5)
+    ambiguous key are a REAL, DIFFERENT ambiguity — a genuinely different
+    ``margin_type`` under the same wire symbol (the linear-vs-inverse
+    OKX-FUTURES/OKX-SWAP perp-family margin-mislabeling clash) — and correctly
+    fail check #3 (``margin_type`` IS a compared column, never on the
+    ignore-list), so they stay excluded exactly as today regardless of whether
+    check #4 would otherwise resolve a wire date for them. That margin_type-driven
+    collapse is a SEPARATE, NOT-YET-IMPLEMENTED follow-up (it would contradict
+    this very docstring's prior classification of that shape as a real
+    ambiguity — a decision this fix deliberately leaves untouched pending
+    explicit operator/team review, not silently overridden here).
+
+    BYBIT's 39 ambiguous keys are a THIRD, DISTINCT shape handled by a dedicated
+    upstream dedup instead of this one: 36 FUTURE keys are a base-asset PARSING
+    REGRESSION (an older catalogue-build generation's dash-split fallback failed
+    to strip the quote from the left segment — see
+    :func:`_dedup_bybit_future_base_asset_parsing`, run BEFORE this function in
+    ``run_rollup``'s Phase D so the 7 compound 3-row groups reduce to a pure
+    2-row off-by-one pair this function then collapses); the remaining 3
+    PERPETUAL keys (``BTCUSD``/``ETHUSD``/``XRPUSD``) are two genuinely
+    different real products sharing one un-marked wire spelling and are
+    correctly EXCLUDED, untouched by either dedup.
 
     This is a NARROW, VERIFIED collapse — never a general "drop duplicates" rule.
     A group of rows sharing one normalised ``(venue, instrument_type, raw_symbol)``
@@ -4498,6 +4600,12 @@ def run_rollup(
 
     # Phase D: dedup / row-count
     if asset_group == "cefi":
+        # BYBIT FUTURE base-asset parsing-regression collapse (see
+        # _dedup_bybit_future_base_asset_parsing's docstring) — MUST run before
+        # the expiry off-by-one collapse below: 7 of its 36 FUTURE keys are
+        # 3-row compound groups where stripping the stale-base row here first
+        # leaves a pure 2-row off-by-one pair for the next dedup to collapse.
+        df = _dedup_bybit_future_base_asset_parsing(df)
         # Ambiguous-wire-key expiry off-by-one collapse (see
         # _dedup_cefi_expiry_off_by_one's docstring) — scoped to cefi (the only
         # asset_group whose rows carry this dated-derivative wire-symbol shape).

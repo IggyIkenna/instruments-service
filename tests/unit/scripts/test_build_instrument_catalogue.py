@@ -5042,3 +5042,249 @@ class TestDedupCefiExpiryOffByOne:
         deduped = rollup._dedup_cefi_expiry_off_by_one(raw)
         assert len(deduped) == 1
         assert deduped.to_dict("records")[0]["instrument_id"] == "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P"
+
+
+# ---------------------------------------------------------------------------
+# _dedup_bybit_future_base_asset_parsing — BYBIT FUTURE base-asset PARSING
+# REGRESSION collapse (cefi_ambiguous_wire_key_bybit_base_asset_parsing_2026_07_22).
+#
+# Concrete example rows below are the EXACT shapes measured live against the prod
+# cefi catalogue 2026-07-22: an older catalogue-build generation's dash-split
+# fallback failed to strip the quote off a Bybit dated FUTURE's left segment
+# (BTCUSDT-10JUL26 -> base="BTCUSDT" instead of "BTC"), producing a stale
+# duplicate row alongside the correctly-parsed one.
+# ---------------------------------------------------------------------------
+
+
+def _bybit_future_simple_pair_rows() -> list[dict[str, object]]:
+    """Real (BYBIT, FUTURE, BTCUSDT-10JUL26) 2-row shape: one correctly-parsed
+    row (base_asset=BTC) + one stale parsing-regression row (base_asset=BTCUSDT)."""
+    base = {
+        "venue": "BYBIT",
+        "instrument_type": "FUTURE",
+        "raw_symbol": "BTCUSDT-10JUL26",
+        "margin_type": "linear",
+        "expiry": "2026-07-10",
+        "available_from": "2026-06-19",
+        "available_to": "2026-07-10",
+    }
+    correct = {
+        **base,
+        "instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260710",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260710",
+        "base_asset": "BTC",
+        "underlying": "BTC",
+    }
+    stale = {
+        **base,
+        "instrument_id": "BYBIT:FUTURE:BTCUSDT-USDT@LIN-20260710",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTCUSDT-USDT@LIN-20260710",
+        "base_asset": "BTCUSDT",
+        "underlying": "BTCUSDT",
+    }
+    return [correct, stale]
+
+
+def _bybit_future_compound_group_rows() -> list[dict[str, object]]:
+    """Real (BYBIT, FUTURE, BTCUSDT-17JUL26) 3-row COMPOUND shape: the correct-base
+    (BTC) off-by-one-day pair (2026-07-17 / 2026-07-18) PLUS the stale-base
+    (BTCUSDT) parsing-regression 3rd row nested at the same 2026-07-17 expiry."""
+    correct_717 = {
+        "venue": "BYBIT",
+        "instrument_type": "FUTURE",
+        "raw_symbol": "BTCUSDT-17JUL26",
+        "instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260717",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260717",
+        "base_asset": "BTC",
+        "underlying": "BTC",
+        "margin_type": "linear",
+        "expiry": "2026-07-17",
+        "available_from": "2026-06-26",
+        "available_to": "2026-07-17",
+    }
+    correct_718 = {
+        **correct_717,
+        "instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260718",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260718",
+        "expiry": "2026-07-18",
+        "available_to": "2026-07-18",
+    }
+    stale_717 = {
+        **correct_717,
+        "instrument_id": "BYBIT:FUTURE:BTCUSDT-USDT@LIN-20260717",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTCUSDT-USDT@LIN-20260717",
+        "base_asset": "BTCUSDT",
+        "underlying": "BTCUSDT",
+    }
+    return [correct_717, correct_718, stale_717]
+
+
+def _bybit_perpetual_ambiguous_rows() -> list[dict[str, object]]:
+    """The 3 real BYBIT PERPETUAL ambiguous wire keys (measured 2026-07-22) —
+    a closed 2019-2020 linear market and a separate still-active inverse market
+    sharing one un-marked wire spelling. Two REAL different products; must NEVER
+    be touched by the FUTURE-scoped base-asset dedup."""
+    rows: list[dict[str, object]] = []
+    for base in ("BTC", "ETH", "XRP"):
+        raw_symbol = f"{base}USD"
+        rows.append(
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": raw_symbol,
+                "instrument_id": f"BYBIT:PERPETUAL:{base}-USD",
+                "canonical_instrument_id": f"BYBIT:PERPETUAL:{base}-USD",
+                "base_asset": base,
+                "underlying": base,
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2019-11-07",
+                "available_to": "2020-03-08",
+            }
+        )
+        rows.append(
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": raw_symbol,
+                "instrument_id": f"BYBIT:PERPETUAL:{base}-USD@INV",
+                "canonical_instrument_id": f"BYBIT:PERPETUAL:{base}-USD@INV",
+                "base_asset": base,
+                "underlying": base,
+                "margin_type": "inverse",
+                "expiry": None,
+                "available_from": "2019-11-07",
+                "available_to": None,
+            }
+        )
+    return rows
+
+
+class TestDedupBybitFutureBaseAssetParsing:
+    def test_collapses_simple_two_row_pair_keeping_correctly_parsed_row(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_bybit_future_simple_pair_rows())
+        out = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["instrument_id"] == "BYBIT:FUTURE:BTC-USDT@LIN-20260710"
+        assert kept["base_asset"] == "BTC"
+
+    def test_compound_three_row_group_fully_resolves_to_one_after_both_dedups(self, rollup: ModuleType) -> None:
+        """The 7 real 3-row compound groups: base-asset dedup strips the stale
+        3rd row FIRST, leaving a pure 2-row off-by-one pair the EXISTING expiry
+        dedup then collapses to 1 on its own next pass — verifying the
+        composition, not just each dedup in isolation."""
+        df = pd.DataFrame(_bybit_future_compound_group_rows())
+        after_base_dedup = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert len(after_base_dedup) == 2, "stale base_asset=BTCUSDT row must be stripped first"
+        assert set(after_base_dedup["base_asset"]) == {"BTC"}
+        after_expiry_dedup = rollup._dedup_cefi_expiry_off_by_one(after_base_dedup)
+        assert len(after_expiry_dedup) == 1
+        kept = after_expiry_dedup.to_dict("records")[0]
+        assert kept["instrument_id"] == "BYBIT:FUTURE:BTC-USDT@LIN-20260717"
+        assert kept["expiry"] == "2026-07-17"
+
+    def test_perpetual_groups_are_completely_untouched(self, rollup: ModuleType) -> None:
+        """The 3 real BYBIT PERPETUAL ambiguous keys are a genuinely different
+        real-product ambiguity (not this parsing bug) and must round-trip with
+        zero drops — scoped strictly to instrument_type == FUTURE."""
+        rows = _bybit_perpetual_ambiguous_rows()
+        df = pd.DataFrame(rows)
+        out = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert len(out) == len(rows) == 6
+        assert sorted(out["instrument_id"]) == sorted(r["instrument_id"] for r in rows)
+
+    def test_no_base_asset_match_in_either_row_raises_stop_on_surprise(self, rollup: ModuleType) -> None:
+        """A group whose raw_symbol re-parses to an authoritative base_asset that
+        matches NEITHER row must never guess (silently dropping the whole group)
+        -- it raises for diagnosis instead."""
+        rows = [
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTCUSDT-17JUL26",
+                "instrument_id": "BYBIT:FUTURE:ETH-USDT@LIN-20260717",
+                "canonical_instrument_id": "BYBIT:FUTURE:ETH-USDT@LIN-20260717",
+                "base_asset": "ETH",
+                "underlying": "ETH",
+                "margin_type": "linear",
+                "expiry": "2026-07-17",
+                "available_from": "2026-06-26",
+                "available_to": "2026-07-17",
+            },
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTCUSDT-17JUL26",
+                "instrument_id": "BYBIT:FUTURE:SOL-USDT@LIN-20260717",
+                "canonical_instrument_id": "BYBIT:FUTURE:SOL-USDT@LIN-20260717",
+                "base_asset": "SOL",
+                "underlying": "SOL",
+                "margin_type": "linear",
+                "expiry": "2026-07-17",
+                "available_from": "2026-06-26",
+                "available_to": "2026-07-17",
+            },
+        ]
+        with pytest.raises(ValueError, match="STOP-ON-SURPRISE"):
+            rollup._dedup_bybit_future_base_asset_parsing(pd.DataFrame(rows))
+
+    def test_unparseable_raw_symbol_also_raises_stop_on_surprise(self, rollup: ModuleType) -> None:
+        """_split_bybit_symbol resolving NO base at all (none of its 3 known
+        shapes match) is equally a surprise -- never silently drop the group."""
+        rows = [
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "NOTAKNOWNSHAPE",
+                "instrument_id": "BYBIT:FUTURE:X-1",
+                "canonical_instrument_id": "BYBIT:FUTURE:X-1",
+                "base_asset": "FOO",
+                "underlying": "FOO",
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2026-01-01",
+                "available_to": None,
+            },
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "NOTAKNOWNSHAPE",
+                "instrument_id": "BYBIT:FUTURE:X-2",
+                "canonical_instrument_id": "BYBIT:FUTURE:X-2",
+                "base_asset": "BAR",
+                "underlying": "BAR",
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2026-01-01",
+                "available_to": None,
+            },
+        ]
+        with pytest.raises(ValueError, match="STOP-ON-SURPRISE"):
+            rollup._dedup_bybit_future_base_asset_parsing(pd.DataFrame(rows))
+
+    def test_leaves_non_bybit_venue_untouched(self, rollup: ModuleType) -> None:
+        """Same wire-symbol shape on a different venue is out of scope entirely
+        -- scoped STRICTLY to venue == BYBIT."""
+        rows = _bybit_future_simple_pair_rows()
+        for row in rows:
+            row["venue"] = "OKX-FUTURES"
+        out = rollup._dedup_bybit_future_base_asset_parsing(pd.DataFrame(rows))
+        assert len(out) == 2
+
+    def test_is_idempotent(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_bybit_future_simple_pair_rows())
+        once = rollup._dedup_bybit_future_base_asset_parsing(df)
+        twice = rollup._dedup_bybit_future_base_asset_parsing(once)
+        assert len(once) == len(twice) == 1
+
+    def test_noop_on_empty_frame(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(columns=list(rollup.CATALOG_COLUMNS))
+        out = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert out.empty
+
+    def test_noop_when_required_columns_absent(self, rollup: ModuleType) -> None:
+        """Prediction/sports-shaped frames carry no raw_symbol/base_asset -> pass through."""
+        df = pd.DataFrame([{"instrument_id": "X", "venue": "KALSHI"}])
+        out = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert len(out) == 1
