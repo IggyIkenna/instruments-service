@@ -609,21 +609,28 @@ this checkpoint is the fix."""
 class _Checkpoint:
     """Resumable walk state: enough to reseed every in-memory accumulator + the GCS
     ``start_offset`` to resume the lexicographically-ordered walk exactly where a
-    preempted run left off."""
+    preempted run left off. ``shard_count`` is how many actionable SHARD files exist
+    (see module docstring on sharding, below) — NOT the actionable rows themselves,
+    which are never eagerly loaded back into memory (only merged once, at the very end)."""
 
     last_name: str
     seen: int
     class_counts: dict[str, int]
     prefix_taxonomy: dict[str, int]
     sizing_by_cell: dict[str, list[int]]
+    shard_count: int
 
 
 def _checkpoint_state_path(asset_group: str) -> str:
     return f"_index/audit/_orphan_sweep_ckpt_{asset_group}_state.json"
 
 
-def _checkpoint_actionable_path(asset_group: str) -> str:
-    return f"_index/audit/_orphan_sweep_ckpt_{asset_group}_actionable.parquet"
+def _checkpoint_actionable_shard_prefix(asset_group: str) -> str:
+    return f"_index/audit/_orphan_sweep_ckpt_{asset_group}_actionable_"
+
+
+def _checkpoint_actionable_shard_path(asset_group: str, shard_index: int) -> str:
+    return f"{_checkpoint_actionable_shard_prefix(asset_group)}{shard_index:06d}.parquet"
 
 
 class _CheckpointStateDict(TypedDict):
@@ -634,6 +641,7 @@ class _CheckpointStateDict(TypedDict):
     class_counts: dict[str, int]
     prefix_taxonomy: dict[str, int]
     sizing_by_cell: dict[str, list[int]]
+    shard_count: int
 
 
 def _load_checkpoint(client: object, bucket: str, asset_group: str) -> _Checkpoint | None:
@@ -654,6 +662,7 @@ def _load_checkpoint(client: object, bucket: str, asset_group: str) -> _Checkpoi
             class_counts=dict(state["class_counts"]),
             prefix_taxonomy=dict(state["prefix_taxonomy"]),
             sizing_by_cell={k: list(v) for k, v in state["sizing_by_cell"].items()},
+            shard_count=state["shard_count"],
         )
     except Exception:
         logger.warning("orphan-sweep %s: checkpoint state unreadable — starting fresh", asset_group)
@@ -679,13 +688,12 @@ class _ActionableRowDict(TypedDict):
     reason: str
 
 
-def _read_actionable_parquet(client: object, bucket: str, asset_group: str) -> list[SweptObject]:
-    """Load the checkpoint's actionable (class-B + class-E) rows written so far."""
+def _read_actionable_parquet_at(client: object, bucket: str, path: str) -> list[SweptObject]:
+    """Load one actionable (class-B + class-E) parquet shard, or ``[]`` if absent."""
     import io
 
     import pandas as pd
 
-    path = _checkpoint_actionable_path(asset_group)
     if not client.blob_exists(bucket, path):  # type: ignore[attr-defined]
         return []
     raw = client.download_bytes(bucket, path)  # type: ignore[attr-defined]
@@ -711,6 +719,19 @@ def _read_actionable_parquet(client: object, bucket: str, asset_group: str) -> l
     ]
 
 
+def _read_all_actionable_shards(client: object, bucket: str, asset_group: str, shard_count: int) -> list[SweptObject]:
+    """Merge every actionable shard written so far — the ONLY point in the whole walk
+    that materialises the full historical actionable list in memory, and only once, at
+    genuine completion (see module note on ``_write_checkpoint`` for why sharding exists
+    at all: found 2026-07-22, defi's e2-standard-4 VM was OOM-killed at 11.75M objects /
+    6.8M actionable rows resident in memory — the original checkpoint fix bounded WRITE
+    frequency but not what stayed resident between writes)."""
+    merged: list[SweptObject] = []
+    for i in range(shard_count):
+        merged.extend(_read_actionable_parquet_at(client, bucket, _checkpoint_actionable_shard_path(asset_group, i)))
+    return merged
+
+
 def _write_checkpoint(
     client: object,
     bucket: str,
@@ -721,40 +742,60 @@ def _write_checkpoint(
     class_counts: Counter[str],
     prefix_taxonomy: Counter[str],
     sizing: SizingRollup,
-    actionable: list[SweptObject],
-) -> None:
+    actionable_since_last_checkpoint: list[SweptObject],
+    shard_index: int,
+) -> int:
     """Write the resumable checkpoint: a small state JSON (bounded size — counters, not
-    per-object rows) plus the actionable parquet accumulated so far (reuses
-    :func:`_write_report`'s writer — same schema the final report + CF-21 cleanup read)."""
+    per-object rows) plus, if there's anything new, ONE actionable shard containing ONLY
+    the rows found since the LAST checkpoint (never the whole history — that is what
+    keeps both the per-write upload cost AND resident memory bounded regardless of how
+    large the walk's cumulative orphan count grows). Returns the shard count to persist
+    in state (``shard_index + 1`` if a shard was written, else unchanged) — callers MUST
+    clear their in-memory ``actionable`` accumulator whenever this returns a bumped count."""
     import io
     import json
 
+    wrote_shard = bool(actionable_since_last_checkpoint)
+    new_shard_count = shard_index + 1 if wrote_shard else shard_index
     state = {
         "last_name": last_name,
         "seen": seen,
         "class_counts": dict(class_counts),
         "prefix_taxonomy": dict(prefix_taxonomy),
         "sizing_by_cell": {"\x1f".join(cell): agg for cell, agg in sizing.by_cell.items()},
+        "shard_count": new_shard_count,
     }
     client.upload_from_file_obj(  # type: ignore[attr-defined]
         bucket, _checkpoint_state_path(asset_group), io.BytesIO(json.dumps(state).encode())
     )
-    _write_actionable_parquet(client, bucket, _checkpoint_actionable_path(asset_group), actionable)
+    if wrote_shard:
+        _write_actionable_parquet(
+            client,
+            bucket,
+            _checkpoint_actionable_shard_path(asset_group, shard_index),
+            actionable_since_last_checkpoint,
+        )
     logger.info(
-        "orphan-sweep %s: checkpoint written — %d objects swept, %d actionable rows, resume point %r",
+        "orphan-sweep %s: checkpoint written — %d objects swept, +%d actionable rows this shard "
+        "(%d shards total), resume point %r",
         asset_group,
         seen,
-        len(actionable),
+        len(actionable_since_last_checkpoint),
+        new_shard_count,
         last_name,
     )
+    return new_shard_count
 
 
 def _delete_checkpoint(client: object, bucket: str, asset_group: str) -> None:
-    """Delete the checkpoint (state + actionable parquet) — called on a genuinely clean
-    full-walk completion, marking there is nothing left to resume."""
-    for path in (_checkpoint_state_path(asset_group), _checkpoint_actionable_path(asset_group)):
-        if client.blob_exists(bucket, path):  # type: ignore[attr-defined]
-            client.delete_blob(bucket, path)  # type: ignore[attr-defined]
+    """Delete the checkpoint (state JSON + every actionable shard) — called on a
+    genuinely clean full-walk completion, marking there is nothing left to resume."""
+    state_path = _checkpoint_state_path(asset_group)
+    if client.blob_exists(bucket, state_path):  # type: ignore[attr-defined]
+        client.delete_blob(bucket, state_path)  # type: ignore[attr-defined]
+    shard_prefix = _checkpoint_actionable_shard_prefix(asset_group)
+    for blob in client.list_blobs(bucket, prefix=shard_prefix):  # type: ignore[attr-defined]
+        client.delete_blob(bucket, blob.name)  # type: ignore[attr-defined]
 
 
 def run_sweep(
@@ -793,26 +834,30 @@ def run_sweep(
     class_counts: Counter[str] = Counter()
     prefix_taxonomy: Counter[str] = Counter()
     sizing = SizingRollup.empty()
-    actionable: list[SweptObject] = []  # class-B (legacy twins for CF-21 cleanup) + class-E (orphans)
+    # Only holds rows found SINCE the last checkpoint shard write — NEVER the whole
+    # walk's history (see _write_checkpoint: a preempted defi run held 6.8M SweptObject
+    # instances resident and got OOM-killed on e2-standard-4 before this fix).
+    actionable: list[SweptObject] = []
+    shard_count = 0
     start_offset = ""
     seen_base = 0
     skip_boundary = ""  # GCS start_offset is INCLUSIVE — the resumed walk re-yields this name once
     if resume:
         ckpt = _load_checkpoint(client, bucket, asset_group)
         if ckpt is not None:
-            actionable = _read_actionable_parquet(client, bucket, asset_group)
             class_counts = Counter(ckpt.class_counts)
             prefix_taxonomy = Counter(ckpt.prefix_taxonomy)
             for cell_key, agg in ckpt.sizing_by_cell.items():
                 cell = tuple(cell_key.split("\x1f"))
                 sizing.by_cell[cell] = list(agg)  # type: ignore[index]
             start_offset, seen_base, skip_boundary = ckpt.last_name, ckpt.seen, ckpt.last_name
+            shard_count = ckpt.shard_count
             logger.info(
-                "orphan-sweep %s: RESUMING from checkpoint — %d objects already swept, %d actionable rows loaded, "
-                "resuming after %r",
+                "orphan-sweep %s: RESUMING from checkpoint — %d objects already swept, %d actionable shards "
+                "recorded, resuming after %r",
                 asset_group,
                 seen_base,
-                len(actionable),
+                shard_count,
                 ckpt.last_name,
             )
     else:
@@ -854,7 +899,7 @@ def run_sweep(
             batch, pending = [], []
             batches_since_checkpoint += 1
             if batches_since_checkpoint >= _CHECKPOINT_BATCH_INTERVAL:
-                _write_checkpoint(
+                new_shard_count = _write_checkpoint(
                     client,
                     bucket,
                     asset_group,
@@ -863,8 +908,12 @@ def run_sweep(
                     class_counts=class_counts,
                     prefix_taxonomy=prefix_taxonomy,
                     sizing=sizing,
-                    actionable=actionable,
+                    actionable_since_last_checkpoint=actionable,
+                    shard_index=shard_count,
                 )
+                if new_shard_count != shard_count:
+                    actionable = []  # THE fix — never let this list outlive its checkpoint shard.
+                shard_count = new_shard_count
                 batches_since_checkpoint = 0
         if seen % 50000 == 0:
             logger.info("  %d objects swept (%.0f/s)", seen, (seen - seen_base) / max(0.01, time.time() - t0))
@@ -884,6 +933,10 @@ def run_sweep(
                 sizing=sizing,
                 actionable=actionable,
             )
+        # ONE-TIME full materialisation — the only point in the whole walk that holds
+        # every actionable row at once, and only because a final report needs it.
+        if shard_count:
+            actionable = _read_all_actionable_shards(client, bucket, asset_group, shard_count) + actionable
         _delete_checkpoint(client, bucket, asset_group)
         return class_counts, prefix_taxonomy, sizing, actionable
     if batch:
