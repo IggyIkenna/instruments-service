@@ -13,6 +13,7 @@ All tests are credential-free and use unittest.mock.
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -204,6 +205,106 @@ class TestLighterAdapter:
         ):
             results = await adapter.get_instruments()
         assert results[0].base_asset == "BTCUSD"
+
+
+class TestLighterMarketIndexResolution:
+    """market_id -> symbol resolution (2026-07-23 investigation).
+
+    Fixture market_id/symbol pairs below are the REAL values live-curled from
+    Lighter's public /orderBookDetails on 2026-07-23 (0->ETH, 1->BTC,
+    133->BIRB inactive-but-listed) — not fabricated placeholders.
+    """
+
+    _REAL_ORDER_BOOK_DETAILS: ClassVar[dict[str, list[dict[str, object]]]] = {
+        "order_book_details": [
+            {"market_id": 0, "symbol": "ETH", "market_type": "perp"},
+            {"market_id": 1, "symbol": "BTC", "market_type": "perp"},
+            # Inactive markets stay listed (never disappear) per the live
+            # investigation — must still resolve honestly for historical objects
+            # captured while BIRB was active.
+            {"market_id": 133, "symbol": "BIRB", "market_type": "perp", "status": "inactive"},
+        ]
+    }
+
+    @pytest.mark.asyncio
+    async def test_resolve_market_index_known_real_pairs(self) -> None:
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
+
+        adapter = LighterReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(adapter, "_get_with_retry", AsyncMock(return_value=self._REAL_ORDER_BOOK_DETAILS)),
+        ):
+            assert await adapter.resolve_market_index("0") == "ETH"
+            assert await adapter.resolve_market_index("1") == "BTC"
+            # Inactive-but-listed market still resolves — no id reuse/disappearance.
+            assert await adapter.resolve_market_index("133") == "BIRB"
+
+    @pytest.mark.asyncio
+    async def test_resolve_market_index_unknown_falls_through_honestly(self) -> None:
+        """A market_id absent from the live universe returns None — never a fabricated guess."""
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
+
+        adapter = LighterReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(adapter, "_get_with_retry", AsyncMock(return_value=self._REAL_ORDER_BOOK_DETAILS)),
+        ):
+            result = await adapter.resolve_market_index("9999")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_market_index_non_numeric_returns_none_without_fetch(self) -> None:
+        """A non-digit string isn't a market_id — short-circuits before any network call."""
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
+
+        adapter = LighterReferenceDataAdapter()
+        with patch.object(adapter, "_make_session", side_effect=AssertionError("must not fetch")):
+            result = await adapter.resolve_market_index("BTC-USDC")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_instrument_by_market_index_resolves_to_correct_symbol(self) -> None:
+        """A known real market_index resolves through get_instrument() to its InstrumentRecord."""
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
+
+        adapter = LighterReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(adapter, "_get_with_retry", AsyncMock(return_value=self._REAL_ORDER_BOOK_DETAILS)),
+        ):
+            found = await adapter.get_instrument("0")
+        assert found is not None
+        assert found.raw_symbol == "ETH"
+
+    @pytest.mark.asyncio
+    async def test_get_instrument_unknown_market_index_falls_through_honestly(self) -> None:
+        """An unresolvable numeric market_id returns None rather than a fabricated match."""
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
+
+        adapter = LighterReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(adapter, "_get_with_retry", AsyncMock(return_value=self._REAL_ORDER_BOOK_DETAILS)),
+        ):
+            result = await adapter.get_instrument("9999")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_instrument_non_numeric_symbol_unaffected(self) -> None:
+        """Existing non-numeric-stem symbol lookups are unaffected by the market_index wiring."""
+        from instruments_service.reference_data.adapters.cefi.lighter import LighterReferenceDataAdapter
+
+        adapter = LighterReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(adapter, "_get_with_retry", AsyncMock(return_value=self._REAL_ORDER_BOOK_DETAILS)),
+        ):
+            found = await adapter.get_instrument("ETH")
+            not_found = await adapter.get_instrument("XYZ")
+        assert found is not None
+        assert found.raw_symbol == "ETH"
+        assert not_found is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
