@@ -59,7 +59,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
-from unified_api_contracts import DATA_TYPES_BY_ASSET_GROUP, VENUES_BY_ASSET_GROUP
+from unified_api_contracts import (
+    DATA_TYPES_BY_ASSET_GROUP,
+    VENUE_TO_ASSET_GROUP,
+    VENUES_BY_ASSET_GROUP,
+    PipelineMode,
+)
 from unified_trading_library import (
     get_bucket_name,
     get_project_id,
@@ -380,7 +385,20 @@ def expected_write_prefix(cell: SmokeCell, smoke_date: str) -> str:
         return f"sports_reference/by_date/day={smoke_date}/"
     if is_prediction_venue_cell(cell):
         return _PREDICTION_INSTRUMENTS_LIST_PREFIX
-    return f"instrument_availability/by_date/day={smoke_date}/venue={cell.venue}/"
+    # Full canonical hive (operator HARD RULE R2, 2026-07-21 —
+    # instrument_availability_hive_canonicalisation_2026_07_21.md): day/pipeline_mode/
+    # asset_group/venue, in that order — matches
+    # writers.py::_instrument_availability_sink_for exactly (this checker's prefix went
+    # stale when that canonicalisation landed, producing a false no_parquet_at failure on
+    # every non-sports/non-prediction cell — 2026-07-23, tradfi Phase D investigation).
+    # pipeline_mode is always BATCH_INSTRUMENTS_SERVICE here (producer-emitted instrument
+    # definitions; see writers.py::_classify_venue_write's non-sports-ref branch).
+    asset_group = VENUE_TO_ASSET_GROUP.get(cell.venue, "cefi")
+    pipeline_mode = PipelineMode.BATCH_INSTRUMENTS_SERVICE.value
+    return (
+        f"instrument_availability/by_date/day={smoke_date}/pipeline_mode={pipeline_mode}/"
+        f"asset_group={asset_group}/venue={cell.venue}/"
+    )
 
 
 def verify_parquet_written(
