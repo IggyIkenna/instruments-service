@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -133,7 +135,7 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
         _sports_prefixes = ("API_FOOTBALL", "TRANSFERMARKT", "FOOTYSTATS", "SFI", "UNDERSTAT", "WEATHER")
         if venue_str.startswith(_sports_prefixes):
             if venue_str == "API_FOOTBALL":
-                manifest_data_type = "FIXTURES"
+                manifest_data_type = FIXTURES_SCHEDULE
             else:
                 for pfx in _sports_prefixes:
                     if venue_str.startswith(pfx + "_"):

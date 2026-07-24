@@ -39,19 +39,21 @@ Behaviour contract:
   ``announced_at = kickoff_utc - 7 days``, mirroring the batch fixture
   fetch path (``orchestrator.py`` lines 3649-3651, 3703-3705) so live ≡
   batch on the timing axis. UAC
-  ``AVAILABILITY_AT_SEMANTICS["FIXTURES"] = "announced_at"`` per
+  ``AVAILABILITY_AT_SEMANTICS["FIXTURES_SCHEDULE"] = "announced_at"`` per
   CLAUDE.md "available_at is per-row, write-time" rule.
-* **GCS path SSOT**: writes via ``_write_fixtures_per_league`` →
-  ``sports_reference/by_date/day=<D>/entity=fixtures/league=<L>/fixtures.parquet``.
-  This matches UAC ``candidate_parquet_paths("FIXTURES", day, league_id)``
-  per the workspace-wide SPORTS GCS Path SSOT (CLAUDE.md "Sports GCS
-  path SSOT" rule).
+* **GCS path SSOT**: writes via ``_write_fixtures_per_league`` (the
+  entity-split writer, ``sports_fixtures.py``) →
+  ``sports_reference/by_date/day=<D>/entity=fixtures_schedule/league=<L>/fixtures_schedule.parquet``
+  (+ ``entity=fixtures_outcomes/`` for completed fixtures). This matches UAC
+  ``candidate_parquet_paths("FIXTURES_SCHEDULE", day, league_id)`` per the
+  workspace-wide SPORTS GCS Path SSOT (CLAUDE.md "Sports GCS path SSOT"
+  rule).
 * **Manifest shard**: ``record_captured`` row_key
-  ``{"date": <D>, "data_type": "FIXTURES", "league_id": <L>}`` with
+  ``{"date": <D>, "data_type": "FIXTURES_SCHEDULE", "league_id": <L>}`` with
   kwargs ``category="sports"``, ``instrument_type="football"``,
-  ``data_type="FIXTURES"``, ``league_id=<L>``. Same shape as the
+  ``data_type="FIXTURES_SCHEDULE"``, ``league_id=<L>``. Same shape as the
   batch path so a future trigger fire cleanly supersedes prior batch
-  rows on the same ``(date, FIXTURES, league_id)`` key.
+  rows on the same ``(date, FIXTURES_SCHEDULE, league_id)`` key.
 * **Idempotency**: re-running the same trigger on the same UTC day
   produces (a) no duplicate parquet content (the per-partition sink
   overwrites the existing ``fixtures.parquet``), and (b) no duplicate
@@ -81,6 +83,7 @@ import pandas as pd
 from unified_api_contracts import EmptyConfirmedReason, FetchEvidence, PipelineMode
 from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
 from unified_api_contracts.sports import (
+    FIXTURES_SCHEDULE,
     get_league_by_api_football_id,
     get_league_fixture_calendar,
 )
@@ -140,7 +143,7 @@ Without it, a fixture polled mid-game on its last fire (e.g. status=1H at the
 _ANNOUNCED_AT_LEAD_DAYS: int = 7
 """Days before kickoff at which a scheduled fixture is announced. Mirrors the
 batch path constant (``orchestrator.py`` lines 3651, 3705). Per UAC
-``AVAILABILITY_AT_SEMANTICS["FIXTURES"] = "announced_at"`` and CLAUDE.md
+``AVAILABILITY_AT_SEMANTICS["FIXTURES_SCHEDULE"] = "announced_at"`` and CLAUDE.md
 "fixtures → announced_at" rule."""
 
 
@@ -313,7 +316,7 @@ async def run_sports_fixtures_daily_repoll(
             # Per CLAUDE.md shard-level failure isolation, do NOT raise inside the
             # per-day loop — record_failed for THIS day, then keep iterating.
             manifest.record_failed(
-                row_key={"date": day_str, "data_type": "FIXTURES"},
+                row_key={"date": day_str, "data_type": FIXTURES_SCHEDULE},
                 error=str(exc),
                 attempted_at=datetime.now(UTC),
                 pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
@@ -366,7 +369,7 @@ async def run_sports_fixtures_daily_repoll(
                     _reason = EmptyConfirmedReason.SOURCE_RETURNED_ZERO
                     _fetch_ev = _srz_evidence
                 manifest.record_empty(
-                    row_key={"date": day_str, "data_type": "FIXTURES", "league_id": _lid},
+                    row_key={"date": day_str, "data_type": FIXTURES_SCHEDULE, "league_id": _lid},
                     reason=_reason,
                     attempted_at=_attempt_ts,
                     pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
@@ -448,19 +451,19 @@ async def run_sports_fixtures_daily_repoll(
             league_df_clean = league_df.drop(columns=["_resolved_league_id"], errors="ignore")
             row_count = len(league_df_clean)
             try:
-                manifest.record_captured(  # QG-allow: emission-policy-not-applicable — raw api-football FIXTURES input capture; not a derived-output boundary
+                manifest.record_captured(  # QG-allow: emission-policy-not-applicable — raw api-football FIXTURES_SCHEDULE input capture; not a derived-output boundary
                     row_key={
                         "date": day_str,
-                        "data_type": "FIXTURES",
+                        "data_type": FIXTURES_SCHEDULE,
                         "league_id": canonical_lid,
                     },
                     df=league_df_clean,
                     asset_group="sports",
                     instrument_type="football",
-                    data_type="FIXTURES",
+                    data_type=FIXTURES_SCHEDULE,
                     league_id=canonical_lid,
                     pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
-                    # FIXTURES is multi-source (api_football + footystats) →
+                    # FIXTURES_SCHEDULE is multi-source (api_football + footystats) →
                     # explicit source required (data_source_provenance Phase 4).
                     # This repoll path uses the api_football reference adapter.
                     source="api_football",

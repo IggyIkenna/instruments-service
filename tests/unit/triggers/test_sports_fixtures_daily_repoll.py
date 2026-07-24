@@ -10,7 +10,7 @@ Covers Phase B.1 of ``instruments_master.md``:
 2. ``available_at`` is stamped per-row at write time as
    ``announced_at = kickoff_utc - 7d`` (UAC SPORTS FIXTURES rule).
 3. Manifest writer is called with the correct row_key shape per
-   (day, canonical league_id) and ``data_type="FIXTURES"``.
+   (day, canonical league_id) and ``data_type="FIXTURES_SCHEDULE"``.
 4. Idempotency: re-running the same trigger upserts the same shard
    keys (last-writer-wins, no duplicate rows on disk).
 5. Empty source → ``record_empty`` with typed reason.
@@ -282,12 +282,12 @@ async def test_run_sports_fixtures_daily_repoll_record_captured_shape(
     # row_key shape per CLAUDE.md "Per-asset-group shard-key matrix → Sports"
     assert call.kwargs["row_key"] == {
         "date": "2026-05-09",
-        "data_type": "FIXTURES",
+        "data_type": "FIXTURES_SCHEDULE",
         "league_id": "EPL",
     }
     assert call.kwargs["asset_group"] == "sports"
     assert call.kwargs["instrument_type"] == "football"
-    assert call.kwargs["data_type"] == "FIXTURES"
+    assert call.kwargs["data_type"] == "FIXTURES_SCHEDULE"
     assert call.kwargs["league_id"] == "EPL"
 
 
@@ -420,7 +420,7 @@ async def test_run_sports_fixtures_daily_repoll_empty_records_per_league_typed_r
     # One per-league record_empty call (EPL)
     assert manifest_mock.record_empty.call_count == 1
     call = manifest_mock.record_empty.call_args
-    assert call.kwargs["row_key"] == {"date": "2026-05-09", "data_type": "FIXTURES", "league_id": "EPL"}
+    assert call.kwargs["row_key"] == {"date": "2026-05-09", "data_type": "FIXTURES_SCHEDULE", "league_id": "EPL"}
     assert call.kwargs["reason"] == EmptyConfirmedReason.EXPECTED_NO_FIXTURE
 
 
@@ -601,7 +601,7 @@ async def test_run_sports_fixtures_daily_repoll_per_day_isolation_on_fetch_error
     # record_failed called once for the failed day.
     assert manifest_mock.record_failed.call_count == 1
     failed_call = manifest_mock.record_failed.call_args
-    assert failed_call.kwargs["row_key"] == {"date": "2026-05-08", "data_type": "FIXTURES"}
+    assert failed_call.kwargs["row_key"] == {"date": "2026-05-08", "data_type": "FIXTURES_SCHEDULE"}
 
 
 @pytest.mark.asyncio
