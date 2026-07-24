@@ -964,19 +964,50 @@ def _taxonomy_label(object_path: str) -> str:
     return f"unknown:{tlp}"
 
 
+_MANIFEST_COLUMNS_FOR_COVERAGE: tuple[str, ...] = (
+    "date",
+    "venue",
+    "data_type",
+    "chain",
+    "instrument_type",
+    "capture_status",
+)
+"""The ONLY columns :func:`build_covered_index` reads — 6 of the v9 manifest's ~40
+(``date``/``venue``/``data_type``/``chain``/``instrument_type``/``capture_status``).
+Column-projecting the parquet read is the fix for a real, measured OOM/thrash: found
+2026-07-24 running defi's backfill dry-run — defi's ``availability_index.parquet`` had
+grown to **23,977,316 manifest rows / 41 columns / 988 MiB on-disk** (grown ~6x in
+~24h under ongoing production capture) and a full
+``pd.read_parquet`` (every column, including wide string columns like
+``instrument_id``/``error_reason``/``service_name`` that ``build_covered_index`` never
+touches) materialised a DataFrame large enough to thrash even an ``e2-highmem-8``
+(64GB) VM — the SAME "system-wide freeze during manifest load" signature previously
+seen for cefi and fixed there only by a machine-type bump
+(``migration_orphan_sweep_performance_decay_2026_07_22.md`` todo 2), which its own
+todo 7 already flagged wouldn't scale "if [the] index keeps growing". It did.
+Column-projecting via ``pyarrow.parquet.read(columns=...)`` (never materialising the
+other ~35 columns) is a targeted, backward-compatible fix — same return type, same
+coverage semantics, a fraction of the memory."""
+
+
 def _load_manifested_cells(client: object, bucket: str) -> CoveredIndex:
-    """Read ``_index/availability_index.parquet`` and build the grain-aware covered index."""
+    """Read ``_index/availability_index.parquet`` and build the grain-aware covered
+    index — column-projected to the 6 fields :func:`build_covered_index` actually uses
+    (see :data:`_MANIFEST_COLUMNS_FOR_COVERAGE`), never materialising the manifest's
+    other ~35 columns for a corpus that can run into the tens of millions of rows."""
     import io
 
-    import pandas as pd
+    import pyarrow.parquet as pq
 
     index_path = "_index/availability_index.parquet"
     if not client.blob_exists(bucket, index_path):  # type: ignore[attr-defined]
         logger.warning("orphan-sweep: no %s in %s", index_path, bucket)
         return {}
     raw = client.download_bytes(bucket, index_path)  # type: ignore[attr-defined]
-    df = pd.read_parquet(io.BytesIO(raw))
-    rows = df.to_dict("records")
+    parquet_file = pq.ParquetFile(io.BytesIO(raw))
+    available = set(parquet_file.schema_arrow.names)
+    cols = [c for c in _MANIFEST_COLUMNS_FOR_COVERAGE if c in available]
+    rows = parquet_file.read(columns=cols).to_pylist()
     return build_covered_index(rows)  # type: ignore[arg-type]
 
 
