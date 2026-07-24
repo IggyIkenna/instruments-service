@@ -54,6 +54,7 @@ from unified_api_contracts import (
     VenueMapping,
     classify_venue_error,
     get_prediction_leagues,
+    is_defi_force_include_pool,
     pipeline_mode_for_sports_entity,
 )
 from unified_api_contracts.internal import InstrumentRecord, PreflightSkipReason, validate_instrument_records
@@ -868,6 +869,7 @@ __all__ = [
     "get_venues_for_asset_groups",
     "io",
     "is_any_league_refresh_date",
+    "is_defi_force_include_pool",
     "is_league_entity_covered",
     "is_non_trading_day",
     "is_transfer_window_open",

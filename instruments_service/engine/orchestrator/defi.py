@@ -457,7 +457,13 @@ def filter_defi_instruments_by_relevance(records: list) -> list:
         venue = (getattr(r, "venue", None) or "").upper()
         is_dex = any(kw in venue for kw in _orch.DEX_VENUE_KEYWORDS)
         if is_dex:
+            pool_address = (getattr(r, "pool_address", None) or getattr(r, "raw_symbol", None) or "").lower()
             if base in major and quote in major:
+                result.append(r)
+            elif _orch.is_defi_force_include_pool(pool_address):
+                # Operator-curated high-TVL pool allowlist (UAC SSOT) — kept even
+                # when a leg is outside the major-assets set (e.g. high-liquidity
+                # Raydium pools that would otherwise be relevance-rejected).
                 result.append(r)
             else:
                 _orch.logger.debug(
