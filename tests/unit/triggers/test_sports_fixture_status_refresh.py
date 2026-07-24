@@ -215,7 +215,7 @@ async def test_stale_league_triggers_targeted_refetch(mock_adapter: MagicMock, p
     assert result == {"2026-06-24/EPL": 1}
     assert manifest_mock.record_captured.call_count == 1
     rc_call = manifest_mock.record_captured.call_args
-    assert rc_call.kwargs["row_key"] == {"date": "2026-06-24", "data_type": "FIXTURES", "league_id": "EPL"}
+    assert rc_call.kwargs["row_key"] == {"date": "2026-06-24", "data_type": "FIXTURES_SCHEDULE", "league_id": "EPL"}
     assert rc_call.kwargs["source"] == "api_football"
     assert manifest_mock.flush.called
 
@@ -533,7 +533,7 @@ async def test_fetch_error_records_failed_and_continues(mock_adapter: MagicMock,
     assert result == {}
     assert manifest_mock.record_failed.call_count == 1
     failed_call = manifest_mock.record_failed.call_args
-    assert failed_call.kwargs["row_key"]["data_type"] == "FIXTURES"
+    assert failed_call.kwargs["row_key"]["data_type"] == "FIXTURES_SCHEDULE"
 
 
 @pytest.mark.asyncio
