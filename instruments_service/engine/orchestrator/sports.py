@@ -75,11 +75,35 @@ def _canonical_league_id(lid_raw: object) -> str:
     - provider-suffixed (e.g. "EPL_39") → Pass 2 strips suffix → "EPL"
     - numeric (e.g. "39") → Pass 1 resolves → "EPL" → Pass 2 no-op
     - unknown numeric (e.g. "9999") → Pass 1 no-op → Pass 2 no-op → "9999"
+
+    A Pass-1 miss on a numeric id is loud, never silent (2026-07-24,
+    ``sports_fixtures_schedule_noncanonical_raw_league_id_folders_2026_07_24.md``):
+    every caller downstream either gates the returned value against the
+    canonical write-universe (``_is_in_canonical_write_universe``, which
+    silently drops an unresolved id) or, historically, wrote it straight to
+    disk as a ``league=<raw_id>`` partition (before that gate existed) — both
+    outcomes previously left no trace that a registry lookup missed. The
+    miss itself is not a bug in THIS function (non-lossy passthrough is the
+    documented, tested CF-7 invariant — see ``TestCanonicalLeagueIdCF7`` in
+    ``test_orchestrator_sports_pipeline.py``); the bug was the total absence
+    of a signal when it happens. Root cause is near-always a stale UAC
+    version at write time for a league the registry gains LATER (dated proof:
+    ``CHINA_SUPER_LEAGUE``/af_id=169, registered ``unified-api-contracts@beec78aa``
+    2026-07-21, but fixtures_schedule shards for it exist dated 2026-05-05/06).
     """
     s = str(lid_raw).strip()
     # Pass 1: numeric → canonical via api_football id lookup
     if s and s.isdigit():
         league = _orch.get_league_by_api_football_id(int(s))
+        if league is None:
+            _orch.logger.warning(
+                "CANONICAL_LEAGUE_ID_LOOKUP_MISS: api_football_id=%s has no UAC registry entry — "
+                "passing through as a raw numeric id (non-lossy by design). If this id IS a currently "
+                "registered league, the writing process is running a stale UAC version; any row written "
+                "under this id will land under a non-canonical league=%s partition until re-processed.",
+                s,
+                s,
+            )
         s = league.league_id if league is not None else s
     # Pass 2: strip provider-id suffix via UAC canonicalizer (CF-7 write-path)
     return _orch._uac_canonicalize_league_id(s)

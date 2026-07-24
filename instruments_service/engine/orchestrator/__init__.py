@@ -485,6 +485,9 @@ from instruments_service.engine.orchestrator.sfi import (
     _write_sfi_league_mapping as _write_sfi_league_mapping,
 )
 from instruments_service.engine.orchestrator.sink import (
+    _assert_not_cross_domain_contamination as _assert_not_cross_domain_contamination,
+)
+from instruments_service.engine.orchestrator.sink import (
     _coerce_adapter_output as _coerce_adapter_output,
 )
 from instruments_service.engine.orchestrator.sink import (
@@ -745,6 +748,7 @@ __all__ = [
     "VenueMapping",
     "_ModelDumpable",
     "_af_id_from_canonical",
+    "_assert_not_cross_domain_contamination",
     "_build_defi_venues",
     "_build_fixture_league_map_from_gcs",
     "_build_market_lifecycle_df",
