@@ -768,3 +768,78 @@ class TestRunSweepResume:
         # every checkpoint write saw exactly the ONE new row since the last one — never
         # a growing cumulative count (1, 2, 3, 4 would mean the OOM bug is back).
         assert seen_batch_sizes == [1, 1, 1, 1]
+
+
+class TestLoadManifestedCellsColumnProjection:
+    """Regression found 2026-07-24 running defi's backfill dry-run: defi's
+    ``availability_index.parquet`` had grown to 23,977,316 rows / 41 columns / 988 MiB
+    on-disk (~6x growth in ~24h under ongoing production capture) and a full
+    ``pd.read_parquet`` (every column) thrashed even an e2-highmem-8 (64GB) VM for
+    15+ minutes with zero progress — the exact "system freeze during manifest load"
+    signature previously fixed for cefi only by a machine-type bump
+    (``migration_orphan_sweep_performance_decay_2026_07_22.md`` todo 2/7). These prove
+    ``_load_manifested_cells`` reads ONLY the 6 columns ``build_covered_index`` needs
+    and still produces the correct covered index, without a live GCS dependency."""
+
+    @staticmethod
+    def _write_index_parquet(rows: list[dict[str, object]]) -> bytes:
+        import io
+
+        import pandas as pd
+
+        buf = io.BytesIO()
+        pd.DataFrame(rows).to_parquet(buf, index=False)
+        return buf.getvalue()
+
+    def test_reads_only_the_coverage_columns_from_a_wide_manifest(self) -> None:
+        # Simulate the real v9 manifest's width: every row carries a handful of extra
+        # columns _load_manifested_cells has no business touching (mirrors the real
+        # schema's instrument_id/error_reason/service_name/etc.) — if the fix
+        # regresses to a full-column read, this test still passes (the extra columns
+        # are harmless), but a parse-time crash on an exotic dtype in one of them
+        # would only be caught by projecting columns in the first place.
+        rows = [
+            {
+                "date": "2026-01-01",
+                "venue": "JUPITER",
+                "data_type": "dex_quote",
+                "chain": "SOLANA",
+                "instrument_type": "dex_pool",
+                "capture_status": "captured",
+                "instrument_id": "some very long id " * 50,  # wide, unused column
+                "error_reason": None,
+                "service_name": "instruments-service",
+                "row_count": 12345,
+            }
+        ]
+        raw = self._write_index_parquet(rows)
+        client = _FakeStorageClient()
+        client._blobs[("bkt", "_index/availability_index.parquet")] = raw
+
+        index = _mod._load_manifested_cells(client, "bkt")
+
+        assert ("2026-01-01", "dex_quote") in index
+        assert ("JUPITER", "SOLANA", "dex_pool") in index[("2026-01-01", "dex_quote")]
+
+    def test_missing_index_returns_empty(self) -> None:
+        client = _FakeStorageClient()
+        assert _mod._load_manifested_cells(client, "bkt") == {}
+
+    def test_ignores_non_captured_rows(self) -> None:
+        rows = [
+            {
+                "date": "2026-01-01",
+                "venue": "JUPITER",
+                "data_type": "dex_quote",
+                "chain": "SOLANA",
+                "instrument_type": "dex_pool",
+                "capture_status": "attempted_failed",
+            }
+        ]
+        raw = self._write_index_parquet(rows)
+        client = _FakeStorageClient()
+        client._blobs[("bkt", "_index/availability_index.parquet")] = raw
+
+        index = _mod._load_manifested_cells(client, "bkt")
+
+        assert index == {}
