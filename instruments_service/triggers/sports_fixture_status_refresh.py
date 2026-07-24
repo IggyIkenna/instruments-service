@@ -42,7 +42,12 @@ from datetime import date as _date
 
 import pandas as pd
 from unified_api_contracts import PipelineMode
-from unified_api_contracts.sports import CanonicalFixture, get_league, get_league_by_api_football_id
+from unified_api_contracts.sports import (
+    FIXTURES_SCHEDULE,
+    CanonicalFixture,
+    get_league,
+    get_league_by_api_football_id,
+)
 from unified_trading_library import ManifestWriter, classify_and_emit_error, resolve_bucket_name
 
 from instruments_service.engine.orchestrator import (
@@ -304,7 +309,7 @@ async def run_sports_fixture_status_refresh(
                     shard=day_str,
                 )
                 manifest.record_failed(
-                    row_key={"date": day_str, "data_type": "FIXTURES"},
+                    row_key={"date": day_str, "data_type": FIXTURES_SCHEDULE},
                     error=str(exc),
                     attempted_at=datetime.now(UTC),
                     pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
@@ -355,12 +360,12 @@ async def run_sports_fixture_status_refresh(
             canonical_lid = canonical_league_id(lid_str)
             row_count = len(league_df)
             try:
-                manifest.record_captured(  # QG-allow: emission-policy-not-applicable — raw api-football FIXTURES input capture; not a derived-output boundary
-                    row_key={"date": day_str, "data_type": "FIXTURES", "league_id": canonical_lid},
+                manifest.record_captured(  # QG-allow: emission-policy-not-applicable — raw api-football FIXTURES_SCHEDULE input capture; not a derived-output boundary
+                    row_key={"date": day_str, "data_type": FIXTURES_SCHEDULE, "league_id": canonical_lid},
                     df=league_df,
                     asset_group="sports",
                     instrument_type="football",
-                    data_type="FIXTURES",
+                    data_type=FIXTURES_SCHEDULE,
                     league_id=canonical_lid,
                     pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                     source="api_football",

@@ -167,8 +167,15 @@ class _ModelDumpable(Protocol):
 # stamped with ``BATCH_FOOTYSTATS``. ODDS removal reversed 2026-06-27 (operator
 # decision): footystats ODDS are pre-match snapshot reference data that stays in IS.
 _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
-    # api_football catalog (FIXTURES + per-fixture entities + reference data)
+    # api_football catalog (FIXTURES + per-fixture entities + reference data).
+    # FIXTURES_SCHEDULE/FIXTURES_OUTCOMES are the post-split successor atoms of the
+    # retired "FIXTURES" literal (fixtures_manifest_legacy_backfill_2026_07_24.md) —
+    # kept alongside the legacy key (never looked up directly anymore, but harmless)
+    # so _pipeline_mode_for_sports_data_type() doesn't silently mis-attribute
+    # pipeline_mode via its caller's bare `except KeyError` fallback (writers.py).
     "FIXTURES": PipelineMode.BATCH_API_FOOTBALL,
+    "FIXTURES_SCHEDULE": PipelineMode.BATCH_API_FOOTBALL,
+    "FIXTURES_OUTCOMES": PipelineMode.BATCH_API_FOOTBALL,
     "INJURIES": PipelineMode.BATCH_API_FOOTBALL,
     "FIXTURE_LINEUPS": PipelineMode.BATCH_API_FOOTBALL,
     "FIXTURE_EVENTS": PipelineMode.BATCH_API_FOOTBALL,
