@@ -26,6 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -128,7 +130,7 @@ def clear_fixture_leagues_cache() -> None:
 
 
 def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
-    """Return the set of league_ids that have a FIXTURES manifest row on ``date``.
+    """Return the set of league_ids that have a FIXTURES_SCHEDULE manifest row on ``date``.
 
     Reads + groups the availability index ONCE per bucket (see
     ``_FIXTURE_LEAGUES_BY_DATE_CACHE`` rationale), then serves every date from the
@@ -140,7 +142,7 @@ def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
         by_date = {}
         _index_df = _orch.read_availability_index(bucket)
         if not _index_df.empty and "league_id" in _index_df.columns:
-            _fix_only = _index_df.loc[_index_df["data_type"] == "FIXTURES", ["date", "league_id"]].dropna(
+            _fix_only = _index_df.loc[_index_df["data_type"] == FIXTURES_SCHEDULE, ["date", "league_id"]].dropna(
                 subset=["league_id"]
             )
             for _date_val, _grp in _fix_only.groupby("date"):
@@ -150,11 +152,11 @@ def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
     return set(by_date.get(date, frozenset()))
 
 
-# Sports per-league entities (FIXTURES + PREDICTIONS + MATCHES + ODDS +
+# Sports per-league entities (FIXTURES_SCHEDULE + PREDICTIONS + MATCHES + ODDS +
 # 5 per-fixture downstreams + ...) write one manifest row per
 # (date, data_type, league_id). The coarse `check_shard_freshness`
 # only checks "is data_type present for this date" — once any league
-# has e.g. FIXTURES for date X, the whole date is "fresh" and
+# has e.g. FIXTURES_SCHEDULE for date X, the whole date is "fresh" and
 # skipped, so other-league missing rows never get re-fetched.
 # Per-league freshness lives in the entity handlers themselves
 # (`_should_skip_date_for_per_league`); skip the coarse pre-flight
@@ -164,7 +166,7 @@ def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
 # OTHER leagues kept the date "fresh" at the coarse level.
 _SPORTS_PER_LEAGUE_ENTITIES: frozenset[str] = frozenset(
     {
-        "FIXTURES",
+        FIXTURES_SCHEDULE,
         "PREDICTIONS",
         "MATCHES",
         "STANDINGS",
@@ -395,9 +397,9 @@ def _build_expected_entities(
     Core: leagues/teams/standings/injuries (slow-moving, fetched every run).
     Per-fixture: fixture_stats/events/lineups/player_stats (one API call per
     completed fixture, rate-limited to 1 req/sec — expensive to re-fetch).
-    Remap venue names to match manifest data_type entries (API_FOOTBALL → FIXTURES).
+    Remap venue names to match manifest data_type entries (API_FOOTBALL → FIXTURES_SCHEDULE).
     """
-    expected = ["FIXTURES" if v == "API_FOOTBALL" else v for v in active_venues]
+    expected = [FIXTURES_SCHEDULE if v == "API_FOOTBALL" else v for v in active_venues]
     _active_venues_set_freshness = set(active_venues)
     if is_sports_run:
         expected.extend(core_entities)

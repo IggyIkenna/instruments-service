@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
-from unified_api_contracts.sports import get_league
+from unified_api_contracts.sports import FIXTURES_SCHEDULE, get_league
 
 from .process_write import _NON_VENUE_GRAIN_VENUE_NAMES
 
@@ -68,34 +68,34 @@ def _fold_written_venues(counts: dict[str, int], expected_venues: set[str]) -> s
     granularity 1:1 (so completeness counts/percentages stay meaningful). Bare
     CEFI/DEFI/TRADFI keys (no ``"/"``) fold to themselves (no-op).
 
-    Sports' ``"FIXTURES/{league_id}"`` composite keys get the SAME treatment,
-    folded to ``API_FOOTBALL`` (the venue that owns the FIXTURES stage-6 write)
-    when it's in ``expected_venues`` — ``"FIXTURES"`` itself is a data_type, never
-    a venue name, so the generic prefix-in-expected_venues check above never
-    matches it on its own.
+    Sports' ``"FIXTURES_SCHEDULE/{league_id}"`` composite keys get the SAME
+    treatment, folded to ``API_FOOTBALL`` (the venue that owns the FIXTURES
+    stage-6 write) when it's in ``expected_venues`` — ``"FIXTURES_SCHEDULE"``
+    itself is a data_type, never a venue name, so the generic
+    prefix-in-expected_venues check above never matches it on its own.
 
     Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15, see
     plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
     without this, a league-scoped FIXTURES run whose target league legitimately
     had zero fixtures that day (the common case — off-season, mid-week rest day,
     etc; ``_write_sports_fixture_venue`` now always stamps
-    ``counts["FIXTURES/{league}"] = 0`` for such leagues) left ``written_venues``
-    without an ``API_FOOTBALL`` entry, so this function misclassified the whole
-    venue as ``SOURCE_RETURNED_ZERO`` (0 records after filtering) and stamped a
-    REDUNDANT blanket ``{date, venue}`` row — live-verified to collide with
-    (and drop) the correct per-league honest-absence row in the same per-VM
-    manifest-shard flush, permanently orphaning any pre-existing stale
-    ``attempted_failed`` row for that (date, league) FIXTURES cell (612 such
-    rows found stuck, all with real per-league keys, genuinely re-fetched
-    clean on every re-attempt yet never cleared). Folding ``FIXTURES/*`` to
-    ``API_FOOTBALL`` here makes ``written_venues`` correctly reflect ANY
-    per-league write (captured OR honest-empty), so the wrong blanket stamp
-    no longer fires at all.
+    ``counts["FIXTURES_SCHEDULE/{league}"] = 0`` for such leagues) left
+    ``written_venues`` without an ``API_FOOTBALL`` entry, so this function
+    misclassified the whole venue as ``SOURCE_RETURNED_ZERO`` (0 records after
+    filtering) and stamped a REDUNDANT blanket ``{date, venue}`` row —
+    live-verified to collide with (and drop) the correct per-league
+    honest-absence row in the same per-VM manifest-shard flush, permanently
+    orphaning any pre-existing stale ``attempted_failed`` row for that (date,
+    league) FIXTURES cell (612 such rows found stuck, all with real per-league
+    keys, genuinely re-fetched clean on every re-attempt yet never cleared).
+    Folding ``FIXTURES_SCHEDULE/*`` to ``API_FOOTBALL`` here makes
+    ``written_venues`` correctly reflect ANY per-league write (captured OR
+    honest-empty), so the wrong blanket stamp no longer fires at all.
     """
     folded: set[str] = set()
     for key in counts:
         prefix = key.split("/", 1)[0]
-        if prefix == "FIXTURES" and "API_FOOTBALL" in expected_venues:
+        if prefix == FIXTURES_SCHEDULE and "API_FOOTBALL" in expected_venues:
             folded.add("API_FOOTBALL")
         elif prefix in expected_venues:
             folded.add(prefix)
@@ -171,7 +171,7 @@ async def _completeness_and_retry(
     # fetch failure during a combined "ALL"-asset-group run (where
     # ``_fixtures_fetch_failed``'s zero-records branch never fires because
     # cefi/tradfi/defi still produced records). ``_finalize_completeness`` below
-    # maps a genuinely-missing ``API_FOOTBALL`` to ``data_type="FIXTURES"`` (same
+    # maps a genuinely-missing ``API_FOOTBALL`` to ``data_type="FIXTURES_SCHEDULE"`` (same
     # convention already used by ``process_preflight.py``'s
     # ``_build_expected_entities``) instead of leaving ``data_type`` blank.
     #
@@ -284,7 +284,7 @@ def _scope_sports_expected_venues(
         if _sports_bucket:
             _idx = _orch.read_availability_index(_sports_bucket)
             if not _idx.empty and "league_id" in _idx.columns:
-                _fix_rows = _idx[(_idx["date"] == date) & (_idx["data_type"] == "FIXTURES")]
+                _fix_rows = _idx[(_idx["date"] == date) & (_idx["data_type"] == FIXTURES_SCHEDULE)]
                 _fixture_leagues = {
                     str(lid).upper() for lid in _fix_rows["league_id"].dropna().unique() if str(lid).strip()
                 }
@@ -609,13 +609,14 @@ def _finalize_completeness(
             else:
                 # Root-cause fix (api_football_write_path_blank_data_type_2026_07_13):
                 # API_FOOTBALL is not a real venue — its manifest cell is keyed by
-                # data_type (FIXTURES is its top-level, venue-grain-shaped entity;
-                # same remap convention already used by process_preflight.py's
-                # _build_expected_entities). Writing row_key={"date","venue"} for it
-                # produced a permanently-orphaned blank-data_type attempted_failed
-                # row that could never reconcile against a real sports cell.
+                # data_type (FIXTURES_SCHEDULE is its top-level, venue-grain-shaped
+                # entity; same remap convention already used by
+                # process_preflight.py's _build_expected_entities). Writing
+                # row_key={"date","venue"} for it produced a permanently-orphaned
+                # blank-data_type attempted_failed row that could never reconcile
+                # against a real sports cell.
                 _failed_row_key: dict[str, str] = (
-                    {"date": date, "data_type": "FIXTURES"}
+                    {"date": date, "data_type": FIXTURES_SCHEDULE}
                     if _failed_venue == "API_FOOTBALL"
                     else {"date": date, "venue": _failed_venue}
                 )
