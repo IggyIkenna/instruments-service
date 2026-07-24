@@ -994,6 +994,41 @@ class TestCanonicalLeagueIdCF7:
         result = _canonical_league_id("9999999")
         assert result == "9999999", f"Expected '9999999' (no registry match), got {result!r}."
 
+    def test_numeric_lookup_miss_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A Pass-1 registry-lookup miss on a numeric id must be LOUD (a logged
+        WARNING), not silent — reproduces the exact lookup-miss condition behind
+        the non-canonical ``league=<raw_af_league_id>`` write-path bug
+        (``sports_fixtures_schedule_noncanonical_raw_league_id_folders_2026_07_24.md``:
+        a league added to the UAC registry AFTER a write occurred for it left no
+        trace that the write-time lookup had missed). The non-lossy passthrough
+        return value itself is unchanged (asserted by
+        ``test_unknown_numeric_passthrough`` above) — this test only asserts the
+        NEW loud-failure signal.
+        """
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        with caplog.at_level("WARNING"):
+            result = _canonical_league_id("9999999")
+
+        assert result == "9999999"
+        assert any("CANONICAL_LEAGUE_ID_LOOKUP_MISS" in r.message and "9999999" in r.message for r in caplog.records), (
+            f"Expected a CANONICAL_LEAGUE_ID_LOOKUP_MISS warning citing '9999999', got: "
+            f"{[r.message for r in caplog.records]}"
+        )
+
+    def test_resolved_numeric_does_not_log_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A numeric id that DOES resolve via Pass 1 must NOT log the lookup-miss
+        warning — the signal is specific to genuine misses, not every numeric
+        lookup, so it stays a rare/actionable signal rather than log noise.
+        """
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        with caplog.at_level("WARNING"):
+            result = _canonical_league_id("39")
+
+        assert result == "EPL"
+        assert not any("CANONICAL_LEAGUE_ID_LOOKUP_MISS" in r.message for r in caplog.records)
+
     def test_whitespace_stripped(self) -> None:
         """Leading/trailing whitespace is stripped before canonicalisation."""
         from instruments_service.engine.orchestrator import _canonical_league_id
