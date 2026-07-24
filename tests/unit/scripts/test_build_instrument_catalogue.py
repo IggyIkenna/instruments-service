@@ -3825,6 +3825,44 @@ def test_add_force_include_non_defi_and_empty_typed(rollup: ModuleType) -> None:
     assert out_empty["force_include"].dtype == bool
 
 
+def test_add_force_include_flags_high_tvl_pool_by_address(rollup: ModuleType) -> None:
+    """A DEX pool whose ``pool_address`` is on UAC's ``DEFI_FORCE_INCLUDE_POOLS`` high-TVL
+    allowlist (e.g. XMR/USDC, ~$47M TVL) is force_include=True even though NEITHER leg is a
+    major asset (the venue/base_asset-keyed ``is_defi_force_include`` predicate alone would
+    have said False here) — the catalogue-side counterpart to the IS DEX relevance-filter
+    pool_address carve-out in ``filter_defi_instruments_by_relevance``. A structurally-
+    identical minor-asset pool whose address is NOT on the allowlist stays force_include=False.
+    """
+    d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
+    force_include_address = "4usrwhonydfubz1kcupz4xcjeadzqzptby4mzu6wegkm"  # XMR/USDC, DEFI_FORCE_INCLUDE_POOLS
+    non_force_include_address = "1111111111111111111111111111111111111111111"
+    rows = [
+        {
+            "instrument_key": f"RAYDIUM-SOLANA:POOL:XMR-USDC:{force_include_address}",
+            "venue": "RAYDIUM-SOLANA",
+            "instrument_type": "POOL",
+            "base_asset": "XMR",
+            "quote_asset": "USDC",
+            "raw_symbol": force_include_address,
+            "pool_address": force_include_address,
+        },
+        {
+            "instrument_key": f"RAYDIUM-SOLANA:POOL:SHITCOIN-WETH:{non_force_include_address}",
+            "venue": "RAYDIUM-SOLANA",
+            "instrument_type": "POOL",
+            "base_asset": "SHITCOIN",
+            "quote_asset": "WETH",
+            "raw_symbol": non_force_include_address,
+            "pool_address": non_force_include_address,
+        },
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    df = rollup._add_force_include(df, "defi")
+    by_pool = {str(row["pool_address"]).lower(): row for row in df.to_dict("records")}
+    assert bool(by_pool[force_include_address]["force_include"]) is True
+    assert bool(by_pool[non_force_include_address]["force_include"]) is False
+
+
 def test_add_instrument_name_stamps_krx_issuer_names(rollup: ModuleType) -> None:
     """_add_instrument_name stamps a human-readable ``name`` on a KRX equity row from
     the UAC ``KRX_EQUITY_NAMES`` SSOT (keyed on base_asset = the bare 6-digit code) and
