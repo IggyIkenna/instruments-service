@@ -565,14 +565,22 @@ no new id scheme was invented.
 **Player-grain honest scope — real, but narrower than the 11-step pipeline table implies**: player rows are sourced
 from `entity=injuries` (real `player_id`/`player_name`/`team_id` columns, verified against real prod GCS
 2026-07-09) — currently-injured players only, not a full roster. `entity=fixture_lineups` (the fuller per-fixture
-roster source the Step 8 table above implies) was tried first and ruled out: its real per-league parquet on GCS
-carries ONLY `formation`/`fixture_id`/`available_at` columns — the per-fixture-entity writer's nested-column-drop
-guard (`sports_reference_fixtures.py::_write_per_fixture_entities`, "Dropping N nested columns") strips the raw
-`startXI`/`substitutes` blocks (which carry `player_id`/`player_name`) before they ever reach GCS, so no player
-identity survives there today. This is a real, separate data-completeness gap in the LINEUPS writer, not something
-the catalogue roll-up can paper over — flagged here as a genuine finding, not fixed in this change (out of scope: a
-writer bug, not a catalogue-roll-up bug). `entity=fixture_lineups` is also not currently active in production
-(last observed 2026-04-15 in a real GCS scan; `entity=injuries` is current).
+roster source the Step 8 table above implies) is currently DORMANT, not stripped — **correction 2026-07-24 (the prior
+"nested-column-drop strips player identity" claim was verified false by reading the actual code)**: the API-Football
+adapter's `get_fixture_lineups()` (`instruments_service/reference_data/adapters/sports/adapters/api_football.py:918`)
+already calls `normalize_api_football_lineup()` to flatten each team's raw lineup block into one FLAT dict per
+(fixture, team, player) — `player_id`/`player_name`/`number`/`pos`/`grid`/`is_starter` land as plain scalar columns —
+BEFORE the rows ever reach `_prepare_fixture_entity_df`'s nested-column-drop guard
+(`sports_reference_fixtures.py:596-615`, "Dropping N nested columns"). That guard only drops columns whose VALUES are
+still raw `dict`/`list` (e.g. an unnormalised nested `statistics` blob); by the time lineup rows reach it, there is no
+nested `startXI`/`substitutes` column left to strip — `player_id` was never at risk from this code path. Re-checked
+against real prod GCS 2026-07-24 (`instruments-store-sports-prd-central-element-323112`,
+`sports_reference/by_date/day={date}/entity=fixture_lineups/`): 0 objects across 5 sampled recent dates (2026-04-15,
+2026-06-13, 2026-06-20, 2026-07-16, 2026-07-18) — `entity=fixture_lineups` genuinely is NOT currently active in
+production (confirmed, this part of the original finding stands), so there is no live row to show player identity IN,
+but the reason is dormancy, not a stripping bug. This is a real, separate data-completeness gap (the writer isn't
+scheduled), not a writer bug — flagged here as a corrected finding, not fixed in this change (out of scope: scheduling
+the writer, not a catalogue-roll-up bug). `entity=injuries` remains the current, active player-grain source.
 
 **Trailing-window scope, not full history**: unlike league-grain (a cheap single manifest-index read), the
 fixture/team/injuries by_date corpus has no GCS-side way to prefix-scope a LISTING to just those three entities (the
