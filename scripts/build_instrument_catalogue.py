@@ -722,7 +722,7 @@ _DEFI_LENDING_SPLIT_ITYPES: frozenset[str] = frozenset(
 )
 
 
-def _instrument_type_from_id(instrument_id: str | None) -> str | None:
+def _instrument_type_from_id(instrument_id: str | None, asset_group: str | None = None) -> str | None:
     """Return the ``VENUE:TYPE:SYMBOL`` middle TYPE segment (uppercased), or None.
 
     The canonical DeFi/CeFi instrument id reserves ``:`` as the top-level
@@ -731,10 +731,25 @@ def _instrument_type_from_id(instrument_id: str | None) -> str | None:
     colon-segment is unambiguously the type. Returns None when the id is blank or
     not in that 3+-segment shape (e.g. a DeFi POOL row re-keyed to a bare
     ``pool_address``, or an id-less row). Pure + idempotent.
+
+    Sports ids are the odd shape out: ``SPORT:BOOKMAKER:MARKET:LEAGUE:SEASON:
+    HOME-AWAY::SELECTION`` — the second colon-segment there is the BOOKMAKER, not
+    a type (the market/type-equivalent is the THIRD segment). Pass
+    ``asset_group="sports"`` to resolve that segment instead
+    (sports_closeout_batch1_ao_ready_2026_07_24.md todo 2). As of 2026-07-24
+    ``build_catalogue_dataframe`` (this function's only caller, via
+    :func:`_canonicalize_instrument_type`) never routes sports rows through here
+    — sports catalogue rows are stamped explicitly by the dedicated
+    ``build_sports_*`` roll-ups — so this parameter is currently defensive/inert
+    for the live pipeline, not yet reachable.
     """
     if not instrument_id:
         return None
     parts = instrument_id.split(":")
+    if asset_group == "sports":
+        if len(parts) < 3 or not parts[2]:
+            return None
+        return parts[2].strip().upper()
     if len(parts) < 3:
         return None
     seg = parts[1].strip().upper()
