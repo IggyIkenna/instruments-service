@@ -202,6 +202,10 @@ SHARD_KEY_COLS = ["date", "venue", "data_type", "instrument_type", "instrument_i
 # projects to the INTERSECTION with the blob's real schema: the per-VM ``_legacy_seed``
 # shard physically lacks ``pipeline_mode``/``row_count`` (they are backfilled on read by
 # ``read_availability_index``, not stored), so ``_ensure_cols`` re-materialises them.
+# ``chain`` MUST be included: the v2 script's ``_chain_merge_safety`` STOP-ON-SURPRISE gate
+# reads it, and a column silently absent from a dry-run read makes that gate a no-op that
+# always reports (0, 0) regardless of the real data — found 2026-07-24 after a dry-run
+# claiming 0/0 was immediately followed by a real 3304-group STOP at --apply time.
 _DRYRUN_COLS = [
     "date",
     "venue",
@@ -213,6 +217,7 @@ _DRYRUN_COLS = [
     "capture_status",
     "row_count",
     "instrument_count",
+    "chain",
 ]
 
 # Best-status wins on a shard-atom collision.
