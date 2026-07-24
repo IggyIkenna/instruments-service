@@ -44,9 +44,27 @@ the ``service_name`` filter below exists specifically to exclude them.
 
 Idempotent -- re-running after --apply finds 0 rows (already corrected).
 
+**Paused-consolidator CAS write** (codex SSOT
+``/codex/05-infrastructure/manifest-consolidator-ssot.md`` § "Surgical ROW REMOVAL from the
+canonical -- a paused-consolidator CAS drop, never a force-rebuild"): a plain read-modify-write
+against `_index/availability_index.parquet` RACES the live `*/1 * * * *` consolidator cron --
+proven live 2026-07-24, an --apply run reverted after >=2 consolidator cycles even though the
+write itself succeeded and verified durable immediately. ``--apply`` therefore REFUSES unless the
+caller has already paused the bucket's consolidator cron (``--i-have-paused-the-consolidator-cron``)
+and confirmed no in-flight execution; it snapshots the pre-edit generation to
+``_index/snapshots/pre_<slug>_<ts>.parquet``, edits at the Arrow level to preserve the EXACT source
+schema, and writes back via a generation-match compare-and-set (``gcs_conditional_put``) that
+ABORTS loudly on any concurrent write instead of silently losing the race. It then calls
+``manifest_consolidator.consolidate(bucket, force=True)`` once to re-stamp the
+``consolidator_content_write_at``/``consolidator_run_at`` markers the CAS write cannot carry
+(the sanctioned CAS helpers take no ``metadata`` kwarg) -- skipping this step leaves a narrow
+resurrection window on the cron's first post-edit cycle. The operator/caller MUST re-enable the
+cron after verifying durability across >=2 cycles.
+
 Usage:
   python scripts/flip_sports_odds_captured_leak_to_attempted_failed.py --dry-run
-  python scripts/flip_sports_odds_captured_leak_to_attempted_failed.py --apply
+  # pause the cron + verify no in-flight execution FIRST, then:
+  python scripts/flip_sports_odds_captured_leak_to_attempted_failed.py --apply --i-have-paused-the-consolidator-cron
 """
 
 from __future__ import annotations
@@ -58,7 +76,18 @@ import sys
 from datetime import UTC, datetime
 
 import pandas as pd
-from unified_trading_library import get_storage_client, resolve_bucket_name
+import pyarrow as pa
+import pyarrow.parquet as pq
+from unified_trading_library import (
+    gcs_conditional_put,
+    gcs_read_object_with_generation,
+    resolve_bucket_name,
+)
+
+# Not re-exported at the unified_trading_library top level (verified against
+# __init__.py's __all__) -- the import-pattern checker's suggested shallow
+# import for this symbol is a false positive; deep import is correct here.
+from unified_trading_library.manifest_consolidator import consolidate  # noqa: qg-deep-import
 
 logger = logging.getLogger(__name__)
 
@@ -90,17 +119,12 @@ _TARGET_ERROR_REASON = "legacy_captured_leak_corrected_per_sports_odds_manifest_
 _EXPECTED_LEAK_WRITE_DATE_PREFIX = "2026-07-14"
 
 
-def _backup_path(run_ts: str) -> str:
-    return f"_index/availability_index.{run_ts}.bak.parquet"
+def _snapshot_path(run_ts: str) -> str:
+    return f"_index/snapshots/pre_sports_odds_captured_leak_{run_ts}.parquet"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--project-id",
-        default="central-element-323112",
-        help="GCP project id (default: central-element-323112).",
-    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument(
         "--dry-run",
@@ -110,11 +134,30 @@ def main() -> int:
     mode.add_argument(
         "--apply",
         action="store_true",
-        help="Write the patched manifest back to GCS (after backup).",
+        help="CAS-write the patched manifest back to GCS (after snapshot).",
+    )
+    parser.add_argument(
+        "--i-have-paused-the-consolidator-cron",
+        action="store_true",
+        help=(
+            "Required with --apply. Attests the caller already paused "
+            "uts-prod-manifest-consolidator-instruments-sports-cron and confirmed no in-flight "
+            "execution — see the manifest-consolidator-ssot.md paused-CAS recipe in the module "
+            "docstring. --apply refuses without this flag."
+        ),
     )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.apply and not args.i_have_paused_the_consolidator_cron:
+        logger.error(
+            "--apply requires --i-have-paused-the-consolidator-cron — a plain read-modify-write "
+            "races the live */1 consolidator cron and silently loses (proven live 2026-07-24). "
+            "Pause uts-prod-manifest-consolidator-instruments-sports-cron, verify no in-flight "
+            "execution, then re-run with the flag."
+        )
+        return 2
 
     bucket = resolve_bucket_name(
         cloud="gcp",
@@ -122,14 +165,18 @@ def main() -> int:
         asset_group="sports",
         deployment_env="prod",
     )
+    index_uri = f"gs://{bucket}/{_INDEX_PATH}"
     run_ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    backup_path = _backup_path(run_ts)
+    snapshot_path = _snapshot_path(run_ts)
 
-    storage = get_storage_client(project_id=args.project_id)
-    logger.info("Reading manifest gs://%s/%s", bucket, _INDEX_PATH)
-    raw_bytes = storage.download_bytes(bucket, _INDEX_PATH)
-    df = pd.read_parquet(io.BytesIO(raw_bytes))
-    logger.info("Manifest rows: %d", len(df))
+    logger.info("Reading manifest %s", index_uri)
+    raw_bytes, generation = gcs_read_object_with_generation(index_uri)
+    if raw_bytes is None:
+        logger.error("Manifest object missing at %s — aborting.", index_uri)
+        return 2
+    source_table = pq.read_table(io.BytesIO(raw_bytes))
+    df = source_table.to_pandas()
+    logger.info("Manifest rows: %d (generation=%d)", len(df), generation)
 
     required_cols = ("capture_status", "venue", "data_type", "date", "instrument_count", "error_reason", "service_name")
     missing = [c for c in required_cols if c not in df.columns]
@@ -196,11 +243,18 @@ def main() -> int:
             _TARGET_CAPTURE_STATUS,
             _TARGET_ERROR_REASON,
         )
-        logger.info("[dry-run] Would write backup to gs://%s/%s", bucket, backup_path)
+        logger.info(
+            "[dry-run] Would snapshot to gs://%s/%s then CAS-write generation=%d", bucket, snapshot_path, generation
+        )
         return 0
 
-    logger.info("Writing backup to gs://%s/%s", bucket, backup_path)
-    storage.upload_bytes(bucket, backup_path, raw_bytes)
+    logger.info("Snapshotting pre-edit generation=%d to gs://%s/%s", generation, bucket, snapshot_path)
+    snapshot_gen = gcs_conditional_put(f"gs://{bucket}/{snapshot_path}", raw_bytes, if_generation_match=0)
+    if snapshot_gen is None:
+        logger.error(
+            "Snapshot write failed (object already exists at that path?) — aborting before touching canonical."
+        )
+        return 2
 
     df.loc[target_mask, "capture_status"] = _TARGET_CAPTURE_STATUS
     df.loc[target_mask, "instrument_count"] = 0
@@ -211,17 +265,47 @@ def main() -> int:
     if "attempted_at" in df.columns:
         df.loc[target_mask, "attempted_at"] = now_iso
 
+    # Arrow-level schema preservation (manifest-consolidator-ssot.md step 4): a plain
+    # pandas round-trip can silently promote/alter dtypes (e.g. schema_version int64).
+    # Rebuild against the SOURCE schema and assert equality before writing a single byte.
+    new_table = pa.Table.from_pandas(df, schema=source_table.schema, preserve_index=False)
+    if not new_table.schema.equals(source_table.schema):
+        logger.error(
+            "Post-edit schema does not match source schema — aborting rather than risk a schema "
+            "regression. source=%s new=%s",
+            source_table.schema,
+            new_table.schema,
+        )
+        return 2
+
     out_buf = io.BytesIO()
-    df.to_parquet(out_buf, index=False, engine="pyarrow")
+    pq.write_table(new_table, out_buf)
     out_buf.seek(0)
-    storage.upload_bytes(bucket, _INDEX_PATH, out_buf.read())
+    new_bytes = out_buf.read()
+
+    logger.info("CAS-writing %s with if_generation_match=%d", index_uri, generation)
+    new_generation = gcs_conditional_put(index_uri, new_bytes, if_generation_match=generation)
+    if new_generation is None:
+        logger.error(
+            "CAS write REFUSED — generation drifted from %d (a concurrent writer landed). "
+            "No canonical bytes were touched. Re-read the current state and re-run from scratch "
+            "(do NOT retry blindly — re-verify the target rows first).",
+            generation,
+        )
+        return 3
     logger.info(
-        "Flipped %d rows to '%s'; manifest re-uploaded. Backup retained at gs://%s/%s",
+        "Flipped %d rows to '%s'; manifest CAS-written (generation %d -> %d). Snapshot at gs://%s/%s",
         target_count,
         _TARGET_CAPTURE_STATUS,
+        generation,
+        new_generation,
         bucket,
-        backup_path,
+        snapshot_path,
     )
+
+    logger.info("Re-stamping consolidator markers via consolidate(bucket, force=True) (CAS write cannot carry them)")
+    report = consolidate(bucket, force=True)
+    logger.info("consolidate(force=True) report: %s", report)
     return 0
 
 

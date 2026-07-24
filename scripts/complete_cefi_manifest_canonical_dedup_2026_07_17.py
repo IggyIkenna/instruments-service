@@ -223,6 +223,12 @@ _DRYRUN_COLS = [
 # Best-status wins on a shard-atom collision.
 _STATUS_RANK = {"captured": 0, "empty_confirmed": 1, "attempted_failed": 2, "expected_unattempted": 3}
 
+# The canonical POST-NORMALISATION `instrument_type` values a futures/options CHAIN-BUNDLE
+# shard lands on (`_ITYPE_ALIASES` maps the raw leaked "FUTURES_CHAIN"/"OPTIONS_CHAIN" itype
+# to these BEFORE `_dedup_blob` ever runs) — NOT the same axis as `_BUNDLE_DATA_TYPES` (the
+# `data_type` column's bundle marker). See `_effective_dedup_key`.
+_BUNDLE_ITYPES_CANON: frozenset[str] = frozenset({"FUTURE", "OPTION"})
+
 # STOP-ON-SURPRISE: raw-captured candidate band across ALL blobs. Measured live
 # 2026-07-17 against the rebuilt -prd manifest: main index = 490,490 (matches the
 # blueprint's ~490k main-index upper bound) + the `_legacy_seed` per-VM shard = 67,560
@@ -1113,20 +1119,83 @@ def _canonicalize_blob(
     return out, captured_keys, stats
 
 
+def _effective_dedup_key(df: pd.DataFrame) -> pd.Series:
+    """The de-dup key ``_dedup_blob``/``_chain_merge_safety`` actually collapse on.
+
+    PIN_ATOM, extended by two axes the CEFI CANONICAL SPEC (``cefi_consolidated_closeout
+    _2026_07_18.md`` § "CEFI CANONICAL SPEC") already declares part of the true shard atom
+    but PIN_ATOM itself omits:
+
+    1. ``underlying`` — but ONLY for the futures/options CHAIN-BUNDLE population (blank
+       ``instrument_id`` + non-blank ``underlying`` + itype in ``_BUNDLE_ITYPES_CANON``). A
+       chain-bundle shard never gets a synthesised id (``resolve_canonical``'s
+       ``blank_id_kept`` path — the full per-contract ids live INSIDE the bundle parquet, not
+       the manifest shard key) and is keyed on ``underlying`` instead. Since PIN_ATOM excludes
+       ``underlying`` and ``instrument_id`` is blank for EVERY bundle regardless of which
+       underlying it represents, different underlyings' same-day bundles (BTC vs. ETH vs. SOL
+       futures/options chains) spuriously collided onto one PIN_ATOM group pre-fix, and
+       ``drop_duplicates`` silently kept only one — the real root cause of the 3304 "lossy"
+       PIN_ATOM groups found 2026-07-24.
+
+    2. ``chain`` — folded in UNCONDITIONALLY (blank-filled, so a blank-chain row's key is
+       byte-identical to before this fix — no behavior change for the ~99% of rows without a
+       chain value). The spec lists ``[chain]`` as part of the shard atom for on-chain/perp-DEX
+       venues; found 2026-07-24 (post-``underlying``-fix re-run): 64 residual lossy PIN_ATOM
+       groups were ASTER rows with TWO captured rows sharing an identical PIN_ATOM but DIFFERENT
+       ``chain`` (blank vs. ``"ASTER"``) and DIFFERING real ``row_count`` — almost certainly a
+       writer chain-tagging transition (blank before, ``"ASTER"`` after) that produced a second
+       manifest row instead of updating the first, rather than two spellings of the same
+       capture. Folding ``chain`` in (rather than `--keep-chain`, which only controls whether the
+       ``chain`` COLUMN is dropped from the WRITTEN output — it does NOT change this key, so it
+       would NOT have prevented this exact merge) keeps both real captures distinct. Trade-off,
+       accepted: once ``chain`` is stripped from the final OUTPUT (the operator's own
+       "derive-on-demand" directive, unrelated to this key), a handful of PIN_ATOM-duplicate rows
+       can remain in the written manifest for this narrow population — a visible, auditable
+       residual, not a silent one, and strictly preferable to destroying either row's real data.
+    """
+    key = df[PIN_ATOM[0]].astype(str)
+    for c in PIN_ATOM[1:]:
+        key = key.str.cat(df[c].fillna("").astype(str), sep=_KEY_SEP)
+    if "underlying" in df.columns and "instrument_id" in df.columns and "instrument_type" in df.columns:
+        iid_blank = df["instrument_id"].fillna("").astype(str).str.strip() == ""
+        itype_bundle = df["instrument_type"].fillna("").astype(str).str.upper().isin(_BUNDLE_ITYPES_CANON)
+        underlying = df["underlying"].fillna("").astype(str)
+        bundle_row = iid_blank & itype_bundle & (underlying.str.strip() != "")
+        key = key.str.cat(underlying.where(bundle_row, ""), sep=_KEY_SEP)
+    if "chain" in df.columns:
+        key = key.str.cat(df["chain"].fillna("").astype(str), sep=_KEY_SEP)
+    return key
+
+
 def _dedup_blob(df: pd.DataFrame) -> tuple[pd.DataFrame, int, dict[str, int]]:
-    """Collapse coexisting shard-atom spellings via drop_duplicates(PIN_ATOM, keep best status)."""
+    """Collapse coexisting shard-atom spellings via drop_duplicates(effective key, keep best status)."""
     if not set(PIN_ATOM).issubset(df.columns) or "capture_status" not in df.columns:
         return df, 0, {}
     rank = df["capture_status"].map(_STATUS_RANK).fillna(9).astype(int)
-    ordered = df.assign(_rank=rank).sort_values("_rank", kind="stable")
+    dedup_key = _effective_dedup_key(df)
+    # Secondary tie-break (found 2026-07-24): within an EQUAL-status collision, prefer the row
+    # carrying MORE captured data (row_count desc) over an arbitrary original-order pick. Found
+    # via 28 BITFINEX-SPOT/BYBIT-SPOT groups (book_snapshot_5/trades, blank id+underlying+chain —
+    # market-wide aggregate shards with no available axis to widen the key with) where two
+    # independently-captured rows for the identical effective key differ only by row_count (e.g.
+    # BITFINEX-SPOT 2024-06-05 book_snapshot_5: ~12.6M vs ~1.8M), almost certainly an un-deduped
+    # re-capture of the same shard rather than 2 distinct things. Some row's data is necessarily
+    # discarded either way (a genuine, tiny, tracked residual — see `_CHAIN_LOSSY_TOLERANCE_MAX` in
+    # the v2 script) — row_count-desc is the principled "more-complete-capture-wins" choice,
+    # consistent with this script's existing best-status-wins idiom, rather than leaving it to
+    # incidental row order.
+    row_count = pd.to_numeric(df["row_count"], errors="coerce").fillna(0) if "row_count" in df.columns else 0
+    ordered = df.assign(_rank=rank, _dedup_key=dedup_key, _rc_desc=-row_count).sort_values(
+        ["_rank", "_rc_desc"], kind="stable"
+    )
     before = len(ordered)
-    kept = ordered.drop_duplicates(subset=PIN_ATOM, keep="first")
+    kept = ordered.drop_duplicates(subset="_dedup_key", keep="first")
     collapsed = before - len(kept)
     breakdown: dict[str, int] = {}
     if collapsed:
         dropped = ordered.loc[~ordered.index.isin(kept.index)]
         breakdown = {str(k): int(v) for k, v in dropped["capture_status"].value_counts().to_dict().items()}
-    kept = kept.drop(columns="_rank").sort_index()
+    kept = kept.drop(columns=["_rank", "_dedup_key", "_rc_desc"]).sort_index()
     return kept, collapsed, breakdown
 
 
