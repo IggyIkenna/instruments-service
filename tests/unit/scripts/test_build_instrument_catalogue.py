@@ -1423,6 +1423,28 @@ def test_canonicalize_instrument_type_defi_split_id_is_authoritative(rollup: Mod
     assert fn("A_TOKEN", instrument_id=None) == "A_TOKEN"
 
 
+def test_instrument_type_from_id_sports_resolves_market_not_bookmaker(rollup: ModuleType) -> None:
+    """sports_closeout_batch1_ao_ready_2026_07_24.md todo 2: sports ids are
+    SPORT:BOOKMAKER:MARKET:LEAGUE:SEASON:HOME-AWAY::SELECTION — the second
+    colon-segment (position 1) is the BOOKMAKER, not a type. With
+    asset_group="sports" the market-equivalent (position 2) resolves instead.
+    Currently defensive/inert for the live pipeline (no reachable sports call
+    path through build_catalogue_dataframe today — sports catalogue rows are
+    stamped explicitly by the dedicated build_sports_* roll-ups)."""
+    fn = rollup._instrument_type_from_id
+    raw = "FOOTBALL:BETFAIR_EX_UK:MATCH_ODDS:ENG_PREMIER_LEAGUE:2025-26:ARSENAL-CHELSEA::HOME"
+    assert fn(raw, asset_group="sports") == "MATCH_ODDS"
+    # Without the asset_group gate (default), behaviour is unchanged (bookmaker
+    # token) — no regression for the existing CeFi/DeFi/TradFi callers.
+    assert fn(raw) == "BETFAIR_EX_UK"
+
+
+def test_instrument_type_from_id_non_sports_unaffected_by_gate(rollup: ModuleType) -> None:
+    fn = rollup._instrument_type_from_id
+    assert fn("VENUS-BSC:A_TOKEN:ABNB-USDC", asset_group="cefi") == "A_TOKEN"
+    assert fn("VENUS-BSC:A_TOKEN:ABNB-USDC") == "A_TOKEN"
+
+
 def test_rollup_lending_split_id_emits_split_not_lending(rollup: ModuleType) -> None:
     """End-to-end FIX 2: a per-date lending row whose id already carries the A_TOKEN/
     DEBT_TOKEN/SPOT_ASSET split but whose ``instrument_type`` COLUMN is a stale legacy
