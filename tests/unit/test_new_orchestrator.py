@@ -1103,6 +1103,70 @@ def test_defi_filter_only_applies_to_defi_venues():
 
 
 # ===========================================================================
+# DEFI RELEVANCE FILTER — is_defi_force_include_pool carve-out
+# High-TVL Raydium pools (UAC DEFI_FORCE_INCLUDE_POOLS, e.g. XMR/USDC $47M,
+# BNB/USDC $18M) whose non-major leg would otherwise fail the DEX relevance
+# gate are force-kept when their pool_address is on the curated allowlist.
+# ===========================================================================
+
+
+def test_defi_filter_force_includes_high_tvl_pool_with_minor_asset():
+    """XMR/USDC on Raydium: XMR is not a major asset (would normally be dropped),
+    but the pool_address is in UAC's DEFI_FORCE_INCLUDE_POOLS high-TVL allowlist,
+    so the relevance filter keeps it."""
+    from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
+
+    r = InstrumentRecord(
+        instrument_key="RAYDIUM-SOLANA:POOL:XMR-USDC",
+        venue="RAYDIUM-SOLANA",
+        instrument_type="POOL",
+        base_asset="XMR",
+        quote_asset="USDC",
+        pool_address="4usrwhonydfubz1kcupz4xcjeadzqzptby4mzu6wegkm",  # XMR/USDC, DEFI_FORCE_INCLUDE_POOLS
+        base_asset_decimals=18,
+        quote_asset_decimals=6,
+    )
+    assert len(filter_defi_instruments_by_relevance([r])) == 1
+
+
+def test_defi_filter_force_include_is_case_insensitive():
+    """A force-include pool_address arriving mixed-case (BNB/USDC, $18M TVL) still matches —
+    the filter lowercases before calling the UAC predicate."""
+    from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
+
+    r = InstrumentRecord(
+        instrument_key="RAYDIUM-SOLANA:POOL:BNB-USDC",
+        venue="RAYDIUM-SOLANA",
+        instrument_type="POOL",
+        base_asset="BNB",
+        quote_asset="USDC",
+        pool_address="AMTPRIWXRENBOHQ4CNMBYBAJM4MCWLTBEXVEW8TRHEVK",  # BNB/USDC, mixed-case input
+        base_asset_decimals=18,
+        quote_asset_decimals=6,
+    )
+    assert len(filter_defi_instruments_by_relevance([r])) == 1
+
+
+def test_defi_filter_minor_asset_pool_not_on_force_include_list_still_rejected():
+    """Control: a structurally-identical minor-asset Raydium pool whose address is NOT on
+    the force-include allowlist is still relevance-rejected — the carve-out is address-keyed,
+    not a blanket exemption for the venue or token pair."""
+    from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
+
+    r = InstrumentRecord(
+        instrument_key="RAYDIUM-SOLANA:POOL:XMR-USDC",
+        venue="RAYDIUM-SOLANA",
+        instrument_type="POOL",
+        base_asset="XMR",
+        quote_asset="USDC",
+        pool_address="1111111111111111111111111111111111111111111",  # not in DEFI_FORCE_INCLUDE_POOLS
+        base_asset_decimals=18,
+        quote_asset_decimals=6,
+    )
+    assert len(filter_defi_instruments_by_relevance([r])) == 0
+
+
+# ===========================================================================
 # VENUE FILTER (--venues CLI arg)
 # Tests that the venue filter correctly restricts which venues are processed.
 # This is the sharding mechanism: run one venue at a time for parallelism.
