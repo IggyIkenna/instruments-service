@@ -41,13 +41,17 @@ import pandas as pd
 from unified_api_contracts.canonical.domain.sports.league_data import (
     get_expected_leagues_for_source,
 )
+from unified_api_contracts.canonical.domain.sports.right_days import (
+    SPORTS_GOLDEN_WINDOW_END,
+    SPORTS_GOLDEN_WINDOW_START,
+)
 from unified_trading_library import get_bucket_name, get_storage_client
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-_WINDOW_START = "2025-09-01"
-_WINDOW_END = "2025-11-30"
+_WINDOW_START = SPORTS_GOLDEN_WINDOW_START
+_WINDOW_END = SPORTS_GOLDEN_WINDOW_END
 _ENTITIES = ["fixture_events", "fixture_lineups", "fixture_stats", "player_stats"]
 _ENTITY_DT = {
     "fixture_events": "FIXTURE_EVENTS",

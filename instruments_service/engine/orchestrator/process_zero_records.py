@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 
 from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
 from unified_api_contracts.registry import NO_ADAPTER_YET, VENUE_TO_ADAPTER_KEY
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
@@ -238,7 +239,7 @@ def _zero_sports_empty_fixture_markers(
         _canon_league_id = _orch._canonical_league_id(_league_id)
         _row_key = {
             "date": date,
-            "data_type": "FIXTURES",
+            "data_type": FIXTURES_SCHEDULE,
             "league_id": _canon_league_id,
         }
         if fixtures_fetch_failed:

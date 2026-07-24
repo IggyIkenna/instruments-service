@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from unified_api_contracts.sports import get_leagues_by_classification
+from unified_api_contracts.sports import FIXTURES_SCHEDULE, get_leagues_by_classification
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -251,7 +251,7 @@ async def _fetch_fixture_ids_via_api(
                 elif hasattr(fx, "league") and hasattr(fx.league, "api_football_id"):
                     af_lid = fx.league.api_football_id
                     _lid = _af_id_to_canonical_league.get(af_lid, "")
-                hooks.note_empty("FIXTURES", league_id=_lid, reason=str(_reason))
+                hooks.note_empty(FIXTURES_SCHEDULE, league_id=_lid, reason=str(_reason))
         _orch.logger.info("Sports reference: %d completed fixtures found for enrichment (API fetch)", len(fixture_ids))
 
         # Write canonical fixtures to sports_reference/by_date/entity=fixtures/
@@ -288,7 +288,7 @@ async def _fetch_fixture_ids_via_api(
             operation="sports_reference_fixtures_fetch",
             shard=date,
         )
-        hooks.note_failed("FIXTURES", exc)
+        hooks.note_failed(FIXTURES_SCHEDULE, exc)
     return fixture_ids, _af_fid_to_league
 
 

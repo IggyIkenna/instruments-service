@@ -95,7 +95,7 @@ class TestManifestLeagueId:
             mock_manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=row_count,
-                data_type="FIXTURES",
+                data_type="FIXTURES_SCHEDULE",
                 league_id=league_id,
             )
 
@@ -106,14 +106,14 @@ class TestManifestLeagueId:
         assert calls[0] == call(
             processing_date=date_type.fromisoformat(date),
             row_count=5,
-            data_type="FIXTURES",
+            data_type="FIXTURES_SCHEDULE",
             league_id="EPL",
         )
         # Second call: BUNDESLIGA
         assert calls[1] == call(
             processing_date=date_type.fromisoformat(date),
             row_count=3,
-            data_type="FIXTURES",
+            data_type="FIXTURES_SCHEDULE",
             league_id="BUNDESLIGA",
         )
 
@@ -144,7 +144,7 @@ class TestEmptyFixtureMarkers:
             mock_manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=0,
-                data_type="FIXTURES",
+                data_type="FIXTURES_SCHEDULE",
                 league_id=league_id,
             )
 
@@ -328,7 +328,7 @@ class TestOrchestratorSportsLeaguePartitioning:
         league_ids = {c.kwargs["row_key"]["league_id"] for c in empty_calls}
         data_types = {c.kwargs["row_key"]["data_type"] for c in empty_calls}
         assert league_ids == {"EPL", "BUNDESLIGA"}
-        assert "FIXTURES" in data_types
+        assert "FIXTURES_SCHEDULE" in data_types
 
     @pytest.mark.asyncio
     async def test_zero_fixtures_with_league_filter(self) -> None:
@@ -370,7 +370,8 @@ class TestOrchestratorSportsLeaguePartitioning:
         epl_empty_calls = [
             c
             for c in mock_manifest_instance.record_empty.call_args_list
-            if c.kwargs["row_key"].get("league_id") == "EPL" and c.kwargs["row_key"].get("data_type") == "FIXTURES"
+            if c.kwargs["row_key"].get("league_id") == "EPL"
+            and c.kwargs["row_key"].get("data_type") == "FIXTURES_SCHEDULE"
         ]
         assert len(epl_empty_calls) >= 1
 
@@ -404,7 +405,7 @@ class TestOrchestratorSportsLeaguePartitioning:
         assert mock_manifest.record_empty.call_count == 0
         failed_calls = mock_manifest.record_failed.call_args_list
         assert len(failed_calls) == 2
-        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES" for c in failed_calls)
+        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES_SCHEDULE" for c in failed_calls)
         mock_manifest.write.assert_called_once()
 
     def test_zero_sports_markers_clean_empty_records_empty(self) -> None:
@@ -440,7 +441,7 @@ class TestOrchestratorSportsLeaguePartitioning:
         assert mock_manifest.record_failed.call_count == 0
         empty_calls = mock_manifest.record_empty.call_args_list
         assert len(empty_calls) == 2
-        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES" for c in empty_calls)
+        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES_SCHEDULE" for c in empty_calls)
         mock_manifest.write.assert_called_once()
 
     @pytest.mark.asyncio
