@@ -653,6 +653,41 @@ def split_dex_pools_fake_history(rows: list[dict[str, str]]) -> tuple[list[dict[
     return legit, excluded
 
 
+def split_unknown_prefix_rows(
+    bucket: str, rows: list[dict[str, str]]
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Split ``E_orphan_real`` rows into (legitimate, unknown-top-level-prefix-excluded).
+
+    Found 2026-07-23 on defi's terminal orphan-sweep ACCEPTANCE line
+    (``orphan_class_E=15865384``, ``unknown_prefixes=8``) — the 8 unknown-prefix objects
+    were ALL ALSO class-E: ``migration_orphan_sweep.py``'s ``classify_object()`` only
+    checks the infra/non-data label before parsing hive segments, it never requires the
+    object's TOP-LEVEL path prefix to be a recognised service-data prefix
+    (``raw_tick_data/`` / ``day=``) before classifying it E_orphan_real. An ad-hoc write
+    under an unrecognised top-level prefix with a hive-shaped tail (found: an agent's own
+    smoke-test artifacts under ``agent-sample-test-jupiter/raw_tick_data/.../day=.../
+    ...parquet``, leaked into the PROD bucket) therefore reads as a genuine orphan even
+    though the sweep's OWN bucket-prefix-taxonomy pass — the same "0 unknown is the
+    acceptance bar" check ``_print_report`` already gates on — flags its top-level prefix
+    as unknown. This backfill was ignoring that exact signal. NEVER ``record_captured`` an
+    object whose top-level prefix the sweep itself could not attribute to real service
+    data — these are delete-candidates for a human-gated prod-bucket review (see
+    ``plans/active/issues/defi_orphan_sweep_test_artifact_prod_leak_2026_07_24.md``), not
+    backfill targets. Mirrors ``split_dex_pools_fake_history``'s exclude-before-plan shape.
+    """
+    legit: list[dict[str, str]] = []
+    excluded: list[dict[str, str]] = []
+    prefix = f"gs://{bucket}/"
+    for r in rows:
+        uri = str(r.get("uri", ""))
+        object_path = uri[len(prefix) :] if uri.startswith(prefix) else uri
+        if _sweep._taxonomy_label(object_path).startswith("unknown:"):
+            excluded.append(r)
+        else:
+            legit.append(r)
+    return legit, excluded
+
+
 def reverify_against_index(
     asset_group: str, bucket: str, rows: list[dict[str, str]]
 ) -> tuple[list[dict[str, str]], int]:
@@ -950,13 +985,21 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("backfill-orphan-E %s: bucket=%s report=%s", ag, bucket, report_uri)
     e_rows_raw = load_class_e(report_uri)
     e_rows, fake_history_rows = split_dex_pools_fake_history(e_rows_raw)
+    e_rows, unknown_prefix_rows = split_unknown_prefix_rows(bucket, e_rows)
     logger.info(
-        "report class-E rows: %d (%d legitimate, %d dex_pools-fake-history EXCLUDED — see "
-        "defi_solana_dex_pools_fake_history_recurrence_prd_bucket_2026_07_23.md)",
+        "report class-E rows: %d (%d legitimate, %d dex_pools-fake-history EXCLUDED, "
+        "%d unknown-top-level-prefix EXCLUDED — see "
+        "defi_solana_dex_pools_fake_history_recurrence_prd_bucket_2026_07_23.md / "
+        "defi_orphan_sweep_test_artifact_prod_leak_2026_07_24.md)",
         len(e_rows_raw),
         len(e_rows),
         len(fake_history_rows),
+        len(unknown_prefix_rows),
     )
+    if unknown_prefix_rows:
+        logger.warning("unknown-top-level-prefix rows excluded (delete-candidates, NEVER backfilled) — first 10:")
+        for r in unknown_prefix_rows[:10]:
+            logger.warning("  %s", r.get("uri", ""))
     still, covered = reverify_against_index(ag, bucket, e_rows)
     logger.info("re-verify vs LIVE index: already-covered=%d (class-B reclass), still-orphan=%d", covered, len(still))
     if args.limit is not None:
