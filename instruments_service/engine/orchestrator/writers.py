@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from unified_api_contracts import VENUE_TO_ASSET_GROUP
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
@@ -243,15 +244,15 @@ def _classify_venue_write(venue_str: str) -> tuple[str, str, str, str, str, _orc
             venue_str = _canonical_venue
 
     # v4: Sports reference entities write data_type (not venue).
-    #     API_FOOTBALL → data_type=FIXTURES, venue=""
+    #     API_FOOTBALL → data_type=FIXTURES_SCHEDULE, venue=""
     #     API_FOOTBALL_INJURIES → data_type=INJURIES, venue=""
     #     Other asset groups keep venue as-is.
     _sports_prefixes = ("API_FOOTBALL", "TRANSFERMARKT", "FOOTYSTATS", "SFI", "UNDERSTAT", "WEATHER")
     is_sports_ref = venue_str.startswith(_sports_prefixes)
     if is_sports_ref:
-        # Extract data_type: API_FOOTBALL_INJURIES → INJURIES, API_FOOTBALL → FIXTURES
+        # Extract data_type: API_FOOTBALL_INJURIES → INJURIES, API_FOOTBALL → FIXTURES_SCHEDULE
         if venue_str == "API_FOOTBALL":
-            manifest_data_type = "FIXTURES"
+            manifest_data_type = FIXTURES_SCHEDULE
         elif "_" in venue_str:
             # Strip the provider prefix: API_FOOTBALL_INJURIES → INJURIES
             for pfx in _sports_prefixes:

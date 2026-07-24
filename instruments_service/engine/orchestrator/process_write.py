@@ -26,6 +26,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
@@ -281,22 +282,22 @@ def _write_sports_fixture_venue(
         manifest.record_captured(  # QG-allow: emission-policy-not-applicable
             row_key={
                 "date": date,
-                "data_type": "FIXTURES",
+                "data_type": FIXTURES_SCHEDULE,
                 "league_id": _canonical_lid_str,
             },
             df=_stamped_fixture_df,
             asset_group="sports",
             instrument_type="",
-            data_type="FIXTURES",
+            data_type=FIXTURES_SCHEDULE,
             league_id=_canonical_lid_str,
             pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-            # FIXTURES is multi-source (api_football + footystats) →
+            # FIXTURES_SCHEDULE is multi-source (api_football + footystats) →
             # explicit source required (data_source_provenance Phase 4).
             # This branch is the API_FOOTBALL venue (venue_str filter).
             source="api_football",
             service_emission_state=None,
         )
-        counts[f"FIXTURES/{_league_id_str}"] = len(_league_df_clean)
+        counts[f"{FIXTURES_SCHEDULE}/{_league_id_str}"] = len(_league_df_clean)
         if sampler.enable_sampling:
             sampler.generate_csv_sample(
                 _league_df_clean,
@@ -333,7 +334,7 @@ def _write_sports_fixture_venue(
     #      ``SOURCE_RETURNED_ZERO`` and stamped a REDUNDANT blanket
     #      ``{date, venue}`` row — live-verified (2026-07-15) to interfere
     #      with the correct per-league row landing in the same per-VM shard
-    #      flush. Stamping ``counts[f"FIXTURES/{league}"] = 0`` for every
+    #      flush. Stamping ``counts[f"FIXTURES_SCHEDULE/{league}"] = 0`` for every
     #      league this loop handles (mirrors the captured branch's
     #      ``counts[...] = len(...)``) makes ``written_venues`` correctly
     #      include ``API_FOOTBALL`` whenever ANY per-league write (captured OR
@@ -347,7 +348,7 @@ def _write_sports_fixture_venue(
             manifest.record_empty(
                 row_key={
                     "date": date,
-                    "data_type": "FIXTURES",
+                    "data_type": FIXTURES_SCHEDULE,
                     "league_id": _exp_lid,
                 },
                 attempted_at=_fx_attempt_ts,
@@ -355,12 +356,12 @@ def _write_sports_fixture_venue(
                 pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
                 source="api_football",
             )
-            counts[f"FIXTURES/{_exp_lid}"] = 0
+            counts[f"{FIXTURES_SCHEDULE}/{_exp_lid}"] = 0
             continue
         manifest.record_empty(
             row_key={
                 "date": date,
-                "data_type": "FIXTURES",
+                "data_type": FIXTURES_SCHEDULE,
                 "league_id": _exp_lid,
             },
             attempted_at=_fx_attempt_ts,
@@ -368,7 +369,7 @@ def _write_sports_fixture_venue(
             pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
             source="api_football",
         )
-        counts[f"FIXTURES/{_exp_lid}"] = 0
+        counts[f"{FIXTURES_SCHEDULE}/{_exp_lid}"] = 0
 
 
 def _write_prediction_venue(
