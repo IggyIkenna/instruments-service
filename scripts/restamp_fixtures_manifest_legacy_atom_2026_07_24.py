@@ -179,17 +179,17 @@ def resolve_dedup_cols(columns: list[str]) -> list[str]:
     return list(BASE_DEDUP_COLS) + [c for c in OPTIONAL_DEDUP_COLS if c in columns]
 
 
-def composite_key(frame: pd.DataFrame, cols: list[str]) -> pd.Series:
-    """String composite key over `cols`; NaN and "" both collapse to "" (matches
-    production's NULL/"" coalesce in `_dedup_key_sql` -- both mean "not applicable").
+def normalize_key_cols(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """NaN/None -> "" per column (matches production's NULL/"" coalesce in
+    `_dedup_key_sql` -- both mean "not applicable"). Deliberately native
+    `.fillna` on the existing (already object/string) columns, NOT a blanket
+    `.astype(str)` composite-string-key + Python `set()` -- that approach
+    OOM-killed the first `--apply` attempt on the real 5.5M-row corpus
+    (materializing 66M+ individual Python string objects, then a ~5.2M-entry
+    Python set, is far more memory-hungry than pandas' native vectorized
+    C-level `duplicated()`/`merge()` used below).
     """
-    kdf = frame[cols].astype(str)
-    for c in cols:
-        kdf[c] = kdf[c].where(frame[c].notna(), "")
-    out = kdf[cols[0]]
-    for c in cols[1:]:
-        out = out.str.cat(kdf[c], sep="\x1f")
-    return out
+    return frame[cols].fillna("")
 
 
 def affected_mask(data_type: pd.Series) -> pd.Series:
@@ -214,27 +214,39 @@ class ClassifyResult:
 def classify(df: pd.DataFrame) -> ClassifyResult:
     """Classify every affected row as SAFE (re-stamp it) or ESCALATE (leave it
     untouched -- a genuine collision). Never drops a row.
+
+    Vectorized via pandas' native `duplicated()`/`merge()` (C-level hash
+    tables) rather than a hand-rolled Python string composite key + `set()` --
+    the latter OOM-killed the first `--apply` attempt at this corpus's real
+    scale (5.5M rows). See :func:`normalize_key_cols`.
     """
     dedup_cols = resolve_dedup_cols(list(df.columns))
-    n_dup_existing = int(composite_key(df, dedup_cols).duplicated().sum())
+    norm = normalize_key_cols(df, dedup_cols)
+    n_dup_existing = int(norm.duplicated(keep="first").sum())
 
     mask = affected_mask(df["data_type"])
     candidate_idx = df.index[mask]
 
-    restamped = df.loc[candidate_idx, dedup_cols].copy()
-    restamped["data_type"] = CANONICAL_DATA_TYPE
-    post_key = composite_key(restamped, dedup_cols)
+    restamped_norm = norm.loc[candidate_idx].copy()
+    restamped_norm["data_type"] = CANONICAL_DATA_TYPE
 
-    internal_dup_mask = post_key.duplicated(keep=False)
+    internal_dup_mask = restamped_norm.duplicated(keep=False)
     internal_collision_idx = candidate_idx[internal_dup_mask.values]
 
     non_internal_idx = candidate_idx[~internal_dup_mask.values]
-    rest = df.loc[~df.index.isin(candidate_idx)]
-    rest_keys = set(composite_key(rest, dedup_cols).values)
-    external_dup_mask = post_key.loc[non_internal_idx].isin(rest_keys)
-    external_collision_idx = non_internal_idx[external_dup_mask.values]
+    rest_norm = norm.loc[~norm.index.isin(candidate_idx)]
+    # Dedup the "rest" side before the join purely to keep the merge's output
+    # small (membership is all that matters, not multiplicity) -- does not
+    # change which candidate rows are found to collide.
+    rest_norm_unique = rest_norm.drop_duplicates(subset=dedup_cols)
 
-    safe_idx = non_internal_idx[~external_dup_mask.values]
+    to_check = restamped_norm.loc[non_internal_idx].copy()
+    to_check["_orig_idx"] = non_internal_idx
+    merged = to_check.merge(rest_norm_unique, on=dedup_cols, how="inner")
+    external_collision_idx = pd.Index(merged["_orig_idx"].unique())
+
+    external_dup_mask = non_internal_idx.isin(external_collision_idx)
+    safe_idx = non_internal_idx[~external_dup_mask]
     escalate_idx = internal_collision_idx.union(external_collision_idx)
 
     return ClassifyResult(
@@ -284,7 +296,7 @@ def _pre_write_gate(df: pd.DataFrame, final_df: pd.DataFrame, result: ClassifyRe
     if len(final_df) != len(df):
         return False, f"row count changed: {len(df)} -> {len(final_df)} (this script never adds/drops rows)"
 
-    n_post_dup = int(composite_key(final_df, dedup_cols).duplicated().sum())
+    n_post_dup = int(normalize_key_cols(final_df, dedup_cols).duplicated(keep="first").sum())
     if n_post_dup != 0:
         return False, f"{n_post_dup} duplicate keys AFTER restamp (classify() collision detection has a bug)"
 
@@ -403,7 +415,7 @@ def try_once(c, t0: float, attempt: int) -> tuple[str, dict]:
     assert len(verify_df) == len(final_df)
 
     dedup_cols = resolve_dedup_cols(list(verify_df.columns))
-    verify_dup = int(composite_key(verify_df, dedup_cols).duplicated().sum())
+    verify_dup = int(normalize_key_cols(verify_df, dedup_cols).duplicated(keep="first").sum())
     print(f"post-write duplicate keys: {verify_dup} (must be 0)", flush=True)
     assert verify_dup == 0
 
