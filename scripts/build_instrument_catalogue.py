@@ -66,6 +66,7 @@ from unified_api_contracts import (
     TardisInstrumentDetail,
     build_pool_identity,
     is_defi_force_include,
+    is_defi_force_include_pool,
     is_in_mvp_capture_universe,
     is_mvp,
     tracks_equity,
@@ -3626,6 +3627,11 @@ def _add_force_include(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
     The keyed-on-protocol predicate leaves a DEX pool that merely contains a force-include
     token at ``False`` (its venue protocol is not a governance-token venue), so
     coincidental liquidity stays distinguishable from a forced inclusion.
+
+    A row is ALSO force-included when its ``pool_address`` is in the operator-curated
+    high-TVL pool allowlist (UAC SSOT :func:`~unified_api_contracts.is_defi_force_include_pool`),
+    so structurally-relevant pools whose legs fall outside the major-assets set (e.g.
+    high-liquidity Raydium pools) are honestly flagged in the catalogue.
     """
     out = df.copy()
     if df.empty:
@@ -3648,7 +3654,9 @@ def _add_force_include(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
         return str(raw)
 
     force_vals: list[bool] = [
-        is_defi_force_include(_cell(row, "venue"), _cell(row, "base_asset")) for _, row in out.iterrows()
+        is_defi_force_include(_cell(row, "venue"), _cell(row, "base_asset"))
+        or is_defi_force_include_pool(_cell(row, "pool_address").lower())
+        for _, row in out.iterrows()
     ]
     out["force_include"] = force_vals
     return out
