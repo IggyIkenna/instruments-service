@@ -589,6 +589,12 @@ from instruments_service.engine.orchestrator.sports_reference_core import (
 from instruments_service.engine.orchestrator.sports_reference_core import (
     _manifest_captured_fixture_leagues as _manifest_captured_fixture_leagues,
 )
+from instruments_service.engine.orchestrator.sports_reference_fixture_entity_gates import (
+    _dedupe_player_stats_df as _dedupe_player_stats_df,
+)
+from instruments_service.engine.orchestrator.sports_reference_fixture_entity_gates import (
+    _normalize_fixture_events_schema as _normalize_fixture_events_schema,
+)
 from instruments_service.engine.orchestrator.transfermarkt import (
     _cache_is_fresh as _cache_is_fresh,
 )
@@ -771,6 +777,7 @@ __all__ = [
     "_coerce_adapter_output",
     "_compute_prediction_shards",
     "_count_per_venue",
+    "_dedupe_player_stats_df",
     "_defi_universe_cache",
     "_defi_universe_retryable",
     "_empty_lifecycle_columns",
@@ -799,6 +806,7 @@ __all__ = [
     "_master_blob_path",
     "_maybe_emit_drift_anomaly",
     "_merge_with_existing_per_league_parquet",
+    "_normalize_fixture_events_schema",
     "_normalize_wrapped_token",
     "_per_league_fixtures_data_unchanged",
     "_pipeline_mode_for_sports_data_type",
