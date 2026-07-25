@@ -115,9 +115,7 @@ def main() -> int:
 
     def _work(row: dict[str, str]) -> tuple[str, str, list[str] | None]:
         day, league = row["date"], row["league_id"]
-        paths = candidate_parquet_paths(
-            "FIXTURE_EVENTS", day, league, pipeline_mode="batch_api_football", include_legacy_archive=True
-        )
+        paths = candidate_parquet_paths("FIXTURE_EVENTS", day, league, pipeline_mode="batch_api_football")
         read_error = False
         for p in paths:
             try:
