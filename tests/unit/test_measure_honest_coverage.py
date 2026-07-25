@@ -885,6 +885,96 @@ class TestChainEnumeration:
         assert coverage["by_chain"]["cefi"] == {}
 
 
+class TestInstrumentTypeCaseInsensitivity:
+    """D1 migration robustness (plans/active/issues/
+    honest_coverage_harness_instrument_type_case_break_on_d1_migration_2026_07_20.md).
+
+    The manifest ``instrument_type`` column moves from its current lowercase writer
+    grain to the UPPERCASE catalogue enum under the D1 ruling. A shard whose history
+    spans both spellings (mixed-case during the migration cutover window) must be
+    counted as ONE covered shard by the Layer-2 drill-down projections, never
+    silently split into two cells keyed by casing (which would make a fully-covered
+    shard look partially/newly uncovered purely from a case artifact).
+    """
+
+    def test_lowercase_and_uppercase_rows_merge_into_one_shard(self, mod: ModuleType) -> None:
+        """A legacy-lowercase captured row + a new-uppercase captured row for the
+        SAME (venue, instrument_type, data_type) shard merge into ONE
+        by_venue_instrument_type[_data_type] cell with BOTH counted captured —
+        not split into two separately-keyed, worse-looking cells."""
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-07-25",
+                    "instrument_type": "SPOT_PAIR",
+                },
+            ]
+        )
+        coverage = _compute_coverage_with_stub(mod, {"cefi": df})
+
+        cefi_vit = coverage["by_venue_instrument_type"]["cefi"]
+        assert "BINANCE" in cefi_vit
+        # Exactly ONE itype key for BINANCE — the case variants merged, not split.
+        assert len(cefi_vit["BINANCE"]) == 1, (
+            f"expected the lowercase/uppercase rows to merge into one shard, got keys "
+            f"{list(cefi_vit['BINANCE'].keys())}"
+        )
+        merged = next(iter(cefi_vit["BINANCE"].values()))
+        assert merged["captured"] == 2
+        assert merged["total"] == 2
+        assert merged["coverage_pct"] == 100.0
+
+        cefi_vitdt = coverage["by_venue_instrument_type_data_type"]["cefi"]["BINANCE"]
+        assert len(cefi_vitdt) == 1
+        merged_dt = next(iter(cefi_vitdt.values()))
+        assert "trades" in merged_dt
+        assert merged_dt["trades"]["captured"] == 2
+
+    def test_uppercase_only_shard_counts_as_covered_same_as_lowercase(self, mod: ModuleType) -> None:
+        """A shard whose ONLY manifest rows are the post-D1 UPPERCASE spelling counts
+        as covered identically to the pre-migration lowercase spelling — case alone
+        must never change whether a shard is deemed covered."""
+        df_lower = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "OKX",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "perpetual",
+                },
+            ]
+        )
+        df_upper = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "OKX",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "PERPETUAL",
+                },
+            ]
+        )
+        cov_lower = _compute_coverage_with_stub(mod, {"cefi": df_lower})
+        cov_upper = _compute_coverage_with_stub(mod, {"cefi": df_upper})
+
+        lower_cell = cov_lower["by_venue_instrument_type"]["cefi"]["OKX"]["perpetual"]
+        upper_cell = cov_upper["by_venue_instrument_type"]["cefi"]["OKX"]["PERPETUAL"]
+        assert lower_cell["captured"] == upper_cell["captured"] == 1
+        assert lower_cell["coverage_pct"] == upper_cell["coverage_pct"] == 100.0
+
+
 class TestV2ByVenueInstrumentTypeDataType:
     """by_venue_instrument_type_data_type aggregation."""
 
