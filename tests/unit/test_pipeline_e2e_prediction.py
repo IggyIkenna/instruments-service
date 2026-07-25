@@ -242,7 +242,11 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # dead (404/522/NXDOMAIN, re-verified 2026-07-22, same as the original 2026-07-20 finding),
 # so phase="live" manufactured an unattainable honest-coverage numerator. SSOT:
 # unified-trading-pm/plans/active/issues/uac_is_defi_oracle_dex_adapter_drift_2026_07_20.md.
-_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 96, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
+# DEFI 96→94 (2026-07-25): -2 for GMX-ARBITRUM/GMX-AVALANCHE, removed venue-wide — GMX
+# perp_funding's entire captured history turned out to be a synthetic OI-imbalance proxy,
+# not real per-market funding data (native subgraph query never worked). SSOT:
+# unified-trading-pm/plans/active/defi_gmx_venue_removal_2026_07_25.md.
+_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 94, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:
