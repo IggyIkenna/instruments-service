@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -778,3 +779,97 @@ class TestFixtureLeagueCanonicalisation:
 
         for raw in ("CHAMPIONSHIP", "PRIMERA_DIVISION", "SUPER_LEAGUE", "FIRST_DIVISION_A"):
             assert raw not in LEAGUE_REGISTRY, f"{raw} is a raw display name, not a canonical slug"
+
+
+class TestResolveFixtureLeagueSlug:
+    """``_resolve_fixture_league_slug`` must resolve via the NUMERIC ``api_football_id``,
+    never the raw ``fx.league.league_id`` display-name form it originates from.
+    Companion to mtds@ad4f1872's ``TestOddsApiCanonicalLeagueId`` (same defect class,
+    same fixture-mapping precedence, different write path).
+
+    Regression guard (2026-07-25): the precedence flip shipped 2026-07-20
+    (``instruments-service@815ad06c3``) never actually activated -- ``CanonicalLeague``
+    did not carry an ``api_football_id`` attribute until unified-api-contracts added it
+    the same day as this test, so ``getattr(..., "api_football_id", None)`` was always
+    ``None`` and the numeric branch silently no-opped for every fixture. These tests
+    exercise the real orchestrator function (not just facts about the UAC registry, which
+    the two tests above already cover) so a future regression on the WIRING -- not just
+    the branch order -- would fail loudly.
+    """
+
+    def test_numeric_api_football_id_resolves_to_canonical_slug(self) -> None:
+        from unified_api_contracts.canonical.domain.sports.league_data import (
+            get_league_by_api_football_id,
+        )
+
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _resolve_fixture_league_slug,
+        )
+
+        epl = get_league_by_api_football_id(39)
+        assert epl is not None, "api-football id 39 (Premier League) must be registered"
+
+        fx = SimpleNamespace(league=SimpleNamespace(api_football_id=39, league_id="PREMIER_LEAGUE"))
+        resolved = _resolve_fixture_league_slug(fx, {39: epl.league_id})
+        assert resolved == "EPL"
+        # The raw display-name form is what a broken numeric branch falls back to --
+        # must NOT be what gets returned when the numeric id IS registered.
+        assert resolved != "PREMIER_LEAGUE"
+
+    def test_disambiguates_colliding_raw_names_by_numeric_id(self) -> None:
+        """The six known ambiguous raw provider names must resolve to DISTINCT
+        canonical slugs via the numeric id, never merge to one.
+
+        Measured 2026-07-20 (sports_league_id_namespace_migration_2026_07_20.md):
+        api-football emits the SAME bare display name for two real, unrelated
+        leagues in six cases. A name-keyed map cannot resolve these without
+        merging distinct leagues; only the numeric id -- in hand at fetch time
+        -- can. Uses each side's REGISTERED api_football_id (real registry data,
+        not synthesized), so this fails loudly if either side is ever
+        deregistered or its id changes without updating this test.
+        """
+        from unified_api_contracts.canonical.domain.sports.league_data import LEAGUE_REGISTRY
+
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _resolve_fixture_league_slug,
+        )
+
+        collisions: dict[str, tuple[str, str]] = {
+            "BUNDESLIGA": ("BUNDESLIGA", "AUSTRIAN_BUNDESLIGA"),
+            "SERIE_A": ("SERIE_A", "BRASILEIRAO"),
+            "SERIE_B": ("SERIE_B", "BRASILEIRAO_SERIE_B"),
+            "CHAMPIONSHIP": ("ENG_CHAMPIONSHIP", "SCOTTISH_CHAMPIONSHIP"),
+            "PRIMERA_DIVISION": ("ARGENTINA_PRIMERA", "CHILE_PRIMERA"),
+            "SUPER_LEAGUE": ("GREEK_SUPER_LEAGUE", "SWISS_SUPER_LEAGUE"),
+        }
+        for raw, (id_a, id_b) in collisions.items():
+            af_id_a = LEAGUE_REGISTRY[id_a].api_football_id
+            af_id_b = LEAGUE_REGISTRY[id_b].api_football_id
+            assert af_id_a is not None and af_id_b is not None, f"{id_a}/{id_b} must both carry an api_football_id"
+            af_map = {af_id_a: id_a, af_id_b: id_b}
+
+            fx_a = SimpleNamespace(league=SimpleNamespace(api_football_id=af_id_a, league_id=raw))
+            fx_b = SimpleNamespace(league=SimpleNamespace(api_football_id=af_id_b, league_id=raw))
+            resolved_a = _resolve_fixture_league_slug(fx_a, af_map)
+            resolved_b = _resolve_fixture_league_slug(fx_b, af_map)
+
+            assert resolved_a == id_a, f"raw {raw!r} af_id={af_id_a} must resolve to {id_a}, got {resolved_a}"
+            assert resolved_b == id_b, f"raw {raw!r} af_id={af_id_b} must resolve to {id_b}, got {resolved_b}"
+            assert resolved_a != resolved_b, f"raw {raw!r} MERGED {id_a} and {id_b} -- name-based resolution bug"
+
+    def test_unregistered_league_falls_back_to_raw_name(self) -> None:
+        """An unresolvable numeric id must not drop the fixture -- honest absence."""
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _resolve_fixture_league_slug,
+        )
+
+        fx = SimpleNamespace(league=SimpleNamespace(api_football_id=999_999_999, league_id="TOTALLY_MADE_UP_LEAGUE"))
+        assert _resolve_fixture_league_slug(fx, {}) == "TOTALLY_MADE_UP_LEAGUE"
+
+    def test_no_league_attribute_returns_none(self) -> None:
+        """A fixture with no ``league`` at all must not be mapped (dropped upstream)."""
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _resolve_fixture_league_slug,
+        )
+
+        assert _resolve_fixture_league_slug(SimpleNamespace(), {}) is None

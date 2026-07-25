@@ -35,6 +35,7 @@ else:  # pragma: no cover - runtime namespace indirection
 
 __all__ = [
     "_resolve_fixture_ids",
+    "_resolve_fixture_league_slug",
     "_run_per_fixture_enrichment",
 ]
 
@@ -183,6 +184,24 @@ async def _ensure_canonical_fixtures_for_override(
         _orch.logger.warning("Could not ensure canonical fixtures at entity=fixtures/: %s", _fx_exc)
 
 
+def _resolve_fixture_league_slug(fx: object, af_id_to_canonical_league: dict[int, str]) -> str | None:
+    """Resolve a fixture's league to its canonical LEAGUE_REGISTRY slug.
+
+    Numeric ``api_football_id`` resolution wins: ``fx.league.league_id`` is a raw
+    provider display name (ambiguous for 6 leagues, e.g. CHAMPIONSHIP = English +
+    Scottish), so only the numeric id can disambiguate. Falls back to the raw
+    value for an unregistered league (honest absence). None if no league at all.
+    See plans/active/issues/sports_league_id_namespace_migration_2026_07_20.md.
+    """
+    _af_lid = getattr(getattr(fx, "league", None), "api_football_id", None)
+    _canon = af_id_to_canonical_league.get(_af_lid) if isinstance(_af_lid, int) else None
+    if _canon is not None:
+        return _canon
+    if hasattr(fx, "league") and hasattr(fx.league, "league_id"):
+        return str(fx.league.league_id)
+    return None
+
+
 async def _fetch_fixture_ids_via_api(
     *,
     adapter: BaseSportsReferenceAdapter,
@@ -220,25 +239,9 @@ async def _fetch_fixture_ids_via_api(
                 with _orch.contextlib.suppress(ValueError, TypeError):
                     fid_int = int(raw_id)
                     fixture_ids.append(fid_int)
-                    # Map AF ID -> league. NUMERIC api_football_id FIRST: it is the only
-                    # thing that yields a canonical LEAGUE_REGISTRY slug. `fx.league.
-                    # league_id` comes from `build_league_id(country, name)`, which falls
-                    # back to a bare `_slug(name)` when country is empty -- so it emits raw
-                    # display names (`PREMIER_LEAGUE`) that no consumer joins on, and six
-                    # of those names are ambiguous across two real leagues each
-                    # (CHAMPIONSHIP = English + Scottish, SERIE_A = Italian + Brasileirao,
-                    # ...). This precedence used to be reversed, which made the numeric
-                    # branch DEAD CODE -- `CanonicalLeague` always carries `league_id`, so
-                    # the first branch always won. Measured + fixed 2026-07-20; see
-                    # plans/active/issues/sports_league_id_namespace_migration_2026_07_20.md.
-                    _af_lid = getattr(getattr(fx, "league", None), "api_football_id", None)
-                    _canon = _af_id_to_canonical_league.get(_af_lid) if isinstance(_af_lid, int) else None
-                    if _canon is not None:
-                        _af_fid_to_league[str(fid_int)] = _canon
-                    elif hasattr(fx, "league") and hasattr(fx.league, "league_id"):
-                        # Unregistered league: keep the raw value so the fixture still
-                        # captures (honest absence) rather than vanishing from the map.
-                        _af_fid_to_league[str(fid_int)] = str(fx.league.league_id)
+                    _slug = _resolve_fixture_league_slug(fx, _af_id_to_canonical_league)
+                    if _slug is not None:
+                        _af_fid_to_league[str(fid_int)] = _slug
             elif fx.status in {"PST", "CANC"}:
                 _reason = (
                     _orch.EmptyConfirmedReason.EXPECTED_FIXTURE_POSTPONED
