@@ -583,6 +583,9 @@ from instruments_service.engine.orchestrator.sports_reference import (
 from instruments_service.engine.orchestrator.sports_reference_core import (
     _list_present_parquet_leagues as _list_present_parquet_leagues,
 )
+from instruments_service.engine.orchestrator.sports_reference_core import (
+    _manifest_captured_fixture_leagues as _manifest_captured_fixture_leagues,
+)
 from instruments_service.engine.orchestrator.transfermarkt import (
     _cache_is_fresh as _cache_is_fresh,
 )
@@ -788,6 +791,7 @@ __all__ = [
     "_is_in_canonical_write_universe",
     "_lifecycle_columns_from_af_response",
     "_list_present_parquet_leagues",
+    "_manifest_captured_fixture_leagues",
     "_master_blob_path",
     "_maybe_emit_drift_anomaly",
     "_merge_with_existing_per_league_parquet",
