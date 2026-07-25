@@ -31,7 +31,6 @@ __all__ = [
     "_find_stale_fixture_leagues_for_date",
     "_merge_with_existing_per_league_parquet",
     "_per_league_fixtures_data_unchanged",
-    "_read_existing_per_league_fixture_ids",
     "_read_fixture_ids_from_gcs",
     "_read_per_league_entity_df",
     "_resolve_sports_ref_blob",
@@ -497,51 +496,6 @@ def _write_fixtures_per_league(
             source_label,
             len(_without_league),
         )
-
-
-def _read_existing_per_league_fixture_ids(
-    bucket: str,
-    date: str,
-    entity_name: str,
-    canonical_league_id: str,
-) -> frozenset[int]:
-    """Return the set of af_fixture_ids already captured in a per-league parquet.
-
-    Reads ``sports_reference/by_date/day={date}/entity={entity}/league={L}/{entity}.parquet``
-    and returns ``frozenset({af_fixture_id, ...})`` of rows present. Used by the
-    per-fixture pre-fetch skip path to avoid wasting api_football calls on
-    fixtures whose data is already on disk.
-
-    Returns empty frozenset on any miss / read failure (the caller treats that
-    as "no captured fixtures known, fetch everything in scope"). Logs at debug
-    level so operators can confirm the skip path engaged.
-    """
-    _canon_path = _orch._sports_ref_canonical_blob_path(
-        date, entity_name, league=canonical_league_id, filename=f"{entity_name}.parquet"
-    )
-    _legacy_path = _orch._sports_ref_legacy_blob_path(
-        date, entity_name, league=canonical_league_id, filename=f"{entity_name}.parquet"
-    )
-    try:
-        storage_client = _orch.get_storage_client()
-        blob_path = _orch._resolve_sports_ref_blob(storage_client, bucket, _canon_path, _legacy_path)
-        blob = storage_client.bucket(bucket).blob(blob_path)
-        if not blob.exists():
-            return frozenset()
-        existing_bytes = storage_client.download_bytes(bucket=bucket, blob_path=blob_path)
-        existing = _orch.pd.read_parquet(_orch.io.BytesIO(existing_bytes))
-    except Exception as exc:
-        _orch.logger.debug(
-            "Pre-fetch skip read failed for gs://%s — proceeding without skip: %s",
-            bucket,
-            exc,
-        )
-        return frozenset()
-    fid_col = "af_fixture_id" if "af_fixture_id" in existing.columns else "fixture_id"
-    if fid_col not in existing.columns:
-        return frozenset()
-    fids = _orch.pd.to_numeric(existing[fid_col], errors="coerce").dropna().astype(int)
-    return frozenset(int(x) for x in fids.tolist())
 
 
 def _per_league_fixtures_data_unchanged(
