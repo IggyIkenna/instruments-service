@@ -150,10 +150,7 @@ async def _ensure_canonical_fixtures_for_override(
                     source_label="old-path-copy",
                     bucket=bucket,
                 )
-                _orch.logger.info(
-                    "Canonical fixtures copied from old path to entity=fixtures/ (%d rows)",
-                    len(_old_df),
-                )
+                _orch.logger.warning("LEGACY_FLAT_PATH_HIT sports_ref_fixtures date=%s (%d rows)", date, len(_old_df))
             else:
                 # No old path — fetch from API Football (costs 33 API calls).
                 # Paired with raw so Q5/Q6 lifecycle columns populate (live=batch).
