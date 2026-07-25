@@ -374,21 +374,18 @@ async def _read_captured_per_entity_league(
     e.g. when downstream of recovered FIXTURES, only the genuinely-missing
     fixtures get re-fetched, not the entire cell.
 
-    Concurrency (api_football_backfill_chronological_scan_never_reaches_pending_tail_2026_07_18.md):
-    ``_read_existing_per_league_fixture_ids`` is blocking GCS I/O
-    (``blob.exists()`` + ``download_bytes()``). Measured evidence: a
-    long-running historical backfill spent ~27s/date re-confirming
-    already-fully-resolved dates, at a rate that would take ~16.7h/entity to
-    ever reach the genuinely-pending tail — dominated by one blocking
-    round-trip PER (entity, league) run SEQUENTIALLY. Fan every (entity,
-    league) lookup for this date out CONCURRENTLY via ``asyncio.to_thread``
-    instead — same result set, same per-cell semantics (no change to what
-    counts as "already captured"), but N round-trips overlap instead of
-    serializing one after another.
+    Batched per entity, not per (entity, league) pair
+    (sports_dependency_check_manifest_vs_gcs_path_2026_07_08.md,
+    ``sports_fixtures.py:356`` todo — see
+    ``sports_fixture_prefetch_skip._read_captured_league_fixture_ids_for_entity``
+    for why per-entity, not per-corpus, batching is the real ceiling here).
+    Remaining (small, entity-count-bounded) calls fan out concurrently via
+    ``asyncio.to_thread`` + ``asyncio.gather``.
     """
     if redo_all or not af_fid_to_league:
         return {}
 
+    entity_names: list[str] = []
     lookup_keys: list[tuple[str, str]] = []
     for entity_name, _ in per_fixture_entities:
         entity_leagues_seen: set[str] = set()
@@ -401,23 +398,28 @@ async def _read_captured_per_entity_league(
                 continue
             entity_leagues_seen.add(canonical_league)
             lookup_keys.append((entity_name, canonical_league))
+        if entity_leagues_seen:
+            entity_names.append(entity_name)
 
     if not lookup_keys:
         return {}
 
-    captured_sets = await _orch.asyncio.gather(
+    per_entity_results = await _orch.asyncio.gather(
         *[
             _orch.asyncio.to_thread(
-                _orch._read_existing_per_league_fixture_ids,
-                bucket=bucket,
-                date=date,
-                entity_name=entity_name,
-                canonical_league_id=canonical_league,
+                _orch._read_captured_league_fixture_ids_for_entity,
+                bucket,
+                date,
+                entity_name,
             )
-            for entity_name, canonical_league in lookup_keys
+            for entity_name in entity_names
         ]
     )
-    return dict(zip(lookup_keys, captured_sets, strict=True))
+    captured_by_entity = dict(zip(entity_names, per_entity_results, strict=True))
+    return {
+        (entity_name, canonical_league): captured_by_entity.get(entity_name, {}).get(canonical_league, frozenset())
+        for entity_name, canonical_league in lookup_keys
+    }
 
 
 async def _gather_per_fixture_rows(
