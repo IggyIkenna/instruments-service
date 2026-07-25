@@ -618,7 +618,8 @@ def _prepare_fixture_entity_df(
             _nested_cols,
         )
         df = df.drop(columns=_nested_cols)
-
+    if entity_name == "player_stats":
+        df = _orch._dedupe_player_stats_df(df)
     # PIT safety: per-fixture stats/events/lineups/player_stats available ~2h after kickoff.
     # No per-row kickoff here — approximate using date + 17:00 UTC (15:00 typical KO + 2h).
     df["available_at"] = _orch.pd.Timestamp(date, tz="UTC") + _orch.pd.Timedelta(hours=17)
@@ -683,7 +684,8 @@ def _write_fixture_entity_per_league(
                     new_rows=_pf_clean,
                     fid_col=_fid_col,
                 )
-
+            if entity_name == "fixture_events":
+                _pf_clean = _orch._normalize_fixture_events_schema(_pf_clean)
             # C.6: available_at = date + 17h already set on df above (KO + 2h
             # approximation). Preserve it; fillna wall-clock for any NaT rows (defensive).
             _pf_copy = _pf_clean.copy()
