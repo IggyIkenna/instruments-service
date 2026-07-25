@@ -37,7 +37,12 @@ import logging
 from typing import cast
 
 import pandas as pd
-from unified_trading_library import DependencyError, get_storage_client, resolve_bucket_name
+from unified_trading_library import (
+    DependencyError,
+    get_storage_client,
+    read_availability_index,
+    resolve_bucket_name,
+)
 
 from instruments_service.config import get_config
 
@@ -81,6 +86,15 @@ _CANONICAL_FIXTURES_SCHEDULE_PREFIX_TEMPLATE: str = (
     "sports_reference/by_date/day={date}/pipeline_mode=batch_api_football/entity=fixtures_schedule/"
 )
 _LEGACY_FIXTURES_SCHEDULE_PREFIX_TEMPLATE: str = "sports_reference/by_date/day={date}/entity=fixtures_schedule/"
+
+# The two manifest ``data_type`` values that mark "api-football ran for this day" —
+# FIXTURES (pre the 2026-07-14 schema-split cutover) and FIXTURES_SCHEDULE
+# (post-cutover; carries every fixture, played or not, so its presence alone is an
+# equivalent marker). NOT ``venue == "API_FOOTBALL"`` — empirically verified against
+# real production data (sports_dependency_check_manifest_vs_gcs_path_2026_07_08.md)
+# that these rows carry an EMPTY ``venue`` column; the api-football identity is
+# implied by ``data_type`` alone (no other source writes these two data_types).
+_API_FOOTBALL_FIXTURES_DATA_TYPES: frozenset[str] = frozenset({"FIXTURES", "FIXTURES_SCHEDULE"})
 
 
 def _resolve_sports_bucket() -> str:
@@ -162,10 +176,56 @@ def _build_remediation_message(date: str, bucket: str, path: str) -> str:
     )
 
 
+def _manifest_shows_fixtures_captured(date: str, bucket: str) -> bool:
+    """Manifest-slice check: does the sports availability manifest show api-football
+    fixtures captured for ``date``?
+
+    Reads a pyarrow row-group-pushed-down slice of ``_index/availability_index.parquet``
+    (column-projected to ``date``/``data_type``/``capture_status``, ~0.1s per call vs.
+    ~1.8-2s of live GCS list/exists probes) and treats any row with
+    ``data_type in _API_FOOTBALL_FIXTURES_DATA_TYPES`` and ``capture_status ==
+    "captured"`` as satisfying the dependency. Empirically verified equivalent to the
+    old GCS-probe verdict against real production data (12+ dates spanning 2024-2026
+    plus 2 genuine-miss dates — see
+    ``issues/sports_dependency_check_manifest_vs_gcs_path_2026_07_08.md``).
+
+    Returns ``False`` (never raises) on ANY read failure — including a manifest
+    consolidator staleness error — so the caller falls through to the direct-GCS-probe
+    fallback below rather than a transient manifest-read hiccup manufacturing a false
+    ``DependencyError``. The manifest consolidator runs every ~1 min; a just-written
+    per-VM shard not yet merged into the consolidated index is exactly this case.
+    """
+    try:
+        idx = read_availability_index(
+            bucket,
+            columns=["date", "data_type", "capture_status"],
+            filters=[("date", "==", date)],
+        )
+    except Exception as exc:
+        logger.warning(
+            "sports dep-check: manifest read failed (bucket=%s date=%s), falling back to GCS probe: %s",
+            bucket,
+            date,
+            exc,
+        )
+        return False
+    if idx.empty:
+        return False
+    fixtures_rows = idx[idx["data_type"].isin(_API_FOOTBALL_FIXTURES_DATA_TYPES)]
+    return bool((fixtures_rows["capture_status"] == "captured").any())
+
+
 def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
     """Raise ``DependencyError`` if api-football data is missing for the date.
 
-    The fixtures parquet at
+    Primary check: a manifest-slice read (:func:`_manifest_shows_fixtures_captured`,
+    ~60-130x faster than the per-date GCS probes below — see
+    ``issues/sports_dependency_check_manifest_vs_gcs_path_2026_07_08.md``).
+
+    Fallback (consolidation-lag / manifest-read-failure safety net — the manifest
+    consolidator runs every ~1 min, so a just-written shard may momentarily not be
+    visible in the consolidated index): the original direct-GCS-probe implementation
+    below. The fixtures parquet at
     ``sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet``
     is the downstream-observable artefact that enrichment adapters read to
     join on canonical fixture IDs. The per-entity parquet
@@ -181,11 +241,18 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
             honouring ``IS_TEST_RUN``.
 
     Raises:
-        DependencyError: If none of the canonical fixtures, the split
-            fixtures_schedule, or the raw api-football entity parquet exists
-            for the date.
+        DependencyError: If the manifest shows no captured fixtures AND none of
+            the canonical fixtures, the split fixtures_schedule, or the raw
+            api-football entity parquet exists for the date (GCS fallback).
     """
     resolved_bucket = bucket or _resolve_sports_bucket()
+
+    if _manifest_shows_fixtures_captured(date, resolved_bucket):
+        logger.debug(
+            "sports dep-check OK: manifest shows api-football fixtures captured for date=%s",
+            date,
+        )
+        return
 
     canonical_path = _CANONICAL_FIXTURES_PATH_TEMPLATE.format(date=date)
     raw_path = _FIXTURES_PATH_TEMPLATE.format(date=date)
