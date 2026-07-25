@@ -2682,7 +2682,9 @@ class TestG1EnumDefiFilter:
         protocol) → key invariant.
         ``lending_indices`` is in one hybrid POOL protocol (line ~592 in _defi.py) so
         it legitimately appears in the POOL union — NOT a cross-product there.
-        ``perp_funding`` is in GMX which uses _POOL → also legitimately in the union.
+        ``perp_funding`` had a similar hybrid-POOL exception via GMX until GMX venue
+        support was removed (2026-07-25, unified-trading-pm/plans/active/
+        defi_gmx_venue_removal_2026_07_25.md) — no POOL protocol declares it now.
         """
         rows = self._run("POOL")
         data_types_emitted = {r.data_type for r in rows}
