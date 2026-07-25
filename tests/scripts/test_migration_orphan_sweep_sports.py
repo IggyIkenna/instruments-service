@@ -134,6 +134,18 @@ def _ref_index() -> object:
             "timeframe": "",
             "capture_status": "captured",
         },
+        # STALE captured row for a pre-2020-06-06-floor flat-legacy cell — the exact
+        # shape of the 4,735-row bug (sports_legacy_duplicate_triage_2026_07_22.md
+        # §2): the manifest still carries this cell as `captured` even though the
+        # underlying GCS object was already wiped by the 2026-07-21 pre-floor purge.
+        {
+            "date": "2019-06-01",
+            "data_type": "FIXTURES",
+            "venue": "",
+            "league_id": "EPL",
+            "timeframe": "",
+            "capture_status": "captured",
+        },
     ]
     index = _mod.build_sports_covered_index(rows)
     index.definition_days.add(("2026-03-21", "API_FOOTBALL"))
@@ -366,7 +378,12 @@ def test_reference_v2_tree_covered_is_legacy_duplicate() -> None:
 
 
 def test_reference_v2_tree_uncovered_is_class_e() -> None:
-    path = "sports_reference_v2/by_date/day=2018-01-05/entity=fixtures/fixtures.parquet"
+    # post-2020-06-06 floor (SOURCE_COVERAGE_START clamps every sports source there,
+    # sports-2020-06-data-floor.md) — a pre-floor date now unconditionally classifies
+    # C3 regardless of coverage (see test_flat_legacy_pre_floor_stale_captured_is_c3
+    # and test_pre_launch_window_is_c3_not_e), so this genuine-E example must use a
+    # post-floor, uncovered date to stay a valid E case.
+    path = "sports_reference_v2/by_date/day=2024-01-05/entity=fixtures/fixtures.parquet"
     cls, _f, _ = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
     assert cls is OC.ORPHAN_REAL
 
@@ -419,6 +436,24 @@ def test_legacy_flat_by_day_twin_is_class_b() -> None:
     path = "sports_reference/fixtures/day=2026-05-01/league=EPL/fixtures.parquet"
     cls, _f, reason = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
     assert cls is OC.LEGACY_DUPLICATE and "legacy flat-by-day" in reason
+
+
+def test_flat_legacy_pre_floor_stale_captured_is_c3_not_b() -> None:
+    # Regression for sports_legacy_duplicate_triage_2026_07_22.md §2: the classifier
+    # used to check is_covered_sports BEFORE _is_pre_launch on this branch, so a
+    # pre-2020-06-06 flat-legacy cell with a stale `captured` manifest row (the object
+    # itself already wiped from GCS) classified B_legacy_duplicate instead of
+    # C3_pre_launch_window — exactly the 4,735-row misclassification the rescan must
+    # retire. Pre-launch now takes precedence regardless of manifest coverage.
+    path = "sports_reference/fixtures/day=2019-06-01/league=EPL/fixtures.parquet"
+    cls, _f, reason = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
+    assert cls is OC.PRE_LAUNCH_WINDOW and "pre-launch" in reason
+    # the day-less FLAT singleton path is untouched by this reordering (never
+    # pre-launch — _is_pre_launch returns False on day="").
+    assert (
+        _mod.classify_reference_object("sports_reference/venues/venues.parquet", _ref_index(), is_parquet=True)[0]
+        is OC.CANONICAL_MANIFESTED
+    )
 
 
 def test_reference_aux_mapping_corpora_are_c2() -> None:

@@ -441,14 +441,22 @@ def classify_reference_object(
         if not dt:
             return SportsObjectClass.JUNK, _EMPTY, f"unknown flat subtree {subtree!r}"
         fields = ("", league, subtree, dt, day, season, "")
+        # Pre-launch floor takes precedence over manifest coverage: a stale
+        # (pre-guard) captured row for a pre-floor day does not make
+        # fabrication-by-construction data real — it stays C3, never B, regardless
+        # of manifest state (this is the exact "manifest says covered" trap the
+        # 4,735 stale flat pre-floor rows fell into, sports_legacy_duplicate_triage
+        # _2026_07_22.md §2). day-less FLAT singletons are never pre-launch
+        # (_is_pre_launch returns False on day=""), so this ordering is a no-op for
+        # them.
+        if _is_pre_launch(dt, day):
+            return SportsObjectClass.PRE_LAUNCH_WINDOW, fields, _PRE_LAUNCH_REASON
         covered = is_covered_sports(index, day=day, data_type=dt, league=league)
         if covered:
             # day-partitioned flat twin (fixtures/day=…) = legacy shape (B); the
             # day-less FLAT singleton (venues/venues.parquet) IS the SSOT shape (A)
             cls = SportsObjectClass.CANONICAL_MANIFESTED if not day else SportsObjectClass.LEGACY_DUPLICATE
             return cls, fields, "FLAT singleton manifested" if not day else "legacy flat-by-day twin of manifested cell"
-        if _is_pre_launch(dt, day):
-            return SportsObjectClass.PRE_LAUNCH_WINDOW, fields, _PRE_LAUNCH_REASON
         if row_count == 0:
             return SportsObjectClass.JUNK, fields, "zero-row object with no manifest row (footer-read)"
         return SportsObjectClass.ORPHAN_REAL, fields, "real data (rows>0) with NO covering manifest row"
