@@ -24,6 +24,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
     from instruments_service.reference_data.adapters.sports.adapters.base import BaseSportsReferenceAdapter
@@ -36,6 +38,7 @@ __all__ = [
     "_fetch_injuries",
     "_fetch_teams_and_standings",
     "_list_present_parquet_leagues",
+    "_manifest_captured_fixture_leagues",
 ]
 
 
@@ -72,6 +75,48 @@ def _list_present_parquet_leagues(bucket: str, date: str, entity_name: str) -> s
         if league_match:
             present.add(_orch._canonical_league_id(league_match.group(1)))
     return present
+
+
+def _manifest_captured_fixture_leagues(*, bucket: str, date: str) -> set[str] | None:
+    """Leagues already CAPTURED for FIXTURES_SCHEDULE on ``date``, per the manifest.
+
+    Oscillation guard mirroring ``enumerate_expected_universe.py``'s
+    ``captured_set`` (instruments-service@ba306543,
+    ``sports_index_recency_masked_captured_atoms_2026_07_13.md``): the
+    ``ba306543`` guard only covers the ``enumerate_v2`` seeder —
+    ``process_write._write_sports_fixture_venue`` (the
+    ``uts-prod-instruments-service-sports-fixtures`` batch-capture path,
+    ``--operation=instruments --mode=batch --asset-group=SPORTS``) is a
+    SEPARATE emission site that must never stamp ``empty_confirmed`` over an
+    atom a PRIOR run already captured — that loop previously only consulted
+    THIS run's captured leagues, so a run that legitimately returned zero
+    fixtures for an already-captured league would mask it.
+
+    Single filtered index read (row-group pushdown on ``date``, slim
+    columns) — not a corpus walk; same pattern as
+    ``close_stale_enrichment_expected_unattempted_cells_2026_07_19.py``.
+    Returns ``None`` on read failure — the caller must then skip the whole
+    empty-emission pass rather than risk masking (same fail-safe contract as
+    :meth:`_AfManifestHooks._presence_guarded_captured_leagues`).
+    """
+    try:
+        _idx = _orch.read_availability_index(
+            bucket,
+            columns=["date", "data_type", "league_id", "capture_status"],
+            filters=[("date", "==", date)],
+        )
+    except Exception as exc:
+        _orch.logger.warning(
+            "FIXTURES captured-set guard: manifest read failed for date=%s (%s) — skipping "
+            "empty-gap emission (cannot prove captured status without a read)",
+            date,
+            exc,
+        )
+        return None
+    if _idx.empty:
+        return set()
+    _fx = _idx[(_idx["data_type"] == FIXTURES_SCHEDULE) & (_idx["capture_status"] == "captured")]
+    return {_orch._canonical_league_id(str(lid)) for lid in _fx["league_id"].dropna().unique() if str(lid).strip()}
 
 
 @dataclass
