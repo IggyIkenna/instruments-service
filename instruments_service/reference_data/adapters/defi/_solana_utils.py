@@ -85,11 +85,15 @@ _LOCAL_CACHE_FILE = _LOCAL_CACHE_DIR / "solana_creation_timestamps.json"
 
 def _get_gcs_bucket() -> str | None:
     """Resolve the DeFi instruments bucket for cache storage."""
-    try:
-        from unified_trading_library import get_bucket_name
+    from unified_trading_library import BucketNamingError, get_bucket_name
 
+    try:
         return get_bucket_name("instruments", "defi")
-    except Exception:
+    except BucketNamingError:
+        # "instruments" is a stable, always-registered domain — this only fires if
+        # that registration is ever removed/renamed, which is exactly the case
+        # BucketNamingError exists to surface. Narrowed (not bare) so it stays
+        # visible rather than being silently swallowed by `except Exception`.
         return None
 
 
@@ -161,6 +165,11 @@ def _save_cache(cache: dict[str, str]) -> None:
                     merged = {**existing, **cache} if isinstance(existing, dict) else cache
                 else:
                     merged = cache
+            # GCS read boundary: download_bytes doesn't pre-wrap the GCS SDK's exception
+            # surface (NotFound/network/auth — many types), and read-merge is
+            # best-effort by design (write still proceeds below with the un-merged
+            # `cache`). Audited 2026-07-25, left broad:
+            # instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
             except Exception:
                 merged = cache
 
@@ -896,6 +905,11 @@ def _save_discovered_pools(protocol: str, addresses: list[str]) -> None:
                         merged = unique_addresses
                 else:
                     merged = unique_addresses
+            # GCS read boundary: download_bytes doesn't pre-wrap the GCS SDK's exception
+            # surface (NotFound/network/auth — many types), and read-merge is
+            # best-effort by design (write still proceeds below with the un-merged
+            # addresses). Audited 2026-07-25, left broad:
+            # instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
             except Exception:
                 merged = unique_addresses
 

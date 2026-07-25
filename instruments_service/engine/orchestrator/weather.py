@@ -276,6 +276,12 @@ async def _fetch_weather_data(
                 wdf = _orch.pd.read_parquet(_orch.io.BytesIO(wdata))
                 if "venue_id" in wdf.columns:
                     existing_venue_ids = set(wdf["venue_id"].dropna().astype(str).unique())
+    # GCS list/download + parquet-parse boundary: neither the GCS SDK's exception
+    # surface (network/auth) nor pyarrow's parquet-parse errors are a small closed
+    # set here, and this is a best-effort existence probe by design — any failure
+    # correctly degrades to "treat as no existing weather data, fetch everything"
+    # (the same outcome as a confirmed-empty prefix). Audited 2026-07-25, left
+    # broad: instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
     except Exception:
         pass  # No existing weather — fetch everything
 
@@ -445,6 +451,11 @@ async def _fetch_weather_data(
                             date,
                             wb.name,
                         )
+            # GCS list/download + parquet-parse boundary: same best-effort merge
+            # rationale as the probe above — any failure here correctly falls back to
+            # writing the newly-fetched data only, the safe/non-data-losing default.
+            # Audited 2026-07-25, left broad:
+            # instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
             except Exception:
                 pass  # Write new data only if merge fails
 
