@@ -163,8 +163,11 @@ async def _fetch_sfi_data(
         _sfi_cached_df, _orch.timedelta(hours=_orch._SFI_CACHE_STALENESS_HOURS)
     ):
         try:
+            # Known failure mode: `date` isn't a valid ISO date string (fromisoformat
+            # raises ValueError). get_leagues_needing_refresh() itself is a pure
+            # registry list-comprehension — nothing else in this line raises.
             _sfi_triggers_today = _orch.get_leagues_needing_refresh(_orch.date_type.fromisoformat(date))
-        except Exception:
+        except ValueError:
             _sfi_triggers_today = ["__fallback__"]
         if not _sfi_triggers_today and "sfi_league_hex" in _sfi_cached_df.columns:
             _sfi_cache_hit = True

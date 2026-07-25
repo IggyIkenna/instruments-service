@@ -329,7 +329,11 @@ def _cache_is_fresh(df: _orch.pd.DataFrame, ttl: _orch.timedelta) -> bool:
         now = _orch.datetime.now(_orch.UTC)
         oldest = timestamps.min().to_pydatetime()
         return (now - oldest) < ttl
-    except Exception:
+    # Known failure modes: `.min().to_pydatetime()` on a NaT (pandas raises ValueError,
+    # theoretically unreachable here since the isna() check above already returns early
+    # on any NaT, but kept as a belt-and-suspenders date-arithmetic guard) or a
+    # non-comparable dtype surfacing as TypeError on `now - oldest`.
+    except (ValueError, TypeError):
         return False
 
 
@@ -449,8 +453,11 @@ async def _fetch_transfermarkt_data(
             _cached_df, _orch.timedelta(days=_orch._TRANSFERMARKT_CACHE_STALENESS_DAYS)
         ):
             try:
+                # Known failure mode: `date` isn't a valid ISO date string (fromisoformat
+                # raises ValueError). get_leagues_needing_refresh() itself is a pure
+                # registry list-comprehension — nothing else in this line raises.
                 _triggers_today = _orch.get_leagues_needing_refresh(_orch.date_type.fromisoformat(date))
-            except Exception:
+            except ValueError:
                 _triggers_today = ["__fallback__"]
             if not _triggers_today:
                 _cache_hit = True
