@@ -649,8 +649,10 @@ def _row_data_types(
     2. Otherwise call the UAC validity matrix for ``(asset_group, venue, instrument_type)``.
        For DeFi this narrows validity to the SPECIFIC protocol named by
        ``instr.venue`` (e.g. ``UNISWAP_V3-ETHEREUM`` → only the Uniswap-V3
-       data_types), so a hybrid protocol's data_type (e.g. GMX's
-       ``perp_funding``) no longer leaks to every pool of that instrument_type.
+       data_types), so a hybrid protocol's narrower data_type no longer leaks
+       to every pool of that instrument_type (e.g. a POOL protocol that also
+       emits ``perp_funding`` should not leak that data_type onto plain DEX
+       pools of a different protocol).
        For every NON-DeFi asset_group, or an unmapped DeFi protocol, the helper
        delegates to the instrument_type-grain matrix (unchanged behaviour).
        - ``None`` returned (unmapped instrument type) → log a warning and fall
