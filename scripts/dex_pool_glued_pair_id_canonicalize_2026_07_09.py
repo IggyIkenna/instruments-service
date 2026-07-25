@@ -7,7 +7,7 @@
 #   finding 2 DEX-pool `instrument_id` migration lands (glued_pair_id becomes
 #   redundant with the canonical instrument_id at that point).
 """Real write-back — canonicalize ``glued_pair_id`` in place for all real DEX-pool
-``POOL`` rows in ``prod/catalog.parquet`` (13 protocols).
+``POOL`` rows in ``prod/catalog.parquet`` (12 protocols).
 
 This is the REAL (write) counterpart to the 2026-07-09 dry-run smoke test
 documented in ``docs/DEFI_INSTRUMENTS.md`` ("DEX pools" section) — same rebuild
@@ -33,7 +33,7 @@ decision in the canonicalization issue doc):
 
 Safety: downloads the live blob once, writes a timestamped
 ``.gluedpairfix.bak.parquet`` backup BEFORE overwriting, refuses to write if
-the row count changes, if ANY POOL row in the 13-protocol scope fails to parse,
+the row count changes, if ANY POOL row in the 12-protocol scope fails to parse,
 or if any rebuilt id fails the target grammar. Re-downloads and re-parses a
 sample of the written blob to verify. Dry-run by default; ``--apply --confirm``
 mutates the live blob. Idempotent — a catalog whose glued_pair_id already
@@ -79,14 +79,15 @@ _RAW_FEETIER_PROTOCOLS = {
     "AERODROME_V3",
     "VELODROME_V2",
     "TRADER_JOE_V2",
-    "GMX",
+    # GMX removed 2026-07-25 (operator ruling — venue removed entirely, see
+    # unified-trading-pm/plans/active/defi_gmx_venue_removal_2026_07_25.md).
 }
 # Balancer's fee segment is already basis points (swapFee * 10000) — just
 # needs int-cast to drop a stray ".0". Curve / Uniswap V2 carry no fee segment.
 _BPS_ALREADY_PROTOCOLS = {"BALANCER"}
 _NO_FEE_PROTOCOLS = {"UNISWAP_V2", "CURVE"}
 
-ALL_13_PROTOCOLS = _RAW_FEETIER_PROTOCOLS | _BPS_ALREADY_PROTOCOLS | _NO_FEE_PROTOCOLS
+ALL_12_PROTOCOLS = _RAW_FEETIER_PROTOCOLS | _BPS_ALREADY_PROTOCOLS | _NO_FEE_PROTOCOLS
 
 _TARGET_GRAMMAR = re.compile(r"^[A-Z0-9_]+-[A-Z0-9]+:POOL:[^:]+-[^:]+(-\d+)?$")
 
@@ -144,7 +145,7 @@ def rewrite_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]:
 
     itypes = work["instrument_type"].astype(str).str.upper()
     venues = work["venue"].astype(str)
-    is_scope = (itypes == "POOL") & venues.isin(ALL_13_PROTOCOLS)
+    is_scope = (itypes == "POOL") & venues.isin(ALL_12_PROTOCOLS)
     stats["pool_rows_in_scope"] = int(is_scope.sum())
 
     new_col = work["glued_pair_id"].astype(str).copy()
@@ -243,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         v_itypes = verify_df["instrument_type"].astype(str).str.upper()
         v_venues = verify_df["venue"].astype(str)
-        v_scope = (v_itypes == "POOL") & v_venues.isin(ALL_13_PROTOCOLS)
+        v_scope = (v_itypes == "POOL") & v_venues.isin(ALL_12_PROTOCOLS)
         v_pool = verify_df[v_scope]
         grammar_ok = v_pool["glued_pair_id"].astype(str).apply(lambda g: bool(_TARGET_GRAMMAR.match(g)))
         logger.info(

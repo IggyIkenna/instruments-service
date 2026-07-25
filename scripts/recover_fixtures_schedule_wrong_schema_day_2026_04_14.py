@@ -1,43 +1,51 @@
 # Epic: sports_master
 # Lifecycle: oneoff
-# Delete-when: after all 85 leagues verified holding the correct fixtures schema for day=2026-04-14
-"""Recover the 85 `entity=fixtures_schedule` shards for `day=2026-04-14` that carry an
-instrument-catalogue schema instead of real fixtures data.
+# Delete-when: after all 36 canonical target leagues verified holding the correct
+#   fixtures schema for day=2026-04-14, and the 85 raw-named contaminated objects have
+#   been human-deleted (out of this script's scope — prod-bucket delete is a
+#   human-only hard stop per codex/02-data/gcs-and-manifest-delete-safety-protocol.md)
+"""Recover the real `day=2026-04-14` fixtures content for the 36 CANONICAL league_ids
+affected by the `entity=fixtures_schedule` cross-domain-contamination incident.
 
-**KNOWN ISSUE — DO NOT RUN --apply YET (2026-07-24)**: `_AFFECTED_LEAGUES` below is the
-literal list of `league=<X>` folder names pulled directly off the 85 bad shards. A live
-PROD dry-run found these strings are NOT registered UAC `api_football` canonical
-league_ids under any tier (e.g. `ENGLAND_CHAMPIONSHIP` doesn't exist anywhere in
-`unified-api-contracts` — the real registered id is the abbreviated `ENG_CHAMPIONSHIP`),
-so `_canonical_league_id()` on a real fetch can never produce a match — the filter in
-`_fetch_and_filter()` will always return 0 rows against these exact strings. A
-concurrent investigation (see the issue doc's DIAG todo, slot 12) found duplicate
-correctly-shaped shards already exist under some of these leagues' ABBREVIATED alias
-codes for this same day, written later (2026-07-19) — the root cause + the correct
-per-league target mapping are still open. Fix `_AFFECTED_LEAGUES` (or the filter logic)
-to use the CURRENT canonical ids once that's resolved, then re-verify with --dry-run
-before ever running --apply. The read-only bad-shard enumeration, snapshot-then-write
-CAS-free pattern, and post-write verification below are otherwise ready to reuse as-is.
+**Corrected target model (2026-07-25)**: the ORIGINAL `_AFFECTED_LEAGUES` set below used
+to be the 85 literal `league=<X>` folder names pulled directly off the 85 bad shards
+(e.g. `ENGLAND_CHAMPIONSHIP`). A live PROD dry-run found these raw strings are NOT
+registered UAC `api_football` canonical league_ids under any tier — they are the
+unabbreviated `build_league_id(country, league_name)` output a `CanonicalFixture` is
+born with, misrouted into the fixtures_schedule path by the (now-guarded) cross-domain
+write-path bug. **Main's ruling on `BLK-7e0a3faa`** explicitly REJECTED writing real
+fixtures under those 85 non-canonical literal names — it would target a partition that
+never should have existed, multiplying the exact duplicate-shard problem this recovery
+is meant to fix. The issue doc's DIAG + gate-(b)/(c) work (slots 11/2) instead derived
+the AUTHORITATIVE 36-item canonical target list this script now uses: 11 canonical
+league folders with NO fixtures_schedule data at all for this date (`_MISSING_LEAGUES`),
+and 25 canonical league folders that are THEMSELVES also contaminated with the wrong
+instrument-catalogue schema (`_CONTAMINATED_CANONICAL_LEAGUES`) — both need a real
+re-fetch + write under their correct canonical id. (14 other canonical folders already
+hold correct fixtures data — excluded. 35 of the original 85 raw names have no canonical
+UAC registry entry at all — structurally unrecoverable to any legitimate target, out of
+scope pending a separate league-registration decision.) The 85 raw-named contaminated
+objects themselves are NOT touched by this script — they are snapshot-then-delete
+candidates once their canonical counterpart is confirmed good, and any prod-bucket
+delete is a human-only hard stop (see the delete-safety-protocol doc above); that step
+is deliberately left for the operator, not this script.
 
 Context (see
 ``unified-trading-pm/plans/active/issues/sports_fixtures_schedule_wrong_schema_day_2026_04_14.md``):
-85 `league=<L>/fixtures_schedule.parquet` shards under `day=2026-04-14` fail a
-column-projection read (`af_league_id` missing) because they hold an
-instrument-catalogue/registry schema (`instrument_key`, `venue`, `tick_size`, ...)
-instead of fixtures data. The exact historical writer could not be pinned (see the
-issue doc's DIAG todo), but a structural guard (`_assert_not_cross_domain_contamination`,
-`instruments-service@b3cb6f8c`) now rejects this class of mix-up at every
-`_gated_sink_write` call, so re-running the normal fixtures write path for this one
-date is safe going forward.
+the write-path bug is fully understood and structurally closed (`_assert_not_cross_domain_
+contamination`, `instruments-service@b3cb6f8c`), so re-running the normal fixtures write
+path for this one date is safe going forward.
 
-This script: (1) snapshots each of the 85 bad objects before touching them, (2) fetches
+This script: (1) snapshots each of the 25 CONTAMINATED canonical shards before
+overwriting them (the 11 MISSING ones have nothing to snapshot), (2) fetches
 `api_football`'s real fixtures for 2026-04-14 ONCE (a single day-level call, not
 per-league — mirrors `_ensure_canonical_fixtures_for_override`'s pattern), (3) filters
-the result to exactly the 85 affected canonical league_ids, (4) writes via the real
+the result to exactly the 36 target canonical league_ids, (4) writes via the real
 `_write_fixtures_per_league()` — now guarded — so `entity=fixtures_schedule` +
-`entity=fixtures_outcomes` land correctly, (5) verifies every one of the 85 target
-shards now parses with the fixtures schema, reporting any league the real fetch didn't
-cover as an explicit, named gap (never silently left broken).
+`entity=fixtures_outcomes` land correctly under each league's CANONICAL id, (5) verifies
+every one of the 36 target shards now parses with the fixtures schema, reporting any
+league the real fetch didn't cover as an explicit, named gap (never silently left
+broken).
 
 Usage:
   python scripts/recover_fixtures_schedule_wrong_schema_day_2026_04_14.py --dry-run
@@ -69,111 +77,72 @@ _DATE = "2026-04-14"
 _PROJECT_ID = "central-element-323112"
 _PREFIX = f"sports_reference/by_date/day={_DATE}/pipeline_mode=batch_api_football/entity=fixtures_schedule/"
 
-# The 85 canonical league_ids confirmed (this session, live corpus scan) to carry the
-# wrong instrument-catalogue schema for day=2026-04-14. Re-derivable via the same scan:
-# list _PREFIX, try `pd.read_parquet(..., columns=["af_league_id"])` on each, collect the
-# leagues whose read raises.
-_AFFECTED_LEAGUES: frozenset[str] = frozenset(
+# 11 canonical league_ids with NO fixtures_schedule data at all for day=2026-04-14
+# (gate (c), slot 2, 2026-07-25 — bounded single-day-prefix GCS listing, not a corpus walk).
+_MISSING_LEAGUES: frozenset[str] = frozenset(
     {
-        "ARGENTINA_LIGA_PROFESIONAL_ARGENTINA",
-        "ARGENTINA_PRIMERA_B_METROPOLITANA",
-        "ARGENTINA_RESERVE_LEAGUE",
-        "ARMENIA_FIRST_LEAGUE",
-        "ARMENIA_PREMIER_LEAGUE",
-        "ARUBA_DIVISION_DI_HONOR",
-        "AUSTRIA_REGIONALLIGA_OST",
-        "BANGLADESH_FEDERATION_CUP",
-        "BARBADOS_PREMIER_LEAGUE",
-        "BOLIVIA_PRIMERA_DIVISION",
-        "BRAZIL_BRASILEIRO_U20_A",
-        "BULGARIA_FIRST_LEAGUE",
-        "BULGARIA_THIRD_LEAGUE_SOUTHEAST",
-        "CHILE_PRIMERA_DIVISION",
-        "CHINA_LEAGUE_TWO",
-        "COLOMBIA_PRIMERA_B",
-        "CONGO_DR_LIGUE_1",
-        "CYPRUS_1_DIVISION",
-        "CZECH_REPUBLIC_4_LIGA_DIVIZIE_D",
-        "ECUADOR_COPA_ECUADOR",
-        "EGYPT_PREMIER_LEAGUE",
-        "ENGLAND_CHAMPIONSHIP",
-        "ENGLAND_LEAGUE_ONE",
-        "ENGLAND_LEAGUE_TWO",
-        "ENGLAND_NATIONAL_LEAGUE",
-        "ENGLAND_NATIONAL_LEAGUE_NORTH",
-        "ENGLAND_NATIONAL_LEAGUE_SOUTH",
-        "ENGLAND_NON_LEAGUE_PREMIER_ISTHMIAN",
-        "ENGLAND_NON_LEAGUE_PREMIER_SOUTHERN_CENTRAL",
-        "ENGLAND_NON_LEAGUE_PREMIER_SOUTHERN_SOUTH",
-        "ENGLAND_PROFESSIONAL_DEVELOPMENT_LEAGUE",
-        "ENGLAND_U18_PREMIER_LEAGUE_NORTH",
-        "ENGLAND_U18_PREMIER_LEAGUE_SOUTH",
-        "ETHIOPIA_PREMIER_LEAGUE",
-        "FINLAND_SUOMEN_CUP",
-        "GERMANY_OBERLIGA_BAYERN_NORD",
-        "GERMANY_OBERLIGA_BAYERN_SUD",
-        "GERMANY_OBERLIGA_BREMEN",
-        "GERMANY_OBERLIGA_HAMBURG",
-        "GERMANY_REGIONALLIGA_BAYERN",
-        "GERMANY_REGIONALLIGA_NORDOST",
-        "HONDURAS_LIGA_NACIONAL",
-        "HUNGARY_NB_I",
-        "INDIA_I_LEAGUE_2ND_DIVISION",
-        "IRAQ_IRAQI_LEAGUE",
-        "ISRAEL_LIGA_LEUMIT",
-        "ITALY_SERIE_B",
-        "JORDAN_LEAGUE",
-        "KENYA_FKF_PREMIER_LEAGUE",
-        "KENYA_SUPER_LEAGUE",
-        "LATVIA_VIRSLIGA",
-        "LIBERIA_LFA_FIRST_DIVISION",
-        "LIECHTENSTEIN_CUP",
-        "MACEDONIA_FIRST_LEAGUE",
-        "MALTA_PREMIER_LEAGUE",
-        "NETHERLANDS_U19_DIVISIE_1",
-        "NIGERIA_NPFL",
-        "NORWAY_3_DIVISION_GIRONE_5",
-        "PANAMA_LIGA_PANAMENA_DE_FUTBOL",
-        "PERU_PRIMERA_DIVISION",
-        "POLAND_III_LIGA_GROUP_3",
-        "PORTUGAL_LIGA_REVELACAO_U23",
-        "ROMANIA_LIGA_II",
-        "SAUDI_ARABIA_DIVISION_1",
-        "SAUDI_ARABIA_PRO_LEAGUE",
-        "SCOTLAND_CHAMPIONSHIP",
-        "SCOTLAND_LEAGUE_ONE",
-        "SLOVAKIA_CUP",
-        "SLOVENIA_1_SNL",
-        "SPAIN_PRIMERA_DIVISION_RFEF_GROUP_1",
-        "SPAIN_SEGUNDA_DIVISION_RFEF_GROUP_5",
-        "SWEDEN_SUPERETTAN",
-        "TANZANIA_LIGI_KUU_BARA",
-        "UKRAINE_U19_LEAGUE",
-        "USA_US_OPEN_CUP",
-        "UZBEKISTAN_SUPER_LEAGUE",
-        "WORLD_AFC_CHAMPIONS_LEAGUE_ELITE",
-        "WORLD_CONMEBOL_LIBERTADORES",
-        "WORLD_CONMEBOL_NATIONS_LEAGUE_WOMEN",
-        "WORLD_CONMEBOL_SUDAMERICANA",
-        "WORLD_FRIENDLIES_WOMEN",
-        "WORLD_OFC_PRO_LEAGUE",
-        "WORLD_UEFA_CHAMPIONS_LEAGUE",
-        "WORLD_WORLD_CUP_WOMEN_QUALIFICATION_CONCACAF",
-        "WORLD_WORLD_CUP_WOMEN_QUALIFICATION_EUROPE",
+        "AFC_CHAMPIONS_LEAGUE_ELITE",
+        "BOLIVIA_PRIMERA",
+        "CYPRUS_FIRST_DIVISION",
+        "ECUADOR_CUP",
+        "IRAQ_LEAGUE",
+        "KENYA_PREMIER_LEAGUE",
+        "LIBERIA_FIRST_DIVISION",
+        "PANAMA_LPF",
+        "PERU_PRIMERA",
+        "SLOVENIA_PRVALIGA",
+        "TANZANIA_LIGI_KUU",
     }
 )
 
+# 25 canonical league_ids whose OWN canonical-folder fixtures_schedule.parquet is
+# ITSELF also contaminated with the wrong instrument-catalogue schema for
+# day=2026-04-14 (gate (c), slot 2, 2026-07-25 — schema-checked by downloading each).
+_CONTAMINATED_CANONICAL_LEAGUES: frozenset[str] = frozenset(
+    {
+        "ARMENIA_FIRST_LEAGUE",
+        "ARMENIA_PREMIER_LEAGUE",
+        "ARUBA_DIVISION_DI_HONOR",
+        "BANGLADESH_FEDERATION_CUP",
+        "BARBADOS_PREMIER_LEAGUE",
+        "BULGARIA_FIRST_LEAGUE",
+        "COLOMBIA_PRIMERA_B",
+        "EGYPT_PREMIER_LEAGUE",
+        "ETHIOPIA_PREMIER_LEAGUE",
+        "FINLAND_SUOMEN_CUP",
+        "HONDURAS_LIGA_NACIONAL",
+        "HUNGARY_NB_I",
+        "ISRAEL_LIGA_LEUMIT",
+        "JORDAN_LEAGUE",
+        "KENYA_SUPER_LEAGUE",
+        "LATVIA_VIRSLIGA",
+        "LIECHTENSTEIN_CUP",
+        "MACEDONIA_FIRST_LEAGUE",
+        "MALTA_PREMIER_LEAGUE",
+        "NIGERIA_NPFL",
+        "ROMANIA_LIGA_II",
+        "SAUDI_ARABIA_DIVISION_1",
+        "SAUDI_ARABIA_PRO_LEAGUE",
+        "SLOVAKIA_CUP",
+        "UZBEKISTAN_SUPER_LEAGUE",
+    }
+)
+
+# The full 36-league write target — union of the two disjoint sets above.
+_AFFECTED_LEAGUES: frozenset[str] = _MISSING_LEAGUES | _CONTAMINATED_CANONICAL_LEAGUES
+
 
 def _bad_shard_paths(bucket: str) -> dict[str, str]:
-    """Return ``{canonical_league_id: blob_path}`` for the 85 affected shards
-    currently present under ``_PREFIX``."""
+    """Return ``{canonical_league_id: blob_path}`` for the 25 CONTAMINATED canonical
+    shards currently present under ``_PREFIX`` (the 11 MISSING leagues have nothing to
+    snapshot — there is no existing object at their canonical path)."""
     storage = get_storage_client(project_id=_PROJECT_ID)
     out: dict[str, str] = {}
     for blob in storage.list_blobs(bucket, prefix=_PREFIX):
-        if "league=" not in blob.name:
+        if "league=" not in blob.name or not blob.name.endswith("fixtures_schedule.parquet"):
             continue
         league = blob.name.split("league=")[1].split("/")[0]
-        if league in _AFFECTED_LEAGUES:
+        if league in _CONTAMINATED_CANONICAL_LEAGUES:
             out[league] = blob.name
     return out
 
@@ -219,18 +188,28 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="Fetch + report only, no snapshot/write.")
-    mode.add_argument("--apply", action="store_true", help="Snapshot the bad shards then write the real fixtures.")
+    mode.add_argument(
+        "--apply", action="store_true", help="Snapshot the 25 contaminated canonical shards then write real fixtures."
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports", deployment_env="prod")
     bad_shards = _bad_shard_paths(bucket)
-    logger.info("Bad shards currently present: %d of %d expected leagues", len(bad_shards), len(_AFFECTED_LEAGUES))
-    missing_shards = _AFFECTED_LEAGUES - set(bad_shards)
-    if missing_shards:
+    logger.info(
+        "Contaminated canonical shards currently present: %d of %d expected (_CONTAMINATED_CANONICAL_LEAGUES); "
+        "%d leagues have no existing shard at all (_MISSING_LEAGUES, nothing to snapshot)",
+        len(bad_shards),
+        len(_CONTAMINATED_CANONICAL_LEAGUES),
+        len(_MISSING_LEAGUES),
+    )
+    unexpected_absent = _CONTAMINATED_CANONICAL_LEAGUES - set(bad_shards)
+    if unexpected_absent:
         logger.warning(
-            "Expected-but-absent bad shard for %d league(s): %s", len(missing_shards), sorted(missing_shards)
+            "Expected-but-absent contaminated shard for %d league(s) (re-verify gate (c) before proceeding): %s",
+            len(unexpected_absent),
+            sorted(unexpected_absent),
         )
 
     filtered_df = asyncio.run(_fetch_and_filter())
@@ -273,7 +252,7 @@ def main() -> int:
         sink,
         filtered_df,
         _DATE,
-        source_label="wrong-schema-recovery-2026-07-24",
+        source_label="wrong-schema-recovery-2026-07-25",
         bucket=bucket,
     )
     logger.info(
