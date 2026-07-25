@@ -63,6 +63,15 @@ Instrument-type column (v2):
   and a warning is logged. Bounded-column reads remain mandatory (cefi index is
   tens-of-millions of rows; loading the full frame OOM-kills the VM).
 
+  D1 migration robustness (2026-07-20 ruling — column moves lowercase writer grain
+  -> UPPERCASE catalogue enum): the by_venue_instrument_type / by_venue_instrument_type
+  _data_type Layer-2 drill-down projections GROUP on a case-folded instrument_type
+  (see _casefold_instrument_type_series) so a shard spanning both the pre-migration
+  lowercase spelling and the post-migration UPPERCASE spelling merges into ONE
+  coverage cell instead of silently splitting into two. Layer-1 (imported from
+  check_enumeration_completeness) already normalises case for the EXPECTED/ENUMERATED
+  intersection. SSOT: codex/02-data/honest-coverage-model.md § Layer-2 read grain.
+
 Usage:
   python measure_honest_coverage.py [--asset-group cefi|defi|tradfi|sports|prediction|all]
   python measure_honest_coverage.py --output-path /tmp/coverage.json   # local probe
@@ -604,6 +613,45 @@ def _count_statuses(df: pd.DataFrame) -> dict[str, int | float]:
     return counts
 
 
+def _casefold_instrument_type_series(series: pd.Series) -> pd.Series:
+    """Case-fold an ``instrument_type`` column for GROUPING only (D1 migration robustness).
+
+    The D1 ruling (2026-07-20, ``/codex/02-data/cross-asset-canonical-target-ssot.md``
+    §7/§11) migrates the manifest ``instrument_type`` column from its current lowercase
+    writer grain to the UPPERCASE catalogue enum. During the ``migration_pending``
+    window (and any transient mixed-case state while a given asset_group's cutover is
+    in flight), the SAME logical ``(venue, instrument_type, data_type)`` shard can carry
+    both spellings across its history. Grouping the Layer-2 drill-down projections
+    (``by_venue_instrument_type`` / ``by_venue_instrument_type_data_type``) on the raw
+    string would silently SPLIT that shard's coverage into two cells (one per casing)
+    instead of one, making a fully-covered shard look partially/newly uncovered purely
+    from a case artifact — see
+    ``plans/active/issues/honest_coverage_harness_instrument_type_case_break_on_d1_migration_2026_07_20.md``.
+
+    This is GROUPING-key normalisation only — the raw, as-written casing is preserved
+    for the reported dict key (see :func:`_representative_instrument_type`) so
+    downstream consumers that deliberately read the raw writer-grain spelling (e.g.
+    deployment-api's distinct-values drift panel, which case-sensitively tracks the
+    cefi/tradfi in-flight uppercase migration) are unaffected outside the transient
+    mixed-case window this exists to protect. Layer-1 (``check_enumeration_completeness
+    ._canon_instrument_type``) already normalises case for the EXPECTED/ENUMERATED
+    matrix intersection; this is the matching fix for the Layer-2 drill-down views,
+    which read the manifest directly and never went through that normaliser.
+    """
+    return series.astype(str).str.strip().str.casefold()
+
+
+def _representative_instrument_type(values: pd.Series) -> str:
+    """Deterministic display label for a case-merged ``instrument_type`` group.
+
+    Picks the lexicographically-smallest raw spelling present in the group — the same
+    determinism precedent as ``check_enumeration_completeness._canonicalise_tuple_set``
+    ("the first original tuple seen for a canonical key wins, deterministic via the
+    sorted input").
+    """
+    return sorted({str(v) for v in values})[0]
+
+
 def _compute_coverage(
     dfs: dict[str, pd.DataFrame],
     *,
@@ -688,10 +736,16 @@ def _compute_coverage(
         by_venue_data_type[ag] = dict(vdt_group)
 
         # level 4 — per (ag, venue, instrument_type) [v2]
+        # Grouped on the CASE-FOLDED instrument_type (D1 migration robustness — see
+        # _casefold_instrument_type_series) so a shard whose history spans the
+        # lowercase writer grain and the post-D1-migration UPPERCASE catalogue enum
+        # stays ONE coverage cell instead of silently splitting into two.
         vit_group: dict[str, dict[str, object]] = defaultdict(dict)
         if "instrument_type" in df_l2.columns:
-            for (venue, itype), vitdf in df_l2.groupby(["venue", "instrument_type"], observed=True):
-                vit_group[str(venue)][str(itype)] = _count_statuses(vitdf)
+            itype_fold = _casefold_instrument_type_series(df_l2["instrument_type"])
+            for (venue, _itype_fold), vitdf in df_l2.groupby([df_l2["venue"], itype_fold], observed=True):
+                display_itype = _representative_instrument_type(vitdf["instrument_type"])
+                vit_group[str(venue)][display_itype] = _count_statuses(vitdf)
         else:
             logger.warning(
                 "  [%s] instrument_type column absent — by_venue_instrument_type will be empty",
@@ -700,10 +754,15 @@ def _compute_coverage(
         by_venue_instrument_type[ag] = dict(vit_group)
 
         # level 5 — per (ag, venue, instrument_type, data_type) [v2]
+        # Same case-fold grouping as level 4 — see the comment there.
         vitdt_group: dict[str, dict[str, dict[str, object]]] = defaultdict(lambda: defaultdict(dict))
         if "instrument_type" in df_l2.columns:
-            for (venue, itype, dt), vitdtdf in df_l2.groupby(["venue", "instrument_type", "data_type"], observed=True):
-                vitdt_group[str(venue)][str(itype)][str(dt)] = _count_statuses(vitdtdf)
+            itype_fold = _casefold_instrument_type_series(df_l2["instrument_type"])
+            for (venue, _itype_fold, dt), vitdtdf in df_l2.groupby(
+                [df_l2["venue"], itype_fold, df_l2["data_type"]], observed=True
+            ):
+                display_itype = _representative_instrument_type(vitdtdf["instrument_type"])
+                vitdt_group[str(venue)][display_itype][str(dt)] = _count_statuses(vitdtdf)
         by_venue_instrument_type_data_type[ag] = {v: dict(it_map) for v, it_map in vitdt_group.items()}
 
         # level 6 — per (ag, date) [v2]
