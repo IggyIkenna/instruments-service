@@ -67,7 +67,7 @@ CATALOGUE_BLOB = "prod/catalog.parquet"
 
 # Protocols whose fee segment is the raw on-wire Uniswap-V3-style feeTier
 # (hundredths-of-bps) and needs /100 to become real bps. Covers Uniswap V3
-# itself plus the 8 protocols that share UniswapV3ReferenceDataAdapter, and
+# itself plus the 7 protocols that share UniswapV3ReferenceDataAdapter, and
 # Uniswap V4 (separate adapter class, same feeTier convention).
 _RAW_FEETIER_PROTOCOLS = {
     "UNISWAP_V3",
