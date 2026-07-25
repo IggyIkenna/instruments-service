@@ -70,7 +70,11 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
 )
 
 # Broad excepts in resolver/cache utilities are intentional defensive wrappers around
-# network/storage boundaries and are audited in this repo.
+# network/storage boundaries — audited 2026-07-25 (instruments_service_codex_compliance
+# _ceiling_drift_2026_07_20.md P3 #3): every site in these 2 files was reviewed and either
+# narrowed to a specific exception type (registry/format lookups, BucketNamingError) or
+# left broad + inline-documented (Secret Manager / GCS read-merge boundaries — genuinely
+# wide, unenumerable auth/network exception surfaces).
 BE_EXCLUDE_GLOBS=(
     "**/reference_data/adapters/defi/_solana_utils.py"
     "**/reference_data/utils/evm_creation_resolver.py"
