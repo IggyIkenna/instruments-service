@@ -563,12 +563,20 @@ def _freshness_preflight(
             per_fixture_entities=per_fixture_entities,
         )
 
-    # Per-entity skip: pass the exact missing list so _fetch_sports_reference_data
-    # only fetches entities that are actually absent from the manifest.
+    # Per-entity skip: pass the exact missing+stale list so
+    # _fetch_sports_reference_data only fetches entities that are actually
+    # absent OR stale in the manifest. An empty missing_entities under an
+    # explicit --sports-entity scope falls back to the legacy unscoped
+    # fetch-everything path in _fetch_sports_reference_block — so a
+    # stale-not-missing entity (e.g. a schema-version re-fetch trigger) MUST
+    # also contribute here, or it silently escapes the CLI scope and burns
+    # the shared, singleton-locked API-Football quota (measured: ~7000
+    # unscoped calls on one date; see
+    # sports_freshness_preflight_stale_scope_escape_burns_shared_quota_2026_07_25.md).
     missing_entities: list[str] = []
-    if is_sports_run and missing:
-        missing_entities = list(missing)
-        missing_set = set(missing)
+    if is_sports_run and (missing or stale):
+        missing_entities = list(dict.fromkeys([*missing, *stale]))
+        missing_set = set(missing_entities)
         core_missing = missing_set & set(core_entities)
         pf_missing = [e for e in per_fixture_entities if e in missing_set]
         instruments_missing = missing_set - set(core_entities) - set(per_fixture_entities)
