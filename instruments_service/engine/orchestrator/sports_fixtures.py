@@ -157,6 +157,11 @@ def _resolve_sports_ref_blob(
         canon_blob = storage_client.bucket(bucket).blob(canonical)  # type: ignore[union-attr]
         if canon_blob.exists():
             return canonical
+    # GCS existence-probe boundary: `.exists()` doesn't pre-wrap the GCS SDK's
+    # exception surface (network/auth — many types); this is a best-effort probe by
+    # design — ANY failure to confirm "canonical exists" correctly falls back to the
+    # legacy path, same as a confirmed-absent result. Audited 2026-07-25, left broad:
+    # instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
     except Exception:
         pass
     return legacy

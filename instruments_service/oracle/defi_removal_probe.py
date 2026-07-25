@@ -256,7 +256,9 @@ def load_removals(bucket: str | None = None) -> dict[str, RemovalRecord]:
         return {}
     if not isinstance(payload, Mapping):
         return {}
-    records_obj = payload.get("removals", [])
+    # Absent "removals" key = malformed/legacy artifact, not an error; degrades to
+    # Option A (all live), same as the branches above.
+    records_obj = payload.get("removals", [])  # noqa: qg-empty-fallback
     out: dict[str, RemovalRecord] = {}
     if not isinstance(records_obj, list):
         return out
