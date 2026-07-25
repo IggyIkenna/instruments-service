@@ -1092,8 +1092,8 @@ class TestGwFalseEmptyWritePath20260714:
                 return_value={"1001": "LA_LIGA"},
             ),
             patch(
-                "instruments_service.engine.orchestrator._read_existing_per_league_fixture_ids",
-                return_value=frozenset({1001}),
+                "instruments_service.engine.orchestrator._read_captured_league_fixture_ids_for_entity",
+                return_value={"LA_LIGA": frozenset({1001})},
             ),
             patch(
                 "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
@@ -1341,65 +1341,53 @@ class TestGwFalseEmptyWritePath20260714:
 
 
 # ---------------------------------------------------------------------------
-# _gather_per_fixture_rows — concurrent pre-fetch-skip lookups
-# (api_football_backfill_chronological_scan_never_reaches_pending_tail_2026_07_18.md)
+# _gather_per_fixture_rows — batched-per-entity pre-fetch-skip lookups
+# (sports_dependency_check_manifest_vs_gcs_path_2026_07_08.md,
+# sports_fixtures.py:356 todo; supersedes the 2026-07-18 concurrency-only fix)
 # ---------------------------------------------------------------------------
 
 
-class TestGatherPerFixtureRowsConcurrentPreFetchSkip:
-    """Regression: the per-(entity, league) pre-fetch-skip read
-    (``_read_existing_per_league_fixture_ids``) is blocking GCS I/O and used
-    to run SEQUENTIALLY, one league at a time, inside ``_gather_per_fixture_rows``.
-    On a long historical backfill this made each already-fully-resolved date
-    cost ~N_leagues round-trips serialized — measured at ~27s/date, on track
-    to take ~16.7h/entity to ever reach the genuinely-pending tail. The fix
-    fans these lookups out concurrently via ``asyncio.to_thread`` +
-    ``asyncio.gather`` instead of a sequential ``for`` loop — same result set,
-    wall-clock bounded by ONE round-trip's latency instead of N.
+class TestGatherPerFixtureRowsBatchedPreFetchSkip:
+    """Regression: the per-(entity, league) pre-fetch-skip read used to issue
+    ONE blocking round-trip PER (entity, league) pair — up to ~4 entities x
+    ~33 leagues. A 2026-07-18 fix fanned those N round-trips out concurrently
+    (wall-clock bounded by one round-trip instead of N serialized), but left
+    the CALL COUNT itself unchanged. This fix collapses call count too: ONE
+    ``_read_captured_league_fixture_ids_for_entity`` call per DISTINCT ENTITY
+    (not per entity x league) — the batched read lists + downloads every
+    league's per-league parquet for that date+entity in a single pass via the
+    shared ``_read_per_league_entity_df`` helper.
     """
 
     @pytest.mark.asyncio
-    async def test_per_league_lookups_run_concurrently_not_sequentially(self) -> None:
-        """5 distinct leagues' pre-fetch-skip reads must overlap: total wall-clock
-        stays close to ONE simulated round-trip, not 5x that (which is what a
-        sequential for-loop would cost — the exact O(total_window_days x leagues)
-        scan shape this issue doc root-caused)."""
-        import time
-
+    async def test_one_batched_call_per_entity_not_per_league(self) -> None:
+        """5 distinct leagues under ONE entity must cost exactly ONE batched
+        lookup call, not 5 — the real fix this todo targeted (call count, not
+        just wall-clock)."""
         from instruments_service.engine.orchestrator.sports_reference_fixtures import (
             _gather_per_fixture_rows,
         )
 
-        round_trip_delay_sec = 0.2
         n_leagues = 5
-
         # Each fixture belongs to a distinct league so the dedup logic in
-        # _gather_per_fixture_rows produces N_LEAGUES distinct lookup keys.
+        # _gather_per_fixture_rows produces N_LEAGUES distinct lookup keys —
+        # all of which must now collapse into ONE per-entity batched call.
         fixture_ids = list(range(1, n_leagues + 1))
         af_fid_to_league = {str(fid): f"LEAGUE_{fid}" for fid in fixture_ids}
 
         async def _noop_fetch(_fid: int) -> list[object]:
             return []
 
-        def _blocking_lookup(*, bucket: str, date: str, entity_name: str, canonical_league_id: str) -> frozenset[int]:
-            # Simulates the real function's blocking GCS round-trip
-            # (blob.exists() + download_bytes()) — a genuine OS-thread sleep,
-            # not an event-loop-blocking one, so this only proves concurrency
-            # if the calls actually run on separate threads.
-            time.sleep(round_trip_delay_sec)
-            return frozenset()
-
         with (
             patch(
-                "instruments_service.engine.orchestrator._read_existing_per_league_fixture_ids",
-                side_effect=_blocking_lookup,
+                "instruments_service.engine.orchestrator._read_captured_league_fixture_ids_for_entity",
+                return_value={},
             ) as mock_lookup,
             patch(
                 "instruments_service.engine.orchestrator._canonical_league_id",
                 side_effect=lambda lid: str(lid),
             ),
         ):
-            started = time.monotonic()
             _entity_rows, _entity_failures, _pre_captured = await _gather_per_fixture_rows(
                 per_fixture_entities=[("fixture_events", _noop_fetch)],
                 date="2020-06-06",
@@ -1408,24 +1396,71 @@ class TestGatherPerFixtureRowsConcurrentPreFetchSkip:
                 af_fid_to_league=af_fid_to_league,
                 redo_all=False,
             )
+
+        assert mock_lookup.call_count == 1, (
+            f"expected ONE batched pre-fetch-skip lookup for the single entity regardless of "
+            f"{n_leagues} distinct leagues, got {mock_lookup.call_count} — the per-(entity, league) "
+            "call-count regression is back"
+        )
+        mock_lookup.assert_called_once_with("test-bucket", "2020-06-06", "fixture_events")
+
+    @pytest.mark.asyncio
+    async def test_multiple_entities_still_run_concurrently(self) -> None:
+        """Multiple entities' batched lookups must still overlap: total
+        wall-clock stays close to ONE simulated round-trip, not N_entities x
+        that (preserves the 2026-07-18 concurrency fix at the entity level)."""
+        import time
+
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _gather_per_fixture_rows,
+        )
+
+        round_trip_delay_sec = 0.2
+        entity_names = ["fixture_stats", "fixture_events", "fixture_lineups", "player_stats"]
+
+        async def _noop_fetch(_fid: int) -> list[object]:
+            return []
+
+        def _blocking_lookup(bucket: str, date: str, entity_name: str) -> dict[str, frozenset[int]]:
+            # Simulates the real function's blocking GCS round-trip — a
+            # genuine OS-thread sleep, not an event-loop-blocking one, so
+            # this only proves concurrency if calls actually run on
+            # separate threads.
+            time.sleep(round_trip_delay_sec)
+            return {}
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._read_captured_league_fixture_ids_for_entity",
+                side_effect=_blocking_lookup,
+            ) as mock_lookup,
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+        ):
+            started = time.monotonic()
+            await _gather_per_fixture_rows(
+                per_fixture_entities=[(name, _noop_fetch) for name in entity_names],
+                date="2020-06-06",
+                bucket="test-bucket",
+                fixture_ids=[1],
+                af_fid_to_league={"1": "LEAGUE_1"},
+                redo_all=False,
+            )
             elapsed = time.monotonic() - started
 
-        assert mock_lookup.call_count == n_leagues, (
-            f"expected one pre-fetch-skip lookup per distinct league ({n_leagues}), got {mock_lookup.call_count}"
-        )
-        # Sequential would cost >= n_leagues * delay (1.0s here); concurrent
-        # execution stays well under 2x a single round-trip regardless of N.
-        sequential_floor = n_leagues * round_trip_delay_sec
+        assert mock_lookup.call_count == len(entity_names)
+        sequential_floor = len(entity_names) * round_trip_delay_sec
         assert elapsed < sequential_floor / 2, (
-            f"per-league pre-fetch-skip lookups ran sequentially (elapsed={elapsed:.2f}s, "
-            f"sequential_floor={sequential_floor:.2f}s) — the O(total_window_days x leagues) "
-            "chronological-scan regression is back"
+            f"per-entity batched lookups ran sequentially (elapsed={elapsed:.2f}s, "
+            f"sequential_floor={sequential_floor:.2f}s) — the entity-level concurrency regressed"
         )
 
     @pytest.mark.asyncio
     async def test_redo_all_skips_lookups_entirely(self) -> None:
         """redo_all=True bypasses the pre-fetch-skip path — zero lookups, exact
-        pre-existing behaviour, unaffected by the concurrency change."""
+        pre-existing behaviour, unaffected by the batching change."""
         from instruments_service.engine.orchestrator.sports_reference_fixtures import (
             _gather_per_fixture_rows,
         )
@@ -1434,7 +1469,7 @@ class TestGatherPerFixtureRowsConcurrentPreFetchSkip:
             return []
 
         with patch(
-            "instruments_service.engine.orchestrator._read_existing_per_league_fixture_ids",
+            "instruments_service.engine.orchestrator._read_captured_league_fixture_ids_for_entity",
         ) as mock_lookup:
             await _gather_per_fixture_rows(
                 per_fixture_entities=[("fixture_events", _noop_fetch)],
@@ -1446,3 +1481,112 @@ class TestGatherPerFixtureRowsConcurrentPreFetchSkip:
             )
 
         assert mock_lookup.call_count == 0, "redo_all must bypass the pre-fetch-skip lookup entirely"
+
+
+# ---------------------------------------------------------------------------
+# _captured_fixture_ids_by_league / _read_captured_league_fixture_ids_for_entity
+# ---------------------------------------------------------------------------
+
+
+class TestCapturedFixtureIdsByLeague:
+    """Unit tests for the pure grouping helper: DataFrame -> {league_id: frozenset(fid)}."""
+
+    def test_groups_by_league_and_dedups_fixture_ids(self) -> None:
+        from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+            _captured_fixture_ids_by_league,
+        )
+
+        df = pd.DataFrame(
+            {
+                "league_id": ["LA_LIGA", "LA_LIGA", "EPL"],
+                "af_fixture_id": [1001, 1002, 2001],
+            }
+        )
+        result = _captured_fixture_ids_by_league(df)
+        assert result == {"LA_LIGA": frozenset({1001, 1002}), "EPL": frozenset({2001})}
+
+    def test_falls_back_to_fixture_id_column(self) -> None:
+        """Mirrors the retired per-league helper's fid_col fallback."""
+        from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+            _captured_fixture_ids_by_league,
+        )
+
+        df = pd.DataFrame({"league_id": ["EPL"], "fixture_id": [3001]})
+        result = _captured_fixture_ids_by_league(df)
+        assert result == {"EPL": frozenset({3001})}
+
+    def test_missing_league_id_column_returns_empty(self) -> None:
+        from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+            _captured_fixture_ids_by_league,
+        )
+
+        df = pd.DataFrame({"af_fixture_id": [1001]})
+        assert _captured_fixture_ids_by_league(df) == {}
+
+    def test_missing_fixture_id_column_returns_empty(self) -> None:
+        from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+            _captured_fixture_ids_by_league,
+        )
+
+        df = pd.DataFrame({"league_id": ["EPL"]})
+        assert _captured_fixture_ids_by_league(df) == {}
+
+
+class TestReadCapturedLeagueFixtureIdsForEntity:
+    """Unit tests for the batched per-entity read — the actual sports_fixtures.py:356 fix."""
+
+    def test_single_list_blobs_pass_covers_every_league(self) -> None:
+        """Proves the batched read is genuinely ONE list+download pass, not
+        one per league — the underlying _read_per_league_entity_df call
+        happens exactly once regardless of how many leagues it returns."""
+        from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+            _read_captured_league_fixture_ids_for_entity,
+        )
+
+        df = pd.DataFrame(
+            {
+                "league_id": ["LA_LIGA", "EPL", "SERIE_A"],
+                "af_fixture_id": [1001, 2001, 3001],
+            }
+        )
+        with patch(
+            "instruments_service.engine.orchestrator._read_per_league_entity_df",
+            return_value=df,
+        ) as mock_read:
+            result = _read_captured_league_fixture_ids_for_entity("bucket", "2026-07-04", "fixture_events")
+
+        assert mock_read.call_count == 1
+        mock_read.assert_called_once_with("bucket", "2026-07-04", "fixture_events", inject_league_id=True)
+        assert result == {
+            "LA_LIGA": frozenset({1001}),
+            "EPL": frozenset({2001}),
+            "SERIE_A": frozenset({3001}),
+        }
+
+    def test_no_blobs_found_returns_empty(self) -> None:
+        from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+            _read_captured_league_fixture_ids_for_entity,
+        )
+
+        with patch(
+            "instruments_service.engine.orchestrator._read_per_league_entity_df",
+            return_value=None,
+        ):
+            result = _read_captured_league_fixture_ids_for_entity("bucket", "2026-07-04", "fixture_events")
+
+        assert result == {}
+
+    def test_read_failure_returns_empty_not_raises(self) -> None:
+        """Fail-safe-empty: a transport error must not crash the pre-fetch
+        skip — the caller treats {} as 'fetch everything, no skip.'"""
+        from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+            _read_captured_league_fixture_ids_for_entity,
+        )
+
+        with patch(
+            "instruments_service.engine.orchestrator._read_per_league_entity_df",
+            side_effect=OSError("transport error"),
+        ):
+            result = _read_captured_league_fixture_ids_for_entity("bucket", "2026-07-04", "fixture_events")
+
+        assert result == {}
