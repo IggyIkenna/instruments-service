@@ -1,0 +1,12 @@
+{
+  "counts": {
+    "missing": 4991,
+    "canonical_13col": 25639,
+    "named_9col": 2372,
+    "degenerate_5col_stub": 7846,
+    "af_prefixed_10col": 2383,
+    "other": 2
+  },
+  "errors": 0,
+  "n_objects": 43233
+}
