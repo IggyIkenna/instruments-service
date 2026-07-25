@@ -19,10 +19,10 @@ batch-vs-live swap-capture split.
 **In scope for this doc**:
 
 - **DEX pools**: Uniswap V2/V3/V4, Balancer, Curve, plus 7 Uniswap-V3-fork/Messari-schema DEXes (PancakeSwap_V3,
-  Sushiswap_V3/Sushiswap, Camelot_V3, Aerodrome_V3, TraderJoe_V2, Velodrome_V2) and GMX — a DEX-pool-shaped
-  **perpetual** (discovered via the shared Uniswap-V3 adapter, but its canonical `instrument_type` target is
-  `perpetual` with `asset_group=defi`, not `POOL`, even though it is pool-shaped; the `POOL` typing in the
-  coverage / `glued_pair_id` tables below is the pre-canonicalization state).
+  Sushiswap_V3/Sushiswap, Camelot_V3, Aerodrome_V3, TraderJoe_V2, Velodrome_V2). (GMX — formerly a DEX-pool-shaped
+  **perpetual** discovered via the shared Uniswap-V3 adapter — had its venue support removed 2026-07-25; its entire
+  captured `perp_funding` history turned out to be a synthetic proxy, not real data. See
+  `unified-trading-pm/plans/active/defi_gmx_venue_removal_2026_07_25.md`.)
 - **Lending**: Aave_V3, Spark, Compound_V3, Morpho, Euler_V2, Fluid, Radiant, Venus, Benqi.
 - **Yield-bearing / LST / restaking**: Lido, EtherFi, Ethena, RocketPool, Renzo, KelpDAO, Puffer, Symbiotic, Karak,
   Convex, Idle, Yearn(\_V3), Beefy, Pendle, EigenLayer.
@@ -58,16 +58,16 @@ migrated in production data. Full detail, decision rationale, and open todos:
   two-id model (Option A) the `instrument_id` for POOL rows stays `pool_address.lower()` — the address-anchored
   machine/join key — and `pool_address` is its own column. POOL rows legitimately DIVERGE between the two ids; that is
   the decided design, not a mismatch to reconcile or migrate away.
-- **Current adapter code**: all 13 DEX-pool protocols in scope (the 5 native adapter classes — Uniswap V2/V3/V4,
-  Balancer, Curve — plus the 8 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug`, see "Adapter
+- **Current adapter code**: all 12 DEX-pool protocols in scope (the 5 native adapter classes — Uniswap V2/V3/V4,
+  Balancer, Curve — plus the 7 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug`, see "Adapter
   architecture" below) build a structured key — `instrument_key = f"{venue_tag}:POOL:{base}-{quote}[-{fee_bps}]"`
   (confirmed in `uniswap_v3.py`, and equivalently in `uniswap_v2.py`/`uniswap_v4.py`/`balancer.py`) — with the
   pool/market address kept separately as `raw_symbol`, not as the instrument_id. Curve uses its own REST-API-derived
   key shape (see the Curve row under "Protocol × chain coverage" below).
 - **Fee-tier code gap — FIXED 2026-07-09** (`uniswap_v3.py`/`uniswap_v4.py::_build_pool_record`): the fee-tier
   segment was colon-separated (`:{fee_str}`) rather than dash-separated, and embedded Uniswap's raw on-wire `feeTier`
-  value (e.g. `3000`) rather than the real basis-points value. Since the 8 fork/config-variant protocols share
-  Uniswap V3's `_build_pool_record` code path, fixing it there fixes all 8 too; V4 (separate adapter class) fixed
+  value (e.g. `3000`) rather than the real basis-points value. Since the 7 fork/config-variant protocols share
+  Uniswap V3's `_build_pool_record` code path, fixing it there fixes all 7 too; V4 (separate adapter class) fixed
   the same way. Now: `symbol = f"{base}-{quote}-{pool_fee_tier_bps}"` when a real fee tier exists, else
   `f"{base}-{quote}"` (the fee segment is OMITTED, not a fabricated `-0`, matching the target's `[-FEE_TIER]`
   optional-bracket grammar). Verified via `_build_pool_record` unit tests (264 passed,
@@ -90,7 +90,7 @@ migrated in production data. Full detail, decision rationale, and open todos:
   `engine/defi_catalog_reader.py` reads `instrument_id` from this exact catalogue expecting `pool_address.lower()`
   for POOL rows (its own fallback deriver `_canonical_defi_id` independently recomputes the identical value) to
   build its expected-universe join for DEX swap/pool market data — so `instrument_id` MUST stay the address machine
-  key; flipping it to the structured form would silently break that join for all 13 protocols. There is therefore
+  key; flipping it to the structured form would silently break that join for all 12 protocols. There is therefore
   **no** address→symbol `instrument_id` rewrite to schedule and no "gap" to close: the symbolic form already lives in
   `canonical_instrument_id`/`glued_pair_id` and the address form is the intended machine key. (The
   `scripts/balancer_cross_chain_pool_address_collision_backfill_2026_07_08.py` header's older "known architectural
@@ -168,7 +168,7 @@ migrated in production data. Full detail, decision rationale, and open todos:
   row deliberately (the catalogue rollup step, not the adapter). There is no address→symbol `instrument_id` rewrite
   to schedule: the symbolic `VENUE-CHAIN:POOL:...` form is the separate `canonical_instrument_id`/`glued_pair_id`,
   and the address form is the machine key MTDS joins on. Flipping `instrument_id` to the symbolic form would break
-  that join for all 13 protocols and is explicitly NOT the target. `glued_pair_id` (canonical, see above) is the
+  that join for all 12 protocols and is explicitly NOT the target. `glued_pair_id` (canonical, see above) is the
   permanent symbolic id for any human-readable/UI consumer.
 
 - **Not a gap**: the `instrument_id` = address / `canonical_instrument_id` = symbolic divergence for POOL rows is the
@@ -661,16 +661,17 @@ never read) and a genuinely separate, large, operator-notify-worthy finding on i
 
 ## DEX pools
 
-### Adapter architecture: 5 native adapters, 8 protocols reuse one via config
+### Adapter architecture: 5 native adapters, 7 protocols reuse one via config
 
 Uniswap V2, Uniswap V3, Uniswap V4, Balancer, and Curve each have a dedicated adapter class. Seven more DEX
-protocols/forks (PancakeSwap_V3, Sushiswap_V3, Sushiswap, Aerodrome_V3, Camelot_V3, Velodrome_V2, TraderJoe_V2) plus
-GMX are **not** separate adapter classes — they all instantiate `UniswapV3ReferenceDataAdapter` with a
+protocols/forks (PancakeSwap_V3, Sushiswap_V3, Sushiswap, Aerodrome_V3, Camelot_V3, Velodrome_V2, TraderJoe_V2) are
+**not** separate adapter classes — they all instantiate `UniswapV3ReferenceDataAdapter` with a
 `protocol_slug` constructor argument (`uniswap_v3.py:118,123`) that swaps the venue prefix and the subgraph-ID lookup
 table. The adapter has a 3-tier subgraph-schema cascade (primary schema → Algebra CL fallback → SushiSwap-pairs
 fallback) to handle the fact these forks don't all use an identical Graph schema. This is real, working
-architecture — not a gap — but means "13 DEX protocols" in the audit's finding 2 is really "5 adapter classes + 8
-config variants of one of them."
+architecture — not a gap — but means "12 DEX protocols" is really "5 adapter classes + 7 config variants of one of
+them." (GMX was an 8th config variant of this adapter until its venue support was removed 2026-07-25 — see the DEX
+pools section below.)
 
 ### Protocol × chain coverage (real, from `SUBGRAPH_IDS`)
 
@@ -688,12 +689,11 @@ config variants of one of them."
 | Velodrome_V2          | Optimism (subgraph has 881 instruments but zero parquets ever written — see gaps below)                                  |
 | Camelot_V3            | Arbitrum                                                                                                                 |
 | TraderJoe_V2          | Avalanche                                                                                                                |
-| GMX                   | Arbitrum, Avalanche (Avalanche has ~1 instrument / minimal historical data)                                              |
 
 ### Known gaps (real, tracked in `_defi_coverage.py` — this is the SSOT data-status reads, not a TODO list to re-derive)
 
 - **Empty/deprecated subgraphs** (`EMPTY_OR_DEPRECATED_DEFI_VENUES`): `TRADER_JOE_V2-AVALANCHE` (0 instruments),
-  `UNISWAP_V3-POLYGON` (subgraph returns 0), `GMX-AVALANCHE` (minimal/no historical parquets).
+  `UNISWAP_V3-POLYGON` (subgraph returns 0).
 - **Subgraph exists, never onboarded** (`DEFI_INSTRUMENTS_NOT_YET_COLLECTED`): `VELODROME_V2-OPTIMISM` (881
   instruments available, zero parquets written), `SPARK-ETHEREUM` (adapter shipped, subgraph has 17 markets, no
   historical parquets yet). `SANCTUM-SOLANA` / `SOLBLAZE-SOLANA` are also listed here (out of this doc's EVM-centric
@@ -723,10 +723,10 @@ fallback safety net for curated pairs. `uniswap_v3.py` mitigates this with a sup
 (`_fetch_major_asset_pools`) that asks the subgraph directly for pools where both `token0` AND `token1` are in
 `DEFI_MAJOR_ASSET_ADDRESS_LIST` (`unified_api_contracts/registry/defi_major_assets.py`), merging any pools the
 TVL-ranked cascade missed into the result set. Because this fires on top of the existing cascade, it also covers the
-8 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug` whenever they run on Ethereum.
+7 protocols that share `UniswapV3ReferenceDataAdapter` via `protocol_slug` whenever they run on Ethereum.
 
 **Known remaining gaps**: (1) `DEFI_MAJOR_ASSET_ADDRESS_LIST` is Ethereum-mainnet-only (every address in it is a
-commented `DERIVED ethereum etherscan` entry) — the same 9 protocols still have the uncovered TVL-ceiling gap on
+commented `DERIVED ethereum etherscan` entry) — the same 8 protocols still have the uncovered TVL-ceiling gap on
 every other chain (Arbitrum, Base, Optimism, Polygon, BSC, Avalanche, zkSync); (2) Uniswap V2, Uniswap V4, and
 Balancer (3 separate adapter classes, each with their own independent fetch/pagination code) don't run this
 supplementary query — they still have the original TVL-rank-then-filter gap on every chain. A full fix would need
@@ -864,7 +864,7 @@ MATIC, AVAX, BNB.
 Both `base_asset` AND `quote_asset` must be in the major-assets whitelist (with equivalence-group tolerance). Applies
 to any venue matching `DEX_VENUE_KEYWORDS` (`unified_api_contracts/registry/defi_major_assets.py`) — this keyword set
 has also grown past the old docs' `["UNISWAP", "CURVE", "BALANCER"]`: it now includes `PANCAKESWAP`, `SUSHISWAP`,
-`AERODROME`, `CAMELOT`, `VELODROME`, `TRADERJOE`, `GMX`, plus the Solana DEXes `ORCA`, `RAYDIUM`, `KAMINO`.
+`AERODROME`, `CAMELOT`, `VELODROME`, `TRADERJOE`, plus the Solana DEXes `ORCA`, `RAYDIUM`, `KAMINO`.
 
 ### Lending market filter
 
@@ -951,15 +951,15 @@ separate question from MVP SCOPE (is this cell supposed to be collected at all) 
 
 ## Data sources and API keys
 
-| Source                                               | Used by                                                                           | Auth                                                                                                           |
-| ---------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| The Graph (`gateway.thegraph.com`)                   | Uniswap V2/V3/V4 + forks, Aave_V3, Compound_V3, Fluid, Radiant, Venus, Benqi, GMX | `thegraph-api-key` secret; free tier 100k queries/month, paid $2/100k queries (billed in GRT on Arbitrum)      |
-| Balancer API v3                                      | Balancer                                                                          | No key required                                                                                                |
-| Curve REST API (`api.curve.finance`)                 | Curve (no subgraph, no RPC — pure REST)                                           | No key required                                                                                                |
-| Goldsky                                              | Euler_V2 (routed via an endpoint override, not the standard Graph gateway)        | —                                                                                                              |
-| `blue-api.morpho.org` GraphQL                        | Morpho (subgraph is the fallback, not primary)                                    | No key required                                                                                                |
-| Alchemy SDK                                          | Token metadata / contract resolution for the static yield/LST/restaking adapters  | `alchemy-api-key` secret; free tier 300M compute units/month                                                   |
-| Hyperliquid / Aster / Extended / Lighter native REST | On-chain-perp DEXes                                                               | Public endpoints, no key needed for instrument discovery (trading credentials are execution-service's concern) |
+| Source                                               | Used by                                                                          | Auth                                                                                                           |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| The Graph (`gateway.thegraph.com`)                   | Uniswap V2/V3/V4 + forks, Aave_V3, Compound_V3, Fluid, Radiant, Venus, Benqi     | `thegraph-api-key` secret; free tier 100k queries/month, paid $2/100k queries (billed in GRT on Arbitrum)      |
+| Balancer API v3                                      | Balancer                                                                         | No key required                                                                                                |
+| Curve REST API (`api.curve.finance`)                 | Curve (no subgraph, no RPC — pure REST)                                          | No key required                                                                                                |
+| Goldsky                                              | Euler_V2 (routed via an endpoint override, not the standard Graph gateway)       | —                                                                                                              |
+| `blue-api.morpho.org` GraphQL                        | Morpho (subgraph is the fallback, not primary)                                   | No key required                                                                                                |
+| Alchemy SDK                                          | Token metadata / contract resolution for the static yield/LST/restaking adapters | `alchemy-api-key` secret; free tier 300M compute units/month                                                   |
+| Hyperliquid / Aster / Extended / Lighter native REST | On-chain-perp DEXes                                                              | Public endpoints, no key needed for instrument discovery (trading credentials are execution-service's concern) |
 
 **Never commit real API keys to `.env`** — configure secret _names_ only (`THEGRAPH_SECRET_NAME`,
 `ALCHEMY_SECRET_NAME`), resolved via GCP Secret Manager at runtime.
