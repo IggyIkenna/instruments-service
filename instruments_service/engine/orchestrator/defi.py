@@ -65,7 +65,10 @@ _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX: dict[str, str] = {
     "camelot_v3": "CAMELOT_V3",
     "velodrome_v2": "VELODROME_V2",
     "trader_joe_v2": "TRADER_JOE_V2",
-    "gmx": "GMX",
+    # gmx removed from universe 2026-07-25 (operator ruling — perp_funding's
+    # entire captured history was a synthetic OI-imbalance proxy, not real
+    # funding-rate data; native subgraph query never worked for this venue).
+    # SSOT: unified-trading-pm/plans/active/defi_gmx_venue_removal_2026_07_25.md.
     "sushiswap": "SUSHISWAP",
     # Lending forks
     "spark": "SPARK",
