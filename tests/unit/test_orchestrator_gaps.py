@@ -1072,3 +1072,76 @@ class TestAllGroupExpansionNocrash:
         assert all(c == "sports" for c in bucket_calls), (
             f"_get_instruments_bucket must be called with 'sports' for ALL runs, got: {bucket_calls}"
         )
+
+
+class TestFreshnessPreflightStaleScopeEscape:
+    """Regression: a stale-not-missing entity under --sports-entity must stay
+    in scope, not silently fall back to the legacy unscoped fetch-everything
+    path.
+
+    Before the fix, _freshness_preflight() built missing_entities only from
+    the `missing` set, never `stale`. A stale=[FIXTURES]/missing=[] date
+    (the schema-version re-fetch trigger, not a first-time capture) therefore
+    produced missing_entities=[], which _fetch_sports_reference_block's
+    `entities_to_fetch=missing_entities if missing_entities else None`
+    resolves to None — the legacy unscoped "fetch every reference block"
+    path, bypassing --sports-entity entirely. Measured impact: a FIXTURES-
+    only backfill VM burned ~7000 shared, singleton-locked API-Football
+    calls fetching teams/stats/events/lineups/player_stats for one date.
+    See sports_freshness_preflight_stale_scope_escape_burns_shared_quota_2026_07_25.md.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stale_not_missing_entity_stays_in_scope(self) -> None:
+        """stale=[FIXTURES]/missing=[] under --sports-entity FIXTURES must
+        yield missing_entities == ["FIXTURES"], never an empty list (which
+        would resolve to the unscoped None fallback downstream)."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, ["FIXTURES"], []),
+            ),
+        ):
+            outcome = _freshness_preflight(
+                date="2020-06-06",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="FIXTURES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        assert outcome.missing_entities == ["FIXTURES"], (
+            f"stale-not-missing FIXTURES must contribute to missing_entities, got: {outcome.missing_entities}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stale_and_missing_entities_both_included_deduped(self) -> None:
+        """stale + missing entities are unioned (deduped) into missing_entities,
+        never just the missing half."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, ["FIXTURES"], ["FIXTURES"]),
+            ),
+        ):
+            outcome = _freshness_preflight(
+                date="2020-06-06",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="FIXTURES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        assert outcome.missing_entities == ["FIXTURES"]
