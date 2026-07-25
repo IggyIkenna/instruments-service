@@ -532,6 +532,12 @@ from instruments_service.engine.orchestrator.sports import (
 from instruments_service.engine.orchestrator.sports import (
     _status_from_af_response as _status_from_af_response,
 )
+from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+    _captured_fixture_ids_by_league as _captured_fixture_ids_by_league,
+)
+from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+    _read_captured_league_fixture_ids_for_entity as _read_captured_league_fixture_ids_for_entity,
+)
 from instruments_service.engine.orchestrator.sports_fixtures import (
     _build_fixture_league_map_from_gcs as _build_fixture_league_map_from_gcs,
 )
@@ -540,9 +546,6 @@ from instruments_service.engine.orchestrator.sports_fixtures import (
 )
 from instruments_service.engine.orchestrator.sports_fixtures import (
     _per_league_fixtures_data_unchanged as _per_league_fixtures_data_unchanged,
-)
-from instruments_service.engine.orchestrator.sports_fixtures import (
-    _read_existing_per_league_fixture_ids as _read_existing_per_league_fixture_ids,
 )
 from instruments_service.engine.orchestrator.sports_fixtures import (
     _read_fixture_ids_from_gcs as _read_fixture_ids_from_gcs,
@@ -762,6 +765,7 @@ __all__ = [
     "_cached_teams_df",
     "_canonical_league_id",
     "_canonical_manifest_venue_chain",
+    "_captured_fixture_ids_by_league",
     "_check_emission_policy",
     "_classify_adapter_failure",
     "_coerce_adapter_output",
@@ -798,7 +802,7 @@ __all__ = [
     "_normalize_wrapped_token",
     "_per_league_fixtures_data_unchanged",
     "_pipeline_mode_for_sports_data_type",
-    "_read_existing_per_league_fixture_ids",
+    "_read_captured_league_fixture_ids_for_entity",
     "_read_fixture_ids_from_gcs",
     "_read_per_league_entity_df",
     "_read_sfi_league_mapping",
