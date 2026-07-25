@@ -311,7 +311,6 @@ def _write_sports_fixture_venue(
     # returned zero for that league. Season window comes from UAC
     # get_league_fixture_calendar — only leagues whose season
     # actually covers this date are claimed empty.
-    #
     # Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15,
     # see plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
     # TWO bugs previously left a pre-existing stale FIXTURES attempted_failed
@@ -343,7 +342,9 @@ def _write_sports_fixture_venue(
     _expected_af_lids = {league.league_id for league in _orch.get_expected_leagues_for_source("api_football")}
     if league_filter:
         _expected_af_lids &= set(league_filter)
-    for _exp_lid in sorted(_expected_af_lids - _captured_lids):
+    if (_mlids := _orch._manifest_captured_fixture_leagues(bucket=manifest.catalogue_bucket, date=date)) is None:
+        return
+    for _exp_lid in sorted(_expected_af_lids - _captured_lids - _mlids):
         if not _orch.get_league_fixture_calendar(_exp_lid, date, date):
             manifest.record_empty(
                 row_key={
