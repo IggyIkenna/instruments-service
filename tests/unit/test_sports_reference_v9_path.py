@@ -566,6 +566,46 @@ class TestEnsureCanonicalFixturesForOverride:
         mock_create_adapter.assert_called_once()
         mock_adapter.get_fixtures_with_raw.assert_awaited_once_with("2026-07-04")
 
+    @pytest.mark.asyncio
+    async def test_old_path_hit_logs_greppable_legacy_marker(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Copying forward from the legacy flat path must log a distinct,
+        greppable LEGACY_FLAT_PATH_HIT marker — the instrumentation this
+        function's todo asked for (`sports_legacy_duplicate_triage_2026_07_22.md`
+        § Part 4 / `sports_satellite_ao_dispatch_batch2_2026_07_24.md`), since the
+        branch is a confirmed live reader (~478 of 28,100 post-floor rows have no
+        canonical twin at all), not a dead fallback that can be silently removed.
+        """
+        import logging
+
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _ensure_canonical_fixtures_for_override,
+        )
+
+        old_df = pd.DataFrame({"af_fixture_id": [1, 2], "timestamp": ["2026-07-04", "2026-07-04"]})
+        buf = io.BytesIO()
+        old_df.to_parquet(buf)
+
+        mock_old_blob = MagicMock()
+        mock_old_blob.exists.return_value = True  # old (legacy) path DOES exist
+        mock_storage = MagicMock()
+        mock_storage.bucket.return_value.blob.return_value = mock_old_blob
+        mock_storage.download_bytes.return_value = buf.getvalue()
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator._read_per_league_entity_df", return_value=None),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", MagicMock()),
+            patch("instruments_service.engine.orchestrator._write_fixtures_per_league", MagicMock()) as _write,
+        ):
+            await _ensure_canonical_fixtures_for_override(date="2026-07-04", bucket="bucket", api_key="key")
+
+        # Took the old-path-copy branch, not the API-fetch branch.
+        assert _write.call_args.kwargs.get("source_label") == "old-path-copy"
+        assert any("LEGACY_FLAT_PATH_HIT" in record.getMessage() for record in caplog.records), (
+            f"expected a LEGACY_FLAT_PATH_HIT warning, got: {[r.getMessage() for r in caplog.records]}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # _write_per_fixture_entities — out-of-universe unmapped rows
