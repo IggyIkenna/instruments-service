@@ -865,7 +865,15 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         ball_possession_pct, …).
 
         Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
-        response is retried rather than recorded as ``attempted_failed``.
+        response is retried rather than recorded as ``attempted_failed``. A
+        HARD failure (anything ``_fetch_and_extract`` re-raises immediately,
+        e.g. daily-quota exhaustion) is re-raised here too — the caller
+        (``_gather_per_fixture_rows._fetch_one``) is the ONLY place that
+        increments ``entity_failures``, so swallowing to ``[]`` would make a
+        real fetch failure indistinguishable from a genuine zero-row result
+        and get silently recorded ``empty_confirmed`` instead of
+        ``attempted_failed`` (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25).
         """
         url = f"{_BASE_URL}/fixtures/statistics"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -873,7 +881,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         # Each raw_rows item is one team-stats block; the normalizer returns
         # list[dict] of length 1 per team. Flatten across all teams.
@@ -894,7 +902,15 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         IDs + names, event_type/detail/comments).
 
         Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
-        response is retried rather than recorded as ``attempted_failed``.
+        response is retried rather than recorded as ``attempted_failed``. A
+        HARD failure (anything ``_fetch_and_extract`` re-raises immediately,
+        e.g. daily-quota exhaustion) is re-raised here too — the caller
+        (``_gather_per_fixture_rows._fetch_one``) is the ONLY place that
+        increments ``entity_failures``, so swallowing to ``[]`` would make a
+        real fetch failure indistinguishable from a genuine zero-row result
+        and get silently recorded ``empty_confirmed`` instead of
+        ``attempted_failed`` (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25).
         """
         url = f"{_BASE_URL}/fixtures/events"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -902,7 +918,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         # Each raw_rows item is one event; the normalizer returns list[dict]
         # of length 1. chain.from_iterable preserves caller symmetry with the
@@ -926,7 +942,15 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         is_starter).
 
         Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
-        response is retried rather than recorded as ``attempted_failed``.
+        response is retried rather than recorded as ``attempted_failed``. A
+        HARD failure (anything ``_fetch_and_extract`` re-raises immediately,
+        e.g. daily-quota exhaustion) is re-raised here too — the caller
+        (``_gather_per_fixture_rows._fetch_one``) is the ONLY place that
+        increments ``entity_failures``, so swallowing to ``[]`` would make a
+        real fetch failure indistinguishable from a genuine zero-row result
+        and get silently recorded ``empty_confirmed`` instead of
+        ``attempted_failed`` (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25).
         """
         url = f"{_BASE_URL}/fixtures/lineups"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -934,7 +958,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         # Each raw_rows item is one team's lineup block; the normalizer
         # returns list[dict] with ~18 rows (startXI + substitutes).
@@ -951,7 +975,15 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         Returns 33+ stat fields per player.
 
         Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
-        response is retried rather than recorded as ``attempted_failed``.
+        response is retried rather than recorded as ``attempted_failed``. A
+        HARD failure (anything ``_fetch_and_extract`` re-raises immediately,
+        e.g. daily-quota exhaustion) is re-raised here too — the caller
+        (``_gather_per_fixture_rows._fetch_one``) is the ONLY place that
+        increments ``entity_failures``, so swallowing to ``[]`` would make a
+        real fetch failure indistinguishable from a genuine zero-row result
+        and get silently recorded ``empty_confirmed`` instead of
+        ``attempted_failed`` (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25).
         """
         url = f"{_BASE_URL}/fixtures/players"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -959,7 +991,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         results: list[CanonicalPlayerPerformance] = []
         for row in raw_rows:
