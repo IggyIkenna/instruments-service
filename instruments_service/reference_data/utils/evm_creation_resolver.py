@@ -148,24 +148,34 @@ def _resolve_rpc_url(chain: str, alchemy_key: str | None = None) -> str | None:
             sc = get_secret_client()
             raw_key: str = str(sc.get_secret("alchemy-api-key") or "")
             key = raw_key.strip()
+        # Secret Manager client construction/access boundary: the ADC/credential
+        # exception surface (google.auth.exceptions.*) isn't a small closed set we can
+        # enumerate safely, and get_secret() already swallows the GCP-API-level errors
+        # internally (returns None) — the only local failure mode left, AttributeError
+        # from `.strip()` on that None, still needs the same "no key available" outcome.
+        # Audited 2026-07-25, left broad: instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
         except Exception:
             logger.warning("evm_creation_resolver: cannot get alchemy-api-key")
             return None
 
-    try:
-        from unified_api_contracts.registry.capability_declarations._defi import (
-            CHAIN_RPC_TEMPLATES,
-        )
-        from unified_api_contracts.registry.chain_env import MAINNET_CHAIN_IDS
+    from unified_api_contracts.registry.capability_declarations._defi import (
+        CHAIN_RPC_TEMPLATES,
+    )
+    from unified_api_contracts.registry.chain_env import MAINNET_CHAIN_IDS
 
-        chain_id = MAINNET_CHAIN_IDS.get(chain.upper())
-        if chain_id is None or chain_id == 0:
-            return None
-        template = CHAIN_RPC_TEMPLATES.get(chain_id)
-        if not template:
-            return None
+    chain_id = MAINNET_CHAIN_IDS.get(chain.upper())
+    if chain_id is None or chain_id == 0:
+        return None
+    template = CHAIN_RPC_TEMPLATES.get(chain_id)
+    if not template:
+        return None
+    try:
+        # Known failure mode: a CHAIN_RPC_TEMPLATES entry with an unexpected/extra
+        # format placeholder. The registry imports above are static in-workspace
+        # symbols (no optional/conditional import), so an ImportError there is a
+        # real bug that should propagate loudly, not be swallowed here.
         return template.format(api_key=key)
-    except Exception:
+    except KeyError:
         return None
 
 
@@ -174,11 +184,15 @@ def _resolve_rpc_url(chain: str, alchemy_key: str | None = None) -> str | None:
 
 def _get_gcs_bucket() -> str | None:
     """Resolve the DeFi instruments bucket for cache storage."""
-    try:
-        from unified_trading_library import get_bucket_name
+    from unified_trading_library import BucketNamingError, get_bucket_name
 
+    try:
         return get_bucket_name("instruments", "defi")
-    except Exception:
+    except BucketNamingError:
+        # "instruments" is a stable, always-registered domain — this only fires if
+        # that registration is ever removed/renamed, which is exactly the case
+        # BucketNamingError exists to surface. Narrowed (not bare) so it stays
+        # visible rather than being silently swallowed by `except Exception`.
         return None
 
 
@@ -240,6 +254,12 @@ def _save_cache(cache: dict[str, str]) -> None:
                     merged = {**existing, **cache} if existing is not None else cache
                 else:
                     merged = cache
+            # GCS read boundary: download_bytes doesn't pre-wrap the GCS SDK's exception
+            # surface (NotFound/network/auth — many types), and read-merge is
+            # best-effort by design (write still proceeds below with the un-merged
+            # `cache`, same outcome the outer except at the bottom of this function
+            # falls back to on a total GCS failure). Audited 2026-07-25, left broad:
+            # instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
             except Exception:
                 merged = cache
 

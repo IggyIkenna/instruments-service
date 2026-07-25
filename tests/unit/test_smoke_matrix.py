@@ -23,6 +23,21 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SMOKE_PATH = _REPO_ROOT / "scripts" / "smoke_matrix.py"
 
+# Shared fake GCP project id for the prediction-bucket resolution tests below.
+# NOT the real prod project id (the codex "Hardcoded prod project ID in tests"
+# gate flags that literal wherever it appears under tests/) — a single
+# project-id-SHAPED placeholder referenced from one constant instead of typed
+# inline at each call site. Audited 2026-07-25
+# (instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #2):
+# every one of the 5 sites that used to spell out the real project id is
+# either (a) `resolve_test_bucket("prediction", ...)`'s `project_id` arg, which
+# that function's prediction branch never reads at all (it delegates straight
+# to `resolve_bucket_name(kind="instruments-store-prediction", ...)` with no
+# project_id), or (b) a monkeypatched return value asserted only for
+# self-consistency — so this constant's actual value is never exercised as a
+# "real project-id-shaped string"; any placeholder is a safe drop-in.
+_TEST_PROJECT_ID = "test-project"
+
 
 def _load_smoke_module() -> ModuleType:
     """Import scripts/smoke_matrix.py as a module (scripts/ isn't packaged)."""
@@ -186,7 +201,7 @@ def test_resolve_test_bucket_prediction_uses_flat_kind(smoke: ModuleType, monkey
 
     def _fake_resolve(**kwargs: object) -> str:
         calls.append(kwargs)
-        return "instruments-store-pred-test-central-element-323112"
+        return f"instruments-store-pred-test-{_TEST_PROJECT_ID}"
 
     monkeypatch.setattr(smoke, "resolve_bucket_name", _fake_resolve)
     # get_bucket_name must NOT be reached for prediction — make it explode if it is.
@@ -195,8 +210,8 @@ def test_resolve_test_bucket_prediction_uses_flat_kind(smoke: ModuleType, monkey
         "get_bucket_name",
         lambda *a, **k: pytest.fail("prediction must not fall through to get_bucket_name string-mangle"),
     )
-    out = smoke.resolve_test_bucket("prediction", "central-element-323112")
-    assert out == "instruments-store-pred-test-central-element-323112"
+    out = smoke.resolve_test_bucket("prediction", _TEST_PROJECT_ID)
+    assert out == f"instruments-store-pred-test-{_TEST_PROJECT_ID}"
     assert "-prediction-test-" not in out  # the old 404 long form
     assert calls == [{"cloud": "gcp", "kind": "instruments-store-prediction", "deployment_env": "test"}]
 
@@ -284,11 +299,11 @@ def test_run_cell_prediction_passes_via_cqg_first_verify(
 ) -> None:
     """End-to-end run_cell for a prediction venue cell: the CQG-first write-verify + manifest
     row both resolve, so the cell passes (before the fix, the day-first prefix found 0)."""
-    monkeypatch.setattr(smoke, "get_project_id", lambda: "central-element-323112")
+    monkeypatch.setattr(smoke, "get_project_id", lambda: _TEST_PROJECT_ID)
     monkeypatch.setattr(
         smoke,
         "resolve_bucket_name",
-        lambda **kwargs: "instruments-store-pred-test-central-element-323112",
+        lambda **kwargs: f"instruments-store-pred-test-{_TEST_PROJECT_ID}",
     )
     cell = smoke.SmokeCell(asset_group="PREDICTION", venue="POLYMARKET", data_type="prediction")
     smoke_date = "2026-07-15"
