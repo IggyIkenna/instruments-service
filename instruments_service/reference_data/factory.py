@@ -234,7 +234,9 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "camelot_v3": "thegraph",
     "velodrome_v2": "thegraph",
     "trader_joe_v2": "thegraph",
-    "gmx": "thegraph",
+    # gmx removed 2026-07-25 (operator ruling — perp_funding history was a
+    # synthetic OI-imbalance proxy, not real funding-rate data). SSOT:
+    # unified-trading-pm/plans/active/defi_gmx_venue_removal_2026_07_25.md.
     "spark": "thegraph",
     "api_football": "api_football",
     "betfair": "betfair",
