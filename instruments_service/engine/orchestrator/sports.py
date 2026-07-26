@@ -459,8 +459,18 @@ def _should_skip_date_for_per_league(
         # No bucket = no index = nothing captured yet; never skip.
         return False
 
-    # ONE index read (TTL-cached) — NOT one per league.
-    index = _orch.read_availability_index(bucket)
+    # ONE index read per date — slim + date-filtered, not the full unfiltered
+    # corpus. The 2026-06-22 fix (see docstring above) already cut this from
+    # one read per LEAGUE to one read per DATE, but a long backfill VM still
+    # calls this once per date across thousands of dates; each full-corpus
+    # decode is ~6.5 GB for the sports bucket. Same fix pattern as
+    # ``mtds_backfill_vm_startup_oom_rc137_2026_07_14`` (~14.86 GiB -> ~5 MB
+    # for a single-day filter on a comparably large index).
+    index = _orch.read_availability_index(
+        bucket,
+        columns=["date", "service_name", "data_type", "league_id", "capture_status", "error_reason"],
+        filters=[("date", "==", date)],
+    )
     if index.empty:
         return False
 

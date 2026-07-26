@@ -184,6 +184,19 @@ _SPORTS_PER_LEAGUE_ENTITIES: frozenset[str] = frozenset(
     }
 )
 
+# Legacy/canonical alias pair for the same underlying per-league fixture-
+# schedule data. ``--sports-entity FIXTURES`` (the launcher's documented CLI
+# option, unchanged since before the FIXTURES->FIXTURES_SCHEDULE manifest
+# migration) restricts ``expected`` to the literal string "FIXTURES"
+# (`_build_expected_entities`'s entity-scope override below), which does NOT
+# match ``_SPORTS_PER_LEAGUE_ENTITIES`` (keyed on the ``FIXTURES_SCHEDULE``
+# constant) — so an entity-scoped FIXTURES run fell through to the coarse
+# ``check_shard_freshness`` path instead of a real per-league check. Tracked
+# for full canonicalisation (retire the "FIXTURES" literal) in
+# `scripts/restamp_fixtures_manifest_legacy_atom_2026_07_24.py`'s follow-up;
+# this alias set is the narrow fix needed now, not that migration.
+_FIXTURES_ENTITY_ALIASES: frozenset[str] = frozenset({"FIXTURES", FIXTURES_SCHEDULE})
+
 
 @dataclass
 class _FreshnessOutcome:
@@ -528,15 +541,44 @@ def _freshness_preflight(
     _freshness_max_age = 0.0 if date < _date_cutoff else 24.0
 
     _has_sports_per_league_in_scope = bool(set(expected) & _SPORTS_PER_LEAGUE_ENTITIES)
+    _is_fixtures_entity_scoped = bool(sports_entity_filter) and sports_entity_filter in _FIXTURES_ENTITY_ALIASES
 
-    if is_sports_run and _has_sports_per_league_in_scope:
+    if is_sports_run and _is_fixtures_entity_scoped:
+        # An entity-scoped FIXTURES run's `expected` is the literal CLI string
+        # ("FIXTURES"), which the coarse `check_shard_freshness` below matches
+        # against ANY league's row for the date — once one league has an old
+        # (possibly pre-migration) row, the WHOLE date is marked fresh and
+        # every other league's genuinely-missing FIXTURES_SCHEDULE row is
+        # never re-fetched. Reuse the same per-league completeness check every
+        # other api_football-sourced entity (STANDINGS/INJURIES/PREDICTIONS)
+        # already gets — see `_should_skip_date_for_per_league` — against the
+        # CURRENT curated write-gate universe, not just "does any row exist".
+        _fx_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+        _fx_expected_leagues = [lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")]
+        is_fresh = _orch._should_skip_date_for_per_league(
+            _fx_manifest,
+            date=date,
+            data_type=FIXTURES_SCHEDULE,
+            expected_canonical_leagues=_fx_expected_leagues,
+            force=redo_all,
+        )
+        stale: list[str] = []
+        missing: list[str] = [] if is_fresh else list(expected)
+        if not is_fresh:
+            _orch.logger.info(
+                "date=%s: per-league FIXTURES check found a genuine gap (not just any-league coarse match) — "
+                "will fetch (expected=%s)",
+                date,
+                expected,
+            )
+    elif is_sports_run and _has_sports_per_league_in_scope:
         # Defer to per-league checks in the entity handlers. Treat all
         # expected entities as "missing" at the date level so the
         # downstream per-entity dispatch fires; each handler does its
         # own per-league `_should_skip_date_for_per_league`.
         is_fresh = False
-        stale: list[str] = []
-        missing: list[str] = list(expected)
+        stale = []
+        missing = list(expected)
         _orch.logger.info(
             "date=%s: deferring pre-flight to per-league entity handlers (sports per-league mode; expected=%s)",
             date,
