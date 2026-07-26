@@ -94,10 +94,16 @@ def _write_manifest(storage_client: object, bucket_name: str, df: pd.DataFrame) 
 def _default_csv_path(asset_group: str, entity_type: str, entity_key: str) -> Path:
     day = datetime.now(UTC).strftime("%Y-%m-%d")
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    # Walk up from scripts/ → instruments-service/ → .tabs/7/ → workspace root.
-    ws_root = Path(__file__).parents[4]
-    pm_dir = ws_root / "unified-trading-pm"
-    if not pm_dir.is_dir():
+    # Path-B per-slot topology: scripts/ → instruments-service/ → .tabs/<slot>/ — the slot's OWN
+    # unified-trading-pm clone is a SIBLING of instruments-service under .tabs/<slot>/, never the
+    # read-only root clone at the top of the workspace. Try the slot-sibling path first (parents[2]);
+    # fall back to the old workspace-root guess (non-slotted checkouts), then alongside the script.
+    candidates = [
+        Path(__file__).parents[2] / "unified-trading-pm",  # .tabs/<slot>/unified-trading-pm
+        Path(__file__).parents[4] / "unified-trading-pm",  # non-slotted workspace root
+    ]
+    pm_dir = next((c for c in candidates if c.is_dir()), None)
+    if pm_dir is None:
         # Fallback: write alongside the script when workspace layout differs.
         pm_dir = Path(__file__).parent
     out_dir = pm_dir / "audits" / "entity_lifecycle" / "by_date" / f"day={day}"
