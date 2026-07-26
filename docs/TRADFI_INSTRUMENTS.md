@@ -430,19 +430,16 @@ pollution, not the real target state.
    leg, joined by `" - "` (e.g. `VX/F1:1:S - VX/G1:1:B`, or a 3-leg butterfly `VX/H1:1:B - VX/J1:2:S - VX/K1:1:B`)
    — into real `list[InstrumentLeg]` objects. Unlike CME's format, CBOE's raw_symbol carries an explicit side/ratio
    per leg, so no leg-count special-casing is needed.
-2. **`symbology.py::_build_leg_key`** (new, shared by both the CME and CBOE parsers) builds every leg's
-   `instrument_key` as `TYPE:SYMBOL` — human product name via `_resolve_product_root()` (`FUTURE:VIX`,
-   `FUTURE:SP500`, not `FUTURE:VX/F1` or `FUTURE:ESM6`), no redundant per-leg `VENUE:` prefix (the combo's own
-   top-level `VENUE:COMBO:...` already carries it once). This also fixes the 2 pre-existing gaps in the CME path.
-   **Deliberate deviation from "route through `unified_api_contracts...canonical_id_builder.build_leg()`"**: the
-   plan's "minimize the change surface" instruction asked for this, but UAC's real `build_leg()` unconditionally
-   embeds `venue` (via `build_instrument_id` → `_venue_token`, which raises if venue is empty) — there is no way to
-   call it and get a venue-less `TYPE:SYMBOL` leg key, which directly conflicts with the just-settled "drop the
-   redundant per-leg venue" decision this same fix implements. Extending UAC's `build_leg()` with an opt-in
-   venue-omission mode would be the fully-DRY answer, but that is a cross-repo change to `unified-api-contracts`
-   (its own quality gates + version bump + dependency re-sync) outside this fix's repo scope — `_build_leg_key`
-   stays a small, real, single, shared local helper instead (still "one implementation, not two independently-
-   evolving ones" within this repo) pending that as a separate, explicitly-tracked follow-up.
+2. **UAC's shared `build_leg()` with the new `include_venue=False` mode** (`unified_api_contracts.build_leg` —
+   `unified-api-contracts` follow-up, shipped) builds every leg's `instrument_key` as `TYPE:SYMBOL` — human product
+   name via `_resolve_product_root()` (`FUTURE:VIX`, `FUTURE:SP500`, not `FUTURE:VX/F1` or `FUTURE:ESM6`), no
+   redundant per-leg `VENUE:` prefix (the combo's own top-level `VENUE:COMBO:...` already carries it once). This
+   also fixes the 2 pre-existing gaps in the CME path. **Formerly** a local `symbology.py::_build_leg_key` helper
+   duplicated this logic (UAC's `build_leg()` unconditionally embedded `venue` at the time, with no way to get a
+   venue-less `TYPE:SYMBOL` leg key) — closed by extending `build_leg()` with an opt-in `include_venue: bool = True`
+   parameter (strips the leading `VENUE:` segment from the built id when `False`), so every TradFi combo leg
+   (CME calendar spreads, CBOE/VX spreads, and the ICE-populated leg path in `adapter.py`) now routes through the
+   one real shared builder instead of a local duplicate — the local `_build_leg_key` helper was deleted.
 3. **`symbology.py::_sanitize_symbol_for_key`** (new) replaces whitespace in the top-level combo's raw-symbol
    payload with a single `-` (e.g. `CBOE:COMBO:VX/F1:1:S-VX/G1:1:B`, not `...S - VX/G1...` with the whitespace-
    padded dash) — applied to EVERY Databento-sourced `instrument_key`, not just combos (see the whitespace finding
