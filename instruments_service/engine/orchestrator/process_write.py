@@ -530,6 +530,7 @@ def _write_tradfi_non_trading_day_entries(
             # source_string_for(pipeline_mode) — see
             # plans/active/issues/manifest_record_expected_empty_blank_source_2026_07_08.md.
             source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+            available_at=_nt_attempt_ts.isoformat(),
         )
         counts[venue] = 0
     _orch.logger.info(
@@ -574,6 +575,7 @@ def _pre_stamp_non_trading_tradfi(
             attempted_at=_nt_attempt_ts,
             pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
             source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+            available_at=_nt_attempt_ts.isoformat(),
         )
         counts[_ntv] = 0
     _orch.logger.info(
@@ -875,6 +877,7 @@ def _seed_expected_unattempted_for_target_universe(
                 attempted_at=_seed_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
                 source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+                available_at=_seed_ts.isoformat(),
             )
             _pre_launch_stamped += 1
             continue
@@ -884,6 +887,7 @@ def _seed_expected_unattempted_for_target_universe(
             row_key=row_key,
             attempted_at=_seed_ts,
             pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            available_at=_seed_ts.isoformat(),
         )
         _seeded += 1
     if _seeded:
