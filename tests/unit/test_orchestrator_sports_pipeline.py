@@ -907,6 +907,118 @@ class TestCF11PerFixtureEntityFailurePath:
 
 
 # ---------------------------------------------------------------------------
+# MVP-league filter — per-fixture enrichment must not follow the wider
+# FIXTURES curated-universe denominator (383 leagues) past MVP scope
+# (96 leagues) — see sports_reference.py's MVP-league filter block.
+# ---------------------------------------------------------------------------
+
+
+class TestMvpLeagueFilterForEnrichment:
+    """Per-fixture enrichment (stats/events/lineups/player-stats) must only
+    call api_football for fixtures in MVP/prediction-scope leagues, even when
+    ``fixture_ids_override`` (from URDI) spans the much wider curated-universe
+    FIXTURES denominator (383 leagues since the 2026-07-24 widening)."""
+
+    @pytest.mark.asyncio
+    async def test_non_mvp_league_fixture_excluded_from_enrichment(self) -> None:
+        """A fixture mapped to a non-MVP league must never reach the adapter's
+        per-fixture enrichment calls."""
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.return_value = []
+        mock_adapter.get_fixture_statistics.return_value = []
+        mock_adapter.get_fixture_events.return_value = []
+        mock_adapter.get_fixture_lineups.return_value = []
+        mock_adapter.get_fixture_player_stats.return_value = []
+
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+        # 1001 -> MVP league, 1002 -> non-MVP (widened curated-universe-only) league
+        fixture_league_map = {"1001": "EPL", "1002": "SOME_WIDENED_ONLY_LEAGUE"}
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch(
+                "instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs",
+                return_value=fixture_league_map,
+            ),
+            patch("instruments_service.engine.orchestrator.get_expected_leagues_for_source", return_value=[]),
+            patch(
+                "instruments_service.engine.orchestrator.sports_reference.get_mvp_football_league_ids",
+                return_value=frozenset({"EPL"}),
+            ),
+        ):
+            await _fetch_sports_reference_data(
+                "2026-03-22",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                fixture_ids_override=[1001, 1002],
+            )
+
+        # Only the MVP fixture (1001) may have been requested; the non-MVP
+        # fixture (1002) must never appear in any per-fixture adapter call.
+        for mock_method in (
+            mock_adapter.get_fixture_statistics,
+            mock_adapter.get_fixture_events,
+            mock_adapter.get_fixture_lineups,
+            mock_adapter.get_fixture_player_stats,
+        ):
+            called_fixture_ids = {call.args[0] for call in mock_method.call_args_list}
+            assert 1002 not in called_fixture_ids, (
+                f"{mock_method} was called for fixture 1002 (non-MVP league) — "
+                "the MVP-league filter should have excluded it"
+            )
+
+    @pytest.mark.asyncio
+    async def test_fixture_with_no_league_mapping_is_kept(self) -> None:
+        """A fixture with NO resolved league (mapping gap) must be KEPT, not
+        dropped — the filter can only prove a fixture is OUT of scope, never
+        assume it, from a missing mapping."""
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.return_value = []
+        mock_adapter.get_fixture_statistics.return_value = []
+        mock_adapter.get_fixture_events.return_value = []
+        mock_adapter.get_fixture_lineups.return_value = []
+        mock_adapter.get_fixture_player_stats.return_value = []
+
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            # No league mapping at all for fixture 2001
+            patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
+            patch("instruments_service.engine.orchestrator.get_expected_leagues_for_source", return_value=[]),
+            patch(
+                "instruments_service.engine.orchestrator.sports_reference.get_mvp_football_league_ids",
+                return_value=frozenset({"EPL"}),
+            ),
+        ):
+            await _fetch_sports_reference_data(
+                "2026-03-22",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                fixture_ids_override=[2001],
+            )
+
+        called_fixture_ids = {call.args[0] for call in mock_adapter.get_fixture_statistics.call_args_list}
+        assert 2001 in called_fixture_ids, "A fixture with no league mapping must be kept, not silently dropped"
+
+
+# ---------------------------------------------------------------------------
 # _canonical_league_id — CF-7 write-path canonicalisation
 # ---------------------------------------------------------------------------
 
