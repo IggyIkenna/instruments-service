@@ -499,16 +499,12 @@ def _write_tradfi_non_trading_day_entries(
     manifest_for_venue: Callable[[str], _orch.ManifestWriter],
 ) -> set[str]:
     """Write 0-count manifest entries for TRADFI venues that returned 0 instruments
-    because the date is a non-trading day (weekend/holiday).
-
-    Without this, those venues have no manifest entry and appear as permanent gaps
-    in the data status. ``manifest_for_venue`` allows the caller to route each
-    venue to the correct per-group manifest (required for ALL-group runs).
-
-    Returns the set of non-trading venue names that were stamped so the caller can
-    suppress regular parquet writes for them (see the per-venue loop in
-    ``_write_all_venues``).
-    """
+    because the date is a non-trading day (weekend/holiday) — without this those
+    venues have no manifest entry and appear as permanent gaps in the data status.
+    ``manifest_for_venue`` routes each venue to the correct per-group manifest
+    (required for ALL-group runs). Returns the set of non-trading venue names
+    stamped, so the caller can suppress regular parquet writes for them (see the
+    per-venue loop in ``_write_all_venues``)."""
     tradfi_empty = {v for v in (non_error_venues - set(counts.keys())) if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"}
     if not tradfi_empty:
         return set()
@@ -550,17 +546,12 @@ def _pre_stamp_non_trading_tradfi(
     counts: dict[str, int],
 ) -> set[str]:
     """Identify tradfi venues that are non-trading on ``date`` and pre-stamp
-    ``empty_confirmed`` for them before the per-venue write loop runs.
-
-    Scoped to venues that *actually ran* this call (present in ``non_error_venues``
-    or appearing in ``records``) so a CEFI-only call never stamps CME/NASDAQ.
-
-    FX is declared 24/7 — ``is_non_trading_day("FX", …)`` always returns ``False``
-    and FX will never appear in the returned set.
-
-    Returns the set of non-trading tradfi venues that were stamped (callers suppress
-    parquet writes for these venues to avoid writing look-back artefacts as captured).
-    """
+    ``empty_confirmed`` for them before the per-venue write loop runs. Scoped to
+    venues that *actually ran* this call (present in ``non_error_venues`` or
+    appearing in ``records``) so a CEFI-only call never stamps CME/NASDAQ. FX is
+    declared 24/7 (``is_non_trading_day("FX", …)`` always ``False``) so it never
+    appears in the returned set. Callers suppress parquet writes for the returned
+    venues to avoid writing look-back artefacts as captured."""
     _attempted = {v for v in (non_error_venues | {r.venue for r in records}) if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"}
     target_dt = _orch.date_type.fromisoformat(date)
     non_trading: set[str] = {v for v in _attempted if _orch.is_non_trading_day(v, target_dt)}
