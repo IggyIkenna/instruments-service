@@ -31,6 +31,7 @@ from unified_api_contracts import (
     CanonicalFuturesContract,
     FuturesContractLifecyclePhase,
     build_instrument_id,
+    build_leg,
 )
 from unified_api_contracts.internal import AssetClass, InstrumentLeg, InstrumentRecord, InstrumentType, OptionType
 
@@ -554,7 +555,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     if not leg_sym:
                         continue
                     side_raw = str(getattr(leg_row, "leg_side", "B") or "B").strip()
-                    side = "SELL" if side_raw in ("A", "S") else "BUY"
+                    side: Literal["BUY", "SELL"] = "SELL" if side_raw in ("A", "S") else "BUY"
                     ratio_num = int(getattr(leg_row, "leg_ratio_qty_numerator", 1) or 1)
                     ratio_den = int(getattr(leg_row, "leg_ratio_qty_denominator", 1) or 1)
                     ratio = max(ratio_num // ratio_den, 1) if ratio_den else ratio_num
@@ -566,8 +567,16 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     # Determine its type from instrument_class.
                     leg_class = str(getattr(leg_row, "leg_instrument_class", "F") or "F")
                     leg_type = _db._CLASS_TO_TYPE.get(leg_class, InstrumentType.FUTURE)
-                    leg_key = _db._build_leg_key(leg_type, leg_sym)
-                    legs.append(InstrumentLeg(instrument_key=leg_key, side=side, ratio=ratio))
+                    leg = build_leg(
+                        canonical_venue,
+                        leg_type,
+                        _db._resolve_product_root(leg_sym) or leg_sym,
+                        side=side,
+                        ratio=ratio,
+                        passthrough=True,
+                        include_venue=False,
+                    )
+                    legs.append(leg)
                 if legs:
                     combo_legs[str(sym)] = legs
 
