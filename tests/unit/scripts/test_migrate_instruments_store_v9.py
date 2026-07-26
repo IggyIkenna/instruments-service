@@ -451,6 +451,33 @@ def test_object_rel_nonsports_insert(rel: str, ag: str, expected: str) -> None:
     assert MOD.canonical_object_rel(expected, ag) == expected
 
 
+@pytest.mark.parametrize(
+    "rel,ag,expected",
+    [
+        (
+            "instrument_availability/by_date/day=2026-05-07/day=2026-05-07/venue=AAVEV3-ARBITRUM/instruments.parquet",
+            "defi",
+            "instrument_availability/by_date/day=2026-05-07/pipeline_mode=batch_instruments_service/asset_group=defi/venue=AAVEV3-ARBITRUM/instruments.parquet",
+        ),
+        (
+            "instrument_availability/by_date/day=2026-05-05/day=2026-05-05/venue=DERIBIT/instruments.parquet",
+            "cefi",
+            "instrument_availability/by_date/day=2026-05-05/pipeline_mode=batch_instruments_service/asset_group=cefi/venue=DERIBIT/instruments.parquet",
+        ),
+    ],
+)
+def test_object_rel_collapses_doubled_day(rel: str, ag: str, expected: str) -> None:
+    """Regression: defi_migration_audit_log_2026_07_24.md P1 — a pre-existing doubled ``day={D}/day={D}/``
+    segment must collapse to one BEFORE the pipeline_mode/asset_group insert, never straddle it
+    (``day=D/pipeline_mode=.../asset_group=.../day=D/venue=...`` is the bug this guards against)."""
+    out = MOD.canonical_object_rel(rel, ag)
+    assert out == expected
+    assert "day=" in out
+    assert out.count("day=") == 1  # never re-emit the doubled segment
+    # idempotent on the now-correct output
+    assert MOD.canonical_object_rel(expected, ag) == expected
+
+
 def test_object_rel_sports_preserves_entity_league() -> None:
     rel = "sports_reference/by_date/day=2024-09-11/entity=fixtures/league=EPL/fixtures.parquet"
     out = MOD.canonical_object_rel(rel, "sports")
