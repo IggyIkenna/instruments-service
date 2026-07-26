@@ -545,6 +545,36 @@ class TestShouldSkipDateForPerLeague:
         assert result is True
         assert mock_read.call_count == 1
 
+    def test_index_read_uses_slim_date_filtered_columns(self) -> None:
+        """Regression guard: the single read must be slim + date-filtered, not
+        the full unfiltered index -- a long backfill VM calls this once per
+        date across thousands of dates, and the full sports index is ~6.5 GB
+        decoded. Same fix pattern as mtds_backfill_vm_startup_oom_rc137_2026_07_14.
+        """
+        manifest = self._make_manifest()
+        df = self._index_df({"EPL": (CaptureStatus.CAPTURED.value, "")})
+        with patch(
+            "instruments_service.engine.orchestrator.read_availability_index",
+            return_value=df,
+        ) as mock_read:
+            _should_skip_date_for_per_league(
+                manifest,
+                date=self._DATE,
+                data_type=self._DATA_TYPE,
+                expected_canonical_leagues=["EPL"],
+                force=False,
+            )
+        _, kwargs = mock_read.call_args
+        assert kwargs.get("filters") == [("date", "==", self._DATE)]
+        assert kwargs.get("columns") is not None and set(kwargs["columns"]) >= {
+            "date",
+            "service_name",
+            "data_type",
+            "league_id",
+            "capture_status",
+            "error_reason",
+        }
+
 
 # ---------------------------------------------------------------------------
 # _extract_prediction_canonical_group
@@ -1145,3 +1175,117 @@ class TestFreshnessPreflightStaleScopeEscape:
             )
 
         assert outcome.missing_entities == ["FIXTURES"]
+
+
+class TestFreshnessPreflightFixturesEntityScopePerLeague:
+    """Regression: --sports-entity FIXTURES must use the real per-league
+    completeness check, not the coarse any-league-has-a-row match.
+
+    Before this fix, an entity-scoped FIXTURES run's `expected` was the
+    literal CLI string "FIXTURES" (not the FIXTURES_SCHEDULE constant), which
+    never matched `_SPORTS_PER_LEAGUE_ENTITIES` -- so it fell through to
+    `check_shard_freshness`, which marks the WHOLE date fresh once ANY single
+    league (even a frozen pre-migration legacy row) has a matching row. A
+    curated league added after that legacy row existed would never be
+    re-fetched. The fix routes this case through `_should_skip_date_for_per_league`
+    (the same per-league completeness check STANDINGS/INJURIES/PREDICTIONS
+    already use) against the current api_football expected-league universe.
+    See sports_freshness_preflight_stale_scope_escape_burns_shared_quota_2026_07_25.md.
+    """
+
+    @pytest.mark.asyncio
+    async def test_coarse_check_shard_freshness_is_never_called(self) -> None:
+        """check_shard_freshness must not be invoked for entity-scoped FIXTURES
+        -- confirms the per-league path is actually taken, not the coarse one."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=MagicMock()),
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[SimpleNamespace(league_id="EPL"), SimpleNamespace(league_id="LA_LIGA")],
+            ) as mock_get_expected,
+            patch(
+                "instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=True
+            ) as mock_per_league,
+            patch("instruments_service.engine.orchestrator.check_shard_freshness") as mock_coarse,
+        ):
+            outcome = _freshness_preflight(
+                date="2026-04-18",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="FIXTURES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        mock_coarse.assert_not_called()
+        mock_get_expected.assert_called_once_with("api_football")
+        mock_per_league.assert_called_once()
+        _, kwargs = mock_per_league.call_args
+        assert kwargs["date"] == "2026-04-18"
+        assert kwargs["expected_canonical_leagues"] == ["EPL", "LA_LIGA"]
+        assert kwargs["force"] is False
+        assert outcome.skip is True
+
+    @pytest.mark.asyncio
+    async def test_genuine_per_league_gap_is_not_skipped(self) -> None:
+        """A curated league missing from the manifest (per-league check
+        returns False) must NOT be coarse-skipped, and must stay in scope
+        (missing_entities == ["FIXTURES"], never empty -> never the unscoped
+        fetch-everything fallback)."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=MagicMock()),
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[SimpleNamespace(league_id="EPL"), SimpleNamespace(league_id="NEW_CURATED_LEAGUE")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.check_shard_freshness") as mock_coarse,
+        ):
+            outcome = _freshness_preflight(
+                date="2026-04-18",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="FIXTURES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        mock_coarse.assert_not_called()
+        assert outcome.skip is False
+        assert outcome.missing_entities == ["FIXTURES"]
+
+    @pytest.mark.asyncio
+    async def test_non_fixtures_entity_scope_still_uses_existing_defer_path(self) -> None:
+        """A real per-league entity OTHER than FIXTURES (e.g. INJURIES) must
+        keep using the existing unconditional-defer branch, unaffected by
+        this fix -- confirms the new branch is scoped tightly to the FIXTURES
+        alias set, not sports entity-scoping in general."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league") as mock_per_league,
+            patch("instruments_service.engine.orchestrator.check_shard_freshness") as mock_coarse,
+        ):
+            outcome = _freshness_preflight(
+                date="2026-04-18",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="INJURIES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        mock_coarse.assert_not_called()
+        mock_per_league.assert_not_called()
+        assert outcome.skip is False
+        assert outcome.missing_entities == ["INJURIES"]
