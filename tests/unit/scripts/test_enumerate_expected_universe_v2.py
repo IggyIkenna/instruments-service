@@ -2047,8 +2047,16 @@ def test_sports_v2_non_overridden_data_type_stays_uppercase(monkeypatch: pytest.
 def test_sports_manifest_data_type_helper_identity_except_odds_horizon_bucket() -> None:
     """Direct unit coverage of the translation helper itself."""
     assert enumerator_module._sports_manifest_data_type("ODDS_HORIZON_BUCKET") == "odds_horizon_bucket"
-    for dt in ("FIXTURES", "MATCHES", "XG", "PLAYER_VALUES", "WEATHER", "SFI_PROGRESSIVE_STATS", "lineups"):
+    for dt in ("MATCHES", "XG", "PLAYER_VALUES", "WEATHER", "SFI_PROGRESSIVE_STATS", "lineups"):
         assert enumerator_module._sports_manifest_data_type(dt) == dt
+
+
+def test_sports_manifest_data_type_helper_maps_fixtures_to_fixtures_schedule() -> None:
+    """Fixtures manifest atom migration (instruments-service@e19c5a7a) — the enumerator
+    must seed FIXTURES_SCHEDULE, not the legacy FIXTURES literal, or expected-universe
+    runs silently re-pollute the manifest with the retired atom (2026-07-26 finding,
+    issues/fixtures_manifest_legacy_backfill_2026_07_24.md)."""
+    assert enumerator_module._sports_manifest_data_type("FIXTURES") == "FIXTURES_SCHEDULE"
 
 
 # ---------------------------------------------------------------------------
