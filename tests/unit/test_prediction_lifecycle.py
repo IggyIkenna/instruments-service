@@ -353,3 +353,36 @@ class TestKalshiLifecycle:
 
         assert len(lifecycles) == 1
         assert lifecycles[0].market_id == "KXBTC-26MAR-90000"
+
+    def test_parse_market_populates_lifecycle_bounds_from_kalshi(self) -> None:
+        """Honest-absence gate (operator 2026-06-23): Kalshi InstrumentRecord
+        MUST carry available_from_datetime / available_to_datetime — the
+        same requirement already covered for Polymarket in
+        ``TestPolymarketLifecycle.test_parse_market_populates_lifecycle_bounds_from_gamma``.
+        """
+        adapter = KalshiReferenceDataAdapter()
+        market = self._kalshi_market()
+
+        record = adapter._parse_market(market, datetime(2026, 3, 26, tzinfo=UTC))  # pyright: ignore[reportPrivateUsage]
+
+        assert record is not None
+        assert record.available_from_datetime == datetime(2026, 3, 25, 0, 0, tzinfo=UTC)
+        btc_range_lag = CANONICAL_GROUP_METADATA[CanonicalQuestionGroup.BTC_PRICE_RANGE_DAILY].settlement_lag
+        assert record.available_to_datetime == datetime(2026, 3, 26, 0, 0, tzinfo=UTC) + btc_range_lag
+
+    def test_parse_market_floors_available_from_to_midnight_for_intraday_open_time(self) -> None:
+        """DP-PATH-006 regression: a market opening mid-day (Kalshi's live
+        ``/markets?status=open`` snapshot stamps ``open_time`` as an intraday
+        timestamp on the current day) must still floor
+        ``available_from_datetime`` to that day's midnight — the PRECISE
+        ``market_created_at`` stays on the MarketLifecycle for MTDS tick-gating,
+        but the InstrumentRecord bound governs day-grain universe membership
+        and must not exclude the market from its own listing day.
+        """
+        adapter = KalshiReferenceDataAdapter()
+        market = self._kalshi_market(open_time="2026-03-25T13:21:00Z")
+
+        record = adapter._parse_market(market, datetime(2026, 3, 26, tzinfo=UTC))  # pyright: ignore[reportPrivateUsage]
+
+        assert record is not None
+        assert record.available_from_datetime == datetime(2026, 3, 25, 0, 0, tzinfo=UTC)
