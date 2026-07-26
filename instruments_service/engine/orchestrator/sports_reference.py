@@ -25,12 +25,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from unified_api_contracts.sports import get_mvp_football_league_ids
-
 from instruments_service.engine.orchestrator.sports_reference_core import (
     _AfManifestHooks,
     _fetch_injuries,
     _fetch_teams_and_standings,
+)
+from instruments_service.engine.orchestrator.sports_reference_filters import (
+    _filter_fixtures_for_enrichment,
 )
 from instruments_service.engine.orchestrator.sports_reference_fixtures import (
     _resolve_fixture_ids,
@@ -180,59 +181,20 @@ async def _fetch_sports_reference_data(
         redo_all=redo_all,
     )
 
-    # MVP-league filter — runs BEFORE the per-fixture entity loop so per-fixture
-    # ENRICHMENT (stats/events/lineups/player-stats) never follows the much wider
-    # FIXTURES curated-universe denominator (get_expected_leagues_for_source,
-    # 383 leagues) out past MVP/prediction scope (96 leagues). Unconditional —
-    # applies to both the URDI-sourced fixture_ids_override path (spans all 383
-    # leagues since the 2026-07-24 widening) and the API-fallback path. A fixture
-    # with NO resolved league (mapping gap) is kept, not dropped — we can only
-    # prove a fixture is OUT of scope, never assume it, from a missing mapping.
-    if fixture_ids:
-        _mvp_leagues = get_mvp_football_league_ids()
-        _pre_mvp_filter = len(fixture_ids)
-        fixture_ids = [
-            fid for fid in fixture_ids if (_lg := _af_fid_to_league.get(str(fid))) is None or _lg in _mvp_leagues
-        ]
-        _mvp_skipped = _pre_mvp_filter - len(fixture_ids)
-        if _mvp_skipped:
-            _orch.logger.info(
-                "MVP-league filter applied for date=%s: %d → %d fixtures (%d skipped — non-MVP league, "
-                "enrichment out of scope)",
-                date,
-                _pre_mvp_filter,
-                len(fixture_ids),
-                _mvp_skipped,
-            )
-
-    # Recovery-mode fixture-id allowlist filter — runs BEFORE the per-fixture
-    # entity loop so we only call api_football for the targeted set. Lifts
-    # the per-fixture work from O(all_fixtures_on_day x 5 entities) to
-    # O(allowlist_intersection_with_day x N_requested_entities). Used for
-    # targeted recovery (e.g. Phase 2's truth-set audit produced a 39k
-    # fixture-id list; we feed it here so we don't re-burn ~560k api_football
-    # calls re-fetching already-captured fixtures' per-fixture entities).
-    if recovery_fixture_ids is not None and fixture_ids:
-        _pre_filter = len(fixture_ids)
-        fixture_ids = [fid for fid in fixture_ids if fid in recovery_fixture_ids]
-        _orch.logger.info(
-            "Recovery fixture-id filter applied for date=%s: %d → %d fixtures (%d skipped — not in allowlist)",
-            date,
-            _pre_filter,
-            len(fixture_ids),
-            _pre_filter - len(fixture_ids),
-        )
-        if not fixture_ids:
-            # Allowlist intersected to zero on this date — no per-fixture work
-            # to do. Return early so we don't write phantom empty manifest rows
-            # for entities we never attempted to fetch on this date.
-            _orch.logger.info(
-                "Recovery fixture-id filter: no targeted fixtures on date=%s — skipping per-fixture loop",
-                date,
-            )
-            # Cross-provider mapping tables can still be useful here, but skip
-            # them in recovery mode to keep the run cheap.
-            return counts
+    # MVP-league + recovery-allowlist filters — extracted to
+    # ``_filter_fixtures_for_enrichment`` (function-size ratchet; see its
+    # docstring for the MVP-scope and recovery-mode rationale). ``None``
+    # signals the recovery allowlist intersected to zero: no per-fixture work
+    # to do, so we return early (also skipping the cross-provider mapping
+    # writes below, same as the original inline behaviour).
+    fixture_ids = _filter_fixtures_for_enrichment(
+        fixture_ids=fixture_ids,
+        af_fid_to_league=_af_fid_to_league,
+        recovery_fixture_ids=recovery_fixture_ids,
+        date=date,
+    )
+    if fixture_ids is None:
+        return counts
 
     if fixture_ids:
         await _run_per_fixture_enrichment(
