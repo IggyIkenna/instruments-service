@@ -2406,9 +2406,13 @@ def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted
     assert len(catalog) == 1
     assert catalog[0].league_id == "EPL"
 
-    # League-grain present_set: league EPL FIXTURES captured on d2 only.
+    # League-grain present_set: league EPL FIXTURES_SCHEDULE captured on d2 only. The present_set
+    # key uses the MANIFEST atom ("FIXTURES_SCHEDULE"), not the UAC axis key ("FIXTURES") passed to
+    # data_types= below — _sports_manifest_data_type() translates via
+    # _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE (fixtures_manifest_legacy_backfill_2026_07_24.md, 2026-07-26
+    # finding: this override was missing, causing the enumerator to seed the legacy "FIXTURES" atom).
     present_cols = ["data_type", "league_id", "date"]
-    present_set = {("FIXTURES", "EPL", "2024-06-02")}
+    present_set = {("FIXTURES_SCHEDULE", "EPL", "2024-06-02")}
 
     rows = list(
         enumerator.enumerate_v2(
@@ -2427,7 +2431,10 @@ def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted
     assert by_date["2024-06-01"].league_id == "EPL"
     assert by_date["2024-06-01"].instrument_id == ""  # blanked → matches captured atom grain
     assert by_date["2024-06-01"].venue == ""
+    # Emitted rows carry the manifest atom (FIXTURES_SCHEDULE), not the raw UAC axis key.
+    assert by_date["2024-06-01"].data_type == "FIXTURES_SCHEDULE"
     assert by_date["2024-06-03"].capture_status == "expected_unattempted"
+    assert by_date["2024-06-03"].data_type == "FIXTURES_SCHEDULE"
 
 
 def test_sports_enumerator_emits_per_source_pre_coverage_and_skips_per_league(rollup: ModuleType) -> None:
