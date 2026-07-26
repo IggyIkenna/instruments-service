@@ -20,9 +20,9 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from unified_api_contracts import TRADFI_DATABENTO_INSTRUMENTS, VenueMapping
+from unified_api_contracts import TRADFI_DATABENTO_INSTRUMENTS, VenueMapping, build_leg
 from unified_api_contracts.internal import AssetClass, InstrumentLeg, InstrumentType
 from unified_api_contracts.registry import EXCHANGE_CODE_TO_NAME
 
@@ -53,7 +53,6 @@ __all__ = [
     "_VENUE_MAPPING",
     "_DATASET_TO_asset_group",
     "_EXCHANGE_CODE_asset_group",
-    "_build_leg_key",
     "_classify_bento_error",
     "_extract_underlying_from_symbol",
     "_parse_cboe_spread_legs",
@@ -225,29 +224,19 @@ def _sanitize_symbol_for_key(raw_symbol: str) -> str:
     return _WHITESPACE_RUN_RE.sub("-", collapsed).strip("-")
 
 
-def _build_leg_key(leg_type: InstrumentType, raw_symbol: str) -> str:
-    """Build a combo leg's ``instrument_key`` — ``TYPE:SYMBOL`` only, no venue.
-
-    The venue is already carried once at the combo's own top-level
-    ``VENUE:COMBO:...`` id, so repeating it per leg is redundant (2026-07-08
-    canonicalization decision — same "no redundant venue" call already made
-    for the position-id margin-marker ``@LIN``/``@INV`` suffix). ``SYMBOL`` is
-    the human-canonical product root resolved via :func:`_resolve_product_root`
-    (e.g. ``VIX``, ``SP500``) — falls back to the raw exchange ticker only when
-    no product-root mapping exists, so a leg never silently loses identity for
-    an unmapped root.
-    """
-    symbol = _resolve_product_root(raw_symbol) or raw_symbol
-    return f"{leg_type}:{symbol}"
-
-
 def _parse_cme_calendar_spread_legs(raw_symbol: str) -> list[InstrumentLeg] | None:
     """Parse CME exchange-defined calendar spread legs from raw_symbol.
 
     Format: ``ROOTMONTHYEAR-ROOTMONTHYEAR`` (e.g. ``ESM6-ESU6``, ``CLZ26-CLF27``).
     Returns [BUY front_leg, SELL back_leg] or None if unparseable. Leg keys are
     venue-free human names (``FUTURE:SP500``, not ``CME:FUTURE:ESM6``) via
-    :func:`_build_leg_key`.
+    UAC's shared :func:`build_leg` (``include_venue=False`` — the venue is
+    already carried once at the combo's own top-level ``VENUE:COMBO:...`` id,
+    so repeating it per leg is redundant, 2026-07-08 canonicalization
+    decision). ``SYMBOL`` is the human-canonical product root resolved via
+    :func:`_resolve_product_root` (e.g. ``VIX``, ``SP500``) — falls back to
+    the raw exchange ticker only when no product-root mapping exists, so a
+    leg never silently loses identity for an unmapped root.
     """
     parts = raw_symbol.split("-")
     if len(parts) != 2:
@@ -261,13 +250,29 @@ def _parse_cme_calendar_spread_legs(raw_symbol: str) -> list[InstrumentLeg] | No
     if not front_und or not back_und:
         return None
     return [
-        InstrumentLeg(instrument_key=_build_leg_key(InstrumentType.FUTURE, front), side="BUY", ratio=1),
-        InstrumentLeg(instrument_key=_build_leg_key(InstrumentType.FUTURE, back), side="SELL", ratio=1),
+        build_leg(
+            "CME",
+            InstrumentType.FUTURE,
+            _resolve_product_root(front) or front,
+            side="BUY",
+            ratio=1,
+            passthrough=True,
+            include_venue=False,
+        ),
+        build_leg(
+            "CME",
+            InstrumentType.FUTURE,
+            _resolve_product_root(back) or back,
+            side="SELL",
+            ratio=1,
+            passthrough=True,
+            include_venue=False,
+        ),
     ]
 
 
 # CBOE/XCBF.PITCH raw-symbol leg-side codes: "S" (sell) / "B" (buy).
-_CBOE_LEG_SIDE: dict[str, str] = {"S": "SELL", "B": "BUY"}
+_CBOE_LEG_SIDE: dict[str, Literal["BUY", "SELL"]] = {"S": "SELL", "B": "BUY"}
 
 
 def _parse_cboe_spread_legs(raw_symbol: str) -> list[InstrumentLeg] | None:
@@ -315,7 +320,17 @@ def _parse_cboe_spread_legs(raw_symbol: str) -> list[InstrumentLeg] | None:
             return None
         if not _db._extract_underlying_from_symbol(ticker):
             return None
-        legs.append(InstrumentLeg(instrument_key=_build_leg_key(InstrumentType.FUTURE, ticker), side=side, ratio=ratio))
+        legs.append(
+            build_leg(
+                "CBOE",
+                InstrumentType.FUTURE,
+                _resolve_product_root(ticker) or ticker,
+                side=side,
+                ratio=ratio,
+                passthrough=True,
+                include_venue=False,
+            )
+        )
     return legs
 
 
