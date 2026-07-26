@@ -123,7 +123,16 @@ def _plan_repair(tgt: pd.DataFrame) -> tuple[pd.DataFrame, int, int]:
 
 def _run_one(asset_group: str, env_short: str, apply: bool) -> int:
     client = get_storage_client(provider="gcp")
-    tgt_bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=asset_group)
+    # prediction has NO per-AG entry under kind="instruments-store" (flat
+    # kind="instruments-store-prediction" instead) -- same gap tracked as its
+    # own nice-to-have in instruments_store_cf_canonicalization_single_walk_
+    # 2026_07_24.md ("canonicalize_instruments_store_index.py can't resolve
+    # the prediction bucket"). Route around it here rather than block this
+    # repair on that separate fix landing.
+    if asset_group == "pred":
+        tgt_bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store-prediction", asset_group=None)
+    else:
+        tgt_bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=asset_group)
     if not tgt_bucket.startswith(f"instruments-store-{asset_group}-{env_short}"):
         logger.error(
             "[%s] Resolved target bucket %s is not the expected env-short shape. Refusing.", asset_group, tgt_bucket
