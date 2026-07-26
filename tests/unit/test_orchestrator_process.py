@@ -376,3 +376,39 @@ class TestWriteVenue:
         assert call_kwargs["data_type"] == "instruments"
         assert call_kwargs["asset_group"] == "defi"
         assert call_kwargs["chain"] == "ETHEREUM"
+
+    def test_write_venue_never_doubles_day_segment(self) -> None:
+        """Regression pin for defi_migration_audit_log_2026_07_24.md P1 (the
+        ``day={D}/day={D}/`` writer regression, ~2026-05-05..2026-05-22): the hive
+        sink prefix built by ``_instrument_availability_sink_for`` must carry
+        exactly ONE ``day=`` segment, and ``partition`` passed to the write gate
+        must stay empty (day never re-supplied through the partition dict — see
+        the alphabetical-sort-trap docstring on that helper). Structurally true
+        since operator R2 (2026-07-22, `a9be6ce9`); pinned here so a future
+        refactor can't silently reintroduce the doubling.
+        """
+        import pandas as pd
+
+        df = pd.DataFrame({"instrument_key": ["A"], "venue": ["AAVE_V3-ARBITRUM"]})
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        counts: dict[str, int] = {}
+
+        with (
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch("instruments_service.engine.orchestrator._WRITE_GATE") as mock_gate,
+            patch("instruments_service.engine.orchestrator.get_data_sink") as mock_get_data_sink,
+        ):
+            mock_get_data_sink.return_value = mock_sink
+            _write_venue("AAVE_V3-ARBITRUM", df, "2026-05-07", "test-bucket", mock_sink, counts, mock_sampler)
+
+        mock_get_data_sink.assert_called_once()
+        prefix = mock_get_data_sink.call_args.kwargs["prefix"]
+        assert prefix.count("day=") == 1, f"doubled day= segment in sink prefix: {prefix!r}"
+        assert prefix == (
+            "instrument_availability/by_date/day=2026-05-07/pipeline_mode=batch_instruments_service/"
+            "asset_group=defi/venue=AAVE_V3-ARBITRUM"
+        )
+        mock_gate.validate_and_write.assert_called_once()
+        assert mock_gate.validate_and_write.call_args.kwargs["partition"] == {}
