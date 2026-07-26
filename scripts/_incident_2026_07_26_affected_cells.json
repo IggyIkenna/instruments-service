@@ -1,0 +1,1682 @@
+[
+  {
+    "date": "2024-04-02",
+    "league_id": "SWISS_SUPER_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-02/pipeline_mode=batch_api_football/entity=player_stats/league=SWISS_SUPER_LEAGUE/player_stats.parquet",
+    "generation": 1785040374228488
+  },
+  {
+    "date": "2024-04-02",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-02/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040374198912
+  },
+  {
+    "date": "2024-03-10",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-10/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040374581946
+  },
+  {
+    "date": "2024-03-10",
+    "league_id": "SERIE_A",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-10/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_A/player_stats.parquet",
+    "generation": 1785040374567510
+  },
+  {
+    "date": "2024-03-10",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-10/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040374566219
+  },
+  {
+    "date": "2024-03-10",
+    "league_id": "J1_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-10/pipeline_mode=batch_api_football/entity=player_stats/league=J1_LEAGUE/player_stats.parquet",
+    "generation": 1785040374674493
+  },
+  {
+    "date": "2024-03-13",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-13/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040363046044
+  },
+  {
+    "date": "2024-03-11",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-11/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040363662120
+  },
+  {
+    "date": "2024-03-24",
+    "league_id": "LIGA_MX",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-24/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_MX/player_stats.parquet",
+    "generation": 1785040363672066
+  },
+  {
+    "date": "2024-03-30",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-30/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040374715003
+  },
+  {
+    "date": "2024-04-05",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-05/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040363247652
+  },
+  {
+    "date": "2024-03-12",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-12/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040374268469
+  },
+  {
+    "date": "2024-02-07",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-02-07/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040362569799
+  },
+  {
+    "date": "2024-05-12",
+    "league_id": "EPL",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-12/pipeline_mode=batch_api_football/entity=player_stats/league=EPL/player_stats.parquet",
+    "generation": 1785040367005221
+  },
+  {
+    "date": "2024-05-25",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-25/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040378265463
+  },
+  {
+    "date": "2024-05-19",
+    "league_id": "ENG_LEAGUE_TWO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-19/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_TWO/player_stats.parquet",
+    "generation": 1785040366892420
+  },
+  {
+    "date": "2024-05-10",
+    "league_id": "ENG_LEAGUE_TWO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-10/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_TWO/player_stats.parquet",
+    "generation": 1785040378196904
+  },
+  {
+    "date": "2024-05-25",
+    "league_id": "ELITESERIEN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-25/pipeline_mode=batch_api_football/entity=player_stats/league=ELITESERIEN/player_stats.parquet",
+    "generation": 1785040366860613
+  },
+  {
+    "date": "2024-05-23",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-23/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040378099569
+  },
+  {
+    "date": "2024-04-10",
+    "league_id": "ENG_LEAGUE_ONE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-10/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_ONE/player_stats.parquet",
+    "generation": 1785040369014192
+  },
+  {
+    "date": "2024-04-13",
+    "league_id": "ELITESERIEN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-13/pipeline_mode=batch_api_football/entity=player_stats/league=ELITESERIEN/player_stats.parquet",
+    "generation": 1785040369093057
+  },
+  {
+    "date": "2024-05-06",
+    "league_id": "ENG_LEAGUE_TWO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-06/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_TWO/player_stats.parquet",
+    "generation": 1785040369262534
+  },
+  {
+    "date": "2024-04-22",
+    "league_id": "LIGA_MX",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-22/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_MX/player_stats.parquet",
+    "generation": 1785040369518043
+  },
+  {
+    "date": "2024-04-22",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-22/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040369568148
+  },
+  {
+    "date": "2024-04-22",
+    "league_id": "ALLSVENSKAN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-22/pipeline_mode=batch_api_football/entity=player_stats/league=ALLSVENSKAN/player_stats.parquet",
+    "generation": 1785040369591737
+  },
+  {
+    "date": "2024-04-14",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-14/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040370428103
+  },
+  {
+    "date": "2024-04-26",
+    "league_id": "LA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-26/pipeline_mode=batch_api_football/entity=player_stats/league=LA_LIGA/player_stats.parquet",
+    "generation": 1785040370673124
+  },
+  {
+    "date": "2024-04-26",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-26/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040369197043
+  },
+  {
+    "date": "2024-05-03",
+    "league_id": "BUNDESLIGA_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-03/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA_2/player_stats.parquet",
+    "generation": 1785040370038241
+  },
+  {
+    "date": "2024-05-03",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-03/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040370096244
+  },
+  {
+    "date": "2024-04-15",
+    "league_id": "LIGA_MX",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-15/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_MX/player_stats.parquet",
+    "generation": 1785040369174376
+  },
+  {
+    "date": "2024-05-04",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-04/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040369880620
+  },
+  {
+    "date": "2024-05-04",
+    "league_id": "LIGA_3",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-04/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_3/player_stats.parquet",
+    "generation": 1785040369920019
+  },
+  {
+    "date": "2024-04-17",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-17/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040370826538
+  },
+  {
+    "date": "2024-04-22",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-22/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040369219608
+  },
+  {
+    "date": "2024-04-08",
+    "league_id": "LIGUE_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-08/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_2/player_stats.parquet",
+    "generation": 1785040370815893
+  },
+  {
+    "date": "2024-04-08",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-08/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040370813017
+  },
+  {
+    "date": "2024-04-08",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-08/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040370801582
+  },
+  {
+    "date": "2024-04-19",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-04-19/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040370852248
+  },
+  {
+    "date": "2024-06-20",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-06-20/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040373494224
+  },
+  {
+    "date": "2024-02-23",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-02-23/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040366036393
+  },
+  {
+    "date": "2024-03-04",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-04/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040364141301
+  },
+  {
+    "date": "2024-03-04",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-04/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040364200506
+  },
+  {
+    "date": "2024-03-04",
+    "league_id": "LA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-04/pipeline_mode=batch_api_football/entity=player_stats/league=LA_LIGA/player_stats.parquet",
+    "generation": 1785040364121496
+  },
+  {
+    "date": "2024-03-08",
+    "league_id": "SUPER_LIG",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-08/pipeline_mode=batch_api_football/entity=player_stats/league=SUPER_LIG/player_stats.parquet",
+    "generation": 1785040364870047
+  },
+  {
+    "date": "2024-03-08",
+    "league_id": "SERIE_A",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-08/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_A/player_stats.parquet",
+    "generation": 1785040365125952
+  },
+  {
+    "date": "2024-02-11",
+    "league_id": "SCOTTISH_PREMIERSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-02-11/pipeline_mode=batch_api_football/entity=player_stats/league=SCOTTISH_PREMIERSHIP/player_stats.parquet",
+    "generation": 1785040364468286
+  },
+  {
+    "date": "2024-03-08",
+    "league_id": "LIGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-08/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_1/player_stats.parquet",
+    "generation": 1785040364220486
+  },
+  {
+    "date": "2024-03-01",
+    "league_id": "LIGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-01/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_1/player_stats.parquet",
+    "generation": 1785040364943092
+  },
+  {
+    "date": "2024-02-23",
+    "league_id": "LIGA_3",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-02-23/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_3/player_stats.parquet",
+    "generation": 1785040366115110
+  },
+  {
+    "date": "2024-02-22",
+    "league_id": "SERIE_A",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-02-22/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_A/player_stats.parquet",
+    "generation": 1785040366164568
+  },
+  {
+    "date": "2024-07-26",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-07-26/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040371335856
+  },
+  {
+    "date": "2024-07-19",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-07-19/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040381735421
+  },
+  {
+    "date": "2024-07-20",
+    "league_id": "BRASILEIRAO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-07-20/pipeline_mode=batch_api_football/entity=player_stats/league=BRASILEIRAO/player_stats.parquet",
+    "generation": 1785040381968794
+  },
+  {
+    "date": "2024-03-31",
+    "league_id": "SCOTTISH_PREMIERSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-31/pipeline_mode=batch_api_football/entity=player_stats/league=SCOTTISH_PREMIERSHIP/player_stats.parquet",
+    "generation": 1785040374325424
+  },
+  {
+    "date": "2024-03-31",
+    "league_id": "LA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-31/pipeline_mode=batch_api_football/entity=player_stats/league=LA_LIGA/player_stats.parquet",
+    "generation": 1785040374357546
+  },
+  {
+    "date": "2024-03-31",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-03-31/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040374352088
+  },
+  {
+    "date": "2024-08-21",
+    "league_id": "ELITESERIEN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-21/pipeline_mode=batch_api_football/entity=player_stats/league=ELITESERIEN/player_stats.parquet",
+    "generation": 1785040385362040
+  },
+  {
+    "date": "2024-08-20",
+    "league_id": "ARGENTINA_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-20/pipeline_mode=batch_api_football/entity=player_stats/league=ARGENTINA_PRIMERA/player_stats.parquet",
+    "generation": 1785040374125488
+  },
+  {
+    "date": "2024-08-30",
+    "league_id": "SUPER_LIG",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-30/pipeline_mode=batch_api_football/entity=player_stats/league=SUPER_LIG/player_stats.parquet",
+    "generation": 1785040385619495
+  },
+  {
+    "date": "2024-08-30",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-30/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040385660145
+  },
+  {
+    "date": "2024-08-23",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-23/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040385893303
+  },
+  {
+    "date": "2024-08-30",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-30/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040385663580
+  },
+  {
+    "date": "2024-08-23",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-23/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040385981453
+  },
+  {
+    "date": "2024-08-12",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-12/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040386822935
+  },
+  {
+    "date": "2024-08-16",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-16/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040386704462
+  },
+  {
+    "date": "2024-08-16",
+    "league_id": "ARGENTINA_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-16/pipeline_mode=batch_api_football/entity=player_stats/league=ARGENTINA_PRIMERA/player_stats.parquet",
+    "generation": 1785040386618899
+  },
+  {
+    "date": "2024-09-02",
+    "league_id": "LIGA_MX",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-09-02/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_MX/player_stats.parquet",
+    "generation": 1785040386853179
+  },
+  {
+    "date": "2024-08-16",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-16/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040386769879
+  },
+  {
+    "date": "2024-08-18",
+    "league_id": "ENG_LEAGUE_TWO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-18/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_TWO/player_stats.parquet",
+    "generation": 1785040386465931
+  },
+  {
+    "date": "2024-08-18",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-18/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040386521443
+  },
+  {
+    "date": "2024-08-19",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-19/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040386950490
+  },
+  {
+    "date": "2024-08-19",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-08-19/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040386934600
+  },
+  {
+    "date": "2024-10-28",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-28/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040378869477
+  },
+  {
+    "date": "2024-10-18",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-18/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040379208451
+  },
+  {
+    "date": "2024-10-18",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-18/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040379245239
+  },
+  {
+    "date": "2024-10-21",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-21/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040379821390
+  },
+  {
+    "date": "2024-10-21",
+    "league_id": "EPL",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-21/pipeline_mode=batch_api_football/entity=player_stats/league=EPL/player_stats.parquet",
+    "generation": 1785040379866300
+  },
+  {
+    "date": "2024-10-25",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-25/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040380247857
+  },
+  {
+    "date": "2024-10-25",
+    "league_id": "SERIE_A",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-25/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_A/player_stats.parquet",
+    "generation": 1785040380254969
+  },
+  {
+    "date": "2024-10-22",
+    "league_id": "LIGUE_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-22/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_2/player_stats.parquet",
+    "generation": 1785040378563673
+  },
+  {
+    "date": "2024-10-20",
+    "league_id": "SCOTTISH_PREMIERSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-20/pipeline_mode=batch_api_football/entity=player_stats/league=SCOTTISH_PREMIERSHIP/player_stats.parquet",
+    "generation": 1785040378668920
+  },
+  {
+    "date": "2024-05-24",
+    "league_id": "LIGA_MX",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-24/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_MX/player_stats.parquet",
+    "generation": 1785040367241530
+  },
+  {
+    "date": "2024-05-24",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-24/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040367292687
+  },
+  {
+    "date": "2024-05-24",
+    "league_id": "ELITESERIEN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-05-24/pipeline_mode=batch_api_football/entity=player_stats/league=ELITESERIEN/player_stats.parquet",
+    "generation": 1785040367270874
+  },
+  {
+    "date": "2024-09-13",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-09-13/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040375175828
+  },
+  {
+    "date": "2024-09-20",
+    "league_id": "BUNDESLIGA_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-09-20/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA_2/player_stats.parquet",
+    "generation": 1785040376212335
+  },
+  {
+    "date": "2024-09-30",
+    "league_id": "EPL",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-09-30/pipeline_mode=batch_api_football/entity=player_stats/league=EPL/player_stats.parquet",
+    "generation": 1785040375232880
+  },
+  {
+    "date": "2024-09-30",
+    "league_id": "ALLSVENSKAN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-09-30/pipeline_mode=batch_api_football/entity=player_stats/league=ALLSVENSKAN/player_stats.parquet",
+    "generation": 1785040375329876
+  },
+  {
+    "date": "2024-10-04",
+    "league_id": "J1_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-04/pipeline_mode=batch_api_football/entity=player_stats/league=J1_LEAGUE/player_stats.parquet",
+    "generation": 1785040376513025
+  },
+  {
+    "date": "2024-10-04",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-04/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040376529353
+  },
+  {
+    "date": "2024-09-27",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-09-27/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040376630350
+  },
+  {
+    "date": "2024-09-27",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-09-27/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040376632109
+  },
+  {
+    "date": "2024-09-27",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-09-27/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040376708663
+  },
+  {
+    "date": "2025-01-14",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-14/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040392581501
+  },
+  {
+    "date": "2025-01-05",
+    "league_id": "ENG_LEAGUE_TWO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-05/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_TWO/player_stats.parquet",
+    "generation": 1785040380620754
+  },
+  {
+    "date": "2025-01-17",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-17/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040380956845
+  },
+  {
+    "date": "2025-01-17",
+    "league_id": "BUNDESLIGA_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-17/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA_2/player_stats.parquet",
+    "generation": 1785040381000621
+  },
+  {
+    "date": "2025-01-17",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-17/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040380995685
+  },
+  {
+    "date": "2025-01-17",
+    "league_id": "LIGA_3",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-17/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_3/player_stats.parquet",
+    "generation": 1785040381006254
+  },
+  {
+    "date": "2025-01-17",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-17/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040381047746
+  },
+  {
+    "date": "2025-01-24",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-24/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040381063235
+  },
+  {
+    "date": "2025-01-24",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-24/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040381085196
+  },
+  {
+    "date": "2025-01-24",
+    "league_id": "LIGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-24/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_1/player_stats.parquet",
+    "generation": 1785040381075312
+  },
+  {
+    "date": "2025-01-24",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-24/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040381118386
+  },
+  {
+    "date": "2025-01-24",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-24/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040381061674
+  },
+  {
+    "date": "2025-01-10",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-10/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040381488027
+  },
+  {
+    "date": "2025-01-10",
+    "league_id": "EREDIVISIE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-10/pipeline_mode=batch_api_football/entity=player_stats/league=EREDIVISIE/player_stats.parquet",
+    "generation": 1785040381535940
+  },
+  {
+    "date": "2025-01-19",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-19/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040380440201
+  },
+  {
+    "date": "2024-07-30",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-07-30/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040382069796
+  },
+  {
+    "date": "2024-11-24",
+    "league_id": "ALLSVENSKAN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-24/pipeline_mode=batch_api_football/entity=player_stats/league=ALLSVENSKAN/player_stats.parquet",
+    "generation": 1785040377891504
+  },
+  {
+    "date": "2024-11-07",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-07/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040389857964
+  },
+  {
+    "date": "2024-11-11",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-11/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040390191408
+  },
+  {
+    "date": "2024-11-29",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-29/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040377627648
+  },
+  {
+    "date": "2024-11-29",
+    "league_id": "SUPER_LIG",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-29/pipeline_mode=batch_api_football/entity=player_stats/league=SUPER_LIG/player_stats.parquet",
+    "generation": 1785040377617821
+  },
+  {
+    "date": "2024-11-29",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-29/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040377635664
+  },
+  {
+    "date": "2024-11-29",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-29/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040377743674
+  },
+  {
+    "date": "2024-11-24",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-24/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040389765971
+  },
+  {
+    "date": "2024-12-03",
+    "league_id": "LIGUE_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-03/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_2/player_stats.parquet",
+    "generation": 1785040377946486
+  },
+  {
+    "date": "2024-11-17",
+    "league_id": "J1_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-17/pipeline_mode=batch_api_football/entity=player_stats/league=J1_LEAGUE/player_stats.parquet",
+    "generation": 1785040378020912
+  },
+  {
+    "date": "2024-11-22",
+    "league_id": "J1_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-22/pipeline_mode=batch_api_football/entity=player_stats/league=J1_LEAGUE/player_stats.parquet",
+    "generation": 1785040389619931
+  },
+  {
+    "date": "2024-11-04",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-04/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040390092399
+  },
+  {
+    "date": "2024-11-04",
+    "league_id": "ALLSVENSKAN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-04/pipeline_mode=batch_api_football/entity=player_stats/league=ALLSVENSKAN/player_stats.parquet",
+    "generation": 1785040390127926
+  },
+  {
+    "date": "2024-11-04",
+    "league_id": "LA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-04/pipeline_mode=batch_api_football/entity=player_stats/league=LA_LIGA/player_stats.parquet",
+    "generation": 1785040390133937
+  },
+  {
+    "date": "2024-11-04",
+    "league_id": "EPL",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-04/pipeline_mode=batch_api_football/entity=player_stats/league=EPL/player_stats.parquet",
+    "generation": 1785040390137693
+  },
+  {
+    "date": "2024-11-10",
+    "league_id": "MLS",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-10/pipeline_mode=batch_api_football/entity=player_stats/league=MLS/player_stats.parquet",
+    "generation": 1785040377100485
+  },
+  {
+    "date": "2024-11-25",
+    "league_id": "EPL",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-25/pipeline_mode=batch_api_football/entity=player_stats/league=EPL/player_stats.parquet",
+    "generation": 1785040377854384
+  },
+  {
+    "date": "2025-03-28",
+    "league_id": "J1_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-03-28/pipeline_mode=batch_api_football/entity=player_stats/league=J1_LEAGUE/player_stats.parquet",
+    "generation": 1785040384060484
+  },
+  {
+    "date": "2025-03-28",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-03-28/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040384083832
+  },
+  {
+    "date": "2025-03-28",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-03-28/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040384035670
+  },
+  {
+    "date": "2025-03-28",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-03-28/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040384061415
+  },
+  {
+    "date": "2025-04-01",
+    "league_id": "EREDIVISIE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-01/pipeline_mode=batch_api_football/entity=player_stats/league=EREDIVISIE/player_stats.parquet",
+    "generation": 1785040395098866
+  },
+  {
+    "date": "2025-03-14",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-03-14/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040383655662
+  },
+  {
+    "date": "2025-03-14",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-03-14/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040383628404
+  },
+  {
+    "date": "2025-03-16",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-03-16/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040384695838
+  },
+  {
+    "date": "2025-04-02",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-02/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040383720858
+  },
+  {
+    "date": "2025-04-21",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-21/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040398377632
+  },
+  {
+    "date": "2025-04-21",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-21/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040398407074
+  },
+  {
+    "date": "2025-04-09",
+    "league_id": "ELITESERIEN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-09/pipeline_mode=batch_api_football/entity=player_stats/league=ELITESERIEN/player_stats.parquet",
+    "generation": 1785040399996736
+  },
+  {
+    "date": "2025-04-09",
+    "league_id": "J1_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-09/pipeline_mode=batch_api_football/entity=player_stats/league=J1_LEAGUE/player_stats.parquet",
+    "generation": 1785040399993529
+  },
+  {
+    "date": "2024-06-25",
+    "league_id": "K_LEAGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-06-25/pipeline_mode=batch_api_football/entity=player_stats/league=K_LEAGUE_1/player_stats.parquet",
+    "generation": 1785040373753067
+  },
+  {
+    "date": "2024-12-18",
+    "league_id": "LIGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-18/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_1/player_stats.parquet",
+    "generation": 1785040383244911
+  },
+  {
+    "date": "2024-12-04",
+    "league_id": "ARGENTINA_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-04/pipeline_mode=batch_api_football/entity=player_stats/league=ARGENTINA_PRIMERA/player_stats.parquet",
+    "generation": 1785040382615598
+  },
+  {
+    "date": "2024-12-20",
+    "league_id": "BUNDESLIGA_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-20/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA_2/player_stats.parquet",
+    "generation": 1785040382928460
+  },
+  {
+    "date": "2024-12-06",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-06/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040382312022
+  },
+  {
+    "date": "2024-12-06",
+    "league_id": "LA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-06/pipeline_mode=batch_api_football/entity=player_stats/league=LA_LIGA/player_stats.parquet",
+    "generation": 1785040382311478
+  },
+  {
+    "date": "2024-12-06",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-06/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040382582974
+  },
+  {
+    "date": "2024-12-06",
+    "league_id": "EREDIVISIE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-06/pipeline_mode=batch_api_football/entity=player_stats/league=EREDIVISIE/player_stats.parquet",
+    "generation": 1785040382371105
+  },
+  {
+    "date": "2024-12-06",
+    "league_id": "LIGA_3",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-06/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_3/player_stats.parquet",
+    "generation": 1785040382536609
+  },
+  {
+    "date": "2024-12-13",
+    "league_id": "LIGA_3",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-13/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_3/player_stats.parquet",
+    "generation": 1785040382157326
+  },
+  {
+    "date": "2024-12-09",
+    "league_id": "ENG_LEAGUE_ONE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-12-09/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_ONE/player_stats.parquet",
+    "generation": 1785040382420419
+  },
+  {
+    "date": "2025-02-10",
+    "league_id": "LA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-10/pipeline_mode=batch_api_football/entity=player_stats/league=LA_LIGA/player_stats.parquet",
+    "generation": 1785040387362011
+  },
+  {
+    "date": "2025-02-14",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-14/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040388913824
+  },
+  {
+    "date": "2025-02-14",
+    "league_id": "EREDIVISIE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-14/pipeline_mode=batch_api_football/entity=player_stats/league=EREDIVISIE/player_stats.parquet",
+    "generation": 1785040388899989
+  },
+  {
+    "date": "2025-02-27",
+    "league_id": "ENG_LEAGUE_TWO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-27/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_TWO/player_stats.parquet",
+    "generation": 1785040388885224
+  },
+  {
+    "date": "2025-02-05",
+    "league_id": "SCOTTISH_PREMIERSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-05/pipeline_mode=batch_api_football/entity=player_stats/league=SCOTTISH_PREMIERSHIP/player_stats.parquet",
+    "generation": 1785040387868036
+  },
+  {
+    "date": "2025-02-05",
+    "league_id": "ARGENTINA_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-05/pipeline_mode=batch_api_football/entity=player_stats/league=ARGENTINA_PRIMERA/player_stats.parquet",
+    "generation": 1785040387915356
+  },
+  {
+    "date": "2025-03-03",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-03-03/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040388726911
+  },
+  {
+    "date": "2025-03-03",
+    "league_id": "LIGUE_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-03-03/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_2/player_stats.parquet",
+    "generation": 1785040388776483
+  },
+  {
+    "date": "2025-02-24",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-24/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040389195120
+  },
+  {
+    "date": "2025-02-24",
+    "league_id": "SERIE_A",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-24/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_A/player_stats.parquet",
+    "generation": 1785040389172263
+  },
+  {
+    "date": "2025-02-28",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-28/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040387129893
+  },
+  {
+    "date": "2025-02-28",
+    "league_id": "LIGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-28/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_1/player_stats.parquet",
+    "generation": 1785040387155034
+  },
+  {
+    "date": "2025-02-28",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-28/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040387226717
+  },
+  {
+    "date": "2025-02-25",
+    "league_id": "ARGENTINA_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-25/pipeline_mode=batch_api_football/entity=player_stats/league=ARGENTINA_PRIMERA/player_stats.parquet",
+    "generation": 1785040387410428
+  },
+  {
+    "date": "2024-11-01",
+    "league_id": "LA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-01/pipeline_mode=batch_api_football/entity=player_stats/league=LA_LIGA/player_stats.parquet",
+    "generation": 1785040379382496
+  },
+  {
+    "date": "2024-11-01",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-01/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040379428875
+  },
+  {
+    "date": "2024-11-01",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-11-01/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040379447868
+  },
+  {
+    "date": "2024-10-12",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-12/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040379663697
+  },
+  {
+    "date": "2024-10-23",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2024-10-23/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040380048400
+  },
+  {
+    "date": "2025-05-04",
+    "league_id": "SCOTTISH_PREMIERSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-04/pipeline_mode=batch_api_football/entity=player_stats/league=SCOTTISH_PREMIERSHIP/player_stats.parquet",
+    "generation": 1785040390656201
+  },
+  {
+    "date": "2025-05-24",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-24/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040390817319
+  },
+  {
+    "date": "2025-05-24",
+    "league_id": "SWISS_SUPER_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-24/pipeline_mode=batch_api_football/entity=player_stats/league=SWISS_SUPER_LEAGUE/player_stats.parquet",
+    "generation": 1785040390825470
+  },
+  {
+    "date": "2025-05-23",
+    "league_id": "BUNDESLIGA_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-23/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA_2/player_stats.parquet",
+    "generation": 1785040391596011
+  },
+  {
+    "date": "2025-05-15",
+    "league_id": "SWISS_SUPER_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-15/pipeline_mode=batch_api_football/entity=player_stats/league=SWISS_SUPER_LEAGUE/player_stats.parquet",
+    "generation": 1785040391769407
+  },
+  {
+    "date": "2025-05-12",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-12/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040391654948
+  },
+  {
+    "date": "2025-05-11",
+    "league_id": "ENG_LEAGUE_TWO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-11/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_TWO/player_stats.parquet",
+    "generation": 1785040390381154
+  },
+  {
+    "date": "2025-05-03",
+    "league_id": "ELITESERIEN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-03/pipeline_mode=batch_api_football/entity=player_stats/league=ELITESERIEN/player_stats.parquet",
+    "generation": 1785040391308502
+  },
+  {
+    "date": "2025-05-03",
+    "league_id": "LIGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-03/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_1/player_stats.parquet",
+    "generation": 1785040391362422
+  },
+  {
+    "date": "2025-06-01",
+    "league_id": "PRIMEIRA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-06-01/pipeline_mode=batch_api_football/entity=player_stats/league=PRIMEIRA_LIGA/player_stats.parquet",
+    "generation": 1785040391883333
+  },
+  {
+    "date": "2025-06-01",
+    "league_id": "ARGENTINA_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-06-01/pipeline_mode=batch_api_football/entity=player_stats/league=ARGENTINA_PRIMERA/player_stats.parquet",
+    "generation": 1785040391910791
+  },
+  {
+    "date": "2025-06-01",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-06-01/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040391923625
+  },
+  {
+    "date": "2025-05-07",
+    "league_id": "LIGA_3",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-07/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_3/player_stats.parquet",
+    "generation": 1785040392048890
+  },
+  {
+    "date": "2025-06-01",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-06-01/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040391936736
+  },
+  {
+    "date": "2025-05-16",
+    "league_id": "LIGA_MX",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-16/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_MX/player_stats.parquet",
+    "generation": 1785040391712381
+  },
+  {
+    "date": "2025-05-10",
+    "league_id": "ENG_LEAGUE_ONE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-05-10/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_ONE/player_stats.parquet",
+    "generation": 1785040392164314
+  },
+  {
+    "date": "2025-06-07",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-06-07/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040392370387
+  },
+  {
+    "date": "2025-01-27",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-27/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040381367721
+  },
+  {
+    "date": "2025-01-12",
+    "league_id": "SCOTTISH_PREMIERSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-01-12/pipeline_mode=batch_api_football/entity=player_stats/league=SCOTTISH_PREMIERSHIP/player_stats.parquet",
+    "generation": 1785040380891550
+  },
+  {
+    "date": "2025-07-12",
+    "league_id": "K_LEAGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-07-12/pipeline_mode=batch_api_football/entity=player_stats/league=K_LEAGUE_1/player_stats.parquet",
+    "generation": 1785040393075703
+  },
+  {
+    "date": "2025-07-25",
+    "league_id": "ARGENTINA_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-07-25/pipeline_mode=batch_api_football/entity=player_stats/league=ARGENTINA_PRIMERA/player_stats.parquet",
+    "generation": 1785040393661963
+  },
+  {
+    "date": "2025-08-24",
+    "league_id": "SCOTTISH_PREMIERSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-24/pipeline_mode=batch_api_football/entity=player_stats/league=SCOTTISH_PREMIERSHIP/player_stats.parquet",
+    "generation": 1785040396764356
+  },
+  {
+    "date": "2025-08-24",
+    "league_id": "SUPER_LIG",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-24/pipeline_mode=batch_api_football/entity=player_stats/league=SUPER_LIG/player_stats.parquet",
+    "generation": 1785040396760977
+  },
+  {
+    "date": "2025-08-11",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-11/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040397257206
+  },
+  {
+    "date": "2025-08-11",
+    "league_id": "BRASILEIRAO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-11/pipeline_mode=batch_api_football/entity=player_stats/league=BRASILEIRAO/player_stats.parquet",
+    "generation": 1785040397172479
+  },
+  {
+    "date": "2025-08-20",
+    "league_id": "ENG_LEAGUE_TWO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-20/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_TWO/player_stats.parquet",
+    "generation": 1785040395616696
+  },
+  {
+    "date": "2025-08-22",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-22/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040395626582
+  },
+  {
+    "date": "2025-08-17",
+    "league_id": "J1_LEAGUE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-17/pipeline_mode=batch_api_football/entity=player_stats/league=J1_LEAGUE/player_stats.parquet",
+    "generation": 1785040395906775
+  },
+  {
+    "date": "2025-08-17",
+    "league_id": "ELITESERIEN",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-17/pipeline_mode=batch_api_football/entity=player_stats/league=ELITESERIEN/player_stats.parquet",
+    "generation": 1785040395948698
+  },
+  {
+    "date": "2025-04-17",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-17/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040398910531
+  },
+  {
+    "date": "2025-04-08",
+    "league_id": "ENG_LEAGUE_TWO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-08/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_LEAGUE_TWO/player_stats.parquet",
+    "generation": 1785040399550313
+  },
+  {
+    "date": "2025-04-07",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-07/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040400485754
+  },
+  {
+    "date": "2025-04-07",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-07/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040400523547
+  },
+  {
+    "date": "2025-04-25",
+    "league_id": "CHILE_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-25/pipeline_mode=batch_api_football/entity=player_stats/league=CHILE_PRIMERA/player_stats.parquet",
+    "generation": 1785040399499974
+  },
+  {
+    "date": "2025-04-04",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-04/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040400260742
+  },
+  {
+    "date": "2025-04-28",
+    "league_id": "MLS",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-28/pipeline_mode=batch_api_football/entity=player_stats/league=MLS/player_stats.parquet",
+    "generation": 1785040400267924
+  },
+  {
+    "date": "2025-04-28",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-28/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040400321257
+  },
+  {
+    "date": "2025-04-14",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-14/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040400585459
+  },
+  {
+    "date": "2025-04-16",
+    "league_id": "EPL",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-04-16/pipeline_mode=batch_api_football/entity=player_stats/league=EPL/player_stats.parquet",
+    "generation": 1785040398971192
+  },
+  {
+    "date": "2025-02-07",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-07/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040388542559
+  },
+  {
+    "date": "2025-02-07",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-07/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040388513660
+  },
+  {
+    "date": "2025-02-19",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-02-19/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040388576347
+  },
+  {
+    "date": "2025-12-02",
+    "league_id": "BRASILEIRAO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-02/pipeline_mode=batch_api_football/entity=player_stats/league=BRASILEIRAO/player_stats.parquet",
+    "generation": 1785040402866190
+  },
+  {
+    "date": "2025-12-02",
+    "league_id": "EREDIVISIE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-02/pipeline_mode=batch_api_football/entity=player_stats/league=EREDIVISIE/player_stats.parquet",
+    "generation": 1785040402874215
+  },
+  {
+    "date": "2025-12-05",
+    "league_id": "DANISH_SUPERLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-05/pipeline_mode=batch_api_football/entity=player_stats/league=DANISH_SUPERLIGA/player_stats.parquet",
+    "generation": 1785040404133521
+  },
+  {
+    "date": "2025-12-05",
+    "league_id": "LA_LIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-05/pipeline_mode=batch_api_football/entity=player_stats/league=LA_LIGA/player_stats.parquet",
+    "generation": 1785040404108757
+  },
+  {
+    "date": "2025-12-05",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-05/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040404132528
+  },
+  {
+    "date": "2025-12-05",
+    "league_id": "EREDIVISIE",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-05/pipeline_mode=batch_api_football/entity=player_stats/league=EREDIVISIE/player_stats.parquet",
+    "generation": 1785040404212099
+  },
+  {
+    "date": "2025-12-04",
+    "league_id": "EPL",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-04/pipeline_mode=batch_api_football/entity=player_stats/league=EPL/player_stats.parquet",
+    "generation": 1785040402763343
+  },
+  {
+    "date": "2025-12-12",
+    "league_id": "BUNDESLIGA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-12/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA/player_stats.parquet",
+    "generation": 1785040402895263
+  },
+  {
+    "date": "2025-12-12",
+    "league_id": "SEGUNDA_DIVISION",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-12/pipeline_mode=batch_api_football/entity=player_stats/league=SEGUNDA_DIVISION/player_stats.parquet",
+    "generation": 1785040402975816
+  },
+  {
+    "date": "2025-12-12",
+    "league_id": "JUPILER_PRO",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-12/pipeline_mode=batch_api_football/entity=player_stats/league=JUPILER_PRO/player_stats.parquet",
+    "generation": 1785040402915601
+  },
+  {
+    "date": "2025-12-12",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-12/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040402924929
+  },
+  {
+    "date": "2025-12-12",
+    "league_id": "BUNDESLIGA_2",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-12/pipeline_mode=batch_api_football/entity=player_stats/league=BUNDESLIGA_2/player_stats.parquet",
+    "generation": 1785040402915399
+  },
+  {
+    "date": "2025-12-07",
+    "league_id": "SCOTTISH_PREMIERSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-07/pipeline_mode=batch_api_football/entity=player_stats/league=SCOTTISH_PREMIERSHIP/player_stats.parquet",
+    "generation": 1785040403561404
+  },
+  {
+    "date": "2025-12-14",
+    "league_id": "ARGENTINA_PRIMERA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-14/pipeline_mode=batch_api_football/entity=player_stats/league=ARGENTINA_PRIMERA/player_stats.parquet",
+    "generation": 1785040403890735
+  },
+  {
+    "date": "2025-12-19",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-19/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040404045241
+  },
+  {
+    "date": "2025-12-19",
+    "league_id": "SUPER_LIG",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-12-19/pipeline_mode=batch_api_football/entity=player_stats/league=SUPER_LIG/player_stats.parquet",
+    "generation": 1785040404048787
+  },
+  {
+    "date": "2025-08-09",
+    "league_id": "EKSTRAKLASA",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-09/pipeline_mode=batch_api_football/entity=player_stats/league=EKSTRAKLASA/player_stats.parquet",
+    "generation": 1785040397269310
+  },
+  {
+    "date": "2025-08-09",
+    "league_id": "LIGA_MX",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-09/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_MX/player_stats.parquet",
+    "generation": 1785040397288996
+  },
+  {
+    "date": "2025-08-25",
+    "league_id": "LIGA_MX",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-25/pipeline_mode=batch_api_football/entity=player_stats/league=LIGA_MX/player_stats.parquet",
+    "generation": 1785040395674822
+  },
+  {
+    "date": "2025-08-25",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-25/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040395651917
+  },
+  {
+    "date": "2025-08-22",
+    "league_id": "ENG_CHAMPIONSHIP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-22/pipeline_mode=batch_api_football/entity=player_stats/league=ENG_CHAMPIONSHIP/player_stats.parquet",
+    "generation": 1785040395717473
+  },
+  {
+    "date": "2025-08-22",
+    "league_id": "SERIE_B",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-22/pipeline_mode=batch_api_football/entity=player_stats/league=SERIE_B/player_stats.parquet",
+    "generation": 1785040395757289
+  },
+  {
+    "date": "2025-08-22",
+    "league_id": "LIGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-22/pipeline_mode=batch_api_football/entity=player_stats/league=LIGUE_1/player_stats.parquet",
+    "generation": 1785040395779254
+  },
+  {
+    "date": "2025-08-15",
+    "league_id": "SUPER_LIG",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-15/pipeline_mode=batch_api_football/entity=player_stats/league=SUPER_LIG/player_stats.parquet",
+    "generation": 1785040396111585
+  },
+  {
+    "date": "2025-08-15",
+    "league_id": "EPL",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-15/pipeline_mode=batch_api_football/entity=player_stats/league=EPL/player_stats.parquet",
+    "generation": 1785040396165017
+  },
+  {
+    "date": "2025-08-02",
+    "league_id": "K_LEAGUE_1",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-02/pipeline_mode=batch_api_football/entity=player_stats/league=K_LEAGUE_1/player_stats.parquet",
+    "generation": 1785040396915203
+  },
+  {
+    "date": "2025-08-05",
+    "league_id": "UCL",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-05/pipeline_mode=batch_api_football/entity=player_stats/league=UCL/player_stats.parquet",
+    "generation": 1785040397384057
+  },
+  {
+    "date": "2025-08-05",
+    "league_id": "CARABAO_CUP",
+    "pipeline_mode": "batch_api_football",
+    "obj_path": "sports_reference/by_date/day=2025-08-05/pipeline_mode=batch_api_football/entity=player_stats/league=CARABAO_CUP/player_stats.parquet",
+    "generation": 1785040397378327
+  }
+]
