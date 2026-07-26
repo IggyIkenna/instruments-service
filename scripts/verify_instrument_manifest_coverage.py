@@ -56,7 +56,7 @@ def main() -> None:
 
     from unified_trading_library import get_bucket_name, read_availability_index
 
-    bucket = get_bucket_name("instruments", args.category)
+    bucket = get_bucket_name("instruments", args.asset_group)
     index = read_availability_index(bucket)
     if index.empty:
         raise RuntimeError(f"Manifest index is empty for bucket={bucket}")
