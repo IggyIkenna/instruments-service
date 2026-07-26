@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.sports import get_mvp_football_league_ids
+
 from instruments_service.engine.orchestrator.sports_reference_core import (
     _AfManifestHooks,
     _fetch_injuries,
@@ -68,6 +70,13 @@ async def _fetch_sports_reference_data(
     This data is slow-moving (leagues/teams change per season, not per day)
     but we re-fetch on each run to capture mid-season transfers, promotions,
     and new referee assignments.
+
+    Per-fixture ENRICHMENT (stats/events/lineups/player-stats) is always
+    restricted to the MVP/prediction-scope league set (``get_mvp_football_league_ids()``,
+    96 leagues) regardless of how many leagues ``fixture_ids``/``fixture_ids_override``
+    span — the FIXTURES-level schedule/existence data covers the much wider
+    curated universe (383 leagues), but enrichment fan-out for leagues we don't
+    predict on is pure API-Football quota burn for data nobody consumes.
 
     Args:
         entities_to_fetch: Specific manifest entity names to fetch (e.g.
@@ -170,6 +179,31 @@ async def _fetch_sports_reference_data(
         hooks=hooks,
         redo_all=redo_all,
     )
+
+    # MVP-league filter — runs BEFORE the per-fixture entity loop so per-fixture
+    # ENRICHMENT (stats/events/lineups/player-stats) never follows the much wider
+    # FIXTURES curated-universe denominator (get_expected_leagues_for_source,
+    # 383 leagues) out past MVP/prediction scope (96 leagues). Unconditional —
+    # applies to both the URDI-sourced fixture_ids_override path (spans all 383
+    # leagues since the 2026-07-24 widening) and the API-fallback path. A fixture
+    # with NO resolved league (mapping gap) is kept, not dropped — we can only
+    # prove a fixture is OUT of scope, never assume it, from a missing mapping.
+    if fixture_ids:
+        _mvp_leagues = get_mvp_football_league_ids()
+        _pre_mvp_filter = len(fixture_ids)
+        fixture_ids = [
+            fid for fid in fixture_ids if (_lg := _af_fid_to_league.get(str(fid))) is None or _lg in _mvp_leagues
+        ]
+        _mvp_skipped = _pre_mvp_filter - len(fixture_ids)
+        if _mvp_skipped:
+            _orch.logger.info(
+                "MVP-league filter applied for date=%s: %d → %d fixtures (%d skipped — non-MVP league, "
+                "enrichment out of scope)",
+                date,
+                _pre_mvp_filter,
+                len(fixture_ids),
+                _mvp_skipped,
+            )
 
     # Recovery-mode fixture-id allowlist filter — runs BEFORE the per-fixture
     # entity loop so we only call api_football for the targeted set. Lifts
