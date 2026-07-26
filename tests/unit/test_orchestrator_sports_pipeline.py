@@ -949,7 +949,7 @@ class TestMvpLeagueFilterForEnrichment:
             ),
             patch("instruments_service.engine.orchestrator.get_expected_leagues_for_source", return_value=[]),
             patch(
-                "instruments_service.engine.orchestrator.sports_reference.get_mvp_football_league_ids",
+                "instruments_service.engine.orchestrator.sports_reference_filters.get_mvp_football_league_ids",
                 return_value=frozenset({"EPL"}),
             ),
         ):
@@ -1002,7 +1002,7 @@ class TestMvpLeagueFilterForEnrichment:
             patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
             patch("instruments_service.engine.orchestrator.get_expected_leagues_for_source", return_value=[]),
             patch(
-                "instruments_service.engine.orchestrator.sports_reference.get_mvp_football_league_ids",
+                "instruments_service.engine.orchestrator.sports_reference_filters.get_mvp_football_league_ids",
                 return_value=frozenset({"EPL"}),
             ),
         ):
