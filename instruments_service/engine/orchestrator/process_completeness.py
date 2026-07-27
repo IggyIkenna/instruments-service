@@ -268,6 +268,7 @@ async def _completeness_and_retry(
         written_venues=written_venues,
         missing_shards=missing_shards,
         bucket=bucket,
+        asset_groups=asset_groups,
     )
 
 
@@ -282,7 +283,11 @@ def _scope_sports_expected_venues(
         _fixture_leagues: set[str] = set()
         _sports_bucket = _orch._get_instruments_bucket("SPORTS")
         if _sports_bucket:
-            _idx = _orch.read_availability_index(_sports_bucket)
+            # Slim read: only date/data_type/league_id are used below. The
+            # full-schema read decodes all 42 columns of the sports index
+            # (measured: 6.2 GiB peak RSS per call) — see
+            # sports_is_daily_enum_backfill_oom_at_32gi_ceiling_2026_07_27.md.
+            _idx = _orch.read_availability_index(_sports_bucket, columns=["date", "data_type", "league_id"])
             if not _idx.empty and "league_id" in _idx.columns:
                 _fix_rows = _idx[(_idx["date"] == date) & (_idx["data_type"] == FIXTURES_SCHEDULE)]
                 _fixture_leagues = {
@@ -464,13 +469,13 @@ def _detect_thin_day_venues(
     """
     if not written_venues:
         return set()
+    _required = {"asset_group", "capture_status", "venue", "date", "instrument_count"}
     try:
-        _idx = _orch.read_availability_index(bucket)
+        _idx = _orch.read_availability_index(bucket, columns=sorted(_required))
     except Exception as exc:  # fail-open: never let a read error block capture progress
         _orch.logger.debug("G1.2 thin-day check skipped (index unavailable): %s", exc)
         return set()
 
-    _required = {"asset_group", "capture_status", "venue", "date", "instrument_count"}
     if not _required.issubset(_idx.columns):
         return set()  # index schema doesn't include the expected columns — skip silently
 
@@ -530,6 +535,7 @@ def _finalize_completeness(
     written_venues: set[str],
     missing_shards: set[str],
     bucket: str,
+    asset_groups: list[str],
 ) -> dict[str, int]:
     """Final completeness assessment + honest-coverage manifest rows.
 
@@ -648,11 +654,24 @@ def _finalize_completeness(
     # thinned snapshot as the full universe (the BINANCE-FUTURES 678→47 class).
     # Writes a corrective record_failed row; consolidator last-write-wins semantics
     # ensure it supersedes the earlier record_captured for this (date, venue) key.
-    _thin_venues = _detect_thin_day_venues(
-        counts=counts,
-        written_venues=written_venues,
-        date=date,
-        bucket=bucket,
+    #
+    # CeFi-only by design (_THIN_DAY_ABS_FLOOR docstring: "never CeFi (sports
+    # days, etc.)") — skip the call (and its availability-index read) entirely
+    # when this run has no CeFi asset group in scope. Before this guard, every
+    # non-CeFi date (sports/tradfi/defi/prediction) paid a full
+    # read_availability_index() decode of the sports index (measured: 6.2 GiB
+    # peak RSS per call, unconditionally, once per date) for a check that could
+    # only ever find zero CeFi rows — see
+    # sports_is_daily_enum_backfill_oom_at_32gi_ceiling_2026_07_27.md.
+    _thin_venues = (
+        _detect_thin_day_venues(
+            counts=counts,
+            written_venues=written_venues,
+            date=date,
+            bucket=bucket,
+        )
+        if "cefi" in {ag.lower() for ag in asset_groups}
+        else set()
     )
     if _thin_venues:
         _thin_ts = _orch.datetime.now(_orch.UTC)
