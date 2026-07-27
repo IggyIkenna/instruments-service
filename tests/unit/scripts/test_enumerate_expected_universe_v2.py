@@ -666,29 +666,45 @@ def test_defi_v2_empty_catalog() -> None:
 
 def test_tradfi_v2_pre_listing_yields_not_listed() -> None:
     # Window includes an alive date so the overlap filter does not skip the instrument.
+    # NOTE: 2022-06-01 is alive (after available_from) but predates NASDAQ's real UAC
+    # discovery floor (2023-04-15), so it now ALSO yields an honest-absence row —
+    # this is the behavior tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20
+    # fixes (previously this alive-but-pre-floor date fell through unclassified in
+    # v2 mode, seeding the generic expected_unattempted "todo" bucket instead).
     catalog = [_make_tradfi_entry(available_from="2022-01-01")]
     rows = _drop_v2_venue_grain(
         list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-06-01"), ["ohlcv_1d"]))
     )
-    assert len(rows) == 1
-    assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
-    assert rows[0].asset_group == "tradfi"
-    assert rows[0].chain == ""
+    assert len(rows) == 2
+    by_date = {r.date: r for r in rows}
+    assert by_date["2021-01-01"].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
+    assert by_date["2021-01-01"].asset_group == "tradfi"
+    assert by_date["2021-01-01"].chain == ""
+    assert by_date["2022-06-01"].reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
 
 
 def test_tradfi_v2_delisted_instrument() -> None:
     # Window includes an alive date so the overlap filter does not skip the instrument.
+    # 2021-01-01 is alive but predates the real NASDAQ discovery floor (2023-04-15) →
+    # EXPECTED_PRE_SOURCE_COVERAGE_START (see the note above); 2022-01-01 → DELISTED.
     catalog = [_make_tradfi_entry(available_from="2020-01-01", available_to="2021-06-30")]
-    # 2021-01-01 is alive → no row; 2022-01-01 → DELISTED
     rows = _drop_v2_venue_grain(
         list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-01-01"), ["ohlcv_1d"]))
     )
-    assert len(rows) == 1
-    assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
+    assert len(rows) == 2
+    by_date = {r.date: r for r in rows}
+    assert by_date["2021-01-01"].reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert by_date["2022-01-01"].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
 def test_tradfi_v2_no_bounds_skips_all_dates() -> None:
-    """Instrument with no available_from/to → no rows (always alive)."""
+    """Instrument with no available_from/to (always alive) in LEGACY mode
+    (``present_set=None``, not provided here): dates ON/AFTER the real NASDAQ
+    discovery floor (2023-04-15) still skip (legacy mode never seeds the alive
+    generic bucket), but dates BEFORE the floor now yield an honest-absence row —
+    the discovery-floor check is a lifecycle-level classification (like
+    NOT_LISTED/DELISTED), not gated on ``present_set``, per
+    tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20."""
     catalog = [_make_tradfi_entry(available_from=None, available_to=None)]
     rows = _drop_v2_venue_grain(
         list(
@@ -699,7 +715,10 @@ def test_tradfi_v2_no_bounds_skips_all_dates() -> None:
             )
         )
     )
-    assert rows == []
+    assert len(rows) == 2
+    dates = {r.date for r in rows}
+    assert dates == {"2020-01-01", "2020-06-01"}
+    assert all(r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START" for r in rows)
 
 
 def test_tradfi_v2_empty_catalog() -> None:
@@ -1726,6 +1745,70 @@ def test_tradfi_v2_no_exclusion_declared_unaffected() -> None:
     """Real production behavior: the registry is empty, so nothing changes for existing callers."""
     catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
     date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_tradfi_v2_pre_discovery_floor_yields_expected_pre_source_coverage_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A date before the venue's UAC discovery floor must NOT seed the generic
+    expected_unattempted ("todo") bucket — issue
+    tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20. Instrument listed
+    long before the floor (mirrors the real NASDAQ/NYSE equities driving the
+    182,407-cell class) so ``EXPECTED_INSTRUMENT_NOT_LISTED`` never fires and the
+    discovery-floor branch is the one under test."""
+    monkeypatch.setattr(
+        enumerator_module.VenueMapping,
+        "get_instrument_discovery_start",
+        lambda self, venue: "2023-04-15" if venue == "NASDAQ" else None,
+    )
+    catalog = [_make_tradfi_entry(available_from="1980-01-01", venue="NASDAQ", mvp=True)]
+    date_axis = _date_axis("2023-04-14")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+    assert r.asset_group == "tradfi"
+
+
+def test_tradfi_v2_on_or_after_discovery_floor_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A date ON/AFTER the venue's discovery floor keeps seeding the normal
+    expected_unattempted ("todo") cell — the floor clip must not over-suppress
+    genuinely fillable dates."""
+    monkeypatch.setattr(
+        enumerator_module.VenueMapping,
+        "get_instrument_discovery_start",
+        lambda self, venue: "2023-04-15" if venue == "NASDAQ" else None,
+    )
+    catalog = [_make_tradfi_entry(available_from="1980-01-01", venue="NASDAQ", mvp=True)]
+    date_axis = _date_axis("2023-04-15")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_tradfi_v2_unknown_venue_discovery_floor_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A venue with no UAC discovery-floor entry (``get_instrument_discovery_start``
+    returns None) must be completely unaffected — falls back to existing behavior."""
+    monkeypatch.setattr(
+        enumerator_module.VenueMapping,
+        "get_instrument_discovery_start",
+        lambda self, venue: None,
+    )
+    catalog = [_make_tradfi_entry(available_from="1980-01-01", venue="NASDAQ", mvp=True)]
+    date_axis = _date_axis("1980-06-01")
     rows = _drop_v2_venue_grain(
         list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
     )
