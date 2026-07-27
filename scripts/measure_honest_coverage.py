@@ -89,7 +89,7 @@ import sys
 from collections import defaultdict
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Final, Protocol, cast
 
 import pandas as pd
 from google.cloud import storage
@@ -834,16 +834,110 @@ def _compute_coverage(
     }
 
 
-def _write_output(payload: dict[str, object], output_path: str | None) -> None:
-    blob_bytes = json.dumps(payload, indent=2).encode()
+# The per-asset_group projections _compute_coverage returns — every one keyed
+# FIRST by asset_group, which is what makes a per-key merge well-defined.
+_MERGEABLE_BY_AG_KEYS: Final[tuple[str, ...]] = (
+    "by_asset_group",
+    "by_venue",
+    "by_venue_data_type",
+    "by_venue_instrument_type",
+    "by_venue_instrument_type_data_type",
+    "by_day",
+    "by_chain",
+)
 
+
+def _read_existing_payload(run_date: str) -> dict[str, object] | None:
+    """Read today's already-written coverage.json, if any, for same-day merge.
+
+    Root-caused 2026-07-26 (deployment_api_honest_coverage_regression_2026_07_26.md):
+    a same-day run that measures only a SUBSET of asset_groups (e.g. a manual
+    ``--asset-group cefi`` dev/debug invocation of launch-measure-honest-coverage-vm.sh
+    — an explicitly documented, normal usage mode) used to silently CLOBBER the
+    day's coverage.json, because ``_write_output`` overwrites the object
+    unconditionally and GCS has no merge semantics. The scheduled nightly
+    ``--asset-group all`` cron measured all 5 groups just fine for days at a
+    time, then a same-day narrower run erased everything but its own group —
+    with no error, no partial banner, nothing: the OTHER asset_groups' data
+    simply vanished from that day's file. Returns None on any read/parse
+    failure (first run of the day, or a malformed prior file) so the caller
+    falls back to writing this run's payload standalone, same as before.
+    """
+    client = storage.Client(project=PROJECT_ID)
+    bucket = client.bucket(_OUTPUT_BUCKET)
+    blob = bucket.blob(f"{run_date}/coverage.json")
+    try:
+        raw = blob.download_as_text()
+    except Exception as exc:
+        logger.info("No existing coverage.json for %s to merge with (%s)", run_date, exc)
+        return None
+    try:
+        existing = json.loads(raw)
+    except Exception as exc:
+        logger.warning("Existing coverage.json for %s is malformed — not merging (%s)", run_date, exc)
+        return None
+    if not isinstance(existing, dict):
+        return None
+    return cast(dict[str, object], existing)
+
+
+def _merge_with_existing(payload: dict[str, object], existing: dict[str, object]) -> dict[str, object]:
+    """Merge this run's payload on top of an existing same-day coverage.json.
+
+    Per-asset_group projections are merged key-by-key: an asset_group THIS run
+    measured overwrites the existing cell (fresh data wins); an asset_group
+    this run did not touch keeps whatever the existing file already had.
+    ``asset_groups_requested``/``measured``/``failed`` are then recomputed off
+    the MERGED ``by_asset_group`` so they describe the combined day rather
+    than just this run — a full ``all`` run naturally supersedes everything
+    (it re-measures every group), while a narrower run only ever ADDS to or
+    refreshes what is already there.
+    """
+    merged: dict[str, object] = dict(existing)
+    for key in _MERGEABLE_BY_AG_KEYS:
+        existing_map = cast("dict[str, object]", existing.get(key) or {})
+        new_map = cast("dict[str, object]", payload.get(key) or {})
+        merged[key] = {**existing_map, **new_map}
+
+    existing_layer1 = cast("dict[str, object]", existing.get("layer_1") or {})
+    new_layer1 = cast("dict[str, object]", payload.get("layer_1") or {})
+    merged["layer_1"] = {
+        "by_asset_group": {
+            **cast("dict[str, object]", existing_layer1.get("by_asset_group") or {}),
+            **cast("dict[str, object]", new_layer1.get("by_asset_group") or {}),
+        },
+    }
+
+    merged_by_ag = cast("dict[str, object]", merged["by_asset_group"])
+    existing_requested = cast("list[str]", existing.get("asset_groups_requested") or [])
+    new_requested = cast("list[str]", payload.get("asset_groups_requested") or [])
+    requested_set = {*existing_requested, *new_requested}
+    requested = [ag for ag in _KNOWN_ASSET_GROUPS if ag in requested_set]
+
+    merged["asset_groups_requested"] = requested
+    merged["asset_groups_measured"] = [ag for ag in _KNOWN_ASSET_GROUPS if ag in merged_by_ag]
+    merged["asset_groups_failed"] = [ag for ag in requested if ag not in merged_by_ag]
+    merged["partial"] = bool(merged["asset_groups_failed"])
+    merged["generated_at"] = payload["generated_at"]
+    merged["date"] = payload["date"]
+    merged["schema_version"] = payload["schema_version"]
+    return merged
+
+
+def _write_output(payload: dict[str, object], output_path: str | None) -> None:
     if output_path:
+        blob_bytes = json.dumps(payload, indent=2).encode()
         with open(output_path, "wb") as f:
             f.write(blob_bytes)
         logger.info("Wrote coverage JSON to %s", output_path)
         return
 
-    run_date = payload["date"]
+    run_date = cast(str, payload["date"])
+    existing = _read_existing_payload(run_date)
+    if existing is not None:
+        payload = _merge_with_existing(payload, existing)
+
+    blob_bytes = json.dumps(payload, indent=2).encode()
     client = storage.Client(project=PROJECT_ID)
     bucket = client.bucket(_OUTPUT_BUCKET)
     blob = bucket.blob(f"{run_date}/coverage.json")

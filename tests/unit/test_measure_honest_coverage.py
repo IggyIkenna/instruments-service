@@ -46,11 +46,12 @@ That dtype change has two correctness footguns which are also covered here:
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -1412,3 +1413,182 @@ class TestCategoricalDtypeCorrectness:
         coverage_categorical = _compute_coverage_with_stub(mod, {"cefi": df_categorical})
 
         assert coverage_object == coverage_categorical
+
+
+class TestSameDayMergeOnWrite:
+    """Regression coverage for deployment_api_honest_coverage_regression_2026_07_26.md.
+
+    A same-day run that measures only a SUBSET of asset_groups (e.g. a manual
+    ``--asset-group cefi`` dev/debug invocation — an explicitly documented normal
+    usage of launch-measure-honest-coverage-vm.sh) used to silently overwrite the
+    whole day's coverage.json, erasing every OTHER asset_group a prior run that
+    same day had already measured (observed in prod 2026-07-25/2026-07-26: two
+    consecutive days' coverage.json held only ``cefi``, though the scheduled
+    ``--asset-group all`` cron ran and completed successfully both days).
+    """
+
+    def _payload(
+        self,
+        *,
+        asset_groups_requested: list[str],
+        asset_groups_measured: list[str],
+        by_asset_group: dict[str, object],
+        generated_at: str = "2026-07-27T00:35:00Z",
+    ) -> dict[str, object]:
+        failed = [ag for ag in asset_groups_requested if ag not in asset_groups_measured]
+        return {
+            "generated_at": generated_at,
+            "date": "2026-07-27",
+            "schema_version": 2,
+            "asset_groups_requested": asset_groups_requested,
+            "asset_groups_measured": asset_groups_measured,
+            "asset_groups_failed": failed,
+            "partial": bool(failed),
+            "by_asset_group": by_asset_group,
+            "by_venue": {ag: {} for ag in asset_groups_measured},
+            "by_venue_data_type": {ag: {} for ag in asset_groups_measured},
+            "by_venue_instrument_type": {ag: {} for ag in asset_groups_measured},
+            "by_venue_instrument_type_data_type": {ag: {} for ag in asset_groups_measured},
+            "by_day": {ag: {} for ag in asset_groups_measured},
+            "by_chain": {ag: {} for ag in asset_groups_measured},
+            "layer_1": {"by_asset_group": {ag: {"completeness_pct": 100.0} for ag in asset_groups_measured}},
+        }
+
+    def test_narrow_run_preserves_other_asset_groups_from_existing_full_run(self, mod: ModuleType) -> None:
+        """A same-day ``cefi``-only run must not erase defi/tradfi/sports/prediction."""
+        existing = self._payload(
+            asset_groups_requested=["cefi", "defi", "tradfi", "sports", "prediction"],
+            asset_groups_measured=["cefi", "defi", "tradfi", "sports", "prediction"],
+            by_asset_group={
+                "cefi": {"captured": 100},
+                "defi": {"captured": 200},
+                "tradfi": {"captured": 300},
+                "sports": {"captured": 400},
+                "prediction": {"captured": 500},
+            },
+            generated_at="2026-07-27T00:35:00Z",
+        )
+        narrow_run = self._payload(
+            asset_groups_requested=["cefi"],
+            asset_groups_measured=["cefi"],
+            by_asset_group={"cefi": {"captured": 999}},  # fresher cefi data
+            generated_at="2026-07-27T22:30:00Z",
+        )
+
+        merged = mod._merge_with_existing(narrow_run, existing)
+
+        # Every asset_group the existing full run measured is still present —
+        # this is the exact behavior that was missing before the fix.
+        assert set(merged["asset_groups_measured"]) == {"cefi", "defi", "tradfi", "sports", "prediction"}
+        assert merged["asset_groups_failed"] == []
+        assert merged["partial"] is False
+        # The touched group (cefi) got the FRESH data, not the stale existing cell.
+        assert merged["by_asset_group"]["cefi"] == {"captured": 999}
+        # Untouched groups are byte-identical to what the existing file had.
+        assert merged["by_asset_group"]["defi"] == {"captured": 200}
+        assert merged["by_asset_group"]["tradfi"] == {"captured": 300}
+        assert merged["by_asset_group"]["sports"] == {"captured": 400}
+        assert merged["by_asset_group"]["prediction"] == {"captured": 500}
+        # Latest run's provenance wins for the scalar fields.
+        assert merged["generated_at"] == "2026-07-27T22:30:00Z"
+
+    def test_full_run_supersedes_a_prior_narrow_run(self, mod: ModuleType) -> None:
+        """A subsequent full ``all`` run fully refreshes every group (no stale leftovers)."""
+        existing = self._payload(
+            asset_groups_requested=["cefi"],
+            asset_groups_measured=["cefi"],
+            by_asset_group={"cefi": {"captured": 1}},
+        )
+        full_run = self._payload(
+            asset_groups_requested=["cefi", "defi", "tradfi", "sports", "prediction"],
+            asset_groups_measured=["cefi", "defi", "tradfi", "sports", "prediction"],
+            by_asset_group={
+                "cefi": {"captured": 111},
+                "defi": {"captured": 222},
+                "tradfi": {"captured": 333},
+                "sports": {"captured": 444},
+                "prediction": {"captured": 555},
+            },
+        )
+
+        merged = mod._merge_with_existing(full_run, existing)
+
+        assert set(merged["asset_groups_measured"]) == {"cefi", "defi", "tradfi", "sports", "prediction"}
+        assert merged["by_asset_group"]["cefi"] == {"captured": 111}
+
+    def test_partial_failure_of_a_group_not_in_existing_file_is_recorded(self, mod: ModuleType) -> None:
+        """Requesting a group that fails to load (and was never measured before) stays marked failed."""
+        existing = self._payload(
+            asset_groups_requested=["cefi"],
+            asset_groups_measured=["cefi"],
+            by_asset_group={"cefi": {"captured": 1}},
+        )
+        # `defi` was requested this run but failed to load (OOM etc.) — not in by_asset_group.
+        failing_run = self._payload(
+            asset_groups_requested=["defi"],
+            asset_groups_measured=[],
+            by_asset_group={},
+        )
+
+        merged = mod._merge_with_existing(failing_run, existing)
+
+        assert merged["asset_groups_measured"] == ["cefi"]
+        assert merged["asset_groups_failed"] == ["defi"]
+        assert merged["partial"] is True
+
+    def test_read_existing_payload_returns_none_when_object_missing(self, mod: ModuleType) -> None:
+        """First run of the day (no prior coverage.json) — merge is a no-op via None."""
+        mock_blob = MagicMock()
+        mock_blob.download_as_text.side_effect = Exception("404 Not Found")
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_client = MagicMock()
+        mock_client.bucket.return_value = mock_bucket
+
+        with patch("google.cloud.storage.Client", return_value=mock_client):
+            result = mod._read_existing_payload("2026-07-27")
+
+        assert result is None
+
+    def test_read_existing_payload_returns_none_on_malformed_json(self, mod: ModuleType) -> None:
+        mock_blob = MagicMock()
+        mock_blob.download_as_text.return_value = "{not valid json"
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_client = MagicMock()
+        mock_client.bucket.return_value = mock_bucket
+
+        with patch("google.cloud.storage.Client", return_value=mock_client):
+            result = mod._read_existing_payload("2026-07-27")
+
+        assert result is None
+
+    def test_write_output_merges_with_existing_gcs_object_before_upload(self, mod: ModuleType) -> None:
+        """End-to-end: _write_output reads-merges-writes instead of blind-overwriting."""
+        existing_payload = self._payload(
+            asset_groups_requested=["cefi", "defi"],
+            asset_groups_measured=["cefi", "defi"],
+            by_asset_group={"cefi": {"captured": 1}, "defi": {"captured": 2}},
+        )
+        mock_blob = MagicMock()
+        mock_blob.download_as_text.return_value = json.dumps(existing_payload)
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_client = MagicMock()
+        mock_client.bucket.return_value = mock_bucket
+
+        narrow_run = self._payload(
+            asset_groups_requested=["cefi"],
+            asset_groups_measured=["cefi"],
+            by_asset_group={"cefi": {"captured": 999}},
+        )
+
+        with patch("google.cloud.storage.Client", return_value=mock_client):
+            mod._write_output(narrow_run, None)
+
+        assert mock_blob.upload_from_string.call_count == 1
+        uploaded = json.loads(mock_blob.upload_from_string.call_args[0][0])
+        # defi survives even though this run only touched cefi.
+        assert uploaded["by_asset_group"]["defi"] == {"captured": 2}
+        assert uploaded["by_asset_group"]["cefi"] == {"captured": 999}
+        assert set(uploaded["asset_groups_measured"]) == {"cefi", "defi"}
