@@ -1104,6 +1104,77 @@ class TestAllGroupExpansionNocrash:
         )
 
 
+class TestMultiAssetGroupListTriggersPerVenueBucketRouting:
+    """Regression: an explicit multi-value --asset-group list (not the "ALL"
+    sentinel) must ALSO trigger per-venue bucket routing in _write_all_venues.
+
+    Before the fix, _is_all_run only checked asset_groups[0] == "ALL" -- a
+    genuine multi-value list like ["SPORTS", "CEFI"] left _is_all_run False,
+    so _get_venue_bucket() returned the single SPORTS-primary bucket for
+    EVERY venue, silently misrouting a real CEFI capture into
+    instruments-store-sports. Root-caused as Finding C in
+    api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md (2
+    phantom rows -- UNISWAP_V3-BASE/defi + BITGET-FUTURES/cefi, both dated
+    2026-06-26 -- found sitting in the live sports manifest).
+    """
+
+    @staticmethod
+    def _make_cefi_record() -> InstrumentRecord:
+        return InstrumentRecord(
+            instrument_key="BTC:SPOT:BTCUSDT",
+            venue="BINANCE-SPOT",
+            instrument_type="SPOT_PAIR",
+            base_asset="BTC",
+            quote_asset="USDT",
+            tick_size=Decimal("0.01"),
+            available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
+        )
+
+    def test_explicit_multi_ag_list_routes_cefi_venue_to_cefi_bucket(self) -> None:
+        """asset_groups=["SPORTS", "CEFI"] (no "ALL" sentinel) must resolve the
+        CEFI venue's write via the cefi bucket, not the sports-primary one."""
+        from instruments_service.engine.orchestrator.process_write import _write_all_venues
+
+        record = self._make_cefi_record()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+
+        bucket_calls: list[str | None] = []
+
+        def _capturing_get_bucket(ag: str | None = None) -> str:
+            bucket_calls.append(ag)
+            return f"test-bucket-{ag}"
+
+        write_venue_calls: list[str] = []
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", side_effect=_capturing_get_bucket),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.DomainValidationService"),
+            patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=False),
+            patch(
+                "instruments_service.engine.orchestrator._write_venue",
+                side_effect=lambda venue, *a, **k: write_venue_calls.append(venue),
+            ),
+        ):
+            _write_all_venues(
+                records=[record],
+                date="2026-06-26",
+                asset_groups=["SPORTS", "CEFI"],
+                league_filter=None,
+                non_error_venues={"BINANCE-SPOT"},
+            )
+
+        assert write_venue_calls == ["BINANCE-SPOT"]
+        # The primary bucket is always resolved once up front ("sports", since
+        # a multi-AG run's primary hardcodes to sports) -- the regression is
+        # that the CEFI venue's OWN bucket must ALSO be resolved (not skipped
+        # in favour of silently reusing the sports-primary bucket for it).
+        assert "cefi" in bucket_calls, f"_get_instruments_bucket must be called with 'cefi', got: {bucket_calls}"
+
+
 class TestFreshnessPreflightStaleScopeEscape:
     """Regression: a stale-not-missing entity under --sports-entity must stay
     in scope, not silently fall back to the legacy unscoped fetch-everything
