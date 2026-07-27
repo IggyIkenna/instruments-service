@@ -92,6 +92,7 @@ def _write_manifest(storage_client: object, bucket_name: str, df: pd.DataFrame) 
 
 
 def _find_repo_toplevel(start: Path) -> Path:
+<<<<<<< HEAD
     """Walk up from `start` to the invoking repo's own clone root (a dir holding `.git`).
 
     Path-B per-slot topology: each repo is its OWN `git clone --reference` with a real
@@ -99,19 +100,31 @@ def _find_repo_toplevel(start: Path) -> Path:
     invocation's clone — the slot's own `.tabs/<slot>/instruments-service`, or the
     non-slotted workspace-root clone — regardless of how many directories deep the
     script itself lives.
+=======
+    """Walk up from `start` to the nearest ancestor containing a `.git` entry (repo root).
+
+    Raises RuntimeError rather than returning a guess — callers must not silently fall back
+    to an unrelated directory when the repo boundary can't be found.
+>>>>>>> 2626d122 (fix(scripts): resolve reconcile_manifest_after_entity_change.py's _default_csv_path via repo-toplevel identity, not a fixed parents[N] hop)
     """
     for candidate in (start, *start.parents):
         if (candidate / ".git").exists():
             return candidate
     raise RuntimeError(
+<<<<<<< HEAD
         f"Could not locate the invoking repo's clone root — no `.git` found walking up "
         f"from {start}. Cannot resolve the audit-CSV destination without it."
+=======
+        f"Could not resolve the enclosing git repo root by walking up from {start} — "
+        "no ancestor directory contains a .git entry."
+>>>>>>> 2626d122 (fix(scripts): resolve reconcile_manifest_after_entity_change.py's _default_csv_path via repo-toplevel identity, not a fixed parents[N] hop)
     )
 
 
 def _default_csv_path(asset_group: str, entity_type: str, entity_key: str) -> Path:
     day = datetime.now(UTC).strftime("%Y-%m-%d")
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+<<<<<<< HEAD
     # unified-trading-pm is always a SIBLING clone of the invoking repo — under Path-B
     # per-slot topology that's `.tabs/<slot>/unified-trading-pm`; under a non-slotted
     # checkout it's the workspace-root clone. Deriving it from the repo's own identity
@@ -126,6 +139,20 @@ def _default_csv_path(asset_group: str, entity_type: str, entity_key: str) -> Pa
             f"clone found next to {repo_toplevel}. Expected {pm_dir} to exist. "
             "Pass --output-csv explicitly to bypass auto-resolution rather than let this "
             "write to an unintended location."
+=======
+    # Resolve the destination from THIS repo's own identity (its git toplevel) instead of a
+    # fixed parents[N] hop. unified-trading-pm is always a sibling of this repo's own clone —
+    # under the Path-B per-slot topology that's .tabs/<slot>/unified-trading-pm, in a
+    # non-slotted checkout it's the workspace-root unified-trading-pm — and the repo-toplevel's
+    # parent is that sibling directory in both layouts, so one resolution covers both.
+    repo_toplevel = _find_repo_toplevel(Path(__file__).resolve().parent)
+    pm_dir = repo_toplevel.parent / "unified-trading-pm"
+    if not pm_dir.is_dir():
+        raise RuntimeError(
+            f"Cannot resolve a writable unified-trading-pm sibling next to this repo's own "
+            f"clone (looked for {pm_dir}). Pass --output-csv explicitly instead of relying on "
+            "the auto-derived destination."
+>>>>>>> 2626d122 (fix(scripts): resolve reconcile_manifest_after_entity_change.py's _default_csv_path via repo-toplevel identity, not a fixed parents[N] hop)
         )
     out_dir = pm_dir / "audits" / "entity_lifecycle" / "by_date" / f"day={day}"
     out_dir.mkdir(parents=True, exist_ok=True)
