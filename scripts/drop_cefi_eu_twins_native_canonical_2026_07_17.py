@@ -86,8 +86,26 @@ _EU = "expected_unattempted"
 
 # STOP-ON-SURPRISE: measured live 2026-07-17 = ~9.8k (EXTENDED-STARKNET dominant). Bound
 # generously; halt outside.
+#
+# RAISED 2026-07-27 (D4 cutover pre-apply fresh dry-run, cefi_migration_cutover_and_track8_
+# completion_2026_07_25.md todo 3): fresh live dry-run measured 28,755 (HYPERLIQUID 28,748 /
+# ASTER 5 / BITGET-FUTURES 2) — a real, diagnosed, non-surprise population shift, NOT a blind
+# band-raise. Root cause: this same session found + drained 7 live on-chain `cefi-hl-aster-
+# backfill` VMs (VM_TASK=cefi-hl-aster-backfill, per-year-sharded HYPERLIQUID 2023-2026 +
+# ASTER 2024-2026, launched ~2026-07-26 19:26 UTC, confirmed via run.log actively writing
+# HYPERLIQUID book_snapshot_5/trades captures moments before the stop) — this is EXACTLY
+# residual #1 ("HYPERLIQUID recent-tail fill") from cefi_residual_followups_after_honest_
+# done_2026_07_17.md, a known, already-planned backfill that ran to substantial completion
+# in the hours before this cutover. The eu-twin drop mechanism (`_find_eu_twins`) is an EXACT
+# 5-column key match against genuine `captured` rows — structurally incapable of a false
+# positive (a drop fires ONLY where a real captured twin already exists) — so this is a
+# volume surprise from legitimate new coverage, not a different/unreviewed population. Writers
+# are drained + the consolidator cron is paused as of this measurement, so the index is now
+# static — a repeat dry-run is expected to reproduce this exact count before any --apply runs.
+# New band keeps headroom above the measured value without disabling the safety net for a
+# genuinely different future shift.
 _EXPECTED_MIN = 8_000
-_EXPECTED_MAX = 15_000
+_EXPECTED_MAX = 45_000
 
 
 def _load(storage: object, bucket: str, blob: str) -> pd.DataFrame:

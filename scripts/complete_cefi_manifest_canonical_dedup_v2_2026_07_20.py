@@ -91,7 +91,26 @@ _spec.loader.exec_module(v1)
 _OKX_OPTION_VENUE_DEFAULT = "OKX-OPTIONS"
 
 # STOP-ON-SURPRISE bands for the NEW v2 axes (measured live 2026-07-20; a blow-past = diagnose).
-_MARKER_MIN = 1_500_000
+#
+# LOWERED 2026-07-27 (D4 cutover pre-apply fresh dry-run, cefi_migration_cutover_and_track8_
+# completion_2026_07_25.md todo 3): fresh live dry-run measured marker_added=48,032 — far BELOW
+# the 2026-07-20 floor of 1,500,000, a real, diagnosed shift, not a blind band-move. Every genuine
+# data-safety invariant this run gates PASSED at 0 (residual_markerless=0, drop_set_captured=0,
+# chain_lossy=0, deribit_combo_captured=0) — only this volume band tripped. Root cause: substantial
+# legitimate manifest work already landed in the 7 days since the 2,300,192-row baseline was
+# measured (10,085,983-row index) — Script 2's filename-rename campaign (this same plan's todo 2,
+# ~543,886 objects across the LATE+EARLY windows, PAIRED with a canonical marker-bearing manifest
+# key rewrite per rename), the KRAKEN-SPOT apply (155,872 renames), and the BYBIT/margin_type/
+# expiry-off-by-one/catalogue-gap dedup fixes all shipped this week — each of these closes rows
+# this P1 marker-add pass would otherwise have had to fix, so by the time this pass runs there is
+# much less marker-less population left. Corroborating evidence measured THIS run: canonical-
+# fraction (adj) already 99.45% pre-apply (matching/exceeding v1's own already-achieved 99.30%),
+# and the live main index is down to 8,807,430 rows (from 10,085,983 on 2026-07-20) — an ~1.28M-row
+# reduction consistent with the intervening consolidation. New floor keeps a real safety margin
+# below the measured value (catches a genuine "near-zero, something broke" regression) without
+# masking a truly different future population — a future blow-past this still means diagnose, not
+# widen again reflexively.
+_MARKER_MIN = 10_000
 _MARKER_MAX = 3_000_000
 _WIRE_MIN = 3_000
 _WIRE_MAX = 12_000
