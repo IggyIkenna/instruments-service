@@ -52,13 +52,17 @@ async def test_get_instruments_yields_pt_yt_sy_records() -> None:
         assert rec.raw_symbol.startswith("0x") and len(rec.raw_symbol) == 42
         assert rec.base_asset_contract_address == rec.raw_symbol
 
+    # Type segment is uniformly YIELD_BEARING (key-vs-field must agree); role lives in the
+    # symbol segment instead (e.g. "PT-wstETH-25JUN2026") — 2026-07-27 key-vs-field fix.
+    assert all(rec.instrument_key.split(":")[1] == "YIELD_BEARING" for rec in records)
+
     # At least one of each role present.
-    roles = {rec.instrument_key.split(":")[1] for rec in records}
+    roles = {rec.instrument_key.split(":")[2].split("-")[0] for rec in records}
     assert roles == {"PT", "YT", "SY"}
 
     # Per-role count: every market emits exactly one PT, YT, SY token.
     for role in ("PT", "YT", "SY"):
-        role_records = [r for r in records if r.instrument_key.split(":")[1] == role]
+        role_records = [r for r in records if r.instrument_key.split(":")[2].split("-")[0] == role]
         assert len(role_records) == 5, f"expected 5 {role} records, got {len(role_records)}"
 
 
@@ -90,7 +94,7 @@ async def test_get_instrument_lookup() -> None:
     by_symbol = await adapter.get_instrument("PT-wstETH-25JUN2026")
     assert by_addr is not None and by_symbol is not None
     assert by_addr.instrument_key == by_symbol.instrument_key
-    assert by_addr.instrument_key == "PENDLE-ETHEREUM:PT:PT-wstETH-25JUN2026"
+    assert by_addr.instrument_key == "PENDLE-ETHEREUM:YIELD_BEARING:PT-wstETH-25JUN2026"
     # Unknown symbol returns None.
     assert await adapter.get_instrument("NOPE-PT-FAKE") is None
 
@@ -119,7 +123,7 @@ async def test_pt_yt_have_expiry_set() -> None:
         assert records, f"no records returned for {chain}"
 
         for rec in records:
-            role = rec.instrument_key.split(":")[1]
+            role = rec.instrument_key.split(":")[2].split("-")[0]
             if role == "SY":
                 assert rec.expiry is None, f"{chain} {rec.instrument_key} SY must not carry expiry"
                 continue
