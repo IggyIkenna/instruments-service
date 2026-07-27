@@ -63,6 +63,8 @@ from unified_api_contracts.predictions import (
     classify_polymarket_to_canonical_group,
     parse_polymarket_sports_fixture,
     underlying_for_group,
+    validate_canonical_question_group,
+    validate_prediction_instrument_type,
 )
 from unified_api_contracts.sports import (
     POLYMARKET_MARKET_TO_CANONICAL,
@@ -213,4 +215,6 @@ __all__ = [
     "slugify_canonical_name",
     "time",
     "underlying_for_group",
+    "validate_canonical_question_group",
+    "validate_prediction_instrument_type",
 ]

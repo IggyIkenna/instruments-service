@@ -35,6 +35,7 @@ from unified_api_contracts.predictions import (
     MarketLifecycle,
     classify_kalshi_to_canonical_group,
     underlying_for_group,
+    validate_canonical_question_group,
 )
 from unified_trading_library import log_event
 
@@ -829,6 +830,12 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         # threaded into classify_lifecycle() (reuse, not reclassify) per
         # prediction_canonical_identity_migration_2026_07_08.md todo 1.
         group = classify_kalshi_to_canonical_group(ticker=ticker) or CanonicalQuestionGroup.OTHER
+        # Re-drift guard (prediction_phase_ab_residuals_2026_07_24.md A2 / batch1 todo
+        # "route every prediction id/underlying/CQG writer through the shared canonical
+        # builder + a QG that fails a non-canonical ... on write") — group.value is a
+        # StrEnum member so this is always canonical today; validated anyway so a future
+        # classifier regression rejects at the writer instead of silently persisting.
+        validate_canonical_question_group(group.value)
         # Per CLAUDE.md "Prediction market lifecycle timing": carry
         # market_created_at + settlement_time on the InstrumentRecord so
         # MTDS CLOB capture + features-* compute can gate ticks. Full
@@ -1019,6 +1026,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
 
         if group is None:
             group = classify_kalshi_to_canonical_group(ticker=ticker) or CanonicalQuestionGroup.OTHER
+        validate_canonical_question_group(group.value)
         settlement_lag = CANONICAL_GROUP_METADATA[group].settlement_lag
         settlement_time = resolution_time + settlement_lag
 
