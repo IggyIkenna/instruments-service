@@ -1868,6 +1868,19 @@ def _enumerate_v2_tradfi(
         # clip. Resolved once per instrument from today's date.
         _today = datetime.now(UTC).date()
         _dt_floor: dict[str, date | None] = {dt: _tradfi_floor_start_for_data_type(dt, _today) for dt in row_dts}
+        # Venue-level Databento ARCHIVE discovery floor (issue
+        # tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20): NASDAQ/NYSE's
+        # DBEQ.BASIC archive earliest date is 2023-04-15, CME 2020-01-01, CBOE
+        # 2020-06-01 — a FIXED per-venue floor distinct from the per-data_type
+        # ROLLING subscription window above (``_dt_floor``). A date before this
+        # floor can never produce a record from ANY data_type at this venue (no
+        # archive exists yet), so it must not seed the generic ``expected_unattempted``
+        # ("todo") bucket the way ``_dt_floor`` alone would miss for long-listed
+        # instruments (e.g. an equity listed in 1980 has no ``af_ts`` gap to catch
+        # this). Resolved from UAC at runtime — never hardcoded per-venue — once per
+        # instrument (constant across dates/data_types for that instrument's venue).
+        _venue_floor = VenueMapping().get_instrument_discovery_start(instr.venue)
+        venue_floor_ts = pd.Timestamp(_venue_floor) if _venue_floor else None
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -1875,6 +1888,12 @@ def _enumerate_v2_tradfi(
                 reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
+            elif venue_floor_ts is not None and d_ts < venue_floor_ts:
+                # Sister of the sports/DeFi "no data possible because the venue/
+                # chain/source did not exist yet" family — reused as-is (no new
+                # UAC reason needed), per its own docstring: "sports / databento
+                # registries".
+                reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
             elif instr.venue.upper() == "NYSE" and instr.instrument_type.upper() == "ETF":
                 # ARCX-primary ETFs: Databento XNYS.PILLAR (NYSE Primary) has no ETF
                 # data — ETFs are listed on NYSE Arca (ARCX), not NYSE Primary. Pre-seed
