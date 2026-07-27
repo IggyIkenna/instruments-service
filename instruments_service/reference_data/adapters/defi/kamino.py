@@ -193,7 +193,10 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         if not sym_a or not sym_b:
             return None
 
-        instrument_key = f"{venue_tag}:VAULT:{sym_a}-{sym_b}:{address[:8]}"
+        # Key segment must match instrument_type (SOLANA_VAULT) -- "VAULT" is not a real
+        # InstrumentType member (2026-07-27, canonical_id_builder_retrofit_checklist_2026_07_08.md
+        # todo 2, same key-vs-field mismatch class as the AAVE_V3/SPARK/COMPOUND_V3 fix).
+        instrument_key = f"{venue_tag}:SOLANA_VAULT:{sym_a}-{sym_b}:{address[:8]}"
 
         return InstrumentRecord(
             instrument_key=instrument_key,
