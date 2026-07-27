@@ -44,10 +44,11 @@ from __future__ import annotations
 
 import argparse
 import logging
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from unified_trading_library import get_storage_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("restamp_is_sports_blank_source")
@@ -57,9 +58,38 @@ _INDEX_BLOB = "_index/availability_index.parquet"
 _SNAPSHOT_BLOB = "_index/snapshots/pre_blank_source_restamp_{date}.parquet"
 
 
+def _parse_gs_uri(uri: str) -> tuple[str, str]:
+    bucket, path = uri.removeprefix("gs://").split("/", 1)
+    return bucket, path
+
+
 def _cp(src: str, dst: str) -> bool:
-    res = subprocess.run(["gcloud", "storage", "cp", src, dst], capture_output=True, text=True, check=False)
-    return res.returncode == 0
+    """Copy between local paths and gs:// URIs via the UTL StorageClient SDK.
+
+    Directional: download (gs://→local), upload (local→gs://), or a server-side
+    same-cloud copy (gs://→gs://, used by the --apply snapshot step below).
+    """
+    src_is_gcs = src.startswith("gs://")
+    dst_is_gcs = dst.startswith("gs://")
+    try:
+        client = get_storage_client(provider="gcp")
+        if src_is_gcs and dst_is_gcs:
+            src_bucket, src_path = _parse_gs_uri(src)
+            dst_bucket, dst_path = _parse_gs_uri(dst)
+            client.copy_blob(src_bucket, src_path, dst_bucket, dst_path)
+            return True
+        if src_is_gcs and not dst_is_gcs:
+            bucket, path = _parse_gs_uri(src)
+            client.download_file(bucket, path, dst)
+            return True
+        if dst_is_gcs and not src_is_gcs:
+            bucket, path = _parse_gs_uri(dst)
+            client.upload_file(bucket, path, src)
+            return True
+        raise ValueError(f"_cp expects at least one of src/dst to be a gs:// URI: src={src!r} dst={dst!r}")
+    except Exception:
+        logger.exception("_cp failed: src=%s dst=%s", src, dst)
+        return False
 
 
 def main() -> int:
