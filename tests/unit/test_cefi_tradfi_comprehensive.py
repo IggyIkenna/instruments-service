@@ -537,6 +537,28 @@ class TestTardisHelperFunctions:
         legs = _parse_deribit_combo_legs("BTC-BOX-25APR26-80000_85000_90000_95000", "DERIBIT")
         assert len(legs) == 4
 
+    def test_parse_combo_legs_5_leg_structure_dropped_not_truncated(self) -> None:
+        """A structure code resolving to 5+ real legs is DROPPED entirely (empty
+        list), not silently truncated to 4 — operator spec 2026-07-09 (1-4 legs
+        hard cap, canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md),
+        mirroring the CME/CBOE hard cap already covered by
+        test_g1c_xcbf_spreads_decompose_to_combo. No real Deribit structure code
+        currently resolves to 5+ legs (every entry in _DERIBIT_COMBO_STRUCTURES
+        tops out at 4), so this patches in a fake 5-leg code as a backstop check."""
+        from instruments_service.reference_data.adapters.cefi.tardis import combos as combos_module
+
+        fake_structures = dict(combos_module._DERIBIT_COMBO_STRUCTURES)
+        fake_structures["FAKE5"] = [
+            ("C", "BUY", 1),
+            ("C", "SELL", 1),
+            ("C", "BUY", 1),
+            ("C", "SELL", 1),
+            ("C", "BUY", 1),
+        ]
+        with patch.object(combos_module, "_DERIBIT_COMBO_STRUCTURES", fake_structures):
+            legs = _parse_deribit_combo_legs("BTC-FAKE5-25APR26-1_2_3_4_5", "DERIBIT")
+        assert legs == []
+
 
 class TestTardisAdapter:
     """Tests for TardisReferenceDataAdapter methods."""
@@ -2931,6 +2953,31 @@ class TestDeribitComboAdapter:
         assert adapter._parse_combo_instrument({"id": ""}, "BTC", now) is None
         # leg-less combo is invalid (validation requires legs) → None
         assert adapter._parse_combo_instrument({"id": "BTC-FS-19JUN26_PERP", "legs": []}, "BTC", now) is None
+
+    @pytest.mark.asyncio
+    async def test_parse_combo_instrument_5_legs_dropped_not_truncated(self) -> None:
+        """A combo whose ``legs`` array carries 5+ real legs is dropped ENTIRELY
+        (record is None), not truncated to 4 — operator spec 2026-07-09 (1-4 legs
+        hard cap, canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md),
+        mirroring the CME/CBOE hard cap covered by
+        test_g1c_xcbf_spreads_decompose_to_combo (test_databento_tardis_adapter.py)."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        now = datetime.now(UTC)
+        item = {
+            "id": "BTC-FAKE5COMBO",
+            "legs": [
+                {"amount": 1, "instrument_name": "BTC-19JUN26-69000-C"},
+                {"amount": -1, "instrument_name": "BTC-19JUN26-70000-C"},
+                {"amount": 1, "instrument_name": "BTC-19JUN26-71000-C"},
+                {"amount": -1, "instrument_name": "BTC-19JUN26-72000-C"},
+                {"amount": 1, "instrument_name": "BTC-19JUN26-73000-C"},
+            ],
+        }
+        assert adapter._parse_combo_instrument(item, "BTC", now) is None
 
     @pytest.mark.asyncio
     async def test_parse_combo_instrument_invalid_timestamp(self) -> None:
