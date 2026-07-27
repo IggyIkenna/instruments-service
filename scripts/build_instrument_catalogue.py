@@ -4426,6 +4426,89 @@ def _dedup_cefi_expiry_off_by_one(df: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+def _backfill_cefi_missing_expiry_from_wire_symbol(df: pd.DataFrame) -> pd.DataFrame:
+    """Backfill a dated CeFi derivative's blank ``expiry``/``available_to`` from its own wire symbol.
+
+    ROOT CAUSE (``cefi_hl_aster_batch_data_gaps_2026_06_22.md``, operator-confirmed
+    "``Tardis HTTP 400`` (20k) is LARGELY SYSTEMATIC" finding): the per-date row's
+    structured ``expiry`` column is the ONLY closing signal :func:`build_catalogue_dataframe`
+    reads (``_extract_meta`` never reads the also-reliable ``available_to_datetime``
+    Tardis metadata, and CeFi never populates ``delisted_at`` — that is a DeFi-only
+    concept). When a dated FUTURE/OPTION's per-date ``expiry`` never resolved on capture
+    (an adapter-side parse miss / absent venue metadata for that snapshot day) but Tardis's
+    ``/v1/instruments`` reference listing keeps re-surfacing the same wire symbol on later
+    daily snapshots (a documented Tardis quirk: long-dead symbols keep appearing, just
+    flagged via ``availableTo``), the aggregate's ``last_day`` keeps advancing with every
+    new snapshot and never falls behind the venue's own walk horizon — so the row reads
+    ACTIVE FOREVER (``available_to=None``). MTDS's active-window gate
+    (``cefi_catalog_reader._cefi_is_active_on_date``) skips its clip whenever the field is
+    blank, so the backfill keeps fetching Tardis long after the real expiry -> HTTP 400
+    (delisted symbol). Confirmed instances: ``CRYPTOFACILITIES:FF_ETHUSD_250228`` fetched
+    2025-03-01 (one day past its real 2025-02-28 expiry); ``BYBIT:BTC-21APR23`` fetched
+    2023-04-22 (one day past its real 2023-04-21 expiry).
+
+    This is the MIRROR of :func:`_dedup_cefi_expiry_off_by_one`'s artifact: that function
+    fixes a two-row duplicate where BOTH rows already carry an expiry (just one day
+    apart); this one fixes a SINGLE row whose expiry never got set in the first place.
+    Reuses the SAME wire-symbol parsers (:func:`_wire_symbol_expiry_date` /
+    :func:`_wire_symbol_expiry_date_numeric_yymmdd`) for the same reason that function
+    does: the exchange's own ticker is the most authoritative expiry signal available,
+    so a row lacking a structured expiry the wire symbol can resolve is filled FROM it,
+    never guessed independently.
+
+    Scoped conservatively — a row is touched ONLY when ALL of:
+
+      1. ``expiry`` is blank AND ``available_to`` is blank (an already-populated value,
+         whether a real expiry or a legitimate "last observed" date for a non-expiring
+         type, is never overwritten — see :data:`CATALOG_COLUMNS`'s ``available_to``
+         comment on that overload);
+      2. ``raw_symbol`` is non-blank and resolves via :func:`_wire_symbol_expiry_date` or
+         :func:`_wire_symbol_expiry_date_numeric_yymmdd` to a real calendar date;
+      3. that resolved date is STRICTLY BEFORE today (UTC) — a future-dated wire expiry
+         is not yet a delisting and must not be pre-emptively clipped; only a date that
+         has already passed proves the row is stale-active, not merely dated-but-current.
+
+    Non-dated types (PERPETUAL / SPOT_PAIR — no wire date token) and rows that already
+    carry an expiry or available_to are untouched by construction (checks 1-2 above).
+
+    Pure + idempotent: a frame with none of this pattern (no cefi rows, columns absent,
+    every row already resolved, or blank rows whose wire symbol carries no dated token
+    or resolves to a future date) round-trips unchanged.
+    """
+    required = {"raw_symbol", "expiry", "available_to"}
+    if df.empty or not required.issubset(df.columns):
+        return df
+
+    raw = df["raw_symbol"].fillna("").astype(str).str.strip()
+    expiry_blank = df["expiry"].isna() | (df["expiry"].astype(str).str.strip().isin(["", "None"]))
+    available_to_blank = df["available_to"].isna() | (df["available_to"].astype(str).str.strip().isin(["", "None"]))
+    candidates = expiry_blank & available_to_blank & (raw != "")
+    if not candidates.any():
+        return df
+
+    today = datetime.now(UTC).date()
+    out = df.copy()
+    filled = 0
+    for idx in df.index[candidates]:
+        raw_symbol = raw.loc[idx]
+        wire_date = _wire_symbol_expiry_date(raw_symbol) or _wire_symbol_expiry_date_numeric_yymmdd(raw_symbol)
+        if wire_date is None or wire_date >= today:
+            continue
+        iso = wire_date.isoformat()
+        out.at[idx, "expiry"] = iso
+        out.at[idx, "available_to"] = iso
+        filled += 1
+
+    if filled == 0:
+        return df
+    logger.info(
+        "CeFi missing-expiry backfill: filled %d row(s) from their own wire symbol "
+        "(see _backfill_cefi_missing_expiry_from_wire_symbol docstring)",
+        filled,
+    )
+    return out
+
+
 #: Catalogue ``venue`` -> Tardis ``exchange`` string, scoped STRICTLY to the 3 venues
 #: :func:`_dedup_cefi_margin_type_mislabel` covers (mirrors
 #: ``unified_api_contracts.VenueMapping().get_tardis_exchange_for_venue`` for exactly
@@ -4806,6 +4889,14 @@ def run_rollup(
         # function's compared columns), so placement here (after, not before) is
         # for readability only, not a correctness dependency.
         df = _dedup_cefi_margin_type_mislabel(df)
+        # Missing-expiry backfill from wire symbol (see
+        # _backfill_cefi_missing_expiry_from_wire_symbol's docstring — Tardis HTTP 400
+        # systematic-cause fix, cefi_hl_aster_batch_data_gaps_2026_06_22.md). Placed
+        # LAST: it only touches rows with BLANK expiry/available_to, which the three
+        # dedups above never produce or consume (each requires an already-populated,
+        # non-blank expiry to group on), so ordering has no correctness interaction —
+        # last is simply the safest place to add a new pass.
+        df = _backfill_cefi_missing_expiry_from_wire_symbol(df)
     print(f"[BISECT-D] dedup complete rows={len(df)} asset_group={asset_group}", flush=True)
     logger.info("Rolled up %d catalogue rows", len(df))
 
