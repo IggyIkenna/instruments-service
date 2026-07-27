@@ -601,10 +601,12 @@ def _write_all_venues(
             "sample_dir": _orch._uc.csv_sample_dir,
         }
     )
-    # ALL runs use per-venue bucket routing; single-AG runs share one bucket.
-    # _is_all_run is the discriminator — "ALL" is not a valid bucket key.
+    # Any run spanning >1 asset_group (the "ALL" sentinel OR an explicit
+    # multi-value --asset-group list) needs per-venue bucket routing -- else
+    # non-primary-AG rows land in the primary AG's bucket alone (Finding C,
+    # api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md).
     _raw_primary = asset_groups[0] if asset_groups else None
-    _is_all_run = _raw_primary is None or _raw_primary.upper() == "ALL"
+    _is_all_run = _raw_primary is None or _raw_primary.upper() == "ALL" or len(asset_groups) > 1
     # Primary bucket: "sports" for ALL runs (downstream sports stages need one bucket).
     primary_asset_group: str | None = "sports" if _is_all_run else _raw_primary
     bucket = _orch._get_instruments_bucket(primary_asset_group)
