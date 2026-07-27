@@ -507,6 +507,7 @@ class TestTradfiNonTradingDayInMissingShards:
                 written_venues={"NASDAQ"},
                 missing_shards={"NYSE"},
                 bucket="tradfi-bucket",
+                asset_groups=["tradfi"],
             )
 
         # NYSE missing on non-trading day → empty_confirmed with EXPECTED_WEEKEND reason.
@@ -568,6 +569,7 @@ class TestTradfiNonTradingDayInMissingShards:
                 written_venues={"DERIBIT"},
                 missing_shards={"BYBIT"},
                 bucket="cefi-bucket",
+                asset_groups=["cefi"],
             )
 
         assert len(_failed_calls) == 1, f"Expected 1 attempted_failed, got {_failed_calls}"
