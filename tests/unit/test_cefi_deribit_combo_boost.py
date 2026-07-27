@@ -103,6 +103,28 @@ class TestBuildLegs:
         assert legs[1].instrument_key == "DERIBIT:FUTURE:BTC-10JUL26"
         assert legs[1].side == "BUY"
 
+    def test_5_legs_dropped_not_truncated(self) -> None:
+        """A combo carrying 5+ real legs is DROPPED entirely (empty list, not
+        truncated to 4) — operator spec 2026-07-09 (1-4 legs hard cap,
+        canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md),
+        mirroring the CME/CBOE hard cap in
+        adapters/tradfi/databento/symbology.py's _parse_cboe_spread_legs."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        legs = DeribitComboReferenceDataAdapter._build_legs(
+            [
+                {"amount": 1, "instrument_name": "BTC-19JUN26-69000-C"},
+                {"amount": -1, "instrument_name": "BTC-19JUN26-70000-C"},
+                {"amount": 1, "instrument_name": "BTC-19JUN26-71000-C"},
+                {"amount": -1, "instrument_name": "BTC-19JUN26-72000-C"},
+                {"amount": 1, "instrument_name": "BTC-19JUN26-73000-C"},
+            ],
+            "BTC-FAKE5COMBO",
+        )
+        assert legs == []
+
     def test_unclassifiable_leg_shape_dropped(self) -> None:
         """A leg name that matches none of the known real Deribit shapes (2-part
         dated/PERPETUAL, 4-part option) is dropped, not raised — same
