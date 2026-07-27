@@ -120,8 +120,16 @@ def _delete_noncanonical_rows(
     lid = df["league_id"].fillna("").astype(str).str.strip()
     has_lid = ~_blank(df["league_id"])
 
-    # Only filter rows that have a league_id AND are not in canonical set
-    non_canonical_mask = has_lid & ~lid.isin(canonical_ids)
+    # Scope to football data_types only — a non-football row (e.g. `trades`, `odds_horizon_bucket`)
+    # can carry a football-style league_id from the pre-canonical write path, but it is not G1 NOISE:
+    # it belongs to a separate, independently-migrated population and must never be deleted here.
+    if "data_type" in df.columns:
+        is_football = df["data_type"].isin(_FOOTBALL_DATA_TYPES)
+    else:
+        is_football = pd.Series(True, index=df.index)
+
+    # Only filter rows that have a league_id AND are not in canonical set AND are football data
+    non_canonical_mask = has_lid & ~lid.isin(canonical_ids) & is_football
     n_delete = int(non_canonical_mask.sum())
     deleted_ids = frozenset(lid[non_canonical_mask].unique())
 
