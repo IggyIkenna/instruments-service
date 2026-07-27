@@ -127,6 +127,18 @@ class TestParseMarket:
         adapter = PolymarketPerpReferenceDataAdapter()
         assert adapter._parse_market({"title": "no id"}, datetime.now(UTC)) is None
 
+    def test_event_contract_ticker_rejected(self) -> None:
+        """Write-time guardrail: this parser previously had NO rejection filter at
+        all — a synthetic event-contract market_id (the KXMVE* family that
+        contaminated KALSHI-PERP) must be rejected at write time, not silently
+        accepted into the catalogue."""
+        adapter = PolymarketPerpReferenceDataAdapter()
+        market: dict[str, object] = {
+            "market_id": "KXMVESPORTSMULTIGAMEEXTENDED-26JUL05",
+            "status": "active",
+        }
+        assert adapter._parse_market(market, datetime.now(UTC)) is None
+
 
 # ---------------------------------------------------------------------------
 # Tests: error classification (pure fn — reused by the Phase-3 repoint path)
