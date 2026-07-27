@@ -91,21 +91,37 @@ def _write_manifest(storage_client: object, bucket_name: str, df: pd.DataFrame) 
     storage_client.upload_from_file_obj(bucket_name, _INDEX_BLOB, out)  # type: ignore[attr-defined]
 
 
+def _find_repo_toplevel(start: Path) -> Path:
+    """Walk up from `start` to the nearest ancestor containing a `.git` entry (repo root).
+
+    Raises RuntimeError rather than returning a guess — callers must not silently fall back
+    to an unrelated directory when the repo boundary can't be found.
+    """
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    raise RuntimeError(
+        f"Could not resolve the enclosing git repo root by walking up from {start} — "
+        "no ancestor directory contains a .git entry."
+    )
+
+
 def _default_csv_path(asset_group: str, entity_type: str, entity_key: str) -> Path:
     day = datetime.now(UTC).strftime("%Y-%m-%d")
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    # Path-B per-slot topology: scripts/ → instruments-service/ → .tabs/<slot>/ — the slot's OWN
-    # unified-trading-pm clone is a SIBLING of instruments-service under .tabs/<slot>/, never the
-    # read-only root clone at the top of the workspace. Try the slot-sibling path first (parents[2]);
-    # fall back to the old workspace-root guess (non-slotted checkouts), then alongside the script.
-    candidates = [
-        Path(__file__).parents[2] / "unified-trading-pm",  # .tabs/<slot>/unified-trading-pm
-        Path(__file__).parents[4] / "unified-trading-pm",  # non-slotted workspace root
-    ]
-    pm_dir = next((c for c in candidates if c.is_dir()), None)
-    if pm_dir is None:
-        # Fallback: write alongside the script when workspace layout differs.
-        pm_dir = Path(__file__).parent
+    # Resolve the destination from THIS repo's own identity (its git toplevel) instead of a
+    # fixed parents[N] hop. unified-trading-pm is always a sibling of this repo's own clone —
+    # under the Path-B per-slot topology that's .tabs/<slot>/unified-trading-pm, in a
+    # non-slotted checkout it's the workspace-root unified-trading-pm — and the repo-toplevel's
+    # parent is that sibling directory in both layouts, so one resolution covers both.
+    repo_toplevel = _find_repo_toplevel(Path(__file__).resolve().parent)
+    pm_dir = repo_toplevel.parent / "unified-trading-pm"
+    if not pm_dir.is_dir():
+        raise RuntimeError(
+            f"Cannot resolve a writable unified-trading-pm sibling next to this repo's own "
+            f"clone (looked for {pm_dir}). Pass --output-csv explicitly instead of relying on "
+            "the auto-derived destination."
+        )
     out_dir = pm_dir / "audits" / "entity_lifecycle" / "by_date" / f"day={day}"
     out_dir.mkdir(parents=True, exist_ok=True)
     key_safe = entity_key.replace("/", "_").replace(":", "_").replace(" ", "_")
