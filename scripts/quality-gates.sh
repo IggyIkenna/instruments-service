@@ -279,10 +279,13 @@ if [[ -d "${QG_SCRIPTS_DIR}" ]]; then
             "instruments-service" "${_RATCHET_BUCKET}" "defi" \
             || log_warn "Honest coverage: IS defi coverage regression — see honest_coverage_formula_consolidation_2026_05_19.md Phase 6"
     fi
-    # STEP 5.83: adapter contract-call regression ratchet (lint_sweep_774602ea8 audit Phase 1)
+    # STEP 5.83: adapter contract-call regression ratchet (lint_sweep_774602ea8 audit Phase 1) — HARD FAIL
+    # (was warn-only through 2026-07-27; a real per-file regression on MTDS's phoenix_orderbook_handler.py
+    # sailed through silently under the warn-only form — see
+    # plans/active/issues/mtds_phoenix_orderbook_handler_contract_call_regression_2026_07_27.md).
     if [[ -f "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" ]]; then
         run_timeout 60 bash "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" "${WORKSPACE_ROOT}" \
-            || log_warn "Adapter contract-call regression — see plans/active/issues/lint_sweep_774602ea8_regression_audit_2026_05_20.md"
+            || { log_fail "Adapter contract-call regression — see plans/active/issues/lint_sweep_774602ea8_regression_audit_2026_05_20.md"; exit 1; }
     fi
     # STEP 5.84: schema-version compliance — no schema_version < 8 in service source (mega audit B1 Pattern 3)
     if [[ -f "${QG_SCRIPTS_DIR}/no_legacy_schema_version.sh" ]]; then
