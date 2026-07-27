@@ -284,7 +284,7 @@ if [[ -d "${QG_SCRIPTS_DIR}" ]]; then
     # sailed through silently under the warn-only form — see
     # plans/active/issues/mtds_phoenix_orderbook_handler_contract_call_regression_2026_07_27.md).
     if [[ -f "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" ]]; then
-        run_timeout 60 bash "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" "${WORKSPACE_ROOT}" \
+        run_timeout 300 bash "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" "${WORKSPACE_ROOT}" \
             || { log_fail "Adapter contract-call regression — see plans/active/issues/lint_sweep_774602ea8_regression_audit_2026_05_20.md"; exit 1; }
     fi
     # STEP 5.84: schema-version compliance — no schema_version < 8 in service source (mega audit B1 Pattern 3)

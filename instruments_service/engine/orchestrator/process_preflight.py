@@ -140,7 +140,11 @@ def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
     by_date = _FIXTURE_LEAGUES_BY_DATE_CACHE.get(bucket)
     if by_date is None:
         by_date = {}
-        _index_df = _orch.read_availability_index(bucket)
+        # Slim read: only date/data_type/league_id are used below. The
+        # full-schema read decodes all 42 columns of the sports index
+        # (measured: 6.2 GiB peak RSS per call) — see
+        # sports_is_daily_enum_backfill_oom_at_32gi_ceiling_2026_07_27.md.
+        _index_df = _orch.read_availability_index(bucket, columns=["date", "data_type", "league_id"])
         if not _index_df.empty and "league_id" in _index_df.columns:
             _fix_only = _index_df.loc[_index_df["data_type"] == FIXTURES_SCHEDULE, ["date", "league_id"]].dropna(
                 subset=["league_id"]
