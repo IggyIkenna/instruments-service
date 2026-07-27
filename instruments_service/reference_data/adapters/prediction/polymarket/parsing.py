@@ -108,6 +108,12 @@ class PolymarketParsingMixin:
             )
             or _pm.CanonicalQuestionGroup.OTHER
         )
+        # Re-drift guard (prediction_phase_ab_residuals_2026_07_24.md A2 / batch1 todo
+        # "route every prediction id/underlying/CQG writer through the shared canonical
+        # builder + a QG that fails a non-canonical ... on write") — group.value is a
+        # StrEnum member so this is always canonical today; validated anyway so a future
+        # classifier regression rejects at the writer instead of silently persisting.
+        _pm.validate_canonical_question_group(group.value)
 
         # Per CLAUDE.md "Prediction market lifecycle timing": every
         # prediction instrument MUST carry market_created_at and
@@ -202,7 +208,7 @@ class PolymarketParsingMixin:
             # rather than an empty string; slug remains the raw_symbol label floor.
             question=market.question,
             raw_symbol=slug,
-            instrument_type="PREDICTION_MARKET",
+            instrument_type=_pm.InstrumentType.PREDICTION_MARKET,
             base_asset=base_asset,
             quote_asset="USDC",
             tick_size=tick_size,
@@ -546,6 +552,7 @@ class PolymarketParsingMixin:
                 )
                 or _pm.CanonicalQuestionGroup.OTHER
             )
+        _pm.validate_canonical_question_group(group.value)
 
         settlement_lag = _pm.CANONICAL_GROUP_METADATA[group].settlement_lag
         settlement_time = resolution_time + settlement_lag
