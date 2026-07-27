@@ -26,22 +26,27 @@ This script:
   3. Deletes the original object.
   4. Verifies 0 objects remain under the 3 venue prefixes.
 
-HARD STOP (codex/02-data/gcs-and-manifest-delete-safety-protocol.md #3.1): this bucket
-(``instruments-store-defi-prd-{PID}``) is a `-prd-` production bucket — ANY delete from it is
-a human-only hard stop, at any confidence level. This script's --apply path must be run by a
-human operator, never by an autonomous agent. Default is --dry-run (list + count only, no
-snapshot, no delete, no write of any kind).
+REVERSIBILITY-QUALIFIED (codex/02-data/gcs-and-manifest-delete-safety-protocol.md §3a, 2026-07-27): this bucket
+(``instruments-store-defi-prd-{PID}``) is a `-prd-` production bucket, but this delete is object/prefix-scoped
+(3 named venue prefixes, never the bucket) with a content-correctness proof already established (no live writer,
+no live reader — see module docstring above) — so it qualifies for the agent-autonomous path IF, and only if, a
+FRESH same-run check confirms the bucket's GCS Soft Delete retention is >= 604800s (7 days). ``--apply`` performs
+that check itself as its first action and aborts loudly if it does not clear the threshold — never trust a prior
+session's claim or this docstring for that number. Default is --dry-run (list + count only, no snapshot, no
+delete, no write of any kind).
 
 Usage:
     python scripts/purge_cefi_perp_defi_blob_contamination_phase3_2026_07_26.py           # dry-run
-    python scripts/purge_cefi_perp_defi_blob_contamination_phase3_2026_07_26.py --apply    # OPERATOR ONLY
+    python scripts/purge_cefi_perp_defi_blob_contamination_phase3_2026_07_26.py --apply    # fresh-checks retention, then applies
 """
 
 from __future__ import annotations
 
 import sys
 
-from unified_trading_library import gcs_copy_object, gcs_delete_object, get_storage_client
+from unified_trading_library import get_storage_client
+
+_MIN_SOFT_DELETE_RETENTION_SECONDS = 604800  # 7 days — codex/02-data/gcs-and-manifest-delete-safety-protocol.md §3a
 
 PID = "central-element-323112"
 BUCKET = f"instruments-store-defi-prd-{PID}"
@@ -71,12 +76,28 @@ def main() -> int:
         print("DRY-RUN (pass --apply to write). Snapshot + delete skipped.")
         return 0
 
+    # Fresh, same-run reversibility check (§3a) — never trust a prior session's claim.
+    # Uses the already-configured `st` client (project_id=PID) directly, not the
+    # gcs_bucket_soft_delete_retention_seconds free-function wrapper, which resolves its
+    # own uncached client via get_storage_client() with no project_id and falls back to
+    # GCP_PROJECT_ID/AWS_ACCOUNT_ID env vars — unset in this script's explicit-PID convention.
+    retention = st.get_bucket_soft_delete_retention_seconds(BUCKET)
+    print(f"soft_delete_retention_seconds={retention} (need >= {_MIN_SOFT_DELETE_RETENTION_SECONDS})")
+    if retention < _MIN_SOFT_DELETE_RETENTION_SECONDS:
+        print(
+            f"ABORT: {BUCKET} soft-delete retention ({retention}s) is below the {_MIN_SOFT_DELETE_RETENTION_SECONDS}s "
+            "reversibility threshold -- this delete no longer qualifies for the autonomous path. Escalate to the "
+            "operator per gcs-and-manifest-delete-safety-protocol.md hard-stop #1."
+        )
+        return 1
+
     for venue, objs in per_venue.items():
         for path in objs:
-            src_uri = f"gs://{BUCKET}/{path}"
-            dst_uri = f"gs://{BUCKET}/{SNAPSHOT_PREFIX}{path}"
-            gcs_copy_object(src_uri, dst_uri)
-            gcs_delete_object(src_uri)
+            # st.copy_blob/delete_blob directly, not the gcs_copy_object/gcs_delete_object
+            # free-function wrappers -- same env-var-dependent client-resolution gap as the
+            # retention check above.
+            st.copy_blob(BUCKET, path, BUCKET, f"{SNAPSHOT_PREFIX}{path}")
+            st.delete_blob(BUCKET, path)
         print(f"venue={venue}: snapshotted + deleted {len(objs)} objects")
 
     # verify: 0 objects remain under any of the 3 venue prefixes
