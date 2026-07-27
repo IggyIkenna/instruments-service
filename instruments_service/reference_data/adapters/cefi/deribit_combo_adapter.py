@@ -39,6 +39,14 @@ _BASE = "https://www.deribit.com/api/v2"
 # Deribit underlyings that are actively traded.
 _DERIBIT_COMBO_UNDERLYINGS: list[str] = ["BTC", "ETH", "SOL", "BNB", "XRP"]
 
+# Hard cap on real combo/spread leg count (operator spec, 2026-07-09 —
+# canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md): 1-4 legs
+# supported; a real combo with 5+ legs is DROPPED (not captured, not
+# truncated) — logged with the real leg count rather than silently lost.
+# Mirrors the CME/CBOE hard cap already implemented in
+# instruments_service/reference_data/adapters/tradfi/databento/symbology.py.
+_MAX_COMBO_LEGS = 4
+
 
 def _classify_deribit_error(exc: Exception, status: int | None = None) -> str:
     """Map a Deribit HTTP/network error to a UAC error code for classification."""
@@ -316,7 +324,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         return records
 
     @staticmethod
-    def _build_legs(raw_legs: object) -> list[InstrumentLeg]:
+    def _build_legs(raw_legs: object, combo_id: str = "") -> list[InstrumentLeg]:
         """Map Deribit get_combos structured ``legs`` → list[InstrumentLeg].
 
         Each Deribit leg is ``{"amount": <signed int>, "instrument_name": <str>}``.
@@ -330,9 +338,23 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         since ``get_combos`` doesn't return a per-leg type field. A leg whose
         name doesn't match any known shape is dropped (logged) rather than
         raised, matching the existing malformed-leg-skip convention below.
+
+        A combo carrying 5+ real legs is dropped ENTIRELY (empty list, not a
+        truncated 4-leg one) with the real leg count logged — mirroring the
+        CME/CBOE hard cap (operator spec 2026-07-09,
+        canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md).
+        ``combo_id`` is optional context for the drop log line only.
         """
         legs: list[InstrumentLeg] = []
         if not isinstance(raw_legs, list):
+            return legs
+        if len(raw_legs) > _MAX_COMBO_LEGS:
+            logger.warning(
+                "DeribitComboAdapter: dropping combo with %d legs (hard cap is %d, combo_id=%r)",
+                len(raw_legs),
+                _MAX_COMBO_LEGS,
+                combo_id,
+            )
             return legs
         for raw in raw_legs:
             if not isinstance(raw, dict):
@@ -401,7 +423,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # Legs: from the get_combos STRUCTURED legs (canonical source). A combo
         # without parseable legs is invalid → drop (validation requires legs).
-        legs: list[InstrumentLeg] = self._build_legs(item.get("legs"))
+        legs: list[InstrumentLeg] = self._build_legs(item.get("legs"), combo_id)
         if not legs:
             return None
 
