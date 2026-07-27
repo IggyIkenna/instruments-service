@@ -5227,6 +5227,124 @@ def _bybit_perpetual_ambiguous_rows() -> list[dict[str, object]]:
     return rows
 
 
+class TestBackfillCefiMissingExpiryFromWireSymbol:
+    """Tardis HTTP 400 systematic-cause fix (cefi_hl_aster_batch_data_gaps_2026_06_22.md):
+    a dated CeFi derivative whose structured expiry/available_to never resolved but whose
+    wire symbol proves it already expired must be backfilled, never left reading ACTIVE
+    forever."""
+
+    def test_backfills_confirmed_cryptofacilities_numeric_symbol_past_expiry(self, rollup: ModuleType) -> None:
+        """The plan's first confirmed instance: CRYPTOFACILITIES:FF_ETHUSD_250228,
+        fetched 2025-03-01 (one day past its real 2025-02-28 expiry) because expiry/
+        available_to never resolved on capture."""
+        rows = [
+            {
+                "venue": "CRYPTOFACILITIES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_ETHUSD_250228",
+                "instrument_id": "CRYPTOFACILITIES:FUTURE:ETH-USD@INV-20250228",
+                "base_asset": "ETH",
+                "available_from": "2025-01-01",
+                "expiry": None,
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] == "2025-02-28"
+        assert row["available_to"] == "2025-02-28"
+
+    def test_backfills_confirmed_bybit_alphabetic_symbol_past_expiry(self, rollup: ModuleType) -> None:
+        """The plan's second confirmed instance: BYBIT:BTC-21APR23, fetched 2023-04-22
+        (one day past its real 2023-04-21 expiry)."""
+        rows = [
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-21APR23",
+                "instrument_id": "BYBIT:FUTURE:BTC-USD@INV-20230421",
+                "base_asset": "BTC",
+                "available_from": "2023-01-01",
+                "expiry": None,
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] == "2023-04-21"
+        assert row["available_to"] == "2023-04-21"
+
+    def test_leaves_untouched_when_expiry_already_populated(self, rollup: ModuleType) -> None:
+        """Never overwrite an already-resolved value — even a blank available_to
+        alongside a populated expiry is not this artifact's shape."""
+        rows = [
+            {
+                "venue": "CRYPTOFACILITIES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_ETHUSD_250228",
+                "instrument_id": "CRYPTOFACILITIES:FUTURE:ETH-USD@INV-20250227",
+                "base_asset": "ETH",
+                "available_from": "2025-01-01",
+                "expiry": "2025-02-27",
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] == "2025-02-27"
+        assert row["available_to"] is None
+
+    def test_leaves_untouched_when_wire_symbol_expiry_is_still_future(self, rollup: ModuleType) -> None:
+        """A dated future/option whose wire expiry hasn't happened yet is genuinely
+        active — must not be pre-emptively clipped."""
+        rows = [
+            {
+                "venue": "KRAKEN-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_XBTUSD_991231",
+                "instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20991231",
+                "base_asset": "BTC",
+                "available_from": "2026-01-01",
+                "expiry": None,
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] is None
+        assert row["available_to"] is None
+
+    def test_leaves_untouched_when_raw_symbol_carries_no_dated_token(self, rollup: ModuleType) -> None:
+        """A perpetual's wire symbol has no DDMonYY / numeric-YYMMDD token — honest
+        no-op, never guessed."""
+        rows = [
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "BTCUSD",
+                "instrument_id": "BYBIT:PERPETUAL:BTC-USD@INV",
+                "base_asset": "BTC",
+                "available_from": "2019-01-01",
+                "expiry": None,
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] is None
+        assert row["available_to"] is None
+
+    def test_empty_frame_returns_unchanged(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(columns=["venue", "instrument_type", "raw_symbol", "expiry", "available_to"])
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(df)
+        assert out.empty
+
+    def test_missing_required_columns_returns_unchanged(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame([{"venue": "BYBIT", "instrument_type": "PERPETUAL"}])
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(df)
+        pd.testing.assert_frame_equal(out, df)
+
+
 class TestDedupBybitFutureBaseAssetParsing:
     def test_collapses_simple_two_row_pair_keeping_correctly_parsed_row(self, rollup: ModuleType) -> None:
         df = pd.DataFrame(_bybit_future_simple_pair_rows())
