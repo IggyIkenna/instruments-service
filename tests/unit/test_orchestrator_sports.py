@@ -714,12 +714,15 @@ def _ft_odds_stack(
     skip: bool = False,
     odds_rows: list | None = None,
     expected_league_ids: list[str] | None = None,
+    scheduled_fixture_map: dict | None = None,
 ) -> tuple:
     mock_adapter = MagicMock()
     mock_adapter.get_fixture_odds_snapshot = AsyncMock(return_value=odds_rows if odds_rows is not None else [])
     mock_mw = MagicMock()
     mock_mw_cls = MagicMock(return_value=mock_mw)
     expected_leagues = [_make_league(lid) for lid in (expected_league_ids or ["EPL"])]
+    # Default to empty scheduled map so existing tests don't trigger the NaN-fill path.
+    _sched_map = scheduled_fixture_map if scheduled_fixture_map is not None else {}
 
     patches = _stack(
         patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
@@ -732,7 +735,15 @@ def _ft_odds_stack(
         patch("instruments_service.engine.orchestrator._canonical_league_id", side_effect=lambda lid: str(lid)),
         patch("instruments_service.engine.orchestrator._is_in_canonical_write_universe", return_value=True),
         patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="footystats"),
-        patch("instruments_service.engine.orchestrator._load_scheduled_footystats_fixture_map", return_value={}),
+        # NOTE: must patch the binding INSIDE the footystats submodule, not the
+        # orchestrator-package re-export — _fetch_footystats_odds calls this name
+        # unqualified from within footystats.py, so it resolves via that module's
+        # own globals, not orchestrator's. Patching only the re-export is a no-op
+        # here (confirmed by a live GCS 403 firing during test runs otherwise).
+        patch(
+            "instruments_service.engine.orchestrator.footystats._load_scheduled_footystats_fixture_map",
+            return_value=_sched_map,
+        ),
         patch("unified_api_contracts.sports.build_fixture_id", return_value="EPL:ARSENAL_v_CHELSEA:2026-01-15"),
         patch("unified_api_contracts.sports.resolve_footystats_team", side_effect=lambda t: t.upper()),
         patch("instruments_service.engine.orchestrator.FOOTYSTATS_HISTORICAL_SEASON_IDS", {123: "EPL"}),
@@ -922,6 +933,134 @@ class TestFetchFootystatsOdds:
         mock_mw.record_captured.assert_not_called()
         # No GCS write for the dropped league either.
         mock_sink_write.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_record_captured_passes_cluster_validation_kwargs(self) -> None:
+        """SP-10-ODDS regression: record_captured for ODDS with canonical_fixture_id must
+        supply expected_root_clusters, cluster_extractor, and cluster_symbol_column so the
+        per-fixture cluster gate is active (not silently skipped)."""
+        odds_rows = [
+            {
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
+                "kickoff_utc": "2026-01-15T15:00:00Z",
+                "home_odds": 1.8,
+                "away_odds": 4.2,
+            }
+        ]
+        stack, _, mock_mw = _ft_odds_stack(skip=False, odds_rows=odds_rows)
+        with stack:
+            await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+
+        mock_mw.record_captured.assert_called()
+        call_kwargs = mock_mw.record_captured.call_args.kwargs
+        # cluster_symbol_column must point to the fixture-id column
+        assert call_kwargs.get("cluster_symbol_column") == "canonical_fixture_id"
+        # cluster_extractor must be callable
+        assert callable(call_kwargs.get("cluster_extractor"))
+        # expected_root_clusters must be a non-None dict (non-empty for mapped fixtures)
+        erc = call_kwargs.get("expected_root_clusters")
+        assert erc is not None
+        assert isinstance(erc, dict)
+        assert len(erc) > 0, "non-empty expected_root_clusters required for mapped fixtures"
+
+
+class TestFootystatsOddsNanFill:
+    """Tests for the NaN-fill step in _fetch_footystats_odds.
+
+    Regression coverage for the FootyStats odds NaN-fill logic added in
+    instruments-service@33c0796c ("NaN-fill scheduled fixtures missing from
+    FootyStats odds API") — scheduled fixtures the odds API silently omits
+    (``has_odds=False``) must still land a row (all market columns NaN) so
+    the honest-coverage denominator (``_load_scheduled_footystats_fixture_map``
+    + ``expected_root_clusters=``) stays intact instead of quietly shrinking.
+    """
+
+    @pytest.mark.asyncio
+    async def test_nan_fill_injects_rows_for_scheduled_fixtures_missing_from_api(
+        self,
+    ) -> None:
+        """Scheduled fixtures absent from the API response get NaN-fill rows injected."""
+        odds_rows = [
+            {
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
+                "kickoff_utc": "2026-01-15T15:00:00Z",
+                "home_odds": 1.8,
+                "away_odds": 4.2,
+            }
+        ]
+        # Two scheduled fixtures; only one is returned by the API.
+        scheduled_map = {
+            "EPL:ARSENAL_v_CHELSEA:2026-01-15": None,
+            "EPL:LIVERPOOL_v_MANUTD:2026-01-15": None,
+        }
+        stack, _, mock_mw = _ft_odds_stack(
+            skip=False,
+            odds_rows=odds_rows,
+            scheduled_fixture_map=scheduled_map,
+        )
+        with stack:
+            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+        # record_captured should be called (not record_empty)
+        mock_mw.record_captured.assert_called()
+        # The total row count should include the NaN-fill row: >= 2
+        assert result.get("footystats_odds", 0) >= 2
+
+    @pytest.mark.asyncio
+    async def test_nan_fill_all_scheduled_when_api_returns_nothing(self) -> None:
+        """When API returns empty but scheduled fixtures exist, they become NaN rows."""
+        scheduled_map = {
+            "EPL:ARSENAL_v_CHELSEA:2026-01-15": None,
+        }
+        stack, _, mock_mw = _ft_odds_stack(
+            skip=False,
+            odds_rows=[],
+            scheduled_fixture_map=scheduled_map,
+        )
+        with stack:
+            await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+        # With scheduled fixtures, we write record_captured (NaN rows), NOT record_empty
+        mock_mw.record_empty.assert_not_called()
+        mock_mw.record_captured.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_no_nan_fill_when_no_scheduled_fixtures(self) -> None:
+        """No scheduled fixtures and no API data → genuine record_empty (unchanged behaviour)."""
+        # _ft_odds_stack defaults scheduled_fixture_map to {}
+        stack, _, mock_mw = _ft_odds_stack(skip=False, odds_rows=[])
+        with stack:
+            await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+        mock_mw.record_empty.assert_called_once()
+        mock_mw.record_captured.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_nan_fill_skipped_when_all_scheduled_fixtures_returned(self) -> None:
+        """When every scheduled fixture is returned by the API, no extra rows are injected."""
+        odds_rows = [
+            {
+                "home_team": "Arsenal",
+                "away_team": "Chelsea",
+                "fixture_id": "123:ARSENAL_v_CHELSEA:2026-01-15",
+                "kickoff_utc": "2026-01-15T15:00:00Z",
+                "home_odds": 1.8,
+            }
+        ]
+        # The scheduled map matches exactly what the API returns (same canonical_fixture_id).
+        scheduled_map = {
+            "EPL:ARSENAL_v_CHELSEA:2026-01-15": None,
+        }
+        stack, _, _mock_mw = _ft_odds_stack(
+            skip=False,
+            odds_rows=odds_rows,
+            scheduled_fixture_map=scheduled_map,
+        )
+        with stack:
+            result = await _fetch_footystats_odds(date=_DATE, api_key="key", bucket=_BUCKET)
+        # Only the single real row should be written
+        assert result.get("footystats_odds", 0) == 1
 
 
 # ---------------------------------------------------------------------------
