@@ -219,7 +219,7 @@ def _get_manifest_high_watermarks(asset_group: str) -> dict[str, int]:
     """
     try:
         bucket = _orch._get_instruments_bucket(asset_group)
-        index_df = _orch.read_availability_index(bucket)
+        index_df = _orch.read_availability_index(bucket, columns=["venue", "instrument_count", "date"])
         if index_df.empty:
             return {}
         hwm: dict[str, int] = {}
