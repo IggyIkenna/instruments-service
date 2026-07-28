@@ -112,6 +112,7 @@ from unified_api_contracts import (
     is_mvp,
     is_total_universe,
     pipeline_mode_for_source,
+    resolve_tradfi_underlying_to_root,
     source_string_for,
     valid_data_types_for_venue_instrument_type,
     venue_data_type_has_batch_source,
@@ -2849,17 +2850,44 @@ assert set(_V2_ENUMERATORS) == set(TOTAL_UNIVERSE_AXES) == set(SUPPORTED_ASSET_G
 )
 
 
-def _derive_underlying(instrument_id: str, asset_group: str = "") -> str:
-    """Fallback underlying derivation when the catalogue ``underlying`` column is
-    blank — the base asset is the token before the first ``-`` separator
-    (``BTC-29MAR24-50000-C`` → ``BTC``; ``BTC-29MAR24`` → ``BTC``).
+def _derive_underlying(instrument_id: str, asset_group: str = "", raw_underlying: str = "") -> str:
+    """Resolve the underlying to key a bundle-grain roll-up on. Two roles:
 
-    ``asset_group="tradfi"`` symbols with no ``-`` separator (ICE COMBO/spread
-    codes carry extra whitespace + numeric spread ids instead of the standard
-    letter+month-code shape, e.g. ``BRN   3  30615524`` / ``G   FSF0032.M0032``)
-    fall back to the whitespace-delimited leading token when it is a registered
-    TradFi root (``TRADFI_ROOTS``). Returns "" if neither shape resolves (cannot
-    key a bundle → caller skips rather than mis-key)."""
+    1. Blank-``underlying`` FALLBACK (``raw_underlying`` omitted/blank): derive
+       from the leaf ``instrument_id`` — the base asset is the token before the
+       first ``-`` separator (``BTC-29MAR24-50000-C`` → ``BTC``;
+       ``BTC-29MAR24`` → ``BTC``). ``asset_group="tradfi"`` symbols with no
+       ``-`` separator (ICE COMBO/spread codes carry extra whitespace +
+       numeric spread ids instead of the standard letter+month-code shape,
+       e.g. ``BRN   3  30615524`` / ``G   FSF0032.M0032``) fall back to the
+       whitespace-delimited leading token when it is a registered TradFi root
+       (``TRADFI_ROOTS``).
+    2. Naming-convention RECONCILIATION (``raw_underlying`` non-blank,
+       ``asset_group="tradfi"``): a manifest/catalog row's ``underlying``
+       column can already be POPULATED but in a spelled-out commodity-name
+       convention ("HEATING-OIL", "PLATINUM", "CRUDE", "NAT-GAS-HH") instead
+       of the catalog's short-root convention ("HO", "PL", "CL", "NG") — a
+       naming-convention mismatch, not a grain mismatch (SSOT:
+       tradfi_combo_underlying_naming_mismatch_blocks_g1_enum_present_rollup_
+       2026_07_28.md). When ``raw_underlying`` isn't already a recognised
+       short root, this tries the UAC reverse-lookup
+       (:func:`unified_api_contracts.resolve_tradfi_underlying_to_root`)
+       before falling back to the raw value UNCHANGED (never blanked) — an
+       unresolved spelled name still reconciles no worse than pre-fix
+       behaviour, preserving the "under-matching beats mis-keying" guarantee
+       for whatever residual the reverse-lookup doesn't cover (e.g. a genuine
+       multi-root spread like ``WTI-BZ``).
+
+    Returns "" if neither role resolves anything usable (cannot key a bundle
+    → caller skips rather than mis-key)."""
+    if raw_underlying:
+        ru = raw_underlying.strip()
+        if ru:
+            if asset_group == "tradfi" and ru not in TRADFI_ROOTS:
+                resolved_root = resolve_tradfi_underlying_to_root(ru)
+                if resolved_root:
+                    return resolved_root
+            return ru
     iid = instrument_id.strip()
     if "-" in iid:
         return iid.split("-", 1)[0]
@@ -3372,15 +3400,26 @@ def _rollup_present_bundle_grain(df: pd.DataFrame, asset_group: str) -> pd.DataF
     This applies the SAME LEAF→bundle re-keying to every present/captured row
     BEFORE the present-set tuples are built: a bundle-leaf row's
     (``instrument_type``, ``instrument_id``, ``underlying``) triple is replaced
-    with (``bundle_it``, ``""``, ``underlying or _derive_underlying(instrument_id)``)
-    — identical derivation to :func:`_rollup_bundle_grain`. Rows that are already
-    bundle-shaped (``instrument_type`` IS a bundle type — ``options_chain`` /
-    ``futures_chain`` / ``combo`` pass through, mirroring ``_rollup_bundle_grain``'s
-    own passthrough for those types) or that are genuine per-contract LEAVES
-    (equity/etf/spot_pair/…) are returned unchanged — a no-op for every
-    asset_group/instrument_type without bundle-grain leaves (only cefi/tradfi
-    declare any in ``INSTRUMENT_GRAIN_BY_AG_AND_INSTRUMENT_TYPE`` today), same
-    no-op guarantee ``_rollup_bundle_grain`` documents for the seed side.
+    with (``bundle_it``, ``""``, ``_derive_underlying(instrument_id, asset_group,
+    raw_underlying=underlying)``) — identical derivation to
+    :func:`_rollup_bundle_grain`, extended (2026-07-28) to ALSO reconcile an
+    already-populated ``underlying`` value through ``_derive_underlying``'s
+    naming-convention path rather than using it verbatim: real captured tradfi
+    COMBO/futures_chain/options_chain rows can carry ``underlying`` already
+    spelled out ("HEATING-OIL", "PLATINUM", "CRUDE", "NAT-GAS-HH") instead of
+    the catalog's short-root convention ("HO", "PL", "CL", "NG") — a naming
+    mismatch (not the grain mismatch this function was originally built to
+    fix) that left the present-set rollup unable to close tradfi's phantom
+    ``expected_unattempted`` cells even after the grain re-keying landed (SSOT:
+    tradfi_combo_underlying_naming_mismatch_blocks_g1_enum_present_rollup_
+    2026_07_28.md). Rows that are already bundle-shaped (``instrument_type`` IS
+    a bundle type — ``options_chain`` / ``futures_chain`` / ``combo`` pass
+    through, mirroring ``_rollup_bundle_grain``'s own passthrough for those
+    types) or that are genuine per-contract LEAVES (equity/etf/spot_pair/…) are
+    returned unchanged — a no-op for every asset_group/instrument_type without
+    bundle-grain leaves (only cefi/tradfi declare any in
+    ``INSTRUMENT_GRAIN_BY_AG_AND_INSTRUMENT_TYPE`` today), same no-op guarantee
+    ``_rollup_bundle_grain`` documents for the seed side.
 
     A row whose underlying cannot be derived (blank ``underlying`` column AND
     ``_derive_underlying`` returns "") is left un-rolled — under-matching (falls
@@ -3423,10 +3462,23 @@ def _rollup_present_bundle_grain(df: pd.DataFrame, asset_group: str) -> pd.DataF
     is_leaf_mask = combo_key.map(is_leaf_by_key)
     id_col = df["instrument_id"].fillna("").astype(str)
     underlying_col = df["underlying"].fillna("").astype(str)
-    derived_underlying = underlying_col.where(
-        underlying_col != "",
-        id_col.map(lambda iid: _derive_underlying(iid, asset_group)),
-    )
+    # Reconcile every bundle-LEAF row's underlying through _derive_underlying —
+    # NOT just the blank ones. A blank underlying derives from the leaf
+    # instrument_id (unchanged pre-fix behaviour); an ALREADY-POPULATED
+    # underlying (real captured tradfi COMBO rows carry a spelled-out name like
+    # "HEATING-OIL") is now also passed through as ``raw_underlying`` so
+    # _derive_underlying can try the UAC reverse-lookup naming-convention
+    # reconciliation (tradfi_combo_underlying_naming_mismatch_blocks_g1_enum_
+    # present_rollup_2026_07_28.md) before falling back to the raw value
+    # unchanged. Restricted to LEAF rows only (never the passthrough
+    # majority) — same population the old blank-only ``id_col.map`` derivation
+    # touched at most, so this is a pure efficiency win, not a new scan.
+    derived_underlying = underlying_col.copy()
+    leaf_idx = is_leaf_mask[is_leaf_mask].index
+    if len(leaf_idx) > 0:
+        derived_underlying.loc[leaf_idx] = [
+            _derive_underlying(id_col.at[i], asset_group, raw_underlying=underlying_col.at[i]) for i in leaf_idx
+        ]
     can_rekey = is_leaf_mask & (derived_underlying != "")
     if not can_rekey.any():
         return df
