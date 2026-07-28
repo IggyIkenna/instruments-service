@@ -116,7 +116,12 @@ async def _fetch_sfi_data(
         get_expected_leagues_for_source,
     )
 
-    adapter = _orch.create_sports_reference_adapter("soccer_football_info", api_key=api_key)
+    # T0/T1 dependency gate: sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+    # No early-return skip path exists before the adapter is used below (SFI
+    # always fetches its league mapping unless cached), so the gate fires here.
+    adapter = _orch.create_sports_reference_adapter(
+        "soccer_football_info", api_key=api_key, date=date, bucket=bucket
+    )
     sink = _orch._sports_ref_sink_for(bucket, date, "progressive_stats")
     counts: dict[str, int] = {}
 
