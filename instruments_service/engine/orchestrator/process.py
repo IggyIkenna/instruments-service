@@ -109,6 +109,7 @@ async def process_instruments(
     season_override: int | None = None,
     recovery_fixture_ids: frozenset[int] | None = None,
     source: str | None = None,
+    run_tag: str = "batch",
 ) -> dict[str, int]:
     """Process instruments for a single date and set of asset groups.
 
@@ -125,6 +126,13 @@ async def process_instruments(
             existing fixtures' rows are preserved. Bypasses date-level
             pre-flight skip — already-captured (date, league) cells are
             still drilled into for these specific fixture_ids.
+        run_tag: GCS output prefix tag from the CLI ``--run-tag`` flag
+            (instruments_service_run_tag_flag_not_applied_2026_07_08).
+            ``"batch"`` (default) writes to the standard path; any other
+            value (e.g. ``"t1-recon"``) routes sports_reference writes under
+            that tag's own namespace via ``apply_run_tag()``. Stashed onto
+            the package-level ``_orch._RUN_TAG`` for the duration of this
+            call — consumed by ``_sports_ref_sink_for()``.
 
     Returns:
         Dict mapping venue → record count written.
@@ -133,6 +141,7 @@ async def process_instruments(
         RuntimeError: If URDI returns zero total records (fail the shard).
     """
     _ = _orch.get_config()  # ensure config is initialized
+    _orch._RUN_TAG = run_tag or "batch"
 
     # Normalise date: BatchIO passes datetime objects from get_date_range(),
     # but all downstream code (URDI, date filter, partition keys) needs str YYYY-MM-DD.

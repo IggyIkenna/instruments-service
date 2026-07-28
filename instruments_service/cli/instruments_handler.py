@@ -96,6 +96,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # is fetched via a MASSIVE pseudo-venue added to the key reloader. None ⇒
         # default (Databento for TradFi).
         self._source: str | None = None
+        # GCS output prefix tag (--run-tag). "batch" (default) = no prefix;
+        # any other value (e.g. "t1-recon") routes sports_reference writes
+        # under that tag's own namespace via UTL apply_run_tag() — see
+        # engine_orchestrator._RUN_TAG and _sports_ref_sink_for()
+        # (instruments_service_run_tag_flag_not_applied_2026_07_08).
+        self._run_tag: str = "batch"
         # Phase 2 stall detection: a long multi-day instruments backfill MUST stream a
         # PIPELINE_HEARTBEAT after each date completes so a hung/idle IS VM trips
         # DP_VM_STALL rather than sitting RUNNING with no progress. rows_captured_cum
@@ -202,6 +208,11 @@ class InstrumentsHandler(UnifiedServiceHandler):
         if source_arg:
             self._source = source_arg.strip().lower()
             logger.info("Reference-data source override from CLI: %s", self._source)
+
+        run_tag_arg: str | None = getattr(self.args, "run_tag", None) if self.args else None
+        self._run_tag = (run_tag_arg or "batch").strip() or "batch"
+        if self._run_tag != "batch":
+            logger.info("Run-tag from CLI: %s (sports_reference writes route under %s/)", self._run_tag, self._run_tag)
 
         trigger_arg: str | None = getattr(self.args, "trigger", None) if self.args else None
         if trigger_arg:
@@ -320,6 +331,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
             season_override=self._season_override,
             recovery_fixture_ids=self._recovery_fixture_ids,
             source=self._source,
+            run_tag=self._run_tag,
         )
         self._emit_date_heartbeat(date, asset_groups, result)
         return result
