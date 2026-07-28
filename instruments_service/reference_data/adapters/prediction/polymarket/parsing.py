@@ -66,7 +66,6 @@ class PolymarketParsingMixin:
         slug = market.market_slug or condition_id
         question = market.question or ""
         expiry = self._parse_end_date(market.end_date_iso)
-        is_active = bool(market.active) and not bool(market.closed)
         tick_raw = market.minimum_tick_size
         tick_size = Decimal(str(tick_raw)) if tick_raw else Decimal("0.01")
         min_order_raw = market.minimum_order_size
@@ -219,8 +218,6 @@ class PolymarketParsingMixin:
             expiry=expiry,
             strike=None,
             option_type=None,
-            is_active=is_active,
-            updated_at=now,
             available_from_datetime=available_from,
             available_to_datetime=available_to,
             underlying=underlying,

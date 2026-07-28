@@ -1319,9 +1319,8 @@ class TestBetfairBuildRunnerRecord:
 
         adapter = BetfairReferenceDataAdapter()
         runner = BetfairRunnerCatalog.model_validate({"selectionId": 12345, "runnerName": "Home Team"})
-        now = datetime.now(UTC)
         expiry = datetime(2026, 6, 15, 15, 0, 0, tzinfo=UTC)
-        record = adapter._build_runner_record(runner, "1.234", "Match Odds", "Soccer", "Event Name", expiry, now)
+        record = adapter._build_runner_record(runner, "1.234", "Soccer", "Event Name", expiry)
         assert record.instrument_key == "1.234/12345"
         assert record.raw_symbol == "Event Name/Home Team"
         assert record.base_asset == "Soccer"
@@ -1334,8 +1333,7 @@ class TestBetfairBuildRunnerRecord:
 
         adapter = BetfairReferenceDataAdapter()
         runner = BetfairRunnerCatalog.model_validate({"selectionId": 99999})
-        now = datetime.now(UTC)
-        record = adapter._build_runner_record(runner, "1.999", "Outright", "", "", None, now)
+        record = adapter._build_runner_record(runner, "1.999", "", "", None)
         assert "Selection_99999" in record.raw_symbol
         assert record.instrument_key == "1.999/99999"
 
@@ -1344,8 +1342,7 @@ class TestBetfairBuildRunnerRecord:
 
         adapter = BetfairReferenceDataAdapter()
         runner = BetfairRunnerCatalog.model_validate({"selectionId": 111, "runnerName": "Draw"})
-        now = datetime.now(UTC)
-        record = adapter._build_runner_record(runner, "1.111", "Correct Score", "", "", None, now)
+        record = adapter._build_runner_record(runner, "1.111", "", "", None)
         assert record.raw_symbol == "Draw"
 
 
@@ -1370,8 +1367,7 @@ class TestBetfairParseCatalogueItem:
                 ],
             }
         )
-        now = datetime.now(UTC)
-        results = adapter._parse_catalogue_item(catalogue, now)
+        results = adapter._parse_catalogue_item(catalogue)
         assert len(results) == 3
         assert results[0].instrument_key == "1.555/101"
         assert results[0].base_asset == "Soccer"
@@ -1388,8 +1384,7 @@ class TestBetfairParseCatalogueItem:
                 "runners": [],
             }
         )
-        now = datetime.now(UTC)
-        results = adapter._parse_catalogue_item(catalogue, now)
+        results = adapter._parse_catalogue_item(catalogue)
         assert results == []
 
     def test_no_event_type_uses_empty_string(self) -> None:
@@ -1403,8 +1398,7 @@ class TestBetfairParseCatalogueItem:
                 "runners": [{"selectionId": 1, "runnerName": "Yes"}],
             }
         )
-        now = datetime.now(UTC)
-        results = adapter._parse_catalogue_item(catalogue, now)
+        results = adapter._parse_catalogue_item(catalogue)
         assert len(results) == 1
         assert results[0].base_asset == ""
 
