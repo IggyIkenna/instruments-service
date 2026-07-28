@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, glue]
     permissions:
       contents: read
       packages: write
