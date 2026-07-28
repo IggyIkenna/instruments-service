@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import ClassVar
@@ -1815,6 +1815,59 @@ def test_tradfi_v2_unknown_venue_discovery_floor_unaffected(monkeypatch: pytest.
     assert len(rows) == 1
     assert rows[0].reason == ""
     assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_tradfi_v2_discovery_floor_invariant_holds_independently_per_venue() -> None:
+    """Regression guard (tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20): the
+    invariant "no cell below ITS OWN venue's UAC discovery floor may ever be seeded as the
+    generic todo bucket (blank-reason expected_unattempted)" must hold independently per
+    venue when MULTIPLE venues with DIFFERENT real floors are enumerated in the SAME pass —
+    not just correct in isolation for one hand-picked venue (the 3 tests above each use a
+    single-venue catalog). Sweeps the REAL (unmocked) ``VenueMapping`` floors for every
+    tradfi venue that currently has one, so this also catches a future floor-table edit that
+    forgets to keep a venue's enumerator behavior in sync — the exact class of drift the
+    182,407-cell incident was.
+    """
+    vm = enumerator_module.VenueMapping()
+    venues_with_floors = [
+        v for v in ("NASDAQ", "NYSE", "CME", "CBOE", "KRX", "FX") if vm.get_instrument_discovery_start(v)
+    ]
+    assert venues_with_floors, "expected at least one tradfi venue with a real UAC discovery floor"
+
+    for venue in venues_with_floors:
+        floor = vm.get_instrument_discovery_start(venue)
+        assert floor is not None  # narrows for date.fromisoformat below (filtered by the comprehension above)
+        day_before = date.fromisoformat(floor) - timedelta(days=1)
+        catalog = [
+            _make_tradfi_entry(instrument_id=f"{venue}-TEST", venue=venue, available_from="1980-01-01", mvp=True)
+        ]
+
+        below_rows = _drop_v2_venue_grain(
+            list(enumerator_module._enumerate_v2_tradfi(catalog, [day_before], ["ohlcv_1d"], present_set=set()))
+        )
+        below_todo = [r for r in below_rows if r.capture_status == "expected_unattempted" and r.reason == ""]
+        assert not below_todo, (
+            f"{venue}: {len(below_todo)} cell(s) below its real floor ({floor}) landed in the "
+            f"generic todo bucket instead of EXPECTED_PRE_SOURCE_COVERAGE_START"
+        )
+
+        on_floor_rows = _drop_v2_venue_grain(
+            list(
+                enumerator_module._enumerate_v2_tradfi(
+                    catalog, [date.fromisoformat(floor)], ["ohlcv_1d"], present_set=set()
+                )
+            )
+        )
+        # The floor date itself must never be caught by the PRE-floor clip specifically — it
+        # may legitimately land in a different empty_confirmed bucket (e.g.
+        # EXPECTED_SOURCE_DELIVERY_LAG) via unrelated logic, which is out of this invariant's
+        # scope; only EXPECTED_PRE_SOURCE_COVERAGE_START on/after the floor is the over-suppression
+        # failure mode this guards against.
+        assert not any(r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START" for r in on_floor_rows), (
+            f"{venue}: the floor date itself ({floor}) was over-suppressed by the pre-floor clip "
+            f"(EXPECTED_PRE_SOURCE_COVERAGE_START) — the floor date IS in-archive and must stay "
+            f"genuinely fillable"
+        )
 
 
 def test_prediction_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
