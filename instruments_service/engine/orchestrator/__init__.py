@@ -111,6 +111,7 @@ from unified_trading_library import (
     stamp_available_at_explicit,
 )
 from unified_trading_library import unified_config as _uc
+from unified_trading_library.config_interface.paths.registry import apply_run_tag  # noqa: qg-deep-import
 from unified_trading_library.fixtures import extract_match_lifecycle  # noqa: qg-deep-import
 
 from instruments_service.config import get_config
@@ -216,6 +217,18 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
 # ---------------------------------------------------------------------------
 _INSTRUMENTS_SERVICE_AS_OF_COLUMNS: tuple[str, ...] = tuple(c for c in DEFAULT_AS_OF_COLUMNS if c != "available_at")
 _WRITE_GATE = InstrumentsWriteGate(mode="strict", check_columns=_INSTRUMENTS_SERVICE_AS_OF_COLUMNS)
+
+# ---------------------------------------------------------------------------
+# --run-tag CLI flag (instruments_service_run_tag_flag_not_applied_2026_07_08):
+# the active run's GCS output prefix tag. "batch" (default) = no prefix; any
+# other value (e.g. "t1-recon") routes writes under that tag's own namespace,
+# per unified-trading-pm/codex/08-workflows/t1-batch-dag.md's documented
+# {run_tag}/{service_name}/{date}/ convention. Set exactly once per process,
+# at the top of process_instruments(), from the parsed --run-tag CLI arg
+# threaded down via InstrumentsHandler._wire_cli_filters_from_args(). Consumed
+# by _sports_ref_sink_for() (sports_fixtures.py) via apply_run_tag().
+# ---------------------------------------------------------------------------
+_RUN_TAG: str = "batch"
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +737,7 @@ __all__ = [
     "_ENTITY_NAME_TO_PIPELINE_MODE",
     "_Q5_SCHEDULE_COLUMNS",
     "_Q6_OUTCOME_COLUMNS",
+    "_RUN_TAG",
     "_SERVICE_NAME",
     "_SFI_CACHE_STALENESS_HOURS",
     "_SOLANA_DEFI_VENUES",
@@ -849,6 +863,7 @@ __all__ = [
     "_write_transfermarkt_team_mapping",
     "_write_venue",
     "_write_venues_from_teams",
+    "apply_run_tag",
     "assert_available_at_present",
     "asyncio",
     "build_futures_contracts",
