@@ -1,6 +1,5 @@
 """Unit tests for venue adapters (no live network — uses mocked responses)."""
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -120,8 +119,7 @@ class TestBetfairAdapter:
                 "marketName": "No Runners",
             }
         )
-        now = datetime.now(UTC)
-        results = adapter._parse_catalogue_item(catalogue, now)
+        results = adapter._parse_catalogue_item(catalogue)
         assert results == []
 
     def test_parse_catalogue_item_runner_no_selection_id(self) -> None:
@@ -137,8 +135,7 @@ class TestBetfairAdapter:
                 "runners": [{"runnerName": "NoId"}],
             }
         )
-        now = datetime.now(UTC)
-        results = adapter._parse_catalogue_item(catalogue, now)
+        results = adapter._parse_catalogue_item(catalogue)
         assert results == []
 
     @pytest.mark.asyncio
