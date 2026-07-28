@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 from unified_api_contracts.sports import FIXTURES_SCHEDULE, get_leagues_by_classification
 
+from instruments_service.engine.orchestrator.sports_reference_filters import _entity_league_scope
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
@@ -385,12 +387,15 @@ async def _read_captured_per_entity_league(
     entity_names: list[str] = []
     lookup_keys: list[tuple[str, str]] = []
     for entity_name, _ in per_fixture_entities:
+        _entity_scope = _entity_league_scope(_entity_dt_for_short(entity_name))
         entity_leagues_seen: set[str] = set()
         for fid in fixture_ids:
             canonical_league = af_fid_to_league.get(str(fid))
             if not canonical_league:
                 continue
             canonical_league = _orch._canonical_league_id(canonical_league)
+            if _entity_scope is not None and canonical_league not in _entity_scope:
+                continue  # out of policy scope — queueing loop skips it too, no prefetch needed
             if canonical_league in entity_leagues_seen:
                 continue
             entity_leagues_seen.add(canonical_league)
@@ -518,6 +523,7 @@ async def _gather_per_fixture_rows(
     tasks: list[_orch.asyncio.Task[None]] = []
     skipped_already_captured = 0
     skipped_no_provider_coverage = 0
+    skipped_out_of_entity_scope = 0
     # Track, per (entity, league), whether ANY task was actually queued this
     # run and whether at least one of its fixtures was provider-covered
     # (i.e. reached the already-captured check rather than being skipped as
@@ -528,9 +534,14 @@ async def _gather_per_fixture_rows(
     _provider_covered_leagues: set[tuple[str, str]] = set()
     for entity_name, fetch_fn in per_fixture_entities:
         _af_entity_dt = _entity_dt_for_short(entity_name)
+        _entity_scope = _entity_league_scope(_af_entity_dt)
         for fid in fixture_ids:
             canonical_league = af_fid_to_league.get(str(fid))
             canonical_league = _orch._canonical_league_id(canonical_league) if canonical_league else ""
+            if canonical_league and _entity_scope is not None and canonical_league not in _entity_scope:
+                # Policy skip, not a provider gap (see _entity_league_scope docstring).
+                skipped_out_of_entity_scope += 1
+                continue
             if (
                 canonical_league
                 and _af_entity_dt
@@ -550,6 +561,12 @@ async def _gather_per_fixture_rows(
                 _queued_leagues.add((entity_name, canonical_league))
             tasks.append(_orch.asyncio.ensure_future(_fetch_one(entity_name, fetch_fn, fid)))
 
+    if skipped_out_of_entity_scope:
+        _orch.logger.info(
+            "Per-fixture entity-scope skip: %d (entity, fixture_id) pairs out of "
+            "SPORTS_ENTITY_LEAGUE_COVERAGE policy scope",
+            skipped_out_of_entity_scope,
+        )
     if skipped_no_provider_coverage:
         _orch.logger.info(
             "Per-fixture observed-coverage skip: %d (entity, fixture_id) pairs whose (league, entity) is "
