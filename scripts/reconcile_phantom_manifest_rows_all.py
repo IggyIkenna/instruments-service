@@ -1089,6 +1089,153 @@ def _apply_delete_legacy_combined_venue_defi_phantoms(
     return n_delete
 
 
+def _pyth_oracle_prices_ghost_failure_mask(df: pd.DataFrame) -> pd.Series:
+    """Boolean mask for the PYTH ``oracle_prices`` stale day-level ``attempted_failed``
+    ghost-row phantom set (SSOT predicate).
+
+    Root cause (see
+    ``plans/active/issues/pyth_oracle_prices_stale_ghost_failure_rows_2026_07_28.md``):
+    pre-fix (before ``market-tick-data-service@533514c2``) the aiodns-missing-resolver
+    crash was recorded as a DAY-LEVEL failure (``instrument_id`` blank) because the whole
+    day's fetch aborted before any per-instrument row was written. The fixed writer
+    succeeds at PER-INSTRUMENT granularity, so a later successful re-run captures real
+    per-instrument rows for that date WITHOUT ever touching/superseding the old
+    day-level failure entry — different shard-key components (blank vs populated
+    ``instrument_id``) mean the ghost row is never overwritten, it just sits alongside
+    the real captures forever.
+
+    A row is a phantom IFF: ``venue=='PYTH'``, ``data_type=='oracle_prices'``,
+    ``capture_status=='attempted_failed'``, ``instrument_id`` is blank, AND at least one
+    ``captured`` row exists for the SAME ``date`` with a non-blank ``instrument_id``
+    (i.e. the fixed per-instrument writer already captured real data for that date,
+    superseding the stale day-level failure marker). Scoped to PYTH oracle_prices only
+    per the issue doc's explicit scope-first instruction — day-vs-instrument granularity
+    drift is a DeFi-oracle-handler-specific pattern, not assumed to generalize.
+    """
+    status = df["capture_status"].fillna("").astype(str)
+    venue = df["venue"].fillna("").astype(str)
+    dt_col = df["data_type"].fillna("").astype(str)
+    instrument_id = (
+        df["instrument_id"].fillna("").astype(str) if "instrument_id" in df.columns else pd.Series("", index=df.index)
+    )
+    is_pyth_oracle = (venue == "PYTH") & (dt_col == "oracle_prices")
+    ghost_candidates = is_pyth_oracle & (status == "attempted_failed") & (instrument_id == "")
+    if not int(ghost_candidates.sum()):
+        return ghost_candidates
+    superseding_dates = set(df.loc[is_pyth_oracle & (status == "captured") & (instrument_id != ""), "date"].astype(str))
+    dates = df["date"].astype(str)
+    return ghost_candidates & dates.isin(superseding_dates)
+
+
+def _report_pyth_oracle_prices_ghost_failures(df: pd.DataFrame) -> None:
+    """DRY-RUN report (no mutation): PYTH oracle_prices stale day-level
+    ``attempted_failed`` ghost rows superseded by a real per-instrument capture for
+    the same date. Single-walk — reads only the already-loaded ``_index`` ``df``."""
+    mask = _pyth_oracle_prices_ghost_failure_mask(df)
+    n = int(mask.sum())
+    logger.info("=== DRY-RUN: PYTH oracle_prices stale day-level attempted_failed ghost-row report ===")
+    logger.info(
+        "GHOST rows (PYTH oracle_prices, attempted_failed, instrument_id blank, "
+        "date superseded by a captured per-instrument row): %d",
+        n,
+    )
+    if n:
+        ghost = df[mask]
+        if "error_reason" in ghost.columns:
+            logger.info(
+                "    by error_reason: %s", ghost["error_reason"].fillna("").astype(str).value_counts().to_dict()
+            )
+        logger.info("    date range: %s .. %s", ghost["date"].min(), ghost["date"].max())
+    logger.info(
+        "DECISION: DELETE (day-level ghost failure superseded by real per-instrument "
+        "captures for the same date — the actual PYTH data for these dates IS captured; "
+        "see plans/active/issues/pyth_oracle_prices_stale_ghost_failure_rows_2026_07_28.md). "
+        "Dry-run only — no writes."
+    )
+
+
+def _apply_delete_pyth_oracle_prices_ghost_failures(
+    storage_client: StorageClient,
+    bucket_name: str,
+    index_blob: str,
+    df: pd.DataFrame,
+) -> int:
+    """APPLY mode: DELETE the PYTH oracle_prices stale day-level ghost ``attempted_failed``
+    rows superseded by a captured per-instrument row for the same date, and write the
+    trimmed ``_index`` back. No whole-corpus GCS walk — the predicate is a cheap boolean
+    mask over the already-loaded index. Re-fetches fresh via
+    ``merge_canonical_with_outstanding_shards`` immediately before the write-back
+    (staleness guard, same pattern as the chain-level / legacy-venue passes above).
+
+    Unlike those two sibling passes (which delete ``empty_confirmed`` rows and assert
+    ``attempted_failed`` is UNCHANGED), this pass deletes ``attempted_failed`` rows BY
+    DESIGN — the invariant here is ``captured`` unchanged and ``attempted_failed``
+    decreases by EXACTLY the deleted count (never more, and the predicate must never
+    select a non-``attempted_failed`` row).
+    """
+    mask = _pyth_oracle_prices_ghost_failure_mask(df)
+    n_delete = int(mask.sum())
+    logger.info("APPLY PYTH oracle_prices ghost-failure DELETE: %d rows match the predicate", n_delete)
+    if n_delete == 0:
+        logger.info("Nothing to delete — PYTH oracle_prices ghost-failure set is empty. No write.")
+        return 0
+
+    # Staleness guard (reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12
+    # todo #2): re-fetch fresh + re-derive the delete predicate immediately before the
+    # write-back so any per-VM shard written since the initial read above isn't
+    # silently discarded by this bulk re-upload.
+    df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, index_blob)
+    status_before = df["capture_status"].fillna("").astype(str)
+    captured_before = int((status_before == "captured").sum())
+    attempted_failed_before = int((status_before == "attempted_failed").sum())
+
+    mask = _pyth_oracle_prices_ghost_failure_mask(df)
+    n_delete = int(mask.sum())
+    if n_delete == 0:
+        logger.info("Nothing to delete after fresh re-check — ghost-failure set is empty. No write.")
+        return 0
+
+    # Defensive guard: the predicate must never select a non-attempted_failed row.
+    deleting = df[mask]
+    deleting_status = deleting["capture_status"].fillna("").astype(str)
+    bad = int((deleting_status != "attempted_failed").sum())
+    if bad:
+        raise RuntimeError(
+            f"REFUSING DELETE — predicate selected {bad} non-attempted_failed rows (would destroy captured data)"
+        )
+
+    kept = df[~mask].copy()
+    status_after = kept["capture_status"].fillna("").astype(str)
+    captured_after = int((status_after == "captured").sum())
+    attempted_failed_after = int((status_after == "attempted_failed").sum())
+    if captured_after != captured_before:
+        raise RuntimeError(
+            f"REFUSING WRITE — captured count changed {captured_before} -> {captured_after} (delete bug)"
+        )
+    expected_attempted_failed_after = attempted_failed_before - n_delete
+    if attempted_failed_after != expected_attempted_failed_after:
+        raise RuntimeError(
+            f"REFUSING WRITE — attempted_failed count {attempted_failed_after} != expected "
+            f"{expected_attempted_failed_after} (before={attempted_failed_before}, deleted={n_delete})"
+        )
+
+    out = io.BytesIO()
+    kept.to_parquet(out, index=False)
+    out.seek(0)
+    logger.info(
+        "Writing trimmed index: %d -> %d rows (%d deleted; captured=%d unchanged; attempted_failed=%d -> %d)",
+        len(df),
+        len(kept),
+        n_delete,
+        captured_after,
+        attempted_failed_before,
+        attempted_failed_after,
+    )
+    storage_client.upload_from_file_obj(bucket_name, index_blob, out)
+    logger.info("Done — PYTH oracle_prices ghost-failure DELETE applied.")
+    return n_delete
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--asset-group", required=True, choices=list(ASSET_GROUP_CONFIG.keys()))
@@ -1223,6 +1370,20 @@ def main() -> int:
             "genuine cells re-seed canonically via the FIXED v2 enumerator)."
         ),
     )
+    p.add_argument(
+        "--report-pyth-oracle-prices-ghost-failures",
+        action="store_true",
+        help=(
+            "PYTH oracle_prices stale day-level ghost-failure pass (single _index read). "
+            "WITHOUT --apply: DRY-RUN report of attempted_failed rows (instrument_id blank) "
+            "superseded by a real captured per-instrument row for the same date — a "
+            "pre-aiodns-fix day-level failure entry never touched by the fixed "
+            "per-instrument-granularity writer. WITH --apply: DELETE that ghost set and "
+            "write the trimmed _index back (preserves captured; attempted_failed decreases "
+            "by exactly the deleted count). See "
+            "plans/active/issues/pyth_oracle_prices_stale_ghost_failure_rows_2026_07_28.md."
+        ),
+    )
     args = p.parse_args()
 
     # --unphantom-only implies --unphantom (it runs the reverse re-validation only).
@@ -1292,6 +1453,19 @@ def main() -> int:
             _apply_delete_legacy_combined_venue_defi_phantoms(storage_client, bucket_name, str(cfg["index"]), df)
         else:
             logger.info("DRY-RUN — pass --apply to DELETE the phantom set. No writes.")
+        return 0
+
+    # PYTH oracle_prices stale day-level ghost-failure pass — single-walk (reuses the
+    # index read above). Returns before any disk-audit / mutation path.
+    if args.report_pyth_oracle_prices_ghost_failures:
+        if args.asset_group != "defi":
+            logger.error("--report-pyth-oracle-prices-ghost-failures requires --asset-group defi")
+            return 2
+        _report_pyth_oracle_prices_ghost_failures(df)
+        if args.apply:
+            _apply_delete_pyth_oracle_prices_ghost_failures(storage_client, bucket_name, str(cfg["index"]), df)
+        else:
+            logger.info("DRY-RUN — pass --apply to DELETE the ghost-failure set. No writes.")
         return 0
 
     # --unphantom-only: skip the FORWARD phantom-flagging pass ENTIRELY. We never
