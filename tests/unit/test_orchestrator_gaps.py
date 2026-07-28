@@ -239,6 +239,37 @@ class TestGetManifestHighWatermarksGeneralized:
             wrapper_result = _get_defi_manifest_high_watermarks()
         assert generic_result == wrapper_result == {"AAVE_V3-ETHEREUM": 100}
 
+    def test_read_availability_index_is_column_projected(self) -> None:
+        """Must not decode the full ~1.58 GB defi index — only venue/instrument_count/date are read.
+
+        Regression guard for read_availability_index_bare_defi_callers_2026_07_27.md: a bare
+        (unprojected) call on a defi-asset-group bucket is one cache-miss from an OOM. Pins the
+        exact columns= list so a future edit can't silently drop back to a bare call.
+        """
+        index_df = pd.DataFrame(
+            {
+                "venue": ["AAVE_V3-ETHEREUM"],
+                "instrument_count": [100],
+                "date": ["2026-01-01"],
+            }
+        )
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="test-bucket",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                return_value=index_df,
+            ) as mock_read,
+            patch(
+                "instruments_service.engine.orchestrator._get_venue_epoch",
+                return_value=None,
+            ),
+        ):
+            _get_manifest_high_watermarks("DEFI")
+        mock_read.assert_called_once_with("test-bucket", columns=["venue", "instrument_count", "date"])
+
 
 # ---------------------------------------------------------------------------
 # _retry_regressed_venues
