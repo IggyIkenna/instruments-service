@@ -46,7 +46,6 @@ async def _fetch_understat_xg(
     GCS path: sports_reference/by_date/day={date}/entity=understat_xg/
               understat_xg.parquet
     """
-    adapter = _orch.create_sports_reference_adapter("understat")
     sink = _orch._sports_ref_sink_for(bucket, date, "understat_xg")
     counts: dict[str, int] = {}
 
@@ -125,6 +124,10 @@ async def _fetch_understat_xg(
             )
         xg_manifest.write()
         return counts
+
+    # T0/T1 dependency gate: fires only when we're actually about to attempt
+    # a fetch (past every skip/guard above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+    adapter = _orch.create_sports_reference_adapter("understat", date=date, bucket=bucket)
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_understat_team

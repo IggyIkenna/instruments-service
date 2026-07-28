@@ -370,7 +370,6 @@ async def _fetch_transfermarkt_data(
         get_expected_leagues_for_source,
     )
 
-    adapter = _orch.create_sports_reference_adapter("transfermarkt", api_key=api_key)
     sink = _orch._sports_ref_sink_for(bucket, date, "player_values")
     counts: dict[str, int] = {}
 
@@ -441,6 +440,10 @@ async def _fetch_transfermarkt_data(
                 )
             manifest.write()
             return counts
+
+        # T0/T1 dependency gate: fires only when we're actually about to attempt
+        # a fetch (past every skip/guard above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+        adapter = _orch.create_sports_reference_adapter("transfermarkt", api_key=api_key, date=date, bucket=bucket)
 
         effective_season = season if season is not None else _orch.datetime.now(_orch.UTC).year
 

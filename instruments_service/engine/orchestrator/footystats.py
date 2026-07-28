@@ -63,7 +63,6 @@ async def _fetch_footystats_predictions(
       sports_reference/by_date/day={date}/entity=footystats_predictions/
         fetched_at_hour={YYYY-MM-DDTHH}/league={league_id}/footystats_predictions.parquet
     """
-    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key)
     # v9: entity-specific sink so pipeline_mode= lands in the GCS path prefix.
     sink = _orch._sports_ref_sink_for(bucket, date, "footystats_predictions")
     counts: dict[str, int] = {}
@@ -133,6 +132,10 @@ async def _fetch_footystats_predictions(
             )
         pred_manifest.write()
         return counts
+
+    # T0/T1 dependency gate: fires only when we're actually about to attempt
+    # a fetch (past every skip/guard above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key, date=date, bucket=bucket)
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
@@ -480,7 +483,6 @@ async def _fetch_footystats_matches(
     GCS path: sports_reference/by_date/day={date}/entity=footystats_matches/
               footystats_matches.parquet
     """
-    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key)
     sink = _orch._sports_ref_sink_for(bucket, date, "footystats_matches")
     counts: dict[str, int] = {}
 
@@ -540,6 +542,10 @@ async def _fetch_footystats_matches(
             )
         _ft_manifest.write()
         return counts
+
+    # T0/T1 dependency gate: fires only when we're actually about to attempt
+    # a fetch (past every skip/guard above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key, date=date, bucket=bucket)
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
@@ -872,7 +878,6 @@ async def _fetch_footystats_odds(
     Removal reversed 2026-06-27 (operator decision #6 REVERSED): footystats ODDS
     are pre-match snapshot reference data (predictive signal); stays in IS.
     """
-    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key)
     sink = _orch._sports_ref_sink_for(bucket, date, "footystats_odds")
     counts: dict[str, int] = {}
     fetched_at_ts = _orch.pd.Timestamp.now(tz="UTC")
@@ -900,6 +905,10 @@ async def _fetch_footystats_odds(
         return counts
     attempt_ts = _orch.datetime.now(_orch.UTC)
     _scheduled_fixture_map = _load_scheduled_footystats_fixture_map(bucket, date)
+
+    # T0/T1 dependency gate: fires only when we're actually about to attempt
+    # a fetch (past the skip check above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key, date=date, bucket=bucket)
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
