@@ -32,7 +32,6 @@ def _make_instrument(
         base_asset=base_asset,
         quote_asset=quote_asset,
         tick_size=Decimal("0.01"),
-        lot_size=Decimal("0.001"),
         contract_size=Decimal("1"),
         expiry=None,
         strike=None,

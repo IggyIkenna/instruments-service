@@ -83,7 +83,7 @@ _SEC_TYPE_MAP: dict[str, InstrumentType] = {
 }
 
 # Map IBKR secType → canonical AssetClass
-_SEC_TYPE_asset_group_MAP: dict[str, AssetClass] = {
+_SEC_TYPE_ASSET_CLASS_MAP: dict[str, AssetClass] = {
     "STK": AssetClass.EQUITY,
     "FUT": AssetClass.COMMODITY,
     "OPT": AssetClass.EQUITY,
@@ -290,7 +290,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
         sec_type = uac.secType or "STK"
         instrument_type = _SEC_TYPE_MAP.get(sec_type, InstrumentType.SPOT_PAIR)
-        asset_group = _SEC_TYPE_asset_group_MAP.get(sec_type, AssetClass.EQUITY)
+        asset_class = _SEC_TYPE_ASSET_CLASS_MAP.get(sec_type, AssetClass.EQUITY)
         currency = uac.currency or "USD"
         tick_size = Decimal(str(uac.minTick)) if uac.minTick else Decimal("0.01")
         expiry = _parse_ibkr_expiry(uac.lastTradeDateOrContractMonth) if sec_type in ("FUT", "OPT", "FOP") else None
@@ -302,9 +302,9 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         payload = self._build_key_payload(symbol, sec_type, currency)
         return InstrumentRecord(
             instrument_key=f"{self.venue.upper()}:{instrument_type.upper()}:{payload}",
-            symbol=symbol,
+            raw_symbol=symbol,
             venue=self.venue,
-            asset_group=asset_group,
+            asset_class=asset_class,
             instrument_type=instrument_type,
             base_asset=symbol,
             quote_asset=currency,
@@ -607,7 +607,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_key=symbol,
             raw_symbol=symbol,
             venue=self.venue,
-            asset_group=AssetClass.EQUITY,
+            asset_class=AssetClass.EQUITY,
             instrument_type=InstrumentType.SPOT_PAIR,
             base_asset=symbol,
             quote_asset="USD",

@@ -89,7 +89,6 @@ def test_uic_instrument_record_construction() -> None:
         base_asset="BTC",
         quote_asset="USDT",
         tick_size=Decimal("0.10"),
-        lot_size=Decimal("0.001"),
         contract_size=Decimal("1"),
     )
     assert record.instrument_key == "BINANCE:PERP:BTCUSDT"
@@ -122,7 +121,6 @@ def test_uic_instrument_record_used_in_schemas() -> None:
         base_asset="BTC",
         quote_asset="USD",
         tick_size=Decimal("0.0005"),
-        lot_size=Decimal("0.1"),
         strike=Decimal("100000"),
         option_type="call",
     )

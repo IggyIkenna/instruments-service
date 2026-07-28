@@ -614,7 +614,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                 InstrumentRecord(
                     instrument_key=f"FX:SPOT_PAIR:{symbol}",
                     venue="FX",
-                    asset_group=AssetClass.FX,
+                    asset_class=AssetClass.FX,
                     instrument_type=InstrumentType.SPOT_PAIR,
                     raw_symbol=fx.yahoo_ticker,
                     base_asset=fx.base,
@@ -647,7 +647,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                 InstrumentRecord(
                     instrument_key=f"KRX:EQUITY:{eq.symbol}",
                     venue="KRX",
-                    asset_group=AssetClass.EQUITY,
+                    asset_class=AssetClass.EQUITY,
                     instrument_type=InstrumentType.EQUITY,
                     raw_symbol=eq.yahoo_ticker,
                     base_asset=eq.symbol,
@@ -691,7 +691,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                 InstrumentRecord(
                     instrument_key=f"{idx.venue}:INDEX:{idx.base_asset}-{quote}",
                     venue=idx.venue,
-                    asset_group=AssetClass(idx.asset_group),
+                    asset_class=AssetClass(idx.asset_group),
                     instrument_type=InstrumentType.INDEX,
                     raw_symbol=idx.yahoo_ticker,
                     base_asset=idx.base_asset,
@@ -924,7 +924,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=canonical_venue,
-            asset_group=asset_group,
+            asset_class=asset_group,
             raw_symbol=raw_symbol,
             instrument_type=instrument_type,
             base_asset=underlying or raw_symbol,
