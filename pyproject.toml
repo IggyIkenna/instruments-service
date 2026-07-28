@@ -75,6 +75,9 @@ Homepage = "https://github.com/iggyikenna/instruments-service"
 Documentation = "https://github.com/iggyikenna/instruments-service"
 Repository = "https://github.com/iggyikenna/instruments-service"
 
+[tool.uv]
+constraint-dependencies = ["setuptools>=83.0.0"]
+
 [tool.uv.sources.unified-trading-library]
 path = "../unified-trading-library"
 editable = true
