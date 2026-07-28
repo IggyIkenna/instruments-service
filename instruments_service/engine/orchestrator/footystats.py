@@ -63,8 +63,6 @@ async def _fetch_footystats_predictions(
       sports_reference/by_date/day={date}/entity=footystats_predictions/
         fetched_at_hour={YYYY-MM-DDTHH}/league={league_id}/footystats_predictions.parquet
     """
-    # v9: entity-specific sink so pipeline_mode= lands in the GCS path prefix.
-    sink = _orch._sports_ref_sink_for(bucket, date, "footystats_predictions")
     counts: dict[str, int] = {}
     fetched_at_ts = _orch.pd.Timestamp.now(tz="UTC")
     fetched_at_hour = fetched_at_ts.strftime("%Y-%m-%dT%H")
@@ -136,6 +134,12 @@ async def _fetch_footystats_predictions(
     # T0/T1 dependency gate: fires only when we're actually about to attempt
     # a fetch (past every skip/guard above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
     adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key, date=date, bucket=bucket)
+
+    # v9: entity-specific sink so pipeline_mode= lands in the GCS path prefix.
+    # Created AFTER the dependency gate (real cloud-storage-client construction
+    # — SocketConnectBlockedError regression tied to a CI runner-type change
+    # surfaced this: the sink must not be built before we know we'll fetch).
+    sink = _orch._sports_ref_sink_for(bucket, date, "footystats_predictions")
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
