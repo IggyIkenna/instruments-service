@@ -23,7 +23,7 @@ env:
 jobs:
   plan-alignment:
     name: Plan Alignment Check — instruments-service
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, glue]
     timeout-minutes: 10
     # Only run if API key is available — advisory job, never required
     if: vars.PLAN_ALIGNMENT_ENABLED != 'false'
