@@ -1,4 +1,4 @@
-"""Sports reference fixture-id filtering helpers (MVP-league + recovery allowlist).
+"""Sports reference fixture-id filtering helpers (recovery allowlist).
 
 Cohesion module of the ``engine.orchestrator`` package — carries the
 enrichment-scope filters decomposed out of ``_fetch_sports_reference_data``
@@ -22,16 +22,27 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from unified_api_contracts.sports import get_mvp_football_league_ids
-
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
     from instruments_service.engine.orchestrator._pkg_ref import orch_namespace as _orch
 
 __all__ = [
+    "_entity_league_scope",
     "_filter_fixtures_for_enrichment",
 ]
+
+
+def _entity_league_scope(af_entity_dt: str) -> frozenset[str] | None:
+    """Resolve ``SPORTS_ENTITY_LEAGUE_COVERAGE`` for a per-fixture entity's
+    canonical manifest data_type. ``None`` = all leagues; a frozenset restricts
+    to those leagues — e.g. FIXTURE_EVENTS/PLAYER_STATS stay MVP-only while
+    FIXTURE_STATS/FIXTURE_LINEUPS cover all leagues (operator ruling
+    2026-07-28). Used by ``_gather_per_fixture_rows``'s task-queueing loop and
+    its prefetch-skip lookup so a policy-out-of-scope league is neither
+    fetched nor read for (matches ``emit_empty_gaps_for_entity``'s per-entity
+    gap denominator too)."""
+    return _orch.get_entity_league_coverage(af_entity_dt) if af_entity_dt else None
 
 
 def _filter_fixtures_for_enrichment(
@@ -41,21 +52,20 @@ def _filter_fixtures_for_enrichment(
     recovery_fixture_ids: frozenset[int] | None,
     date: str,
 ) -> list[int] | None:
-    """Apply the MVP-league filter and the optional recovery-mode allowlist filter
-    to ``fixture_ids`` before the per-fixture entity loop.
+    """Apply the optional recovery-mode allowlist filter to ``fixture_ids`` before
+    the per-fixture entity loop.
 
-    MVP-league filter — runs BEFORE the per-fixture entity loop so per-fixture
-    ENRICHMENT (stats/events/lineups/player-stats) never follows the much wider
-    FIXTURES curated-universe denominator (get_expected_leagues_for_source,
-    383 leagues) out past MVP/prediction scope (96 leagues). Unconditional —
-    applies to both the URDI-sourced fixture_ids_override path (spans all 383
-    leagues since the 2026-07-24 widening) and the API-fallback path. A fixture
-    with NO resolved league (mapping gap) is kept, not dropped — we can only
-    prove a fixture is OUT of scope, never assume it, from a missing mapping.
+    MVP-vs-all-leagues scoping is no longer done HERE, unconditionally, for every
+    per-fixture entity: ``SPORTS_ENTITY_LEAGUE_COVERAGE`` now varies by entity
+    (FIXTURE_STATS/FIXTURE_LINEUPS cover all leagues; FIXTURE_EVENTS/PLAYER_STATS
+    stay MVP-restricted — operator ruling 2026-07-28), so a single shared
+    pre-filter here would incorrectly starve the all-leagues entities. The
+    per-entity scope check now runs inside ``_gather_per_fixture_rows``'s
+    task-queueing loop instead (see its ``get_entity_league_coverage`` check),
+    where each entity's own coverage set is consulted independently.
 
-    Recovery-mode fixture-id allowlist filter — runs AFTER the MVP filter so we
-    only call api_football for the targeted set. Lifts the per-fixture work
-    from O(all_fixtures_on_day x 5 entities) to O(allowlist_intersection_with_day
+    Recovery-mode fixture-id allowlist filter — lifts the per-fixture work from
+    O(all_fixtures_on_day x 5 entities) to O(allowlist_intersection_with_day
     x N_requested_entities). Used for targeted recovery (e.g. Phase 2's
     truth-set audit produced a 39k fixture-id list; we feed it here so we don't
     re-burn ~560k api_football calls re-fetching already-captured fixtures'
@@ -66,23 +76,6 @@ def _filter_fixtures_for_enrichment(
     cross-provider mapping writes) so we don't write phantom empty manifest
     rows for entities never attempted on this date.
     """
-    if fixture_ids:
-        _mvp_leagues = get_mvp_football_league_ids()
-        _pre_mvp_filter = len(fixture_ids)
-        fixture_ids = [
-            fid for fid in fixture_ids if (_lg := af_fid_to_league.get(str(fid))) is None or _lg in _mvp_leagues
-        ]
-        _mvp_skipped = _pre_mvp_filter - len(fixture_ids)
-        if _mvp_skipped:
-            _orch.logger.info(
-                "MVP-league filter applied for date=%s: %d → %d fixtures (%d skipped — non-MVP league, "
-                "enrichment out of scope)",
-                date,
-                _pre_mvp_filter,
-                len(fixture_ids),
-                _mvp_skipped,
-            )
-
     if recovery_fixture_ids is not None and fixture_ids:
         _pre_filter = len(fixture_ids)
         fixture_ids = [fid for fid in fixture_ids if fid in recovery_fixture_ids]

@@ -72,12 +72,16 @@ async def _fetch_sports_reference_data(
     but we re-fetch on each run to capture mid-season transfers, promotions,
     and new referee assignments.
 
-    Per-fixture ENRICHMENT (stats/events/lineups/player-stats) is always
-    restricted to the MVP/prediction-scope league set (``get_mvp_football_league_ids()``,
-    96 leagues) regardless of how many leagues ``fixture_ids``/``fixture_ids_override``
-    span — the FIXTURES-level schedule/existence data covers the much wider
-    curated universe (383 leagues), but enrichment fan-out for leagues we don't
-    predict on is pure API-Football quota burn for data nobody consumes.
+    Per-fixture ENRICHMENT scope varies by entity (``SPORTS_ENTITY_LEAGUE_COVERAGE``,
+    ``unified_api_contracts``) — operator ruling 2026-07-28: FIXTURE_STATS (game
+    results) and FIXTURE_LINEUPS follow the full curated universe (383 leagues,
+    same as FIXTURES), while FIXTURE_EVENTS and PLAYER_STATS stay restricted to
+    the MVP/prediction-scope league set (``get_mvp_football_league_ids()``, 96
+    leagues) regardless of how many leagues ``fixture_ids``/``fixture_ids_override``
+    span — per-event/per-player enrichment fan-out for leagues we don't predict
+    on is pure API-Football quota burn for data nobody consumes there. The check
+    runs per-entity inside ``_gather_per_fixture_rows``, not as a shared
+    pre-filter (see ``_filter_fixtures_for_enrichment``'s docstring).
 
     Args:
         entities_to_fetch: Specific manifest entity names to fetch (e.g.
