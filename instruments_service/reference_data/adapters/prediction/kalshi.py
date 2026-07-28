@@ -818,8 +818,6 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             question = None  # honest-absence: no human title → raw_symbol is the floor
         base_asset = str(series_ticker)[:50] if series_ticker else ticker[:50]
         expiry = self._parse_close_time(market.close_time)
-        status_raw = getattr(market, "status", None)
-        is_active = str(status_raw).lower() == "active" if status_raw else True
         tick_raw = getattr(market, "tick_size", None)
         tick_size = Decimal(str(tick_raw)) if tick_raw else Decimal("0.01")
         min_order_raw = getattr(market, "min_order_size", None)
@@ -920,8 +918,6 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             expiry=expiry,
             strike=None,
             option_type=None,
-            is_active=is_active,
-            updated_at=now,
             available_from_datetime=_afd,
             available_to_datetime=lifecycle.settlement_time if lifecycle else None,
             underlying=underlying,

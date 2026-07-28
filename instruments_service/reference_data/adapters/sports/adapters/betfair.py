@@ -114,11 +114,10 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
             return []
         session_token, app_key = self._get_credentials()
         raw_list = await self._fetch_markets_raw(session_token, app_key)
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         for raw_item in raw_list:
             catalogue = BetfairMarketCatalogue.model_validate(raw_item)
-            records = self._parse_catalogue_item(catalogue, now)
+            records = self._parse_catalogue_item(catalogue)
             results.extend(records)
         return results
 
@@ -239,17 +238,15 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
     def _parse_catalogue_item(
         self,
         catalogue: BetfairMarketCatalogue,
-        now: datetime,
     ) -> list[InstrumentRecord]:
         """Convert a BetfairMarketCatalogue item into per-runner InstrumentRecords."""
         market_id = catalogue.market_id or ""
-        market_name = catalogue.market_name or ""
         runners: list[BetfairRunnerCatalog] = catalogue.runners or []
         sport_name = catalogue.event_type.name or "" if catalogue.event_type else ""
         event_name = catalogue.event.name or "" if catalogue.event else ""
         market_expiry = self._parse_market_start_time(catalogue.market_start_time)
         return [
-            self._build_runner_record(runner, market_id, market_name, sport_name, event_name, market_expiry, now)
+            self._build_runner_record(runner, market_id, sport_name, event_name, market_expiry)
             for runner in runners
             if runner.selection_id is not None
         ]
@@ -267,22 +264,18 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         runner: BetfairRunnerCatalog,
         market_id: str,
-        market_name: str,
         sport_name: str,
         event_name: str,
         market_expiry: datetime | None,
-        now: datetime,
     ) -> InstrumentRecord:
         """Build a single InstrumentRecord for a Betfair runner."""
         selection_id = runner.selection_id
         runner_name = runner.runner_name or f"Selection_{selection_id}"
         instrument_key = f"{market_id}/{selection_id}"
         raw_symbol = f"{event_name}/{runner_name}" if event_name else runner_name
-        display_symbol = f"{market_name}/{runner_name}" if market_name else runner_name
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=self.venue,
-            symbol=display_symbol,
             raw_symbol=raw_symbol,
             instrument_type=InstrumentType.EXCHANGE_ODDS,
             base_asset=sport_name,
@@ -295,6 +288,4 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
             expiry=market_expiry,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
         )
