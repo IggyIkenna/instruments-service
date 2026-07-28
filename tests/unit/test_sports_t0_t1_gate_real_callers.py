@@ -15,7 +15,7 @@ SSOT: ``unified-trading-pm/codex/02-data/sports-adapter-dependency-order.md``.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -70,6 +70,16 @@ class _FakeStorageClient:
 def _patch_dependency_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force check_api_football_dependency's two-tier check to a full miss:
     empty manifest slice (primary) + no GCS objects under any probe (fallback).
+
+    Also stubs ``get_data_sink`` — footystats/understat/transfermarkt build
+    their output sink (``_sports_ref_sink_for`` -> ``get_data_sink`` ->
+    ``get_storage_client(provider="gcp")``) BEFORE reaching the T0/T1 gate
+    (only SFI checks the gate first), so an unmocked real GCS client
+    construction attempts ``google.auth.default()`` -> GCE metadata ping,
+    which pytest_socket blocks in CI (SocketConnectBlockedError on
+    169.254.169.254). Mocking here (not just sports_dependency's own client)
+    keeps every real call site in this file hermetic regardless of where the
+    gate sits relative to sink construction.
     """
     monkeypatch.setattr(
         sports_dependency,
@@ -80,6 +90,10 @@ def _patch_dependency_missing(monkeypatch: pytest.MonkeyPatch) -> None:
         sports_dependency,
         "get_storage_client",
         lambda *_a, **_k: _FakeStorageClient(set()),
+    )
+    monkeypatch.setattr(
+        "instruments_service.engine.orchestrator.get_data_sink",
+        lambda *_a, **_k: MagicMock(),
     )
 
 

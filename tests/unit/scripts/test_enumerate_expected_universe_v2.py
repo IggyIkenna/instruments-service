@@ -4011,3 +4011,235 @@ def test_every_sports_data_type_seed_provenance_matches_canonical_registry() -> 
         if source != canonical_source:
             mismatches.append(f"{dt}: seeds source={source!r}, canonical owner is {canonical_source!r}")
     assert not mismatches, "sports seed provenance diverges from the canonical registry:\n  " + "\n  ".join(mismatches)
+
+
+# ---------------------------------------------------------------------------
+# G1-ENUM present-set symmetric rollup fix (2026-07-27, option (a) — June-2026-
+# vintage-audit finding, item 14). ``_rollup_bundle_grain`` normalises the
+# CATALOG-SEED side (leaf option/combo/future instruments collapse to ONE
+# per-underlying bundle candidate); the present-set builders previously loaded
+# the manifest VERBATIM, so a LEAF-shaped captured bundle cell (real
+# instrument_id, blank underlying) could never satisfy the rolled-up seed key
+# (blank instrument_id, populated underlying) — manufacturing a phantom
+# ``expected_unattempted`` cell for an underlying that IS captured. These tests
+# cover ``_rollup_present_bundle_grain`` via its two call sites
+# (``_build_present_set`` / ``_build_captured_set``) plus an end-to-end proof.
+# ---------------------------------------------------------------------------
+
+
+def _underlying_aware_present_df(rows: list[dict[str, str]]) -> pd.DataFrame:
+    """Build a raw-shaped tradfi/cefi present-set manifest DataFrame with every
+    ``_UNDERLYING_AWARE_PRESENT_COLS`` column populated (defaults to "" when a
+    row dict omits a key) — mirrors a real per-asset_group manifest read."""
+    cols = enumerator_module._UNDERLYING_AWARE_PRESENT_COLS
+    return pd.DataFrame([{c: r.get(c, "") for c in cols} for r in rows])
+
+
+def test_build_present_set_rolls_up_leaf_combo_capture_to_bundle_grain() -> None:
+    """A LEAF-shaped tradfi COMBO capture (real per-contract instrument_id, blank
+    underlying) rolls up to the writer's bundle key — blank instrument_id +
+    derived underlying — the SAME grain ``_rollup_bundle_grain`` produces on the
+    seed side."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ES-CAL-1",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "", "ES", "", "2024-06-03")}
+
+
+def test_build_present_set_rolls_up_leaf_option_capture_to_options_chain_bundle_grain() -> None:
+    """A LEAF-shaped tradfi OPTION capture rolls up to the ``options_chain`` bundle key."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME-OPTIONS",
+                "data_type": "trades",
+                "instrument_type": "option",
+                "instrument_id": "CL-C-70",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME-OPTIONS", "", "trades", "options_chain", "", "CL", "", "2024-06-03")}
+
+
+def test_build_present_set_rolls_up_leaf_combo_capture_to_options_chain_bundle_grain_cefi() -> None:
+    """CeFi COMBO leaves roll up to the ``options_chain`` bundle (unlike tradfi,
+    whose combo rolls up to its OWN ``combo`` bundle type) — proves the rollup is
+    asset_group-aware via the SAME UAC registry (``bundle_instrument_type_for_leaf``)
+    the seed side uses, not a re-implemented/hardcoded rule."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "DERIBIT",
+                "data_type": "trades",
+                "instrument_type": "combo",
+                "instrument_id": "BTC-29MAR24-50000-C",
+                "date": "2024-03-01",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "cefi")
+    assert got == {("DERIBIT", "", "trades", "options_chain", "", "BTC", "", "2024-03-01")}
+
+
+def test_build_present_set_leaf_non_bundle_type_passthrough() -> None:
+    """A genuine per-contract LEAF (equity) is left unchanged — no rollup for
+    instrument_types without a bundle-grain declaration (no regression for the
+    non-bundle majority of the manifest)."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "NASDAQ",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "equity",
+                "instrument_id": "AAPL",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("NASDAQ", "", "ohlcv_1m", "equity", "AAPL", "", "", "2024-06-03")}
+
+
+def test_build_present_set_already_bundle_shaped_row_passthrough() -> None:
+    """A row already captured at the writer's bundle grain (blank instrument_id +
+    underlying populated) is left unchanged — no double-rollup / no regression
+    for the pre-existing correct capture shape (the case the pre-fix test suite
+    already covered end-to-end)."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "futures_chain",
+                "instrument_id": "",
+                "underlying": "ES",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "futures_chain", "", "ES", "", "2024-06-03")}
+
+
+def test_build_present_set_underlying_undecidable_leaves_row_unrolled() -> None:
+    """A bundle-leaf row whose underlying cannot be derived (no ``-`` separator,
+    not a registered TradFi root, blank ``underlying`` column) is left with its
+    RAW key — under-matching (falls back to pre-fix behaviour for that one row)
+    beats silently mis-keying / discarding real capture evidence."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ZZZNOTAROOT",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "ZZZNOTAROOT", "", "", "2024-06-03")}
+
+
+def test_build_present_set_missing_underlying_column_is_noop() -> None:
+    """A manifest without an ``underlying`` column (old shape / backward-safe) skips
+    the rollup entirely rather than collapsing every underlying of a bundle type
+    into one blank-instrument_id tuple (see ``_UNDERLYING_AWARE_PRESENT_COLS``'s
+    docstring: keying on the blank instrument_id alone would falsely mark every
+    OTHER underlying's cell "present")."""
+    df = pd.DataFrame(
+        [
+            {
+                "venue": "CME",
+                "chain": "",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ES-CAL-1",
+                "league_id": "",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "ES-CAL-1", "", "2024-06-03")}
+
+
+def test_build_captured_set_rolls_up_leaf_bundle_capture() -> None:
+    """The oscillation-guard ``captured_set`` is rolled bundle-grain-symmetric too
+    — a LEAF-shaped captured combo cell must suppress a lifecycle
+    ``empty_confirmed`` re-stamp the same way a bundle-shaped one does."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ES-CAL-1",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    df["capture_status"] = "captured"
+    got = enumerator_module._build_captured_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "", "ES", "", "2024-06-03")}
+
+
+def test_enumerate_v2_tradfi_leaf_shaped_combo_capture_suppresses_phantom_seed() -> None:
+    """End-to-end G1-ENUM regression: a manifest that captured a tradfi COMBO
+    bundle at LEAF grain (real per-contract instrument_id, blank underlying — the
+    shape a pre-rollup writer/backfill snapshot can carry) must suppress the
+    rolled-up combo seed for that underlying via ``_build_present_set``'s rollup,
+    not leave it phantom-``expected_unattempted`` (june_2026_vintage_audit_
+    findings_2026_07_27.md §5 item 14, G1-ENUM).
+
+    Pre-fix: the present-set would have kept the RAW leaf key
+    ``(CME, "", ohlcv_1m, combo, ES-CAL-2, "", "", 2024-06-03)``, which can never
+    equal the seed's rolled-up key ``(CME, "", ohlcv_1m, combo, "", ES, "", ...)``
+    — the seed fires as a phantom ``expected_unattempted`` cell even though the
+    underlying's combo data IS captured (just under a different leaf contract).
+    Post-fix: the present-set carries the ROLLED-UP key and suppresses the seed.
+    """
+    catalog = [
+        _make_tradfi_entry(
+            instrument_id="ES-CAL-1", instrument_type="COMBO", venue="CME", underlying="ES", available_from="2020-01-01"
+        ),
+    ]
+    manifest_df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ES-CAL-2",  # a DIFFERENT leaf contract, same underlying
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    present_set = enumerator_module._build_present_set(manifest_df, "tradfi")
+    present_cols = enumerator_module._present_cols_for("tradfi", list(manifest_df.columns))
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="tradfi",
+            catalog=catalog,
+            date_axis=_date_axis("2024-06-03"),
+            data_types=["ohlcv_1m"],
+            present_set=present_set,
+            present_cols=present_cols,
+        )
+    )
+    seeded = {(r.instrument_type, r.instrument_id, r.underlying) for r in rows}
+    assert ("combo", "", "ES") not in seeded, (
+        "LEAF-shaped combo capture for underlying ES must suppress the rolled-up combo seed "
+        "(present-set symmetry fix) — phantom expected_unattempted regression"
+    )
