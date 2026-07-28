@@ -3349,11 +3349,106 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     return df, local_path
 
 
+def _rollup_present_bundle_grain(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
+    """Mirror :func:`_rollup_bundle_grain`'s LEAF→bundle instrument_type collapse on
+    PRESENT/CAPTURED manifest rows (G1-ENUM present-set symmetry fix, option (a),
+    2026-07-27).
+
+    ``_rollup_bundle_grain`` normalises the CATALOG-SEED side: every per-contract
+    option/combo/future LEAF instrument rolls up to ONE synthetic per-underlying
+    bundle entry (``instrument_id=""`` + ``underlying=<U>``, bundle
+    ``instrument_type`` — ``options_chain``/``futures_chain``/``combo``) before the
+    seed is cross-joined against the date axis. ``_build_present_set`` /
+    ``_build_captured_set`` previously loaded the manifest VERBATIM (no rollup) —
+    so a manifest row the writer recorded at LEAF grain (e.g. a per-contract
+    ``instrument_type=combo`` capture with a real, non-blank ``instrument_id`` and
+    a blank ``underlying``) could never satisfy the rolled-up seed key (blank
+    ``instrument_id`` + ``underlying=<U>``, bundle ``instrument_type``). That
+    asymmetry manufactures a PHANTOM ``expected_unattempted`` cell for an
+    underlying that IS captured — just not at the writer's canonical bundle grain
+    — inflating the could-exist denominator and deflating the reported coverage %
+    (June-2026-vintage-audit finding G1-ENUM, item 14).
+
+    This applies the SAME LEAF→bundle re-keying to every present/captured row
+    BEFORE the present-set tuples are built: a bundle-leaf row's
+    (``instrument_type``, ``instrument_id``, ``underlying``) triple is replaced
+    with (``bundle_it``, ``""``, ``underlying or _derive_underlying(instrument_id)``)
+    — identical derivation to :func:`_rollup_bundle_grain`. Rows that are already
+    bundle-shaped (``instrument_type`` IS a bundle type — ``options_chain`` /
+    ``futures_chain`` / ``combo`` pass through, mirroring ``_rollup_bundle_grain``'s
+    own passthrough for those types) or that are genuine per-contract LEAVES
+    (equity/etf/spot_pair/…) are returned unchanged — a no-op for every
+    asset_group/instrument_type without bundle-grain leaves (only cefi/tradfi
+    declare any in ``INSTRUMENT_GRAIN_BY_AG_AND_INSTRUMENT_TYPE`` today), same
+    no-op guarantee ``_rollup_bundle_grain`` documents for the seed side.
+
+    A row whose underlying cannot be derived (blank ``underlying`` column AND
+    ``_derive_underlying`` returns "") is left un-rolled — under-matching (falls
+    back to pre-fix behaviour for that one row) beats silently discarding real
+    capture evidence by mis-keying it. Likewise, a caller missing any of the
+    required columns (``instrument_type``/``venue``/``instrument_id``/
+    ``underlying`` — the last is absent on an OLD-shape manifest) gets the frame
+    back untouched: without ``underlying`` to key on, re-keying would collapse
+    every underlying of a ``(venue, bundle_type)`` into ONE tuple (see
+    ``_UNDERLYING_AWARE_PRESENT_COLS``'s docstring) — skip rather than mis-key.
+    """
+    required = {"instrument_type", "venue", "instrument_id", "underlying"}
+    if df.empty or not required.issubset(df.columns):
+        return df
+
+    it_col = df["instrument_type"].fillna("").astype(str)
+    venue_col = df["venue"].fillna("").astype(str)
+    # Tuple keys, NOT a NUL-joined string: pandas' vectorised ``Series.__add__``
+    # silently truncates at an embedded ``"\x00"`` (numpy fixed-width string ops
+    # treat it as a C-string terminator) — a NUL separator collapsed every
+    # (instrument_type, venue) pair down to their concatenation with no
+    # delimiter, so ``key.split("\x00", 1)`` found nothing to split on. Tuples
+    # are hashable and side-step the footgun entirely.
+    combo_key = pd.Series(list(zip(it_col, venue_col, strict=True)), index=df.index)
+    unique_keys = combo_key.unique()
+
+    bundle_it_by_key: dict[tuple[str, str], str | None] = {}
+    is_leaf_by_key: dict[tuple[str, str], bool] = {}
+    for key in unique_keys:
+        it, venue = key
+        b_it = bundle_instrument_type_for_leaf(asset_group, it, venue)
+        is_leaf_by_key[key] = (
+            grain_for_instrument_type(asset_group, it, venue) == GRAIN_BUNDLE_BY_UNDERLYING and b_it is not None
+        )
+        bundle_it_by_key[key] = b_it
+
+    if not any(is_leaf_by_key.values()):
+        return df  # fast no-op path — no bundle-grain leaves in this manifest slice
+
+    is_leaf_mask = combo_key.map(is_leaf_by_key)
+    id_col = df["instrument_id"].fillna("").astype(str)
+    underlying_col = df["underlying"].fillna("").astype(str)
+    derived_underlying = underlying_col.where(
+        underlying_col != "",
+        id_col.map(lambda iid: _derive_underlying(iid, asset_group)),
+    )
+    can_rekey = is_leaf_mask & (derived_underlying != "")
+    if not can_rekey.any():
+        return df
+
+    out = df.copy()
+    bundle_it_col = combo_key.map(bundle_it_by_key)
+    out.loc[can_rekey, "instrument_type"] = bundle_it_col[can_rekey]
+    out.loc[can_rekey, "instrument_id"] = ""
+    out.loc[can_rekey, "underlying"] = derived_underlying[can_rekey]
+    return out
+
+
 def _build_present_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ...]]:
     """Build the set of present manifest row-key tuples at the per-asset_group grain.
 
     Sports uses LEAGUE-grain (``data_type, league_id, date``); every other group
-    uses the full per-instrument grain — see :func:`_present_cols_for`.
+    uses the full per-instrument grain — see :func:`_present_cols_for`. Rolls
+    bundle-grain LEAF captures up to the writer's bundle key first (G1-ENUM
+    present-set symmetry fix — see :func:`_rollup_present_bundle_grain`) so a
+    present row is compared against the seed at the SAME grain the seed is built
+    at, rather than asymmetrically diffing a rolled-up seed against a verbatim
+    present-set.
     """
     if df.empty:
         return set()
@@ -3362,6 +3457,7 @@ def _build_present_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ...
         return set()
     available = _present_cols_for(asset_group, list(df.columns))
     df_subset = df[available].fillna("").astype(str)
+    df_subset = _rollup_present_bundle_grain(df_subset, asset_group)
     return {tuple(row) for row in df_subset.itertuples(index=False, name=None)}
 
 
@@ -3376,6 +3472,9 @@ def _build_captured_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ..
     (captured→empty_confirmed oscillation, 2026-07-13; consolidator-side twin
     rule: the 2026-07-12 captured-outranks-recency dedup tie-break in
     ``unified_trading_library.manifest_consolidator``).
+    Also rolled bundle-grain-symmetric (:func:`_rollup_present_bundle_grain`) so a
+    LEAF-shaped captured bundle cell suppresses the oscillation guard the same way
+    a bundle-shaped one does.
     SSOT: ``codex/02-data/availability-manifest-and-data-status.md``.
     """
     if df.empty or "date" not in df.columns or "capture_status" not in df.columns:
@@ -3387,6 +3486,7 @@ def _build_captured_set(df: pd.DataFrame, asset_group: str) -> set[tuple[str, ..
     # materialise a full-width copy of the captured rows (sports OOM 2026-07-14).
     available = _present_cols_for(asset_group, list(df.columns))
     df_subset = df.loc[captured_mask, available].fillna("").astype(str)
+    df_subset = _rollup_present_bundle_grain(df_subset, asset_group)
     return {tuple(row) for row in df_subset.itertuples(index=False, name=None)}
 
 
