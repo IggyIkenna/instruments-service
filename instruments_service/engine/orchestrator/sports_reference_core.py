@@ -276,6 +276,17 @@ class _AfManifestHooks:
         (the fixture exists but the entity is uncollectable there). SSOT:
         ``unified_api_contracts.registry.sports_league_entity_coverage``.
 
+        The gap DENOMINATOR is also entity-scope-aware (``SPORTS_ENTITY_LEAGUE_
+        COVERAGE`` via ``get_entity_league_coverage`` — operator ruling
+        2026-07-28): an entity restricted to a subset of leagues (e.g.
+        FIXTURE_EVENTS/PLAYER_STATS, MVP-only) is intersected against that
+        subset rather than the full curated universe, so a non-MVP league is
+        simply excluded from "expected" for that entity — not flagged as any
+        kind of gap. Previously this hardcoded the full curated-universe
+        denominator for every entity, so coverage views showed ~287 non-MVP
+        leagues as a permanent gap for those entities when they were never in
+        scope by policy.
+
         PRESENCE guard (2026-07-14 GW verification RED): see
         :meth:`_presence_guarded_captured_leagues`.
         """
@@ -286,6 +297,9 @@ class _AfManifestHooks:
             return
         captured_league_ids = guarded
         _expected = {lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")}
+        _entity_scope = _orch.get_entity_league_coverage(data_type)
+        if _entity_scope is not None:
+            _expected &= _entity_scope
         for _exp_lid in sorted(_expected - captured_league_ids):
             self._emit_empty_gap_for_league(data_type, _exp_lid)
 

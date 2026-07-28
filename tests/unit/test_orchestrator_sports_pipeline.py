@@ -907,22 +907,37 @@ class TestCF11PerFixtureEntityFailurePath:
 
 
 # ---------------------------------------------------------------------------
-# MVP-league filter — per-fixture enrichment must not follow the wider
-# FIXTURES curated-universe denominator (383 leagues) past MVP scope
-# (96 leagues) — see sports_reference.py's MVP-league filter block.
+# Per-entity league-scope filter — per-fixture enrichment entities restricted
+# to MVP scope (FIXTURE_EVENTS/PLAYER_STATS) must not follow the wider FIXTURES
+# curated-universe denominator (383 leagues) past MVP scope (96 leagues), while
+# entities widened to all leagues (FIXTURE_STATS/FIXTURE_LINEUPS — operator
+# ruling 2026-07-28) must NOT be filtered — see SPORTS_ENTITY_LEAGUE_COVERAGE
+# and _gather_per_fixture_rows's entity-scope skip.
 # ---------------------------------------------------------------------------
 
 
-class TestMvpLeagueFilterForEnrichment:
-    """Per-fixture enrichment (stats/events/lineups/player-stats) must only
-    call api_football for fixtures in MVP/prediction-scope leagues, even when
-    ``fixture_ids_override`` (from URDI) spans the much wider curated-universe
-    FIXTURES denominator (383 leagues since the 2026-07-24 widening)."""
+def _entity_scope_side_effect(entity: str) -> frozenset[str] | None:
+    """Mirrors the shipped SPORTS_ENTITY_LEAGUE_COVERAGE split: FIXTURE_STATS/
+    FIXTURE_LINEUPS cover all leagues (None); FIXTURE_EVENTS/PLAYER_STATS stay
+    MVP-restricted to {"EPL"} for this test's purposes."""
+    if entity in ("FIXTURE_STATS", "FIXTURE_LINEUPS"):
+        return None
+    if entity in ("FIXTURE_EVENTS", "PLAYER_STATS"):
+        return frozenset({"EPL"})
+    return None
+
+
+class TestPerEntityLeagueScopeForEnrichment:
+    """Per-fixture enrichment entities apply their OWN SPORTS_ENTITY_LEAGUE_
+    COVERAGE scope independently — FIXTURE_STATS/FIXTURE_LINEUPS see every
+    league ``fixture_ids_override`` (from URDI) spans, even the much wider
+    curated-universe FIXTURES denominator (383 leagues since the 2026-07-24
+    widening), while FIXTURE_EVENTS/PLAYER_STATS stay MVP-restricted."""
 
     @pytest.mark.asyncio
-    async def test_non_mvp_league_fixture_excluded_from_enrichment(self) -> None:
-        """A fixture mapped to a non-MVP league must never reach the adapter's
-        per-fixture enrichment calls."""
+    async def test_non_mvp_league_fixture_excluded_only_from_mvp_restricted_entities(self) -> None:
+        """A fixture mapped to a non-MVP league must never reach FIXTURE_EVENTS/
+        PLAYER_STATS, but MUST reach FIXTURE_STATS/FIXTURE_LINEUPS (all-leagues scope)."""
         mock_adapter = AsyncMock()
         mock_adapter.get_leagues.return_value = []
         mock_adapter.get_teams.return_value = []
@@ -948,9 +963,10 @@ class TestMvpLeagueFilterForEnrichment:
                 return_value=fixture_league_map,
             ),
             patch("instruments_service.engine.orchestrator.get_expected_leagues_for_source", return_value=[]),
+            patch("instruments_service.engine.orchestrator.is_league_entity_covered", return_value=True),
             patch(
-                "instruments_service.engine.orchestrator.sports_reference_filters.get_mvp_football_league_ids",
-                return_value=frozenset({"EPL"}),
+                "instruments_service.engine.orchestrator.get_entity_league_coverage",
+                side_effect=_entity_scope_side_effect,
             ),
         ):
             await _fetch_sports_reference_data(
@@ -961,18 +977,20 @@ class TestMvpLeagueFilterForEnrichment:
                 fixture_ids_override=[1001, 1002],
             )
 
-        # Only the MVP fixture (1001) may have been requested; the non-MVP
-        # fixture (1002) must never appear in any per-fixture adapter call.
-        for mock_method in (
-            mock_adapter.get_fixture_statistics,
-            mock_adapter.get_fixture_events,
-            mock_adapter.get_fixture_lineups,
-            mock_adapter.get_fixture_player_stats,
-        ):
+        # MVP-restricted entities: the non-MVP fixture (1002) must never appear.
+        for mock_method in (mock_adapter.get_fixture_events, mock_adapter.get_fixture_player_stats):
             called_fixture_ids = {call.args[0] for call in mock_method.call_args_list}
             assert 1002 not in called_fixture_ids, (
                 f"{mock_method} was called for fixture 1002 (non-MVP league) — "
-                "the MVP-league filter should have excluded it"
+                "the entity-scope filter should have excluded it"
+            )
+        # All-leagues entities: the non-MVP fixture (1002) MUST appear.
+        for mock_method in (mock_adapter.get_fixture_statistics, mock_adapter.get_fixture_lineups):
+            called_fixture_ids = {call.args[0] for call in mock_method.call_args_list}
+            assert 1002 in called_fixture_ids, (
+                f"{mock_method} was NOT called for fixture 1002 (non-MVP league) — "
+                "FIXTURE_STATS/FIXTURE_LINEUPS cover all leagues (operator ruling 2026-07-28) "
+                "and must not be filtered"
             )
 
     @pytest.mark.asyncio
@@ -1001,9 +1019,10 @@ class TestMvpLeagueFilterForEnrichment:
             # No league mapping at all for fixture 2001
             patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
             patch("instruments_service.engine.orchestrator.get_expected_leagues_for_source", return_value=[]),
+            patch("instruments_service.engine.orchestrator.is_league_entity_covered", return_value=True),
             patch(
-                "instruments_service.engine.orchestrator.sports_reference_filters.get_mvp_football_league_ids",
-                return_value=frozenset({"EPL"}),
+                "instruments_service.engine.orchestrator.get_entity_league_coverage",
+                side_effect=_entity_scope_side_effect,
             ),
         ):
             await _fetch_sports_reference_data(
@@ -1452,6 +1471,76 @@ class TestGwFalseEmptyWritePath20260714:
         )
 
 
+class TestEmitEmptyGapsForEntityPerEntityDenominator:
+    """emit_empty_gaps_for_entity's gap DENOMINATOR must be entity-scope-aware
+    (operator ruling 2026-07-28): a league outside an MVP-restricted entity's
+    SPORTS_ENTITY_LEAGUE_COVERAGE is excluded from "expected" entirely — not
+    flagged as any kind of gap — while an all-leagues entity (FIXTURE_STATS/
+    FIXTURE_LINEUPS) still sees it. Uses the REAL UAC registry (not mocked)
+    to prove this end-to-end, not just against a stubbed denominator."""
+
+    def test_non_mvp_league_excluded_for_mvp_restricted_entity(self) -> None:
+        """WORLD_CUP (a real non-MVP league in the 383-league curated
+        universe) must NOT be emitted as any gap for FIXTURE_EVENTS
+        (MVP-restricted, 96 leagues) — it's simply out of scope by policy."""
+        from datetime import UTC, datetime
+
+        from instruments_service.engine.orchestrator.sports_reference_core import _AfManifestHooks
+
+        mock_manifest = MagicMock()
+        hooks = _AfManifestHooks(
+            date="2025-09-15",
+            manifest=mock_manifest,
+            attempt_ts=datetime.now(UTC),
+            bucket="",  # presence guard disabled
+        )
+        with (
+            patch("instruments_service.engine.orchestrator.is_league_entity_covered", return_value=True),
+            patch(
+                "instruments_service.engine.orchestrator.get_league_fixture_calendar",
+                return_value=[{"fixture_id": 1}],
+            ),
+        ):
+            hooks.emit_empty_gaps_for_entity("FIXTURE_EVENTS", set())
+
+        stamped = {c.kwargs["row_key"]["league_id"] for c in mock_manifest.record_empty.call_args_list}
+        assert "WORLD_CUP" not in stamped, (
+            "WORLD_CUP (non-MVP) was stamped as a gap for FIXTURE_EVENTS — the entity-scope "
+            "denominator fix should exclude it entirely (out of scope by policy, not a gap)"
+        )
+        assert "EPL" in stamped, "EPL (MVP) must still be a genuine gap for FIXTURE_EVENTS when uncaptured"
+
+    def test_non_mvp_league_still_included_for_all_leagues_entity(self) -> None:
+        """The SAME non-MVP league (WORLD_CUP) MUST still be a real gap for
+        FIXTURE_STATS (all-leagues scope) — the fix must not over-exclude."""
+        from datetime import UTC, datetime
+
+        from instruments_service.engine.orchestrator.sports_reference_core import _AfManifestHooks
+
+        mock_manifest = MagicMock()
+        hooks = _AfManifestHooks(
+            date="2025-09-15",
+            manifest=mock_manifest,
+            attempt_ts=datetime.now(UTC),
+            bucket="",
+        )
+        with (
+            patch("instruments_service.engine.orchestrator.is_league_entity_covered", return_value=True),
+            patch(
+                "instruments_service.engine.orchestrator.get_league_fixture_calendar",
+                return_value=[{"fixture_id": 1}],
+            ),
+        ):
+            hooks.emit_empty_gaps_for_entity("FIXTURE_STATS", set())
+
+        stamped = {c.kwargs["row_key"]["league_id"] for c in mock_manifest.record_empty.call_args_list}
+        assert "WORLD_CUP" in stamped, (
+            "WORLD_CUP (non-MVP) was NOT stamped as a gap for FIXTURE_STATS — this entity covers "
+            "all leagues (operator ruling 2026-07-28), so it must still see the full denominator"
+        )
+        assert "EPL" in stamped, "EPL (MVP) must also still be a gap for FIXTURE_STATS when uncaptured"
+
+
 # ---------------------------------------------------------------------------
 # _gather_per_fixture_rows — batched-per-entity pre-fetch-skip lookups
 # (sports_dependency_check_manifest_vs_gcs_path_2026_07_08.md,
@@ -1499,6 +1588,10 @@ class TestGatherPerFixtureRowsBatchedPreFetchSkip:
                 "instruments_service.engine.orchestrator._canonical_league_id",
                 side_effect=lambda lid: str(lid),
             ),
+            # Neutralize entity-scope filtering (SPORTS_ENTITY_LEAGUE_COVERAGE) —
+            # this test is about batching/call-count, not scope semantics, and
+            # the fake LEAGUE_N names aren't in the real MVP set.
+            patch("instruments_service.engine.orchestrator.get_entity_league_coverage", return_value=None),
         ):
             _entity_rows, _entity_failures, _pre_captured = await _gather_per_fixture_rows(
                 per_fixture_entities=[("fixture_events", _noop_fetch)],
@@ -1550,6 +1643,10 @@ class TestGatherPerFixtureRowsBatchedPreFetchSkip:
                 "instruments_service.engine.orchestrator._canonical_league_id",
                 side_effect=lambda lid: str(lid),
             ),
+            # Neutralize entity-scope filtering (SPORTS_ENTITY_LEAGUE_COVERAGE) —
+            # this test is about entity-level concurrency, not scope semantics,
+            # and "LEAGUE_1" isn't in the real MVP set.
+            patch("instruments_service.engine.orchestrator.get_entity_league_coverage", return_value=None),
         ):
             started = time.monotonic()
             await _gather_per_fixture_rows(
