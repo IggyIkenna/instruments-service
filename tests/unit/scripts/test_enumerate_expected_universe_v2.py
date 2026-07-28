@@ -4243,3 +4243,89 @@ def test_enumerate_v2_tradfi_leaf_shaped_combo_capture_suppresses_phantom_seed()
         "LEAF-shaped combo capture for underlying ES must suppress the rolled-up combo seed "
         "(present-set symmetry fix) — phantom expected_unattempted regression"
     )
+
+
+# ---------------------------------------------------------------------------
+# TradFi combo underlying-naming mismatch (2026-07-28) —
+# tradfi_combo_underlying_naming_mismatch_blocks_g1_enum_present_rollup_2026_07_28.md
+#
+# Even after the G1-ENUM present-set grain-symmetry fix above, real captured
+# tradfi COMBO/futures_chain/options_chain manifest rows can carry an
+# ALREADY-POPULATED ``underlying`` column in a spelled-out commodity-name
+# convention ("HEATING-OIL", "PLATINUM", "CRUDE", "NAT-GAS-HH") instead of the
+# catalog's short-root convention ("HO", "PL", "CL", "NG") — a naming
+# mismatch, not a grain mismatch. _derive_underlying now takes the raw
+# catalog/manifest ``underlying`` value and reconciles it via the UAC
+# reverse-lookup (``resolve_tradfi_underlying_to_root``) before falling back
+# to the raw value unchanged.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw_underlying", "expected_root"),
+    [
+        ("HEATING-OIL", "HO"),
+        ("PLATINUM", "PL"),
+        ("CRUDE", "CL"),
+        ("NAT-GAS-HH", "NG"),
+        ("COPPER", "HG"),
+        ("GOLD", "GC"),
+        ("SILVER", "SI"),
+    ],
+)
+def test_derive_underlying_reconciles_spelled_out_raw_underlying(raw_underlying: str, expected_root: str) -> None:
+    """A non-blank, spelled-out ``raw_underlying`` reconciles to the catalog's short
+    root code via the UAC reverse-lookup instead of being returned verbatim."""
+    assert enumerator_module._derive_underlying("", "tradfi", raw_underlying=raw_underlying) == expected_root
+
+
+def test_derive_underlying_raw_underlying_already_a_root_passes_through_unchanged() -> None:
+    """A raw_underlying that's ALREADY the catalog's short root code (the correct,
+    writer-shaped convention) is returned as-is — no unnecessary reverse-lookup call,
+    no regression for the already-correct majority (futures_chain/options_chain)."""
+    assert enumerator_module._derive_underlying("", "tradfi", raw_underlying="HO") == "HO"
+    assert enumerator_module._derive_underlying("", "tradfi", raw_underlying="ES") == "ES"
+
+
+def test_derive_underlying_raw_underlying_non_tradfi_passes_through_unchanged() -> None:
+    """The reverse-lookup reconciliation is scoped to tradfi only — a cefi/defi row's
+    already-populated underlying is never rerouted through the TradFi registry."""
+    assert enumerator_module._derive_underlying("", "cefi", raw_underlying="HEATING-OIL") == "HEATING-OIL"
+
+
+def test_derive_underlying_raw_underlying_unresolvable_falls_back_unchanged() -> None:
+    """A genuine multi-root spread (``WTI-BZ``) or opaque residual the reverse-lookup
+    can't resolve is returned UNCHANGED, never blanked — under-matching beats
+    mis-keying / discarding real capture evidence."""
+    assert enumerator_module._derive_underlying("", "tradfi", raw_underlying="WTI-BZ") == "WTI-BZ"
+
+
+def test_derive_underlying_blank_raw_underlying_still_derives_from_instrument_id() -> None:
+    """Blank raw_underlying (the pre-fix call shape) still falls through to the
+    instrument_id-split derivation — no regression for the grain-symmetry fix."""
+    assert enumerator_module._derive_underlying("ES-CAL-1", "tradfi", raw_underlying="") == "ES"
+    assert enumerator_module._derive_underlying("ES-CAL-1", "tradfi") == "ES"
+
+
+def test_build_present_set_reconciles_already_populated_spelled_out_underlying() -> None:
+    """End-to-end proof for the naming-mismatch fix: a real captured tradfi COMBO
+    row (legacy-cased ``COMBO``, blank instrument_id, ALREADY-POPULATED but
+    spelled-out ``underlying="HEATING-OIL"``) now rolls up to the catalog's short
+    root ``HO`` — the present-set key can match a ``HO``-seeded combo bundle
+    instead of permanently phantom-``expected_unattempted``ing every HO combo
+    date because the raw manifest spelling never matched the catalog convention.
+    """
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "COMBO",
+                "instrument_id": "",
+                "underlying": "HEATING-OIL",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "", "HO", "", "2024-06-03")}
