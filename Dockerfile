@@ -58,21 +58,6 @@ RUN uv pip install --system --no-cache-dir keyrings.google-artifactregistry-auth
 # NOW copy pip.conf - keyring is ready to handle Artifact Registry auth
 COPY pip.conf /etc/pip.conf
 
-# `uv pip install` does NOT read pip.conf's extra-index-url (that's a pip-only convention) — it
-# silently falls back to pypi.org only, so a private-registry-only package reads as "not found in
-# the package registry" with no auth error surfaced. This stayed invisible because the base image
-# below already pins UTL/UAC at a version satisfying this repo's floor, so `uv pip install
-# --no-sources -e .` (line ~73) never needed a real registry fetch — until a floor-bump (e.g.
-# unified-trading-library>=0.65.0) outpaces the base image's pinned version, at which point uv MUST
-# fetch fresh and this gap surfaces as a build failure (repro: cloud_build_unified_api_contracts_
-# publish_ordering_race_2026_07_29.md — 4 consecutive instruments-service Cloud Build failures
-# post-floor-bump while other repos self-healed, because their failure really was the documented
-# transient publish race and this one is a structural uv/pip.conf gap). Mirror pip.conf's extra
-# index + enable uv's keyring auth (disabled by default) so `uv pip install` can ALSO reach the
-# private registry when the base image is behind.
-ENV UV_EXTRA_INDEX_URL=https://asia-northeast1-python.pkg.dev/central-element-323112/unified-libraries/simple/ \
-    UV_KEYRING_PROVIDER=subprocess
-
 # Copy service source code and lockfile
 COPY . .
 
