@@ -222,6 +222,12 @@ class PolymarketParsingMixin:
             available_to_datetime=available_to,
             underlying=underlying,
             canonical_instrument_id=sports_canonical_instrument_id,
+            # Write-back of the classification already computed above (line ~100) for
+            # `underlying` / `classify_lifecycle` — reused here, not re-derived, so the
+            # instruments-service catalogue-rollup cqg grain can materialise without
+            # needing title/slug/event_slug/outcome persisted separately.
+            # prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2 ("249-b").
+            canonical_question_group=group.value,
         )
 
     def _build_instrument_id(
