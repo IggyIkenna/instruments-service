@@ -75,12 +75,19 @@ class TestGetInstrumentsCached:
         assert adapter.call_count == 2  # different keys = different caches
 
     @pytest.mark.asyncio
-    async def test_cache_expired_refetches(self) -> None:
+    async def test_cache_expired_refetches(self, monkeypatch: pytest.MonkeyPatch) -> None:
         adapter = _CacheTestAdapter()
         adapter._cache_ttl = 0.01  # 10ms TTL
         adapter.call_count = 0
+
+        # Fake monotonic clock — base_adapter.py calls time.monotonic() directly (module
+        # attribute lookup at call time), so patching it lets us jump past the TTL instead
+        # of a real sleep.
+        fake_now = [1_000_000.0]
+        monkeypatch.setattr(time, "monotonic", lambda: fake_now[0])
+
         await adapter.get_instruments_cached()
-        time.sleep(0.02)  # Wait for TTL to expire
+        fake_now[0] += 0.02  # advance the fake clock past the TTL, no real sleep
         await adapter.get_instruments_cached()
         assert adapter.call_count == 2  # TTL expired, refetched
 
