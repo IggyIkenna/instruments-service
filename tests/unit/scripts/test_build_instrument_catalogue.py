@@ -1668,20 +1668,69 @@ def test_prediction_rollup_cqg_lifecycle_spans_member_window(rollup: ModuleType)
 
 
 def test_prediction_rollup_blank_cqg_emits_conditionid_grain_no_bundle(rollup: ModuleType) -> None:
-    """249-a: a blank cqg (the real venue=/market= writer layout, which emits NO
-    canonical_question_group) yields NO cqg-bundle row but DOES emit the
-    conditionId grain (trades + market_lifecycle). Pre-fix this skipped the whole
-    frame → 0-row catalogue; the bundle/cqg grain stays absent (gated on 338)."""
+    """249-a: a blank path-cqg AND no row-level canonical_question_group column
+    (a historical pre-249-b snapshot) yields NO cqg-bundle row but DOES emit the
+    conditionId grain (trades + market_lifecycle). Pre-249-a this skipped the
+    whole frame → 0-row catalogue; the cqg bundle grain legitimately stays absent
+    when NEITHER cqg source is populated."""
     d1 = date(2025, 3, 14)
     df = rollup.build_prediction_catalogue_dataframe(
         [(d1, "POLYMARKET", "", _pred_snap([{"instrument_key": "c1", "venue": "POLYMARKET"}]))]
     )
     recs = df.to_dict("records")
-    # No cqg bundle row (no empty-string bundle; the cqg grain is 249-b, gated on 338).
+    # No cqg bundle row — genuinely absent from both the path AND the row.
     assert not [r for r in recs if r["data_type"] == "prediction_canonical_question_group"]
     # ...but the conditionId grain IS materialised (the 249-a fix — was 0 rows before).
     assert {r["instrument_id"] for r in recs if r["data_type"] == "trades"} == {"c1"}
     assert {r["instrument_id"] for r in recs if r["data_type"] == "market_lifecycle"} == {"c1"}
+
+
+def test_prediction_rollup_row_level_cqg_column_emits_bundle_249b(rollup: ModuleType) -> None:
+    """249-b (decision 338 — RESOLVED, prediction_satellite_ao_dispatch_batch5_2026_07_26.md
+    todo 2): the REAL production shape — path-cqg is blank (the writer never emits a
+    canonical_question_group= path segment) but each row carries its OWN
+    canonical_question_group column (the write-back from
+    classify_{polymarket,kalshi}_to_canonical_group(), UAC
+    InstrumentRecord.canonical_question_group). Previously this yielded ZERO cqg-bundle
+    rows (the function only ever looked at the blank path value); now the cqg grain
+    materialises per-row, and TWO markets sharing the same group correctly fold into
+    ONE bundle row (not two)."""
+    d1 = date(2025, 3, 14)
+    df = rollup.build_prediction_catalogue_dataframe(
+        [
+            (
+                d1,
+                "POLYMARKET",
+                "",  # path-cqg blank — the real writer layout
+                _pred_snap(
+                    [
+                        {
+                            "instrument_key": "0xaaa",
+                            "venue": "POLYMARKET",
+                            "canonical_question_group": "BTC_UP_DOWN_DAILY",
+                        },
+                        {
+                            "instrument_key": "0xbbb",
+                            "venue": "POLYMARKET",
+                            "canonical_question_group": "BTC_UP_DOWN_DAILY",
+                        },
+                        {
+                            "instrument_key": "0xccc",
+                            "venue": "POLYMARKET",
+                            "canonical_question_group": "ETH_PRICE_RANGE",
+                        },
+                    ]
+                ),
+            ),
+        ]
+    )
+    recs = df.to_dict("records")
+    cqg_rows = {r["instrument_id"]: r for r in recs if r["data_type"] == "prediction_canonical_question_group"}
+    # Two distinct groups → two bundle rows (not zero, not three — the two BTC markets fold).
+    assert set(cqg_rows) == {"BTC_UP_DOWN_DAILY", "ETH_PRICE_RANGE"}
+    # The conditionId grain is unaffected (still one row per market, per data_type).
+    trades = {r["instrument_id"] for r in recs if r["data_type"] == "trades"}
+    assert trades == {"0xaaa", "0xbbb", "0xccc"}
 
 
 def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleType) -> None:

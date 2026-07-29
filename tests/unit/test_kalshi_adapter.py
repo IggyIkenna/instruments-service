@@ -62,6 +62,13 @@ class TestKalshiAdapter:
             results = await adapter.get_instruments()
         assert len(results) >= 1
         assert results[0].venue == "KALSHI"
+        # prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2 ("249-b"):
+        # canonical_question_group is a write-back of the classification already
+        # computed for `underlying` — never None for a real market (the classifier
+        # is non-Optional, OTHER is the catch-all), so the instruments-service
+        # catalogue-rollup cqg grain can read it back per-row.
+        assert results[0].canonical_question_group is not None
+        assert results[0].canonical_question_group != ""
 
     @pytest.mark.asyncio
     async def test_get_instruments_uses_open_status_filter_not_active(self) -> None:
