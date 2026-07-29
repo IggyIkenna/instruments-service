@@ -168,15 +168,21 @@ steps:
       - "-c"
       - |
         VERSION=$(cat /workspace/VERSION 2>/dev/null || echo "$SHORT_SHA")
+        # Fresh token for the Dockerfile's gar_token BuildKit secret (private-GAR uv install
+        # step) — same mechanism the auth-precheck step already proves works against this
+        # exact index. Written to /workspace only, never committed, never baked into a layer.
+        gcloud auth print-access-token > /workspace/.gar_token
         DOCKER_BUILDKIT=1 docker build -f Dockerfile \
           --build-arg PROJECT_ID=$PROJECT_ID \
           --build-arg SETUPTOOLS_SCM_PRETEND_VERSION=$$VERSION \
           --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --secret id=gar_token,src=/workspace/.gar_token \
           --cache-from asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:latest \
           -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:$SHORT_SHA \
           -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:$$VERSION \
           -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:latest \
           .
+        rm -f /workspace/.gar_token
     waitFor: ["pull-base-image", "ensure-repo", "extract-version"]
 
   # ── STEP 5: REQUIRED — Run quality gates INSIDE the image ─────────────────
