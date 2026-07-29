@@ -198,6 +198,19 @@ def _write_per_league_parquet(
     canonical_league_id: str,
     rows: list[dict[str, object]],
 ) -> int:
+    if not rows:
+        # Defensive guard (sports_player_stats_empty_write_followups_2026_07_26):
+        # the sole caller only invokes this per (day, league) key that a
+        # defaultdict(list) actually accumulated >=1 row under, so `rows` is
+        # never empty in practice today — but this function's own signature
+        # allows it, and unconditionally writing an empty pd.DataFrame(rows)
+        # is exactly the bug class that silently destroyed 240 PLAYER_STATS
+        # objects in the incident this todo follows up on. Refuse rather than
+        # trust the caller forever.
+        raise ValueError(
+            f"_write_per_league_parquet called with 0 rows for day={day} league={canonical_league_id} "
+            "-- refusing to write an empty canonical fixtures object."
+        )
     df = pd.DataFrame(rows)
     df = _post_fill_available_at(df)
     buf = io.BytesIO()

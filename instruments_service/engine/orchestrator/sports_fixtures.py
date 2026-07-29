@@ -98,7 +98,13 @@ def _sports_ref_source(entity_name: str) -> str:
 def _sports_ref_sink_for(bucket: str, date: str, entity_name: str) -> _orch.DataSink:
     """Return a DataSink for sports_reference writes with canonical pipeline_mode= in prefix.
 
-    Prefix: ``sports_reference/by_date/day={date}/pipeline_mode={pm}``
+    Prefix: ``sports_reference/by_date/day={date}/pipeline_mode={pm}``, further
+    prefixed by the active ``--run-tag`` (``_orch._RUN_TAG``) via
+    ``apply_run_tag()`` — a no-op for the default ``"batch"`` tag, and
+    ``{run_tag}/sports_reference/by_date/day={date}/pipeline_mode={pm}`` for
+    any other tag (e.g. ``t1-recon``), per
+    unified-trading-pm/codex/08-workflows/t1-batch-dag.md
+    (instruments_service_run_tag_flag_not_applied_2026_07_08).
 
     Callers pass ``partition={"entity": entity_name, "league": L}`` (or other keys
     WITHOUT ``day``/``pipeline_mode`` — those are already in the prefix).  Since
@@ -106,9 +112,10 @@ def _sports_ref_sink_for(bucket: str, date: str, entity_name: str) -> _orch.Data
     ``league`` (l) — producing the correct canonical segment order.
     """
     pm = _orch._sports_ref_pm(entity_name)
+    prefix = _orch.apply_run_tag(f"sports_reference/by_date/day={date}/pipeline_mode={pm}", _orch._RUN_TAG)
     return _orch.get_data_sink(
         bucket=bucket,
-        prefix=f"sports_reference/by_date/day={date}/pipeline_mode={pm}",
+        prefix=prefix,
     )
 
 
