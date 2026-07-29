@@ -37,6 +37,28 @@ def _clear_understat_league_cache():
     clear_understat_league_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_understat_rate_limiter():
+    """``BaseSportsReferenceAdapter._throttle`` paces requests via a CLASS-level
+    ``_next_slot`` monotonic reservation that is never reset between calls (by
+    design — one adapter instance is a per-VM singleton in production). Any test
+    here that mocks only ``aiohttp.ClientSession`` (not ``_get_with_retry``) drives
+    the REAL ``_throttle()`` for each of the 6 per-league requests in
+    ``get_fixtures``; each reservation advances ``_next_slot`` by
+    ``_min_request_interval`` regardless of real wall-clock time, so the debt
+    accumulates across the whole test session and eventually forces some later
+    test's ``_throttle()`` call to actually ``asyncio.sleep`` for the backlog —
+    deterministically tripping the 60s pytest-timeout once the backlog exceeds it
+    (root cause of the recurring
+    ``test_get_fixtures_resets_error_count`` CI timeout, 2026-07-29). Reset the
+    reservation clock around each test so no real sleep is ever owed."""
+    UnderstatAdapter._next_slot = 0.0
+    UnderstatAdapter._last_request_time = 0.0
+    yield
+    UnderstatAdapter._next_slot = 0.0
+    UnderstatAdapter._last_request_time = 0.0
+
+
 def _make_aiohttp_mock(
     json_response: object,
     status: int = 200,
