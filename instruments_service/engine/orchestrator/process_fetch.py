@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 from unified_api_contracts import VENUE_TO_ASSET_GROUP
 
+from instruments_service.engine.orchestrator.process_preflight import _ENRICHMENT_PROVIDERS
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -122,7 +124,16 @@ async def _fetch_urdi_records(
         non_defi_active: list[str] = []
     else:
         defi_active = [v for v in active_venues if v in defi_venue_names]
-        non_defi_active = [v for v in active_venues if v not in defi_venue_names]
+        # Enrichment-provider pseudo-venues (FOOTYSTATS/UNDERSTAT/TRANSFERMARKT/
+        # SOCCER_FOOTBALL_INFO/OPEN_METEO) live in ``active_venues`` only so stage 7
+        # enrichment can check membership (``"UNDERSTAT" in active_venues_set``) —
+        # they have no generic URDI-factory adapter and are fetched directly by their
+        # own provider call in stage 7, never through this stage-2 URDI fetch. Passing
+        # them here produced the recurring live-production "No URDI adapter for N
+        # venue(s)" warning on every non-enrichment-only sports entity dispatch.
+        non_defi_active = [
+            v for v in active_venues if v not in defi_venue_names and v not in _ENRICHMENT_PROVIDERS
+        ]
 
     # DeFi: use cached universe (one API call for entire batch run)
     if defi_active and mode == "batch":  # noqa: L2-mode-seam — DeFi caching decision; design call pending per batch_live_symmetry Q3
