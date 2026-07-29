@@ -968,6 +968,16 @@ class TestPerEntityLeagueScopeForEnrichment:
                 "instruments_service.engine.orchestrator.get_entity_league_coverage",
                 side_effect=_entity_scope_side_effect,
             ),
+            # Pre-fetch skip must not hit the real storage client — a non-empty
+            # fixture_league_map (unlike this class's other tests) makes
+            # _read_captured_per_entity_league's lookup_keys non-empty, which
+            # would otherwise call the real local-storage list_blobs() and
+            # rglob() a shared, suite-lifetime-accumulated temp directory
+            # (>60s pytest-timeout by the time this test runs late in the run).
+            patch(
+                "instruments_service.engine.orchestrator._read_captured_league_fixture_ids_for_entity",
+                return_value={},
+            ),
         ):
             await _fetch_sports_reference_data(
                 "2026-03-22",
