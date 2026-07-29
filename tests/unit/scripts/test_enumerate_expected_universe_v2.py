@@ -385,6 +385,52 @@ def test_cefi_v2_multiple_data_types() -> None:
     assert {r.data_type for r in rows} == set(data_types)
 
 
+def test_cefi_v2_denominator_is_could_exist_universe_not_just_manifest() -> None:
+    """data_completion_cefi item ⑦ — the coverage DENOMINATOR is the COULD-EXIST universe, not just rows
+    already in the manifest. Two alive cefi instruments, ONE captured (in present_set): the enumerator
+    seeds ``expected_unattempted`` for the un-captured one and SKIPS the captured one — so the seeded
+    universe UNION manifest = {captured-cell, expected_unattempted-cell} is a SUPERSET of (or equal to)
+    the manifest. Adding a catalog instrument can only GROW the denominator (seed a new owed cell),
+    never shrink it / drop a captured cell. Mirrors
+    ``test_defi_v2_denominator_is_could_exist_universe_not_just_manifest`` /
+    ``test_tradfi_v2_denominator_is_could_exist_universe_not_just_manifest`` for the cefi
+    could-exist-denominator-seed campaign (the ``--catalog-path`` parquet + ``--apply-write`` run
+    against the canonical ``_index``)."""
+    captured = _make_cefi_entry(instrument_id="BTC-USDT", venue="BINANCE-FUTURES", available_from="2019-01-01")
+    uncaptured = _make_cefi_entry(instrument_id="ETH-USDT", venue="BINANCE-FUTURES", available_from="2019-01-01")
+    date_axis = _date_axis("2024-06-01")
+    # cefi present-set keying is underlying-aware (matches the enumerator's own default
+    # _pcols when present_cols is omitted — see test_cefi_v2_alive_date_in_present_set_skipped).
+    present_set = {
+        _row_key_from_dict(
+            {
+                "venue": "BINANCE-FUTURES",
+                "chain": "",
+                "data_type": "ohlcv_1d",
+                "instrument_type": "PERPETUAL",
+                "instrument_id": "BTC-USDT",
+                "underlying": "",
+                "league_id": "",
+                "date": "2024-06-01",
+            },
+            cols=enumerator_module._UNDERLYING_AWARE_PRESENT_COLS,
+        )
+    }
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_cefi(
+                [captured, uncaptured], date_axis, ["ohlcv_1d"], present_set=present_set
+            )
+        )
+    )
+    # exactly ONE owed cell — the un-captured instrument; the captured one is skipped (not dropped)
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].instrument_id == "ETH-USDT"
+    # denominator (captured 1 + expected_unattempted 1) ≥ manifest captured (1) — never shrinks
+    assert 1 + len(rows) >= len(present_set)
+
+
 # ---------------------------------------------------------------------------
 # DeFi v2 enumerator tests
 # ---------------------------------------------------------------------------
