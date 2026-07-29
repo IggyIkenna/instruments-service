@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 from unified_api_contracts import VENUE_TO_ASSET_GROUP
 
+from .process_preflight import _ENRICHMENT_PROVIDERS
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -122,7 +124,22 @@ async def _fetch_urdi_records(
         non_defi_active: list[str] = []
     else:
         defi_active = [v for v in active_venues if v in defi_venue_names]
-        non_defi_active = [v for v in active_venues if v not in defi_venue_names]
+        # Exclude the sports enrichment pseudo-venues (FOOTYSTATS/UNDERSTAT/
+        # TRANSFERMARKT/SOCCER_FOOTBALL_INFO/OPEN_METEO) from this stage-2 URDI
+        # fetch — they have no real VENUE_TO_ADAPTER_KEY entry (NO_ADAPTER_YET
+        # sentinels only) and are fetched later, in stage-7 sports enrichment
+        # (process_enrichment.py), never via fetch_instruments_for_all_venues.
+        # get_venues_for_asset_groups() intentionally includes them in
+        # active_venues for entity-scoping/skip-if-fresh purposes, but passing
+        # them here produced a recurring, harmless-but-noisy "No URDI adapter
+        # for N venue(s)" warning + permanent UNSUPPORTED failure on every
+        # sports dispatch (sports_stats_delayed_live_capture_still_dead_post_fix_2026_07_29.md).
+        # Mirrors the same exclusion already applied at the --sports-provider
+        # short-circuit (_ENRICHMENT_PROVIDERS, process_preflight.py) and, via
+        # the equivalent _NON_VENUE_GRAIN_VENUE_NAMES SSOT, at the
+        # fixtures-fetch-failed check (process.py) and completeness/retry
+        # scoping (process_completeness.py) — this closes the last call site.
+        non_defi_active = [v for v in active_venues if v not in defi_venue_names and v not in _ENRICHMENT_PROVIDERS]
 
     # DeFi: use cached universe (one API call for entire batch run)
     if defi_active and mode == "batch":  # noqa: L2-mode-seam — DeFi caching decision; design call pending per batch_live_symmetry Q3

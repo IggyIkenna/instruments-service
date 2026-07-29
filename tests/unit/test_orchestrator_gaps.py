@@ -1391,3 +1391,85 @@ class TestFreshnessPreflightFixturesEntityScopePerLeague:
         mock_per_league.assert_not_called()
         assert outcome.skip is False
         assert outcome.missing_entities == ["INJURIES"]
+
+
+class TestFetchUrdiRecordsExcludesEnrichmentPseudoVenues:
+    """Regression: FOOTYSTATS/UNDERSTAT/TRANSFERMARKT/SOCCER_FOOTBALL_INFO/
+    OPEN_METEO must never reach fetch_instruments_for_all_venues().
+
+    These 5 are IS-owned sports enrichment pseudo-venues with no real
+    VENUE_TO_ADAPTER_KEY entry (NO_ADAPTER_YET sentinels only) -- they are
+    fetched later, in stage-7 sports enrichment, never via this stage-2 URDI
+    call. get_venues_for_asset_groups() intentionally includes them in
+    active_venues for entity-scoping/skip-if-fresh purposes, but before this
+    fix they leaked straight into fetch_instruments_for_all_venues(),
+    producing a recurring "No URDI adapter for N venue(s)" warning +
+    permanent UNSUPPORTED failure on every live sports dispatch. See
+    sports_stats_delayed_live_capture_still_dead_post_fix_2026_07_29.md.
+    """
+
+    @pytest.mark.asyncio
+    async def test_enrichment_pseudo_venues_excluded_from_urdi_call(self) -> None:
+        from instruments_service.engine.orchestrator.process_fetch import _fetch_urdi_records
+
+        mock_result = VenueFetchResult(records=[], failed_venues=[])
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
+                AsyncMock(return_value=mock_result),
+            ) as mock_fetch,
+            patch("instruments_service.engine.orchestrator.SolanaCacheSession", MagicMock()),
+        ):
+            await _fetch_urdi_records(
+                active_venues=[
+                    "API_FOOTBALL",
+                    "FOOTYSTATS",
+                    "UNDERSTAT",
+                    "TRANSFERMARKT",
+                    "SOCCER_FOOTBALL_INFO",
+                    "OPEN_METEO",
+                ],
+                api_keys=None,
+                date="2026-07-29",
+                mode="batch",
+                source=None,
+                skip_urdi=False,
+            )
+
+        mock_fetch.assert_called_once()
+        called_venues = mock_fetch.call_args[0][0]
+        assert called_venues == ["API_FOOTBALL"], (
+            f"enrichment pseudo-venues must never reach fetch_instruments_for_all_venues, got: {called_venues}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_real_venue_alongside_enrichment_pseudo_venues_still_fetched(self) -> None:
+        """A mixed active_venues list (real CeFi venue + the 5 pseudo-venues)
+        must still pass the real venue through -- confirms the exclusion is
+        scoped to exactly the 5 names, not an accidental blanket filter."""
+        from instruments_service.engine.orchestrator.process_fetch import _fetch_urdi_records
+
+        mock_result = VenueFetchResult(records=[], failed_venues=[])
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
+                AsyncMock(return_value=mock_result),
+            ) as mock_fetch,
+            patch("instruments_service.engine.orchestrator.SolanaCacheSession", MagicMock()),
+            patch("instruments_service.engine.orchestrator._get_manifest_high_watermarks", return_value={}),
+        ):
+            await _fetch_urdi_records(
+                active_venues=["BINANCE-SPOT", "UNDERSTAT", "OPEN_METEO"],
+                api_keys=None,
+                date="2026-07-29",
+                mode="batch",
+                source=None,
+                skip_urdi=False,
+            )
+
+        called_venues = mock_fetch.call_args[0][0]
+        assert called_venues == ["BINANCE-SPOT"], (
+            f"real venue must still reach fetch_instruments_for_all_venues, got: {called_venues}"
+        )
