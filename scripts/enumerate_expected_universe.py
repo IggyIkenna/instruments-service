@@ -887,13 +887,14 @@ def _cefi_entry_in_mvp_universe(
     )
 
 
-def _tradfi_entry_in_mvp_universe(instr: InstrumentCatalogEntry) -> bool:
+def _tradfi_entry_in_mvp_universe(instr: InstrumentCatalogEntry, *, base_override: str = "") -> bool:
     """Return True iff the tradfi catalogue entry is within the MVP capture universe.
 
     Mirrors :func:`_cefi_entry_in_mvp_universe` for the tradfi asset group:
 
     1. Prefer the catalogue's pre-tagged ``mvp`` column (set by the rollup via UAC
        ``is_in_mvp_capture_universe``): ``True``/``False`` short-circuits the predicate.
+       **Skipped when ``base_override`` is passed** — see below.
     2. If absent (``None``), fall back to the shared UAC ``is_mvp`` predicate for
        ``asset_group="tradfi"`` — uses the ``TradfiMvpRule`` (underliers/base_ccys/
        instrument_types; equity carve-out via ``TRADFI_EQUITY_PERP_BASIS_UNIVERSE`` +
@@ -904,12 +905,29 @@ def _tradfi_entry_in_mvp_universe(instr: InstrumentCatalogEntry) -> bool:
     passes ``instr.base_asset or instr.underlying`` (stripped, uppercased) so the
     call mirrors what the capture writer computes.
 
+    ``base_override`` (used by :func:`_rollup_bundle_grain`'s tradfi bundle-mvp
+    roll-up, SSOT tradfi_combo_composite_id_misparse_mvp_gate_false_exclusion_
+    2026_07_28.md): the instruments-service catalogue pre-tags EVERY COMBO leaf
+    row ``mvp=False`` UNCONDITIONALLY (confirmed live: all 59,228 catalog COMBO
+    rows carry ``mvp=False``, never ``None`` — a catalog-writer-level default,
+    not a per-instrument judgement) — trusting that column at the LEAF level
+    would permanently short-circuit the bundle roll-up's own correctly-derived
+    ``underlying`` (e.g. an "ESU4-ESZ4" leg resolving to the real root "ES")
+    before the live predicate ever sees it. When ``base_override`` is non-blank
+    the pre-tagged ``mvp`` column is deliberately BYPASSED and the live
+    predicate runs against the override value instead — the caller is
+    asserting "check the RESOLVED bundle underlying, not this leaf's own
+    (possibly stale) tag".
+
     Bundle instrument_types are normalised via :func:`_mvp_capture_itype` (asset-group-
     agnostic: ``OPTIONS_CHAIN``/``COMBO`` → ``OPTION``, ``FUTURES_CHAIN`` → ``FUTURE``).
     """
-    if instr.mvp is not None:
-        return instr.mvp
-    base_ccy = (instr.base_asset or instr.underlying).strip().upper() or None
+    if base_override:
+        base_ccy: str | None = base_override.strip().upper() or None
+    else:
+        if instr.mvp is not None:
+            return instr.mvp
+        base_ccy = (instr.base_asset or instr.underlying).strip().upper() or None
     return is_mvp(
         "tradfi",
         instr.venue,
@@ -2850,18 +2868,84 @@ assert set(_V2_ENUMERATORS) == set(TOTAL_UNIVERSE_AXES) == set(SUPPORTED_ASSET_G
 )
 
 
+_TRADFI_COMBO_ID_RE = re.compile(r"^[A-Z]+:COMBO:(?P<rest>.+)$")
+# Same root+month-code+year shape as futures_factory.py's _FUTURES_SYM_RE
+# (root, optional dot separator, CME month code, 1-2 digit year) — applied to
+# a combo's FIRST leg instead of a bare futures symbol; only the root is
+# needed here so month/year aren't captured as separate groups.
+_TRADFI_COMBO_LEG_ROOT_RE = re.compile(r"^(?P<root>[A-Z0-9]{1,5})\.?(?:[FGHJKMNQUVXZ]\d{1,2})$")
+
+
+def _derive_tradfi_combo_root(iid: str) -> str:
+    """Recover the real product root from a wire-format tradfi COMBO composite
+    ``instrument_id`` (see ``_derive_underlying``'s docstring, role 1a). SSOT:
+    tradfi_combo_composite_id_misparse_mvp_gate_false_exclusion_2026_07_28.md.
+
+    The catalog's COMBO leaf rows carry composite ids like
+    ``"CME:COMBO:6AF1-6AU0"`` (CME calendar/inter-commodity spreads) or
+    ``"CBOE:COMBO:VX/F7:1:S-VX/G7:1:B"`` (CBOE calendar spreads) that the
+    plain "-"-split / whitespace-token fallbacks below mis-parse — the
+    ``"VENUE:COMBO:"`` prefix stays glued to whatever token they extract,
+    producing a garbage key (``"CME:COMBO:6AF1"``) instead of the real
+    product root (``"6A"``).
+
+    Returns "" (never mis-keys, caller falls through to the pre-existing
+    fallbacks unchanged) when: the id isn't ``VENUE:COMBO:``-prefixed; OR the
+    prefix IS recognised but nothing extracted validates against
+    ``TRADFI_ROOTS`` — e.g. a genuine multi-root inter-commodity spread like
+    CME's ``CL:BZ`` (WTI-Brent) combos, which have no single real root and
+    must stay unresolved (under-matching beats mis-keying) so the caller's
+    "-"-split fallback runs on the ORIGINAL (unstripped) id — byte-identical
+    to pre-fix behaviour for shapes this helper doesn't cover.
+    """
+    m = _TRADFI_COMBO_ID_RE.match(iid)
+    if not m:
+        return ""
+    rest = m.group("rest")
+    candidate = ""
+    if "-" in rest:
+        leg1 = rest.split("-", 1)[0].strip()
+        leg_m = _TRADFI_COMBO_LEG_ROOT_RE.match(leg1)
+        if leg_m:
+            candidate = leg_m.group("root")
+        elif "/" in leg1:
+            # CBOE calendar-spread leg shape ("VX/F7:1:S") — root is the
+            # token before the "/" (expiry code + side-suffix carry no root).
+            candidate = leg1.split("/", 1)[0].strip()
+    if not candidate:
+        # Prefix present but no "-" in the remainder (e.g. ICE's
+        # "VENUE:COMBO:BRN   3  <spread id>" shape) — retry the
+        # whitespace-token fallback on the STRIPPED remainder instead of the
+        # original id. The original always fails here: its leading token is
+        # "VENUE:COMBO:<root>", never a bare registered root, so role-1c's
+        # whitespace fallback could never resolve it while this prefix stayed
+        # attached (a real, previously-silent drop-from-roll-up this fix
+        # also closes, not just the "-"-split shapes named above).
+        tokens = rest.split()
+        if tokens:
+            candidate = tokens[0]
+    return candidate if candidate in TRADFI_ROOTS else ""
+
+
 def _derive_underlying(instrument_id: str, asset_group: str = "", raw_underlying: str = "") -> str:
     """Resolve the underlying to key a bundle-grain roll-up on. Two roles:
 
     1. Blank-``underlying`` FALLBACK (``raw_underlying`` omitted/blank): derive
-       from the leaf ``instrument_id`` — the base asset is the token before the
-       first ``-`` separator (``BTC-29MAR24-50000-C`` → ``BTC``;
-       ``BTC-29MAR24`` → ``BTC``). ``asset_group="tradfi"`` symbols with no
-       ``-`` separator (ICE COMBO/spread codes carry extra whitespace +
-       numeric spread ids instead of the standard letter+month-code shape,
-       e.g. ``BRN   3  30615524`` / ``G   FSF0032.M0032``) fall back to the
-       whitespace-delimited leading token when it is a registered TradFi root
-       (``TRADFI_ROOTS``).
+       from the leaf ``instrument_id``.
+       a. ``asset_group="tradfi"`` wire-format COMBO composite ids
+          (``"<VENUE>:COMBO:<LEG1>-<LEG2>"``) resolve via
+          :func:`_derive_tradfi_combo_root` FIRST, recovering the real
+          product root instead of letting roles 1b/1c below mis-key on the
+          glued-on ``"VENUE:COMBO:"`` prefix.
+       b. Otherwise the base asset is the token before the first ``-``
+          separator (``BTC-29MAR24-50000-C`` → ``BTC``; ``BTC-29MAR24`` →
+          ``BTC``).
+       c. ``asset_group="tradfi"`` symbols with no ``-`` separator (ICE
+          COMBO/spread codes carry extra whitespace + numeric spread ids
+          instead of the standard letter+month-code shape, e.g.
+          ``BRN   3  30615524`` / ``G   FSF0032.M0032``) fall back to the
+          whitespace-delimited leading token when it is a registered TradFi
+          root (``TRADFI_ROOTS``).
     2. Naming-convention RECONCILIATION (``raw_underlying`` non-blank,
        ``asset_group="tradfi"``): a manifest/catalog row's ``underlying``
        column can already be POPULATED but in a spelled-out commodity-name
@@ -2889,6 +2973,10 @@ def _derive_underlying(instrument_id: str, asset_group: str = "", raw_underlying
                     return resolved_root
             return ru
     iid = instrument_id.strip()
+    if asset_group == "tradfi":
+        combo_root = _derive_tradfi_combo_root(iid)
+        if combo_root:
+            return combo_root
     if "-" in iid:
         return iid.split("-", 1)[0]
     if asset_group == "tradfi":
@@ -2982,8 +3070,22 @@ def _rollup_bundle_grain(catalog: list[InstrumentCatalogEntry], asset_group: str
             # ``mvp`` column (the bundle instrument_type — options_chain/futures_chain/
             # combo — is not directly recognisable by the leaf-level ``is_mvp``
             # predicate, which keys off the LEAF instrument_type). A bundle is MVP
-            # iff ANY of its leaves is MVP (the leaf's mvp column or _tradfi_entry_in_mvp_universe).
-            bundle_mvp[key] = bundle_mvp.get(key, False) or _tradfi_entry_in_mvp_universe(instr)
+            # iff ANY of its leaves is MVP (the leaf's mvp column or
+            # _tradfi_entry_in_mvp_universe) — EXCEPT for COMBO leaves specifically,
+            # where the catalogue pre-tags mvp=False UNCONDITIONALLY (confirmed live:
+            # all 59,228 catalog COMBO rows, never None — a catalog-writer-level
+            # default, not a per-instrument judgement), which would otherwise
+            # permanently short-circuit the live predicate before it ever sees this
+            # roll-up's correctly-resolved ``underlying``. futures_chain/options_chain
+            # leaves keep trusting their pre-tag unchanged — no evidence they share
+            # this bug, and forcing a live recompute for them regressed a real fixture
+            # (a non-canonical CME-OPTIONS venue fails the live predicate that its
+            # pre-tag correctly answered) — see
+            # tradfi_combo_composite_id_misparse_mvp_gate_false_exclusion_2026_07_28.md.
+            is_combo_leaf = instr.instrument_type.strip().upper() == "COMBO"
+            bundle_mvp[key] = bundle_mvp.get(key, False) or _tradfi_entry_in_mvp_universe(
+                instr, base_override=underlying if is_combo_leaf else ""
+            )
         if key not in bundles:
             bundles[key] = [instr.available_from, instr.available_to]
             if instr.available_to is None:
