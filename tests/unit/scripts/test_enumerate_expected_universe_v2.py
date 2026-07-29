@@ -3523,6 +3523,156 @@ def test_rollup_bundle_grain_tradfi_ice_combo_no_underlying_column_recovers_via_
 
 
 # ---------------------------------------------------------------------------
+# TradFi COMBO wire-format composite-id mis-parse (G1-ENUM MVP-gate false
+# exclusion) — tradfi_combo_composite_id_misparse_mvp_gate_false_exclusion_
+# 2026_07_28.md. The catalog's blank-underlying COMBO leaves carry a composite
+# "<VENUE>:COMBO:<LEG1>-<LEG2>" instrument_id; the plain "-"-split fallback
+# mis-parses these into a garbage "<VENUE>:COMBO:<LEG1-partial>" key that never
+# passes the MVP gate — silently dropping every combo bundle candidate,
+# including the ES/S&P-500 complex (the sole MVP-scoped tradfi combo/option
+# underlier per the 2026-07-14 operator ruling). All id shapes below are real,
+# distinct instrument_id values sampled live from the prod tradfi instruments
+# catalog (see the issue doc's provenance for the exact source, 2026-07-29) —
+# not synthesised guesses.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("instrument_id", "expected_root"),
+    [
+        # The case this fix exists for: ES calendar spreads must resolve to "ES"
+        # so they pass is_mvp() and stop being dropped before enumeration.
+        ("CME:COMBO:ESU4-ESZ4", "ES"),
+        ("CME:COMBO:ESH4-ESM4", "ES"),
+        # Ordinary CME single-letter-root calendar spreads.
+        ("CME:COMBO:CLH4-CLQ4", "CL"),
+        ("CME:COMBO:GCG7-GCZ1", "GC"),
+        # Multi-letter root (metals).
+        ("CME:COMBO:METQ3-METZ4", "MET"),
+        # Digit-leading root (currency futures).
+        ("CME:COMBO:6LG6-6LX5", "6L"),
+        # Crypto futures root sharing the venue namespace.
+        ("CME:COMBO:BTCG2-MBTH2", "BTC"),
+        # CBOE calendar spread — VX/<expiry>:<n>:<side> leg shape, root before "/".
+        ("CBOE:COMBO:VX/N6:1:S-VX/Z6:1:B", "VX"),
+        # ICE spread legs keep the whitespace-token shape even once the
+        # "VENUE:COMBO:" prefix is stripped — falls through to the pre-existing
+        # whitespace-fallback (role 1c), same as the non-composite ICE shape
+        # already covered above.
+        ("ICE:COMBO:BRN FMX0025-BRN FMQ0026", "BRN"),
+        ("ICE:COMBO:G   FMQ0029-G   FMU0029", "G"),
+    ],
+)
+def test_derive_underlying_tradfi_combo_composite_id(instrument_id: str, expected_root: str) -> None:
+    assert enumerator_module._derive_underlying(instrument_id, "tradfi") == expected_root
+
+
+def test_derive_underlying_tradfi_combo_composite_id_unresolvable_root_falls_through() -> None:
+    """A COMBO leg whose extracted root isn't a registered TRADFI_ROOTS member
+    falls through to the pre-existing "-"-split fallback on the ORIGINAL
+    (unstripped) id rather than mis-keying — under-matching beats mis-keying,
+    unchanged from pre-fix behavior for shapes this helper can't resolve."""
+    result = enumerator_module._derive_underlying("CME:COMBO:ZZZNOTAROOT1-ZZZNOTAROOT2", "tradfi")
+    assert result == "CME:COMBO:ZZZNOTAROOT1"  # byte-identical to the old naive "-"-split
+
+
+def test_derive_underlying_tradfi_combo_composite_id_non_tradfi_unaffected() -> None:
+    """The composite-id parse is tradfi-only — a cefi/defi id with the same
+    shape (unlikely in practice, but the guard must be real) still falls
+    through to the generic "-"-split, never the tradfi-specific helper."""
+    assert enumerator_module._derive_underlying("CME:COMBO:ESU4-ESZ4", "cefi") == "CME:COMBO:ESU4"
+    assert enumerator_module._derive_underlying("CME:COMBO:ESU4-ESZ4", "") == "CME:COMBO:ESU4"
+
+
+def test_derive_underlying_tradfi_combo_composite_id_no_prefix_match_unaffected() -> None:
+    """An id that doesn't match the VENUE:COMBO: prefix shape (e.g. the existing
+    non-combo cefi-style leaf id already covered elsewhere) is untouched by
+    the new helper — regression guard for the pre-existing "-"-split path."""
+    assert enumerator_module._derive_underlying("BTC-29MAR24-50000-C", "") == "BTC"
+    assert enumerator_module._derive_underlying("ES-CAL-1", "tradfi") == "ES"
+
+
+def test_rollup_bundle_grain_tradfi_combo_composite_id_reaches_es_root() -> None:
+    """End-to-end: a blank-underlying ES calendar-spread COMBO leaf now rolls
+    up into a synthetic combo entry keyed on "ES" — the real, MVP-scoped
+    underlier — instead of being silently dropped from the roll-up. Uses the
+    REAL production shape (mvp=False, not this fixture's default mvp=True —
+    see the mvp-pretag test below for why that default would have masked the
+    actual bug) so this test exercises the true end-to-end path."""
+    catalog = [
+        _make_tradfi_entry(instrument_id="CME:COMBO:ESU4-ESZ4", instrument_type="COMBO", venue="CME", mvp=False),
+        _make_tradfi_entry(instrument_id="CME:COMBO:ESH4-ESM4", instrument_type="COMBO", venue="CME", mvp=False),
+    ]
+    rolled = enumerator_module._rollup_bundle_grain(catalog, "tradfi")
+    synth = [e for e in rolled if e.instrument_type == "combo"]
+    assert len(synth) == 1
+    assert synth[0].instrument_id == "ES"
+
+
+# ---------------------------------------------------------------------------
+# TradFi COMBO catalogue mvp=False pre-tag masking the bundle-level MVP gate
+# — the SECOND half of tradfi_combo_composite_id_misparse_mvp_gate_false_
+# exclusion_2026_07_28.md, found via real end-to-end production verification
+# (a synthetic-fixture-only test could not have caught this: _make_tradfi_
+# entry's own default is mvp=True, which never exercises the real catalogue
+# shape). Confirmed live: ALL 59,228 catalog COMBO rows carry mvp=False
+# unconditionally (never None) — a catalog-writer-level default, not a
+# per-instrument judgement — which short-circuits _tradfi_entry_in_mvp_
+# universe's leaf-mvp-column preference BEFORE the live predicate ever sees
+# the roll-up's correctly-resolved underlying.
+# ---------------------------------------------------------------------------
+
+
+def test_tradfi_entry_in_mvp_universe_pretagged_mvp_false_short_circuits_without_override() -> None:
+    """Regression guard for the ORIGINAL (correct, unchanged) behavior: a
+    catalogue entry with a real pre-tagged mvp=False is trusted as-is when NO
+    base_override is passed — this is the exact shape that, prior to the
+    fix, made every COMBO leaf (and therefore every combo bundle) permanently
+    non-MVP regardless of its underlying."""
+    entry = _make_tradfi_entry(instrument_id="CME:COMBO:ESU4-ESZ4", instrument_type="COMBO", venue="CME", mvp=False)
+    assert enumerator_module._tradfi_entry_in_mvp_universe(entry) is False
+
+
+def test_tradfi_entry_in_mvp_universe_base_override_bypasses_stale_pretag() -> None:
+    """The fix: base_override deliberately bypasses a pre-tagged mvp=False and
+    runs the live predicate against the RESOLVED underlying instead — this is
+    what lets the roll-up's bundle_mvp computation see the true answer."""
+    entry = _make_tradfi_entry(instrument_id="CME:COMBO:ESU4-ESZ4", instrument_type="COMBO", venue="CME", mvp=False)
+    assert enumerator_module._tradfi_entry_in_mvp_universe(entry, base_override="ES") is True
+    # A non-MVP root still correctly resolves False even with an override —
+    # this isn't a "always True" backdoor, it's a real live-predicate call.
+    assert enumerator_module._tradfi_entry_in_mvp_universe(entry, base_override="ZZZNOTMVP") is False
+
+
+def test_tradfi_entry_in_mvp_universe_no_pretag_ignores_override_irrelevance() -> None:
+    """When the catalogue's own mvp column is genuinely None (no pre-tag at
+    all — the non-combo/non-bundle common case), base_override and the
+    ordinary base_asset/underlying fallback reach the same live-predicate
+    call for the same value, so behavior is unaffected by the new parameter
+    for entries that never had a stale pre-tag to bypass."""
+    entry = _make_tradfi_entry(instrument_id="ESM6", instrument_type="FUTURE", venue="CME", underlying="ES", mvp=None)
+    assert enumerator_module._tradfi_entry_in_mvp_universe(entry) == enumerator_module._tradfi_entry_in_mvp_universe(
+        entry, base_override="ES"
+    )
+
+
+def test_rollup_bundle_grain_tradfi_combo_mvp_tag_survives_catalog_pretag_false() -> None:
+    """The synthetic ES combo bundle entry itself must carry mvp=True after
+    the roll-up (not just resolve correctly if re-queried) — this is what the
+    downstream _enumerate_v2_tradfi gate (line ~1815) actually reads, so a
+    correct underlying with a wrong mvp tag would still silently drop the
+    candidate one gate later."""
+    catalog = [
+        _make_tradfi_entry(instrument_id="CME:COMBO:ESU4-ESZ4", instrument_type="COMBO", venue="CME", mvp=False),
+    ]
+    rolled = enumerator_module._rollup_bundle_grain(catalog, "tradfi")
+    synth = [e for e in rolled if e.instrument_type == "combo"]
+    assert len(synth) == 1
+    assert synth[0].instrument_id == "ES"
+    assert synth[0].mvp is True
+
+
+# ---------------------------------------------------------------------------
 # DeFi canonical venue/chain split — gotcha #3 (defi-canonical-naming-ssot.md)
 #
 # The instruments-service catalog stores legacy combined venue='AAVEV3-ARBITRUM'
