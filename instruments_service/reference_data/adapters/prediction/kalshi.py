@@ -921,6 +921,11 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             available_from_datetime=_afd,
             available_to_datetime=lifecycle.settlement_time if lifecycle else None,
             underlying=underlying,
+            # Write-back of the classification already computed above (line ~830) for
+            # `underlying` / `classify_lifecycle` — reused here, not re-derived, so the
+            # instruments-service catalogue-rollup cqg grain can materialise.
+            # prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2 ("249-b").
+            canonical_question_group=group.value,
         )
 
     def _parse_close_time(self, close_time_raw: str | None) -> datetime | None:

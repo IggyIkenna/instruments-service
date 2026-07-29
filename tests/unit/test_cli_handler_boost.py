@@ -142,6 +142,7 @@ def test_wire_cli_filters_venues_with_earliest_date() -> None:
     args.lookback_days = None
     args.lookahead_days = None
     args.force_window = False
+    args.run_tag = None
     handler.args = args
 
     with patch(
@@ -169,6 +170,7 @@ def test_wire_cli_filters_recovery_fixture_ids() -> None:
     args.lookback_days = None
     args.lookahead_days = None
     args.force_window = False
+    args.run_tag = None
     handler.args = args
 
     expected_ids = frozenset([1, 2, 3])
@@ -194,6 +196,7 @@ def test_wire_cli_filters_source_arg() -> None:
     args.lookback_days = None
     args.lookahead_days = None
     args.force_window = False
+    args.run_tag = None
     handler.args = args
 
     handler._wire_cli_filters_from_args()

@@ -57,6 +57,10 @@ class TestPolymarketUnderlying:
         assert record is not None
         assert record.underlying == "BTC"
         assert record.canonical_instrument_id is None  # non-sports: not populated at adapter time
+        # prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2 ("249-b"):
+        # write-back of the same precomputed `group` — never None/blank for a
+        # classified market (OTHER is the honest catch-all, never absence).
+        assert record.canonical_question_group not in (None, "")
 
     def test_cpi_macro_market_gets_cpi_underlying(self) -> None:
         adapter = PolymarketReferenceDataAdapter()
@@ -77,6 +81,7 @@ class TestPolymarketUnderlying:
         record = adapter._parse_market(market, _NOW)  # pyright: ignore[reportPrivateUsage]
         assert record is not None
         assert record.underlying == "CPI"
+        assert record.canonical_question_group not in (None, "")
 
     def test_politics_market_with_named_underlying(self) -> None:
         """A classified politics market (Trump) gets its OWN named underlying —
@@ -99,6 +104,7 @@ class TestPolymarketUnderlying:
         record = adapter._parse_market(market, _NOW)  # pyright: ignore[reportPrivateUsage]
         assert record is not None
         assert record.underlying == "TRUMP"
+        assert record.canonical_question_group not in (None, "")
 
     def test_genuinely_unclassified_market_falls_to_other(self) -> None:
         """A market the classifier can't route (cqg=MISC_NOVELTY) honestly gets
@@ -121,6 +127,9 @@ class TestPolymarketUnderlying:
         record = adapter._parse_market(market, _NOW)  # pyright: ignore[reportPrivateUsage]
         assert record is not None
         assert record.underlying == "OTHER"
+        # Even a genuinely-unclassified market's cqg is a real (non-empty) enum
+        # member (e.g. MISC_NOVELTY) — the classifier is non-Optional, never blank.
+        assert record.canonical_question_group not in (None, "")
 
     def test_sports_market_gets_none_underlying_and_fixture_id(self) -> None:
         """Sports fixtures don't have a single scalar underlying (None, "not
@@ -167,6 +176,9 @@ class TestPolymarketUnderlying:
         assert record is not None
         assert record.underlying is None
         assert record.canonical_instrument_id == "EPL:CHELSEA_v_ARSENAL:20260322"
+        # underlying=None is a sports-specific "no single scalar underlying" case —
+        # the cqg classification itself is still a real (non-empty) sports group.
+        assert record.canonical_question_group not in (None, "")
 
 
 class TestKalshiUnderlying:
@@ -184,6 +196,7 @@ class TestKalshiUnderlying:
         record = adapter._parse_market(raw, _NOW)  # pyright: ignore[reportPrivateUsage]
         assert record is not None
         assert record.underlying == "BTC"
+        assert record.canonical_question_group not in (None, "")
 
     def test_cpi_macro_market_gets_cpi_underlying(self) -> None:
         adapter = KalshiReferenceDataAdapter()
@@ -199,6 +212,7 @@ class TestKalshiUnderlying:
         record = adapter._parse_market(raw, _NOW)  # pyright: ignore[reportPrivateUsage]
         assert record is not None
         assert record.underlying == "CPI"
+        assert record.canonical_question_group not in (None, "")
 
     def test_fed_market_gets_fed_underlying(self) -> None:
         """Real macro/politics-adjacent example: Fed rate decisions get a NAMED
@@ -216,6 +230,7 @@ class TestKalshiUnderlying:
         record = adapter._parse_market(raw, _NOW)  # pyright: ignore[reportPrivateUsage]
         assert record is not None
         assert record.underlying == "FED"
+        assert record.canonical_question_group not in (None, "")
 
     def test_sports_market_gets_none_underlying(self) -> None:
         adapter = KalshiReferenceDataAdapter()
@@ -231,6 +246,8 @@ class TestKalshiUnderlying:
         record = adapter._parse_market(raw, _NOW)  # pyright: ignore[reportPrivateUsage]
         assert record is not None
         assert record.underlying is None
+        # underlying=None is sports-specific — the cqg classification is still real.
+        assert record.canonical_question_group not in (None, "")
 
     def test_genuinely_unclassified_market_falls_to_other(self) -> None:
         adapter = KalshiReferenceDataAdapter()
@@ -246,6 +263,7 @@ class TestKalshiUnderlying:
         record = adapter._parse_market(raw, _NOW)  # pyright: ignore[reportPrivateUsage]
         assert record is not None
         assert record.underlying == "OTHER"
+        assert record.canonical_question_group not in (None, "")
 
 
 class TestClassifyLifecycleGroupReuse:
