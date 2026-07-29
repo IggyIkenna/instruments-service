@@ -1994,10 +1994,15 @@ def build_prediction_catalogue_dataframe(
 
     Args:
         snapshots: iterable of ``(day, venue, cqg, frame)`` — one per
-            ``instrument_availability/by_date/day=/venue=/canonical_question_group=/instruments.parquet``
-            blob. ``venue`` + ``cqg`` come from the PATH (the writer drops the
-            ``_canonical_group`` column); ``frame`` holds that day's per-market
-            InstrumentRecords (``instrument_key`` = conditionId).
+            ``instrument_availability/by_date/day=/venue=[/market=]/instruments.parquet``
+            blob. ``venue`` comes from the PATH; ``cqg`` is a legacy path-derived
+            fallback (always ``""`` in practice — the writer never emits a
+            ``canonical_question_group=`` path segment, see
+            :func:`_iter_prediction_by_date_snapshots`). ``frame`` holds that day's
+            per-market InstrumentRecords (``instrument_key`` = conditionId); as of
+            249-b (decision 338), each ROW in ``frame`` also carries its own
+            ``canonical_question_group`` column — THIS is what the cqg grain below
+            actually keys on, not the per-blob ``cqg`` argument.
 
     Returns:
         A DataFrame with :data:`CATALOG_COLUMNS`:
@@ -2023,24 +2028,18 @@ def build_prediction_catalogue_dataframe(
         cqg_str = cqg.strip()
         # 249-a: the conditionId grain (instrument_key) accumulates from EVERY
         # non-empty frame — it does NOT require a canonical_question_group. The
-        # cqg grain (gated below on cqg_str) is materialised only when the writer
-        # emits a cqg, which it does not in the current venue=/market= layout
-        # (that's 249-b, gated on operator decision 338). Skipping a frame on
-        # `not cqg_str` (the pre-fix behaviour) dropped BOTH grains → 0-row
-        # catalogue. Skip only genuinely-empty frames.
+        # cqg grain is materialised per-ROW below from each row's own
+        # canonical_question_group column (249-b, decision 338 — RESOLVED; see the
+        # per-row merge inside the loop). Skipping a frame on `not cqg_str` (the
+        # pre-249-b behaviour) dropped BOTH grains → 0-row catalogue. Skip only
+        # genuinely-empty frames.
         if frame.empty:
             continue
         records: list[dict[str, object]] = frame.to_dict("records")  # pyright: ignore[reportAssignmentType]
-        # cqg-grain lifecycle: the cqg is present on this day if ANY member is.
-        cqg_itype = ""
-        cqg_created: str | None = None
-        cqg_settled: str | None = None
-        saw_member = False
         for row in records:
             cid = _row_id(row)
             if cid is None:
                 continue
-            saw_member = True
             itype = _str_field(row, "instrument_type")
             created = (
                 _opt_field(row, "start_date")
@@ -2105,11 +2104,6 @@ def build_prediction_catalogue_dataframe(
             fixture_date = _opt_field(row, "fixture_date")
             af_fixture_id = _opt_field(row, "af_fixture_id")
             af_fixture_match_status = _opt_field(row, "af_fixture_match_status")
-            cqg_itype = cqg_itype or itype
-            if created and (cqg_created is None or created < cqg_created):
-                cqg_created = created
-            if settled and (cqg_settled is None or settled > cqg_settled):
-                cqg_settled = settled
             _merge_lifecycle(
                 cid_acc,
                 (venue_str, cid),
@@ -2130,10 +2124,20 @@ def build_prediction_catalogue_dataframe(
                 af_fixture_id,
                 af_fixture_match_status,
             )
-        # cqg grain only when the writer emits a cqg (249-b, gated on decision
-        # 338). Currently always empty → no cqg rows, conditionId grain only.
-        if saw_member and cqg_str:
-            _merge_lifecycle(cqg_acc, (venue_str, cqg_str), day, venue_str, cqg_itype, cqg_created, cqg_settled)
+            # cqg grain (249-b, decision 338 — RESOLVED, see
+            # prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2): PER-ROW,
+            # not per-frame — one instruments.parquet blob spans MANY markets across
+            # MANY different canonical_question_groups (the writer does not partition
+            # by cqg), so a single blob-level cqg cannot represent it. Each row now
+            # carries its OWN canonical_question_group (write-back from the adapter's
+            # classify_{polymarket,kalshi}_to_canonical_group() call — UAC
+            # InstrumentRecord.canonical_question_group). Falls back to the
+            # PATH-derived ``cqg_str`` (the pre-fix, always-empty-in-practice source)
+            # only for historical snapshots captured before this field existed, so an
+            # old snapshot degrades to "no cqg row" rather than a KeyError.
+            row_cqg = _str_field(row, "canonical_question_group").strip() or cqg_str
+            if row_cqg:
+                _merge_lifecycle(cqg_acc, (venue_str, row_cqg), day, venue_str, itype, created, settled)
 
     if not all_days:
         return pd.DataFrame(columns=list(CATALOG_COLUMNS))
@@ -2855,9 +2859,18 @@ def _iter_prediction_by_date_snapshots(
     instruments.parquet`` — it does NOT emit a ``canonical_question_group=`` path
     segment (the prior code required one and so skipped EVERY blob → 0-row
     catalogue). The conditionId (``instrument_key``) is read from the FRAME, so
-    the cqg is no longer needed for the conditionId grain; ``cqg`` is yielded as
-    ``""`` (the cqg grain is 249-b, gated on operator decision 338, and the
-    rollup only materialises it when cqg is non-empty). Both the venue-level
+    the cqg is no longer needed for the conditionId grain; ``cqg`` (this
+    function's PATH-derived value) is yielded as ``""`` in practice, always, since
+    the writer never emits the path segment. **249-b (decision 338 — RESOLVED,
+    prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2):** the cqg GRAIN
+    itself no longer depends on this path-derived value — each row in the FRAME now
+    carries its own ``canonical_question_group`` column (a write-back of the
+    classification the adapter already computed via
+    ``classify_{polymarket,kalshi}_to_canonical_group()``, UAC
+    ``InstrumentRecord.canonical_question_group``), which
+    :func:`build_prediction_catalogue_dataframe` reads per-row. This function's
+    ``cqg`` return value is kept only as a legacy fallback for historical
+    snapshots captured before that field existed. Both the venue-level
     ``instruments.parquet`` (full conditionId universe) and the per-market
     ``market=<M>/instruments.parquet`` blobs are read; the rollup dedups by
     ``(venue, conditionId)`` via ``_merge_lifecycle``. The metadata sibling
