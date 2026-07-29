@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 from unified_api_contracts import VENUE_TO_ASSET_GROUP
 
+from instruments_service.engine.orchestrator.process_preflight import _ENRICHMENT_PROVIDERS
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -116,13 +118,28 @@ async def _fetch_urdi_records(
     _non_error_venues = out.non_error_venues
 
     defi_venue_names = frozenset(_orch._DEFI_VENUES)
+    # `active_venues` for a sports run also carries the enrichment-provider
+    # pseudo-venues (FOOTYSTATS/UNDERSTAT/TRANSFERMARKT/SOCCER_FOOTBALL_INFO/
+    # OPEN_METEO) purely so downstream stage-7 enrichment (process_enrichment.py)
+    # and stage-4 zero-record handling (process_zero_records.py) can do
+    # membership checks against it (see process.py's `_fixtures_fetch_failed`
+    # docstring). They are never real URDI-fetchable venues — they carry
+    # NO_ADAPTER_YET sentinels by design (their real capture path is the
+    # sports orchestrator's own per-fixture/enrichment dispatch, never the
+    # generic URDI/master factory: sports_stats_delayed_live_capture_still_dead_post_fix_2026_07_29).
+    # Excluding them HERE (not just from the post-fetch success check) stops
+    # every non-enrichment-only, non-per-fixture sports dispatch from logging
+    # a spurious "No URDI adapter for N venue(s)" WARNING + "URDI fetch: N
+    # venue(s) failed with PERMANENT errors" ERROR for venues that were never
+    # meant to be fetched via this path at all.
+    _fetchable_venues = [v for v in active_venues if v not in _ENRICHMENT_PROVIDERS]
     if skip_urdi:
         # Enrichment-only: empty the venue lists so URDI fetch loops are no-ops.
         defi_active: list[str] = []
         non_defi_active: list[str] = []
     else:
-        defi_active = [v for v in active_venues if v in defi_venue_names]
-        non_defi_active = [v for v in active_venues if v not in defi_venue_names]
+        defi_active = [v for v in _fetchable_venues if v in defi_venue_names]
+        non_defi_active = [v for v in _fetchable_venues if v not in defi_venue_names]
 
     # DeFi: use cached universe (one API call for entire batch run)
     if defi_active and mode == "batch":  # noqa: L2-mode-seam — DeFi caching decision; design call pending per batch_live_symmetry Q3
