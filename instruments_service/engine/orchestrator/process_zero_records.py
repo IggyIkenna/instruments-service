@@ -57,6 +57,7 @@ async def _handle_zero_records(
     sports_entity_filter: str | None,
     season_override: int | None,
     fixtures_fetch_failed: bool = False,
+    pre_launch_venues: frozenset[str] | None = None,
 ) -> dict[str, int]:
     """Stage 4 — handle zero records after the date filter.
 
@@ -64,6 +65,11 @@ async def _handle_zero_records(
     actually ERRORED (raised → ``failed_venues``), as opposed to running clean
     and returning zero fixtures. A failed fetch must record ``attempted_failed``
     (not ``empty_confirmed``) so the gap stays visible.
+
+    ``pre_launch_venues`` — venues (subset of ``active_venues``) whose every
+    raw URDI-fetched record honestly post-dates ``date`` (see
+    ``process_fetch._pre_launch_venues_from_raw_fetch``); only consulted by
+    the non-sports path.
 
     Raises:
         RuntimeError: when zero records is NOT an expected absence
@@ -90,6 +96,7 @@ async def _handle_zero_records(
         asset_groups=asset_groups,
         active_venues=active_venues,
         mode=mode,
+        pre_launch_venues=pre_launch_venues,
     )
 
 
@@ -537,14 +544,62 @@ async def _zero_sports_fixture_independent(
     return counts
 
 
+def _stamp_pre_launch_venues(
+    *,
+    date: str,
+    asset_groups: list[str],
+    pre_launch_remaining: list[str],
+) -> dict[str, int]:
+    """Write honest ``EXPECTED_PRE_VENUE_LAUNCH`` markers + return zero-counts.
+
+    Split out of ``_zero_records_non_sports`` (QG function-size cap) — see that
+    function's pre-venue-launch short-circuit for the calling contract. Mirrors
+    the DeFi pre-genesis / TradFi non-trading-day / NO_ADAPTER_YET honest-
+    absence stamps above it. Issue: cefi_coinbase_cde_urdi_zero_records_2026_07_28.md.
+    """
+    primary_asset_group = asset_groups[0] if asset_groups else None
+    bucket = _orch._get_instruments_bucket(primary_asset_group)
+    manifest = _orch.ManifestWriter(
+        service_name="instruments-service",
+        catalogue_bucket=bucket,
+    )
+    attempt_ts = _orch.datetime.now(_orch.UTC)
+    for venue in sorted(pre_launch_remaining):
+        manifest.record_expected_empty(
+            row_key={"date": date, "venue": venue},
+            reason="EXPECTED_PRE_VENUE_LAUNCH",
+            attempted_at=attempt_ts,
+            pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+        )
+    manifest.write()
+    _orch.logger.info(
+        "Pre-venue-launch: date=%s venues=%s — every URDI-fetched instrument "
+        "is dated after the requested date, wrote expected_unattempted markers",
+        date,
+        sorted(pre_launch_remaining),
+    )
+    _orch.log_event(
+        "PROCESSING_COMPLETED",
+        details={"date": date, "asset_groups": asset_groups, "pre_launch_venues": sorted(pre_launch_remaining)},
+    )
+    return dict.fromkeys(pre_launch_remaining, 0)
+
+
 def _zero_records_non_sports(
     *,
     date: str,
     asset_groups: list[str],
     active_venues: list[str],
     mode: str,
+    pre_launch_venues: frozenset[str] | None = None,
 ) -> dict[str, int]:
     """Zero-record handling for DeFi batch / TradFi non-trading days.
+
+    ``pre_launch_venues`` — venues (subset of ``active_venues``) whose every
+    raw URDI-fetched record carries an ``available_from_datetime`` after
+    ``date`` — a genuine pre-launch venue (e.g. COINBASE-CDE backfilled before
+    its own registration date), not a fetch failure.
 
     Raises:
         RuntimeError: when the zero is not an expected absence.
@@ -601,6 +656,26 @@ def _zero_records_non_sports(
             )
         _na_manifest.write()
         return dict.fromkeys(_no_adapter_active, 0)
+
+    # Pre-venue-launch CeFi/DeFi venue: every record URDI fetched for this
+    # venue carries an available_from_datetime after the requested date — the
+    # venue genuinely had zero listed instruments yet, mirroring the DeFi
+    # pre-genesis / TradFi non-trading-day honest-absence paths. Without this,
+    # a real adapter whose fetched universe is 100% future-dated (e.g.
+    # COINBASE-CDE backfilled before its own registration date) crashes with
+    # RuntimeError instead of writing an honest marker. Only fires when EVERY
+    # remaining active venue qualifies — a mixed batch where some venue is
+    # zero for a genuinely different (non-pre-launch) reason still falls
+    # through to the diagnostic + raise below.
+    # Issue: cefi_coinbase_cde_urdi_zero_records_2026_07_28.md.
+    _remaining_active = [v for v in active_venues if v not in _no_adapter_active]
+    _pre_launch_remaining = [v for v in _remaining_active if v in (pre_launch_venues or frozenset())]
+    if _pre_launch_remaining and set(_pre_launch_remaining) == set(_remaining_active):
+        return _stamp_pre_launch_venues(
+            date=date,
+            asset_groups=asset_groups,
+            pre_launch_remaining=_pre_launch_remaining,
+        )
 
     # TradFi non-trading day: zero instruments on weekends/holidays is expected.
     # Write 0-count manifest entries per venue so the manifest marks the day as
