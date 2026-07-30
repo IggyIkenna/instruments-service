@@ -126,6 +126,46 @@ class TestRejectJunkInstruments:
         kept = reject_junk_instruments([good, junk])
         assert kept == [good]
 
+    def test_accented_latin_sports_team_names_are_kept(self) -> None:
+        """Ordinary accented-Latin sports fixture names must NOT be rejected as junk.
+
+        Regression for `issues/sports_features_layer_findings_sweep_2026_07_18.md` §D
+        (2026-07-30): the prior blanket `field.isascii()` check dropped ~9.8% of a
+        sampled sports date's real fixtures for legitimate Iberian/Latin American
+        team names. Pins the exact 3 names the source doc measured live.
+        """
+        records = [
+            _make_record(
+                instrument_key="SPAIN_PRIMERA_DIVISION_RFEF_GROUP_2:SANLUQUENO_v_ALBACETE",
+                venue="API_FOOTBALL",
+                base_asset="Sanluqueño vs Albacete",
+            ),
+            _make_record(
+                instrument_key="PORTUGAL_LIGA_3:UNIAO_DE_LEIRIA_v_UNIAO_SANTAREM",
+                venue="API_FOOTBALL",
+                base_asset="União de Leiria vs União Santarém",
+            ),
+            _make_record(
+                instrument_key="BOLIVIA_PRIMERA_DIVISION:NACIONAL_POTOSI_v_SAN_JOSE",
+                venue="API_FOOTBALL",
+                base_asset="Nacional Potosí vs San José",
+            ),
+        ]
+        kept = reject_junk_instruments(records)
+        assert kept == records
+
+    def test_cjk_junk_still_rejected_after_latin_script_narrowing(self) -> None:
+        """The narrowed guard must still reject the original CJK/meme junk it was built for."""
+        records = [
+            _make_record(
+                instrument_key="BITGET-FUTURES:PERPETUAL:龙虾-USDT", venue="BITGET-FUTURES", base_asset="龙虾"
+            ),
+            _make_record(
+                instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生"
+            ),
+        ]
+        assert reject_junk_instruments(records) == []
+
 
 # ---------------------------------------------------------------------------
 # _canonical_manifest_venue_chain — on-chain CeFi perps must NOT defi-split (G1.3)
