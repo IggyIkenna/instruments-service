@@ -178,6 +178,19 @@ class TestParsing:
         assert key.venue == "EIGENLAYER"
         assert key.chain == "ETHEREUM"
 
+    def test_defi_venue_chain_split_guarded_against_unknown_chain_suffix(self) -> None:
+        """Pins defi_cefi_venue_chain_axis_contamination_2026_07_28.md.
+
+        A dash-bearing venue whose suffix is NOT a real UAC MAINNET_CHAIN_IDS member
+        (e.g. a CeFi "BITGET-FUTURES" venue physically mis-landed in the DeFi bucket)
+        must NOT be split — the unconditional partition() previously produced the
+        corrupted venue="BITGET", chain="FUTURES" manifest rows this doc root-caused.
+        """
+        segs = {"venue": "BITGET-FUTURES", "data_type": "perp_daily_ctx", "instrument_type": "perpetual"}
+        key = _mod.shard_key_from_segments("defi", segs)
+        assert key.venue == "BITGET-FUTURES"
+        assert key.chain == ""
+
     def test_source_from_pipeline_mode(self) -> None:
         assert _mod._source_from_pipeline_mode("batch_polymarket_clob") == "polymarket_clob"
         assert _mod._source_from_pipeline_mode("") == ""
