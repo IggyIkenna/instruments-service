@@ -250,6 +250,7 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
         pool_fee_tier_bps = _parse_fee_tier_bps(fee_tier)
         symbol = f"{base}-{quote}-{pool_fee_tier_bps}" if pool_fee_tier_bps is not None else f"{base}-{quote}"
         venue_tag = f"UNISWAP_V4-{self._chain}"
+        # KNOWN NON-UNIQUENESS -- see the identical note in uniswap_v3.py::_build_pool_record.
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
         available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))

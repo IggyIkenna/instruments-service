@@ -717,9 +717,14 @@ def test_tradfi_v2_pre_listing_yields_not_listed() -> None:
     # this is the behavior tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20
     # fixes (previously this alive-but-pre-floor date fell through unclassified in
     # v2 mode, seeding the generic expected_unattempted "todo" bucket instead).
+    # data_types=["ohlcv_1m"]: a real NASDAQ/ETF-valid data_type (unlike "ohlcv_1d",
+    # which unified-api-contracts@0c0f6953 registered as a genuine tradfi data_type
+    # for FRED, closing the "unknown data_type passes through" loophole this test
+    # used to rely on incidentally — see the same commit's smoke_matrix TRADFI target
+    # count pin update in test_pipeline_e2e_prediction.py for the sibling fix).
     catalog = [_make_tradfi_entry(available_from="2022-01-01")]
     rows = _drop_v2_venue_grain(
-        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-06-01"), ["ohlcv_1d"]))
+        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-06-01"), ["ohlcv_1m"]))
     )
     assert len(rows) == 2
     by_date = {r.date: r for r in rows}
@@ -735,7 +740,7 @@ def test_tradfi_v2_delisted_instrument() -> None:
     # EXPECTED_PRE_SOURCE_COVERAGE_START (see the note above); 2022-01-01 → DELISTED.
     catalog = [_make_tradfi_entry(available_from="2020-01-01", available_to="2021-06-30")]
     rows = _drop_v2_venue_grain(
-        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-01-01"), ["ohlcv_1d"]))
+        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-01-01"), ["ohlcv_1m"]))
     )
     assert len(rows) == 2
     by_date = {r.date: r for r in rows}
@@ -757,7 +762,7 @@ def test_tradfi_v2_no_bounds_skips_all_dates() -> None:
             enumerator_module._enumerate_v2_tradfi(
                 catalog,
                 _date_axis("2020-01-01", "2020-06-01", "2025-01-01"),
-                ["ohlcv_1d"],
+                ["ohlcv_1m"],
             )
         )
     )
@@ -1012,7 +1017,7 @@ def test_tradfi_v2_mvp_gate_includes_mvp_via_column() -> None:
     """A catalogue row tagged mvp=True IS seeded as expected_unattempted."""
     catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
     rows = list(
-        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2023-06-01"), ["ohlcv_1m"], present_set=set())
     )
     assert rows
     assert all(r.capture_status == "expected_unattempted" for r in rows)
@@ -1771,13 +1776,13 @@ def test_tradfi_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch
         enumerator_module,
         "is_out_of_bounds",
         lambda asset_group, source, data_type, day: (
-            (asset_group, source, data_type) == ("tradfi", "NASDAQ", "ohlcv_1d")
+            (asset_group, source, data_type) == ("tradfi", "NASDAQ", "ohlcv_1m")
         ),
     )
     catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
     date_axis = _date_axis("2023-06-01")
     rows = _drop_v2_venue_grain(
-        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
     )
     assert len(rows) == 1
     r = rows[0]
@@ -1792,7 +1797,7 @@ def test_tradfi_v2_no_exclusion_declared_unaffected() -> None:
     catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
     date_axis = _date_axis("2023-06-01")
     rows = _drop_v2_venue_grain(
-        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
     )
     assert len(rows) == 1
     assert rows[0].reason == ""
@@ -1816,7 +1821,7 @@ def test_tradfi_v2_pre_discovery_floor_yields_expected_pre_source_coverage_start
     catalog = [_make_tradfi_entry(available_from="1980-01-01", venue="NASDAQ", mvp=True)]
     date_axis = _date_axis("2023-04-14")
     rows = _drop_v2_venue_grain(
-        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
     )
     assert len(rows) == 1
     r = rows[0]
@@ -1838,7 +1843,7 @@ def test_tradfi_v2_on_or_after_discovery_floor_unaffected(monkeypatch: pytest.Mo
     catalog = [_make_tradfi_entry(available_from="1980-01-01", venue="NASDAQ", mvp=True)]
     date_axis = _date_axis("2023-04-15")
     rows = _drop_v2_venue_grain(
-        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
     )
     assert len(rows) == 1
     assert rows[0].reason == ""
@@ -1854,9 +1859,13 @@ def test_tradfi_v2_unknown_venue_discovery_floor_unaffected(monkeypatch: pytest.
         lambda self, venue: None,
     )
     catalog = [_make_tradfi_entry(available_from="1980-01-01", venue="NASDAQ", mvp=True)]
-    date_axis = _date_axis("1980-06-01")
+    # Probed date must stay within ohlcv_1m's own Databento rolling-history floor
+    # (~16y trailing from today, unrelated to the venue-discovery floor under test
+    # here — that one is mocked off) or the seed gets clipped by that SEPARATE gate
+    # instead, for reasons orthogonal to this test's "no venue floor" intent.
+    date_axis = _date_axis("2023-06-01")
     rows = _drop_v2_venue_grain(
-        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
     )
     assert len(rows) == 1
     assert rows[0].reason == ""

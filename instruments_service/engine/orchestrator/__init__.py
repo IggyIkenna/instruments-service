@@ -600,7 +600,7 @@ from instruments_service.engine.orchestrator.sports_reference_core import (
     _list_present_parquet_leagues as _list_present_parquet_leagues,
 )
 from instruments_service.engine.orchestrator.sports_reference_core import (
-    _manifest_captured_fixture_leagues as _manifest_captured_fixture_leagues,
+    _manifest_captured_leagues_for_data_type as _manifest_captured_leagues_for_data_type,
 )
 from instruments_service.engine.orchestrator.sports_reference_fixture_entity_gates import (
     _dedupe_player_stats_df as _dedupe_player_stats_df,
@@ -816,7 +816,7 @@ __all__ = [
     "_is_in_canonical_write_universe",
     "_lifecycle_columns_from_af_response",
     "_list_present_parquet_leagues",
-    "_manifest_captured_fixture_leagues",
+    "_manifest_captured_leagues_for_data_type",
     "_master_blob_path",
     "_maybe_emit_drift_anomaly",
     "_merge_with_existing_per_league_parquet",
