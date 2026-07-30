@@ -27,6 +27,7 @@ from .adapters.cefi.polymarket_perp import PolymarketPerpReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
 from .adapters.defi.aave_oracle import AaveOracleReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+from .adapters.defi.ankr import AnkrReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
 from .adapters.defi.beefy import BeefyReferenceDataAdapter
 from .adapters.defi.benqi import BenqiReferenceDataAdapter
@@ -49,6 +50,8 @@ from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
 from .adapters.defi.lifinity import LifinityReferenceDataAdapter
+from .adapters.defi.maker import MakerReferenceDataAdapter
+from .adapters.defi.mantle import MantleReferenceDataAdapter
 from .adapters.defi.marginfi import MarginfiReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.meteora import MeteoraReferenceDataAdapter
@@ -67,6 +70,9 @@ from .adapters.defi.solana_native_staking import SolanaNativeStakingAdapter
 from .adapters.defi.solblaze import SolblazeReferenceDataAdapter
 from .adapters.defi.solend import SolendReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
+from .adapters.defi.stader import StaderReferenceDataAdapter
+from .adapters.defi.stakewise import StakewiseReferenceDataAdapter
+from .adapters.defi.swell import SwellReferenceDataAdapter
 from .adapters.defi.symbiotic import SymbioticReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
@@ -123,6 +129,7 @@ _CANONICAL_VENUE_TO_CCXT_EXCHANGE: dict[str, str] = {
 _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aave_oracle": AaveOracleReferenceDataAdapter,
     "aave_v3": AaveV3ReferenceDataAdapter,
+    "ankr": AnkrReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
     "aster": AsterReferenceDataAdapter,
     "coinbase_cde": CoinbaseCdeReferenceDataAdapter,
@@ -164,6 +171,8 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "lighter": LighterReferenceDataAdapter,
     "lido": LidoReferenceDataAdapter,
     "lifinity": LifinityReferenceDataAdapter,
+    "maker": MakerReferenceDataAdapter,
+    "mantle": MantleReferenceDataAdapter,
     "meteora": MeteoraReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
     "orca": OrcaReferenceDataAdapter,
@@ -183,6 +192,9 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "solblaze": SolblazeReferenceDataAdapter,
     "solend": SolendReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
+    "stader": StaderReferenceDataAdapter,
+    "stakewise": StakewiseReferenceDataAdapter,
+    "swell": SwellReferenceDataAdapter,
     "symbiotic": SymbioticReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
     "uniswap_v2": UniswapV2ReferenceDataAdapter,
@@ -301,6 +313,26 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "puffer": "",
     "sanctum": "",
     "solblaze": "",
+    # ANKR / STADER / STAKEWISE / SWELL / MANTLE (LST) + MAKER (YIELD_BEARING,
+    # sDAI) — curated single-token registries, no API key needed (2026-07-30,
+    # defi_venue_pipeline_to_live_ao_build_2026_07_30.md todo 1). Registration
+    # alone does NOT move the defi denominator — same two-step precedent as
+    # CHAINLINK above: _build_defi_venues() derives from
+    # _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX + _STATIC_DEFI_VENUES +
+    # _SOLANA_DEFI_VENUES, NOT from _ADAPTERS, so the strict set-equality
+    # drift guard (test_defi_set_equals_uac_denominator_drift_guard) stays
+    # green. Declaring these 6 venues live in UAC (phase=live +
+    # VENUE_TO_ADAPTER_KEY) and adding them to _STATIC_DEFI_VENUES is the
+    # REMAINING coordinated step — deliberately deferred to this same plan's
+    # todo 5 (the phase flip), gated behind cron-health + 90-day backfill +
+    # catalogue registration (todos 2-4) per the plan's `sequential: true`
+    # ordering.
+    "ankr": "",
+    "stader": "",
+    "stakewise": "",
+    "swell": "",
+    "mantle": "",
+    "maker": "",
     "solana_native": "",  # static registry; MTDS fetches rates via solana_rpc + helius_rpc
     # Restaking vault protocols — curated static vault registries.
     "symbiotic": "",
