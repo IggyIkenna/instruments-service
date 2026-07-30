@@ -333,7 +333,7 @@ async def process_instruments(
         )
 
     # 3. Filter to instruments active on the requested date + enrich.
-    records, date_dt, defi_venue_set = _filter_and_enrich_records(
+    records, date_dt, defi_venue_set, pre_launch_venues = _filter_and_enrich_records(
         records=records,
         date=date,
         asset_groups=asset_groups,
@@ -360,6 +360,7 @@ async def process_instruments(
             sports_entity_filter=sports_entity_filter,
             season_override=season_override,
             fixtures_fetch_failed=fixtures_fetch_failed,
+            pre_launch_venues=pre_launch_venues,
         )
 
     # 5. Schema validation — per-record failure isolation (hard_schema_enforcement Phase 2).

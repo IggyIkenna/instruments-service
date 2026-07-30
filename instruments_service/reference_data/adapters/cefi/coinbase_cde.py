@@ -33,7 +33,7 @@ from decimal import Decimal, InvalidOperation
 from typing import cast
 
 import aiohttp
-from unified_api_contracts import UnsupportedCapabilityError, classify_venue_error
+from unified_api_contracts import UnsupportedCapabilityError, VenueMapping, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_trading_library import log_event
@@ -63,7 +63,20 @@ _MARGIN_TYPE = MarginType.LINEAR
 # 62-exchange Tardis registry) — capture starts from the date this venue was
 # registered, not a fabricated pre-history. Mirrors
 # market_data_categories.VENUE_DATA_TYPE_CAPABILITIES["COINBASE-CDE"]["trades"].
-_CDE_REGISTRATION_DATE = datetime(2026, 7, 10, tzinfo=UTC)
+#
+# SSOT: UAC VenueMapping.get_instrument_discovery_start("COINBASE-CDE"). Was
+# hardcoded as datetime(2026, 7, 10) — the date this adapter's REST endpoint
+# was live-confirmed — which silently diverged from UAC's later MEASURED
+# venue_start_dates entry (2025-12-12: real backward-paginated trade history
+# probed day-by-day via the same public ticker endpoint, unified-api-contracts
+# venue_mapping.py; that entry's own comment states the 2026-07-10 floor
+# "understated ~7 months of fetchable trades"). Mirrors the HYPERLIQUID fix
+# (2026-05-05) for the same divergence class — both now consume the same UAC
+# field so the two can never drift apart again. Issue:
+# cefi_coinbase_cde_urdi_zero_records_2026_07_28.md.
+_CDE_REGISTRATION_DATE = datetime.fromisoformat(
+    cast(str, VenueMapping().get_instrument_discovery_start("COINBASE-CDE"))
+).replace(tzinfo=UTC)
 
 
 def _classify_cde_error(exc: Exception, status: int | None = None) -> str:

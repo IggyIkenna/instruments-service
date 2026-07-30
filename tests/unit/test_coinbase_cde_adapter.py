@@ -13,16 +13,20 @@ derivatives`` rejections and ``Batch complete: 0 results collected``).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import TracebackType
+from typing import cast
 from unittest.mock import patch
 
 import pytest
+from unified_api_contracts import VenueMapping
 from unified_api_contracts.internal import InstrumentType
 from unified_api_contracts.internal.reference.instrument_validation import (
     validate_instrument_records,
 )
 
 from instruments_service.reference_data.adapters.cefi.coinbase_cde import (
+    _CDE_REGISTRATION_DATE,
     CoinbaseCdeReferenceDataAdapter,
 )
 
@@ -126,3 +130,39 @@ class TestCoinbaseCdeGetInstruments:
         valid, rejected = validate_instrument_records(records)
         assert rejected == []
         assert len(valid) == 2
+
+
+class TestCdeRegistrationDateMatchesUacRegistry:
+    """Regression for `cefi_coinbase_cde_urdi_zero_records_2026_07_28.md`.
+
+    `_CDE_REGISTRATION_DATE` used to be a hardcoded `datetime(2026, 7, 10)` that
+    silently diverged from UAC's later-corrected `venue_start_dates["COINBASE-CDE"]`
+    (2025-12-12, measured via real backward-paginated trade history) — a real
+    backfill over any date in the 2025-12-12..2026-07-10 gap crashed with
+    `RuntimeError: URDI returned zero records` because every fetched instrument's
+    `available_from_datetime` was stamped with the stale, too-late floor.
+    """
+
+    def test_registration_date_derives_from_uac_venue_mapping(self) -> None:
+        """The adapter constant is no longer a standalone hardcoded literal — it
+        must equal UAC's own SSOT for this venue's instrument-discovery start,
+        so the two can never independently drift again (mirrors the HYPERLIQUID
+        fix, 2026-05-05)."""
+        expected = datetime.fromisoformat(
+            cast(str, VenueMapping().get_instrument_discovery_start("COINBASE-CDE"))
+        ).replace(tzinfo=UTC)
+        assert expected == _CDE_REGISTRATION_DATE
+
+    def test_registration_date_is_not_the_stale_2026_07_10_floor(self) -> None:
+        """Direct regression: the specific stale value must not silently come back."""
+        assert datetime(2026, 7, 10, tzinfo=UTC) != _CDE_REGISTRATION_DATE
+
+    @pytest.mark.asyncio
+    async def test_fetched_instruments_carry_the_corrected_available_from_datetime(self) -> None:
+        adapter = CoinbaseCdeReferenceDataAdapter()
+        with patch.object(adapter, "_make_session", return_value=_FakeSession()):
+            records = await adapter.get_instruments()
+
+        assert records
+        for rec in records:
+            assert rec.available_from_datetime == _CDE_REGISTRATION_DATE
