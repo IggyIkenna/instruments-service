@@ -13,6 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
+from instruments_service.reference_data.adapters.sports.adapters.base import (
+    _MIN_REQUEST_INTERVAL,
+)
 from instruments_service.reference_data.adapters.sports.adapters.understat import (
     UnderstatAdapter,
     _extract_dates_from_json,
@@ -39,24 +42,42 @@ def _clear_understat_league_cache():
 
 @pytest.fixture(autouse=True)
 def _reset_understat_rate_limiter():
-    """``BaseSportsReferenceAdapter._throttle`` paces requests via a CLASS-level
-    ``_next_slot`` monotonic reservation that is never reset between calls (by
-    design — one adapter instance is a per-VM singleton in production). Any test
-    here that mocks only ``aiohttp.ClientSession`` (not ``_get_with_retry``) drives
-    the REAL ``_throttle()`` for each of the 6 per-league requests in
-    ``get_fixtures``; each reservation advances ``_next_slot`` by
-    ``_min_request_interval`` regardless of real wall-clock time, so the debt
-    accumulates across the whole test session and eventually forces some later
-    test's ``_throttle()`` call to actually ``asyncio.sleep`` for the backlog —
-    deterministically tripping the 60s pytest-timeout once the backlog exceeds it
-    (root cause of the recurring
-    ``test_get_fixtures_resets_error_count`` CI timeout, 2026-07-29). Reset the
-    reservation clock around each test so no real sleep is ever owed."""
-    UnderstatAdapter._next_slot = 0.0
-    UnderstatAdapter._last_request_time = 0.0
+    """``BaseSportsReferenceAdapter._throttle`` paces requests via CLASS-level state
+    that is never reset between calls (by design — one adapter instance is a
+    per-VM singleton in production): the monotonic ``_next_slot`` reservation, AND
+    the separate UTC-fixed-window counters ``_window_max_per_min``/
+    ``_window_max_per_day`` (+ their ``_window_*_epoch``/``_window_*_count``
+    trackers) that ``_reserve_utc_window_slot`` uses to sleep to the next provider
+    boundary once a window's share is spent (see base.py's ``set_rate_budget_rpm``/
+    ``set_window_quota`` — these are written via ``type(self)``, i.e. onto
+    ``UnderstatAdapter`` itself whenever ANY test anywhere in the suite constructs
+    one and calls either setter). Any test here that mocks only
+    ``aiohttp.ClientSession`` (not ``_get_with_retry``) drives the REAL
+    ``_throttle()`` for each of the 6 per-league requests in ``get_fixtures``; if
+    either mechanism is left with leaked non-zero/non-default state from an earlier
+    test in the same xdist worker, that debt/cap forces a real
+    ``asyncio.sleep`` — deterministically tripping the pytest-timeout once it
+    exceeds it (root cause of the recurring
+    ``test_get_fixtures_resets_error_count`` CI timeout, 2026-07-29; the original
+    fix here covered only ``_next_slot``/``_last_request_time`` and still recurred
+    2026-07-30 via the window-quota path). Reset the full rate-limiter state
+    (spacer + window quotas + window counters) to class defaults around each test
+    so no real sleep is ever owed regardless of which leaked first."""
+    _reset_rate_limiter_state()
     yield
+    _reset_rate_limiter_state()
+
+
+def _reset_rate_limiter_state() -> None:
     UnderstatAdapter._next_slot = 0.0
     UnderstatAdapter._last_request_time = 0.0
+    UnderstatAdapter._min_request_interval = _MIN_REQUEST_INTERVAL
+    UnderstatAdapter._window_max_per_min = 0
+    UnderstatAdapter._window_max_per_day = 0
+    UnderstatAdapter._window_minute_epoch = -1
+    UnderstatAdapter._window_minute_count = 0
+    UnderstatAdapter._window_day_epoch = -1
+    UnderstatAdapter._window_day_count = 0
 
 
 def _make_aiohttp_mock(
