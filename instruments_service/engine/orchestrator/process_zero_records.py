@@ -544,6 +544,48 @@ async def _zero_sports_fixture_independent(
     return counts
 
 
+def _stamp_pre_launch_venues(
+    *,
+    date: str,
+    asset_groups: list[str],
+    pre_launch_remaining: list[str],
+) -> dict[str, int]:
+    """Write honest ``EXPECTED_PRE_VENUE_LAUNCH`` markers + return zero-counts.
+
+    Split out of ``_zero_records_non_sports`` (QG function-size cap) — see that
+    function's pre-venue-launch short-circuit for the calling contract. Mirrors
+    the DeFi pre-genesis / TradFi non-trading-day / NO_ADAPTER_YET honest-
+    absence stamps above it. Issue: cefi_coinbase_cde_urdi_zero_records_2026_07_28.md.
+    """
+    primary_asset_group = asset_groups[0] if asset_groups else None
+    bucket = _orch._get_instruments_bucket(primary_asset_group)
+    manifest = _orch.ManifestWriter(
+        service_name="instruments-service",
+        catalogue_bucket=bucket,
+    )
+    attempt_ts = _orch.datetime.now(_orch.UTC)
+    for venue in sorted(pre_launch_remaining):
+        manifest.record_expected_empty(
+            row_key={"date": date, "venue": venue},
+            reason="EXPECTED_PRE_VENUE_LAUNCH",
+            attempted_at=attempt_ts,
+            pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+        )
+    manifest.write()
+    _orch.logger.info(
+        "Pre-venue-launch: date=%s venues=%s — every URDI-fetched instrument "
+        "is dated after the requested date, wrote expected_unattempted markers",
+        date,
+        sorted(pre_launch_remaining),
+    )
+    _orch.log_event(
+        "PROCESSING_COMPLETED",
+        details={"date": date, "asset_groups": asset_groups, "pre_launch_venues": sorted(pre_launch_remaining)},
+    )
+    return dict.fromkeys(pre_launch_remaining, 0)
+
+
 def _zero_records_non_sports(
     *,
     date: str,
@@ -629,33 +671,11 @@ def _zero_records_non_sports(
     _remaining_active = [v for v in active_venues if v not in _no_adapter_active]
     _pre_launch_remaining = [v for v in _remaining_active if v in (pre_launch_venues or frozenset())]
     if _pre_launch_remaining and set(_pre_launch_remaining) == set(_remaining_active):
-        _pl_primary_asset_group = asset_groups[0] if asset_groups else None
-        _pl_bucket = _orch._get_instruments_bucket(_pl_primary_asset_group)
-        _pl_manifest = _orch.ManifestWriter(
-            service_name="instruments-service",
-            catalogue_bucket=_pl_bucket,
+        return _stamp_pre_launch_venues(
+            date=date,
+            asset_groups=asset_groups,
+            pre_launch_remaining=_pre_launch_remaining,
         )
-        _pl_attempt_ts = _orch.datetime.now(_orch.UTC)
-        for _pl_venue in sorted(_pre_launch_remaining):
-            _pl_manifest.record_expected_empty(
-                row_key={"date": date, "venue": _pl_venue},
-                reason="EXPECTED_PRE_VENUE_LAUNCH",
-                attempted_at=_pl_attempt_ts,
-                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
-                source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
-            )
-        _pl_manifest.write()
-        _orch.logger.info(
-            "Pre-venue-launch: date=%s venues=%s — every URDI-fetched instrument "
-            "is dated after the requested date, wrote expected_unattempted markers",
-            date,
-            sorted(_pre_launch_remaining),
-        )
-        _orch.log_event(
-            "PROCESSING_COMPLETED",
-            details={"date": date, "asset_groups": asset_groups, "pre_launch_venues": sorted(_pre_launch_remaining)},
-        )
-        return dict.fromkeys(_pre_launch_remaining, 0)
 
     # TradFi non-trading day: zero instruments on weekends/holidays is expected.
     # Write 0-count manifest entries per venue so the manifest marks the day as
