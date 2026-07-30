@@ -52,24 +52,23 @@ def _reset_understat_rate_limiter():
     ``set_window_quota`` — these are written via ``type(self)``, i.e. onto
     ``UnderstatAdapter`` itself whenever ANY test anywhere in the suite constructs
     one and calls either setter). This reset closed the LEAKED-state class of
-    recurrence (2026-07-29, then again 2026-07-30 via the window-quota path) but a
-    3rd recurrence (2026-07-30, promotion PR #1035) hit ``test_get_fixtures_
-    resets_error_count`` again even with state fully clean — root cause there
-    wasn't a leak at all: every test that mocks only ``aiohttp.ClientSession``
-    (not ``_get_with_retry``) still drove 6 REAL ``await asyncio.sleep(...)`` calls
-    via the real ``_throttle()`` (one per per-league request in ``get_fixtures``),
-    and a genuinely clean ~0.1s-per-call sleep can still get scheduled arbitrarily
-    late under xdist/shared-runner CPU contention — no leak needed for that to blow
-    a 150s pytest-timeout, just enough host contention. Every such call site in
-    this file now ALSO mocks ``_throttle`` directly (see the `with (...)` blocks in
-    ``TestUnderstatGetFixtures``/``TestUnderstatGetFixturesEdgeCases``/
-    ``TestUnderstatFetchErrorTracking``/``TestUnderstatFailedLeagueNameTracking``),
-    so no test in this file awaits a real timer at all; this fixture now guards
-    only against a hypothetical future test that constructs an adapter and calls
-    ``get_fixtures`` without also mocking ``_throttle``. Reset the full
-    rate-limiter state (spacer + window quotas + window counters) to class
-    defaults around each test so no real sleep is ever owed regardless of which
-    leaked first."""
+    recurrence (2026-07-29, then again 2026-07-30 via the window-quota path), and a
+    3rd recurrence (2026-07-30, promotion PR #1035) was chased into mocking
+    ``_throttle`` directly on every ``get_fixtures``-driving call site (see the
+    `with (...)` blocks below) so no test awaits a real timer. A 4th recurrence
+    (2026-07-30, promotion PR #1036) hit ``test_get_fixtures_resets_error_count``
+    AGAIN with both fixes in place — root cause was neither a state leak nor a real
+    sleep: every ``get_fixtures``-driving test that patched only the global
+    ``aiohttp.ClientSession`` (not ``adapter._make_session``) still let the REAL
+    ``_make_session()`` execute, constructing a real ``aiohttp.TCPConnector``
+    (+ ``ThreadedResolver`` thread pool) 6 times per call — genuinely cheap in
+    isolation, but real synchronous socket/thread-pool setup that can blow a 150s
+    timeout under xdist/shared-runner CPU contention, same as a leaked real sleep.
+    Every such call site now instead mocks ``adapter._make_session`` directly (the
+    same pattern every other test in this file already used), so ``_make_session``
+    never runs for real. Reset the full rate-limiter state (spacer + window quotas
+    + window counters) to class defaults around each test so no real sleep is ever
+    owed regardless of which leaked first."""
     _reset_rate_limiter_state()
     yield
     _reset_rate_limiter_state()
@@ -172,7 +171,7 @@ class TestUnderstatGetFixtures:
         adapter = UnderstatAdapter()
         mock_session = _make_aiohttp_mock(raw)
         with (
-            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch.object(adapter, "_make_session", return_value=mock_session),
             patch.object(adapter, "_throttle", AsyncMock()),
         ):
             fixtures = await adapter.get_fixtures("2026-09-15")
@@ -185,7 +184,7 @@ class TestUnderstatGetFixtures:
         adapter = UnderstatAdapter()
         mock_session = _make_aiohttp_mock(raw)
         with (
-            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch.object(adapter, "_make_session", return_value=mock_session),
             patch.object(adapter, "_throttle", AsyncMock()),
         ):
             fixtures = await adapter.get_fixtures("2026-09-15")
@@ -198,7 +197,7 @@ class TestUnderstatGetFixtures:
         adapter = UnderstatAdapter()
         mock_session = _make_aiohttp_mock(raw)
         with (
-            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch.object(adapter, "_make_session", return_value=mock_session),
             patch.object(adapter, "_throttle", AsyncMock()),
         ):
             fixtures = await adapter.get_fixtures("2026-03-15")
@@ -322,7 +321,7 @@ class TestUnderstatGetFixturesEdgeCases:
         adapter = UnderstatAdapter()
         mock_session = _make_aiohttp_mock(raw)
         with (
-            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch.object(adapter, "_make_session", return_value=mock_session),
             patch.object(adapter, "_throttle", AsyncMock()),
         ):
             fixtures = await adapter.get_fixtures("XXXX-09-15")
@@ -335,7 +334,7 @@ class TestUnderstatGetFixturesEdgeCases:
         adapter = UnderstatAdapter()
         mock_session = _make_aiohttp_mock(raw)
         with (
-            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch.object(adapter, "_make_session", return_value=mock_session),
             patch.object(adapter, "_throttle", AsyncMock()),
         ):
             fixtures = await adapter.get_fixtures("2026-XX-15")
@@ -687,7 +686,7 @@ class TestUnderstatFetchErrorTracking:
         raw = {"dates": []}
         mock_session = _make_aiohttp_mock(raw)
         with (
-            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch.object(adapter, "_make_session", return_value=mock_session),
             patch.object(adapter, "_throttle", AsyncMock()),
         ):
             await adapter.get_fixtures("2026-09-15")
@@ -813,7 +812,7 @@ class TestUnderstatFailedLeagueNameTracking:
         raw = {"dates": []}
         mock_session = _make_aiohttp_mock(raw)
         with (
-            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch.object(adapter, "_make_session", return_value=mock_session),
             patch.object(adapter, "_throttle", AsyncMock()),
         ):
             await adapter.get_fixtures("2026-09-15")
