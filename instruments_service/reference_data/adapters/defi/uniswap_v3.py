@@ -606,6 +606,11 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         # than a fabricated "-0" placeholder.
         symbol = f"{base}-{quote}-{pool_fee_tier_bps}" if pool_fee_tier_bps is not None else f"{base}-{quote}"
         venue_tag = f"{self._venue_prefix}-{self._chain}"
+        # KNOWN NON-UNIQUENESS (defi_instrument_availability_duplicate_instrument_key_rows_2026_07_26.md,
+        # operator-ruled 2026-07-18 two-id model): this symbolic key is the human-readable/UI form only,
+        # NOT a uniqueness guarantee -- two distinct real pools can share base/quote/fee-tier and thus this
+        # exact key. The true unique machine key is `pool_address` (below); a consumer needing per-row
+        # uniqueness must key on (pool_address, chain), never on instrument_key alone.
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
         available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))

@@ -638,6 +638,46 @@ def test_rollup_defi_pool_spelling_variants_collapse_to_one_open_lifecycle(rollu
     assert row["chain"] == "POLYGON"
 
 
+def test_rollup_defi_pool_same_symbol_different_address_stay_distinct_lifecycles(
+    rollup: ModuleType,
+) -> None:
+    """Regression for `defi_instrument_availability_duplicate_instrument_key_rows_2026_07_26.md`:
+    two genuinely different on-chain pools can share the SAME base/quote/fee-tier and thus the
+    SAME symbolic ``instrument_key``/``glued_pair_id`` (confirmed real 2026-07-29, e.g.
+    ``PANCAKESWAP_V3-BSC:POOL:USDT-USDC-100`` mapping to two distinct ``pool_address`` values).
+
+    Per the operator's 2026-07-18 two-id/dual-key ruling (Option A,
+    codex/02-data/defi-canonical-naming-ssot.md), the symbolic key is documented as the
+    human-readable/UI form ONLY — it is NOT the uniqueness guarantee, and is not meant to be one.
+    The real machine/lifecycle key is ``pool::<chain>::<pool_address>`` (:func:`_aggregate_key`),
+    which IS always unique because ``pool_address`` is the on-chain contract address. This test
+    proves the roll-up does not collapse/overwrite one colliding pool with the other -- both
+    ``instrument_id`` (bare pool_address) rows survive as distinct catalogue entries, even though
+    they share one ``glued_pair_id``.
+    """
+    d1 = date(2024, 1, 1)
+    addr_a = "0x846d0c9c1b1e6f7fda1d1c1f0d2e3f4a5b6c7d8e"
+    addr_b = "0x1750d0c9c1b1e6f7fda1d1c1f0d2e3f4a5b6c7d8"
+    pool_a = {
+        "instrument_key": "PANCAKESWAP_V3-BSC:POOL:USDT-USDC-100",
+        "venue": "PANCAKESWAP_V3-BSC",
+        "instrument_type": "POOL",
+        "raw_symbol": addr_a,
+        "pool_address": addr_a,
+        "base_asset": "USDT",
+        "quote_asset": "USDC",
+        "pool_fee_tier": 100,
+    }
+    pool_b = {**pool_a, "raw_symbol": addr_b, "pool_address": addr_b}
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot([pool_a, pool_b]))])
+    pool_rows = df[df["instrument_type"].astype(str).str.upper() == "POOL"].to_dict("records")
+    assert len(pool_rows) == 2
+    ids = {row["instrument_id"] for row in pool_rows}
+    assert ids == {addr_a, addr_b}
+    glued_ids = {row["glued_pair_id"] for row in pool_rows}
+    assert glued_ids == {"PANCAKESWAP_V3-BSC:POOL:USDT-USDC-100"}
+
+
 def test_rollup_non_pool_row_has_blank_dual_form(rollup: ModuleType) -> None:
     """A CeFi/non-pool row carries blank glued_pair_id + pool_address (no fabrication)."""
     d1 = date(2024, 1, 1)

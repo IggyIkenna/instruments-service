@@ -219,6 +219,7 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         symbol = f"{base}-{quote}"
         venue_tag = f"UNISWAP_V2-{self._chain}"
+        # KNOWN NON-UNIQUENESS -- see the identical note in uniswap_v3.py::_build_pool_record.
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
         available_since = parse_created_timestamp(pair.get("createdAtTimestamp"))
