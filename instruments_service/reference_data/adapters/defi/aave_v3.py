@@ -15,6 +15,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import get_subgraph_id
 from unified_trading_library import log_event
 
@@ -419,7 +420,11 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         }
 
         a_symbol = f"A{sym_upper}"
-        a_token_instrument_key = f"{venue_tag}:A_TOKEN:{a_symbol}"
+        # Routed through the shared UAC builder (canonical_id_builder_retrofit_checklist_2026_07_08.md
+        # todo 2) — pure DRY, output is behavior-identical to the prior f-string (venue_tag is already
+        # the fully-composed, upper-cased VENUE-CHAIN token, so passing it as `venue` with no `chain`
+        # reproduces it verbatim).
+        a_token_instrument_key = build_instrument_id(venue_tag, InstrumentType.A_TOKEN, a_symbol)
         results = [
             InstrumentRecord(
                 instrument_key=a_token_instrument_key,
@@ -433,7 +438,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         if reserve.get("borrowingEnabled", False):
             debt_symbol = f"DEBT{sym_upper}"
-            debt_token_instrument_key = f"{venue_tag}:DEBT_TOKEN:{debt_symbol}"
+            debt_token_instrument_key = build_instrument_id(venue_tag, InstrumentType.DEBT_TOKEN, debt_symbol)
             results.append(
                 InstrumentRecord(
                     instrument_key=debt_token_instrument_key,
