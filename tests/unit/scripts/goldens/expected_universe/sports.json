@@ -1,8 +1,9 @@
 {
   "asset_group": "sports",
-  "captured_at": "2026-07-22",
-  "tuple_count": 27,
+  "captured_at": "2026-07-30",
+  "tuple_count": 30,
   "tuples": [
+    ["BET888SPORT", "odds", "trades"],
     ["BETFAIR", "odds", "markets"],
     ["BETFAIR", "odds", "odds_movement"],
     ["BETFAIR", "odds", "odds_snapshot"],
@@ -14,6 +15,7 @@
     ["BETFAIR_SB_UK", "odds", "trades"],
     ["DRAFTKINGS", "odds", "trades"],
     ["FANDUEL", "odds", "trades"],
+    ["LADBROKES", "odds", "trades"],
     ["ODDS_API", "odds", "ODDS"],
     ["ODDS_API", "odds", "arbitrage_opportunity"],
     ["ODDS_API", "odds", "markets"],
@@ -29,6 +31,7 @@
     ["PINNACLE", "odds", "odds_snapshot"],
     ["PINNACLE", "odds", "outcomes"],
     ["PINNACLE", "odds", "settlements"],
-    ["PINNACLE", "odds", "trades"]
+    ["PINNACLE", "odds", "trades"],
+    ["SMARKETS", "odds", "trades"]
   ]
 }
