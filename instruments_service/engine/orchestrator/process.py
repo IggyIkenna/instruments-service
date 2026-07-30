@@ -27,6 +27,7 @@ split, and mutable caches remain package-level attributes.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from instruments_service.engine.orchestrator.process_completeness import _completeness_and_retry
@@ -96,6 +97,131 @@ def _fixtures_fetch_failed(
     return not skip_urdi and bool(_checkable_venues) and not all(v in non_error_venues for v in _checkable_venues)
 
 
+@dataclass
+class _VenuePreflightOutcome:
+    """Result of stages 1-1b: either an ``early_return`` short-circuit value
+    (venue filter / freshness pre-flight / enrichment-only fast path all hit),
+    or the resolved venue + sports-entity state to continue processing with."""
+
+    early_return: dict[str, int] | None
+    active_venues: list[str]
+    is_sports_run: bool
+    missing_entities: list[str]
+    core_entities: list[str]
+    per_fixture_entities: list[str]
+
+
+async def _resolve_venues_and_preflight(
+    *,
+    date: str,
+    asset_groups: list[str],
+    venues: list[str],
+    redo_all: bool,
+    api_keys: dict[str, str] | None,
+    sports_provider: str | None,
+    sports_entity_filter: str | None,
+    season_override: int | None,
+    recovery_fixture_ids: frozenset[int] | None,
+) -> _VenuePreflightOutcome:
+    """Stages 1-1b: venue availability, ``--sports-provider`` filter, freshness
+    pre-flight, and its enrichment-only fast path — the setup work
+    ``process_instruments`` does before the URDI fetch, factored out to keep
+    that function under ``MAX_FUNCTION_LINES``."""
+    # 1. Skip venues not yet launched
+    active_venues = [v for v in venues if _orch.is_venue_available(v, date)]
+
+    # --sports-provider: restrict to only this provider's venues (and run the
+    # enrichment provider short-circuit where it applies).
+    if sports_provider:
+        active_venues, provider_result = await _apply_sports_provider_filter(
+            date=date,
+            asset_groups=asset_groups,
+            redo_all=redo_all,
+            api_keys=api_keys,
+            active_venues=active_venues,
+            sports_provider=sports_provider,
+            sports_entity_filter=sports_entity_filter,
+            season_override=season_override,
+        )
+        if provider_result is not None:
+            return _VenuePreflightOutcome(
+                early_return=provider_result,
+                active_venues=active_venues,
+                is_sports_run=False,
+                missing_entities=[],
+                core_entities=[],
+                per_fixture_entities=[],
+            )
+
+    if not active_venues:
+        _orch.logger.info("No active venues for date=%s asset_groups=%s", date, asset_groups)
+        return _VenuePreflightOutcome(
+            early_return={},
+            active_venues=active_venues,
+            is_sports_run=False,
+            missing_entities=[],
+            core_entities=[],
+            per_fixture_entities=[],
+        )
+
+    is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in asset_groups)
+
+    # 1b. Skip-if-exists: check manifest for fresh data (unless --force).
+    # The outcome carries the (possibly entity-scoped) core/per-fixture entity
+    # lists + which sports entities the manifest says are missing (empty when
+    # --force is set).
+    preflight = _freshness_preflight(
+        date=date,
+        asset_groups=asset_groups,
+        active_venues=active_venues,
+        is_sports_run=is_sports_run,
+        sports_entity_filter=sports_entity_filter,
+        recovery_fixture_ids=recovery_fixture_ids,
+        redo_all=redo_all,
+    )
+    if preflight.skip:
+        return _VenuePreflightOutcome(
+            early_return={},
+            active_venues=active_venues,
+            is_sports_run=is_sports_run,
+            missing_entities=[],
+            core_entities=[],
+            per_fixture_entities=[],
+        )
+
+    # Fast path: if only specific sports entities are missing (instruments done),
+    # skip URDI fetch and jump to targeted sports enrichment.
+    if preflight.missing_entities and api_keys:
+        fast_path_counts = await _enrichment_only_fast_path(
+            date=date,
+            asset_groups=asset_groups,
+            api_keys=api_keys,
+            missing_entities=preflight.missing_entities,
+            core_entities=preflight.core_entities,
+            per_fixture_entities=preflight.per_fixture_entities,
+            recovery_fixture_ids=recovery_fixture_ids,
+            redo_all=redo_all,
+        )
+        if fast_path_counts is not None:
+            return _VenuePreflightOutcome(
+                early_return=fast_path_counts,
+                active_venues=active_venues,
+                is_sports_run=is_sports_run,
+                missing_entities=preflight.missing_entities,
+                core_entities=preflight.core_entities,
+                per_fixture_entities=preflight.per_fixture_entities,
+            )
+
+    return _VenuePreflightOutcome(
+        early_return=None,
+        active_venues=active_venues,
+        is_sports_run=is_sports_run,
+        missing_entities=preflight.missing_entities,
+        core_entities=preflight.core_entities,
+        per_fixture_entities=preflight.per_fixture_entities,
+    )
+
+
 async def process_instruments(
     date: str | _orch.datetime,
     asset_groups: list[str],
@@ -155,65 +281,26 @@ async def process_instruments(
     # per-provider per-day pre-flight skip is bypassed (full rationale on the helper).
     redo_all = _promote_redo_all_for_recovery(recovery_fixture_ids=recovery_fixture_ids, redo_all=redo_all)
 
-    # 1. Skip venues not yet launched
-    active_venues = [v for v in venues if _orch.is_venue_available(v, date)]
-
-    # --sports-provider: restrict to only this provider's venues (and run the
-    # enrichment provider short-circuit where it applies).
-    if sports_provider:
-        active_venues, provider_result = await _apply_sports_provider_filter(
-            date=date,
-            asset_groups=asset_groups,
-            redo_all=redo_all,
-            api_keys=api_keys,
-            active_venues=active_venues,
-            sports_provider=sports_provider,
-            sports_entity_filter=sports_entity_filter,
-            season_override=season_override,
-        )
-        if provider_result is not None:
-            return provider_result
-
-    if not active_venues:
-        _orch.logger.info("No active venues for date=%s asset_groups=%s", date, asset_groups)
-        return {}
-
-    is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in asset_groups)
-
-    # 1b. Skip-if-exists: check manifest for fresh data (unless --force).
-    # The outcome carries the (possibly entity-scoped) core/per-fixture entity
-    # lists + which sports entities the manifest says are missing (empty when
-    # --force is set).
-    preflight = _freshness_preflight(
+    # 1-1b. Venue availability + --sports-provider filter + freshness
+    # pre-flight (+ its enrichment-only fast path) — see
+    # _resolve_venues_and_preflight for the full stage breakdown.
+    preflight_outcome = await _resolve_venues_and_preflight(
         date=date,
         asset_groups=asset_groups,
-        active_venues=active_venues,
-        is_sports_run=is_sports_run,
-        sports_entity_filter=sports_entity_filter,
-        recovery_fixture_ids=recovery_fixture_ids,
+        venues=venues,
         redo_all=redo_all,
+        api_keys=api_keys,
+        sports_provider=sports_provider,
+        sports_entity_filter=sports_entity_filter,
+        season_override=season_override,
+        recovery_fixture_ids=recovery_fixture_ids,
     )
-    if preflight.skip:
-        return {}
-    _sports_missing_entities = preflight.missing_entities
-    _sports_core_entities = preflight.core_entities
-    _sports_per_fixture_entities = preflight.per_fixture_entities
-
-    # Fast path: if only specific sports entities are missing (instruments done),
-    # skip URDI fetch and jump to targeted sports enrichment.
-    if _sports_missing_entities and api_keys:
-        fast_path_counts = await _enrichment_only_fast_path(
-            date=date,
-            asset_groups=asset_groups,
-            api_keys=api_keys,
-            missing_entities=_sports_missing_entities,
-            core_entities=_sports_core_entities,
-            per_fixture_entities=_sports_per_fixture_entities,
-            recovery_fixture_ids=recovery_fixture_ids,
-            redo_all=redo_all,
-        )
-        if fast_path_counts is not None:
-            return fast_path_counts
+    if preflight_outcome.early_return is not None:
+        return preflight_outcome.early_return
+    active_venues = preflight_outcome.active_venues
+    is_sports_run = preflight_outcome.is_sports_run
+    _sports_missing_entities = preflight_outcome.missing_entities
+    _sports_per_fixture_entities = preflight_outcome.per_fixture_entities
 
     _orch.log_event(
         "PROCESSING_STARTED",
