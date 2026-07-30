@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pandas as pd  # pyright: ignore[reportMissingImports]
@@ -196,6 +197,149 @@ def _run_refresh_league_entity_coverage(argv: list[str] | None = None) -> None: 
         print("DRY RUN — committed UAC JSON untouched (use --write to apply).")
 
 
+def _make_contains_predicate(needle: str) -> Callable[[str], bool]:
+    """Return a case-insensitive substring predicate over ``error_reason``."""
+    needle_lower = needle.lower()
+
+    def _predicate(reason: str) -> bool:
+        return needle_lower in reason.lower()
+
+    return _predicate
+
+
+def _run_reprocess_shards(argv: list[str] | None = None) -> None:  # pragma: no cover
+    """Select + retry manifest shards after an adapter/writer bug fix.
+
+    Called when ``--operation=reprocess-shards`` is passed. Bypasses the
+    ServiceBootstrap date-loop — like ``status`` / ``refresh-league-entity-
+    coverage`` this is a corpus-wide maintenance verb, not a date-fetch.
+
+    The permanent, generic replacement for the 13 near-identical one-off
+    "load manifest -> filter by predicate -> flip status -> write back"
+    scripts audited in ``manifest_reprocessing_generic_utility_2026_07_07.md``
+    — backed by ``unified_trading_library.select_shards_for_reprocess`` /
+    ``reprocess_shards``, which port that audit's three safety gates
+    (per-VM shard isolation before any write, idx-only mutation, the
+    captured-count invariant).
+
+    Dry-run by default (prints what WOULD flip); ``--apply`` mutates the
+    manifest (and additionally requires ``MANIFEST_PER_VM_SHARDS=true`` +
+    ``VM_NAME`` per ``reprocess_shards``'s own safety gate). Output is one
+    JSON object to stdout describing what matched/flipped.
+
+    Example::
+
+        instruments-service --operation reprocess-shards --asset-group cefi \\
+          --venue ASTER --capture-status attempted_failed \\
+          --error-reason-contains "404" \\
+          --date-start 2024-10-01 --date-end 2026-05-14 [--apply]
+    """
+    from unified_trading_library import (  # pyright: ignore[reportUnknownVariableType]  # noqa: imports-inside-functions
+        CaptureStatus,
+        read_availability_index,
+        reprocess_shards,
+        select_shards_for_reprocess,
+    )
+
+    _capture_status_values = {s.value for s in CaptureStatus}
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--asset-group", default=None)
+    parser.add_argument("--bucket", default=None)
+    parser.add_argument("--venue", default=None)
+    parser.add_argument("--capture-status", default=CaptureStatus.ATTEMPTED_FAILED.value)
+    parser.add_argument("--error-reason-contains", default=None)
+    parser.add_argument("--date-start", default=None)
+    parser.add_argument("--date-end", default=None)
+    parser.add_argument("--target-status", default=CaptureStatus.EXPECTED_UNATTEMPTED.value)
+    parser.add_argument("--target-error-reason", default="")
+    parser.add_argument("--apply", action="store_true", default=False)
+    args, _ = parser.parse_known_args(argv)
+
+    asset_group: str | None = str(args.asset_group).lower() if args.asset_group is not None else None  # pyright: ignore[reportAny]
+    capture_status: str = str(args.capture_status)  # pyright: ignore[reportAny]
+    target_status: str = str(args.target_status)  # pyright: ignore[reportAny]
+    for label, value in (("--capture-status", capture_status), ("--target-status", target_status)):
+        if value not in _capture_status_values:
+            print(
+                json.dumps(
+                    {
+                        "error": f"{label}={value!r} is not a valid CaptureStatus value",
+                        "valid": sorted(_capture_status_values),
+                    }
+                ),
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    bucket: str | None = str(args.bucket) if args.bucket else None  # pyright: ignore[reportAny]
+    if bucket is None:
+        if asset_group is None:
+            print(
+                json.dumps(
+                    {"error": "reprocess-shards requires --bucket or --asset-group to resolve the manifest bucket"}
+                ),
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        bucket = get_write_bucket_name("instruments", asset_group)
+
+    reason_contains: str | None = str(args.error_reason_contains) if args.error_reason_contains else None  # pyright: ignore[reportAny]
+    error_reason_predicate = _make_contains_predicate(reason_contains) if reason_contains is not None else None
+
+    try:
+        index: pd.DataFrame = read_availability_index(bucket)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+    except Exception as exc:
+        print(json.dumps({"error": str(exc), "bucket": bucket}), file=sys.stderr)
+        sys.exit(1)
+
+    date_start: str | None = str(args.date_start) if args.date_start else None  # pyright: ignore[reportAny]
+    date_end: str | None = str(args.date_end) if args.date_end else None  # pyright: ignore[reportAny]
+    idx = select_shards_for_reprocess(  # pyright: ignore[reportUnknownVariableType]
+        index,
+        asset_group=asset_group,
+        venue=str(args.venue) if args.venue else None,  # pyright: ignore[reportAny]
+        capture_status=capture_status,
+        date_start=date_start,
+        date_end=date_end,
+        error_reason_predicate=error_reason_predicate,
+    )
+
+    try:
+        result = reprocess_shards(  # pyright: ignore[reportUnknownVariableType]
+            bucket,
+            index,
+            idx,  # pyright: ignore[reportUnknownArgumentType]
+            target_status=target_status,
+            target_error_reason=str(args.target_error_reason),  # pyright: ignore[reportAny]
+            dry_run=not bool(args.apply),  # pyright: ignore[reportAny]
+        )
+    except Exception as exc:
+        print(json.dumps({"error": str(exc), "bucket": bucket}), file=sys.stderr)
+        sys.exit(1)
+
+    print(
+        json.dumps(
+            {
+                "bucket": bucket,
+                "asset_group": asset_group,
+                "venue": str(args.venue) if args.venue else None,  # pyright: ignore[reportAny]
+                "capture_status": capture_status,
+                "date_start": date_start,
+                "date_end": date_end,
+                "error_reason_contains": reason_contains,
+                "target_status": target_status,
+                "dry_run": result.dry_run,  # pyright: ignore[reportUnknownMemberType]
+                "matched": result.matched,  # pyright: ignore[reportUnknownMemberType]
+                "flipped": result.flipped,  # pyright: ignore[reportUnknownMemberType]
+                "captured_count_before": result.captured_count_before,  # pyright: ignore[reportUnknownMemberType]
+                "captured_count_after": result.captured_count_after,  # pyright: ignore[reportUnknownMemberType]
+            },
+            indent=2,
+        )
+    )
+
+
 def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pragma: no cover
     parser.add_argument(
         "--source",
@@ -347,6 +491,16 @@ def main_service_cli() -> None:  # pragma: no cover
         "--operation" in _argv and _argv[_argv.index("--operation") + 1] == _refresh_op
     ):
         _run_refresh_league_entity_coverage(_argv)
+        return
+    # --operation=reprocess-shards selects + retries manifest shards after an adapter/writer
+    # bug fix (the generic replacement for the 13 one-off reclassify scripts audited in
+    # manifest_reprocessing_generic_utility_2026_07_07.md); read-then-conditionally-write
+    # maintenance verb, not a date-fetch.
+    _reprocess_op = "reprocess-shards"
+    if f"--operation={_reprocess_op}" in _argv or (
+        "--operation" in _argv and _argv[_argv.index("--operation") + 1] == _reprocess_op
+    ):
+        _run_reprocess_shards(_argv)
         return
     # Daily recon run self-defaults its date window to TODAY so the scheduled
     # 06:00 UTC job never re-fetches a stale hardcoded date (incident 2026-06-23).
