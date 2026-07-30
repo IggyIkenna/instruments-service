@@ -61,9 +61,21 @@ _MARGIN_TYPE = MarginType.LINEAR
 
 # Zero Tardis/historical coverage for this venue (confirmed against the full
 # 62-exchange Tardis registry) — capture starts from the date this venue was
-# registered, not a fabricated pre-history. Mirrors
-# market_data_categories.VENUE_DATA_TYPE_CAPABILITIES["COINBASE-CDE"]["trades"].
-_CDE_REGISTRATION_DATE = datetime(2026, 7, 10, tzinfo=UTC)
+# registered, not a fabricated pre-history.
+#
+# Reconciled 2026-07-30 (cefi_coinbase_cde_urdi_zero_records_2026_07_28.md
+# todo 3) against ``unified_api_contracts.registry.venue_mapping.py``'s
+# ``venue_start_dates["COINBASE-CDE"] = "2025-12-12"``: the two dates
+# disagreed by ~7 months (this constant was 2026-07-10, the date the adapter
+# itself was built/live-confirmed — an assumption, not a measurement). The
+# registry value is the ground truth: MTDS's native-REST batch adapter
+# (mtds@28ad6b38, 2026-07-13) probed the public Advanced-Trade ticker
+# endpoint's backward-paginated trade history day-by-day and found REAL
+# trades back to 2025-12-12 (todo 31a, 2026-07-14) — you cannot have a real
+# trade on an unlisted instrument, so 2025-12-12 is a measured lower bound on
+# when these futures were actually available, strictly earlier than this
+# constant's un-measured 2026-07-10 guess. Updated to match.
+_CDE_REGISTRATION_DATE = datetime(2025, 12, 12, tzinfo=UTC)
 
 
 def _classify_cde_error(exc: Exception, status: int | None = None) -> str:

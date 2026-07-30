@@ -56,6 +56,7 @@ async def _handle_zero_records(
     redo_all: bool,
     sports_entity_filter: str | None,
     season_override: int | None,
+    pre_filter_records: list[_orch.InstrumentRecord],
     fixtures_fetch_failed: bool = False,
 ) -> dict[str, int]:
     """Stage 4 — handle zero records after the date filter.
@@ -90,6 +91,7 @@ async def _handle_zero_records(
         asset_groups=asset_groups,
         active_venues=active_venues,
         mode=mode,
+        pre_filter_records=pre_filter_records,
     )
 
 
@@ -543,6 +545,7 @@ def _zero_records_non_sports(
     asset_groups: list[str],
     active_venues: list[str],
     mode: str,
+    pre_filter_records: list[_orch.InstrumentRecord],
 ) -> dict[str, int]:
     """Zero-record handling for DeFi batch / TradFi non-trading days.
 
@@ -601,6 +604,64 @@ def _zero_records_non_sports(
             )
         _na_manifest.write()
         return dict.fromkeys(_no_adapter_active, 0)
+
+    # Pre-launch honest absence: URDI successfully fetched real instrument
+    # records for a venue (the adapter/discovery API is genuinely live), but
+    # EVERY fetched record's ``available_from_datetime`` falls after the
+    # requested date, so ``filter_instruments_by_date`` correctly zeroed them
+    # all out — the venue simply predates its own registration/listing date
+    # for this historical date. Distinct from NO_ADAPTER_YET above (no adapter
+    # exists at all) and from a genuine active-day zero (raised below): here
+    # the fetch worked and returned real data, it just doesn't cover this day.
+    # Mirrors the DeFi pre-genesis / TradFi non-trading-day patterns in this
+    # function with an honest ``EXPECTED_PRE_VENUE_LAUNCH``/
+    # ``EXPECTED_PRE_GENESIS_CHAIN`` marker instead of crashing the shard.
+    _pre_launch_candidates = [v for v in active_venues if v not in _no_adapter_active]
+    _target_dt = _orch.datetime.fromisoformat(date).replace(tzinfo=_orch.UTC)
+    _pre_launch_venues = []
+    for _venue in _pre_launch_candidates:
+        _venue_records = [r for r in pre_filter_records if r.venue == _venue]
+        if _venue_records and all(
+            r.available_from_datetime is not None and r.available_from_datetime > _target_dt
+            for r in _venue_records
+        ):
+            _pre_launch_venues.append(_venue)
+    if _pre_launch_venues and set(_pre_launch_venues) == set(_pre_launch_candidates):
+        # Lazy import — sibling cohesion module, avoids a load-time cycle
+        # (process_write imports nothing from this module).
+        from instruments_service.engine.orchestrator.process_write import (  # noqa: imports-inside-functions
+            _pre_launch_empty_reason,
+        )
+
+        _pl_primary_asset_group = asset_groups[0] if asset_groups else None
+        _pl_bucket = _orch._get_instruments_bucket(_pl_primary_asset_group)
+        _pl_manifest = _orch.ManifestWriter(
+            service_name="instruments-service",
+            catalogue_bucket=_pl_bucket,
+        )
+        _pl_attempt_ts = _orch.datetime.now(_orch.UTC)
+        for _pl_venue in sorted(_pre_launch_venues):
+            _pl_manifest_venue, _pl_manifest_chain = _orch._canonical_manifest_venue_chain(_pl_venue)
+            _pl_row_key: dict[str, str] = {"date": date, "venue": _pl_manifest_venue}
+            if _pl_manifest_chain:
+                _pl_row_key["chain"] = _pl_manifest_chain
+            _pl_manifest.record_expected_empty(
+                row_key=_pl_row_key,
+                reason=_pre_launch_empty_reason(_pl_venue, _pl_manifest_chain, date),
+                attempted_at=_pl_attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+            )
+        _pl_manifest.write()
+        _orch.logger.info(
+            "Pre-launch honest absence: date=%s venues=%s — URDI fetched %d record(s) but "
+            "every one carries available_from_datetime after the requested date; wrote "
+            "expected_empty manifest entries instead of failing the shard",
+            date,
+            sorted(_pre_launch_venues),
+            len(pre_filter_records),
+        )
+        return dict.fromkeys(_pre_launch_venues, 0)
 
     # TradFi non-trading day: zero instruments on weekends/holidays is expected.
     # Write 0-count manifest entries per venue so the manifest marks the day as

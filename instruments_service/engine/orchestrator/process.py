@@ -360,6 +360,12 @@ async def process_instruments(
             sports_entity_filter=sports_entity_filter,
             season_override=season_override,
             fixtures_fetch_failed=fixtures_fetch_failed,
+            # Pre-date-filter snapshot (``_filter_and_enrich_records`` above builds a
+            # NEW list rather than mutating in place, so ``fetch_outcome.records`` is
+            # still the raw URDI fetch) — lets the honest-absence check below tell
+            # "URDI fetched real records but every one predates the requested day"
+            # apart from a genuine fetch failure.
+            pre_filter_records=fetch_outcome.records,
         )
 
     # 5. Schema validation — per-record failure isolation (hard_schema_enforcement Phase 2).
