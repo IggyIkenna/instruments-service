@@ -296,22 +296,55 @@ async def _per_fixture_gcs_fast_path(
     return pf_counts
 
 
+def _pre_launch_venues_from_raw_fetch(
+    records: list[_orch.InstrumentRecord],
+    date_dt: _orch.datetime,
+) -> frozenset[str]:
+    """Venues whose every URDI-fetched (pre-filter) record honestly post-dates ``date_dt``.
+
+    A venue qualifies only when EVERY one of its fetched instruments carries an
+    explicit ``available_from_datetime`` later than the requested date — a
+    record with ``available_from_datetime=None`` never counts (the date filter
+    treats None as "always available", so it is not evidence of a pre-launch
+    venue). Feeds ``_zero_records_non_sports``'s honest
+    ``EXPECTED_PRE_VENUE_LAUNCH`` marker so a backfill over a pre-launch
+    historical date for a real adapter-backed venue (e.g. COINBASE-CDE before
+    its registration date) writes an honest absence instead of crashing.
+    Issue: cefi_coinbase_cde_urdi_zero_records_2026_07_28.md.
+    """
+    by_venue: dict[str, list[_orch.InstrumentRecord]] = {}
+    for r in records:
+        venue = (getattr(r, "venue", None) or "").upper()
+        by_venue.setdefault(venue, []).append(r)
+    return frozenset(
+        venue
+        for venue, venue_records in by_venue.items()
+        if venue_records
+        and all(
+            (since := getattr(r, "available_from_datetime", None)) is not None and since > date_dt
+            for r in venue_records
+        )
+    )
+
+
 def _filter_and_enrich_records(
     *,
     records: list[_orch.InstrumentRecord],
     date: str,
     asset_groups: list[str],
-) -> tuple[list[_orch.InstrumentRecord], _orch.datetime, frozenset[str] | None]:
+) -> tuple[list[_orch.InstrumentRecord], _orch.datetime, frozenset[str] | None, frozenset[str]]:
     """Stage 3 — filter to instruments active on the requested date + enrich.
 
     URDI adapters return the full historical instrument universe; this reduces
     it to only instruments tradeable on the requested day. Passes the DeFi
     venue set so the filter can warn on missing available_from_datetime.
-    Returns ``(records, date_dt, defi_venue_set)`` for downstream stages.
+    Returns ``(records, date_dt, defi_venue_set, pre_launch_venues)`` for
+    downstream stages — see ``_pre_launch_venues_from_raw_fetch`` for the last.
     """
     is_defi_run = any(c.upper() in ("DEFI", "ALL") for c in asset_groups)
     defi_venue_set: frozenset[str] | None = frozenset(_orch._DEFI_VENUES) if is_defi_run else None
     date_dt = _orch.datetime.fromisoformat(date).replace(tzinfo=_orch.UTC)
+    pre_launch_venues = _pre_launch_venues_from_raw_fetch(records, date_dt)
     records = _orch.filter_instruments_by_date(records, date_dt, defi_venues=defi_venue_set)
     _orch.logger.info(
         "Date filter %s: %d instruments active (from URDI fetch)",
@@ -378,4 +411,4 @@ def _filter_and_enrich_records(
             before - len(records),
         )
 
-    return records, date_dt, defi_venue_set
+    return records, date_dt, defi_venue_set, pre_launch_venues
