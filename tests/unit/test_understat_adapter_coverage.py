@@ -659,12 +659,26 @@ class TestUnderstatFetchErrorTracking:
 
     @pytest.mark.asyncio
     async def test_get_fixtures_resets_error_count(self) -> None:
-        """get_fixtures resets _fetch_error_count before each call."""
+        """get_fixtures resets _fetch_error_count before each call.
+
+        Mocks ``_make_session``/``_get_with_retry`` directly (like this class's
+        other tests) rather than only ``aiohttp.ClientSession`` — the latter still
+        drives the REAL per-league ``_throttle()`` call for all 6 leagues, which is
+        the recurring CI-timeout root cause documented on
+        ``_reset_understat_rate_limiter`` above (two prior fixes, 2026-07-29 and
+        2026-07-30, made the reset more thorough but this test kept being the one
+        exposed to whatever real-timing sensitivity remained — a 2026-07-30 CI run
+        still hit the 150s pytest-timeout here). This test only asserts the
+        error-count reset, so it does not need to exercise real throttle timing at
+        all; bypassing ``_get_with_retry`` removes that sensitivity entirely.
+        """
         adapter = UnderstatAdapter()
         adapter._fetch_error_count = 99  # pre-set to dirty value
         raw = {"dates": []}
-        mock_session = _make_aiohttp_mock(raw)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
+        with (
+            patch.object(adapter, "_make_session", return_value=_make_session_cm()),
+            patch.object(adapter, "_get_with_retry", AsyncMock(return_value=raw)),
+        ):
             await adapter.get_fixtures("2026-09-15")
         # After a clean call with no errors, error count reflects this call only
         assert adapter._fetch_error_count == 0
