@@ -395,8 +395,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # Publish DATA_READY coordination event so downstream services
         # (e.g. market-tick-data-service) know instrument data is available.
         # Only fires in live mode; publish_coordination_event raises ValueError
-        # in batch mode so we guard with suppress.
-        with contextlib.suppress(RuntimeError, ValueError):
+        # in batch mode so we guard with suppress. Mock-mode's LocalFsEventSink
+        # doesn't implement publish_coordination_event at all (AttributeError) --
+        # suppress that too so cleanup() never crashes the process under
+        # CLOUD_MOCK_MODE=true (real repro: instruments-service --mode live
+        # --asset-group cefi under mock mode, 2026-07-30).
+        with contextlib.suppress(RuntimeError, ValueError, AttributeError):
             publish_coordination_event(
                 "DATA_READY",
                 payload={
@@ -412,7 +416,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
         if _args2 is not None:
             cli_asset_groups_cleanup = getattr(_args2, "asset_group", None) or getattr(_args2, "category", None)
         if cli_asset_groups_cleanup and any(c.upper() in ("SPORTS", "ALL") for c in cli_asset_groups_cleanup):
-            with contextlib.suppress(RuntimeError, ValueError):
+            with contextlib.suppress(RuntimeError, ValueError, AttributeError):
                 publish_coordination_event(
                     "SPORTS_LIVE_STATS",
                     payload={
