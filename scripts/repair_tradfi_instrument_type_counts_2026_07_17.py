@@ -26,6 +26,15 @@ false; the drift was manufactured by the migration. Live-verified 2026-07-17: tr
 object = 74,005 rows (OPTION 69,212 / COMBO 4,446 / FUTURE 347) — exactly the ORIGINAL manifest count — while
 the LEGACY object = 2,826 (OPTION 2,566 / COMBO 228 / FUTURE 32) — exactly what the migration wrote.
 
+**CORRECTION (2026-07-30, per
+``plans/active/issues/backfill_smoke_write_path_canonical_audit_2026_07_20.md`` Section 3b): "CANONICAL" above
+describes the state of the 2026-07-16 tradfi migration's OWN snapshot, not the ongoing live write path.** The
+live ``instrument_availability`` writer (``instruments_service/engine/orchestrator/process_write.py`` +
+``writers.py``) emits the FLAT ``day=/venue=`` shape today, same as before and after this migration — the
+"canonical, source-aware" hive path this script prefers only ever got populated for tradfi by the one-time
+2026-07-16 batch migration itself, not by any ongoing capture. Do not read this docstring as evidence the live
+writer emits the hive shape; it does not.
+
 =============================================================================================
 WHY THE TWO OBVIOUS REPAIRS ARE BOTH WRONG (each measured, 2026-07-17 — re-verify at run time)
 =============================================================================================
