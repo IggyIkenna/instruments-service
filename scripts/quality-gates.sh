@@ -216,10 +216,6 @@ FUNCTION_SIZE_EXTRA_EXCLUDES=(
     "!" "-path" "./${SOURCE_DIR}/engine/orchestrator/__init__.py"
 )
 
-# pip-audit: ignore cryptography CVE-2026-34073 (DNS name constraint bypass, low severity, pending upgrade)
-PIP_AUDIT_EXTRA_ARGS="--ignore-vuln CVE-2026-34073"
-
-
 # Temporary rollout tolerance for known codex debt under active remediation.
 # Ratcheted 4 → 3 on 2026-06-11: the function/file-size violation class CLEARED
 # — process_instruments (1,931L) + _fetch_sports_reference_data (882L) were
