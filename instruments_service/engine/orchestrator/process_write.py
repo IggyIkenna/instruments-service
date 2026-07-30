@@ -342,7 +342,10 @@ def _write_sports_fixture_venue(
     _expected_af_lids = {league.league_id for league in _orch.get_expected_leagues_for_source("api_football")}
     if league_filter:
         _expected_af_lids &= set(league_filter)
-    if (_mlids := _orch._manifest_captured_fixture_leagues(bucket=manifest.catalogue_bucket, date=date)) is None:
+    _mlids = _orch._manifest_captured_leagues_for_data_type(
+        bucket=manifest.catalogue_bucket, date=date, data_type=FIXTURES_SCHEDULE
+    )
+    if _mlids is None:
         return
     for _exp_lid in sorted(_expected_af_lids - _captured_lids - _mlids):
         if not _orch.get_league_fixture_calendar(_exp_lid, date, date):
