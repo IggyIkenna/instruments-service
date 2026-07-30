@@ -3226,12 +3226,32 @@ def build_sports_fixture_team_player_catalogue(
     return pd.concat([fixture_df, team_df, player_df], ignore_index=True)
 
 
-def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str) -> int | None:
-    """Return the row count of the current canonical catalogue, or None when absent."""
+def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str, *, asset_group: str) -> int | None:
+    """Return the row count of the current canonical catalogue, or None when absent.
+
+    **Dedup-aware guard** (RULED 2026-07-28,
+    ``dp_catalog_not_running_sports_prediction_2026_07_15.md``): for
+    ``asset_group == "cefi"``, re-runs the SAME cefi-only Phase D dedup passes
+    (:func:`_apply_cefi_phase_d_dedups`, mirroring :func:`run_rollup`'s own Phase D)
+    over the current catalogue before counting. Root cause this fixes: cefi's
+    daily incremental job already runs these dedup passes on the freshly-rolled
+    side (Phase D), but the monotonic guard was comparing that ALREADY-DEDUPED new
+    count against a NOT-equally-deduped current-catalogue count — so a day whose
+    window happened to touch enough still-ambiguous historical duplicate pairs
+    could push the new count below the current baseline even though zero real
+    instruments were lost (confirmed via `dropped_active: 0` on every observed
+    occurrence, 07-16 through 07-27). Deduping BOTH sides identically before
+    comparing makes the comparison MORE precise, not looser — a genuine
+    active-row drop still trips the guard exactly as before (see
+    tests/unit/scripts/test_promote_catalogue_dedup_aware_guard.py). Every other
+    asset_group is unaffected (dedup is a cefi-only Phase D pass).
+    """
     if not storage.blob_exists(bucket, blob_path):
         return None
     payload = storage.download_bytes(bucket, blob_path)
     current = pd.read_parquet(io.BytesIO(payload))
+    if asset_group == "cefi":
+        current = _apply_cefi_phase_d_dedups(current)
     return len(current)
 
 
@@ -3301,13 +3321,21 @@ def promote_catalogue(
     env: str,
     df: pd.DataFrame,
     *,
+    asset_group: str,
     allow_shrink: bool,
     dry_run: bool,
 ) -> int:
-    """Apply the monotonic-guard promotion. Returns a process exit code (0 = ok)."""
+    """Apply the monotonic-guard promotion. Returns a process exit code (0 = ok).
+
+    ``asset_group`` feeds the dedup-aware guard (see
+    :func:`_read_current_row_count`'s docstring) — for cefi, the current
+    catalogue's row count is computed AFTER re-running the same Phase D dedup
+    passes the freshly-rolled ``df`` already went through, so the comparison is
+    apples-to-apples.
+    """
     canonical_blob, temp_blob = _catalogue_object_paths(env)
     new_count = len(df)
-    current_count = _read_current_row_count(storage, bucket, canonical_blob)
+    current_count = _read_current_row_count(storage, bucket, canonical_blob, asset_group=asset_group)
     decision = evaluate_monotonic_guard(new_count, current_count, allow_shrink=allow_shrink)
 
     logger.info(
@@ -4679,6 +4707,29 @@ def _dedup_cefi_margin_type_mislabel(df: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+def _apply_cefi_phase_d_dedups(df: pd.DataFrame) -> pd.DataFrame:
+    """Run the cefi-only Phase D DEDUP passes (excludes the missing-expiry backfill).
+
+    Extracted so :func:`promote_catalogue`'s monotonic guard can run the SAME 3
+    passes over the CURRENT prod catalogue before comparing row counts (the
+    "dedup-aware guard" fix, ``dp_catalog_not_running_sports_prediction_2026_07_15.md``
+    RULED 2026-07-28) without duplicating the pass list/order in two places —
+    :func:`run_rollup`'s own Phase D calls this same helper for the freshly-rolled
+    side. Order matters (see each function's docstring): bybit base-asset dedup
+    MUST run before the expiry off-by-one collapse (some groups are 3-row
+    compounds only the bybit pass first reduces to a clean 2-row pair); the
+    margin-type mislabel dedup is verified order-independent against both.
+    Deliberately excludes :func:`_backfill_cefi_missing_expiry_from_wire_symbol` —
+    that pass FILLS previously-blank fields rather than dropping rows, so it
+    cannot itself cause a dedup-only shrink and re-running it against the
+    current prod catalogue would be pure wasted work for the guard's purposes.
+    """
+    df = _dedup_bybit_future_base_asset_parsing(df)
+    df = _dedup_cefi_expiry_off_by_one(df)
+    df = _dedup_cefi_margin_type_mislabel(df)
+    return df
+
+
 def run_rollup(
     asset_group: str,
     *,
@@ -4884,24 +4935,12 @@ def run_rollup(
 
     # Phase D: dedup / row-count
     if asset_group == "cefi":
-        # BYBIT FUTURE base-asset parsing-regression collapse (see
-        # _dedup_bybit_future_base_asset_parsing's docstring) — MUST run before
-        # the expiry off-by-one collapse below: 7 of its 36 FUTURE keys are
-        # 3-row compound groups where stripping the stale-base row here first
-        # leaves a pure 2-row off-by-one pair for the next dedup to collapse.
-        df = _dedup_bybit_future_base_asset_parsing(df)
-        # Ambiguous-wire-key expiry off-by-one collapse (see
-        # _dedup_cefi_expiry_off_by_one's docstring) — scoped to cefi (the only
-        # asset_group whose rows carry this dated-derivative wire-symbol shape).
-        df = _dedup_cefi_expiry_off_by_one(df)
-        # OKX-FUTURES/OKX-SWAP/BITGET-FUTURES stale margin_type mislabel collapse
-        # (see _dedup_cefi_margin_type_mislabel's docstring — operator ruling
-        # 2026-07-23). Order vs the two dedups above is VERIFIED order-independent
-        # (disjoint venue scope vs the BYBIT dedup; disjoint by construction — never
-        # the same group — vs the expiry dedup, since margin_type is one of that
-        # function's compared columns), so placement here (after, not before) is
-        # for readability only, not a correctness dependency.
-        df = _dedup_cefi_margin_type_mislabel(df)
+        # BYBIT base-asset parsing-regression + ambiguous-wire-key expiry
+        # off-by-one + OKX/BITGET margin_type mislabel collapses — see
+        # _apply_cefi_phase_d_dedups's docstring for pass order/rationale. Shared
+        # with promote_catalogue's dedup-aware monotonic guard, which re-runs the
+        # SAME helper over the CURRENT prod catalogue before comparing row counts.
+        df = _apply_cefi_phase_d_dedups(df)
         # Missing-expiry backfill from wire symbol (see
         # _backfill_cefi_missing_expiry_from_wire_symbol's docstring — Tardis HTTP 400
         # systematic-cause fix, cefi_hl_aster_batch_data_gaps_2026_06_22.md). Placed
@@ -4947,6 +4986,7 @@ def run_rollup(
         bucket,
         env,
         df,
+        asset_group=asset_group,
         allow_shrink=allow_shrink,
         dry_run=dry_run,
     )
