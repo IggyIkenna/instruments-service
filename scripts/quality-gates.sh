@@ -284,8 +284,18 @@ if [[ -d "${QG_SCRIPTS_DIR}" ]]; then
     # sailed through silently under the warn-only form — see
     # plans/active/issues/mtds_phoenix_orderbook_handler_contract_call_regression_2026_07_27.md).
     if [[ -f "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" ]]; then
-        run_timeout 300 bash "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" "${WORKSPACE_ROOT}" \
-            || { log_fail "Adapter contract-call regression — see plans/active/issues/lint_sweep_774602ea8_regression_audit_2026_05_20.md"; exit 1; }
+        run_timeout 300 bash "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" "${WORKSPACE_ROOT}"
+        _qg_583_rc=$?
+        # Distinguish a genuine content regression from the check itself timing out — same
+        # log_fail text for both would send whoever hits this chasing a nonexistent code
+        # regression instead of an infra timeout (todo 3 of the timeout issue doc below).
+        if [[ ${_qg_583_rc} -eq 124 ]]; then
+            log_fail "Adapter contract-call regression check TIMED OUT after 300s — this is an infra/host-load issue, NOT a content regression; see plans/active/issues/qg_5_83_adapter_contract_regression_workspace_scan_timeout_2026_07_27.md"
+            exit 1
+        elif [[ ${_qg_583_rc} -ne 0 ]]; then
+            log_fail "Adapter contract-call regression — see plans/active/issues/lint_sweep_774602ea8_regression_audit_2026_05_20.md"
+            exit 1
+        fi
     fi
     # STEP 5.84: schema-version compliance — no schema_version < 8 in service source (mega audit B1 Pattern 3)
     if [[ -f "${QG_SCRIPTS_DIR}/no_legacy_schema_version.sh" ]]; then
