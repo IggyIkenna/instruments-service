@@ -746,6 +746,7 @@ class TestZeroRecordsNonSportsFixedForFX:
                 asset_groups=["TRADFI"],
                 active_venues=["CME", "NASDAQ", "FX"],
                 mode="batch",
+                pre_filter_records=[],
             )
 
         # CME and NASDAQ must have been stamped with EXPECTED_WEEKEND.
@@ -802,6 +803,7 @@ class TestZeroRecordsNonSportsFixedForFX:
                 asset_groups=["TRADFI"],
                 active_venues=["CME", "NASDAQ"],
                 mode="batch",
+                pre_filter_records=[],
             )
 
         assert result == {"CME": 0, "NASDAQ": 0}, f"Expected clean dict; got {result}"
@@ -827,6 +829,7 @@ class TestZeroRecordsNonSportsFixedForFX:
                     asset_groups=["CEFI"],
                     active_venues=["BYBIT", "DERIBIT"],
                     mode="batch",
+                    pre_filter_records=[],
                 )
 
 
@@ -916,6 +919,7 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
                 asset_groups=["TRADFI"],
                 active_venues=["FX"],
                 mode="batch",
+                pre_filter_records=[],
             )
 
         assert result == {"FX": 0}, f"Expected clean zero-count dict; got {result}"
@@ -964,6 +968,7 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
                 asset_groups=["TRADFI"],
                 active_venues=["CME", "FX"],
                 mode="batch",
+                pre_filter_records=[],
             )
 
         # is_non_trading_day must never have been called with FX (NO_ADAPTER_YET) — only CME.
@@ -972,3 +977,128 @@ class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
         )
         assert "CME" in _checked_venues
         assert result == {"CME": 0}, f"Expected only CME stamped as non-trading; got {result}"
+
+
+class TestZeroRecordsNonSportsPreLaunchHonestAbsence:
+    """Crash-harden fix (cefi_coinbase_cde_urdi_zero_records_2026_07_28.md todo 3):
+    a real adapter-backed venue whose URDI fetch succeeds but whose EVERY fetched
+    record's ``available_from_datetime`` postdates the requested day must resolve
+    as an honest ``empty_confirmed``/``EXPECTED_PRE_VENUE_LAUNCH`` absence, never
+    the ``RuntimeError`` shard-failure crash (production incident: COINBASE-CDE,
+    date=2026-03-15, ``URDI returned zero records`` traceback in
+    ``_zero_records_non_sports``).
+    """
+
+    def test_all_records_post_date_writes_honest_marker_not_crash(self) -> None:
+        """URDI fetches real records for a venue but all predate the request day
+        (mirrors the COINBASE-CDE production crash) — must NOT raise, must write
+        an EXPECTED_PRE_VENUE_LAUNCH manifest row, and must return {venue: 0}."""
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        from unified_api_contracts.internal import InstrumentRecord
+
+        from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
+
+        _expected_empty_calls: list[dict[str, object]] = []
+
+        class _CapManifest:
+            def __init__(self, *_: object, **__: object) -> None:
+                pass
+
+            def record_expected_empty(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                **_kw: object,
+            ) -> None:
+                _expected_empty_calls.append({"row_key": dict(row_key), "reason": reason})
+
+            def write(self) -> None:
+                pass
+
+        # COINBASE-CDE (real cefi adapter) fetched 2 real futures, both stamped
+        # available_from_datetime AFTER the requested 2026-03-15 date — exactly
+        # the production shape (adapter's own registration-date floor postdates
+        # the historical backfill day).
+        _records = [
+            InstrumentRecord(
+                instrument_key="COINBASE-CDE:FUTURE:BIT-31JUL26-CDE",
+                venue="COINBASE-CDE",
+                instrument_type="FUTURE",
+                base_asset="BTC",
+                quote_asset="USD",
+                tick_size=Decimal("0.01"),
+                available_from_datetime=datetime(2026, 7, 10, tzinfo=UTC),
+            ),
+            InstrumentRecord(
+                instrument_key="COINBASE-CDE:FUTURE:ETH-31JUL26-CDE",
+                venue="COINBASE-CDE",
+                instrument_type="FUTURE",
+                base_asset="ETH",
+                quote_asset="USD",
+                tick_size=Decimal("0.01"),
+                available_from_datetime=datetime(2026, 7, 10, tzinfo=UTC),
+            ),
+        ]
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=_CapManifest,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="cefi-bucket",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = _zero_records_non_sports(
+                date="2026-03-15",
+                asset_groups=["CEFI"],
+                active_venues=["COINBASE-CDE"],
+                mode="batch",
+                pre_filter_records=_records,
+            )
+
+        assert result == {"COINBASE-CDE": 0}, f"Expected clean zero-count dict; got {result}"
+        assert len(_expected_empty_calls) == 1
+        assert _expected_empty_calls[0]["row_key"] == {"date": "2026-03-15", "venue": "COINBASE-CDE"}
+        assert _expected_empty_calls[0]["reason"] == EmptyConfirmedReason.EXPECTED_PRE_VENUE_LAUNCH.value
+
+    def test_partial_post_date_records_still_raises(self) -> None:
+        """A venue with a MIX of pre- and post-date records (i.e. some real
+        instruments ARE live on the requested day) must NOT be misclassified as
+        pre-launch — the zero-after-filter here would indicate a genuine bug
+        elsewhere, so the existing RuntimeError shard-failure path still fires."""
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        from unified_api_contracts.internal import InstrumentRecord
+
+        from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
+
+        _records = [
+            InstrumentRecord(
+                instrument_key="COINBASE-CDE:FUTURE:BIT-31JUL26-CDE",
+                venue="COINBASE-CDE",
+                instrument_type="FUTURE",
+                base_asset="BTC",
+                quote_asset="USD",
+                tick_size=Decimal("0.01"),
+                available_from_datetime=datetime(2020, 1, 1, tzinfo=UTC),
+            ),
+        ]
+
+        with patch("instruments_service.engine.orchestrator.log_event"):
+            import pytest
+
+            with pytest.raises(RuntimeError):
+                _zero_records_non_sports(
+                    date="2026-03-15",
+                    asset_groups=["CEFI"],
+                    active_venues=["COINBASE-CDE"],
+                    mode="batch",
+                    pre_filter_records=_records,
+                )
