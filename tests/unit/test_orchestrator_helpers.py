@@ -154,6 +154,24 @@ class TestRejectJunkInstruments:
         kept = reject_junk_instruments(records)
         assert kept == records
 
+    def test_azerbaijani_schwa_team_names_are_kept(self) -> None:
+        """Azerbaijani 'ə' (schwa, IPA Extensions block) is a real alphabet letter, not junk.
+
+        Regression for `sports_satellite_ao_dispatch_batch8_2026_07_30.md`'s corpus-loss
+        quantification pass (2026-07-30): a live recapture on 2021-09-18 found the
+        Latin-1/Extended-A/B-only allow-list still rejecting 'Səbail' (AZERBAIJAN_PREMYER_LIQA)
+        because U+0259 sits in IPA Extensions (0x0250-0x02AF), not the 3 originally-allowed
+        ranges — a residual instance of the same §D bug class in a different geography.
+        """
+        records = [
+            _make_record(
+                instrument_key="AZERBAIJAN_PREMYER_LIQA:QABALA_v_SBAIL",
+                venue="API_FOOTBALL",
+                base_asset="Qabala vs Səbail",
+            ),
+        ]
+        assert reject_junk_instruments(records) == records
+
     def test_cjk_junk_still_rejected_after_latin_script_narrowing(self) -> None:
         """The narrowed guard must still reject the original CJK/meme junk it was built for."""
         records = [

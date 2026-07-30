@@ -393,14 +393,20 @@ _KNOWN_TEST_BASES: frozenset[str] = frozenset({"TEST", "TESTUSDT", "DUMMY", "PLA
 #: Unicode ranges of ordinary accented Latin script (Spanish/Portuguese/French/German/
 #: Polish/Czech/Scandinavian team & fixture names — Sanluqueño, União, Potosí, Cañoneros,
 #: Logroñés, ...) that must NOT be treated as junk. Covers Latin-1 Supplement + Latin
-#: Extended-A/B. Anything OUTSIDE these ranges (CJK, emoji, other scripts/symbols) is
-#: still rejected below — this is what the guard was actually built to catch
+#: Extended-A/B + IPA Extensions (the block Azerbaijani's schwa 'ə' — a real alphabet
+#: letter, e.g. "Səbail" — lives in, not just phonetic notation). Anything OUTSIDE these
+#: ranges (CJK, emoji, other scripts/symbols) is still rejected below — this is what the
+#: guard was actually built to catch
 #: (`issues/sports_features_layer_findings_sweep_2026_07_18.md` §D, 2026-07-30 fix:
 #: the guard was rejecting ~9.8% of a sampled sports date's fixtures for legitimate
-#: Latin-accented team names, biased toward Iberian/Latin American leagues).
+#: Latin-accented team names, biased toward Iberian/Latin American leagues; IPA
+#: Extensions added same-day after a live corpus-loss quantification recapture on
+#: 2021-09-18 caught 'Səbail' (AZERBAIJAN_PREMYER_LIQA) still being rejected, tracked in
+#: `plans/active/sports_satellite_ao_dispatch_batch8_2026_07_30.md`).
 _ALLOWED_NON_ASCII_RANGES: tuple[tuple[int, int], ...] = (
     (0x00A0, 0x00FF),  # Latin-1 Supplement
     (0x0100, 0x017F),  # Latin Extended-A
+    (0x0250, 0x02AF),  # IPA Extensions (Azerbaijani ə and similar adopted-letter usage)
     (0x0180, 0x024F),  # Latin Extended-B
 )
 
