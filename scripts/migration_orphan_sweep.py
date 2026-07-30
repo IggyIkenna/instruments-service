@@ -66,6 +66,7 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from unified_api_contracts import ShardKey, canonical_path_templates, is_valid_shard_key
+from unified_api_contracts.registry.chain_env import MAINNET_CHAIN_IDS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -250,8 +251,18 @@ def shard_key_from_segments(asset_group: str, segments: dict[str, str]) -> Shard
     venue = segments.get("venue", "")
     chain = segments.get("chain", "")
     # DeFi combined venue-chain overload: ``venue=EIGENLAYER-ETHEREUM`` with no chain=.
+    # Guarded by UAC's MAINNET_CHAIN_IDS (the SSOT canonical chain vocabulary) so a
+    # venue that merely CONTAINS a dash for an unrelated reason (e.g. a CeFi
+    # "BITGET-FUTURES" venue physically mis-landed in the DeFi bucket) never gets
+    # mis-split into a fabricated (venue, chain) pair — this exact unconditional split
+    # produced the corrupted chain="FUTURES" manifest rows root-caused in
+    # defi_cefi_venue_chain_axis_contamination_2026_07_28.md; mirrors the identical
+    # guard already present in
+    # market-tick-data-service/scripts/rebuild_defi_manifest.py::_split_legacy_venue_chain.
     if asset_group == "defi" and not chain and "-" in venue:
-        venue, _sep, chain = venue.partition("-")
+        candidate_venue, _sep, candidate_chain = venue.partition("-")
+        if candidate_chain.upper() in MAINNET_CHAIN_IDS:
+            venue, chain = candidate_venue, candidate_chain
     return ShardKey(
         asset_group=asset_group,
         venue=venue,
