@@ -69,8 +69,17 @@ COPY . .
 ARG SETUPTOOLS_SCM_PRETEND_VERSION
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 
-# Install service dependencies (base image already has UTL + UAC pre-installed)
-RUN uv pip install --system --no-sources -e .
+# Install service dependencies (base image already has UTL + UAC pre-installed).
+# uv does NOT read pip.conf's extra-index-url (pip-only convention) and its
+# keyring-subprocess integration 401s against GAR in this container (unlike pip's
+# in-process keyring import, which works) — see
+# cloud_build_unified_api_contracts_publish_ordering_race_2026_07_29.md. Fix: mount a
+# freshly-minted access token (same auth-precheck mechanism already proven against this
+# exact index) as a BuildKit secret, scoped to only this RUN layer — never baked into an
+# image layer or history.
+RUN --mount=type=secret,id=gar_token \
+    UV_EXTRA_INDEX_URL="https://oauth2accesstoken:$(cat /run/secrets/gar_token)@asia-northeast1-python.pkg.dev/central-element-323112/unified-libraries/simple/" \
+    uv pip install --system --no-sources -e .
 
 # Create data directories
 RUN mkdir -p /app/instruments-service/data/samples /app/instruments-service/logs

@@ -246,7 +246,12 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # perp_funding's entire captured history turned out to be a synthetic OI-imbalance proxy,
 # not real per-market funding data (native subgraph query never worked). SSOT:
 # unified-trading-pm/plans/active/defi_gmx_venue_removal_2026_07_25.md.
-_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 94, "TRADFI": 7, "SPORTS": 7, "PREDICTION": 2}
+# TRADFI 7→8 (2026-07-29): +1 for FRED, newly registered in VENUES_BY_ASSET_GROUP["tradfi"] +
+# VenueMapping.all_databento_venues (unified-api-contracts@0c0f6953) — FRED had a live
+# FredAdapter with 29 KEY_SERIES that was invisible to get_venues_for_asset_groups(["TRADFI"])
+# until this fix. Dedup is per (asset_group, venue), so exactly one new venue == exactly +1
+# target. SSOT: unified-trading-pm/plans/active/issues/macro_micro_econ_data_capture_audit_2026_06_05.md.
+_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 94, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:

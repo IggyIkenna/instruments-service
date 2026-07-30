@@ -13,9 +13,13 @@ stamp ``empty_confirmed`` over it, masking the prior capture on read (no
 consolidator dedup collapse across differing service_name/source identity).
 
 Covers:
-* ``_manifest_captured_fixture_leagues`` — the manifest-read guard helper
-  (filters to the requested date + FIXTURES_SCHEDULE + capture_status ==
+* ``_manifest_captured_leagues_for_data_type`` — the manifest-read guard
+  helper (filters to the requested date + data_type + capture_status ==
   captured; empty index → empty set; read failure → ``None`` fail-safe).
+  Generalized from FIXTURES_SCHEDULE-only (formerly
+  ``_manifest_captured_fixture_leagues``) so ``emit_empty_gaps_for_entity``
+  can reuse it for TEAMS/STANDINGS/INJURIES — see
+  ``test_sports_reference_core_manifest_index_guard.py``.
 * ``_write_sports_fixture_venue`` — a league already captured in the
   manifest (but not this run) must NOT get ``record_empty``; a genuinely
   absent league still does; a manifest-read failure skips the whole
@@ -29,7 +33,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 from instruments_service.engine.orchestrator.process_write import _write_sports_fixture_venue
-from instruments_service.engine.orchestrator.sports_reference_core import _manifest_captured_fixture_leagues
+from instruments_service.engine.orchestrator.sports_reference_core import _manifest_captured_leagues_for_data_type
 
 
 class TestManifestCapturedFixtureLeagues:
@@ -43,7 +47,9 @@ class TestManifestCapturedFixtureLeagues:
             }
         )
         with patch("instruments_service.engine.orchestrator.read_availability_index", return_value=idx):
-            result = _manifest_captured_fixture_leagues(bucket="test-bucket", date="2026-07-22")
+            result = _manifest_captured_leagues_for_data_type(
+                bucket="test-bucket", date="2026-07-22", data_type="FIXTURES_SCHEDULE"
+            )
         # EPL is empty_confirmed (excluded); the FIXTURE_STATS + prior-date rows
         # are a different data_type / date (excluded) — only the one qualifying
         # captured FIXTURES_SCHEDULE/2026-07-22 row survives.
@@ -54,14 +60,24 @@ class TestManifestCapturedFixtureLeagues:
             "instruments_service.engine.orchestrator.read_availability_index",
             return_value=pd.DataFrame(),
         ):
-            assert _manifest_captured_fixture_leagues(bucket="test-bucket", date="2026-07-22") == set()
+            assert (
+                _manifest_captured_leagues_for_data_type(
+                    bucket="test-bucket", date="2026-07-22", data_type="FIXTURES_SCHEDULE"
+                )
+                == set()
+            )
 
     def test_read_failure_returns_none_fail_safe(self) -> None:
         with patch(
             "instruments_service.engine.orchestrator.read_availability_index",
             side_effect=RuntimeError("gcs unavailable"),
         ):
-            assert _manifest_captured_fixture_leagues(bucket="test-bucket", date="2026-07-22") is None
+            assert (
+                _manifest_captured_leagues_for_data_type(
+                    bucket="test-bucket", date="2026-07-22", data_type="FIXTURES_SCHEDULE"
+                )
+                is None
+            )
 
 
 class TestWriteSportsFixtureVenueOscillationGuard:
