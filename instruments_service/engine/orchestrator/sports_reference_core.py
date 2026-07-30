@@ -24,8 +24,6 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from unified_api_contracts.sports import FIXTURES_SCHEDULE
-
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
     from instruments_service.reference_data.adapters.sports.adapters.base import BaseSportsReferenceAdapter
@@ -38,7 +36,7 @@ __all__ = [
     "_fetch_injuries",
     "_fetch_teams_and_standings",
     "_list_present_parquet_leagues",
-    "_manifest_captured_fixture_leagues",
+    "_manifest_captured_leagues_for_data_type",
 ]
 
 
@@ -77,20 +75,23 @@ def _list_present_parquet_leagues(bucket: str, date: str, entity_name: str) -> s
     return present
 
 
-def _manifest_captured_fixture_leagues(*, bucket: str, date: str) -> set[str] | None:
-    """Leagues already CAPTURED for FIXTURES_SCHEDULE on ``date``, per the manifest.
+def _manifest_captured_leagues_for_data_type(*, bucket: str, date: str, data_type: str) -> set[str] | None:
+    """Leagues already CAPTURED for ``data_type`` on ``date``, per the manifest.
 
     Oscillation guard mirroring ``enumerate_expected_universe.py``'s
     ``captured_set`` (instruments-service@ba306543,
     ``sports_index_recency_masked_captured_atoms_2026_07_13.md``): the
-    ``ba306543`` guard only covers the ``enumerate_v2`` seeder —
-    ``process_write._write_sports_fixture_venue`` (the
-    ``uts-prod-instruments-service-sports-fixtures`` batch-capture path,
-    ``--operation=instruments --mode=batch --asset-group=SPORTS``) is a
-    SEPARATE emission site that must never stamp ``empty_confirmed`` over an
-    atom a PRIOR run already captured — that loop previously only consulted
+    ``ba306543`` guard only covers the ``enumerate_v2`` seeder. Two SEPARATE
+    batch-capture emission sites must never stamp ``empty_confirmed`` over an
+    atom a PRIOR run already captured (that loop previously only consulted
     THIS run's captured leagues, so a run that legitimately returned zero
-    fixtures for an already-captured league would mask it.
+    results for an already-captured league would mask it):
+    ``process_write._write_sports_fixture_venue`` (FIXTURES_SCHEDULE) and
+    ``_AfManifestHooks.emit_empty_gaps_for_entity`` (the "regular sports
+    instruments" — TEAMS/STANDINGS/INJURIES/etc. — via
+    :meth:`_AfManifestHooks._manifest_index_guarded_captured_leagues`).
+    Originally FIXTURES_SCHEDULE-only (as ``_manifest_captured_fixture_leagues``);
+    generalized to any ``data_type`` so both emission sites share one guard.
 
     Single filtered index read (row-group pushdown on ``date``, slim
     columns) — not a corpus walk; same pattern as
@@ -107,16 +108,17 @@ def _manifest_captured_fixture_leagues(*, bucket: str, date: str) -> set[str] | 
         )
     except Exception as exc:
         _orch.logger.warning(
-            "FIXTURES captured-set guard: manifest read failed for date=%s (%s) — skipping "
+            "%s captured-set guard: manifest read failed for date=%s (%s) — skipping "
             "empty-gap emission (cannot prove captured status without a read)",
+            data_type,
             date,
             exc,
         )
         return None
     if _idx.empty:
         return set()
-    _fx = _idx[(_idx["data_type"] == FIXTURES_SCHEDULE) & (_idx["capture_status"] == "captured")]
-    return {_orch._canonical_league_id(str(lid)) for lid in _fx["league_id"].dropna().unique() if str(lid).strip()}
+    _dt = _idx[(_idx["data_type"] == data_type) & (_idx["capture_status"] == "captured")]
+    return {_orch._canonical_league_id(str(lid)) for lid in _dt["league_id"].dropna().unique() if str(lid).strip()}
 
 
 @dataclass
@@ -223,6 +225,35 @@ class _AfManifestHooks:
             )
         return captured_league_ids | _present
 
+    def _manifest_index_guarded_captured_leagues(
+        self, data_type: str, captured_league_ids: set[str]
+    ) -> set[str] | None:
+        """Union any league with an EXISTING manifest ``captured`` row for
+        ``(date, data_type)`` into ``captured_league_ids`` — the same
+        cross-identity oscillation guard ``process_write._write_sports_fixture_venue``
+        already applies to FIXTURES_SCHEDULE
+        (:func:`_manifest_captured_leagues_for_data_type`), extended here to the
+        "regular sports instruments" entities (TEAMS/STANDINGS/INJURIES/...)
+        emitted via :meth:`emit_empty_gaps_for_entity`.
+
+        Guards the SAME bug class as the presence guard above, but for the case
+        the presence guard cannot catch: a captured manifest row written under a
+        DIFFERENT identity (service_name/venue/instrument dims) than this run's
+        writer, with no on-disk object under THIS run's expected per-league path
+        (e.g. a legacy/bare-path capture) — the recency-masking class documented
+        in ``sports_index_recency_masked_captured_atoms_2026_07_13.md`` §
+        "ROOT CAUSE CORRECTED". Returns ``None`` when the manifest read itself
+        fails (fail-safe — caller must abort emission, mirroring
+        :meth:`_presence_guarded_captured_leagues`). Gated on ``self.bucket``
+        (empty string = guard disabled, same as the presence guard).
+        """
+        if not self.bucket:
+            return captured_league_ids
+        _mlids = _orch._manifest_captured_leagues_for_data_type(bucket=self.bucket, date=self.date, data_type=data_type)
+        if _mlids is None:
+            return None
+        return captured_league_ids | _mlids
+
     def _emit_empty_gap_for_league(self, data_type: str, exp_lid: str) -> None:
         """Classify + stamp one expected league's absence (the per-league body of
         :meth:`emit_empty_gaps_for_entity`'s loop). See that method's docstring for
@@ -289,10 +320,18 @@ class _AfManifestHooks:
 
         PRESENCE guard (2026-07-14 GW verification RED): see
         :meth:`_presence_guarded_captured_leagues`.
+
+        MANIFEST-INDEX oscillation guard (2026-07-23, extends instruments-service@
+        ba306543/the FIXTURES_SCHEDULE guard to this entity path): see
+        :meth:`_manifest_index_guarded_captured_leagues`.
         """
         if self.manifest is None:
             return
         guarded = self._presence_guarded_captured_leagues(data_type, captured_league_ids)
+        if guarded is None:
+            return
+        captured_league_ids = guarded
+        guarded = self._manifest_index_guarded_captured_leagues(data_type, captured_league_ids)
         if guarded is None:
             return
         captured_league_ids = guarded
