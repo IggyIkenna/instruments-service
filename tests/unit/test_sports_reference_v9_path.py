@@ -637,7 +637,7 @@ class TestWritePerFixtureEntitiesOutOfUniverse:
         from instruments_service.engine.orchestrator.sports_reference_core import (
             _AfManifestHooks,
         )
-        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+        from instruments_service.engine.orchestrator.sports_reference_fixtures_write import (
             _write_per_fixture_entities,
         )
 
