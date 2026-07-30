@@ -3,7 +3,7 @@
 Cohesion module of the ``engine.orchestrator`` package. Carries the
 ``player_stats`` writer-side de-dup gate and the ``fixture_events``
 writer-side schema-conformance gate used by
-``sports_reference_fixtures._prepare_fixture_entity_df`` /
+``sports_reference_fixtures_write._prepare_fixture_entity_df`` /
 ``_write_fixture_entity_per_league`` (split out to keep that module under the
 900-line file-size ratchet; plan:
 ``unified-trading-pm/plans/active/sports_satellite_ao_dispatch_batch2_2026_07_24.md``).
