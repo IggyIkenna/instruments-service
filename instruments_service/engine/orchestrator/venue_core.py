@@ -385,19 +385,45 @@ def filter_instruments_by_date(
 
 #: Known test / placeholder instrument BASES that leak from venue test listings
 #: (e.g. exchange-internal smoke symbols). Compared case-insensitively against the
-#: record's base_asset / raw_symbol / instrument_key. Non-ASCII rejection (below)
-#: already catches the CJK/meme junk (龙虾 / 币安人生 / 我踏马来了); this set covers
-#: ASCII placeholders venues occasionally list. Extend as new junk is observed.
+#: record's base_asset / raw_symbol / instrument_key. Non-Latin-script rejection
+#: (below) already catches the CJK/meme junk (龙虾 / 币安人生 / 我踏马来了); this set
+#: covers ASCII placeholders venues occasionally list. Extend as new junk is observed.
 _KNOWN_TEST_BASES: frozenset[str] = frozenset({"TEST", "TESTUSDT", "DUMMY", "PLACEHOLDER"})
+
+#: Unicode ranges of ordinary accented Latin script (Spanish/Portuguese/French/German/
+#: Polish/Czech/Scandinavian team & fixture names — Sanluqueño, União, Potosí, Cañoneros,
+#: Logroñés, ...) that must NOT be treated as junk. Covers Latin-1 Supplement + Latin
+#: Extended-A/B. Anything OUTSIDE these ranges (CJK, emoji, other scripts/symbols) is
+#: still rejected below — this is what the guard was actually built to catch
+#: (`issues/sports_features_layer_findings_sweep_2026_07_18.md` §D, 2026-07-30 fix:
+#: the guard was rejecting ~9.8% of a sampled sports date's fixtures for legitimate
+#: Latin-accented team names, biased toward Iberian/Latin American leagues).
+_ALLOWED_NON_ASCII_RANGES: tuple[tuple[int, int], ...] = (
+    (0x00A0, 0x00FF),  # Latin-1 Supplement
+    (0x0100, 0x017F),  # Latin Extended-A
+    (0x0180, 0x024F),  # Latin Extended-B
+)
+
+
+def _is_junk_script_char(ch: str) -> bool:
+    """True if ``ch`` is outside ASCII and outside the allowed accented-Latin ranges."""
+    code_point = ord(ch)
+    if code_point < 0x80:
+        return False
+    return not any(lo <= code_point <= hi for lo, hi in _ALLOWED_NON_ASCII_RANGES)
 
 
 def _is_junk_instrument(record: object) -> tuple[bool, str]:
     """Return ``(is_junk, reason)`` for a fetched instrument record (§1.5 noise guard).
 
     A capture-correctness reject (G1.4): an instrument whose identity carries a
-    NON-ASCII character (the 2026-06-24 audit found CJK/meme test bases —
-    龙虾/币安人生/我踏马来了 — on BINANCE/BITGET/ASTER) or a known ASCII test base is
-    junk and must NOT enter ``by_date/``. Checks ``base_asset``, ``raw_symbol`` and
+    character OUTSIDE ASCII + ordinary accented Latin script (the 2026-06-24 audit
+    found CJK/meme test bases — 龙虾/币安人生/我踏马来了 — on BINANCE/BITGET/ASTER) or a
+    known ASCII test base is junk and must NOT enter ``by_date/``. Ordinary
+    Latin-1/Latin-Extended accented characters (Sanluqueño, União, Potosí, ...) are
+    legitimate identity, not noise — narrowed 2026-07-30 after this guard was found
+    silently dropping ~9.8% of a sampled sports date's real fixtures (see
+    ``_ALLOWED_NON_ASCII_RANGES`` above). Checks ``base_asset``, ``raw_symbol`` and
     ``instrument_key`` so the reject fires regardless of which field carries the junk.
     Pure + side-effect-free (the caller logs + drops).
     """
@@ -405,15 +431,15 @@ def _is_junk_instrument(record: object) -> tuple[bool, str]:
     raw_symbol = (getattr(record, "raw_symbol", None) or "").strip()
     key = (getattr(record, "instrument_key", None) or "").strip()
     for field in (base, raw_symbol, key):
-        if field and not field.isascii():
-            return True, f"non-ascii ({field!r})"
+        if field and any(_is_junk_script_char(ch) for ch in field):
+            return True, f"non-latin-script ({field!r})"
     if base.upper() in _KNOWN_TEST_BASES:
         return True, f"known-test-base ({base!r})"
     return False, ""
 
 
 def reject_junk_instruments(records: list) -> list:
-    """Drop junk/test/non-ASCII instruments at capture time (§1.5 noise guard, G1.4).
+    """Drop junk/test/non-Latin-script instruments at capture time (§1.5 noise guard, G1.4).
 
     Applied to EVERY asset group right after the date filter, so junk symbols never
     reach ``by_date/`` (and therefore never reach the catalogue roll-up / coverage /
