@@ -14,6 +14,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import DEFI_MAJOR_ASSET_ADDRESS_LIST, SUBGRAPH_IDS
 from unified_trading_library import log_event
 
@@ -606,7 +607,11 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         # than a fabricated "-0" placeholder.
         symbol = f"{base}-{quote}-{pool_fee_tier_bps}" if pool_fee_tier_bps is not None else f"{base}-{quote}"
         venue_tag = f"{self._venue_prefix}-{self._chain}"
-        instrument_key = f"{venue_tag}:POOL:{symbol}"
+        # Routed through the shared UAC builder (canonical_id_builder_retrofit_checklist_2026_07_08.md
+        # todo 2) — pure DRY, output is behavior-identical to the prior f-string (venue_tag is already
+        # the fully-composed, upper-cased VENUE-CHAIN token, so passing it as `venue` with no `chain`
+        # reproduces it verbatim).
+        instrument_key = build_instrument_id(venue_tag, InstrumentType.POOL, symbol)
 
         available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))
 

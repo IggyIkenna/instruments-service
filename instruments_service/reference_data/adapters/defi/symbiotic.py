@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -112,7 +113,11 @@ class SymbioticReferenceDataAdapter(BaseReferenceDataAdapter):
             vault_address = vault["vault_address"]
             underlying = vault["underlying"]
 
-            instrument_key = f"{venue_tag}:YIELD_BEARING:{symbol}"
+            # Routed through the shared UAC builder (canonical_id_builder_retrofit_checklist_2026_07_08.md
+            # todo 2) — pure DRY, output is behavior-identical to the prior f-string (venue_tag is
+            # already the fully-composed, upper-cased VENUE-CHAIN token, so passing it as `venue` with
+            # no `chain` reproduces it verbatim).
+            instrument_key = build_instrument_id(venue_tag, InstrumentType.YIELD_BEARING, symbol)
             results.append(
                 InstrumentRecord(
                     instrument_key=instrument_key,

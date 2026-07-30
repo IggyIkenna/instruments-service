@@ -22,6 +22,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import build_pool_identity, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import SOLANA_DEFI_PROTOCOLS, get_solana_protocol_url
 from unified_trading_library import log_event, resolve_solana_token_symbol
 
@@ -312,7 +313,12 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         # Solana base58 address, preserved verbatim as BOTH the symbol and the machine id
         # (raw_symbol / pool_address); the pair is unknown for on-chain-discovered pools, so
         # build_pool_identity's address-lowercasing pair fallback is intentionally NOT used here.
-        instrument_key = f"{venue_tag}:POOL:{pool_id}-Historical"
+        # Routed through the shared UAC builder (canonical_id_builder_retrofit_checklist_2026_07_08.md
+        # todo 2) — pure DRY, output is behavior-identical to the prior f-string (venue_tag is already
+        # the fully-composed, upper-cased VENUE-CHAIN token, so passing it as `venue` with no `chain`
+        # reproduces it verbatim; the literal :POOL: segment matches the sanctioned glued_pair_id
+        # convention used by build_pool_identity() below for the same SOLANA_AMM_POOL type).
+        instrument_key = build_instrument_id(venue_tag, InstrumentType.POOL, f"{pool_id}-Historical")
 
         return InstrumentRecord(
             instrument_key=instrument_key,
