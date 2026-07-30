@@ -27,7 +27,7 @@ from instruments_service.engine.orchestrator.sports_reference_fixture_entity_gat
     _dedupe_player_stats_df,
     _normalize_fixture_events_schema,
 )
-from instruments_service.engine.orchestrator.sports_reference_fixtures import _prepare_fixture_entity_df
+from instruments_service.engine.orchestrator.sports_reference_fixtures_write import _prepare_fixture_entity_df
 
 # ---------------------------------------------------------------------------
 # 1. player_stats writer-side de-dup
@@ -193,7 +193,7 @@ def test_write_fixture_entity_per_league_normalizes_degenerate_fixture_events_be
     from unittest.mock import MagicMock, patch
 
     from instruments_service.engine.orchestrator.sports_reference_core import _AfManifestHooks
-    from instruments_service.engine.orchestrator.sports_reference_fixtures import _write_per_fixture_entities
+    from instruments_service.engine.orchestrator.sports_reference_fixtures_write import _write_per_fixture_entities
 
     entity_rows: dict[str, list[dict[str, object]]] = {
         "fixture_events": [
