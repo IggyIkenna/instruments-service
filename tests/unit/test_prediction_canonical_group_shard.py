@@ -96,6 +96,29 @@ class TestExtractPredictionCanonicalGroup:
 
         assert _extract_prediction_canonical_group(row) == CanonicalQuestionGroup.BTC_PRICE_RANGE_DAILY.value
 
+    def test_kalshi_composite_instrument_key_still_classifies_correctly(self) -> None:
+        """Regression guard for the write-time CQG mis-bucketing bug
+        (`prediction_capture_incident_remediation_2026_07_06.md` Phase 6):
+        the writer's real ``instrument_key`` is the canonical
+        ``VENUE:TYPE:SYMBOL`` id (e.g.
+        ``"KALSHI:PREDICTION_MARKET:KXBTCD-25JUL30-B12345"``), not a bare
+        ticker. Passing that full composite string into
+        ``classify_kalshi_to_canonical_group`` made every override/prefix
+        lookup miss (they match on the string START), silently routing
+        ~79% of daily Kalshi volume to ``OTHER`` since >=2026-07-12. The
+        extractor must strip the ``VENUE:TYPE:`` prefix before classifying.
+        """
+        row = _row(
+            venue="KALSHI",
+            instrument_key="KALSHI:PREDICTION_MARKET:KXBTC-26MAR-90000",
+            raw_symbol="KXBTC",
+        )
+
+        result = _extract_prediction_canonical_group(row)
+
+        assert result == CanonicalQuestionGroup.BTC_PRICE_RANGE_DAILY.value
+        assert result != CanonicalQuestionGroup.OTHER.value
+
     def test_unknown_venue_routes_to_other(self) -> None:
         """Defensive — should never trigger in practice, but the
         helper must be robust against rows that slip through the
