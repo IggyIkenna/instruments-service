@@ -92,7 +92,15 @@ def _extract_prediction_canonical_group(row: _orch.pd.Series) -> str:
     # Kalshi adapter ships venue as lowercase ``"kalshi"`` per
     # ``KalshiReferenceDataAdapter.venue``.
     if venue_upper == "KALSHI":
-        ticker = str(row.get("instrument_key", "") or "")
+        # instrument_key is the canonical ``VENUE:TYPE:SYMBOL`` id (e.g.
+        # ``"KALSHI:PREDICTION_MARKET:KXBTCD-25JUL30-B12345"`` since the
+        # 2026-07-09 canonical-id retrofit) — the classifier's override/prefix
+        # lookups match against the string START, so passing the full
+        # composite id through made every lookup miss and silently routed
+        # ~79% of daily Kalshi volume to OTHER since >=2026-07-12. Extract the
+        # bare ticker (the trailing SYMBOL segment) before classifying.
+        instrument_key = str(row.get("instrument_key", "") or "")
+        ticker = instrument_key.rsplit(":", 1)[-1]
         group = _orch.classify_kalshi_to_canonical_group(ticker=ticker)
         return (group or _orch.CanonicalQuestionGroup.OTHER).value
     return _orch.CanonicalQuestionGroup.OTHER.value
