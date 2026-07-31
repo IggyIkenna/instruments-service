@@ -165,6 +165,9 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "marginfi": MarginfiReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
     "massive": MassiveReferenceDataAdapter,
+    # Registered but currently unreachable via UAC VENUE_TO_ADAPTER_KEY — see
+    # adapters/tradfi/ibkr.py's module docstring STATUS note for the full explanation
+    # + activation path (tradfi_adapter_dead_code_fallback_audit_2026_07_25.md Finding I-3).
     "ibkr": IBKRReferenceDataAdapter,
     "kalshi": KalshiReferenceDataAdapter,
     "kalshi_perp": KalshiPerpReferenceDataAdapter,
