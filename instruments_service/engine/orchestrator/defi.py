@@ -149,6 +149,20 @@ _STATIC_DEFI_VENUES: list[str] = [
     # parsing needed). UAC flips AAVE-ETHEREUM to phase="live" in lockstep
     # (denominator drift guard, unified-api-contracts@6bdbc31d).
     "AAVE-ETHEREUM",
+    # 6 LST/vault venues (defi_venue_pipeline_to_live_ao_build_2026_07_30.md
+    # todo 5 — operator ruling 2026-07-29). Genuine instruments-service
+    # reference-data adapters (ankr.py/stader.py/stakewise.py/swell.py/
+    # mantle.py/maker.py, todo 1), a verified-healthy production capture cron
+    # (todo 2), a complete 90-day manifest backfill (todo 3, 90/90 days per
+    # venue), and instruments-catalogue registration (todo 4) all preceded
+    # this — UAC flips these to phase="live" in the SAME commit (denominator
+    # drift guard, unified-api-contracts).
+    "ANKR-ETHEREUM",
+    "STADER-ETHEREUM",
+    "STAKEWISE-ETHEREUM",
+    "SWELL-ETHEREUM",
+    "MANTLE-ETHEREUM",
+    "MAKER-ETHEREUM",
 ]
 
 
