@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from instruments_service.reference_data.adapters.prediction.kalshi import KalshiReferenceDataAdapter
+from instruments_service.reference_data.adapters.prediction.kalshi import (
+    _SERIES_CATEGORIES,
+    KalshiReferenceDataAdapter,
+)
 
 
 def _make_cm(resp: object) -> MagicMock:
@@ -626,3 +629,12 @@ class TestKalshiAdapter:
         # exactly one call — the /historical/cutoff lookup; no market pagination
         mock_session_obj.get.assert_called_once()
         assert "historical/cutoff" in mock_session_obj.get.call_args.args[0]
+
+    def test_series_categories_include_commodities(self) -> None:
+        """Regression: Kalshi's own ``/series/KXGOLDD`` reports category="Commodities",
+        not Crypto/Economics/Financials — before "Commodities" was in
+        ``_SERIES_CATEGORIES``, the series-scoped discovery never fetched it even
+        though ``classify_kalshi_to_canonical_group`` already maps
+        KXGOLDD -> GOLD_UP_DOWN_DAILY, so real, currently-open daily gold markets
+        were silently never captured (confirmed live 2026-07-31)."""
+        assert "Commodities" in _SERIES_CATEGORIES
