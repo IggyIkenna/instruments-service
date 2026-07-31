@@ -155,6 +155,38 @@ def test_wire_cli_filters_venues_with_earliest_date() -> None:
     assert handler._venue_override == ["NYSE"]
 
 
+def test_wire_cli_filters_venues_uppercased_regardless_of_cli_casing() -> None:
+    """Regression (sports_venue_override_case_mismatch_false_attempted_failed_2026_07_31):
+    a lowercase --venues CLI value must be normalised to uppercase before it is
+    stored, so it matches the uppercase-keyed UAC VENUE_TO_ADAPTER_KEY registry
+    lookup downstream. Mirrors the sports_provider_arg.upper() precedent two
+    lines below in the same method."""
+    handler = _make_handler()
+    args = MagicMock()
+    args.venues = ["api_football"]
+    args.sports_entity = None
+    args.sports_provider = None
+    args.league = None
+    args.season = None
+    args.recovery_fixture_ids = None
+    args.source = None
+    args.trigger = None
+    args.lookback_days = None
+    args.lookahead_days = None
+    args.force_window = False
+    args.run_tag = None
+    handler.args = args
+
+    with patch(
+        "instruments_service.cli.instruments_handler.earliest_venue_date",
+        return_value=None,
+    ) as mock_earliest:
+        handler._wire_cli_filters_from_args()
+
+    assert handler._venue_override == ["API_FOOTBALL"]
+    mock_earliest.assert_called_once_with(["API_FOOTBALL"])
+
+
 def test_wire_cli_filters_recovery_fixture_ids() -> None:
     """Line 160: when recovery_fixture_ids arg is set, _load_recovery_fixture_ids is called."""
     handler = _make_handler()
