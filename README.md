@@ -13,7 +13,7 @@ source scripts/setup.sh
 
 For each configured venue and date:
 
-1. `urdi_reference_provider.fetch(venue, date)` → `list[InstrumentRecord]` (canonical, already typed)
+1. `urdi_reference_provider.fetch_instruments_for_all_venues(venues, ...)` → `VenueFetchResult` wrapping canonical `list[InstrumentRecord]` (already typed)
 2. Optional CCXT metadata enrichment (`engine/processors/cefi_metadata.py`) for leverage/margin fields
 3. `DomainValidationService("instruments").validate(df)` — flags anomalies via event log
 4. `ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA).validate_dataframe(df)` — blocks bad writes
