@@ -1510,7 +1510,23 @@ def build_catalogue_dataframe(
         _canon_venue_cache[raw] = canonical
         return canonical
 
+    # [BISECT-C-PROGRESS] heartbeat (2026-07-31, tradfi_catalogue_full_regen_job_failing_
+    # 2026_07_31.md): a --mode full walk over this loop is the entire multi-hour dark span
+    # between the [BISECT-C]/[BISECT-D] markers with zero output of its own — exactly the
+    # window every observed lifecycle-catalogue-full-* NonZeroExitCode failure died in,
+    # producing NO application log line at all (confirmed across cefi/defi/tradfi, not just
+    # the largest corpus). Print every 500 processed snapshots so a recurrence finally
+    # surfaces WHERE the walk got to before the container was killed, instead of another
+    # total log blackout.
+    _processed_snapshots = 0
     for day, frame in snapshots:
+        _processed_snapshots += 1
+        if _processed_snapshots % 500 == 0:
+            print(
+                f"[BISECT-C-PROGRESS] asset_group={asset_group} processed_snapshots={_processed_snapshots} "
+                f"distinct_instruments={len(aggregates)}",
+                flush=True,
+            )
         all_days.add(day)
         if frame.empty:
             continue
