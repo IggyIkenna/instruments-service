@@ -828,6 +828,16 @@ class TestCF11PerFixtureEntityFailurePath:
                 return_value={"1001": "EPL", "1002": "BUNDESLIGA"},
             ),
             patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+            # Pre-fetch skip must not hit the real storage client — a non-empty
+            # fixture_league_map (like this test's) makes
+            # _read_captured_per_entity_league's lookup_keys non-empty, which
+            # would otherwise call the real local-storage list_blobs() and
+            # rglob() a shared, suite-lifetime-accumulated temp directory
+            # (>150s pytest-timeout by the time this test runs late in the run).
+            patch(
+                "instruments_service.engine.orchestrator._read_captured_league_fixture_ids_for_entity",
+                return_value={},
+            ),
         ):
             await _fetch_sports_reference_data(
                 "2026-03-22",
