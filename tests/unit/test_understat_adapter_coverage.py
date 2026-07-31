@@ -87,6 +87,33 @@ def _reset_rate_limiter_state() -> None:
     UnderstatAdapter._window_day_count = 0
 
 
+@pytest.fixture(autouse=True)
+def _no_op_gc_collect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``get_fixtures()`` calls a REAL ``gc.collect()`` once per league (6x per
+    date) to prevent OOM on a full-history backfill — a deliberate, load-bearing
+    call (commit e6c753fc: "add gc.collect() between league fetches to prevent
+    OOM"; predecessor bd324244a: plain refcounting via ``raw_response = None``
+    alone was NOT sufficient, production hit exit code 137). It is a synchronous,
+    CPU-bound, non-yielding call whose cost scales with the TOTAL tracked-object
+    count in the process — under this repo's ~5100-test suite running in one
+    pytest-xdist worker, that count is orders of magnitude higher than a
+    standalone run, and a single slow collection pass can burn the entire
+    pytest-timeout budget outright. Confirmed via the actual failing stack traces
+    on `pytest_timeout_60s_flaky_under_contention_2026_07_29.md` todo 6/7 landing
+    mid-``gc.collect()`` (understat.py:140), not in any awaited I/O — the prior 4
+    fix attempts in that doc (leaked rate-limiter state, real `_throttle()`
+    sleeps, TCPConnector construction) all targeted awaited real timers and never
+    considered this synchronous call, which is why they didn't close the flake.
+    These unit tests exercise fixture-parsing logic with a handful of small mocked
+    responses and have no OOM exposure of their own, so the real GC pass buys
+    nothing here — no-op it so CI wall-clock reflects the code under test, not
+    this process's incidental heap size. Does NOT disable Python's automatic
+    threshold-triggered generational GC (a C-level mechanism independent of the
+    ``gc.collect()`` Python function) — only this adapter's explicit extra pass.
+    """
+    monkeypatch.setattr("gc.collect", lambda: 0)
+
+
 def _make_aiohttp_mock(
     json_response: object,
     status: int = 200,
