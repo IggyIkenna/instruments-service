@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Epic: sports_master
+# Lifecycle: oneoff
+# Delete-when: the fixture_events re-fetch campaign closes (0 non-13-col objects remaining)
 """Census the schema variant of every captured canonical FIXTURE_EVENTS object.
 
 Epic: sports_master
