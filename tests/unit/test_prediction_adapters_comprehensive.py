@@ -1028,6 +1028,40 @@ class TestKalshiParseMarket:
         assert result.tick_size == Decimal("0.01")
         assert result.min_size == Decimal("1")
 
+    def test_sports_fixture_stamps_canonical_instrument_id(self) -> None:
+        """Fixture-pairing residual: a Kalshi sports market (ANY league fixture_parsing
+        covers, not just soccer) gets canonical_instrument_id = build_fixture_id(...) —
+        mirrors the Polymarket adapter's already-shipped sports_canonical_instrument_id.
+        """
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXMLBGAME-26JUN261910SEACLE-SEA",
+            "event_ticker": "KXMLBGAME-26JUN261910SEACLE",
+            "title": "Seattle vs Cleveland",
+            "status": "active",
+            "close_time": "2026-06-26T23:10:00Z",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.canonical_instrument_id == "MLB:CLEVELAND_v_SEATTLE:20260626"
+
+    def test_sports_season_future_leaves_canonical_instrument_id_none(self) -> None:
+        """A season-future/award ticker (no GAME/MATCH token) parses to no fixture —
+        honest absence, never a guessed id."""
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXNBA-27",
+            "event_ticker": "KXNBA-27",
+            "title": "2027 Pro Basketball Champion",
+            "status": "active",
+            "close_time": "2027-06-01T00:00:00Z",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.canonical_instrument_id is None
+
     def test_market_question_composed_with_yes_sub_title(self) -> None:
         """The human title is threaded into InstrumentRecord.question and SURVIVES.
 
