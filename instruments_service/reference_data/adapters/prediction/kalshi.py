@@ -34,9 +34,11 @@ from unified_api_contracts.predictions import (
     CanonicalQuestionGroup,
     MarketLifecycle,
     classify_kalshi_to_canonical_group,
+    parse_kalshi_sports_fixture,
     underlying_for_group,
     validate_canonical_question_group,
 )
+from unified_api_contracts.sports import build_fixture_id, build_team_id
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -902,6 +904,28 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
                     fixture_date=expiry.date().isoformat() if expiry else None,
                 )
             register_fixture_match(instrument_key, fixture_attrs)
+        # Fixture-pairing residual (prediction_satellite_ao_dispatch_batch6-008): mirror the
+        # Polymarket adapter's ALREADY-SHIPPED sports_canonical_instrument_id computation
+        # (polymarket/parsing.py::_build_instrument_id) so Kalshi sports markets ALSO get the
+        # Sports asset group's own local (no-network) fixture id stamped onto
+        # canonical_instrument_id, for EVERY league fixture_parsing.py covers (MLB/NFL/NBA/
+        # tennis/soccer) — not just the soccer af_fixture_id path above. Reuse, not
+        # reinvention: build_fixture_id/build_team_id are the SAME builders the Sports asset
+        # group's own catalogue uses, so a Kalshi and a Polymarket market on the identical
+        # real-world fixture with IDENTICAL venue-rendered team-name strings get
+        # byte-identical canonical_instrument_id. Honest-absence (None) when the title
+        # doesn't parse to a fixture (season-future/award — parse_kalshi_sports_fixture
+        # returns None), never a guessed id.
+        sports_canonical_instrument_id: str | None = None
+        if underlying_axis.value.startswith("SPORTS_"):
+            _fixture = parse_kalshi_sports_fixture(event_ticker or ticker, title or "")
+            if _fixture is not None:
+                sports_canonical_instrument_id = build_fixture_id(
+                    _fixture.league,
+                    build_team_id(_fixture.home),
+                    build_team_id(_fixture.away),
+                    _fixture.fixture_date.isoformat(),
+                )
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=self.venue,
@@ -921,6 +945,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             available_from_datetime=_afd,
             available_to_datetime=lifecycle.settlement_time if lifecycle else None,
             underlying=underlying,
+            canonical_instrument_id=sports_canonical_instrument_id,
             # Write-back of the classification already computed above (line ~830) for
             # `underlying` / `classify_lifecycle` — reused here, not re-derived, so the
             # instruments-service catalogue-rollup cqg grain can materialise.
