@@ -28,6 +28,16 @@ the earlier date now evidenced; a pool it never knew about is appended), never
 delist/shrink anything. ``promote_catalogue``'s monotonic guard is the second
 independent safety net (refuses any accidental shrink).
 
+**Invocation (bounded-by-construction, required for remaining runs)**: run this script via
+``scripts/run_expand_defi_pool_catalogue_bounded.sh`` — it wraps this exact command under
+``unified-trading-pm``'s ``scripts/dev/run-bounded-analysis.sh`` memory-cap wrapper (a
+documented ~9.5GiB peak, see
+``issues/expand_defi_pool_catalogue_script_unbounded_memory_2026_07_31.md``), so a future
+run against one of the other 11 default DEX protocols dies cleanly at the cap instead of
+threatening the shared host if the column-pruning fix's bound is ever exceeded. Do not
+invoke this script directly (``python3 expand_defi_pool_catalogue_from_manifest_2026_07_31.py``)
+on the shared planning-vm.
+
 **Scope**: all 12 EVM default DEX protocols (from UAC's own ``SUBGRAPH_IDS`` SSOT,
 address-shaped ``instrument_id`` filtered via the SAME ``0x[hex]`` regex the reference
 purge tool uses) + ORCA/RAYDIUM/PHOENIX (Solana, base58-pubkey ``instrument_id``,
