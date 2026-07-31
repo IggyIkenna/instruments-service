@@ -172,9 +172,9 @@ class InstrumentsHandler(UnifiedServiceHandler):
         """Map instruments CLI flags from parsed args onto handler fields."""
         venues_arg: list[str] | None = getattr(self.args, "venues", None) if self.args else None
         if venues_arg:
-            self._venue_override = venues_arg
-            logger.info("Venue override from CLI: %s", venues_arg)
-            earliest = earliest_venue_date(venues_arg)
+            self._venue_override = [v.upper() for v in venues_arg]
+            logger.info("Venue override from CLI: %s", self._venue_override)
+            earliest = earliest_venue_date(self._venue_override)
             if earliest:
                 logger.info("Earliest venue launch date: %s (dates before this will be skipped)", earliest)
 
