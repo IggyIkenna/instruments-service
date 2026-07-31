@@ -23,12 +23,18 @@ TRADFI_DATABENTO_INSTRUMENTS registry — DBEQ.BASIC equities / GLBX.MDP3 CME fu
 routing here. The old cboe_options→OPRA.PILLAR + nasdaq/nyse→XNAS.ITCH/XNYS.PILLAR
 map was DEAD non-billable config and was removed 2026-06-25.)
   apple       / databento → DatabentoReferenceDataAdapter
-  apple       / ibkr      → IBKRReferenceDataAdapter
+  apple       / ibkr      → IBKRReferenceDataAdapter  # unreached — see below
   nasdaq      / databento → DatabentoReferenceDataAdapter
   nyse        / databento → DatabentoReferenceDataAdapter
   cme_futures / databento → DatabentoReferenceDataAdapter
-  cme_futures / ibkr      → IBKRReferenceDataAdapter
-  ibkr        / ibkr      → IBKRReferenceDataAdapter
+  cme_futures / ibkr      → IBKRReferenceDataAdapter  # unreached — see below
+  ibkr        / ibkr      → IBKRReferenceDataAdapter  # unreached — see below
+
+  The 3 "ibkr" data_source rows above are registered but currently unreachable — this
+  module's own create_reference_data_adapter_for_source() has no caller anywhere in the
+  workspace outside tests/. See adapters/tradfi/ibkr.py's module docstring STATUS note for
+  the full explanation + activation path
+  (tradfi_adapter_dead_code_fallback_audit_2026_07_25.md Finding I-3).
 
 Generic data-source-only
   databento / databento → DatabentoReferenceDataAdapter

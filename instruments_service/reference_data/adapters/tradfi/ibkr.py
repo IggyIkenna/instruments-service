@@ -5,6 +5,22 @@ Uses the inject-IB pattern: the caller creates one connected ib_insync.IB instan
 pointing at ibkr-gateway-infra and injects it into this adapter. The adapter never
 calls IB().connect() internally — connection lifecycle belongs to the caller.
 
+STATUS (confirmed 2026-07-31, plans/active/issues/tradfi_adapter_dead_code_fallback_audit_2026_07_25.md
+Finding I-3): registered but UNREACHED in production — kept intentionally, not deleted, per the
+same "document why it's kept" precedent this audit applied to databento_equity.py. Two
+registration points exist, neither is reachable by any real (non-test) call today:
+  - factory.py's VENUE_REGISTRY["ibkr"] is only ever instantiated via
+    create_reference_data_adapter(), whose sole real caller (get_adapter_for_canonical_venue())
+    resolves the adapter key through UAC's VENUE_TO_ADAPTER_KEY — which has zero entries mapping
+    any canonical venue to "ibkr" ("ibkr" is a broker, not a venue, per UAC
+    _endpoint_registry_data.py:674; real venues route to CME/ICE/CBOE instead).
+  - router.py's ("apple"|"cme_futures"|"ibkr", "ibkr") routing entries are only reachable via
+    create_reference_data_adapter_for_source(), which has no caller anywhere in the workspace
+    outside its own unit/integration tests.
+To activate: either add a real UAC VENUE_TO_ADAPTER_KEY entry pointing at "ibkr", or wire a real
+caller to create_reference_data_adapter_for_source() with data_source="ibkr". Until one of those
+lands, this class is exercised only by tests/unit/test_*.py and tests/integration/*.
+
 Auth pattern:
   TWS / IB Gateway socket connection. No API key — auth is the socket handshake.
   Credentials stored in Secret Manager as "ibkr-account-credentials" are used by
