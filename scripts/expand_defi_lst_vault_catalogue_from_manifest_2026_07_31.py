@@ -52,8 +52,13 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-from unified_trading_library import StorageClient, get_config, get_storage_client, resolve_bucket_name
-from unified_trading_library.manifest_writer._read_index import read_availability_index
+from unified_trading_library import (
+    StorageClient,
+    get_config,
+    get_storage_client,
+    read_availability_index,
+    resolve_bucket_name,
+)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from build_instrument_catalogue import (
