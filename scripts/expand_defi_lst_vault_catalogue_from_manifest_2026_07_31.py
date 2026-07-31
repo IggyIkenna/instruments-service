@@ -79,14 +79,61 @@ _BACKFILL_WINDOW = ("2026-05-02", "2026-07-30")  # matches todo 3's completed 90
 
 #: (venue, data_type, instrument_type, symbol, contract_address, underlying) — every
 #: field ground-truthed by reading this session's own real, freshly-written GCS
-#: objects (see module docstring), not guessed.
+#: objects (see module docstring), not guessed. Every address below is the SAME
+#: already-cited, already-baselined constant registered in its todo-1 adapter file
+#: (instruments_service/reference_data/adapters/defi/{ankr,stader,stakewise,swell,
+#: mantle,maker}.py's own `_*_ADDRESS # DERIVED ... from ethereum etherscan`) —
+#: re-cited here per-file since the address-citation gate scans per line, not
+#: cross-file.
 _TARGETS: tuple[tuple[str, str, str, str, str, str], ...] = (
-    ("ANKR", "lst_rates", "LST", "ankrETH", "0xE95A203B1a91a908F9B9CE46459d101078c2c3cb", "ETH"),
-    ("STADER", "lst_rates", "LST", "ETHx", "0xcf5EA1b38380f6aF39068375516Daf40Ed70D299", "ETH"),
-    ("STAKEWISE", "lst_rates", "LST", "osETH", "0x2A261e60FB14586B474C208b1B7AC6D0f5000306", "ETH"),
-    ("SWELL", "lst_rates", "LST", "swETH", "0xf951E335afb289353dc249e82926178EaC7DEd78", "ETH"),
-    ("MANTLE", "lst_rates", "LST", "mETH", "0xe3cBd06D7dadB3F4e6557bAb7EdD924CD1489E8f", "ETH"),
-    ("MAKER", "vault_share_price", "YIELD_BEARING", "sDAI", "0x83F20F44975D03b1b09e64809B757c47f942BEeA", "DAI"),
+    (
+        "ANKR",
+        "lst_rates",
+        "LST",
+        "ankrETH",
+        "0xE95A203B1a91a908F9B9CE46459d101078c2c3cb",  # DERIVED 2026-07-31 from ethereum etherscan (see ankr.py)
+        "ETH",
+    ),
+    (
+        "STADER",
+        "lst_rates",
+        "LST",
+        "ETHx",
+        "0xcf5EA1b38380f6aF39068375516Daf40Ed70D299",  # DERIVED 2026-07-31 from ethereum etherscan (see stader.py)
+        "ETH",
+    ),
+    (
+        "STAKEWISE",
+        "lst_rates",
+        "LST",
+        "osETH",
+        "0x2A261e60FB14586B474C208b1B7AC6D0f5000306",  # DERIVED 2026-07-31 from ethereum etherscan (see stakewise.py)
+        "ETH",
+    ),
+    (
+        "SWELL",
+        "lst_rates",
+        "LST",
+        "swETH",
+        "0xf951E335afb289353dc249e82926178EaC7DEd78",  # DERIVED 2026-07-31 from ethereum etherscan (see swell.py)
+        "ETH",
+    ),
+    (
+        "MANTLE",
+        "lst_rates",
+        "LST",
+        "mETH",
+        "0xe3cBd06D7dadB3F4e6557bAb7EdD924CD1489E8f",  # DERIVED 2026-07-31 from ethereum etherscan (see mantle.py)
+        "ETH",
+    ),
+    (
+        "MAKER",
+        "vault_share_price",
+        "YIELD_BEARING",
+        "sDAI",
+        "0x83F20F44975D03b1b09e64809B757c47f942BEeA",  # DERIVED 2026-07-31 from ethereum etherscan (see maker.py)
+        "DAI",
+    ),
 )
 
 _CHAIN = "ETHEREUM"
