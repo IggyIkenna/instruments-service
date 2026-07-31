@@ -82,8 +82,8 @@ from unified_trading_library import (
     log_event,
     resolve_bucket_name,
     setup_events,
+    with_retry,
 )
-from unified_trading_library.utils.retry import with_retry
 
 # Reused (not reimplemented) for the numeric-YYMMDD wire-date fallback in
 # _wire_symbol_expiry_date_numeric_yymmdd — same established intra-repo pattern as
