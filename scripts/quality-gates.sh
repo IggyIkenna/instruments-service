@@ -312,3 +312,34 @@ if [[ -d "${QG_SCRIPTS_DIR}" ]]; then
 else
     log_warn "IS-MTDS QG scripts dir not found at ${QG_SCRIPTS_DIR}"
 fi
+
+# STEP 5.107: no-NEW-URDI-refs grep guard (instruments-service-ONLY)
+# codex_vs_repo_docs_ssot_audit_2026_06_01.md finding 369 (corrected 2026-07-12):
+# `urdi_reference_provider.py` is the LOAD-BEARING external-fetch spine — do NOT
+# rename it away (the earlier "rg URDI → 0 hits → rename" reading was wrong). The
+# correct standing guard is the OPPOSITE: freeze the existing footprint + block
+# NEW `URDI` refs from proliferating. Shrinking count ratchet (same shape as the
+# base-service 5.94/5.95/5.105 ratchets); baseline grandfathers the current spine.
+# Deliberately NOT in the shared base-service.sh — `URDI` is legit in other repos'
+# code (UAC/UTL/execution-service); this guard is IS-scoped only.
+_URDI_CHECKER="${WORKSPACE_ROOT}/unified-trading-pm/scripts/quality_gates/check_no_new_urdi_refs.py"
+if [[ -f "${_URDI_CHECKER}" ]]; then
+    _URDI_LOG="${TMPDIR:-/tmp}/no_new_urdi_refs_qg.log.$$"
+    if run_timeout 60 "${PYTHON_CMD}" "${_URDI_CHECKER}" \
+            --workspace-root "${WORKSPACE_ROOT}" --scope instruments-service >"${_URDI_LOG}" 2>&1; then
+        if grep -q '^\[WARN\]' "${_URDI_LOG}" 2>/dev/null; then
+            log_warn "STEP 5.107: below the URDI-ref baseline — ratchet no_new_urdi_refs_baseline.yaml DOWN (re-run --update-baseline)"
+        else
+            log_success "STEP 5.107: No new URDI references in instruments-service source (grep guard, finding 369)"
+        fi
+    else
+        log_fail "STEP 5.107: NEW URDI reference(s) above the grandfathered baseline. Do NOT rename urdi_reference_provider.py (it is the load-bearing fetch spine) — but do NOT grow the URDI footprint either. Remove the new ref, or add '# QG-allow: urdi-legacy' with a one-line reason:"
+        cat "${_URDI_LOG}"
+        log_fail "         Baseline: unified-trading-pm/scripts/quality_gates/no_new_urdi_refs_baseline.yaml (NEVER raise a count)"
+        log_fail "         Recheck: ${PYTHON_CMD} unified-trading-pm/scripts/quality_gates/check_no_new_urdi_refs.py --workspace-root ${WORKSPACE_ROOT} --scope instruments-service"
+        V=$(( V + 1 ))
+    fi
+    rm -f "${_URDI_LOG}" 2>/dev/null
+else
+    log_success "STEP 5.107: skipped (URDI checker not yet provisioned in this repo's PM checkout)"
+fi
