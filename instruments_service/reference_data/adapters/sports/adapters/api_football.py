@@ -725,7 +725,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         raw_rows: list[dict[str, object]] = []
         response_list = _extract_response(raw_response)

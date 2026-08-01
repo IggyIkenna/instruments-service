@@ -212,6 +212,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                             date,
                             exc,
                         )
+                        raise
 
                 # 2. Actual weather across match window (archive for >90d, forecast for recent)
                 cutoff = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
@@ -263,6 +264,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                                 date,
                                 fallback_exc,
                             )
+                            raise
                     else:
                         logger.warning(
                             "Actual weather fetch failed for (%.2f, %.2f) on %s: %s",
@@ -271,6 +273,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                             date,
                             exc,
                         )
+                        raise
                 if isinstance(actual_resp, dict) and "hourly" in actual_resp:
                     hourly = actual_resp["hourly"]
                     times = hourly.get("time", [])
@@ -284,6 +287,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
         except Exception as exc:
             error_code = self._classify_error(exc)
             self._emit_fetch_failed(error_code, exc)
+            raise
 
         # Compute aggregates across the 3-hour match window for each lead time
         for lead in ["forecast_t24h", "forecast_t0", "actual"]:
