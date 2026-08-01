@@ -1,40 +1,40 @@
 # Branch Protection Rules
 
-## Main Branch Protection
+> Branch protection is **centrally managed from PM** (ruleset + classic protection, rolled out via
+> workflow templates) — it is not configured per-repo by hand. This file documents the effective
+> rules; the SSOT is `codex/08-workflows/ci-cd-flow.md`.
 
-Configure the following branch protection rules for the `main` branch:
+## Protected Branches
+
+Both `live-defi-rollout` (LDR, the integration branch every clone tracks) and `main` reject direct
+code pushes. Code reaches LDR only through `quickmerge --agent`; `main` is a reconciled projection
+back-merged to LDR. There is no `main` working branch.
 
 ### Required Settings
 
-- **Require pull request reviews**: 1 approval minimum
-- **Dismiss stale reviews on new commits**: Enabled
-- **Require status checks to pass**: Enabled
-  - Required checks: `quality-gates`
-- **Require branches to be up to date**: Enabled
-- **Include administrators**: Enabled (applies to all users)
+- **Require pull request**: enabled (code lands via the quickmerge → LDR → promote-PR flow)
+- **Require status checks to pass**: enabled
+  - Required check: **`quality-gates-v2`** (the single required check across all repos)
+- **Require branches to be up to date**: enabled
+- **No force push** / **no direct push**: enabled
+- **Include administrators**: enabled
 
-### Status Check Requirements
+### Status Check: `quality-gates-v2`
 
-The following status checks must pass before merging:
+The promote PR must pass `quality-gates-v2`, which runs the same gate set as local
+`bash scripts/quality-gates.sh`:
 
-- `quality-gates` workflow completion
-- Ruff linting (no E, F, W, I rule violations)
-- Basedpyright type checking (with 60s timeout)
-- Tests with 35% minimum coverage
+- Ruff version check + `ruff check` + `ruff format --check`
+- `basedpyright` type checking
+- Unit tests with the coverage floor (a **ratcheted, moving target** — read `MIN_COVERAGE` at the
+  top of `scripts/quality-gates.sh`, mirrored by `[tool.coverage.report] fail_under` in
+  `pyproject.toml`; do not hardcode a number here)
 - pip-audit security scan
-
-### Quality Gate Requirements
-
-#### Python Service: instruments-service
-
-- **Ruff linting**: PASS (no E, F, W, I rule violations)
-- **Basedpyright**: PASS (with 60s timeout to prevent hangs)
-- **Tests**: PASS with 35% minimum coverage
-- **Security scan**: PASS (pip-audit for dependencies)
+- The workspace code-rule bans (no `os.getenv`, no `Any`, no inline `gs://`, UTC datetimes only, …)
 
 ## Timeout Configurations
 
-All long-running operations have strict timeouts to prevent hanging builds:
+Long-running operations carry strict timeouts to prevent hanging builds:
 
 | Operation         | Timeout     | Rationale                             |
 | ----------------- | ----------- | ------------------------------------- |
@@ -44,56 +44,31 @@ All long-running operations have strict timeouts to prevent hanging builds:
 | Integration tests | 120 seconds | Reasonable test time                  |
 | E2E tests         | 180 seconds | Complete end-to-end validation        |
 
-## Enforcement Rules
+## Enforcement
 
-### No Merge Conditions
+A promote PR is blocked from merging if `quality-gates-v2` fails for any reason (lint, type-check,
+tests, coverage below the ratcheted floor, pip-audit findings, or a timeout).
 
-Pull requests will be blocked from merging if:
+### Hotfixes
 
-- Any required status check fails
-- Code coverage falls below 35%
-- Ruff linting errors exist
-- Basedpyright type checking fails or times out
-- pip-audit finds security vulnerabilities
-- Tests fail or timeout
+Ship a hotfix via `quickmerge --agent` with `--hotfix` (requires `[hotfix]` in the message). Never
+force-push a shared branch; never `[skip ci]` a v2-gated promote-PR head (write `skip-ci` if you
+must reference the marker in prose).
 
-### Emergency Procedures
+## Local Verification
 
-In case of critical hotfixes:
-
-1. Create emergency branch from `main`
-2. Apply minimal fix with tests
-3. Run local quality gates: `make ci-local`
-4. Request expedited review
-5. Merge only after all checks pass
-
-## Local Testing
-
-Before creating pull requests, run local quality gates:
+Before shipping, run the canonical gate entrypoint (never run `pytest`/`ruff`/`basedpyright`
+standalone):
 
 ```bash
-# Full CI simulation
-make ci-local
-
-# Individual checks
-make lint        # Ruff linting
-make type-check  # Basedpyright with timeout
-make test        # Tests with coverage
+bash scripts/quality-gates.sh
 ```
 
-This mirrors the exact CI checks and catches issues before pushing.
+This mirrors the exact `quality-gates-v2` checks and catches issues before pushing.
 
 ## Troubleshooting
 
-### Common Issues
-
-- **Basedpyright timeout**: Usually indicates complex types or circular imports - simplify type definitions
-- **Coverage drops**: Add tests for new code paths, ensure 35% minimum maintained
-- **Ruff failures**: Run `ruff format .` and `ruff check . --fix` locally before committing
-
-### Getting Help
-
-- Check workflow logs in GitHub Actions tab
-- Review specific error messages in PR comments
-- Run `bash scripts/quality-gates.sh` locally to reproduce issues
-- Check instrument definitions and CCXT integration patterns
+- **Basedpyright timeout**: usually complex types or circular imports — simplify type definitions
+- **Coverage drop**: add tests for new code paths; keep the ratcheted floor from regressing
+- **Ruff failures**: run `ruff format .` and `ruff check . --fix` locally before committing
+- **CI logs**: `gh run view --log-failed` for the failing `quality-gates-v2` run
