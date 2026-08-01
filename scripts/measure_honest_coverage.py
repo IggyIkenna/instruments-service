@@ -63,6 +63,23 @@ Instrument-type column (v2):
   and a warning is logged. Bounded-column reads remain mandatory (cefi index is
   tens-of-millions of rows; loading the full frame OOM-kills the VM).
 
+Per-asset-group streaming (real column-prune refactor, 2026-08-01):
+  ``main()`` reads, computes, and releases ONE asset_group's manifest at a time instead
+  of accumulating every requested asset_group's primary DataFrame in memory for the
+  whole run before computing coverage. ``_compute_coverage``'s per-ag loop body has no
+  cross-ag state, so streaming one ag at a time is behaviorally identical to the old
+  batched ``dfs: dict[str, pd.DataFrame]`` call (see
+  ``TestPerAssetGroupStreaming.test_streaming_equals_batch_for_multiple_asset_groups``)
+  — it bounds peak memory to the single largest asset_group's read instead of the sum
+  of all 5. A naive drop of ``instrument_id`` from ``_READ_COLUMNS`` was considered and
+  REJECTED (see ``issues/honest_coverage_nightly_cron_undersized_and_launcher_ssot_drift
+  _2026_07_16.md``): ``_merge_manifests`` dedups the prd+oracle merge on
+  ``(date, venue, instrument_id, data_type)``, and dropping the column collapses
+  distinct instruments onto ``(date, venue, data_type)``, corrupting the coverage
+  denominator. This refactor changes ONLY *when* each asset_group's DataFrame is read
+  and released — the read columns, the merge key, and the per-ag computation are
+  byte-for-byte unchanged.
+
   D1 migration robustness (2026-07-20 ruling — column moves lowercase writer grain
   -> UPPERCASE catalogue enum): the by_venue_instrument_type / by_venue_instrument_type
   _data_type Layer-2 drill-down projections GROUP on a case-folded instrument_type
@@ -82,6 +99,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 import importlib.util
 import json
 import logging
@@ -847,6 +865,37 @@ _MERGEABLE_BY_AG_KEYS: Final[tuple[str, ...]] = (
 )
 
 
+def _init_coverage_accumulator() -> dict[str, object]:
+    """Return an empty structure shaped like ``_compute_coverage``'s return value.
+
+    Seeds every ``_MERGEABLE_BY_AG_KEYS`` entry (+ ``layer_1.by_asset_group``) with an
+    empty dict so ``_accumulate_coverage`` can unconditionally ``.update()`` into it as
+    each asset_group streams through — see main()'s per-asset_group loop.
+    """
+    acc: dict[str, object] = {key: {} for key in _MERGEABLE_BY_AG_KEYS}
+    acc["layer_1"] = {"by_asset_group": {}}
+    return acc
+
+
+def _accumulate_coverage(acc: dict[str, object], ag_coverage: dict[str, object]) -> None:
+    """Merge one asset_group's ``_compute_coverage()`` output into ``acc``, in place.
+
+    Unlike ``_merge_with_existing`` (which reconciles a fresh run against a possibly
+    STALE existing GCS payload from earlier the same day, so freshness/priority
+    matters), each asset_group here is computed exactly once per run — main() streams
+    one ag at a time, releasing its manifest DataFrame before reading the next — so
+    this is a plain per-key union with no priority logic needed.
+    """
+    for key in _MERGEABLE_BY_AG_KEYS:
+        acc_map = cast("dict[str, object]", acc[key])
+        new_map = cast("dict[str, object]", ag_coverage.get(key) or {})
+        acc_map.update(new_map)
+    acc_layer1 = cast("dict[str, object]", acc["layer_1"])
+    acc_layer1_by_ag = cast("dict[str, object]", acc_layer1["by_asset_group"])
+    new_layer1 = cast("dict[str, object]", ag_coverage.get("layer_1") or {})
+    acc_layer1_by_ag.update(cast("dict[str, object]", new_layer1.get("by_asset_group") or {}))
+
+
 def _read_existing_payload(run_date: str) -> dict[str, object] | None:
     """Read today's already-written coverage.json, if any, for same-day merge.
 
@@ -995,17 +1044,31 @@ def main() -> None:
     merge = not args.no_merge
     primary_bucket_override = args.primary_bucket
 
-    dfs: dict[str, pd.DataFrame] = {}
+    # Per-asset-group streaming (real column-prune refactor, 2026-08-01 — see the
+    # module docstring section of the same name): read, compute, and release ONE
+    # asset_group's manifest at a time instead of holding every requested asset_group's
+    # primary DataFrame in memory simultaneously for the whole run. _compute_coverage's
+    # per-ag loop body has no cross-ag state, so calling it once per ag and merging the
+    # single-ag result via _accumulate_coverage is behaviorally identical to the old
+    # batched dict-of-all-ags call — peak memory is now bounded by the single largest
+    # asset_group's read instead of the sum of all 5.
+    coverage = _init_coverage_accumulator()
+    asset_groups_measured: list[str] = []
     for ag in asset_groups:
         df = _read_manifest(
             ag,
             merge=merge,
             primary_bucket_override=primary_bucket_override,
         )
-        if df is not None and not df.empty:
-            dfs[ag] = df
+        if df is None or df.empty:
+            continue
+        ag_coverage = _compute_coverage({ag: df}, diagnose=args.diagnose_layer1)
+        _accumulate_coverage(coverage, ag_coverage)
+        asset_groups_measured.append(ag)
+        del df, ag_coverage
+        gc.collect()
 
-    if not dfs:
+    if not asset_groups_measured:
         logger.error("No manifests loaded — nothing to measure")
         sys.exit(1)
 
@@ -1016,7 +1079,7 @@ def main() -> None:
     # indistinguishable from a healthy full run and the Honest Coverage card
     # silently renders only the asset groups that happened to load. Consumers read
     # ``partial`` + ``asset_groups_failed`` to surface a "coverage incomplete" banner.
-    asset_groups_failed = [ag for ag in asset_groups if ag not in dfs]
+    asset_groups_failed = [ag for ag in asset_groups if ag not in asset_groups_measured]
     partial = bool(asset_groups_failed)
     if partial:
         logger.error(
@@ -1029,15 +1092,13 @@ def main() -> None:
             ", ".join(asset_groups_failed),
         )
 
-    coverage = _compute_coverage(dfs, diagnose=args.diagnose_layer1)
-
     now_utc = datetime.now(UTC)
     payload: dict[str, object] = {
         "generated_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "date": date.today().isoformat(),
         "schema_version": 2,
         "asset_groups_requested": asset_groups,
-        "asset_groups_measured": list(dfs.keys()),
+        "asset_groups_measured": asset_groups_measured,
         "asset_groups_failed": asset_groups_failed,
         "partial": partial,
         **coverage,
