@@ -255,7 +255,13 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # 2026-07-31): ANKR/STADER/STAKEWISE/SWELL/MANTLE/MAKER-ETHEREUM flipped
 # pipeline->live, +6 new dedup'd targets. Verified via the same
 # enumerate_cells + _dedupe_shard_targets call this test itself makes.
-_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 100, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
+# DEFI 100->101 (defi_plasma_chain_onboarding_gap_2026_07_26.md /
+# defi_satellite_ao_dispatch_batch6_2026_07_30.md, 2026-08-01): +1 for
+# AAVE-PLASMA, flipped pipeline->live (unified-api-contracts@06c54fee) once
+# real capture was verified (18 manifest rows, venue=AAVE_V3/chain=PLASMA).
+# Verified via the same enumerate_cells + _dedupe_shard_targets call this
+# test itself makes.
+_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 101, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:

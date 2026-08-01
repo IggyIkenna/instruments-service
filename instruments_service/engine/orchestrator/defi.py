@@ -163,6 +163,19 @@ _STATIC_DEFI_VENUES: list[str] = [
     "SWELL-ETHEREUM",
     "MANTLE-ETHEREUM",
     "MAKER-ETHEREUM",
+    # AAVE-PLASMA (2026-08-01 — defi_plasma_chain_onboarding_gap_2026_07_26.md /
+    # defi_satellite_ao_dispatch_batch6_2026_07_30.md todo). Genuinely an Aave V3
+    # market (same aave_v3 adapter as every AAVE_V3-* venue; UAC
+    # unified-api-contracts@18ed167f registers "AAVE-PLASMA": "aave_v3" in
+    # VENUE_TO_ADAPTER_KEY) — its UAC venue constant is the bare "AAVE" form set
+    # 2026-05-22 (before chain identity was resolved), not "AAVE_V3-PLASMA", so
+    # the subgraph auto-gen loop above can never discover it (Plasma also has no
+    # subgraph_id — RPC-only). Real capture verified: 18 manifest rows,
+    # venue=AAVE_V3/chain=PLASMA, date=2026-07-30. UAC flipped phase
+    # pipeline->live in the SAME window (unified-api-contracts@06c54fee) —
+    # listing it here restores the denominator drift guard
+    # (set(_build_defi_venues()) == VENUES_BY_ASSET_GROUP["defi"]).
+    "AAVE-PLASMA",
 ]
 
 
