@@ -4000,39 +4000,132 @@ def _upload_csv_report_to_gcs(
     return f"gs://{bucket_name}/{blob_name}"
 
 
-def _write_absent_rows(
+# Bounded flush size for the v2 apply-write STREAMING path (below) — chosen to
+# keep one in-flight chunk (the ExpectedRow list + its per-row dict records +
+# the pandas DataFrame built from them) well under the 8Gi Cloud Run Job
+# ceiling even for DeFi's proportionally enormous per-instrument catalog
+# (dex_pool_state alone carries 18.9M captured manifest rows). Root-cause fix
+# for the 19-consecutive-day ``expected-universe-v2-defi`` OOM
+# (2026-07-14..2026-08-01) —
+# plans/active/issues/defi_v2_expected_universe_enumerator_oom_2026_08_01.md.
+V2_STREAM_CHUNK_SIZE = 250_000
+
+
+def _write_v2_per_vm_shard_chunk(
     *,
-    absent_rows: list[ExpectedRow],
+    chunk: list[ExpectedRow],
+    asset_group: str,
+    bucket_name: str,
+    run_id: str,
+    part_index: int,
+) -> int:
+    """Write one bounded chunk of ``ExpectedRow`` to its own per-VM shard part.
+
+    Blob path ``_index/per_vm/{VM_NAME}-part{part_index:05d}.parquet``. Writing
+    multiple part files per run (instead of one ``{VM_NAME}.parquet``) is
+    safe: the manifest consolidator globs every ``_index/per_vm/*.parquet``
+    blob under the prefix
+    (``unified_trading_library.manifest_consolidator._list_per_vm_shards_with_mtime``)
+    rather than assuming exactly one shard per ``VM_NAME`` — each part merges
+    into the canonical manifest and is pruned independently like any other
+    per-VM shard.
+
+    Returns the number of rows written.
+    """
+    vm_name = os.environ["VM_NAME"]
+    per_vm_blob = f"_index/per_vm/{vm_name}-part{part_index:05d}.parquet"
+    attempted_at_iso = datetime.now(UTC).isoformat()
+
+    new_rows_records: list[dict[str, object]] = []
+    for r in chunk:
+        # #4 — stamp pipeline_mode + source + transport so seeded denominator
+        # rows match the real rows they reconcile against (else CF-3 reads blank).
+        pipeline_mode, source, transport = _derive_pm_source_transport(asset_group, r.data_type, venue=r.venue)
+        new_rows_records.append(
+            {
+                "asset_group": asset_group,
+                "venue": r.venue,
+                "chain": r.chain,
+                "data_type": r.data_type,
+                "instrument_type": r.instrument_type,
+                "instrument_id": r.instrument_id,
+                "underlying": r.underlying,
+                "league_id": r.league_id,
+                "date": r.date,
+                "capture_status": r.capture_status,
+                "error_reason": r.reason if r.capture_status == "empty_confirmed" else "",
+                "attempted_at": attempted_at_iso,
+                "written_at": attempted_at_iso,
+                "schema_version": MANIFEST_SCHEMA_VERSION,
+                "row_count": 0,
+                "service_name": "instruments-service",
+                "enumerator_run_id": run_id,
+                "pipeline_mode": pipeline_mode,
+                "source": source,
+                "transport": transport,
+            }
+        )
+
+    new_df = pd.DataFrame(new_rows_records)
+    with tempfile.NamedTemporaryFile(
+        prefix=f"enum-univ-out-{asset_group}-",
+        suffix=".parquet",
+        delete=False,
+    ) as tf:
+        out_path = tf.name
+    try:
+        new_df.to_parquet(out_path, index=False)
+        client = storage.Client(project=PROJECT_ID)
+        bucket = client.bucket(bucket_name)
+        out_blob = bucket.blob(per_vm_blob)
+        out_blob.upload_from_filename(out_path, timeout=600)
+        logger.info(
+            "Uploaded per-VM shard part to gs://%s/%s (%d rows)",
+            bucket_name,
+            per_vm_blob,
+            len(new_rows_records),
+        )
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(out_path)
+    return len(new_rows_records)
+
+
+def _stream_write_v2_absent_rows(
+    *,
+    rows: Iterator[ExpectedRow],
+    max_writes_per_run: int,
+    chunk_size: int,
     asset_group: str,
     bucket_name: str,
     apply_write: bool,
-    report_dir: Path,
     report_path: Path,
     run_id: str,
     run_ts: str,
     gcs_report_bucket_arg: str | None,
-    enumerator_version: str = "v2",
 ) -> int:
-    """Shared CSV-report + optional per-VM shard write path.
+    """Stream the v2 bounded-window enumeration to disk/GCS in bounded chunks.
 
-    Called from ``main()``'s v2 path. Writes a CSV audit report, optionally
-    uploads it to GCS, then (if ``--apply-write``) writes a per-VM manifest
-    shard parquet to GCS.
+    Replaces the pre-2026-08-01 ``_write_absent_rows`` pattern of draining
+    ``enumerate_v2``'s whole generator into one in-memory ``list[ExpectedRow]``
+    before any write happened — fine for cefi/tradfi/sports/prediction but
+    OOM'd DeFi's ``expected-universe-v2-defi`` Cloud Run Job (8Gi ceiling)
+    every day for 19 consecutive days (2026-07-14..2026-08-01), because
+    DeFi's per-instrument catalog x window x data_types cross-product is
+    proportionally enormous. See
+    plans/active/issues/defi_v2_expected_universe_enumerator_oom_2026_08_01.md.
 
-    Args:
-        absent_rows: Rows to report/write.
-        asset_group: Target asset group (for record-keeping).
-        bucket_name: GCS bucket holding the canonical manifest.
-        apply_write: If False, scan-only (no GCS shard write).
-        report_dir: Local directory for CSV report.
-        report_path: Full path of the CSV report file.
-        run_id: Unique run identifier used in events + shard paths.
-        run_ts: Timestamp string ``YYYYMMDD-HHMMSS`` for report naming.
-        gcs_report_bucket_arg: ``args.gcs_report_bucket`` value.
-        enumerator_version: ``"v2"`` for event logging.
+    The ``max_writes_per_run`` halt-safety is now checked INCREMENTALLY as
+    each row is counted, not only after a full drain — so a runaway
+    enumeration both stops sooner AND never has to materialise the runaway
+    set in memory to notice. Trade-off vs the old atomic-abort: chunks already
+    flushed (CSV + GCS per-VM shard parts) before the cap trips STAY written;
+    they are honest, correctly-generated candidate rows for the portion of the
+    catalog processed so far, not corrupted data — the halt-safety's job is to
+    stop an unbounded run, not to guarantee zero partial progress.
 
     Returns:
-        Exit code (0 = success, 4 = env guard failure).
+        Exit code (0 = success, 4 = env guard failure, 5 = halt-safety).
     """
     if apply_write:
         if os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower() not in ("1", "true", "yes"):
@@ -4051,20 +4144,79 @@ def _write_absent_rows(
             _emit_event("ENUMERATOR_FAILED", reason="missing_vm_name_env", run_id=run_id)
             return 4
 
-    # Distribution by reason.
+    total_candidates = 0
+    total_written = 0
+    part_index = 0
     reason_counts: dict[str, int] = {}
-    for r in absent_rows:
-        reason_counts[r.reason] = reason_counts.get(r.reason, 0) + 1
+    start_write = time.time()
+
+    with report_path.open("w", newline="") as csv_fh:
+        csv_writer: csv.DictWriter | None = None
+
+        def _flush(pending: list[ExpectedRow]) -> None:
+            nonlocal csv_writer, total_written, part_index
+            if csv_writer is None:
+                csv_writer = csv.DictWriter(csv_fh, fieldnames=list(asdict(pending[0]).keys()))
+                csv_writer.writeheader()
+            csv_writer.writerows(asdict(r) for r in pending)
+            for r in pending:
+                reason_counts[r.reason] = reason_counts.get(r.reason, 0) + 1
+            if apply_write:
+                part_index += 1
+                total_written += _write_v2_per_vm_shard_chunk(
+                    chunk=pending,
+                    asset_group=asset_group,
+                    bucket_name=bucket_name,
+                    run_id=run_id,
+                    part_index=part_index,
+                )
+
+        chunk: list[ExpectedRow] = []
+        for expected_row in rows:
+            chunk.append(expected_row)
+            total_candidates += 1
+            if total_candidates > max_writes_per_run:
+                logger.error(
+                    "Halt-safety triggered: would-write %d > max_writes_per_run %d "
+                    "(chunks already flushed up to this point remain written). "
+                    "Increase --max-writes-per-run after operator review.",
+                    total_candidates,
+                    max_writes_per_run,
+                )
+                _emit_event(
+                    "ENUMERATOR_FAILED",
+                    reason="max_writes_exceeded",
+                    candidates=total_candidates,
+                    cap=max_writes_per_run,
+                    run_id=run_id,
+                )
+                return 5
+            if len(chunk) >= chunk_size:
+                _flush(chunk)
+                chunk = []
+        if chunk:
+            _flush(chunk)
+
+    logger.info("v2 enumeration complete: %d candidate rows (per-instrument grain)", total_candidates)
+
+    if total_candidates == 0:
+        with contextlib.suppress(OSError):
+            report_path.unlink()
+        logger.info("v2: nothing to backfill — manifest already covers the expected per-instrument universe.")
+        _emit_event(
+            "ENUMERATOR_COMPLETED",
+            enumerator_version="v2",
+            asset_group=asset_group,
+            candidates=0,
+            written=0,
+            run_id=run_id,
+        )
+        return 0
+
     logger.info("Distribution by reason:")
     for reason, count in sorted(reason_counts.items(), key=lambda kv: -kv[1]):
         logger.info("  %s: %d", reason, count)
-
-    # CSV audit.
-    with report_path.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(asdict(absent_rows[0]).keys()))
-        writer.writeheader()
-        writer.writerows(asdict(r) for r in absent_rows)
-    logger.info("Would-write report: %s (%d rows)", report_path, len(absent_rows))
+    logger.info("Would-write report: %s (%d rows)", report_path, total_candidates)
 
     # Upload CSV report to GCS so it survives VM auto-shutdown.
     gcs_report_uri: str | None = None
@@ -4099,9 +4251,9 @@ def _write_absent_rows(
         logger.info("Scan-only mode; not writing manifest. Pass --apply-write to commit.")
         _emit_event(
             "ENUMERATOR_COMPLETED",
-            enumerator_version=enumerator_version,
+            enumerator_version="v2",
             asset_group=asset_group,
-            candidates=len(absent_rows),
+            candidates=total_candidates,
             written=0,
             report_path=str(report_path),
             gcs_report_uri=gcs_report_uri,
@@ -4109,80 +4261,26 @@ def _write_absent_rows(
         )
         return 0
 
-    # Write per-VM shard.
-    vm_name = os.environ["VM_NAME"]
-    per_vm_blob = f"_index/per_vm/{vm_name}.parquet"
-    attempted_at_iso = datetime.now(UTC).isoformat()
-
-    new_rows_records: list[dict[str, object]] = []
-    for r in absent_rows:
-        # #4 — stamp pipeline_mode + source + transport so seeded denominator
-        # rows match the real rows they reconcile against (else CF-3 reads blank).
-        pipeline_mode, source, transport = _derive_pm_source_transport(asset_group, r.data_type, venue=r.venue)
-        record: dict[str, object] = {
-            "asset_group": asset_group,
-            "venue": r.venue,
-            "chain": r.chain,
-            "data_type": r.data_type,
-            "instrument_type": r.instrument_type,
-            "instrument_id": r.instrument_id,
-            "underlying": r.underlying,
-            "league_id": r.league_id,
-            "date": r.date,
-            "capture_status": r.capture_status,
-            "error_reason": r.reason if r.capture_status == "empty_confirmed" else "",
-            "attempted_at": attempted_at_iso,
-            "written_at": attempted_at_iso,
-            "schema_version": MANIFEST_SCHEMA_VERSION,
-            "row_count": 0,
-            "service_name": "instruments-service",
-            "enumerator_run_id": run_id,
-            "pipeline_mode": pipeline_mode,
-            "source": source,
-            "transport": transport,
-        }
-        new_rows_records.append(record)
-
-    new_df = pd.DataFrame(new_rows_records)
-
-    with tempfile.NamedTemporaryFile(
-        prefix=f"enum-univ-out-{asset_group}-",
-        suffix=".parquet",
-        delete=False,
-    ) as tf:
-        out_path = tf.name
-    start_write = time.time()
-    try:
-        new_df.to_parquet(out_path, index=False)
-        client = storage.Client(project=PROJECT_ID)
-        bucket = client.bucket(bucket_name)
-        out_blob = bucket.blob(per_vm_blob)
-        out_blob.upload_from_filename(out_path, timeout=600)
-        logger.info("Uploaded per-VM shard to gs://%s/%s", bucket_name, per_vm_blob)
-    finally:
-        with contextlib.suppress(OSError):
-            os.unlink(out_path)
-
     elapsed = time.time() - start_write
     _emit_event(
         "ENUMERATOR_COMPLETED",
-        enumerator_version=enumerator_version,
+        enumerator_version="v2",
         asset_group=asset_group,
-        candidates=len(absent_rows),
-        written=len(new_rows_records),
+        candidates=total_candidates,
+        written=total_written,
         elapsed_secs=round(elapsed, 1),
         report_path=str(report_path),
         gcs_report_uri=gcs_report_uri,
-        per_vm_blob=per_vm_blob,
+        per_vm_shard_parts=part_index,
         run_id=run_id,
     )
     logger.info(
-        "Wrote %d rows to per-VM shard gs://%s/%s for VM=%s in %.1fs. "
+        "Wrote %d rows across %d per-VM shard part(s) (gs://%s/_index/per_vm/%s-part*.parquet) in %.1fs. "
         "Consolidator will merge into canonical manifest within ~5min.",
-        len(new_rows_records),
+        total_written,
+        part_index,
         bucket_name,
-        per_vm_blob,
-        vm_name,
+        os.environ.get("VM_NAME", ""),
         elapsed,
     )
     return 0
@@ -4303,11 +4401,10 @@ def main() -> int:
         # expected_unattempted; lifecycle-boundary days → empty_confirmed). The result
         # is range-encoded into the companion artifact rather than written per-day, so
         # the ~190M-day full-history collapses to ~1-3M spans. The bounded-window path
-        # is identical but over the short window + writes per-day rows to the _index shard.
-        # Wrap enumerate_v2 in an adapter that matches the absent_rows list
-        # the existing write-path expects (list[ExpectedRow])
-        v2_absent: list[ExpectedRow] = []
-        for expected_row in enumerate_v2(
+        # is identical but over the short window + STREAMS per-day rows to the _index
+        # shard in bounded chunks (see _stream_write_v2_absent_rows) rather than
+        # draining the whole generator into memory first.
+        v2_rows = enumerate_v2(
             asset_group=asset_group,
             catalog=catalog,
             date_axis=date_axis,
@@ -4315,7 +4412,31 @@ def main() -> int:
             present_set=v2_present_set,
             present_cols=v2_present_cols,
             captured_set=v2_captured_set,
-        ):
+        )
+        if not full_history:
+            # BOUNDED-WINDOW (the daily-cron default): stream candidates to
+            # disk/GCS in bounded chunks — root-cause fix for the 2026-08-01
+            # DeFi OOM (19 consecutive days OOM'd draining this generator into
+            # one in-memory list before any write happened). See
+            # plans/active/issues/defi_v2_expected_universe_enumerator_oom_2026_08_01.md.
+            return _stream_write_v2_absent_rows(
+                rows=v2_rows,
+                max_writes_per_run=max_writes_per_run,
+                chunk_size=V2_STREAM_CHUNK_SIZE,
+                asset_group=asset_group,
+                bucket_name=bucket_name,
+                apply_write=apply_write,
+                report_path=report_path,
+                run_id=run_id,
+                run_ts=run_ts,
+                gcs_report_bucket_arg=gcs_report_bucket_arg,
+            )
+        # FULL-HISTORY: range-encoding needs the full per-day candidate set
+        # materialised (contiguous-span compaction), so this branch still
+        # drains the generator into one list. Not implicated in the
+        # 2026-08-01 DeFi OOM — the daily cron never passes --full-history.
+        v2_absent: list[ExpectedRow] = []
+        for expected_row in v2_rows:
             v2_absent.append(expected_row)
             if len(v2_absent) > max_writes_per_run:
                 logger.error(
@@ -4349,31 +4470,17 @@ def main() -> int:
             return 0
         # FULL-HISTORY: range-encode the per-day candidates into contiguous spans +
         # write the companion artifact (not the per-day _index shard). ~100x compaction.
-        if full_history:
-            ranges = range_encode(v2_absent)
-            total_days = sum(r.n_days for r in ranges)
-            logger.info(
-                "v2 full-history: %d per-day candidates → %d range rows (%d EU-days; %.0fx compaction)",
-                len(v2_absent),
-                len(ranges),
-                total_days,
-                (len(v2_absent) / len(ranges)) if ranges else 1.0,
-            )
-            if not apply_write:
-                logger.info("Scan-only full-history; pass --apply-write to commit the range companion.")
-                _emit_event(
-                    "ENUMERATOR_COMPLETED",
-                    enumerator_version="v2",
-                    asset_group=asset_group,
-                    candidates=len(v2_absent),
-                    range_rows=len(ranges),
-                    eu_days=total_days,
-                    written=0,
-                    full_history=True,
-                    run_id=run_id,
-                )
-                return 0
-            code = _write_range_artifact(ranges=ranges, asset_group=asset_group, bucket_name=bucket_name, run_id=run_id)
+        ranges = range_encode(v2_absent)
+        total_days = sum(r.n_days for r in ranges)
+        logger.info(
+            "v2 full-history: %d per-day candidates → %d range rows (%d EU-days; %.0fx compaction)",
+            len(v2_absent),
+            len(ranges),
+            total_days,
+            (len(v2_absent) / len(ranges)) if ranges else 1.0,
+        )
+        if not apply_write:
+            logger.info("Scan-only full-history; pass --apply-write to commit the range companion.")
             _emit_event(
                 "ENUMERATOR_COMPLETED",
                 enumerator_version="v2",
@@ -4381,23 +4488,24 @@ def main() -> int:
                 candidates=len(v2_absent),
                 range_rows=len(ranges),
                 eu_days=total_days,
-                written=len(ranges),
+                written=0,
                 full_history=True,
                 run_id=run_id,
             )
-            return code
-        return _write_absent_rows(
-            absent_rows=v2_absent,
-            asset_group=asset_group,
-            bucket_name=bucket_name,
-            apply_write=apply_write,
-            report_dir=report_dir,
-            report_path=report_path,
-            run_id=run_id,
-            run_ts=run_ts,
-            gcs_report_bucket_arg=gcs_report_bucket_arg,
+            return 0
+        code = _write_range_artifact(ranges=ranges, asset_group=asset_group, bucket_name=bucket_name, run_id=run_id)
+        _emit_event(
+            "ENUMERATOR_COMPLETED",
             enumerator_version="v2",
+            asset_group=asset_group,
+            candidates=len(v2_absent),
+            range_rows=len(ranges),
+            eu_days=total_days,
+            written=len(ranges),
+            full_history=True,
+            run_id=run_id,
         )
+        return code
     finally:
         with contextlib.suppress(OSError):
             os.unlink(v2_local_manifest)
