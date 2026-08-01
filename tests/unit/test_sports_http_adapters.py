@@ -483,12 +483,19 @@ class TestApiFootballAdapterHttp:
         assert standings[0]["rank"] == 1
 
     @pytest.mark.asyncio
-    async def test_get_standings_empty_on_error(self) -> None:
+    async def test_get_standings_error_propagates(self) -> None:
+        """Fix (sports_adapter_dead_code_fallback_duplicate_audit_2026_08_01 finding 2):
+        get_standings must propagate a fetch failure to attempted_failed, not
+        silently masquerade as an honest empty standings table — matching every
+        sibling per-entity fetch method in this file.
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
         mock_session = _make_aiohttp_mock({}, status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            standings = await adapter.get_standings(39)
-        assert standings == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="HTTP 500"),
+        ):
+            await adapter.get_standings(39)
 
     @pytest.mark.asyncio
     async def test_get_injuries(self) -> None:
