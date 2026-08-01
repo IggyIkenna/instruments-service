@@ -82,6 +82,7 @@ from unified_trading_library import (
     log_event,
     resolve_bucket_name,
     setup_events,
+    with_retry,
 )
 
 # Reused (not reimplemented) for the numeric-YYMMDD wire-date fallback in
@@ -2717,6 +2718,31 @@ def _tune_download_pool(storage: StorageClient, size: int) -> None:
     logger.info("Tuned GCS HTTP connection pool to %d (matches download workers)", size)
 
 
+def _download_by_date_blob(storage: StorageClient, bucket: str, name: str) -> bytes:
+    """Download one ``by_date`` snapshot blob, retrying transient network failures.
+
+    **Root cause (2026-07-31, tradfi_catalogue_full_regen_job_failing_2026_07_31.md).**
+    A ``--mode full`` walk downloads tens of thousands of blobs (27,175 for tradfi)
+    over several hours via :func:`_bounded_parallel_load`, whose per-item ``load``
+    exception propagates and kills the WHOLE run (by design — see its docstring). A
+    single transient ``requests.exceptions.ConnectionError: Connection reset by peer``
+    on any ONE blob (GCS's own client-level retry already exhausted) was silently
+    aborting hours of otherwise-complete work with zero application log output (the
+    abrupt-kill investigation this fix closes). At this blob count, hitting at least
+    one transient network blip over a multi-hour run is the expected case, not the
+    exception — so the retry belongs at the per-blob boundary, not the per-run one.
+    ``with_retry``'s default retryable set (``ConnectionError``/``TimeoutError``/
+    ``OSError``) already covers ``requests.exceptions.ConnectionError`` (a subclass
+    of ``OSError``) with no extra configuration.
+    """
+    return with_retry(
+        lambda: storage.download_bytes(bucket, name),
+        max_attempts=5,
+        base_delay=1.0,
+        max_delay=30.0,
+    )
+
+
 def _bounded_parallel_load(
     items: list[_LoadItemT],
     load: Callable[[_LoadItemT], _LoadResultT],
@@ -2845,7 +2871,7 @@ def _iter_by_date_snapshots(
 
     def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame]:
         day, name = item
-        payload = storage.download_bytes(bucket, name)
+        payload = _download_by_date_blob(storage, bucket, name)
         return day, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
@@ -2933,7 +2959,7 @@ def _iter_prediction_by_date_snapshots(
 
     def _load(item: tuple[date, str, str, str]) -> tuple[date, str, str, pd.DataFrame]:
         day, venue, cqg, name = item
-        payload = storage.download_bytes(bucket, name)
+        payload = _download_by_date_blob(storage, bucket, name)
         return day, venue, cqg, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
@@ -2984,7 +3010,7 @@ def _iter_sports_by_date_snapshots(
 
     def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame]:
         day, name = item
-        payload = storage.download_bytes(bucket, name)
+        payload = _download_by_date_blob(storage, bucket, name)
         return day, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
@@ -3083,7 +3109,7 @@ def _iter_sports_ftp_snapshots(
 
     def _load(item: tuple[str, date, str, str]) -> tuple[str, date, str, pd.DataFrame]:
         entity, day, league_id, name = item
-        payload = storage.download_bytes(bucket, name)
+        payload = _download_by_date_blob(storage, bucket, name)
         return entity, day, league_id, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window — see _bounded_parallel_load. Streamed

@@ -14,6 +14,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import SUBGRAPH_IDS
 from unified_trading_library import log_event
 
@@ -251,7 +252,7 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
         symbol = f"{base}-{quote}-{pool_fee_tier_bps}" if pool_fee_tier_bps is not None else f"{base}-{quote}"
         venue_tag = f"UNISWAP_V4-{self._chain}"
         # KNOWN NON-UNIQUENESS -- see the identical note in uniswap_v3.py::_build_pool_record.
-        instrument_key = f"{venue_tag}:POOL:{symbol}"
+        instrument_key = build_instrument_id(venue_tag, InstrumentType.POOL, symbol, passthrough=True)
 
         available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))
 

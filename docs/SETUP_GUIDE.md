@@ -35,7 +35,7 @@ gcloud auth application-default login
 python -c "from instruments_service import InstrumentProcessingService; print('Import OK')"
 
 # 5. Generate instruments for a date range
-python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-24
+python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-24
 ```
 
 ---
@@ -472,7 +472,7 @@ print('Secret Manager OK' if key else 'Secret Manager FAILED')
 # 3. Quality gates green
 bash scripts/quality-gates.sh --quick
 
-# 4. Generate + query instruments
-python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-24
-python -m instruments_service --mode instruments-query --start-date 2023-05-23 --output-format json
+# 4. Generate instruments, then read the coverage diagnostic
+python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-24
+python -m instruments_service --operation status --asset-group defi
 ```

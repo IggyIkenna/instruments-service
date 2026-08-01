@@ -76,15 +76,29 @@ _HISTORICAL_GAP_EDGE_DAYS = 3
 # 2000 cap slots in the plain `/markets?status=open` snapshot. LIVE path only.
 # Cross-venue-relevant Kalshi categories to series-scope enumerate. Crypto /
 # Economics / Financials carry the crypto-daily + macro + index + FX families;
-# Sports carries the per-game markets (KX{LEAGUE}…GAME / *SPREAD / *TOTAL / *NRFI)
-# that map to the shared SPORTS_{LEAGUE}_{BETTYPE} groups; Politics is included so
-# election/geo markets are captured (the classifier currently OTHERs most — they
-# ride along for when they become canonically grouped). The non-OTHER classifier
-# filter keeps only cross-venue-relevant series, so adding broad categories is
-# cheap (all-in-memory classification; only matched series are fetched).
-_SERIES_CATEGORIES: tuple[str, ...] = ("Crypto", "Economics", "Financials", "Sports", "Politics")
+# Commodities carries GOLD_UP_DOWN_DAILY/CRUDE_OIL_UP_DOWN_DAILY/NATGAS_UP_DOWN_DAILY
+# (confirmed live 2026-07-31: Kalshi's own /series/KXGOLDD reports
+# category="Commodities", NOT one of Crypto/Economics/Financials — its real,
+# currently-open daily gold markets were silently never discovered before this
+# category was added, despite classify_kalshi_to_canonical_group already having
+# the KXGOLDD->GOLD_UP_DOWN_DAILY mapping wired); Sports carries the per-game
+# markets (KX{LEAGUE}…GAME / *SPREAD / *TOTAL / *NRFI) that map to the shared
+# SPORTS_{LEAGUE}_{BETTYPE} groups; Politics is included so election/geo markets
+# are captured (the classifier currently OTHERs most — they ride along for when
+# they become canonically grouped). The non-OTHER classifier filter keeps only
+# cross-venue-relevant series, so adding broad categories is cheap (all-in-memory
+# classification; only matched series are fetched).
+_SERIES_CATEGORIES: tuple[str, ...] = ("Crypto", "Economics", "Financials", "Commodities", "Sports", "Politics")
 _MAX_SERIES_PAGES = 5  # per-series page budget (≤1000 markets per series)
-_MAX_SERIES_TOTAL = 350  # ceiling on total series fetched across all categories
+# Ceiling on total series fetched across all categories. Was 350 pre-Commodities;
+# live-measured 2026-07-31 that Commodities alone contributes 12 non-OTHER
+# classified series (KXGOLDD/KXGOLDEOY/KXGOLDMON/KXGOLDH/KXGOLD15M/KXGOLDW/
+# KXGOLDYEAR/KXGOLDDIRY/KXGOLDVSSILVER/KXSILVERMON/KXSILVERW/KXSILVERD) — bumped
+# by exactly that amount so adding Commodities doesn't silently starve the
+# already-scanned categories (Sports in particular) of their prior share of the
+# shared cap, confirmed by an A/B live comparison (Sports records: 1440 without
+# Commodities in the scan vs 978 with it in, both hitting the old cap of 350).
+_MAX_SERIES_TOTAL = 362  # ceiling on total series fetched across all categories
 # Rate-limit guards for the series-scoped fan-out: ~40 non-OTHER series fired
 # back-to-back overruns Kalshi's read limit (HTTP 429). A small inter-series
 # delay (~3 req/s) keeps it under the limit, and a bounded exp-backoff retry

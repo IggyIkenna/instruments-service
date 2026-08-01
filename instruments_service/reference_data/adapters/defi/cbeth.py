@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -103,7 +104,7 @@ class CbethReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
-            instrument_key = f"{venue_tag}:LST:{symbol}"
+            instrument_key = build_instrument_id(venue_tag, InstrumentType.LST, symbol, passthrough=True)
             results.append(
                 InstrumentRecord(
                     instrument_key=instrument_key,

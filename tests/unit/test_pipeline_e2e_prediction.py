@@ -251,7 +251,11 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # FredAdapter with 29 KEY_SERIES that was invisible to get_venues_for_asset_groups(["TRADFI"])
 # until this fix. Dedup is per (asset_group, venue), so exactly one new venue == exactly +1
 # target. SSOT: unified-trading-pm/plans/active/issues/macro_micro_econ_data_capture_audit_2026_06_05.md.
-_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 94, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
+# DEFI 94->100 (defi_venue_pipeline_to_live_ao_build_2026_07_30.md todo 5,
+# 2026-07-31): ANKR/STADER/STAKEWISE/SWELL/MANTLE/MAKER-ETHEREUM flipped
+# pipeline->live, +6 new dedup'd targets. Verified via the same
+# enumerate_cells + _dedupe_shard_targets call this test itself makes.
+_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 100, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:

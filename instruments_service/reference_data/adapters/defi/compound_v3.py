@@ -18,6 +18,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import get_subgraph_id
 from unified_trading_library import log_event
 
@@ -264,7 +265,7 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         # InstrumentKey.from_string()) while the field was the unrelated, shared
         # `LENDING` value. Both now agree, matching the AAVE_V3/SPARK pattern.
         supply_symbol = f"C{sym_upper}"
-        supply_instrument_key = f"{venue_tag}:A_TOKEN:{supply_symbol}"
+        supply_instrument_key = build_instrument_id(venue_tag, InstrumentType.A_TOKEN, supply_symbol, passthrough=True)
         results = [
             InstrumentRecord(
                 instrument_key=supply_instrument_key,
@@ -278,7 +279,9 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # Borrow instrument (borrow base asset against collateral)
         borrow_symbol = f"BORROW{sym_upper}"
-        borrow_instrument_key = f"{venue_tag}:DEBT_TOKEN:{borrow_symbol}"
+        borrow_instrument_key = build_instrument_id(
+            venue_tag, InstrumentType.DEBT_TOKEN, borrow_symbol, passthrough=True
+        )
         results.append(
             InstrumentRecord(
                 instrument_key=borrow_instrument_key,
