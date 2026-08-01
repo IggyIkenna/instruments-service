@@ -15,6 +15,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import get_subgraph_id
 from unified_trading_library import log_event
 
@@ -419,7 +420,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         }
 
         a_symbol = f"A{sym_upper}"
-        a_token_instrument_key = f"{venue_tag}:A_TOKEN:{a_symbol}"
+        a_token_instrument_key = build_instrument_id(venue_tag, InstrumentType.A_TOKEN, a_symbol, passthrough=True)
         results = [
             InstrumentRecord(
                 instrument_key=a_token_instrument_key,
@@ -433,7 +434,9 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         if reserve.get("borrowingEnabled", False):
             debt_symbol = f"DEBT{sym_upper}"
-            debt_token_instrument_key = f"{venue_tag}:DEBT_TOKEN:{debt_symbol}"
+            debt_token_instrument_key = build_instrument_id(
+                venue_tag, InstrumentType.DEBT_TOKEN, debt_symbol, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
                     instrument_key=debt_token_instrument_key,
