@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -101,7 +102,7 @@ class SolanaNativeStakingAdapter(BaseReferenceDataAdapter):
             symbol = inst["symbol"]
             mint = inst["mint_address"]
 
-            instrument_key = f"{venue_tag}:STAKING:{symbol}"
+            instrument_key = build_instrument_id(venue_tag, InstrumentType.STAKING, symbol, passthrough=True)
             results.append(
                 InstrumentRecord(
                     instrument_key=instrument_key,
