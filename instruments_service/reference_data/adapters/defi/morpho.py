@@ -68,6 +68,19 @@ query {{
 """
 
 
+def _sanitize_symbol_segment(symbol: str) -> str:
+    """Strip the canonical id's reserved ``:`` delimiter from an upstream token symbol.
+
+    Morpho markets can reference any on-chain ERC-20, including symbols not
+    controlled by this adapter (e.g. GMX's Arbitrum GM token symbol
+    ``"GM:ETH/USD[WETH-USDC]"``, confirmed live 2026-08-01). A ``:`` leaking
+    into the instrument_key's SYMBOL segment collides with the reserved
+    ``VENUE:TYPE:SYMBOL`` delimiter, so replace it before it reaches
+    ``build_canonical_instrument_id``.
+    """
+    return symbol.replace(":", "_")
+
+
 class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
     """Morpho Blue reference data: isolated lending market discovery via Morpho API."""
 
@@ -204,7 +217,16 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         # reserved top-level VENUE:TYPE:SYMBOL delimiter, so a 3rd colon inside the
         # symbol segment is ambiguous to any naive split(":") parser (operator
         # decision 2026-07-08, instrument_id_format_canonicalization finding 6).
-        pair_key = f"{collateral_symbol}-{loan_symbol}-{market_key[:8]}"
+        # collateral_symbol/loan_symbol are upstream on-chain token symbols, not
+        # ours to control — confirmed live 2026-08-01 that at least one real
+        # market carries a ':' in its symbol (GMX's Arbitrum GM token,
+        # "GM:ETH/USD[WETH-USDC]"), which would otherwise leak the reserved
+        # delimiter into the SYMBOL segment and trip build_canonical_instrument_id's
+        # embedded-':' guard, raising for every market on that chain (no
+        # per-market isolation in the caller's loop). Sanitize before use.
+        pair_key = (
+            f"{_sanitize_symbol_segment(collateral_symbol)}-{_sanitize_symbol_segment(loan_symbol)}-{market_key[:8]}"
+        )
 
         # DeFi metadata: Morpho Blue uses the bytes32 uniqueKey as the
         # canonical market identifier; surface that as pool_address along
