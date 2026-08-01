@@ -1592,3 +1592,115 @@ class TestSameDayMergeOnWrite:
         assert uploaded["by_asset_group"]["defi"] == {"captured": 2}
         assert uploaded["by_asset_group"]["cefi"] == {"captured": 999}
         assert set(uploaded["asset_groups_measured"]) == {"cefi", "defi"}
+
+
+class TestPerAssetGroupStreaming:
+    """Real column-prune refactor (2026-08-01) — see issues/honest_coverage_nightly_cron
+    _undersized_and_launcher_ssot_drift_2026_07_16.md.  main() now reads/computes/
+    releases one asset_group's manifest at a time instead of holding every requested
+    asset_group's primary DataFrame in memory simultaneously.  These tests prove:
+      1. _accumulate_coverage correctly folds a single ag's _compute_coverage() output
+         into a running accumulator across multiple calls.
+      2. Streaming (N separate single-ag _compute_coverage calls, merged) produces
+         BYTE-IDENTICAL output to the old batched (one _compute_coverage call over a
+         dict of all ags) approach — the refactor changes only *when* each ag's
+         DataFrame is read/released, never the read columns, the merge key, or the
+         per-ag computation itself.
+    """
+
+    def test_init_coverage_accumulator_shape(self, mod: ModuleType) -> None:
+        acc = mod._init_coverage_accumulator()
+        for key in mod._MERGEABLE_BY_AG_KEYS:
+            assert acc[key] == {}
+        assert acc["layer_1"] == {"by_asset_group": {}}
+
+    def test_accumulate_coverage_merges_two_asset_groups(self, mod: ModuleType) -> None:
+        acc = mod._init_coverage_accumulator()
+        cefi_coverage = {
+            "by_asset_group": {"cefi": {"captured": 1}},
+            "by_venue": {"cefi": {"BINANCE": {"captured": 1}}},
+            "by_venue_data_type": {"cefi": {}},
+            "by_venue_instrument_type": {"cefi": {}},
+            "by_venue_instrument_type_data_type": {"cefi": {}},
+            "by_day": {"cefi": {}},
+            "by_chain": {"cefi": {}},
+            "layer_1": {"by_asset_group": {"cefi": {"completeness_pct": 100.0}}},
+        }
+        defi_coverage = {
+            "by_asset_group": {"defi": {"captured": 2}},
+            "by_venue": {"defi": {"UNISWAP": {"captured": 2}}},
+            "by_venue_data_type": {"defi": {}},
+            "by_venue_instrument_type": {"defi": {}},
+            "by_venue_instrument_type_data_type": {"defi": {}},
+            "by_day": {"defi": {}},
+            "by_chain": {"defi": {}},
+            "layer_1": {"by_asset_group": {"defi": {"completeness_pct": 50.0}}},
+        }
+
+        mod._accumulate_coverage(acc, cefi_coverage)
+        mod._accumulate_coverage(acc, defi_coverage)
+
+        assert acc["by_asset_group"] == {"cefi": {"captured": 1}, "defi": {"captured": 2}}
+        assert acc["by_venue"]["cefi"] == {"BINANCE": {"captured": 1}}
+        assert acc["by_venue"]["defi"] == {"UNISWAP": {"captured": 2}}
+        assert acc["layer_1"]["by_asset_group"] == {
+            "cefi": {"completeness_pct": 100.0},
+            "defi": {"completeness_pct": 50.0},
+        }
+
+    def test_streaming_equals_batch_for_multiple_asset_groups(self, mod: ModuleType) -> None:
+        """The core equivalence proof: streaming one-ag-at-a-time == batching all ags."""
+        cefi_df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+                {
+                    "capture_status": "attempted_failed",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-29",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
+        defi_df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "UNISWAP",
+                    "data_type": "swaps",
+                    "date": "2026-06-28",
+                    "instrument_type": "amm_pool",
+                    "chain": "ETHEREUM",
+                },
+            ]
+        )
+        sports_df = _make_df_v2(
+            [
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "APIFOOTBALL",
+                    "data_type": "odds",
+                    "date": "2026-06-28",
+                    "instrument_type": "match",
+                },
+            ]
+        )
+
+        # Old behavior: one _compute_coverage call over a dict of every ag.
+        batched = _compute_coverage_with_stub(
+            mod, {"cefi": cefi_df.copy(), "defi": defi_df.copy(), "sports": sports_df.copy()}
+        )
+
+        # New behavior: stream one ag at a time, accumulating via _accumulate_coverage.
+        streamed = mod._init_coverage_accumulator()
+        for ag, df in (("cefi", cefi_df), ("defi", defi_df), ("sports", sports_df)):
+            ag_coverage = _compute_coverage_with_stub(mod, {ag: df})
+            mod._accumulate_coverage(streamed, ag_coverage)
+
+        assert streamed == batched
