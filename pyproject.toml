@@ -137,10 +137,7 @@ root = "."
 pythonVersion = "3.13"
 pythonPlatform = "All"
 extraPaths = [
-    "../unified-market-interface",
     "../unified-api-contracts",
-    "../unified-config-interface",
-    "../unified-internal-contracts",
     "../unified-trading-library",
 ]
 
