@@ -398,6 +398,15 @@ def _build_launcher_argv(cell: SmokeCell, day: str, vm_name: str, project_id: st
         "--test-run",
         "--project",
         project_id,
+        # Every leg this driver runs writes test-bucket-only (never prod) — but
+        # launch-instruments-backfill-vm.sh's --service-account defaults to the PROD-tier
+        # SA (lc_tier_service_account: prod->uts-prd-sa, staging/dev->uts-test-sa) unless
+        # --env is passed explicitly. uts-prd-sa's storage.objectAdmin grant is IAM
+        # Condition-scoped to -prd- buckets ONLY (bucket_iam_write_protection_per_tier_
+        # 2026_06_09.md); without --env the VM 403s on every -test- write. --env staging
+        # selects uts-test-sa, which is the sibling condition-scoped to -test- buckets.
+        "--env",
+        "staging",
     ]
     if cell.sports_provider:
         argv.extend(["--sports-provider", cell.venue])
