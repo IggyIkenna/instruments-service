@@ -427,10 +427,10 @@ see that section for the mechanism (`FixtureIdResolver`) and the real measured m
 
 ### Steps 10-11: Features (FSS -> GCS)
 
-| Step | What                                               | Source                    | Output                                                                        |
-| ---- | -------------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------- |
-| 10   | Derived stable (form, standings, goals)            | instruments-service GCS   | `features-sports-*/sports_features/by_date/day={date}/feature_group={group}/` |
-| 11   | Derived complex (xG, weather, odds microstructure) | Multi-provider APIs + GCS | Same path                                                                     |
+| Step | What                                               | Source                    | Output                                                                                      |
+| ---- | -------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------- |
+| 10   | Derived stable (form, standings, goals)            | instruments-service GCS   | `features-sports-{env}-{project}/sports_features/by_date/day={date}/feature_group={group}/` |
+| 11   | Derived complex (xG, weather, odds microstructure) | Multi-provider APIs + GCS | Same path                                                                                   |
 
 **Feature counts**: the SSOT, `features-service/features_service/sports/schemas/feature_catalog.py` (its own
 docstring: "the SSOT for what features the pipeline produces"), wires 32 calculator groups into
@@ -498,7 +498,7 @@ gs://market-data-tick-sports-{env}-{project}/
     league_id={LEAGUE}/fixture_id={FIXTURE}/instrument_type=odds/data_type=trades/ticks.parquet
                                                                (venue= is the bookmaker, not the literal ODDS_API)
 
-gs://features-sports-{project}/
+gs://features-sports-{env}-{project}/
   sports_features/by_date/day={YYYY-MM-DD}/feature_group={group}/features.parquet
 ```
 
