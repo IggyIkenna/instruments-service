@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from instruments_service.reference_data.adapters.prediction.kalshi import (
+    _MAX_SERIES_TOTAL,
     _SERIES_CATEGORIES,
     KalshiReferenceDataAdapter,
 )
@@ -638,3 +639,12 @@ class TestKalshiAdapter:
         KXGOLDD -> GOLD_UP_DOWN_DAILY, so real, currently-open daily gold markets
         were silently never captured (confirmed live 2026-07-31)."""
         assert "Commodities" in _SERIES_CATEGORIES
+
+    def test_max_series_total_absorbs_commodities_without_starving_prior_categories(self) -> None:
+        """Regression: live-measured 2026-07-31 — Commodities contributes exactly 12
+        non-OTHER classified series (KXGOLDD and 11 siblings). ``_MAX_SERIES_TOTAL``
+        must be at least the pre-Commodities budget (350) plus that amount, else
+        adding Commodities silently steals scan quota from Sports/Politics (an A/B
+        live comparison showed Sports records drop 1440->978 when Commodities
+        shares the old 350 cap)."""
+        assert _MAX_SERIES_TOTAL >= 350 + 12
