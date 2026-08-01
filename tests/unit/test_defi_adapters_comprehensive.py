@@ -1249,6 +1249,195 @@ class TestAaveV3Adapter:
         assert "WETH" in assets
         assert "RETH" in assets
 
+    @pytest.mark.asyncio
+    async def test_get_instruments_plasma_routes_to_rpc_discovery(self) -> None:
+        """PLASMA chain must route to RPC discovery, never the subgraph (no subgraph exists)."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="PLASMA")
+        with (
+            patch.object(adapter, "_get_plasma_reserves_via_rpc", new=AsyncMock(return_value=[])) as mock_rpc,
+            patch.object(adapter, "_resolve_api_url") as mock_url,
+        ):
+            results = await adapter.get_instruments()
+        mock_rpc.assert_called_once()
+        mock_url.assert_not_called()
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_plasma_reserves_via_rpc_no_key_returns_empty(self) -> None:
+        """No Alchemy key available: honest empty (not attempted), matches the no-subgraph-API-key convention."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="PLASMA")
+        with patch(
+            "instruments_service.reference_data.adapters.defi.aave_v3.resolve_plasma_alchemy_key",
+            return_value=None,
+        ):
+            results = await adapter._get_plasma_reserves_via_rpc()
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_plasma_reserves_via_rpc_total_failure_raises(self) -> None:
+        """A total getAllReservesTokens fetch failure is a TRANSIENT FETCH FAILURE, not an empty universe."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="PLASMA")
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.resolve_plasma_alchemy_key",
+                return_value="test-key",
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.resolve_rpc_url",
+                return_value="https://plasma-mainnet.g.alchemy.com/v2/test-key",
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.discover_plasma_reserves_sync",
+                side_effect=ValueError("rpc boom"),
+            ),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter._get_plasma_reserves_via_rpc()
+
+    @pytest.mark.asyncio
+    async def test_get_plasma_reserves_via_rpc_success_builds_instruments(self) -> None:
+        """Happy path: RPC discovery -> InstrumentRecords, A_TOKEN always + DEBT_TOKEN when borrowingEnabled."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="PLASMA")
+        fake_reserves: list[dict[str, object]] = [
+            {
+                "id": "0xunderlying1",
+                "symbol": "USDT0",
+                "underlyingAsset": "0xUnderlying1",
+                "decimals": 6,
+                "borrowingEnabled": True,
+                "aToken": {"id": "0xAToken1"},
+            },
+            {
+                "id": "0xunderlying2",
+                "symbol": "WXPL",
+                "underlyingAsset": "0xUnderlying2",
+                "decimals": 18,
+                "borrowingEnabled": False,
+                "aToken": {"id": "0xAToken2"},
+            },
+        ]
+
+        async def _fake_resolver(*_args: object, **_kwargs: object) -> dict[str, object]:
+            return {}
+
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.resolve_plasma_alchemy_key",
+                return_value="test-key",
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.resolve_rpc_url",
+                return_value="https://plasma-mainnet.g.alchemy.com/v2/test-key",
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.discover_plasma_reserves_sync",
+                return_value=fake_reserves,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.batch_resolve_evm_creation_timestamps",
+                new=_fake_resolver,
+            ),
+        ):
+            results = await adapter._get_plasma_reserves_via_rpc()
+
+        # USDT0 borrowingEnabled=True -> A_TOKEN + DEBT_TOKEN; WXPL borrowingEnabled=False -> A_TOKEN only.
+        assert len(results) == 3
+        assert all(r.venue == "AAVE_V3-PLASMA" for r in results)
+        by_symbol: dict[str, set[str]] = {}
+        for r in results:
+            by_symbol.setdefault(r.base_asset, set()).add(r.instrument_type.value)
+        assert by_symbol["USDT0"] == {"A_TOKEN", "DEBT_TOKEN"}
+        assert by_symbol["WXPL"] == {"A_TOKEN"}
+
+    def test_discover_plasma_reserves_sync_builds_reserve_dicts(self) -> None:
+        """Direct unit test of the sync RPC-walk helper against a mocked web3.Web3."""
+        from instruments_service.reference_data.adapters.defi import aave_v3 as aave_v3_module
+
+        mock_provider = MagicMock()
+        mock_provider.functions.getAllReservesTokens.return_value.call.return_value = [
+            ("USDT0", "0xunderlying1"),
+        ]
+        mock_provider.functions.getReserveTokensAddresses.return_value.call.return_value = (
+            "0xAToken1",
+            "0xStableDebt1",
+            "0xVariableDebt1",
+        )
+        mock_provider.functions.getReserveConfigurationData.return_value.call.return_value = (
+            6,  # decimals
+            7500,  # ltv
+            8000,  # liquidationThreshold
+            10500,  # liquidationBonus
+            1000,  # reserveFactor
+            True,  # usageAsCollateralEnabled
+            True,  # borrowingEnabled
+            False,  # stableBorrowRateEnabled
+            True,  # isActive
+            False,  # isFrozen
+        )
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_provider
+
+        mock_web3_cls = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider.return_value = MagicMock()
+        mock_web3_cls.to_checksum_address.side_effect = lambda addr: addr
+
+        with patch("web3.Web3", mock_web3_cls):
+            results = aave_v3_module.discover_plasma_reserves_sync("https://fake-rpc")
+
+        assert len(results) == 1
+        reserve = results[0]
+        assert reserve["symbol"] == "USDT0"
+        assert reserve["decimals"] == 6
+        assert reserve["borrowingEnabled"] is True
+        assert reserve["aToken"] == {"id": "0xAToken1"}
+
+    def test_discover_plasma_reserves_sync_skips_inactive_reserve(self) -> None:
+        """An inactive/frozen reserve is excluded, not surfaced as a phantom instrument."""
+        from instruments_service.reference_data.adapters.defi import aave_v3 as aave_v3_module
+
+        mock_provider = MagicMock()
+        mock_provider.functions.getAllReservesTokens.return_value.call.return_value = [
+            ("DEADCOIN", "0xdead"),
+        ]
+        mock_provider.functions.getReserveTokensAddresses.return_value.call.return_value = (
+            "0xAToken1",
+            "0xStableDebt1",
+            "0xVariableDebt1",
+        )
+        mock_provider.functions.getReserveConfigurationData.return_value.call.return_value = (
+            18,
+            0,
+            0,
+            0,
+            0,
+            False,
+            False,
+            False,
+            False,  # isActive=False
+            False,
+        )
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_provider
+
+        mock_web3_cls = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider.return_value = MagicMock()
+        mock_web3_cls.to_checksum_address.side_effect = lambda addr: addr
+
+        with patch("web3.Web3", mock_web3_cls):
+            results = aave_v3_module.discover_plasma_reserves_sync("https://fake-rpc")
+
+        assert results == []
+
 
 # ── UniswapV4ReferenceDataAdapter ─────────────────────────────────────────────
 
