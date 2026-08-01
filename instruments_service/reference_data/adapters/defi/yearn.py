@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -149,7 +150,7 @@ class YearnReferenceDataAdapter(BaseReferenceDataAdapter):
             underlying = vault["underlying"]
             decimals = _ASSET_DECIMALS.get(underlying, 18)
 
-            instrument_key = f"{venue_tag}:YIELD_BEARING:{symbol}"
+            instrument_key = build_instrument_id(venue_tag, InstrumentType.YIELD_BEARING, symbol, passthrough=True)
 
             results.append(
                 InstrumentRecord(

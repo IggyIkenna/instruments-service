@@ -14,6 +14,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import DEFI_MAJOR_ASSET_ADDRESS_LIST, SUBGRAPH_IDS
 from unified_trading_library import log_event
 
@@ -611,7 +612,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         # NOT a uniqueness guarantee -- two distinct real pools can share base/quote/fee-tier and thus this
         # exact key. The true unique machine key is `pool_address` (below); a consumer needing per-row
         # uniqueness must key on (pool_address, chain), never on instrument_key alone.
-        instrument_key = f"{venue_tag}:POOL:{symbol}"
+        instrument_key = build_instrument_id(venue_tag, InstrumentType.POOL, symbol, passthrough=True)
 
         available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))
 
