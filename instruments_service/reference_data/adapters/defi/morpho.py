@@ -11,6 +11,7 @@ Reference: https://morpho.org/
 """
 
 import logging
+import re
 from datetime import datetime
 from decimal import Decimal
 
@@ -47,6 +48,23 @@ _MORPHO_CHAIN_IDS: dict[str, int] = {
     "OPTIMISM": 10,
     "POLYGON": 137,
 }
+
+# A raw ERC-20 `symbol()` is vendor/contract-controlled, unsanitized input — most are plain
+# tickers, but real exceptions exist (confirmed live 2026-08-01: a GMX GM-vault collateral
+# asset on Morpho-Arbitrum reports symbol `GM:ETH/USD[WETH-USDC]`). `:` is the canonical id's
+# own reserved VENUE:TYPE:SYMBOL delimiter — an embedded `:` makes
+# `build_canonical_instrument_id(..., passthrough=True)` raise ValueError (canonical_id_builder's
+# fail-loud double-wrapped-id guard), which would abort this method's per-chain loop entirely
+# since callers don't wrap per-market (instrument_id_format_canonicalization_2026_07_08.md
+# finding 6). `/` and brackets are also stripped: a stray `/` in a symbol that ends up in a
+# GCS object path would silently create unintended subdirectories.
+_UNSAFE_SYMBOL_CHARS = re.compile(r"[:/\[\]]")
+
+
+def _sanitize_symbol(symbol: str) -> str:
+    """Strip characters that would corrupt the canonical id delimiter or a GCS path."""
+    return _UNSAFE_SYMBOL_CHARS.sub("", symbol)
+
 
 _MARKETS_QUERY_TEMPLATE = """
 query {{
@@ -204,7 +222,9 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         # reserved top-level VENUE:TYPE:SYMBOL delimiter, so a 3rd colon inside the
         # symbol segment is ambiguous to any naive split(":") parser (operator
         # decision 2026-07-08, instrument_id_format_canonicalization finding 6).
-        pair_key = f"{collateral_symbol}-{loan_symbol}-{market_key[:8]}"
+        # The raw asset symbols themselves are sanitized first — see
+        # _sanitize_symbol's docstring for the real GM-vault case this guards.
+        pair_key = f"{_sanitize_symbol(collateral_symbol)}-{_sanitize_symbol(loan_symbol)}-{market_key[:8]}"
 
         # DeFi metadata: Morpho Blue uses the bytes32 uniqueKey as the
         # canonical market identifier; surface that as pool_address along
