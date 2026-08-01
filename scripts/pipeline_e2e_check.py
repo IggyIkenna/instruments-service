@@ -338,7 +338,7 @@ def _slugify(value: str) -> str:
     return slug or "x"
 
 
-def _shard_vm_name(asset_group: str, venue: str, leg: str, run_ts: str) -> str:
+def _shard_vm_name(asset_group: str, venue: str, leg: str, run_ts: str, day: str) -> str:
     """Build an RFC1035-legal VM name that still matches the registered
     ``instr-backfill-{stub}-`` prefix (``VM_PREFIX_TO_BUCKET`` in
     ``vm_zombie_watchdog.py`` — a ``-pipelinecheck-<ts>``-style suffix still matches per
@@ -347,11 +347,15 @@ def _shard_vm_name(asset_group: str, venue: str, leg: str, run_ts: str) -> str:
     The plan's literal template (``instr-backfill-{ag}-pipelinecheck-{run_ts}``) is
     extended here with a per-venue/per-leg suffix: this script processes multiple venues
     sequentially within one run under the SAME asset_group, and the bare template would
-    collide across venues/legs (GCE instance names must be unique per zone).
+    collide across venues/legs (GCE instance names must be unique per zone). A short
+    ``day`` digest is included so two concurrent DIFFERENT-day runs of the SAME
+    (asset_group, venue, leg) cell landing in the same UTC second cannot collide either
+    (features_pipeline_e2e_check_vm_name_collision_same_second_2026_08_01.md).
     """
     stub = _AG_VM_PREFIX_STUB.get(asset_group.upper(), _slugify(asset_group))
     leg_stub = _LEG_STUB.get(leg, _slugify(leg))
-    prefix = f"instr-backfill-{stub}-pchk-{run_ts}-{leg_stub}-"
+    day_digest = hashlib.sha256(day.encode("utf-8")).hexdigest()[:4]
+    prefix = f"instr-backfill-{stub}-pchk-{run_ts}-{leg_stub}-{day_digest}-"
     venue_slug = _slugify(venue)
     budget = _GCE_NAME_MAX - len(prefix)
     if len(venue_slug) > budget:
@@ -476,7 +480,7 @@ def _run_leg(
     match = _manifest_match(cell)
     force = leg == "force"
     is_skip_leg = leg == "skip"
-    vm_name = _shard_vm_name(cell.asset_group, cell.venue, leg, run_ts)
+    vm_name = _shard_vm_name(cell.asset_group, cell.venue, leg, run_ts, day)
 
     result = ShardCheckResult(
         shard_label=f"{cell.asset_group}/{cell.venue}/{day}",
