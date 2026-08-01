@@ -4280,7 +4280,10 @@ def _stream_write_v2_absent_rows(
         total_written,
         part_index,
         bucket_name,
-        os.environ.get("VM_NAME", ""),
+        # apply_write=True is guaranteed here (env-guarded above), so VM_NAME
+        # is already required to be set — fail fast rather than silently
+        # logging a blank VM tag (QG STEP 5.101).
+        os.environ["VM_NAME"],
         elapsed,
     )
     return 0
