@@ -333,7 +333,10 @@ def test_projected_frame_yields_identical_sets_as_full_width() -> None:
         )
 
 
-def test_read_manifest_parquet_projected_reads_key_columns_only(tmp_path: Path) -> None:
+def test_stream_present_and_captured_sets_reads_key_columns_only(tmp_path: Path) -> None:
+    """Parquet round-trip + column projection via the streaming builder
+    (replaces the removed ``_read_manifest_parquet_projected`` — DeFi OOM
+    2026-08-01, streaming-set fix)."""
     df = _rich_manifest_frame()
     # Parquet cannot hold a mixed int/str object column — stringify the numeric
     # league_id (the in-memory mixed-dtype coercion path is covered above; this
@@ -341,18 +344,44 @@ def test_read_manifest_parquet_projected_reads_key_columns_only(tmp_path: Path) 
     df["league_id"] = df["league_id"].map(lambda v: v if v is None else str(v))
     path = tmp_path / "index.parquet"
     df.to_parquet(path, index=False)
-    got = enumerator_module._read_manifest_parquet_projected(str(path), "sports")
-    assert list(got.columns) == ["data_type", "league_id", "date", "capture_status"]
-    assert len(got) == len(df)
-    # Round-trip through parquet + projection still yields identical sets.
-    assert enumerator_module._build_captured_set(got, "sports") == _legacy_build_captured_set(df, "sports")
-    assert enumerator_module._build_present_set(got, "sports") == _legacy_build_present_set(df, "sports")
+    present, captured = enumerator_module._stream_present_and_captured_sets_from_parquet(str(path), "sports")
+    assert captured == _legacy_build_captured_set(df, "sports")
+    assert present == _legacy_build_present_set(df, "sports")
 
 
-def test_read_manifest_parquet_projected_falls_back_full_width(tmp_path: Path) -> None:
-    """A degenerate parquet with NO needed columns keeps legacy full-width behaviour."""
+def test_stream_present_and_captured_sets_falls_back_full_width(tmp_path: Path) -> None:
+    """A degenerate parquet with NO needed columns keeps legacy full-width behaviour
+    (empty sets — no key columns to build a row-key tuple from)."""
     df = pd.DataFrame({"foo": ["a"], "bar": ["b"]})
     path = tmp_path / "weird.parquet"
     df.to_parquet(path, index=False)
-    got = enumerator_module._read_manifest_parquet_projected(str(path), "sports")
-    assert list(got.columns) == ["foo", "bar"]
+    present, captured = enumerator_module._stream_present_and_captured_sets_from_parquet(str(path), "sports")
+    assert present == set()
+    assert captured == set()
+
+
+# ---------------------------------------------------------------------------
+# 4. Streamed (multi-batch) vs whole-DataFrame equivalence — the actual DeFi
+#    OOM regression pin (2026-08-01, defi_v2_expected_universe_enumerator_
+#    oom_2026_08_01.md Todo 2): proves batching the parquet read never changes
+#    the result vs. materialising one full-width DataFrame, at a batch size
+#    small enough to force multiple batches over the fixture.
+# ---------------------------------------------------------------------------
+
+
+def test_stream_present_and_captured_sets_multi_batch_equals_whole_dataframe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    df = _rich_manifest_frame()
+    df["league_id"] = df["league_id"].map(lambda v: v if v is None else str(v))
+    path = tmp_path / "index.parquet"
+    df.to_parquet(path, index=False)
+
+    # Force multiple batches over an 8-row fixture (batch_size=1 == 8 batches).
+    monkeypatch.setattr(enumerator_module, "V2_MANIFEST_READ_BATCH_SIZE", 1)
+    for asset_group in ("sports", "cefi", "tradfi", "prediction"):
+        present, captured = enumerator_module._stream_present_and_captured_sets_from_parquet(
+            str(path), asset_group
+        )
+        assert captured == enumerator_module._build_captured_set(df, asset_group)
+        assert present == enumerator_module._build_present_set(df, asset_group)
