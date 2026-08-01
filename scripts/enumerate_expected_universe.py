@@ -3365,42 +3365,83 @@ def _needed_manifest_columns(asset_group: str, schema_names: list[str]) -> list[
     return needed
 
 
-def _read_manifest_parquet_projected(local_path: str, asset_group: str) -> pd.DataFrame:
-    """Read a manifest index/shard parquet restricted to the enumerator's columns.
+#: Row-batch size for streaming manifest reads (present/captured-set building).
+#: Bounds peak memory to O(batch) instead of O(full manifest) — the DeFi OOM
+#: (2026-08-01) proved column-projection alone (the sports-OOM fix,
+#: 2026-07-14) does not scale: DeFi's consolidated index is 29.9M rows x 7-8
+#: present-set string columns, and materialising ALL of them as ONE pandas
+#: DataFrame still exceeds the 8Gi Cloud Run Job ceiling on pandas' per-cell
+#: Python-object overhead alone (confirmed live: OOM'd again — signal 9 during
+#: "Loading manifest from ...", before a single row is written, even after the
+#: write-path streaming fix in ``_stream_write_v2_absent_rows``). 1M rows/batch
+#: keeps a full-width present-cols batch well under ~200MB even at the widest
+#: per-instrument grain.
+V2_MANIFEST_READ_BATCH_SIZE = 1_000_000
 
-    Projects to :func:`_needed_manifest_columns` (schema read first — zero data
-    IO) so the full-width index is never materialised in pandas. Falls back to
-    a full-width read only when the schema carries NONE of the needed columns
-    (degenerate/foreign parquet — legacy behaviour, and the set builders then
-    return empty sets exactly as before).
+
+def _stream_present_and_captured_sets_from_parquet(
+    local_path: str, asset_group: str
+) -> tuple[set[tuple[str, ...]], set[tuple[str, ...]]]:
+    """Build ``(present_set, captured_set)`` from one manifest parquet file via bounded row-batches.
+
+    Delegates the actual grain/rollup/oscillation-guard logic to the existing,
+    tested :func:`_build_present_set` / :func:`_build_captured_set` — called
+    once PER BATCH and unioned — never reimplements those rules. Batching
+    never changes the result vs. building from one combined DataFrame: the
+    only per-batch cross-row step (:func:`_rollup_present_bundle_grain`'s
+    unique-``(instrument_type, venue)`` grouping) is a pure per-asset_group
+    lookup with no dependency on rows outside the batch. See
+    ``test_enumerate_manifest_memory_frugal.py``'s batched-vs-whole
+    equivalence tests. Falls back to a single non-streamed full-width read
+    when the schema carries NONE of the needed columns (degenerate/foreign
+    parquet — the set builders then return empty sets exactly as before).
     """
     schema_names = list(pq.read_schema(local_path).names)
     columns = _needed_manifest_columns(asset_group, schema_names)
     if not columns:
-        return pd.read_parquet(local_path)
-    return pd.read_parquet(local_path, columns=columns)
+        df = pd.read_parquet(local_path)
+        return _build_present_set(df, asset_group), _build_captured_set(df, asset_group)
+
+    present: set[tuple[str, ...]] = set()
+    captured: set[tuple[str, ...]] = set()
+    parquet_file = pq.ParquetFile(local_path)
+    for batch in parquet_file.iter_batches(columns=columns, batch_size=V2_MANIFEST_READ_BATCH_SIZE):
+        batch_df = batch.to_pandas()
+        present.update(_build_present_set(batch_df, asset_group))
+        captured.update(_build_captured_set(batch_df, asset_group))
+        del batch_df
+    return present, captured
 
 
-def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame, str]:
-    """Bulk-download the canonical manifest + unconsolidated per-VM shards. Returns (df, local_path).
+def _download_manifest_sets(
+    bucket_name: str, asset_group: str
+) -> tuple[set[tuple[str, ...]], set[tuple[str, ...]], list[str]]:
+    """Stream-build ``(present_set, captured_set, present_cols)`` from the manifest + per-VM shards.
 
-    Reads BOTH the consolidated availability_index.parquet AND any per-VM shards under
-    _index/per_vm/ that have not yet been merged by the consolidator.  Prevents the
-    race condition where typing scripts write empty_confirmed rows to per-VM shards and
-    the consolidator has not yet merged them when the enumerator runs: without the
-    per-VM augmentation the enumerator's present_set would miss those typed rows, write
-    expected_unattempted for the same keys, and the newer eu written_at would overwrite
-    the typed rows after consolidation.
-
-    Every parquet read here is COLUMN-PROJECTED to the present-set key grain +
-    ``capture_status`` (:func:`_read_manifest_parquet_projected`) — the returned
-    frame is a key-column view of the manifest, NOT the full-width index (sports
-    OOM 2026-07-14; the enumerator consumes nothing else).
+    Replaces the prior ``_download_manifest`` (bulk-load into ONE pandas
+    DataFrame, removed 2026-08-01 — DeFi OOM) — the sports-OOM column-projection
+    fix (2026-07-14) does not scale to DeFi's 29.9M-row consolidated index even
+    fully column-pruned: 7-8 present-set string columns x 29.9M rows still
+    exceeds an 8Gi container on pandas' per-cell object overhead alone
+    (confirmed live OOM 2026-08-01, DURING the manifest load — before the
+    write-path streaming fix from Todo 1 even gets a chance to run). Streams
+    the main index AND every unconsolidated per-VM shard (same
+    pre-consolidation-race coverage the old function provided — prevents the
+    race where typing scripts write empty_confirmed rows to per-VM shards
+    before the consolidator merges them) through
+    :func:`_stream_present_and_captured_sets_from_parquet` in bounded batches,
+    UNIONING each file's sets — mathematically identical to building from one
+    combined DataFrame (see that function's docstring) but with peak memory
+    bounded to O(one batch) instead of O(full manifest). Each local temp file
+    is deleted immediately after it's consumed (bounds disk too, not just
+    memory) rather than deferred to one final caller-side cleanup.
 
     If a pre-cached copy exists at /tmp/{asset_group}_manifest_cache.parquet
     (written by a preceding gsutil cp to avoid GCS SDK stream timeouts on
     large manifests), use it directly instead of re-downloading (the cache
     skips per-VM augmentation; this is acceptable for the manual cache path).
+
+    See ``plans/active/issues/defi_v2_expected_universe_enumerator_oom_2026_08_01.md``.
     """
     # Support both /tmp and home-dir caches (macOS sandbox writes home-dir on some calls)
     _home_cache = os.path.expanduser(f"~/tmp_manifest_cache/{asset_group}_manifest_cache.parquet")
@@ -3408,26 +3449,32 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
     cache_path = _home_cache if os.path.exists(_home_cache) else _tmp_cache
     if os.path.exists(cache_path):
         logger.info("Using pre-cached manifest at %s", cache_path)
-        df = _read_manifest_parquet_projected(cache_path, asset_group)
-        logger.info("Manifest rows: %d", len(df))
-        return df, cache_path
+        present, captured = _stream_present_and_captured_sets_from_parquet(cache_path, asset_group)
+        present_cols = _present_cols_for(asset_group, list(pq.read_schema(cache_path).names))
+        logger.info("Manifest present-set: %d, captured-set: %d", len(present), len(captured))
+        return present, captured, present_cols
 
     client = storage.Client(project=PROJECT_ID)
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(MANIFEST_BLOB)
-    logger.info("Loading manifest from gs://%s/%s", bucket_name, MANIFEST_BLOB)
+    logger.info("Streaming manifest from gs://%s/%s", bucket_name, MANIFEST_BLOB)
     with tempfile.NamedTemporaryFile(
         prefix=f"enum-univ-{asset_group}-",
         suffix=".parquet",
         delete=False,
     ) as tf:
         local_path = tf.name
-    blob.download_to_filename(local_path, timeout=600)
-    df = _read_manifest_parquet_projected(local_path, asset_group)
-    logger.info("Manifest rows: %d", len(df))
+    try:
+        blob.download_to_filename(local_path, timeout=600)
+        present_cols = _present_cols_for(asset_group, list(pq.read_schema(local_path).names))
+        present, captured = _stream_present_and_captured_sets_from_parquet(local_path, asset_group)
+        logger.info("Manifest present-set: %d, captured-set: %d", len(present), len(captured))
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(local_path)
 
     # Augment with per-VM shards to close the pre-consolidation race window.
-    # Best-effort: a failure here falls back to the consolidated-only index
+    # Best-effort: a failure here falls back to the consolidated-only sets
     # (present_set may miss some recently-typed rows, but that is the old
     # behaviour — never worse than before this fix).
     try:
@@ -3436,10 +3483,9 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
         ]
         if shard_blobs:
             logger.info(
-                "Augmenting present-set with %d per-VM shard(s) to close pre-consolidation race",
+                "Augmenting present/captured sets with %d per-VM shard(s) to close pre-consolidation race",
                 len(shard_blobs),
             )
-            extra_frames: list[pd.DataFrame] = []
             for shard_blob in shard_blobs:
                 shard_local: str | None = None
                 try:
@@ -3450,13 +3496,17 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
                     ) as stf:
                         shard_local = stf.name
                     shard_blob.download_to_filename(shard_local, timeout=120)
-                    # Same column projection as the main index: pd.concat
-                    # (sort=False) unions by name, so a shard-only key column
-                    # still surfaces and main-index rows get NaN -> "" exactly
-                    # as the legacy full-width concat did.
-                    shard_df = _read_manifest_parquet_projected(shard_local, asset_group)
-                    extra_frames.append(shard_df)
-                    logger.info("Loaded per-VM shard %s: %d rows", shard_blob.name, len(shard_df))
+                    shard_present, shard_captured = _stream_present_and_captured_sets_from_parquet(
+                        shard_local, asset_group
+                    )
+                    present.update(shard_present)
+                    captured.update(shard_captured)
+                    logger.info(
+                        "Loaded per-VM shard %s: present +%d, captured +%d",
+                        shard_blob.name,
+                        len(shard_present),
+                        len(shard_captured),
+                    )
                 except Exception as shard_exc:
                     logger.warning(
                         "Skipping per-VM shard %s (best-effort): %s",
@@ -3467,16 +3517,18 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
                     if shard_local is not None:
                         with contextlib.suppress(OSError):
                             os.unlink(shard_local)
-            if extra_frames:
-                df = pd.concat([df, *extra_frames], ignore_index=True, sort=False)
-                logger.info("Augmented manifest: %d total rows (main + per-VM shards)", len(df))
+            logger.info(
+                "Augmented manifest sets: present=%d, captured=%d (main + per-VM shards)",
+                len(present),
+                len(captured),
+            )
     except Exception as augment_exc:
         logger.warning(
             "Per-VM shard augmentation failed (best-effort, using consolidated index only): %s",
             augment_exc,
         )
 
-    return df, local_path
+    return present, captured, present_cols
 
 
 def _rollup_present_bundle_grain(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
@@ -4366,137 +4418,117 @@ def main() -> int:
         catalog_df = pd.read_parquet(catalog_path)
     logger.info("v2 catalog loaded: %d instruments", len(catalog_df))
     catalog = _catalog_from_dataframe(catalog_df)
-    # Download manifest to build present_set for expected_unattempted detection.
-    v2_manifest_df, v2_local_manifest = _download_manifest(bucket_name, asset_group)
-    try:
-        v2_present_set = _build_present_set(v2_manifest_df, asset_group)
-        logger.info("v2 manifest present-set size: %d", len(v2_present_set))
-        v2_captured_set = _build_captured_set(v2_manifest_df, asset_group)
-        logger.info("v2 manifest captured-set size: %d (oscillation guard)", len(v2_captured_set))
-        # Column order used in _build_present_set (must match present_set tuples).
-        v2_present_cols = _present_cols_for(asset_group, list(v2_manifest_df.columns))
-        # The manifest frame is fully consumed into the two key-sets + the
-        # present-cols list above — release it before the enumeration loop
-        # accumulates v2_absent (memory-frugal load path, sports OOM 2026-07-14).
-        del v2_manifest_df
-        # Build date_axis as list[date]
-        date_axis_ts = pd.date_range(start_date, end_date, freq="D")
-        date_axis: list[date] = [d.date() for d in date_axis_ts]
-        # Sports denominator iterates the captured provider data_types
-        # (SPORTS_DATA_TYPE_TO_SOURCE), NOT the MTDS odds types in
-        # DATA_TYPES_BY_ASSET_GROUP["sports"] — see _sports_data_types().
-        if data_types_override is not None:
-            # Explicit override (e.g. prediction cqg-bundle grain only, decision 338).
-            data_types_list = data_types_override
-            logger.info("v2: data_type override active → %s", data_types_list)
-        elif asset_group == "sports":
-            data_types_list = _sports_data_types()
-        elif asset_group == "tradfi":
-            # Excludes corporate_action_confirmed/earnings_result — real capture
-            # lives in features-service, not MTDS. See
-            # _tradfi_mtds_tick_manifest_data_types()'s docstring.
-            data_types_list = _tradfi_mtds_tick_manifest_data_types()
-        else:
-            data_types_list = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
-        # FULL-HISTORY (Part 2): enumerate the FULL --start..--end window. The
-        # present_set is STILL passed (alive-and-present cells — the recent ~120d
-        # _index window — correctly SKIP, never double-counted; alive-and-absent →
-        # expected_unattempted; lifecycle-boundary days → empty_confirmed). The result
-        # is range-encoded into the companion artifact rather than written per-day, so
-        # the ~190M-day full-history collapses to ~1-3M spans. The bounded-window path
-        # is identical but over the short window + STREAMS per-day rows to the _index
-        # shard in bounded chunks (see _stream_write_v2_absent_rows) rather than
-        # draining the whole generator into memory first.
-        v2_rows = enumerate_v2(
+    # Stream-build present_set/captured_set for expected_unattempted detection —
+    # never materialises the manifest as one full-width DataFrame (DeFi OOM
+    # 2026-08-01; see _download_manifest_sets's docstring).
+    v2_present_set, v2_captured_set, v2_present_cols = _download_manifest_sets(bucket_name, asset_group)
+    logger.info("v2 manifest present-set size: %d", len(v2_present_set))
+    logger.info("v2 manifest captured-set size: %d (oscillation guard)", len(v2_captured_set))
+    # Build date_axis as list[date]
+    date_axis_ts = pd.date_range(start_date, end_date, freq="D")
+    date_axis: list[date] = [d.date() for d in date_axis_ts]
+    # Sports denominator iterates the captured provider data_types
+    # (SPORTS_DATA_TYPE_TO_SOURCE), NOT the MTDS odds types in
+    # DATA_TYPES_BY_ASSET_GROUP["sports"] — see _sports_data_types().
+    if data_types_override is not None:
+        # Explicit override (e.g. prediction cqg-bundle grain only, decision 338).
+        data_types_list = data_types_override
+        logger.info("v2: data_type override active → %s", data_types_list)
+    elif asset_group == "sports":
+        data_types_list = _sports_data_types()
+    elif asset_group == "tradfi":
+        # Excludes corporate_action_confirmed/earnings_result — real capture
+        # lives in features-service, not MTDS. See
+        # _tradfi_mtds_tick_manifest_data_types()'s docstring.
+        data_types_list = _tradfi_mtds_tick_manifest_data_types()
+    else:
+        data_types_list = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
+    # FULL-HISTORY (Part 2): enumerate the FULL --start..--end window. The
+    # present_set is STILL passed (alive-and-present cells — the recent ~120d
+    # _index window — correctly SKIP, never double-counted; alive-and-absent →
+    # expected_unattempted; lifecycle-boundary days → empty_confirmed). The result
+    # is range-encoded into the companion artifact rather than written per-day, so
+    # the ~190M-day full-history collapses to ~1-3M spans. The bounded-window path
+    # is identical but over the short window + STREAMS per-day rows to the _index
+    # shard in bounded chunks (see _stream_write_v2_absent_rows) rather than
+    # draining the whole generator into memory first.
+    v2_rows = enumerate_v2(
+        asset_group=asset_group,
+        catalog=catalog,
+        date_axis=date_axis,
+        data_types=data_types_list,
+        present_set=v2_present_set,
+        present_cols=v2_present_cols,
+        captured_set=v2_captured_set,
+    )
+    if not full_history:
+        # BOUNDED-WINDOW (the daily-cron default): stream candidates to
+        # disk/GCS in bounded chunks — root-cause fix for the 2026-08-01
+        # DeFi OOM (19 consecutive days OOM'd draining this generator into
+        # one in-memory list before any write happened). See
+        # plans/active/issues/defi_v2_expected_universe_enumerator_oom_2026_08_01.md.
+        return _stream_write_v2_absent_rows(
+            rows=v2_rows,
+            max_writes_per_run=max_writes_per_run,
+            chunk_size=V2_STREAM_CHUNK_SIZE,
             asset_group=asset_group,
-            catalog=catalog,
-            date_axis=date_axis,
-            data_types=data_types_list,
-            present_set=v2_present_set,
-            present_cols=v2_present_cols,
-            captured_set=v2_captured_set,
+            bucket_name=bucket_name,
+            apply_write=apply_write,
+            report_path=report_path,
+            run_id=run_id,
+            run_ts=run_ts,
+            gcs_report_bucket_arg=gcs_report_bucket_arg,
         )
-        if not full_history:
-            # BOUNDED-WINDOW (the daily-cron default): stream candidates to
-            # disk/GCS in bounded chunks — root-cause fix for the 2026-08-01
-            # DeFi OOM (19 consecutive days OOM'd draining this generator into
-            # one in-memory list before any write happened). See
-            # plans/active/issues/defi_v2_expected_universe_enumerator_oom_2026_08_01.md.
-            return _stream_write_v2_absent_rows(
-                rows=v2_rows,
-                max_writes_per_run=max_writes_per_run,
-                chunk_size=V2_STREAM_CHUNK_SIZE,
-                asset_group=asset_group,
-                bucket_name=bucket_name,
-                apply_write=apply_write,
-                report_path=report_path,
-                run_id=run_id,
-                run_ts=run_ts,
-                gcs_report_bucket_arg=gcs_report_bucket_arg,
+    # FULL-HISTORY: range-encoding needs the full per-day candidate set
+    # materialised (contiguous-span compaction), so this branch still
+    # drains the generator into one list. Not implicated in the
+    # 2026-08-01 DeFi OOM — the daily cron never passes --full-history.
+    v2_absent: list[ExpectedRow] = []
+    for expected_row in v2_rows:
+        v2_absent.append(expected_row)
+        if len(v2_absent) > max_writes_per_run:
+            logger.error(
+                "Halt-safety triggered: would-write %d > max_writes_per_run %d. "
+                "Increase --max-writes-per-run after operator review.",
+                len(v2_absent),
+                max_writes_per_run,
             )
-        # FULL-HISTORY: range-encoding needs the full per-day candidate set
-        # materialised (contiguous-span compaction), so this branch still
-        # drains the generator into one list. Not implicated in the
-        # 2026-08-01 DeFi OOM — the daily cron never passes --full-history.
-        v2_absent: list[ExpectedRow] = []
-        for expected_row in v2_rows:
-            v2_absent.append(expected_row)
-            if len(v2_absent) > max_writes_per_run:
-                logger.error(
-                    "Halt-safety triggered: would-write %d > max_writes_per_run %d. "
-                    "Increase --max-writes-per-run after operator review.",
-                    len(v2_absent),
-                    max_writes_per_run,
-                )
-                _emit_event(
-                    "ENUMERATOR_FAILED",
-                    reason="max_writes_exceeded",
-                    candidates=len(v2_absent),
-                    cap=max_writes_per_run,
-                    run_id=run_id,
-                )
-                return 5
-        logger.info(
-            "v2 enumeration complete: %d candidate rows (per-instrument grain)",
-            len(v2_absent),
-        )
-        if not v2_absent:
-            logger.info("v2: nothing to backfill — manifest already covers the expected per-instrument universe.")
             _emit_event(
-                "ENUMERATOR_COMPLETED",
-                enumerator_version="v2",
-                asset_group=asset_group,
-                candidates=0,
-                written=0,
-                run_id=run_id,
-            )
-            return 0
-        # FULL-HISTORY: range-encode the per-day candidates into contiguous spans +
-        # write the companion artifact (not the per-day _index shard). ~100x compaction.
-        ranges = range_encode(v2_absent)
-        total_days = sum(r.n_days for r in ranges)
-        logger.info(
-            "v2 full-history: %d per-day candidates → %d range rows (%d EU-days; %.0fx compaction)",
-            len(v2_absent),
-            len(ranges),
-            total_days,
-            (len(v2_absent) / len(ranges)) if ranges else 1.0,
-        )
-        if not apply_write:
-            logger.info("Scan-only full-history; pass --apply-write to commit the range companion.")
-            _emit_event(
-                "ENUMERATOR_COMPLETED",
-                enumerator_version="v2",
-                asset_group=asset_group,
+                "ENUMERATOR_FAILED",
+                reason="max_writes_exceeded",
                 candidates=len(v2_absent),
-                range_rows=len(ranges),
-                eu_days=total_days,
-                written=0,
-                full_history=True,
+                cap=max_writes_per_run,
                 run_id=run_id,
             )
-            return 0
-        code = _write_range_artifact(ranges=ranges, asset_group=asset_group, bucket_name=bucket_name, run_id=run_id)
+            return 5
+    logger.info(
+        "v2 enumeration complete: %d candidate rows (per-instrument grain)",
+        len(v2_absent),
+    )
+    if not v2_absent:
+        logger.info("v2: nothing to backfill — manifest already covers the expected per-instrument universe.")
+        _emit_event(
+            "ENUMERATOR_COMPLETED",
+            enumerator_version="v2",
+            asset_group=asset_group,
+            candidates=0,
+            written=0,
+            run_id=run_id,
+        )
+        return 0
+    # FULL-HISTORY: range-encode the per-day candidates into contiguous spans +
+    # write the companion artifact (not the per-day _index shard). ~100x compaction.
+    ranges = range_encode(v2_absent)
+    total_days = sum(r.n_days for r in ranges)
+    logger.info(
+        "v2 full-history: %d per-day candidates → %d range rows (%d EU-days; %.0fx compaction)",
+        len(v2_absent),
+        len(ranges),
+        total_days,
+        (len(v2_absent) / len(ranges)) if ranges else 1.0,
+    )
+    if not apply_write:
+        logger.info("Scan-only full-history; pass --apply-write to commit the range companion.")
         _emit_event(
             "ENUMERATOR_COMPLETED",
             enumerator_version="v2",
@@ -4504,14 +4536,24 @@ def main() -> int:
             candidates=len(v2_absent),
             range_rows=len(ranges),
             eu_days=total_days,
-            written=len(ranges),
+            written=0,
             full_history=True,
             run_id=run_id,
         )
-        return code
-    finally:
-        with contextlib.suppress(OSError):
-            os.unlink(v2_local_manifest)
+        return 0
+    code = _write_range_artifact(ranges=ranges, asset_group=asset_group, bucket_name=bucket_name, run_id=run_id)
+    _emit_event(
+        "ENUMERATOR_COMPLETED",
+        enumerator_version="v2",
+        asset_group=asset_group,
+        candidates=len(v2_absent),
+        range_rows=len(ranges),
+        eu_days=total_days,
+        written=len(ranges),
+        full_history=True,
+        run_id=run_id,
+    )
+    return code
 
 
 if __name__ == "__main__":
