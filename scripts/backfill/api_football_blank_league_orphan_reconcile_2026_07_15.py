@@ -194,7 +194,7 @@ def main() -> int:
         log.info("DRY RUN — no writes performed. Re-run without --dry-run to apply.")
         return 0
 
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET)
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET, per_vm_shards=True)
     n_written = 0
     n_skipped_no_coverage = 0
     for _, row in orphans.iterrows():

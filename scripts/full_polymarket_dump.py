@@ -225,7 +225,9 @@ def main() -> None:
     project_id = UnifiedCloudConfig().gcp_project_id
     bucket = f"instruments-store-prediction-{project_id}"
 
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket, batch_size=100)
+    manifest = ManifestWriter(
+        service_name="instruments-service", catalogue_bucket=bucket, batch_size=100, per_vm_shards=True
+    )
     dates_written = 0
     dates_skipped = 0
 
