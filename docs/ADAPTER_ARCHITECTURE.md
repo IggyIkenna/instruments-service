@@ -95,7 +95,7 @@ instruments_service/
 │   └── adapters/
 │       ├── cefi/                      # ccxt_adapter.py, tardis/, aster.py, hyperliquid.py, lighter.py, ...
 │       ├── defi/                      # uniswap_v2/v3/v4.py, aave_v3.py, morpho.py, curve.py, + ~35 more
-│       ├── tradfi/                    # databento/, ibkr.py, massive.py, futures_factory.py, tradfi_live.py
+│       ├── tradfi/                    # databento/, ibkr.py, futures_factory.py, tradfi_live.py
 │       ├── prediction/                # kalshi.py, polymarket/
 │       └── sports/                    # adapters/ (api_football.py, betfair.py, ...), factory.py, _normalizer.py
 ├── config/                            # instruments_config, settings
@@ -126,9 +126,10 @@ python -m instruments_service --operation instruments --mode batch \
 - `--asset-group` (`CEFI` / `DEFI` / `TRADFI` / `SPORTS` / `PREDICTION` / `ALL`) selects which venue set
   `get_venues_for_asset_groups()` resolves.
 - Additional flags: `--venues` (shard override), `--force`, `--sports-provider` / `--sports-entity` / `--league` /
-  `--season` (sports-domain scoping), `--source` (`massive` routes TradFi to the Massive/Polygon.io-compatible
-  adapter instead of Databento), `--trigger` (live-mode entity-subset selector, in-progress rollout), `--run-tag`
-  (GCS output prefix; `t1-recon` self-defaults the date window to today).
+  `--season` (sports-domain scoping), `--trigger` (live-mode entity-subset selector, in-progress rollout),
+  `--run-tag` (GCS output prefix; `t1-recon` self-defaults the date window to today). The `--source` flag and its
+  Massive/Polygon.io alternate TradFi adapter were removed 2026-08-03 — Databento is the sole TradFi
+  reference-data source (SSOT: `/codex/02-data/tradfi-databento-sourcing-ssot.md`).
 
 ### Orchestration: `process_instruments()` (8 stages)
 
@@ -262,8 +263,9 @@ docs show.
 
 **TradFi** (`reference_data/adapters/tradfi/`): `databento/` (`adapter.py`, `symbology.py`, `sessions.py` — CME/NASDAQ/
 NYSE/CBOE/ICE via Databento, including static VIX/KRW-USD/Bitcoin-ETF definitions), `ibkr.py` (Interactive Brokers),
-`massive.py` (Polygon.io-compatible alternate source, opt-in via `--source massive`), `futures_factory.py`,
-`tradfi_live.py`.
+`futures_factory.py`, `tradfi_live.py`. Databento is the SOLE TradFi reference-data source — the Massive
+(Polygon.io) alternate adapter `massive.py` and its `--source massive` routing were deleted 2026-08-03
+(SSOT: `/codex/02-data/tradfi-databento-sourcing-ssot.md`).
 
 **Prediction** (`reference_data/adapters/prediction/`): `kalshi.py`, `polymarket/` (event-contract markets; routes
 through its own domain builder, `canonical/domain/prediction/prediction_mapping.py`, rather than the ad hoc CeFi/DeFi

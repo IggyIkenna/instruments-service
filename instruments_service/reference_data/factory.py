@@ -87,7 +87,6 @@ from .adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
 from .adapters.tradfi.fx import FxReferenceDataAdapter
 from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
-from .adapters.tradfi.massive import MassiveReferenceDataAdapter
 from .adapters.tradfi.tradfi_live import TradFiLiveReferenceDataAdapter
 from .base_adapter import BaseReferenceDataAdapter
 
@@ -164,7 +163,12 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "karak": KarakReferenceDataAdapter,
     "marginfi": MarginfiReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
-    "massive": MassiveReferenceDataAdapter,
+    # "massive" (= Polygon.io, rebranded) removed 2026-08-03 — the reference-data
+    # adapter + its --source routing are DELETED; Databento is the sole TradFi
+    # reference-data source. Completes the 2026-07-19 removal that landed in
+    # unified-api-contracts@a2beed46 (SOURCE_PRIORITY) + market-tick-data-service@362a487e
+    # (tick routing) but never reached this repo. SSOT:
+    # unified-trading-pm/codex/02-data/tradfi-databento-sourcing-ssot.md.
     # Registered but currently unreachable via UAC VENUE_TO_ADAPTER_KEY — see
     # adapters/tradfi/ibkr.py's module docstring STATUS note for the full explanation
     # + activation path (tradfi_adapter_dead_code_fallback_audit_2026_07_25.md Finding I-3).
@@ -219,7 +223,7 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "coinbase_cde": "",
     "tardis": "tardis",
     "databento": "databento",
-    "massive": "massive",
+    # "massive" removed 2026-08-03 alongside its adapter (see _ADAPTERS above).
     "ibkr": "ibkr",
     # Curated static FX_SPOT_PAIRS list (UAC registry) — no vendor call, no API key.
     "fx": "",
@@ -367,11 +371,6 @@ def clear_adapter_pool() -> None:
     _adapter_pool.clear()
 
 
-#: TradFi reference adapter keys sharing the target_date + venue_filter contract
-#: (both emit the canonical InstrumentRecord; Massive is Polygon.io-API compatible
-#: — the sanctioned alt to Databento whose re-runs are billing-blocked 2026-06).
-_DATE_AWARE_TRADFI_ADAPTER_KEYS: frozenset[str] = frozenset({"databento", "massive"})
-
 # DeFi adapters that accept a chain parameter (EVM + Solana). Membership here =
 # factory parses the chain segment from "<VENUE>-<CHAIN>" and passes it as
 # `chain=` to the adapter ctor. Adapters NOT in this set default to ETHEREUM
@@ -450,33 +449,21 @@ def _resolve_uac_adapter_key(canonical_venue: str) -> str:
     return adapter_key
 
 
-def _resolve_source_aware_adapter_key(adapter_key: str, source: str | None) -> str:
-    """Source-aware routing: ``source="massive"`` re-points a TradFi venue that
-    defaults to Databento → the Massive adapter (Databento re-runs billing-blocked
-    2026-06; Massive refills ``by_date/``). Same canonical InstrumentRecord output."""
-    if source == "massive" and adapter_key == "databento":
-        return "massive"
-    return adapter_key
-
-
 def _build_date_aware_tradfi_adapter(
-    adapter_key: str,
     *,
     project_id: str | None,
     api_key: str | None,
     date: str | None,
     canonical_venue: str,
 ) -> BaseReferenceDataAdapter:
-    """Build a Databento/Massive adapter — date + venue filter so each venue only
-    fetches its own instruments (target_date baked in at init)."""
+    """Build the Databento adapter — date + venue filter so each venue only
+    fetches its own instruments (target_date baked in at init).
+
+    Databento is the SOLE TradFi reference-data source: the Massive (Polygon.io)
+    alternate adapter and its ``--source massive`` re-pointing were deleted
+    2026-08-03. SSOT: unified-trading-pm/codex/02-data/tradfi-databento-sourcing-ssot.md.
+    """
     target = date_type.fromisoformat(date) if date else None
-    if adapter_key == "massive":
-        return MassiveReferenceDataAdapter(
-            project_id=project_id,
-            api_key=api_key,
-            target_date=target,
-            venue_filter=canonical_venue,
-        )
     return DatabentoReferenceDataAdapter(
         project_id=project_id,
         api_key=api_key,
@@ -549,7 +536,6 @@ def get_adapter_for_canonical_venue(
     date: str | None = None,
     extra_api_keys: dict[str, str] | None = None,
     mode: str = "batch",
-    source: str | None = None,
 ) -> BaseReferenceDataAdapter:
     """Create a reference data adapter for a UAC canonical venue name.
 
@@ -575,7 +561,6 @@ def get_adapter_for_canonical_venue(
             unknown to UAC, or declared adapterless via NO_ADAPTER_YET).
     """
     adapter_key = _resolve_uac_adapter_key(canonical_venue)
-    adapter_key = _resolve_source_aware_adapter_key(adapter_key, source)
 
     # Live mode: route CeFi Tardis venues to CCXT (real-time public endpoints).
     # Tardis is historical-only and can't provide live instrument definitions.
@@ -623,14 +608,14 @@ def get_adapter_for_canonical_venue(
     # Check pool — reuse existing adapter if same key + credentials + venue + date
     # Include canonical_venue in pool key so AAVE_V3-ARBITRUM != AAVE_V3-ETHEREUM
     # Include date for adapters whose target date is baked in at init time:
-    # Databento, Massive, AND api_football (2026-07-14: the api_football URDI
+    # Databento AND api_football (2026-07-14: the api_football URDI
     # adapter pins ``self._date`` at construction; pooling it WITHOUT the date
     # made every later date of a multi-date batch run reuse the FIRST date's
     # fixture universe — the per-date filter then saw 0 active instruments and
     # the zero-record path stamped false EXPECTED_NO_FIXTURE markers over real
     # fixture days. GW enrichment RED, issue
     # sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14).
-    pool_date = date if adapter_key in ("databento", "massive", "api_football") else None
+    pool_date = date if adapter_key in ("databento", "api_football") else None
     pool_key = (adapter_key, api_key, canonical_venue, pool_date)
     if pool_key in _adapter_pool:
         return _adapter_pool[pool_key]
@@ -689,9 +674,8 @@ def get_adapter_for_canonical_venue(
             exchanges=tardis_exchanges,
             canonical_venue_override=canonical_venue,
         )
-    elif adapter_key in _DATE_AWARE_TRADFI_ADAPTER_KEYS:
+    elif adapter_key == "databento":
         adapter = _build_date_aware_tradfi_adapter(
-            adapter_key,
             project_id=project_id,
             api_key=api_key,
             date=date,

@@ -1927,7 +1927,8 @@ def _enumerate_v2_tradfi(
         else:
             # Use raw_symbol.upper() when populated to match the MTDS TradFi catalog reader
             # convention (_canonical_tradfi_id returns raw_symbol.upper() for EQUITY/ETF/INDEX
-            # types). The Massive adapter writes instrument_key="NASDAQ:EQUITY:AAPL" which
+            # types). The (now-removed 2026-08-03) Massive adapter wrote instrument_key=
+            # "NASDAQ:EQUITY:AAPL" — the Databento adapter emits the same form — which
             # becomes instr.instrument_id, while raw_symbol="AAPL" matches the MTDS writer's
             # captured-shard atom. Misalignment causes EU rows to persist as expected_unattempted
             # even after capture (different dedup keys — never collide in the consolidator).
