@@ -1,16 +1,31 @@
-"""Dedup-aware cefi monotonic guard (RULED 2026-07-28, was `[OPERATOR]`, retagged
-`[DATA]` — ``dp_catalog_not_running_sports_prediction_2026_07_15.md``).
+"""Dedup-aware monotonic guard (RULED 2026-07-28, was `[OPERATOR]`, retagged
+`[DATA]` — ``dp_catalog_not_running_sports_prediction_2026_07_15.md``; generalised
+2026-08-02 for the defi ``DP-CATALOG-001`` recurrence).
 
-Root cause this fixes: cefi's daily incremental job already runs 3 Phase D dedup
-passes (`_dedup_bybit_future_base_asset_parsing`, `_dedup_cefi_expiry_off_by_one`,
-`_dedup_cefi_margin_type_mislabel`) on the FRESHLY-ROLLED side before the monotonic
-guard compares row counts, but `promote_catalogue` was comparing that
-ALREADY-DEDUPED new count against a NOT-equally-deduped current-catalogue count —
-so a day whose window happened to touch enough still-ambiguous historical
-duplicate pairs could trip `CATALOGUE_SHRINK_BLOCKED` even though zero real
-instruments were lost (live-confirmed `dropped_active: 0` on every 2026-07-16
-through 07-27 occurrence). The fix re-runs the SAME 3 passes over the CURRENT
-catalogue before counting, for cefi only.
+Root cause (cefi, original fix): cefi's daily incremental job already runs 3
+Phase D dedup passes (`_dedup_bybit_future_base_asset_parsing`,
+`_dedup_cefi_expiry_off_by_one`, `_dedup_cefi_margin_type_mislabel`) on the
+FRESHLY-ROLLED side before the monotonic guard compares row counts, but
+`promote_catalogue` was comparing that ALREADY-DEDUPED new count against a
+NOT-equally-deduped current-catalogue count — so a day whose window happened to
+touch enough still-ambiguous historical duplicate pairs could trip
+`CATALOGUE_SHRINK_BLOCKED` even though zero real instruments were lost
+(live-confirmed `dropped_active: 0` on every 2026-07-16 through 07-27
+occurrence). The fix re-runs the SAME 3 passes over the CURRENT catalogue before
+counting, for cefi only.
+
+Root cause (defi, 2026-08-02 follow-up): the SAME class recurs for ANY asset
+group via `_merge_incremental`'s own dedup-on-re-observation behaviour — when
+the current catalogue holds 2 rows sharing one `_incremental_merge_keys`
+identity (e.g. a `pool::<CHAIN>::<addr>` pair left over from pre-canonicalisation
+drift) and a fresh by_date window re-observes that instrument, the merge
+correctly collapses the pair to 1 row, shrinking `len(df)` by 1 even though
+zero active instruments were lost. Confirmed live: `lifecycle-catalogue-regen-defi`
+blocked 2 consecutive days (DP-CATALOG-001 CRITICAL, 46h stale) on exactly this
+shape (14 duplicate pool keys in the stored catalogue, 8 re-observed by the
+window, `dropped_active: 0`). `_dedupe_by_incremental_merge_key` generalises the
+fix: dedupe the CURRENT catalogue by its own merge key, for every asset group,
+in addition to cefi's Phase D passes.
 
 Kept in its own file (not appended to the large, frequently-contended
 test_build_instrument_catalogue.py) — same convention as
@@ -128,6 +143,124 @@ def _distinct_real_rows() -> list[dict[str, object]]:
             "available_to": None,
         },
     ]
+
+
+def _duplicate_defi_pool_rows() -> list[dict[str, object]]:
+    """Two rows for the SAME on-chain pool (identical chain + pool_address, hence
+    identical `pool::<CHAIN>::<addr>` merge key) under different `instrument_id`
+    spellings — the confirmed 2026-08-02 defi shape (14 such pairs found live in
+    ``gs://instruments-store-defi-prd-.../prod/catalog.parquet``), already-closed
+    (``available_to`` set) exactly like the live `dropped_delisted` sample."""
+    base = {
+        "instrument_type": "pool",
+        "venue": "AERODROME_V3",
+        "chain": "BASE",
+        "pool_address": "0x0652202c4b2d09cb93aedefadc14b36869483a98",
+        "available_from": "2025-01-24",
+        "available_to": "2026-07-30",
+    }
+    return [
+        {**base, "instrument_id": "AERODROME_V3-BASE:POOL:0x0652202c4b2d09cb93aedefadc14b36869483a98"},
+        {**base, "instrument_id": "AERODROME_V3-BASE:POOL:0x0652202C4B2D09CB93AEDEFADC14B36869483A98-legacy"},
+    ]
+
+
+def _distinct_defi_pool_rows() -> list[dict[str, object]]:
+    """Two genuinely distinct on-chain pools (different pool_address) — must
+    never collapse under any dedup pass."""
+    return [
+        {
+            "instrument_type": "pool",
+            "venue": "AERODROME_V3",
+            "chain": "BASE",
+            "pool_address": "0x0652202c4b2d09cb93aedefadc14b36869483a98",
+            "instrument_id": "AERODROME_V3-BASE:POOL:0x0652202c4b2d09cb93aedefadc14b36869483a98",
+            "available_from": "2025-01-24",
+            "available_to": None,
+        },
+        {
+            "instrument_type": "pool",
+            "venue": "UNISWAP_V3",
+            "chain": "ETHEREUM",
+            "pool_address": "0xa1f8a6807c402e4a15ef4eba36528a3fed24e577",
+            "instrument_id": "UNISWAP_V3-ETHEREUM:POOL:0xa1f8a6807c402e4a15ef4eba36528a3fed24e577",
+            "available_from": "2024-06-01",
+            "available_to": None,
+        },
+    ]
+
+
+class TestDedupeByIncrementalMergeKeyHelper:
+    def test_collapses_duplicate_pool_key_pair(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_duplicate_defi_pool_rows())
+        out = rollup._dedupe_by_incremental_merge_key(df, asset_group="defi")
+        assert len(out) == 1
+
+    def test_distinct_pool_rows_round_trip_unchanged(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_distinct_defi_pool_rows())
+        out = rollup._dedupe_by_incremental_merge_key(df, asset_group="defi")
+        assert len(out) == 2
+
+    def test_empty_frame_round_trips(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_distinct_defi_pool_rows()).iloc[0:0]
+        out = rollup._dedupe_by_incremental_merge_key(df, asset_group="defi")
+        assert len(out) == 0
+
+
+class TestPromoteCatalogueDedupAwareGuardDefiPoolKey:
+    """The confirmed 2026-08-02 defi ``DP-CATALOG-001`` shape: ``promote_catalogue``
+    for ``asset_group="defi"``."""
+
+    def test_pool_key_dedup_only_shrink_does_not_trip_guard(self, rollup: ModuleType) -> None:
+        """Current catalogue holds an un-collapsed pool-key duplicate pair (2 rows,
+        1 real on-chain pool). A freshly-rolled catalogue that re-observed the pool
+        and already collapsed it (1 row, via `_merge_incremental`'s branch 1) must
+        NOT trip CATALOGUE_SHRINK_BLOCKED — before this fix, new=1 < raw current=2
+        would have blocked it exactly like the live incident."""
+        bucket, env = "instruments-store-defi-prd-test", "prod"
+        canonical_blob = f"{env}/{rollup.CATALOG_FILENAME}"
+        current_payload = _to_parquet_bytes(_duplicate_defi_pool_rows())
+        storage = _FakeStorage(canonical_blob, current_payload)
+
+        new_df = pd.DataFrame([_duplicate_defi_pool_rows()[0]])  # already-collapsed: 1 row
+
+        code = rollup.promote_catalogue(
+            storage,
+            bucket,
+            env,
+            new_df,
+            asset_group="defi",
+            allow_shrink=False,
+            dry_run=True,
+        )
+        assert code == 0, "pool-key-dedup-only-driven shrink must be ACCEPTED, not CATALOGUE_SHRINK_BLOCKED"
+
+    def test_genuine_active_pool_drop_still_trips_guard(
+        self, rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Current catalogue holds 2 genuinely distinct pools (different
+        pool_address, no dedup pass ever touches this pair). A freshly-rolled
+        catalogue that drops one of them for real (1 row) must STILL trip
+        CATALOGUE_SHRINK_BLOCKED — the generalised dedup-aware guard must not
+        weaken real data-loss protection for defi."""
+        monkeypatch.setattr(rollup, "log_event", lambda *args, **kwargs: None)
+        bucket, env = "instruments-store-defi-prd-test", "prod"
+        canonical_blob = f"{env}/{rollup.CATALOG_FILENAME}"
+        current_payload = _to_parquet_bytes(_distinct_defi_pool_rows())
+        storage = _FakeStorage(canonical_blob, current_payload)
+
+        new_df = pd.DataFrame([_distinct_defi_pool_rows()[0]])  # genuinely drops the UNISWAP_V3 pool
+
+        code = rollup.promote_catalogue(
+            storage,
+            bucket,
+            env,
+            new_df,
+            asset_group="defi",
+            allow_shrink=False,
+            dry_run=True,
+        )
+        assert code == 1, "a genuine active-pool drop must still be BLOCKED"
 
 
 class TestApplyCefiPhaseDDedupsHelper:
