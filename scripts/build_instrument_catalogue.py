@@ -3268,25 +3268,58 @@ def build_sports_fixture_team_player_catalogue(
     return pd.concat([fixture_df, team_df, player_df], ignore_index=True)
 
 
+def _dedupe_by_incremental_merge_key(df: pd.DataFrame, *, asset_group: str) -> pd.DataFrame:
+    """Collapse rows sharing the SAME :func:`_incremental_merge_keys` identity to one.
+
+    **Merge-key dedup-aware guard** (DP-CATALOG-001 defi follow-up, 2026-08-02 —
+    generalises the cefi-only fix from ``dp_catalog_not_running_sports_prediction_
+    2026_07_15.md`` to EVERY asset group). Root cause this fixes: the CURRENT
+    stored catalogue can carry a handful of legacy rows that share the exact same
+    merge identity (e.g. two ``pool::<CHAIN>::<addr>`` rows for one on-chain pool,
+    left over from a pre-canonicalisation spelling drift). :func:`_merge_incremental`
+    is correct to collapse such a pair to ONE row the moment a fresh by_date window
+    re-observes that pool (branch 1 takes the single window row; both stale
+    duplicates leave the frozen tail) — but that legitimate collapse shrinks
+    ``len(df)`` by 1 per pair, and the monotonic guard was comparing that
+    ALREADY-COLLAPSED new count against a NOT-equally-collapsed current-catalogue
+    count, tripping ``CATALOGUE_SHRINK_BLOCKED`` even though zero real instruments
+    were lost. Confirmed live 2026-08-02: defi's ``lifecycle-catalogue-regen-defi``
+    daily job blocked 2 consecutive days (46h stale, DP-CATALOG-001 CRITICAL) on
+    exactly this shape — 14 duplicate ``pool::CHAIN::addr`` keys sitting in the
+    stored catalogue, 8 of them re-observed by the day's window, net -8 rows,
+    ``dropped_active: 0`` / ``dropped_delisted: 2884`` (all already-closed pool
+    rows) confirming no active instrument was actually lost. Deduping the CURRENT
+    side by its own merge key before counting makes the comparison MORE precise,
+    not looser — two rows that genuinely have DIFFERENT merge keys (a real active
+    row) are untouched and still trip the guard exactly as before.
+    """
+    if df.empty:
+        return df
+    keys = _incremental_merge_keys(df, asset_group=asset_group)
+    return df[~keys.duplicated(keep="first")]
+
+
 def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str, *, asset_group: str) -> int | None:
     """Return the row count of the current canonical catalogue, or None when absent.
 
     **Dedup-aware guard** (RULED 2026-07-28,
-    ``dp_catalog_not_running_sports_prediction_2026_07_15.md``): for
-    ``asset_group == "cefi"``, re-runs the SAME cefi-only Phase D dedup passes
-    (:func:`_apply_cefi_phase_d_dedups`, mirroring :func:`run_rollup`'s own Phase D)
-    over the current catalogue before counting. Root cause this fixes: cefi's
-    daily incremental job already runs these dedup passes on the freshly-rolled
-    side (Phase D), but the monotonic guard was comparing that ALREADY-DEDUPED new
-    count against a NOT-equally-deduped current-catalogue count — so a day whose
-    window happened to touch enough still-ambiguous historical duplicate pairs
-    could push the new count below the current baseline even though zero real
-    instruments were lost (confirmed via `dropped_active: 0` on every observed
-    occurrence, 07-16 through 07-27). Deduping BOTH sides identically before
-    comparing makes the comparison MORE precise, not looser — a genuine
-    active-row drop still trips the guard exactly as before (see
-    tests/unit/scripts/test_promote_catalogue_dedup_aware_guard.py). Every other
-    asset_group is unaffected (dedup is a cefi-only Phase D pass).
+    ``dp_catalog_not_running_sports_prediction_2026_07_15.md``; generalised
+    2026-08-02, see :func:`_dedupe_by_incremental_merge_key`): for
+    ``asset_group == "cefi"``, first re-runs the SAME cefi-only Phase D dedup
+    passes (:func:`_apply_cefi_phase_d_dedups`, mirroring :func:`run_rollup`'s own
+    Phase D) over the current catalogue before counting — that fix's own root
+    cause (cefi's daily incremental job already runs these dedup passes on the
+    freshly-rolled side, so the guard was comparing an ALREADY-DEDUPED new count
+    against a NOT-equally-deduped current-catalogue count) is unchanged. THEN,
+    for every asset group (incl. cefi), collapses the current catalogue by its
+    own :func:`_incremental_merge_keys` identity — the generic form of the same
+    apples-to-apples principle, covering the merge's OWN dedup-on-re-observation
+    behaviour rather than only cefi's Phase D passes (see
+    :func:`_dedupe_by_incremental_merge_key` for the confirmed defi incident this
+    closes). Deduping BOTH sides identically before comparing makes the
+    comparison MORE precise, not looser — a genuine active-row drop still trips
+    the guard exactly as before (see
+    tests/unit/scripts/test_promote_catalogue_dedup_aware_guard.py).
     """
     if not storage.blob_exists(bucket, blob_path):
         return None
@@ -3294,6 +3327,7 @@ def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str,
     current = pd.read_parquet(io.BytesIO(payload))
     if asset_group == "cefi":
         current = _apply_cefi_phase_d_dedups(current)
+    current = _dedupe_by_incremental_merge_key(current, asset_group=asset_group)
     return len(current)
 
 
