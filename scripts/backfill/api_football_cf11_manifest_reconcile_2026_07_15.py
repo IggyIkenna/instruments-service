@@ -124,7 +124,7 @@ def main() -> None:
         log.info("=== nothing to reconcile — 0 CF11 cells ===")
         return
 
-    mw = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET)
+    mw = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET, per_vm_shards=True)
     reconciled = 0
     skipped_no_parquet: list[str] = []
     for _, row in cf11.sort_values(["date", "league_id", "data_type"]).iterrows():

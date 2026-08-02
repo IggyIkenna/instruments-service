@@ -307,7 +307,7 @@ def run_apply(storage: object, rep: pd.DataFrame) -> int:
     if to_stamp.empty:
         logger.info("nothing to re-stamp; no shard written")
         return 0
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET)
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET, per_vm_shards=True)
     stamped = 0
     for _, a in to_stamp.iterrows():
         dt, lg, day = str(a["data_type"]), str(a["league_id"]), str(a["date"])

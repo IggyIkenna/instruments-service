@@ -116,6 +116,7 @@ def main() -> None:
         service_name="instruments-service",
         catalogue_bucket=bucket,
         batch_size=100,
+        per_vm_shards=True,
     )
     for row in new_rows:
         writer.add(
