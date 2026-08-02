@@ -42,7 +42,6 @@ async def test_enrichment_provider_venues_excluded_from_urdi_fetch() -> None:
             api_keys=None,
             date="2026-07-29",
             mode="batch",
-            source=None,
             skip_urdi=False,
         )
 
@@ -69,7 +68,6 @@ async def test_skip_urdi_still_empties_venue_lists() -> None:
             api_keys=None,
             date="2026-07-29",
             mode="batch",
-            source=None,
             skip_urdi=True,
         )
 

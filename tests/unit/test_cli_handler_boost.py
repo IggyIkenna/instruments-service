@@ -2,8 +2,7 @@
 
 Targets the specific uncovered branches identified in the 85% → 90% coverage push:
 - Module-level bucket helpers (_get_instruments_bucket_for_asset_group, _get_instruments_bucket)
-- preflight(): --source massive adds MASSIVE pseudo-venue
-- _wire_cli_filters_from_args(): venues+earliest_date, recovery_fixture_ids, source arg
+- _wire_cli_filters_from_args(): venues+earliest_date, recovery_fixture_ids
 - _load_recovery_fixture_ids(): GCS path, local path, exception, missing column
 - process(): date normalisation when "T" present
 - cleanup(): ManifestWriter flush branch + sports coordination event branch
@@ -123,41 +122,6 @@ def test_get_instruments_bucket_alias_calls_through() -> None:
 
 
 # ---------------------------------------------------------------------------
-# preflight(): --source massive
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_preflight_source_massive_adds_venue() -> None:
-    """Line 123: when _source == 'massive', MASSIVE is appended to active_venues."""
-    handler = _make_handler()
-    handler._source = "massive"
-
-    captured_venues: list[str] = []
-    mock_reloader = MagicMock()
-    mock_reloader.current_keys = {}
-
-    def _capture_start_reloader(venues: list[str]) -> None:
-        captured_venues.extend(venues)
-        handler._key_reloader = mock_reloader
-        mock_reloader.start()
-
-    with (
-        patch(
-            "instruments_service.cli.instruments_handler.get_venues_for_asset_groups",
-            return_value=["BINANCE"],
-        ),
-        patch(
-            "instruments_service.cli.instruments_handler.clear_defi_universe_cache",
-        ),
-        patch.object(handler, "_start_key_reloader", side_effect=_capture_start_reloader),
-    ):
-        await handler.preflight()
-
-    assert "MASSIVE" in captured_venues
-
-
-# ---------------------------------------------------------------------------
 # _wire_cli_filters_from_args()
 # ---------------------------------------------------------------------------
 
@@ -172,7 +136,6 @@ def test_wire_cli_filters_venues_with_earliest_date() -> None:
     args.league = None
     args.season = None
     args.recovery_fixture_ids = None
-    args.source = None
     args.trigger = None
     args.lookback_days = None
     args.lookahead_days = None
@@ -204,7 +167,6 @@ def test_wire_cli_filters_venues_uppercased_regardless_of_cli_casing() -> None:
     args.league = None
     args.season = None
     args.recovery_fixture_ids = None
-    args.source = None
     args.trigger = None
     args.lookback_days = None
     args.lookahead_days = None
@@ -232,7 +194,6 @@ def test_wire_cli_filters_recovery_fixture_ids() -> None:
     args.league = None
     args.season = None
     args.recovery_fixture_ids = "/tmp/recovery.parquet"
-    args.source = None
     args.trigger = None
     args.lookback_days = None
     args.lookahead_days = None
@@ -246,29 +207,6 @@ def test_wire_cli_filters_recovery_fixture_ids() -> None:
 
     mock_load.assert_called_once_with("/tmp/recovery.parquet")
     assert handler._recovery_fixture_ids == expected_ids
-
-
-def test_wire_cli_filters_source_arg() -> None:
-    """Lines 164-165: when source arg is set, _source is normalised to lowercase."""
-    handler = _make_handler()
-    args = MagicMock()
-    args.venues = None
-    args.sports_entity = None
-    args.sports_provider = None
-    args.league = None
-    args.season = None
-    args.recovery_fixture_ids = None
-    args.source = "MASSIVE"
-    args.trigger = None
-    args.lookback_days = None
-    args.lookahead_days = None
-    args.force_window = False
-    args.run_tag = None
-    handler.args = args
-
-    handler._wire_cli_filters_from_args()
-
-    assert handler._source == "massive"
 
 
 # ---------------------------------------------------------------------------
