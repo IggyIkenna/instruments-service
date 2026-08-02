@@ -1,0 +1,15 @@
+{
+  "bucket": "instruments-store-sports-prd-central-element-323112",
+  "floor_date": "2020-06-06",
+  "total_manifest_rows_read": 10925700,
+  "legacy_captured_pairs": 42771,
+  "canonical_captured_pairs": 109823,
+  "redundant_manifest_count": 42688,
+  "candidate_count": 83,
+  "load_bearing_count": 0,
+  "redundant_gcs_discovered_count": 0,
+  "redundant_total_count": 42688,
+  "stale_label_count": 83,
+  "read_error_count": 0,
+  "read_errors_sample": []
+}
