@@ -234,7 +234,6 @@ async def process_instruments(
     league_filter: list[str] | None = None,
     season_override: int | None = None,
     recovery_fixture_ids: frozenset[int] | None = None,
-    source: str | None = None,
     run_tag: str = "batch",
 ) -> dict[str, int]:
     """Process instruments for a single date and set of asset groups.
@@ -315,7 +314,6 @@ async def process_instruments(
         api_keys=api_keys,
         date=date,
         mode=mode,
-        source=source,
         skip_urdi=_skip_urdi,
     )
     records = fetch_outcome.records
@@ -376,7 +374,6 @@ async def process_instruments(
         asset_groups=asset_groups,
         api_keys=api_keys,
         mode=mode,
-        source=source,
         active_venues=active_venues,
         league_filter=league_filter,
         sports_entity_filter=sports_entity_filter,
@@ -400,7 +397,6 @@ async def _write_enrich_and_finalize(
     asset_groups: list[str],
     api_keys: dict[str, str] | None,
     mode: str,
-    source: str | None,
     active_venues: list[str],
     league_filter: list[str] | None,
     sports_entity_filter: str | None,
@@ -449,7 +445,6 @@ async def _write_enrich_and_finalize(
         asset_groups=asset_groups,
         api_keys=api_keys,
         mode=mode,
-        source=source,
         bucket=write_outcome.bucket,
         sink=write_outcome.sink,
         sampler=write_outcome.sampler,

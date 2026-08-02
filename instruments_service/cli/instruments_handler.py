@@ -102,11 +102,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # calling api_football, and the per-league parquet writes use
         # read-modify-write semantics to preserve existing fixtures' rows.
         self._recovery_fixture_ids: frozenset[int] | None = None
-        # Reference-data source override (--source). When "massive", TradFi venues
-        # route to the Massive adapter (instead of Databento) + the MASSIVE_API_KEY
-        # is fetched via a MASSIVE pseudo-venue added to the key reloader. None ⇒
-        # default (Databento for TradFi).
-        self._source: str | None = None
         # GCS output prefix tag (--run-tag). "batch" (default) = no prefix;
         # any other value (e.g. "t1-recon") routes sports_reference writes
         # under that tag's own namespace via UTL apply_run_tag() — see
@@ -158,11 +153,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._wire_cli_filters_from_args()
 
         active_venues = get_venues_for_asset_groups(asset_groups)
-        # When --source massive, add the MASSIVE pseudo-venue so the key reloader
-        # fetches MASSIVE_API_KEY (keyed as the "massive" data source) alongside
-        # the venue keys. UAC VENUE_TO_DATA_SOURCE["MASSIVE"]="massive".
-        if self._source == "massive":
-            active_venues = [*active_venues, "MASSIVE"]
         self._start_key_reloader(active_venues)
         self._start_heartbeat_timer(asset_groups)
 
@@ -174,7 +164,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
             asset_group=primary_ag.lower(),
             data_type="instruments",
             rows_captured_cum=lambda: self._rows_captured_cum,
-            source=self._source or "",
+            source="",
             extra={"service": "instruments", "cadence": "60s-timer"},
         )
         self._heartbeat_timer.start()
@@ -214,11 +204,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
         recovery_path_arg: str | None = getattr(self.args, "recovery_fixture_ids", None) if self.args else None
         if recovery_path_arg:
             self._recovery_fixture_ids = self._load_recovery_fixture_ids(recovery_path_arg)
-
-        source_arg: str | None = getattr(self.args, "source", None) if self.args else None
-        if source_arg:
-            self._source = source_arg.strip().lower()
-            logger.info("Reference-data source override from CLI: %s", self._source)
 
         run_tag_arg: str | None = getattr(self.args, "run_tag", None) if self.args else None
         self._run_tag = (run_tag_arg or "batch").strip() or "batch"
@@ -341,7 +326,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
             league_filter=self._league_filter,
             season_override=self._season_override,
             recovery_fixture_ids=self._recovery_fixture_ids,
-            source=self._source,
             run_tag=self._run_tag,
         )
         self._emit_date_heartbeat(date, asset_groups, result)
@@ -370,7 +354,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 asset_group=primary_ag.lower(),
                 data_type="instruments",
                 rows_captured_cum=self._rows_captured_cum,
-                source=self._source or "",
+                source="",
                 extra={"service": "instruments", "date": date, "venues_ok": len(result)},
             )
         except Exception as exc:  # defensive — heartbeat must never abort the backfill

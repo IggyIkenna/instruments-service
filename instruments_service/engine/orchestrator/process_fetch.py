@@ -99,7 +99,6 @@ async def _fetch_urdi_records(
     api_keys: dict[str, str] | None,
     date: str,
     mode: str,
-    source: str | None,
     skip_urdi: bool,
 ) -> _UrdiFetchOutcome:
     """Stage 2 — fetch from URDI, the sole external API path.
@@ -187,7 +186,7 @@ async def _fetch_urdi_records(
     if non_defi_active:
         with _orch.SolanaCacheSession():
             non_defi_result = await _orch.fetch_instruments_for_all_venues(
-                non_defi_active, api_keys=api_keys, date=date, mode=mode, source=source
+                non_defi_active, api_keys=api_keys, date=date, mode=mode
             )
         non_defi_records = non_defi_result.records
 

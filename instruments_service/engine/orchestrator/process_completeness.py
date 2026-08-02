@@ -114,7 +114,6 @@ async def _completeness_and_retry(
     asset_groups: list[str],
     api_keys: dict[str, str] | None,
     mode: str,
-    source: str | None,
     bucket: str,
     sink: _orch.DataSink,
     sampler: _orch.SamplingService,
@@ -274,7 +273,6 @@ async def _completeness_and_retry(
         asset_groups=asset_groups,
         api_keys=api_keys,
         mode=mode,
-        source=source,
         bucket=bucket,
         sink=sink,
         sampler=sampler,
@@ -372,7 +370,6 @@ async def _retry_missing_venues(
     asset_groups: list[str],
     api_keys: dict[str, str] | None,
     mode: str,
-    source: str | None,
     bucket: str,
     sink: _orch.DataSink,
     sampler: _orch.SamplingService,
@@ -412,7 +409,6 @@ async def _retry_missing_venues(
                 api_keys=api_keys,
                 date=date,
                 mode=mode,
-                source=source,
             )
         retry_records = retry_result.records
         # Update retryable set from this attempt's failures
