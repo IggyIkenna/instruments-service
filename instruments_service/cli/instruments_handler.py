@@ -52,10 +52,21 @@ def _get_instruments_bucket_for_asset_group(asset_group: str) -> str:
     Prediction resolves via the dedicated flat kind ``instruments-store-prediction``
     (the bucket-name SSOT omits a ``PREDICTION`` entry from the per-asset_group
     ``instruments-store`` dict — see :func:`resolve_instruments_store_kind`).
+
+    Test-aware (2026-08-02, DP-VM-002 agt-299005): mirrors
+    ``engine.orchestrator.catalogue._get_instruments_bucket``'s ``IS_TEST_RUN`` handling —
+    a ``--test-run`` invocation sets ``DEPLOYMENT_ENV=staging`` (required for the
+    ``uts-test-sa`` IAM identity, per
+    ``pipeline_e2e_check_missing_env_flag_test_bucket_403_2026_08_01.md``), so resolving
+    without an explicit ``deployment_env`` fell through to the ambient
+    ``DEPLOYMENT_ENV_SHORT`` ("stg") — a bucket tier that is never provisioned. Only this
+    module's ``cleanup()`` final-flush path called this without the override; the
+    catalogue helper used by the rest of the orchestrator was already correct.
     """
     normalized_group = asset_group.lower()
     kind, kind_ag = resolve_instruments_store_kind(normalized_group)
-    return resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag)
+    deployment_env = "test" if engine_orchestrator.get_config().is_test_run else None
+    return resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag, deployment_env=deployment_env)
 
 
 def _get_instruments_bucket(asset_group: str = "SPORTS") -> str:
