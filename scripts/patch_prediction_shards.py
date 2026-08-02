@@ -72,7 +72,9 @@ def main() -> None:
         return
 
     # Process each date — read the instrument parquet, compute shards
-    writer = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket, batch_size=50)
+    writer = ManifestWriter(
+        service_name="instruments-service", catalogue_bucket=bucket, batch_size=50, per_vm_shards=True
+    )
     total_shards = 0
 
     for i, date_str in enumerate(dates_to_process):
