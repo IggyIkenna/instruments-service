@@ -60,12 +60,45 @@ def test_get_instruments_bucket_for_asset_group_delegates_to_resolve() -> None:
             "instruments_service.cli.instruments_handler.resolve_bucket_name",
             return_value="test-sports-bucket",
         ) as mock_resolve_bucket,
+        patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
     ):
+        mock_cfg.return_value.is_test_run = False
         result = _get_instruments_bucket_for_asset_group("SPORTS")
 
     assert result == "test-sports-bucket"
     mock_resolve_kind.assert_called_once_with("sports")
-    mock_resolve_bucket.assert_called_once_with(cloud="gcp", kind="instruments-store", asset_group="sports")
+    mock_resolve_bucket.assert_called_once_with(
+        cloud="gcp", kind="instruments-store", asset_group="sports", deployment_env=None
+    )
+
+
+def test_get_instruments_bucket_for_asset_group_test_run_resolves_test_tier() -> None:
+    """DP-VM-002 (2026-08-02, agt-299005): IS_TEST_RUN must resolve deployment_env="test"
+    explicitly — NOT the ambient DEPLOYMENT_ENV_SHORT default, which resolves the
+    never-provisioned "-stg-" tier whenever a --test-run leg sets DEPLOYMENT_ENV=staging
+    (required for the uts-test-sa IAM identity). Mirrors
+    engine.orchestrator.catalogue._get_instruments_bucket's already-correct handling.
+    """
+    from instruments_service.cli.instruments_handler import _get_instruments_bucket_for_asset_group
+
+    with (
+        patch(
+            "instruments_service.cli.instruments_handler.resolve_instruments_store_kind",
+            return_value=("instruments-store", "sports"),
+        ),
+        patch(
+            "instruments_service.cli.instruments_handler.resolve_bucket_name",
+            return_value="instruments-store-sports-test-test-project",
+        ) as mock_resolve_bucket,
+        patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
+    ):
+        mock_cfg.return_value.is_test_run = True
+        result = _get_instruments_bucket_for_asset_group("SPORTS")
+
+    assert result == "instruments-store-sports-test-test-project"
+    mock_resolve_bucket.assert_called_once_with(
+        cloud="gcp", kind="instruments-store", asset_group="sports", deployment_env="test"
+    )
 
 
 def test_get_instruments_bucket_alias_calls_through() -> None:
@@ -81,7 +114,9 @@ def test_get_instruments_bucket_alias_calls_through() -> None:
             "instruments_service.cli.instruments_handler.resolve_bucket_name",
             return_value="alias-sports-bucket",
         ),
+        patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
     ):
+        mock_cfg.return_value.is_test_run = False
         result = _get_instruments_bucket("SPORTS")
 
     assert result == "alias-sports-bucket"
