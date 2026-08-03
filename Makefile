@@ -1,13 +1,13 @@
 # Makefile for instruments-service
-# This mirrors the exact CI checks for local testing consistency
-#
-# CRITICAL: This must match .github/workflows/quality-gates.yml exactly
+# Thin wrapper around scripts/quality-gates.sh — the ONLY sanctioned entrypoint
+# for lint/type-check/tests (workspace hard rule: never run pytest/ruff/
+# basedpyright directly). MIN_COVERAGE lives in scripts/quality-gates.sh, not here.
 #
 # Usage:
 #   make ci-local    # Run all CI checks locally (matches GitHub Actions)
 #   make lint        # Run linting only
 #   make test        # Run tests only
-#   make type-check  # Run type checking only
+#   make type-check  # Run type checking only (lint+typecheck, no tests)
 
 .PHONY: ci-local lint test type-check help install
 
@@ -18,9 +18,9 @@ help:
 	@echo "Available targets:"
 	@echo "  ci-local    - Run all CI checks locally (recommended before push)"
 	@echo "  install     - Install dependencies"
-	@echo "  lint        - Run ruff linting and formatting"
-	@echo "  type-check  - Run basedpyright with timeout"
-	@echo "  test        - Run tests with coverage"
+	@echo "  lint        - Run ruff linting and formatting via quality-gates.sh"
+	@echo "  type-check  - Run basedpyright via quality-gates.sh"
+	@echo "  test        - Run tests with coverage via quality-gates.sh"
 	@echo "  help        - Show this help message"
 	@echo ""
 	@echo "Example: make ci-local"
@@ -33,42 +33,28 @@ install:
 
 # Main target that mirrors CI exactly
 ci-local:
-	@echo "Running CI checks locally..."
-	@echo "============================="
-	@echo ""
-	@echo "Step 1: Ruff linting"
-	@$(MAKE) lint
-	@echo ""
-	@echo "Step 2: Type checking (with timeout)"
-	@$(MAKE) type-check
-	@echo ""
-	@echo "Step 3: Tests with coverage"
-	@$(MAKE) test
-	@echo ""
-	@echo "✅ All CI checks passed!"
+	@echo "Running CI checks locally via scripts/quality-gates.sh..."
+	bash scripts/quality-gates.sh --no-fix
 
 # Ruff linting (matches CI exactly)
 lint:
-	@echo "Running ruff check and format..."
-	ruff check . --output-format=text
-	ruff format . --check
+	@echo "Running lint via scripts/quality-gates.sh..."
+	bash scripts/quality-gates.sh --no-fix --lint
 
-# Type checking with timeout (CRITICAL: matches CI timeout)
+# Type checking (matches CI)
 type-check:
-	@echo "Running basedpyright with timeout..."
-	# CRITICAL: Use timeout to prevent hanging (must match CI)
-	timeout 60 basedpyright instruments_service/ || (echo "Type check failed or timed out" && exit 1)
+	@echo "Running type-check via scripts/quality-gates.sh..."
+	QG_SLICE=typecheck bash scripts/quality-gates.sh --no-fix
 
-# Tests with coverage (matches CI coverage threshold)
+# Tests with coverage (matches CI coverage threshold: MIN_COVERAGE in scripts/quality-gates.sh)
 test:
-	@echo "Running tests with coverage..."
-	pytest --cov=instruments_service --cov-fail-under=35
+	@echo "Running tests via scripts/quality-gates.sh..."
+	bash scripts/quality-gates.sh --no-fix --test
 
 # Individual targets for debugging
 lint-fix:
-	@echo "Auto-fixing linting issues..."
-	ruff format .
-	ruff check . --fix
+	@echo "Auto-fixing linting issues via scripts/quality-gates.sh..."
+	bash scripts/quality-gates.sh --fix --lint
 
 # Security scan
 security:
