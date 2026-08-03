@@ -1,0 +1,28 @@
+{
+  "total_captured_fixture_events_rows_censused": 43260,
+  "missing_count": 4996,
+  "missing_by_year": {
+    "2018": 4,
+    "2019": 3865,
+    "2020": 1127
+  },
+  "missing_distinct_written_at_count": 4996,
+  "missing_written_at_sample": [
+    "2026-07-15T19:24:55.323530+00:00",
+    "2026-07-15T19:24:55.323601+00:00",
+    "2026-07-15T19:24:55.323671+00:00",
+    "2026-07-15T19:24:55.323740+00:00",
+    "2026-07-15T19:24:55.324246+00:00",
+    "2026-07-15T19:24:55.324671+00:00",
+    "2026-07-15T19:24:55.324898+00:00",
+    "2026-07-15T19:24:55.325181+00:00",
+    "2026-07-15T19:24:55.325827+00:00",
+    "2026-07-15T19:24:55.326255+00:00"
+  ],
+  "present_distinct_written_at_count": 38264,
+  "written_at_overlap_between_missing_and_present": 0,
+  "missing_distinct_job_ids": 1,
+  "missing_error_reason_counts": {
+    "": 4996
+  }
+}

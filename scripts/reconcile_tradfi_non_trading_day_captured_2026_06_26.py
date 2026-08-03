@@ -95,20 +95,23 @@ SNAPSHOT_BLOB = "_index/snapshots/pre_nontrade_flip_2026_06_26.parquet"
 
 # Calendar-bound tradfi venues (is_non_trading_day raises for unknown venues).
 # FX is 24/7 — skip. YAHOO_FINANCE is a legacy source-as-venue — skip.
-_CALENDAR_BOUND_VENUES: frozenset[str] = frozenset({
-    "NASDAQ",
-    "NYSE",
-    "CME",
-    "CBOE",
-    "ICE",
-    "KRX",
-})
+_CALENDAR_BOUND_VENUES: frozenset[str] = frozenset(
+    {
+        "NASDAQ",
+        "NYSE",
+        "CME",
+        "CBOE",
+        "ICE",
+        "KRX",
+    }
+)
 
 # Per-venue cap: alert (but do not abort) if a venue would have more than this many flips.
 _PER_VENUE_WARN_CAP = 5_000
 
 
 # ─────────────────────────── bucket resolution ────────────────────────────────
+
 
 def _get_bucket() -> str:
     from unified_trading_library import resolve_bucket_name
@@ -117,6 +120,7 @@ def _get_bucket() -> str:
 
 
 # ─────────────────────────── calendar check ───────────────────────────────────
+
 
 def _is_non_trading(venue: str, iso_date: str) -> bool:
     """Use the IS sessions SSOT (exchange_calendars-backed) to test non-trading.
@@ -152,16 +156,20 @@ def _non_trading_reason(venue: str, iso_date: str) -> str:
     from instruments_service.reference_data.adapters.tradfi.databento import (
         non_trading_day_reason,
     )
+
     try:
         target = date.fromisoformat(iso_date)
         reason = non_trading_day_reason(venue, target)
         return reason or "EXPECTED_WEEKEND"
     except Exception as exc:
-        logger.warning("non_trading_day_reason(%r, %r) raised %s — defaulting to EXPECTED_WEEKEND", venue, iso_date, exc)
+        logger.warning(
+            "non_trading_day_reason(%r, %r) raised %s — defaulting to EXPECTED_WEEKEND", venue, iso_date, exc
+        )
         return "EXPECTED_WEEKEND"
 
 
 # ─────────────────────────── manifest I/O ─────────────────────────────────────
+
 
 def _download_manifest(bucket_name: str) -> pd.DataFrame:
     from unified_trading_library import get_storage_client
@@ -218,6 +226,7 @@ def _write_per_vm_shard(bucket_name: str, flipped_df: pd.DataFrame) -> str:
 
 # ─────────────────────────── dry-run count ────────────────────────────────────
 
+
 def _identify_wrong_cells(df: pd.DataFrame) -> pd.DataFrame:
     """Return sub-DataFrame of wrongly-captured non-trading-day rows.
 
@@ -260,6 +269,7 @@ def _identify_wrong_cells(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ─────────────────────────── validation gates ─────────────────────────────────
+
 
 def _validate_no_fx_yahoo(wrong: pd.DataFrame) -> bool:
     """Gate: no FX or YAHOO_FINANCE rows must be in the flip set."""
@@ -304,15 +314,21 @@ def _validate_trading_day_unchanged(df_before: pd.DataFrame, df_after: pd.DataFr
 
 # ─────────────────────────── CSV audit ────────────────────────────────────────
 
+
 def _write_audit_csv(wrong: pd.DataFrame, report_dir: Path, ts: str) -> Path:
     report_path = report_dir / f"tradfi_nontrade_flip_{ts}.csv"
-    audit_cols = [c for c in ["date", "venue", "data_type", "capture_status", "error_reason", "instrument_id"] if c in wrong.columns]
+    audit_cols = [
+        c
+        for c in ["date", "venue", "data_type", "capture_status", "error_reason", "instrument_id"]
+        if c in wrong.columns
+    ]
     wrong[audit_cols].to_csv(report_path, index=False)
     logger.info("Audit CSV: %s (%d rows)", report_path, len(wrong))
     return report_path
 
 
 # ─────────────────────────── main logic ───────────────────────────────────────
+
 
 def _build_summary(wrong: pd.DataFrame) -> None:
     """Log per-venue counts and sample rows."""
@@ -335,7 +351,9 @@ def _build_summary(wrong: pd.DataFrame) -> None:
 
     # Sample rows for sanity check
     if not wrong.empty:
-        sample_cols = [c for c in ["date", "venue", "data_type", "capture_status", "error_reason"] if c in wrong.columns]
+        sample_cols = [
+            c for c in ["date", "venue", "data_type", "capture_status", "error_reason"] if c in wrong.columns
+        ]
         logger.info("=== Sample rows (first 10) ===\n%s", wrong[sample_cols].head(10).to_string())
 
 
@@ -372,10 +390,12 @@ def main() -> int:
     logger.info("dry_run=%s  report_dir=%s", args.dry_run, report_dir)
 
     if not args.dry_run:
-        if os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower() not in ("1", "true", "yes"):
-            logger.error(
-                "--no-dry-run requires MANIFEST_PER_VM_SHARDS=true (per-VM shard isolation rule). Aborting."
-            )
+        if os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower() not in (  # noqa: qg-empty-fallback — optional flag, absent == disabled (falsy)
+            "1",
+            "true",
+            "yes",
+        ):
+            logger.error("--no-dry-run requires MANIFEST_PER_VM_SHARDS=true (per-VM shard isolation rule). Aborting.")
             return 4
         if not os.environ.get("VM_NAME"):
             logger.error("--no-dry-run requires VM_NAME=<unique-tag>. Aborting.")
@@ -456,10 +476,7 @@ def _parse_args() -> argparse.Namespace:
         "--dry-run",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help=(
-            "Default: dry-run (scan + CSV only, no manifest write). "
-            "Pass --no-dry-run to apply the flip."
-        ),
+        help=("Default: dry-run (scan + CSV only, no manifest write). Pass --no-dry-run to apply the flip."),
     )
     p.add_argument(
         "--report-dir",

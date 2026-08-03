@@ -1,5 +1,11 @@
 """CCXT generic reference data adapter — wraps ccxt for multi-venue support."""
 
+# Reuses the tardis package's shared @LIN/@INV canonical-key builders (private,
+# underscore-prefixed by convention within that package) so live (CCXT) and
+# batch (Tardis) construct the IDENTICAL instrument_key for the identical
+# instrument — see _build_instrument_key below.
+# pyright: reportPrivateUsage=false
+
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -7,9 +13,15 @@ from decimal import Decimal
 from typing import cast
 
 import ccxt.async_support as ccxta
-from unified_api_contracts import BAR_TIMEFRAMES, BarTimeframe
+from unified_api_contracts import BAR_TIMEFRAMES, BarTimeframe, VenueMapping
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType, OptionType
 from unified_trading_library.availability_stamping import compute_bar_close_boundary  # noqa: qg-deep-import
+
+from instruments_service.reference_data.adapters.cefi.tardis.parsing import (
+    _build_canonical_future_key,
+    _build_canonical_option_key,
+    _build_canonical_perpetual_key,
+)
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -39,11 +51,40 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         super().__init__(project_id=project_id, api_key=api_key)
         self._exchange_id = venue
         self._venue = canonical_venue or venue
+        # Precomputed ONCE per adapter instance (not per-market — VenueMapping()
+        # rebuilds several dict/list field factories, too costly for a per-market
+        # hot loop over thousands of instruments). See _resolve_instrument_key_venue.
+        self._instrument_key_venue = self._resolve_instrument_key_venue(self._venue)
 
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
         return self._venue
+
+    @staticmethod
+    def _resolve_instrument_key_venue(canonical_venue: str) -> str:
+        """Resolve the VENUE token to use inside ``instrument_key``.
+
+        A handful of canonical venues (e.g. ``BYBIT-FUTURES``) are UAC-registered
+        aliases that route to the SAME underlying Tardis exchange as their
+        "primary" venue (``BYBIT``) — ``TardisReferenceDataAdapter._parse_tardis_
+        instrument`` derives its ``canonical_venue`` purely from
+        ``VenueMapping.tardis_to_venue[exchange]``, so a batch-mode query for the
+        alias venue still comes back tagged with the PRIMARY venue token (e.g.
+        querying batch mode for ``BYBIT-FUTURES`` yields ``instrument_key``s
+        prefixed ``BYBIT:...``, not ``BYBIT-FUTURES:...``). Mirroring that
+        resolution here (rather than using the alias verbatim) is required for
+        the live/batch ``instrument_key`` to converge for these alias venues too.
+
+        Falls back to ``canonical_venue`` unchanged when it has no Tardis
+        exchange mapping (e.g. bare ``OKX`` — has no live batch-mode counterpart
+        to converge with in the first place).
+        """
+        vm = VenueMapping()
+        tardis_exchange = vm.get_tardis_exchange_for_venue(canonical_venue)
+        if tardis_exchange is None:
+            return canonical_venue
+        return vm.tardis_to_venue.get(tardis_exchange, canonical_venue)
 
     def _get_exchange(self) -> ccxta.Exchange:
         """Instantiate a ccxt async exchange by venue name."""
@@ -84,6 +125,79 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         if ccxt_type == "option":
             return InstrumentType.OPTION
         return InstrumentType.SPOT_PAIR
+
+    @staticmethod
+    def _build_instrument_key(
+        canonical_venue: str,
+        instrument_type: InstrumentType,
+        base: str,
+        quote: str,
+        raw_symbol: str,
+        margin_type: MarginType | None,
+        expiry: datetime | None,
+        strike: Decimal | None,
+        option_type: OptionType | None,
+    ) -> str:
+        """Build the canonical ``instrument_key`` for a live-mode CCXT market.
+
+        Mirrors the construction ``TardisReferenceDataAdapter._parse_tardis_
+        instrument`` uses for the SAME 13 canonical CeFi venues in batch mode
+        (``instruments_service/reference_data/adapters/cefi/tardis/adapter.py``)
+        so live and batch converge on an identical id for the identical
+        instrument — this is the workspace's ``paper(W) == batch-rerun(W)``
+        determinism invariant (canonical_id_p0_ccxt_live_batch_divergence
+        2026-07-08). Routes through the literal SAME shared @LIN/@INV builders
+        Tardis uses (``instrument_id_format_canonicalization_2026_07_08.md``
+        finding 1, ``tardis/parsing.py``'s ``_build_canonical_perpetual_key``/
+        ``_build_canonical_future_key``/``_build_canonical_option_key``) —
+        identical functions, not a duplicated construction, so live and batch
+        can never drift apart on this again.
+
+        * PERPETUAL with a resolved ``margin_type``: shared
+          ``_build_canonical_perpetual_key`` → ``VENUE:PERPETUAL:BASE-QUOTE@LIN|INV``.
+        * FUTURE/OPTION with ``margin_type`` + ``expiry`` resolved (OPTION also
+          needs ``strike``/``option_type``): shared ``_build_canonical_future_key``/
+          ``_build_canonical_option_key`` → ``VENUE:TYPE:BASE-QUOTE@LIN|INV-
+          YYYYMMDD[-STRIKE-C|P]``. The quote is ALWAYS present — DERIBIT included
+          (operator ruling 2026-07-18, superseding the earlier "Deribit drops the
+          quote for dated derivatives" special case; mirrors the same removal in
+          ``tardis/adapter.py``). ccxt usually populates ``market["quote"]``
+          ("USD" inverse / "USDC" linear for Deribit); a DERIBIT-scoped fallback
+          derives it from the margin type when ccxt left it blank, so a marked id
+          never reaches the fail-loud builder without a quote.
+        * Falls back to the legacy ``VENUE:TYPE:BASE-QUOTE`` /
+          ``VENUE:TYPE:RAW_SYMBOL`` shape (unchanged from before this wiring)
+          when the margin/expiry/strike/right inputs the target format needs
+          aren't resolvable — shard-level isolation, never raise.
+        """
+        # Deribit's quote resolves to USDC (linear, USDC-settled) / USD (inverse,
+        # coin-settled). Fallback ONLY when ccxt didn't populate the quote and a
+        # margin type is resolved — DERIBIT-scoped so a non-Deribit linear (e.g.
+        # BINANCE USDT) is never mis-defaulted to USDC.
+        resolved_quote = quote
+        if canonical_venue == "DERIBIT" and not resolved_quote and margin_type is not None:
+            resolved_quote = "USDC" if margin_type is MarginType.LINEAR else "USD"
+        if instrument_type is InstrumentType.PERPETUAL and margin_type is not None and base and resolved_quote:
+            return _build_canonical_perpetual_key(canonical_venue, base, resolved_quote, margin_type)
+        if instrument_type is InstrumentType.FUTURE and margin_type is not None and expiry is not None and base:
+            return _build_canonical_future_key(canonical_venue, base, resolved_quote, margin_type, expiry)
+        if (
+            instrument_type is InstrumentType.OPTION
+            and margin_type is not None
+            and expiry is not None
+            and strike is not None
+            and option_type is not None
+            and base
+        ):
+            option_right = "C" if option_type is OptionType.CALL else "P"
+            return _build_canonical_option_key(
+                canonical_venue, base, resolved_quote, margin_type, expiry, strike, option_right
+            )
+        if instrument_type in (InstrumentType.SPOT_PAIR, InstrumentType.PERPETUAL) and base and quote:
+            symbol = f"{base.upper()}-{quote.upper()}"
+        else:
+            symbol = raw_symbol.upper()
+        return f"{canonical_venue}:{instrument_type.value}:{symbol}"
 
     @staticmethod
     def _extract_market_sizes(
@@ -153,10 +267,28 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         if mapped_type == InstrumentType.OPTION and strike is None:
             return None
 
+        raw_symbol = str(market.get("id") or symbol)
+        instrument_key = self._build_instrument_key(
+            self._instrument_key_venue,
+            mapped_type,
+            base,
+            quote,
+            raw_symbol,
+            margin_type,
+            expiry,
+            strike,
+            option_type,
+        )
+
         return InstrumentRecord(
-            instrument_key=symbol,
+            instrument_key=instrument_key,
+            # CeFi has no raw-exchange-code-to-human-name translation gap the way
+            # TradFi does (base is already human-readable, e.g. "BTC") — so
+            # canonical_instrument_id is just the already-canonical instrument_key.
+            # SSOT: unified-trading-pm/plans/active/canonical_instrument_id_cefi_defi_backfill_2026_07_14.md
+            canonical_instrument_id=instrument_key,
             venue=self.venue,
-            raw_symbol=str(market.get("id") or symbol),
+            raw_symbol=raw_symbol,
             instrument_type=mapped_type,
             base_asset=base,
             quote_asset=quote,

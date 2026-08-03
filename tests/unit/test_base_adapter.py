@@ -340,20 +340,16 @@ class TestCCXTAdapter:
         opt_call = InstrumentRecord(
             instrument_key="BTC/USD-call",
             venue="deribit",
-            symbol="BTC/USD",
             raw_symbol="BTC-31DEC24-50000-C",
             instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.01"),
-            lot_size=Decimal("0.001"),
             min_order_size=Decimal("0.001"),
             contract_size=Decimal("1"),
             strike=Decimal("50000"),
             option_type="call",
             expiry=datetime(2024, 12, 31, tzinfo=UTC),
-            is_active=True,
-            updated_at=datetime.now(UTC),
         )
         with patch.object(adapter, "get_instruments", return_value=[opt_call]):
             chain = await adapter.get_options_chain("BTC")
@@ -373,18 +369,14 @@ class TestCCXTAdapter:
         fut = InstrumentRecord(
             instrument_key="BTC-31MAR24",
             venue="deribit",
-            symbol="BTC/USD",
             raw_symbol="BTC-31MAR24",
             instrument_type="FUTURE",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.5"),
-            lot_size=Decimal("10"),
             min_order_size=Decimal("10"),
             contract_size=Decimal("1"),
             expiry=expiry,
-            is_active=True,
-            updated_at=datetime.now(UTC),
         )
         with patch.object(adapter, "get_instruments", return_value=[fut]):
             calendar = await adapter.get_expiry_calendar("BTC", instrument_type="FUTURE")

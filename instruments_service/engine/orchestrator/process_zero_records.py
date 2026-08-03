@@ -28,7 +28,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
+from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
+from unified_api_contracts.registry import NO_ADAPTER_YET, VENUE_TO_ADAPTER_KEY
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
@@ -55,6 +57,7 @@ async def _handle_zero_records(
     sports_entity_filter: str | None,
     season_override: int | None,
     fixtures_fetch_failed: bool = False,
+    pre_launch_venues: frozenset[str] | None = None,
 ) -> dict[str, int]:
     """Stage 4 — handle zero records after the date filter.
 
@@ -62,6 +65,11 @@ async def _handle_zero_records(
     actually ERRORED (raised → ``failed_venues``), as opposed to running clean
     and returning zero fixtures. A failed fetch must record ``attempted_failed``
     (not ``empty_confirmed``) so the gap stays visible.
+
+    ``pre_launch_venues`` — venues (subset of ``active_venues``) whose every
+    raw URDI-fetched record honestly post-dates ``date`` (see
+    ``process_fetch._pre_launch_venues_from_raw_fetch``); only consulted by
+    the non-sports path.
 
     Raises:
         RuntimeError: when zero records is NOT an expected absence
@@ -88,6 +96,7 @@ async def _handle_zero_records(
         asset_groups=asset_groups,
         active_venues=active_venues,
         mode=mode,
+        pre_launch_venues=pre_launch_venues,
     )
 
 
@@ -159,13 +168,28 @@ def _zero_sports_empty_fixture_markers(
     league_filter: list[str] | None,
     fixtures_fetch_failed: bool = False,
 ) -> None:
-    """Write one marker per prediction league for a zero-fixture day.
+    """Write one marker per expected api_football league for a zero-fixture day.
 
     When ``fixtures_fetch_failed`` is True the fixtures venue's adapter ERRORED
     (e.g. API-Football plan/quota/auth error → ``response: []``); the day's
     "zero fixtures" is NOT honest absence, so write ``attempted_failed`` via
     ``record_failed`` so the gap stays visible + is backfilled. Only a clean
     fetch that genuinely returned zero fixtures writes ``empty_confirmed``.
+
+    League denominator (2026-07-14): the full 94-league api_football write
+    universe (``get_expected_leagues_for_source("api_football")``) — NOT the
+    33-league Prediction tier (``get_all_prediction_league_ids``), which is the
+    same classification-filter mismatch class fixed for TEAMS/STANDINGS on
+    2026-07-13. The marker set must match the enumerator's denominator or 61
+    of 94 leagues stay permanently blank-reason on zero-fixture days.
+
+    PRESENCE guard (2026-07-14 GW verification RED): a league whose per-league
+    FIXTURES parquet already EXISTS for this date is NEVER stamped
+    ``empty_confirmed`` — a zero-fixture verdict contradicted by on-disk
+    presence is a stale/erroneous universe fetch (e.g. the pooled URDI adapter
+    pinning its first date's fixtures onto every later date — see
+    ``reference_data/factory.py`` pool-key note), not honest absence. Issue:
+    ``sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14``.
 
     Honest-coverage (CLAUDE.md "4 pillars" #1): we use ``record_empty`` here,
     NOT ``add(row_count=0)``. Marking zero-fixture days as ``captured`` with
@@ -180,17 +204,50 @@ def _zero_sports_empty_fixture_markers(
     If a date has no fixtures, no parquet should exist; the manifest's
     ``empty_confirmed`` row is the single honest marker.
     """
-    _empty_league_ids = league_filter if league_filter else _orch.get_all_prediction_league_ids()
+    _empty_league_ids = (
+        league_filter
+        if league_filter
+        else [lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")]
+    )
     _empty_attempt_ts = _orch.datetime.now(_orch.UTC)
     _empty_manifest = _orch.ManifestWriter(
         service_name="instruments-service",
         catalogue_bucket=bucket,
     )
+    # PRESENCE guard — see docstring. Only consulted for the empty_confirmed
+    # branch: attempted_failed rows are an honest attempt trace and never
+    # claim absence.
+    _present_fixture_leagues: set[str] = set()
+    if not fixtures_fetch_failed:
+        try:
+            _present_fixture_leagues = _orch._list_present_parquet_leagues(bucket, date, "fixtures")
+        except Exception as exc:
+            # FAIL-SAFE: if presence cannot be verified, absence cannot be
+            # honestly stamped — skip the empty markers this run (cells stay
+            # pending and are re-attempted later) rather than risk stamping
+            # empty_confirmed over data we could not see.
+            _orch.logger.warning(
+                "SPORTS zero-fixture presence probe failed for date=%s (%s) — skipping "
+                "empty_confirmed FIXTURES markers this run (cannot prove absence without presence)",
+                date,
+                exc,
+            )
+            return
+        if _present_fixture_leagues:
+            _orch.logger.warning(
+                "SPORTS zero-fixture verdict for date=%s is contradicted by %d existing per-league "
+                "FIXTURES parquet(s) (%s%s) — presence-guard: NOT stamping empty_confirmed over them",
+                date,
+                len(_present_fixture_leagues),
+                ", ".join(sorted(_present_fixture_leagues)[:10]),
+                ", ..." if len(_present_fixture_leagues) > 10 else "",
+            )
     for _league_id in _empty_league_ids:
+        _canon_league_id = _orch._canonical_league_id(_league_id)
         _row_key = {
             "date": date,
-            "data_type": "FIXTURES",
-            "league_id": _orch._canonical_league_id(_league_id),
+            "data_type": FIXTURES_SCHEDULE,
+            "league_id": _canon_league_id,
         }
         if fixtures_fetch_failed:
             # Fetch ERRORED (plan/quota/auth/etc.) — NOT honest absence.
@@ -200,12 +257,16 @@ def _zero_sports_empty_fixture_markers(
                 attempted_at=_empty_attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
             )
+        elif _canon_league_id in _present_fixture_leagues:
+            # Parquet exists for (date, league) — presence wins, no empty stamp.
+            continue
         else:
             _empty_manifest.record_empty(
                 row_key=_row_key,
                 attempted_at=_empty_attempt_ts,
                 reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                source="api_football",
             )
     _empty_manifest.write()
     if fixtures_fetch_failed:
@@ -215,10 +276,13 @@ def _zero_sports_empty_fixture_markers(
             len(_empty_league_ids),
         )
     else:
+        _stamped = len({_orch._canonical_league_id(lid) for lid in _empty_league_ids} - _present_fixture_leagues)
         _orch.logger.info(
-            "SPORTS: No fixtures for date=%s — wrote empty_confirmed markers for %d leagues",
+            "SPORTS: No fixtures for date=%s — wrote empty_confirmed markers for %d leagues "
+            "(%d presence-guarded league(s) skipped)",
             date,
-            len(_empty_league_ids),
+            _stamped,
+            len(_present_fixture_leagues),
         )
 
 
@@ -301,6 +365,7 @@ async def _zero_sports_reference_fetch(
                         reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-entity-no-fixture-oracle; proven honest absence via fetch_evidence (clean 2xx+0-rows)
                         pipeline_mode=_orch._pipeline_mode_for_sports_data_type(entity_name.upper()),
                         fetch_evidence=_entity_ev,
+                        source=_orch._sports_ref_source(entity_name),
                     )
         # Per-fixture entities on zero-fixture dates: nothing
         # to fetch (no fixtures = no per-fixture data). Write
@@ -320,6 +385,7 @@ async def _zero_sports_reference_fetch(
                     attempted_at=_orch.datetime.now(_orch.UTC),
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source(entity_short),
                 )
         sports_manifest.write()
 
@@ -353,6 +419,15 @@ def _zero_sports_enrichment_markers(
             catalogue_bucket=bucket,
         )
         _enr_attempt_ts = _orch.datetime.now(_orch.UTC)
+        # data_type → sports_reference entity-key, for the explicit source=
+        # stamp below (_sports_ref_source takes the entity key, not the
+        # uppercase data_type these enrichment markers are keyed by).
+        _enr_entity_to_sports_ref_entity = {
+            "PREDICTIONS": "footystats_predictions",
+            "MATCHES": "footystats_matches",
+            "XG": "understat_xg",
+            "WEATHER": "weather",
+        }
         for _enr_entity in _enrichment_zero_entities:
             # Honest-coverage: zero-fixture day → record_empty,
             # NOT add(row_count=0). See CLAUDE.md "4 pillars" #1
@@ -366,6 +441,7 @@ def _zero_sports_enrichment_markers(
                 attempted_at=_enr_attempt_ts,
                 reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=_orch._pipeline_mode_for_sports_data_type(_enr_entity),
+                source=_orch._sports_ref_source(_enr_entity_to_sports_ref_entity[_enr_entity]),
             )
         _enr_manifest.write()
         _orch.logger.info(
@@ -468,14 +544,62 @@ async def _zero_sports_fixture_independent(
     return counts
 
 
+def _stamp_pre_launch_venues(
+    *,
+    date: str,
+    asset_groups: list[str],
+    pre_launch_remaining: list[str],
+) -> dict[str, int]:
+    """Write honest ``EXPECTED_PRE_VENUE_LAUNCH`` markers + return zero-counts.
+
+    Split out of ``_zero_records_non_sports`` (QG function-size cap) — see that
+    function's pre-venue-launch short-circuit for the calling contract. Mirrors
+    the DeFi pre-genesis / TradFi non-trading-day / NO_ADAPTER_YET honest-
+    absence stamps above it. Issue: cefi_coinbase_cde_urdi_zero_records_2026_07_28.md.
+    """
+    primary_asset_group = asset_groups[0] if asset_groups else None
+    bucket = _orch._get_instruments_bucket(primary_asset_group)
+    manifest = _orch.ManifestWriter(
+        service_name="instruments-service",
+        catalogue_bucket=bucket,
+    )
+    attempt_ts = _orch.datetime.now(_orch.UTC)
+    for venue in sorted(pre_launch_remaining):
+        manifest.record_expected_empty(
+            row_key={"date": date, "venue": venue},
+            reason="EXPECTED_PRE_VENUE_LAUNCH",
+            attempted_at=attempt_ts,
+            pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+        )
+    manifest.write()
+    _orch.logger.info(
+        "Pre-venue-launch: date=%s venues=%s — every URDI-fetched instrument "
+        "is dated after the requested date, wrote expected_unattempted markers",
+        date,
+        sorted(pre_launch_remaining),
+    )
+    _orch.log_event(
+        "PROCESSING_COMPLETED",
+        details={"date": date, "asset_groups": asset_groups, "pre_launch_venues": sorted(pre_launch_remaining)},
+    )
+    return dict.fromkeys(pre_launch_remaining, 0)
+
+
 def _zero_records_non_sports(
     *,
     date: str,
     asset_groups: list[str],
     active_venues: list[str],
     mode: str,
+    pre_launch_venues: frozenset[str] | None = None,
 ) -> dict[str, int]:
     """Zero-record handling for DeFi batch / TradFi non-trading days.
+
+    ``pre_launch_venues`` — venues (subset of ``active_venues``) whose every
+    raw URDI-fetched record carries an ``available_from_datetime`` after
+    ``date`` — a genuine pre-launch venue (e.g. COINBASE-CDE backfilled before
+    its own registration date), not a fetch failure.
 
     Raises:
         RuntimeError: when the zero is not an expected absence.
@@ -491,11 +615,75 @@ def _zero_records_non_sports(
         )
         return {}
 
+    # NO_ADAPTER_YET sentinel venues (e.g. YAHOO_FINANCE — a legacy source-as-venue
+    # artifact UAC declares adapterless in venue_adapter_keys.py) can never return
+    # records and were never meant to be declared in the tradfi session/calendar SSOT
+    # (sessions.py _EXCHANGE_HOURS/_XCAL_MAPPING) — they are not real, calendar-bound
+    # venues. Routing them into the tradfi calendar check below crashes with
+    # UndeclaredTradfiVenueError (fail-closed by design for a genuine config gap on a
+    # REAL venue) even though "0 records" here is an honest, already-declared absence,
+    # not a fetch failure. Short-circuit before ever reaching that check.
+    _no_adapter_active = [v for v in active_venues if VENUE_TO_ADAPTER_KEY.get(v) == NO_ADAPTER_YET]
+    if _no_adapter_active and set(_no_adapter_active) == set(active_venues):
+        _orch.logger.info(
+            "No records for date=%s: all requested venue(s) %s are declared NO_ADAPTER_YET "
+            "in UAC (venue_adapter_keys.py) — honest absence, not a fetch failure.",
+            date,
+            sorted(_no_adapter_active),
+        )
+        # Stamp an honest empty_confirmed manifest row per venue — without this,
+        # a NO_ADAPTER_YET venue would look like a permanent, never-attempted gap
+        # in the data-status view forever (the exact "silent absence" this
+        # workspace's honest-coverage model exists to prevent), even though the
+        # 0-count outcome above is fully accounted for. Mirrors the TradFi
+        # non-trading-day stamp below; reason matches UAC's
+        # EmptyConfirmedReason.EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE ("the
+        # source structurally does not offer this data_type/venue at all").
+        _primary_asset_group = asset_groups[0] if asset_groups else None
+        _na_bucket = _orch._get_instruments_bucket(_primary_asset_group)
+        _na_manifest = _orch.ManifestWriter(
+            service_name="instruments-service",
+            catalogue_bucket=_na_bucket,
+        )
+        _na_attempt_ts = _orch.datetime.now(_orch.UTC)
+        for _na_venue in sorted(_no_adapter_active):
+            _na_manifest.record_expected_empty(
+                row_key={"date": date, "venue": _na_venue},
+                reason="EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE",
+                attempted_at=_na_attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+            )
+        _na_manifest.write()
+        return dict.fromkeys(_no_adapter_active, 0)
+
+    # Pre-venue-launch CeFi/DeFi venue: every record URDI fetched for this
+    # venue carries an available_from_datetime after the requested date — the
+    # venue genuinely had zero listed instruments yet, mirroring the DeFi
+    # pre-genesis / TradFi non-trading-day honest-absence paths. Without this,
+    # a real adapter whose fetched universe is 100% future-dated (e.g.
+    # COINBASE-CDE backfilled before its own registration date) crashes with
+    # RuntimeError instead of writing an honest marker. Only fires when EVERY
+    # remaining active venue qualifies — a mixed batch where some venue is
+    # zero for a genuinely different (non-pre-launch) reason still falls
+    # through to the diagnostic + raise below.
+    # Issue: cefi_coinbase_cde_urdi_zero_records_2026_07_28.md.
+    _remaining_active = [v for v in active_venues if v not in _no_adapter_active]
+    _pre_launch_remaining = [v for v in _remaining_active if v in (pre_launch_venues or frozenset())]
+    if _pre_launch_remaining and set(_pre_launch_remaining) == set(_remaining_active):
+        return _stamp_pre_launch_venues(
+            date=date,
+            asset_groups=asset_groups,
+            pre_launch_remaining=_pre_launch_remaining,
+        )
+
     # TradFi non-trading day: zero instruments on weekends/holidays is expected.
     # Write 0-count manifest entries per venue so the manifest marks the day as
     # processed and won't re-fetch without --force. This prevents permanent gaps
     # in instrument data for every weekend and exchange holiday.
-    tradfi_active = [v for v in active_venues if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"]
+    tradfi_active = [
+        v for v in active_venues if VENUE_TO_ASSET_GROUP.get(v) == "tradfi" and v not in _no_adapter_active
+    ]
     if tradfi_active:
         target_dt = _orch.date_type.fromisoformat(date)
         non_trading_venues = [v for v in tradfi_active if _orch.is_non_trading_day(v, target_dt)]
@@ -530,6 +718,7 @@ def _zero_records_non_sports(
                     reason=_reason,
                     attempted_at=_nt_attempt_ts,
                     pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                    source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
                 )
             manifest.write()
             _orch.logger.info(

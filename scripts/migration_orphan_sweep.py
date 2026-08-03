@@ -63,8 +63,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import TypedDict, cast
 
 from unified_api_contracts import ShardKey, canonical_path_templates, is_valid_shard_key
+from unified_api_contracts.registry.chain_env import MAINNET_CHAIN_IDS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -121,12 +123,27 @@ _DATA_PREFIXES: tuple[str, ...] = ("raw_tick_data/", "day=")
 #   * ``configs/`` — service config artifacts co-located in the AG buckets.
 #   * ``databento-batch-registry/`` — the tradfi Databento batch-job registry
 #     (vendor job metadata, not market data).
+#   * ``_migration_backup`` (2026-07-10, found running the tradfi orphan sweep) — the
+#     backup-first pattern used by the 2026-07-09 canonicalization migrators
+#     (``migrate_tradfi_single_leg_product_root_lin_2026_07_09.py`` writes
+#     ``_migration_backup_2026_07_09/``; the sibling defi/cefi 07-09 migrators write
+#     ``_migration_backups/<effort>/``) — server-side pre-write copies, own lifecycle
+#     (deleted after the owning migration is verified), never raw-tick data.
+#   * ``_needs_attribution`` (2026-07-10, full unlimited tradfi sweep: 71,830 objects
+#     surfaced as ``unknown``) — the deliberate holding prefix both
+#     ``migrate_tradfi_to_v9_canonical.py`` and the defi walk migrator write un-path-
+#     attributable legacy objects to (no ``instrument_type=``, non-chain, bare-symbol
+#     stem) instead of silently dropping them (operator 2026-06-08: "preserve, never
+#     lose; do NOT guess"). PRESERVED holding data, own later content-aware attribution
+#     pass, never raw-tick-deleted by this sweep.
 _NON_DATA_TOP_LEVEL_LABELS: dict[str, str] = {
     "_manifests/": "manifest-infra",
     "configs/": "configs",
     "dex_pools/": "legacy-data",
     "lending_indices/": "legacy-data",
     "databento-batch-registry/": "vendor-registry",
+    "_migration_backup": "migration-backup",
+    "_needs_attribution": "needs-attribution",
 }
 _NON_DATA_PREFIX_LABELS: dict[str, str] = {
     "_index/": "manifest-infra",
@@ -234,8 +251,18 @@ def shard_key_from_segments(asset_group: str, segments: dict[str, str]) -> Shard
     venue = segments.get("venue", "")
     chain = segments.get("chain", "")
     # DeFi combined venue-chain overload: ``venue=EIGENLAYER-ETHEREUM`` with no chain=.
+    # Guarded by UAC's MAINNET_CHAIN_IDS (the SSOT canonical chain vocabulary) so a
+    # venue that merely CONTAINS a dash for an unrelated reason (e.g. a CeFi
+    # "BITGET-FUTURES" venue physically mis-landed in the DeFi bucket) never gets
+    # mis-split into a fabricated (venue, chain) pair — this exact unconditional split
+    # produced the corrupted chain="FUTURES" manifest rows root-caused in
+    # defi_cefi_venue_chain_axis_contamination_2026_07_28.md; mirrors the identical
+    # guard already present in
+    # market-tick-data-service/scripts/rebuild_defi_manifest.py::_split_legacy_venue_chain.
     if asset_group == "defi" and not chain and "-" in venue:
-        venue, _sep, chain = venue.partition("-")
+        candidate_venue, _sep, candidate_chain = venue.partition("-")
+        if candidate_chain.upper() in MAINNET_CHAIN_IDS:
+            venue, chain = candidate_venue, candidate_chain
     return ShardKey(
         asset_group=asset_group,
         venue=venue,
@@ -496,66 +523,47 @@ def _footer_row_count(client: object, bucket: str, name: str) -> int | None:
         return None
 
 
-def _resolve_bucket(asset_group: str, cloud: str = "gcp") -> str:
-    """Resolve the canonical raw-tick bucket for an asset_group via the bucket-name SSOT.
-    Mirrors ``reconcile_phantom_manifest_rows_all._BUCKET_KIND_MAP``."""
-    from unified_trading_library import resolve_bucket_name
+def _footer_verify_pending(
+    client: object, bucket: str, pending: list[tuple[int, str]], *, workers: int
+) -> dict[int, int | None]:
+    """Footer-read every ``(batch_index, name)`` candidate IN PARALLEL (mirrors
+    ``backfill_orphan_class_e_sports.footer_verify``'s pool pattern). Found 2026-07-22
+    (``migration_orphan_sweep_performance_decay_2026_07_22.md``): the sweep's own
+    ``workers`` parameter was threaded through the CLI/``run_sweep`` signature but never
+    actually used — every footer read ran sequentially, and a bucket region dense with
+    small would-be-orphan candidates turned the walk's cumulative throughput from
+    ~11,000 objects/s into ~50/s (each read is a real network round-trip). Batching
+    footer reads across a bounded window (see ``_SWEEP_BATCH_SIZE``) and running them
+    concurrently closes that gap without buffering the whole bucket in memory."""
+    from concurrent.futures import ThreadPoolExecutor
 
-    kind_map = {
-        "cefi": ("market-data", "cefi"),
-        "defi": ("market-data", "defi"),
-        "tradfi": ("market-data", "tradfi"),
-        "sports": ("instruments-store", "sports"),
-        "prediction": ("market-data-tick-prediction", None),
-    }
-    kind, ag_arg = kind_map[asset_group]
-    if ag_arg is None:
-        return resolve_bucket_name(cloud=cloud, kind=kind)
-    return resolve_bucket_name(cloud=cloud, kind=kind, asset_group=ag_arg)
+    if not pending:
+        return {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        rows_list = list(pool.map(lambda t: _footer_row_count(client, bucket, t[1]), pending))
+    return {idx: rows for (idx, _name), rows in zip(pending, rows_list, strict=True)}
 
 
-def run_sweep(
-    asset_group: str,
+_SWEEP_BATCH_SIZE = 2000
+"""Bounded window for the footer-verify concurrency batch (see _footer_verify_pending)
+— keeps peak memory flat regardless of total bucket size, unlike buffering the whole
+walk before verifying."""
+
+
+def _finalize_swept_batch(
+    batch: list[tuple[str, object, ObjectClass, ShardKey, str]],
+    footer_rows: dict[int, int | None],
     *,
-    cloud: str = "gcp",
-    workers: int = 32,
-    limit: int | None = None,
-) -> tuple[Counter[str], Counter[str], SizingRollup, list[SweptObject]]:
-    """Walk the AG bucket once, classify every object, roll up sizing + the prefix
-    taxonomy. Returns (class_counts, prefix_taxonomy, sizing, orphan_E_objects).
-
-    The full GCS read uses ``get_storage_client().list_blobs`` (paginated; size + crc32c
-    come free from the blob metadata). Class-(E) candidates' footer row_count is read
-    lazily ONLY for the no-manifest-row subset (cheap) to split (D) zero-row from (E).
-    """
-    from unified_trading_library import get_storage_client
-
-    bucket = _resolve_bucket(asset_group, cloud)
-    client = get_storage_client()
-    logger.info("orphan-sweep %s: bucket=%s — loading manifest cells", asset_group, bucket)
-    manifested = _load_manifested_cells(client, bucket)
-    logger.info("orphan-sweep %s: %d captured manifest cells", asset_group, len(manifested))
-
-    class_counts: Counter[str] = Counter()
-    prefix_taxonomy: Counter[str] = Counter()
-    sizing = SizingRollup.empty()
-    actionable: list[SweptObject] = []  # class-B (legacy twins for CF-21 cleanup) + class-E (orphans)
-    t0 = time.time()
-    for seen, blob in enumerate(client.list_blobs(bucket), start=1):
-        name = blob.name
-        prefix_taxonomy[_taxonomy_label(name)] += 1
-        is_parquet = name.endswith(".parquet")
-        cls, key, reason = classify_object(name, asset_group, manifested, is_parquet=is_parquet, row_count=None)
-        # The lazy footer read the docstring promises (implemented R1 close-out
-        # 2026-06-11): a would-be-(E) object with no row evidence may be a 0-row
-        # schema shell (e.g. weekend equity days — footer num_rows=0, ~4KB), which
-        # is class (D) junk, not a backfill target. Only small objects can be
-        # 0-row shells, so the read is bounded to <256KB candidates — large
-        # objects are certainly rows>0 and stay (E) without a read.
-        if cls is ObjectClass.ORPHAN_REAL and int(getattr(blob, "size", 0) or 0) < 262144:
-            rows = _footer_row_count(client, bucket, name)
-            if rows == 0:
-                cls, reason = ObjectClass.JUNK, "zero-row object with no manifest row (footer-read)"
+    bucket: str,
+    asset_group: str,
+    class_counts: Counter[str],
+    sizing: SizingRollup,
+    actionable: list[SweptObject],
+) -> None:
+    """Apply any footer-verify results, then build + roll up every object in one batch."""
+    for idx, (name, blob, cls, key, reason) in enumerate(batch):
+        if footer_rows.get(idx) == 0:
+            cls, reason = ObjectClass.JUNK, "zero-row object with no manifest row (footer-read)"
         class_counts[cls.value] += 1
         segs = parse_hive_segments(name)
         pm = segs.get("pipeline_mode", "")
@@ -574,15 +582,385 @@ def run_sweep(
             crc32c=str(getattr(blob, "crc32c", "") or ""),
             reason=reason,
         )
-        if is_parquet and cls != ObjectClass.NON_DATA:
+        if name.endswith(".parquet") and cls != ObjectClass.NON_DATA:
             sizing.add(obj)
         if cls in (ObjectClass.ORPHAN_REAL, ObjectClass.LEGACY_DUPLICATE):
             actionable.append(obj)
+
+
+def _resolve_bucket(asset_group: str, cloud: str = "gcp") -> str:
+    """Resolve the canonical raw-tick bucket for an asset_group via the bucket-name SSOT.
+    Mirrors ``reconcile_phantom_manifest_rows_all._BUCKET_KIND_MAP``."""
+    from unified_trading_library import resolve_bucket_name
+
+    kind_map = {
+        "cefi": ("market-data", "cefi"),
+        "defi": ("market-data", "defi"),
+        "tradfi": ("market-data", "tradfi"),
+        "sports": ("instruments-store", "sports"),
+        "prediction": ("market-data-tick-prediction", None),
+    }
+    kind, ag_arg = kind_map[asset_group]
+    if ag_arg is None:
+        return resolve_bucket_name(cloud=cloud, kind=kind)
+    return resolve_bucket_name(cloud=cloud, kind=kind, asset_group=ag_arg)
+
+
+_CHECKPOINT_BATCH_INTERVAL = 100
+"""Batches (of _SWEEP_BATCH_SIZE objects, i.e. ~200K objects) between full checkpoint
+writes. Bounds the write-amplification of re-uploading the growing actionable parquet —
+writing it every 2000-object batch would reproduce the exact per-object-overhead
+pathology this sweep was fixed for (migration_orphan_sweep_performance_decay_2026_07_22.md
+todo 4). Found 2026-07-22: a preempted SPOT VM today loses 100% of its in-memory
+orphan-E finds (defi hit this TWICE: 1.25M then 3.4M objects of discovery discarded) —
+this checkpoint is the fix."""
+
+
+@dataclass
+class _Checkpoint:
+    """Resumable walk state: enough to reseed every in-memory accumulator + the GCS
+    ``start_offset`` to resume the lexicographically-ordered walk exactly where a
+    preempted run left off. ``shard_count`` is how many actionable SHARD files exist
+    (see module docstring on sharding, below) — NOT the actionable rows themselves,
+    which are never eagerly loaded back into memory (only merged once, at the very end)."""
+
+    last_name: str
+    seen: int
+    class_counts: dict[str, int]
+    prefix_taxonomy: dict[str, int]
+    sizing_by_cell: dict[str, list[int]]
+    shard_count: int
+
+
+def _checkpoint_state_path(asset_group: str) -> str:
+    return f"_index/audit/_orphan_sweep_ckpt_{asset_group}_state.json"
+
+
+def _checkpoint_actionable_shard_prefix(asset_group: str) -> str:
+    return f"_index/audit/_orphan_sweep_ckpt_{asset_group}_actionable_"
+
+
+def _checkpoint_actionable_shard_path(asset_group: str, shard_index: int) -> str:
+    return f"{_checkpoint_actionable_shard_prefix(asset_group)}{shard_index:06d}.parquet"
+
+
+class _CheckpointStateDict(TypedDict):
+    """The on-disk shape of the checkpoint state JSON (see :func:`_write_checkpoint`)."""
+
+    last_name: str
+    seen: int
+    class_counts: dict[str, int]
+    prefix_taxonomy: dict[str, int]
+    sizing_by_cell: dict[str, list[int]]
+    shard_count: int
+
+
+def _load_checkpoint(client: object, bucket: str, asset_group: str) -> _Checkpoint | None:
+    """Load the checkpoint state (not the actionable rows — see
+    :func:`_read_actionable_parquet`), or ``None`` if absent/unreadable (the safe side:
+    an unreadable checkpoint starts the walk fresh rather than resuming from bad state)."""
+    import json
+
+    state_path = _checkpoint_state_path(asset_group)
+    if not client.blob_exists(bucket, state_path):  # type: ignore[attr-defined]
+        return None
+    try:
+        raw_bytes = client.download_bytes(bucket, state_path)  # type: ignore[attr-defined]
+        state = cast(_CheckpointStateDict, json.loads(raw_bytes))
+        return _Checkpoint(
+            last_name=state["last_name"],
+            seen=state["seen"],
+            class_counts=dict(state["class_counts"]),
+            prefix_taxonomy=dict(state["prefix_taxonomy"]),
+            sizing_by_cell={k: list(v) for k, v in state["sizing_by_cell"].items()},
+            shard_count=state["shard_count"],
+        )
+    except Exception:
+        logger.warning("orphan-sweep %s: checkpoint state unreadable — starting fresh", asset_group)
+        return None
+
+
+class _ActionableRowDict(TypedDict):
+    """The on-disk row shape of the actionable checkpoint/report parquet (mirrors
+    ``vars(SweptObject)`` — see :func:`_write_report`)."""
+
+    uri: str
+    asset_group: str
+    obj_class: str
+    venue: str
+    chain: str
+    instrument_type: str
+    data_type: str
+    day: str
+    pipeline_mode: str
+    source: str
+    size_bytes: int
+    crc32c: str
+    reason: str
+
+
+def _read_actionable_parquet_at(client: object, bucket: str, path: str) -> list[SweptObject]:
+    """Load one actionable (class-B + class-E) parquet shard, or ``[]`` if absent."""
+    import io
+
+    import pandas as pd
+
+    if not client.blob_exists(bucket, path):  # type: ignore[attr-defined]
+        return []
+    raw = client.download_bytes(bucket, path)  # type: ignore[attr-defined]
+    df = pd.read_parquet(io.BytesIO(raw))
+    rows = cast(list[_ActionableRowDict], df.to_dict("records"))
+    return [
+        SweptObject(
+            uri=r["uri"],
+            asset_group=r["asset_group"],
+            obj_class=ObjectClass(r["obj_class"]),
+            venue=r["venue"],
+            chain=r["chain"],
+            instrument_type=r["instrument_type"],
+            data_type=r["data_type"],
+            day=r["day"],
+            pipeline_mode=r["pipeline_mode"],
+            source=r["source"],
+            size_bytes=r["size_bytes"],
+            crc32c=r["crc32c"],
+            reason=r["reason"],
+        )
+        for r in rows
+    ]
+
+
+def _read_all_actionable_shards(client: object, bucket: str, asset_group: str, shard_count: int) -> list[SweptObject]:
+    """Merge every actionable shard written so far — the ONLY point in the whole walk
+    that materialises the full historical actionable list in memory, and only once, at
+    genuine completion (see module note on ``_write_checkpoint`` for why sharding exists
+    at all: found 2026-07-22, defi's e2-standard-4 VM was OOM-killed at 11.75M objects /
+    6.8M actionable rows resident in memory — the original checkpoint fix bounded WRITE
+    frequency but not what stayed resident between writes)."""
+    merged: list[SweptObject] = []
+    for i in range(shard_count):
+        merged.extend(_read_actionable_parquet_at(client, bucket, _checkpoint_actionable_shard_path(asset_group, i)))
+    return merged
+
+
+def _write_checkpoint(
+    client: object,
+    bucket: str,
+    asset_group: str,
+    *,
+    last_name: str,
+    seen: int,
+    class_counts: Counter[str],
+    prefix_taxonomy: Counter[str],
+    sizing: SizingRollup,
+    actionable_since_last_checkpoint: list[SweptObject],
+    shard_index: int,
+) -> int:
+    """Write the resumable checkpoint: a small state JSON (bounded size — counters, not
+    per-object rows) plus, if there's anything new, ONE actionable shard containing ONLY
+    the rows found since the LAST checkpoint (never the whole history — that is what
+    keeps both the per-write upload cost AND resident memory bounded regardless of how
+    large the walk's cumulative orphan count grows). Returns the shard count to persist
+    in state (``shard_index + 1`` if a shard was written, else unchanged) — callers MUST
+    clear their in-memory ``actionable`` accumulator whenever this returns a bumped count."""
+    import io
+    import json
+
+    wrote_shard = bool(actionable_since_last_checkpoint)
+    new_shard_count = shard_index + 1 if wrote_shard else shard_index
+    state = {
+        "last_name": last_name,
+        "seen": seen,
+        "class_counts": dict(class_counts),
+        "prefix_taxonomy": dict(prefix_taxonomy),
+        "sizing_by_cell": {"\x1f".join(cell): agg for cell, agg in sizing.by_cell.items()},
+        "shard_count": new_shard_count,
+    }
+    client.upload_from_file_obj(  # type: ignore[attr-defined]
+        bucket, _checkpoint_state_path(asset_group), io.BytesIO(json.dumps(state).encode())
+    )
+    if wrote_shard:
+        _write_actionable_parquet(
+            client,
+            bucket,
+            _checkpoint_actionable_shard_path(asset_group, shard_index),
+            actionable_since_last_checkpoint,
+        )
+    logger.info(
+        "orphan-sweep %s: checkpoint written — %d objects swept, +%d actionable rows this shard "
+        "(%d shards total), resume point %r",
+        asset_group,
+        seen,
+        len(actionable_since_last_checkpoint),
+        new_shard_count,
+        last_name,
+    )
+    return new_shard_count
+
+
+def _delete_checkpoint(client: object, bucket: str, asset_group: str) -> None:
+    """Delete the checkpoint (state JSON + every actionable shard) — called on a
+    genuinely clean full-walk completion, marking there is nothing left to resume."""
+    state_path = _checkpoint_state_path(asset_group)
+    if client.blob_exists(bucket, state_path):  # type: ignore[attr-defined]
+        client.delete_blob(bucket, state_path)  # type: ignore[attr-defined]
+    shard_prefix = _checkpoint_actionable_shard_prefix(asset_group)
+    for blob in client.list_blobs(bucket, prefix=shard_prefix):  # type: ignore[attr-defined]
+        client.delete_blob(bucket, blob.name)  # type: ignore[attr-defined]
+
+
+def run_sweep(
+    asset_group: str,
+    *,
+    cloud: str = "gcp",
+    workers: int = 32,
+    limit: int | None = None,
+    resume: bool = True,
+) -> tuple[Counter[str], Counter[str], SizingRollup, list[SweptObject]]:
+    """Walk the AG bucket once, classify every object, roll up sizing + the prefix
+    taxonomy. Returns (class_counts, prefix_taxonomy, sizing, orphan_E_objects).
+
+    The full GCS read uses ``get_storage_client().list_blobs`` (paginated; size + crc32c
+    come free from the blob metadata). Class-(E) candidates' footer row_count is read
+    ONLY for the no-manifest-row subset (cheap) to split (D) zero-row from (E) — batched
+    every ``_SWEEP_BATCH_SIZE`` objects and footer-read CONCURRENTLY (``workers``, see
+    ``_footer_verify_pending``): a sequential per-object read is what caused the
+    2026-07-22 throughput collapse on defi/prediction (documented in
+    ``migration_orphan_sweep_performance_decay_2026_07_22.md``).
+
+    ``resume`` (default True): if a checkpoint exists, seed every accumulator from it and
+    resume the walk via GCS ``start_offset`` instead of starting over — a preempted SPOT
+    VM (confirmed 2026-07-22 on defi, twice) otherwise loses 100% of its in-memory finds.
+    Pass ``resume=False`` (``--force`` on the CLI) to ignore/discard any existing
+    checkpoint and start fresh.
+    """
+    from unified_trading_library import get_storage_client
+
+    bucket = _resolve_bucket(asset_group, cloud)
+    client = get_storage_client()
+    logger.info("orphan-sweep %s: bucket=%s — loading manifest cells", asset_group, bucket)
+    manifested = _load_manifested_cells(client, bucket)
+    logger.info("orphan-sweep %s: %d captured manifest cells", asset_group, len(manifested))
+
+    class_counts: Counter[str] = Counter()
+    prefix_taxonomy: Counter[str] = Counter()
+    sizing = SizingRollup.empty()
+    # Only holds rows found SINCE the last checkpoint shard write — NEVER the whole
+    # walk's history (see _write_checkpoint: a preempted defi run held 6.8M SweptObject
+    # instances resident and got OOM-killed on e2-standard-4 before this fix).
+    actionable: list[SweptObject] = []
+    shard_count = 0
+    start_offset = ""
+    seen_base = 0
+    skip_boundary = ""  # GCS start_offset is INCLUSIVE — the resumed walk re-yields this name once
+    if resume:
+        ckpt = _load_checkpoint(client, bucket, asset_group)
+        if ckpt is not None:
+            class_counts = Counter(ckpt.class_counts)
+            prefix_taxonomy = Counter(ckpt.prefix_taxonomy)
+            for cell_key, agg in ckpt.sizing_by_cell.items():
+                cell = tuple(cell_key.split("\x1f"))
+                sizing.by_cell[cell] = list(agg)  # type: ignore[index]
+            start_offset, seen_base, skip_boundary = ckpt.last_name, ckpt.seen, ckpt.last_name
+            shard_count = ckpt.shard_count
+            logger.info(
+                "orphan-sweep %s: RESUMING from checkpoint — %d objects already swept, %d actionable shards "
+                "recorded, resuming after %r",
+                asset_group,
+                seen_base,
+                shard_count,
+                ckpt.last_name,
+            )
+    else:
+        _delete_checkpoint(client, bucket, asset_group)
+
+    batch: list[tuple[str, object, ObjectClass, ShardKey, str]] = []
+    pending: list[tuple[int, str]] = []  # (index within batch, name) needing a footer read
+    batches_since_checkpoint = 0
+    t0 = time.time()
+    seen = seen_base
+    for blob in client.list_blobs(bucket, start_offset=start_offset):
+        name = blob.name
+        if skip_boundary:
+            skip_boundary = ""
+            if name == start_offset:
+                continue
+        seen += 1
+        prefix_taxonomy[_taxonomy_label(name)] += 1
+        is_parquet = name.endswith(".parquet")
+        cls, key, reason = classify_object(name, asset_group, manifested, is_parquet=is_parquet, row_count=None)
+        # A would-be-(E) object with no row evidence may be a 0-row schema shell (e.g.
+        # weekend equity days), which is class (D) junk, not a backfill target. Only
+        # small objects can be 0-row shells, so the candidate set is bounded to <256KB.
+        if cls is ObjectClass.ORPHAN_REAL and int(getattr(blob, "size", 0) or 0) < 262144:
+            pending.append((len(batch), name))
+        batch.append((name, blob, cls, key, reason))
+        if len(batch) >= _SWEEP_BATCH_SIZE:
+            footer_rows = _footer_verify_pending(client, bucket, pending, workers=workers)
+            _finalize_swept_batch(
+                batch,
+                footer_rows,
+                bucket=bucket,
+                asset_group=asset_group,
+                class_counts=class_counts,
+                sizing=sizing,
+                actionable=actionable,
+            )
+            last_name = batch[-1][0]
+            batch, pending = [], []
+            batches_since_checkpoint += 1
+            if batches_since_checkpoint >= _CHECKPOINT_BATCH_INTERVAL:
+                new_shard_count = _write_checkpoint(
+                    client,
+                    bucket,
+                    asset_group,
+                    last_name=last_name,
+                    seen=seen,
+                    class_counts=class_counts,
+                    prefix_taxonomy=prefix_taxonomy,
+                    sizing=sizing,
+                    actionable_since_last_checkpoint=actionable,
+                    shard_index=shard_count,
+                )
+                if new_shard_count != shard_count:
+                    actionable = []  # THE fix — never let this list outlive its checkpoint shard.
+                shard_count = new_shard_count
+                batches_since_checkpoint = 0
         if seen % 50000 == 0:
-            logger.info("  %d objects swept (%.0f/s)", seen, seen / max(0.01, time.time() - t0))
+            logger.info("  %d objects swept (%.0f/s)", seen, (seen - seen_base) / max(0.01, time.time() - t0))
         if limit is not None and seen >= limit:
             logger.info("  --limit %d reached — stopping walk", limit)
             break
+    else:
+        # loop completed WITHOUT a --limit break — a genuinely full, clean walk.
+        if batch:
+            footer_rows = _footer_verify_pending(client, bucket, pending, workers=workers)
+            _finalize_swept_batch(
+                batch,
+                footer_rows,
+                bucket=bucket,
+                asset_group=asset_group,
+                class_counts=class_counts,
+                sizing=sizing,
+                actionable=actionable,
+            )
+        # ONE-TIME full materialisation — the only point in the whole walk that holds
+        # every actionable row at once, and only because a final report needs it.
+        if shard_count:
+            actionable = _read_all_actionable_shards(client, bucket, asset_group, shard_count) + actionable
+        _delete_checkpoint(client, bucket, asset_group)
+        return class_counts, prefix_taxonomy, sizing, actionable
+    if batch:
+        footer_rows = _footer_verify_pending(client, bucket, pending, workers=workers)
+        _finalize_swept_batch(
+            batch,
+            footer_rows,
+            bucket=bucket,
+            asset_group=asset_group,
+            class_counts=class_counts,
+            sizing=sizing,
+            actionable=actionable,
+        )
     return class_counts, prefix_taxonomy, sizing, actionable
 
 
@@ -597,19 +975,50 @@ def _taxonomy_label(object_path: str) -> str:
     return f"unknown:{tlp}"
 
 
+_MANIFEST_COLUMNS_FOR_COVERAGE: tuple[str, ...] = (
+    "date",
+    "venue",
+    "data_type",
+    "chain",
+    "instrument_type",
+    "capture_status",
+)
+"""The ONLY columns :func:`build_covered_index` reads — 6 of the v9 manifest's ~40
+(``date``/``venue``/``data_type``/``chain``/``instrument_type``/``capture_status``).
+Column-projecting the parquet read is the fix for a real, measured OOM/thrash: found
+2026-07-24 running defi's backfill dry-run — defi's ``availability_index.parquet`` had
+grown to **23,977,316 manifest rows / 41 columns / 988 MiB on-disk** (grown ~6x in
+~24h under ongoing production capture) and a full
+``pd.read_parquet`` (every column, including wide string columns like
+``instrument_id``/``error_reason``/``service_name`` that ``build_covered_index`` never
+touches) materialised a DataFrame large enough to thrash even an ``e2-highmem-8``
+(64GB) VM — the SAME "system-wide freeze during manifest load" signature previously
+seen for cefi and fixed there only by a machine-type bump
+(``migration_orphan_sweep_performance_decay_2026_07_22.md`` todo 2), which its own
+todo 7 already flagged wouldn't scale "if [the] index keeps growing". It did.
+Column-projecting via ``pyarrow.parquet.read(columns=...)`` (never materialising the
+other ~35 columns) is a targeted, backward-compatible fix — same return type, same
+coverage semantics, a fraction of the memory."""
+
+
 def _load_manifested_cells(client: object, bucket: str) -> CoveredIndex:
-    """Read ``_index/availability_index.parquet`` and build the grain-aware covered index."""
+    """Read ``_index/availability_index.parquet`` and build the grain-aware covered
+    index — column-projected to the 6 fields :func:`build_covered_index` actually uses
+    (see :data:`_MANIFEST_COLUMNS_FOR_COVERAGE`), never materialising the manifest's
+    other ~35 columns for a corpus that can run into the tens of millions of rows."""
     import io
 
-    import pandas as pd
+    import pyarrow.parquet as pq
 
     index_path = "_index/availability_index.parquet"
     if not client.blob_exists(bucket, index_path):  # type: ignore[attr-defined]
         logger.warning("orphan-sweep: no %s in %s", index_path, bucket)
         return {}
     raw = client.download_bytes(bucket, index_path)  # type: ignore[attr-defined]
-    df = pd.read_parquet(io.BytesIO(raw))
-    rows = df.to_dict("records")
+    parquet_file = pq.ParquetFile(io.BytesIO(raw))
+    available = set(parquet_file.schema_arrow.names)
+    cols = [c for c in _MANIFEST_COLUMNS_FOR_COVERAGE if c in available]
+    rows = parquet_file.read(columns=cols).to_pylist()
     return build_covered_index(rows)  # type: ignore[arg-type]
 
 
@@ -651,6 +1060,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="stop after N objects (smoke / partial sweep)")
     parser.add_argument("--dry-run", action="store_true", help="scan + report only; never write/delete (default)")
     parser.add_argument("--report-out", type=str, default="", help="gs:// URI to write the orphan_sweep parquet")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="ignore + delete any existing checkpoint, start the walk over from scratch",
+    )
     args = parser.parse_args(argv)
 
     # Sports dispatches via its own UAC candidate_parquet_paths SSOT — canonical_path_
@@ -660,7 +1074,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     class_counts, prefix_taxonomy, sizing, actionable = run_sweep(
-        args.asset_group, cloud=args.cloud, workers=args.workers, limit=args.limit
+        args.asset_group, cloud=args.cloud, workers=args.workers, limit=args.limit, resume=not args.force
     )
     code = _print_report(args.asset_group, class_counts, prefix_taxonomy, sizing, actionable)
     if args.report_out:
@@ -672,21 +1086,31 @@ def main(argv: list[str] | None = None) -> int:
     return code
 
 
-def _write_report(report_out: str, actionable: list[SweptObject]) -> None:
-    """Write the actionable objects (class-E orphans + class-B legacy twins) to a parquet
-    at ``report_out`` (gs:// URI). The CF-21 cleanup reads class-B from here."""
+def _write_actionable_parquet(client: object, bucket: str, blob_path: str, actionable: list[SweptObject]) -> None:
+    """Serialize ``actionable`` to parquet and upload via the given ``client`` — the
+    shared writer both the final ``--report-out`` (:func:`_write_report`) and the
+    resumable checkpoint (:func:`_write_checkpoint`) use, so a checkpoint write never
+    silently reaches for a DIFFERENT live storage client than the one the walk itself is
+    using."""
     import io
 
     import pandas as pd
-    from unified_trading_library import get_storage_client
 
     df = pd.DataFrame([{**vars(o), "obj_class": o.obj_class.value} for o in actionable])
     buf = io.BytesIO()
     df.to_parquet(buf, index=False)
     buf.seek(0)
+    client.upload_from_file_obj(bucket, blob_path, buf)  # type: ignore[attr-defined]
+
+
+def _write_report(report_out: str, actionable: list[SweptObject]) -> None:
+    """Write the actionable objects (class-E orphans + class-B legacy twins) to a parquet
+    at ``report_out`` (gs:// URI). The CF-21 cleanup reads class-B from here."""
+    from unified_trading_library import get_storage_client
+
     assert report_out.startswith("gs://")
     bucket, _sep, blob_path = report_out[len("gs://") :].partition("/")
-    get_storage_client().upload_from_file_obj(bucket, blob_path, buf)  # type: ignore[attr-defined]
+    _write_actionable_parquet(get_storage_client(), bucket, blob_path, actionable)
     n_e = sum(1 for o in actionable if o.obj_class == ObjectClass.ORPHAN_REAL)
     n_b = sum(1 for o in actionable if o.obj_class == ObjectClass.LEGACY_DUPLICATE)
     logger.info("wrote %d actionable rows (%d orphan-E + %d legacy-B) to %s", len(actionable), n_e, n_b, report_out)

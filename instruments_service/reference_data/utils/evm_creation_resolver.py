@@ -45,62 +45,26 @@ _LOCAL_CACHE_DIR = Path(__file__).resolve().parent.parent.parent.parent / ".cach
 _LOCAL_CACHE_FILE = _LOCAL_CACHE_DIR / "evm_creation_timestamps.json"
 
 # ── Protocol deploy date floors (same role as Solana floor dates) ────
-# Used as guaranteed fallback when RPC resolution fails.
+# Used as guaranteed fallback for a (protocol, chain) pair UAC
+# ``PROTOCOL_LAUNCH_DATES`` does not (yet) track.
+#
+# Bug-class-3 sweep (2026-07-27, ``defi_onchain_derivable_values_and_date_drift_2026_06_20.md``
+# P1 "Latent Bug-class-3 local fallback drift sweep"): every entry that used to live here
+# EXCEPT aave_v3/GNOSIS is now also declared in UAC ``PROTOCOL_LAUNCH_DATES`` (chain_env.py),
+# so ``get_protocol_floor_date()``'s UAC-first cascade never reached them — pure dead
+# weight, several silently STALE (e.g. spark/ETHEREUM still carried the pre-2026-05-08
+# 2023-05-09 over-clip value that UAC's own chain_env.py comment names as the exact bug
+# this fallback was meant to guard against; UAC now correctly has 2023-03-07). Removed
+# rather than "documented why it survives" (the todo's other option) — none of them
+# survive any real code path, and a stale unreachable duplicate of a UAC value is a worse
+# footgun than no duplicate at all. aave_v3/GNOSIS is the one pair UAC does not track, so
+# it stays as the only genuine fallback.
 LENDING_PROTOCOL_DEPLOY_DATES: dict[str, dict[str, datetime]] = {
     "aave_v3": {
-        "ETHEREUM": datetime(2023, 1, 27, tzinfo=UTC),
-        "ARBITRUM": datetime(2023, 3, 16, tzinfo=UTC),
-        "OPTIMISM": datetime(2023, 3, 16, tzinfo=UTC),
-        "BASE": datetime(2024, 3, 1, tzinfo=UTC),
-        "POLYGON": datetime(2023, 1, 27, tzinfo=UTC),
-        "AVALANCHE": datetime(2023, 1, 27, tzinfo=UTC),
+        # Not subgraph-audited (outside the Tab 14 2026-05-08 drift-table scope,
+        # which covered ETHEREUM/ARBITRUM/OPTIMISM/BASE/BSC only) — kept as the
+        # existing conservative floor, not re-verified by this sweep.
         "GNOSIS": datetime(2023, 10, 1, tzinfo=UTC),
-        "BSC": datetime(2024, 6, 1, tzinfo=UTC),
-    },
-    "compound_v3": {
-        "ETHEREUM": datetime(2022, 8, 26, tzinfo=UTC),
-        "ARBITRUM": datetime(2023, 6, 28, tzinfo=UTC),
-        "BASE": datetime(2023, 8, 9, tzinfo=UTC),
-        "POLYGON": datetime(2023, 5, 24, tzinfo=UTC),
-        "OPTIMISM": datetime(2024, 1, 10, tzinfo=UTC),
-    },
-    "morpho": {
-        "ETHEREUM": datetime(2024, 1, 8, tzinfo=UTC),
-        "BASE": datetime(2024, 6, 1, tzinfo=UTC),
-    },
-    "fluid": {
-        "ETHEREUM": datetime(2024, 3, 1, tzinfo=UTC),
-    },
-    "spark": {
-        # Spark Protocol launched on Ethereum mainnet in early-May 2023
-        # (MakerDAO-fork; first wstETH market block 17192443 ≈ 2023-03-07,
-        # full liquidity-mining go-live 2023-05-09).
-        "ETHEREUM": datetime(2023, 5, 9, tzinfo=UTC),
-    },
-    "euler_v2": {
-        # Euler V2 (EVK + EVC) re-launched on Ethereum mainnet 2024-08-29
-        # after the V1 hack (March 2023) and full restitution.
-        "ETHEREUM": datetime(2024, 8, 29, tzinfo=UTC),
-        "ARBITRUM": datetime(2025, 1, 15, tzinfo=UTC),
-    },
-    "radiant": {
-        # Radiant Capital — omnichain LayerZero lending. V2 deploy on
-        # Arbitrum 2023-07-08; subsequent BSC + ETH releases.
-        "ETHEREUM": datetime(2024, 1, 17, tzinfo=UTC),
-        "ARBITRUM": datetime(2023, 7, 8, tzinfo=UTC),
-        "BSC": datetime(2023, 3, 22, tzinfo=UTC),
-    },
-    "venus": {
-        # Venus Protocol — first BSC lending market launched 2020-09-22
-        # (forked Compound). Ethereum mainnet IL Core Pool launched
-        # 2024-04-15; Sepolia testnet pre-dates that.
-        "BSC": datetime(2020, 9, 22, tzinfo=UTC),
-        "ETHEREUM": datetime(2024, 4, 15, tzinfo=UTC),
-    },
-    "benqi": {
-        # Benqi Liquid Markets on Avalanche — first Comptroller deploy
-        # 2021-08-19 (qiAVAX/qiUSDC.e markets).
-        "AVALANCHE": datetime(2021, 8, 19, tzinfo=UTC),
     },
 }
 
@@ -111,8 +75,9 @@ def get_protocol_floor_date(protocol: str, chain: str) -> datetime:
     Lookup precedence:
       1. UAC ``PROTOCOL_LAUNCH_DATES`` (canonical SSOT) keyed by
          ``(chain_upper, venue_prefix_upper)`` — used for protocols UAC tracks.
-      2. Local ``LENDING_PROTOCOL_DEPLOY_DATES`` fallback for protocols UAC does
-         not yet track (morpho, fluid, spark, euler_v2, radiant, venus, benqi).
+      2. Local ``LENDING_PROTOCOL_DEPLOY_DATES`` fallback for a (protocol, chain)
+         pair UAC does not yet track (as of the 2026-07-27 Bug-class-3 sweep,
+         only aave_v3/GNOSIS).
       3. Generic 2020-01-01 floor when neither layer has the pair.
 
     Reference: pre-2026-05-08 the local dict carried wrong dates for AAVE V3
@@ -148,24 +113,34 @@ def _resolve_rpc_url(chain: str, alchemy_key: str | None = None) -> str | None:
             sc = get_secret_client()
             raw_key: str = str(sc.get_secret("alchemy-api-key") or "")
             key = raw_key.strip()
+        # Secret Manager client construction/access boundary: the ADC/credential
+        # exception surface (google.auth.exceptions.*) isn't a small closed set we can
+        # enumerate safely, and get_secret() already swallows the GCP-API-level errors
+        # internally (returns None) — the only local failure mode left, AttributeError
+        # from `.strip()` on that None, still needs the same "no key available" outcome.
+        # Audited 2026-07-25, left broad: instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
         except Exception:
             logger.warning("evm_creation_resolver: cannot get alchemy-api-key")
             return None
 
-    try:
-        from unified_api_contracts.registry.capability_declarations._defi import (
-            CHAIN_RPC_TEMPLATES,
-        )
-        from unified_api_contracts.registry.chain_env import MAINNET_CHAIN_IDS
+    from unified_api_contracts.registry.capability_declarations._defi import (
+        CHAIN_RPC_TEMPLATES,
+    )
+    from unified_api_contracts.registry.chain_env import MAINNET_CHAIN_IDS
 
-        chain_id = MAINNET_CHAIN_IDS.get(chain.upper())
-        if chain_id is None or chain_id == 0:
-            return None
-        template = CHAIN_RPC_TEMPLATES.get(chain_id)
-        if not template:
-            return None
+    chain_id = MAINNET_CHAIN_IDS.get(chain.upper())
+    if chain_id is None or chain_id == 0:
+        return None
+    template = CHAIN_RPC_TEMPLATES.get(chain_id)
+    if not template:
+        return None
+    try:
+        # Known failure mode: a CHAIN_RPC_TEMPLATES entry with an unexpected/extra
+        # format placeholder. The registry imports above are static in-workspace
+        # symbols (no optional/conditional import), so an ImportError there is a
+        # real bug that should propagate loudly, not be swallowed here.
         return template.format(api_key=key)
-    except Exception:
+    except KeyError:
         return None
 
 
@@ -174,11 +149,15 @@ def _resolve_rpc_url(chain: str, alchemy_key: str | None = None) -> str | None:
 
 def _get_gcs_bucket() -> str | None:
     """Resolve the DeFi instruments bucket for cache storage."""
-    try:
-        from unified_trading_library import get_bucket_name
+    from unified_trading_library import BucketNamingError, get_bucket_name
 
+    try:
         return get_bucket_name("instruments", "defi")
-    except Exception:
+    except BucketNamingError:
+        # "instruments" is a stable, always-registered domain — this only fires if
+        # that registration is ever removed/renamed, which is exactly the case
+        # BucketNamingError exists to surface. Narrowed (not bare) so it stays
+        # visible rather than being silently swallowed by `except Exception`.
         return None
 
 
@@ -240,6 +219,12 @@ def _save_cache(cache: dict[str, str]) -> None:
                     merged = {**existing, **cache} if existing is not None else cache
                 else:
                     merged = cache
+            # GCS read boundary: download_bytes doesn't pre-wrap the GCS SDK's exception
+            # surface (NotFound/network/auth — many types), and read-merge is
+            # best-effort by design (write still proceeds below with the un-merged
+            # `cache`, same outcome the outer except at the bottom of this function
+            # falls back to on a total GCS failure). Audited 2026-07-25, left broad:
+            # instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
             except Exception:
                 merged = cache
 

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import aiohttp
 import aiohttp.resolver
+from unified_api_contracts.registry.venue_launch_dates import get_venue_launch_date
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,20 @@ def _make_session() -> aiohttp.ClientSession:
 
 
 # ── Protocol floor dates (conservative mainnet launch dates) ──────────
-# Used as guaranteed fallback when per-pool RPC resolution fails or is
-# unavailable.  Matches the Aave V3 pattern (_AAVE_V3_DEPLOY_DATE).
-# Any instrument that currently exists on-chain was created ON or AFTER
-# its protocol's launch date.
+# SECONDARY fallback only — ``get_protocol_floor_date`` below checks UAC
+# ``venue_launch_dates.DEFI_VENUE_LAUNCH_DATES`` (the operator-curated
+# real-launch-date SSOT) FIRST. This dict is consulted only for protocols
+# UAC does not yet track. Used as guaranteed fallback when per-pool RPC
+# resolution fails or is unavailable.  Matches the Aave V3 pattern
+# (_AAVE_V3_DEPLOY_DATE). Any instrument that currently exists on-chain was
+# created ON or AFTER its protocol's launch date.
+#
+# NOTE some entries here are STALE vs the UAC SSOT (e.g. kamino=2024-01-01
+# here vs the real 2022-08-24 in UAC ``DEFI_VENUE_LAUNCH_DATES["KAMINO-
+# SOLANA"]``; jito=2021-11-01 here vs the real 2022-08-16) — left as-is
+# since UAC now wins for any protocol it covers; only reached for the
+# protocols UAC does not yet carry (drift/meteora/phoenix/jupiter/
+# lifinity/pyth/solend/marginfi/sanctum at time of writing).
 SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "drift": datetime(2022, 11, 4, tzinfo=UTC),  # Drift v2 mainnet launch
     "kamino": datetime(2024, 1, 1, tzinfo=UTC),  # Kamino vaults mainnet launch
@@ -45,9 +56,9 @@ SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "orca": datetime(2022, 3, 1, tzinfo=UTC),  # Orca Whirlpools (CLMM) launch
     "marinade": datetime(2021, 8, 1, tzinfo=UTC),  # Marinade mSOL mainnet launch
     "jito": datetime(2021, 11, 1, tzinfo=UTC),  # Jito stake pool mainnet launch
-    "mango": datetime(2023, 8, 1, tzinfo=UTC),  # Mango V4 mainnet launch (Aug 2023)
-    "zeta": datetime(2022, 4, 1, tzinfo=UTC),  # Zeta Markets v1 mainnet launch
-    "flash_trade": datetime(2023, 11, 1, tzinfo=UTC),  # Flash Trade mainnet launch
+    # mango / zeta / flash_trade removed 2026-07-15 (operator ruling; dead API endpoints,
+    # ~$0 TVL, zero MTDS capture ever wired). SSOT:
+    # unified-trading-pm/codex/04-architecture/solana-defi-coverage.md.
     # Plan C: Solana AMM coverage expansion (2026-05-13)
     "meteora": datetime(2022, 9, 1, tzinfo=UTC),  # Meteora Dynamic Liquidity mainnet launch
     "phoenix": datetime(2023, 6, 1, tzinfo=UTC),  # Phoenix CLOB DEX mainnet launch
@@ -60,6 +71,9 @@ SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "sanctum": datetime(
         2023, 6, 1, tzinfo=UTC
     ),  # Sanctum v1 LST marketplace mainnet launch (conservative floor); medium confidence
+    # Plan: MarginFi + Solend Solana lending adapters (2026-07-09)
+    "solend": datetime(2021, 8, 13, tzinfo=UTC),  # Solend mainnet launch (confirmed 2021-08-13)
+    "marginfi": datetime(2023, 7, 1, tzinfo=UTC),  # marginfi v2 mainnet GA (July 2023, conservative floor)
 }
 
 # ── Timestamp cache ───────────────────────────────────────────────────
@@ -71,11 +85,15 @@ _LOCAL_CACHE_FILE = _LOCAL_CACHE_DIR / "solana_creation_timestamps.json"
 
 def _get_gcs_bucket() -> str | None:
     """Resolve the DeFi instruments bucket for cache storage."""
-    try:
-        from unified_trading_library import get_bucket_name
+    from unified_trading_library import BucketNamingError, get_bucket_name
 
+    try:
         return get_bucket_name("instruments", "defi")
-    except Exception:
+    except BucketNamingError:
+        # "instruments" is a stable, always-registered domain — this only fires if
+        # that registration is ever removed/renamed, which is exactly the case
+        # BucketNamingError exists to surface. Narrowed (not bare) so it stays
+        # visible rather than being silently swallowed by `except Exception`.
         return None
 
 
@@ -147,6 +165,11 @@ def _save_cache(cache: dict[str, str]) -> None:
                     merged = {**existing, **cache} if isinstance(existing, dict) else cache
                 else:
                     merged = cache
+            # GCS read boundary: download_bytes doesn't pre-wrap the GCS SDK's exception
+            # surface (NotFound/network/auth — many types), and read-merge is
+            # best-effort by design (write still proceeds below with the un-merged
+            # `cache`). Audited 2026-07-25, left broad:
+            # instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
             except Exception:
                 merged = cache
 
@@ -260,12 +283,36 @@ def _update_cache(new_entries: dict[str, str]) -> None:
 def get_protocol_floor_date(protocol: str) -> datetime:
     """Return the conservative floor date for a Solana protocol.
 
-    Raises KeyError if the protocol is not registered — this forces
-    callers to register new protocols rather than silently defaulting.
+    Lookup precedence:
+      1. UAC ``venue_launch_dates.DEFI_VENUE_LAUNCH_DATES`` (canonical SSOT,
+         operator-curated real-launch dates) — tried first as the
+         chain-suffixed venue form ``{PROTOCOL}-SOLANA`` (e.g.
+         ``KAMINO-SOLANA``, matching the manifest's ``venue`` column for
+         per-chain DeFi rows), then the bare ``{PROTOCOL}`` form (protocols
+         catalogued without a chain suffix).
+      2. Local ``SOLANA_PROTOCOL_DEPLOY_DATES`` fallback for protocols UAC
+         does not yet track.
+
+    Raises KeyError if the protocol is in NEITHER layer — this forces
+    callers to register new protocols rather than silently defaulting
+    (honest-absence: no date is fabricated here).
+
+    Reference: pre-2026-07-18 this function only consulted the local dict,
+    which carried stale dates for several protocols UAC now tracks more
+    accurately (kamino: local 2024-01-01 vs UAC real 2022-08-24; jito:
+    local 2021-11-01 vs UAC real 2022-08-16) — floored years of legitimate
+    on-chain history to the wrong (too-late) listing date, which the DeFi
+    drilldown then rendered as a generic pre-history gap. UAC's
+    ``DEFI_VENUE_LAUNCH_DATES`` is the workspace SSOT for venue launch
+    dates — consult it first.
     """
     key = protocol.lower()
+    venue_upper = protocol.upper()
+    uac_date = get_venue_launch_date("defi", f"{venue_upper}-SOLANA") or get_venue_launch_date("defi", venue_upper)
+    if uac_date is not None:
+        return datetime.fromisoformat(uac_date).replace(tzinfo=UTC)
     if key not in SOLANA_PROTOCOL_DEPLOY_DATES:
-        msg = f"No floor date for Solana protocol {protocol!r} — register it in _solana_utils.SOLANA_PROTOCOL_DEPLOY_DATES"
+        msg = f"No floor date for Solana protocol {protocol!r} — register it in _solana_utils.SOLANA_PROTOCOL_DEPLOY_DATES or unified_api_contracts.registry.venue_launch_dates.DEFI_VENUE_LAUNCH_DATES"
         raise KeyError(msg)
     return SOLANA_PROTOCOL_DEPLOY_DATES[key]
 
@@ -858,6 +905,11 @@ def _save_discovered_pools(protocol: str, addresses: list[str]) -> None:
                         merged = unique_addresses
                 else:
                     merged = unique_addresses
+            # GCS read boundary: download_bytes doesn't pre-wrap the GCS SDK's exception
+            # surface (NotFound/network/auth — many types), and read-merge is
+            # best-effort by design (write still proceeds below with the un-merged
+            # addresses). Audited 2026-07-25, left broad:
+            # instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
             except Exception:
                 merged = unique_addresses
 

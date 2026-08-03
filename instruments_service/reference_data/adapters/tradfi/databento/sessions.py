@@ -5,8 +5,7 @@ former monolithic ``adapters/tradfi/databento.py``; plan:
 ``unified-trading-pm/plans/active/codex_violations_ratchet_to_five_2026_06_10.md``).
 
 Single SSOT for TradFi session metadata (trading hours / holidays / early
-closes) across reference-data sources — the Massive adapter reuses
-``EXCHANGE_HOURS`` + ``get_session_metadata`` from here via the package facade.
+closes) for the Databento TradFi reference-data adapter.
 
 Shared collaborators (the ``xcals`` module alias, the calendar cache and
 sibling functions) resolve through ``_db`` — the live package namespace — so
@@ -35,7 +34,6 @@ else:  # pragma: no cover - runtime namespace indirection
     from instruments_service.reference_data.adapters.tradfi.databento._pkg_ref import databento_namespace as _db
 
 __all__ = [
-    "EXCHANGE_HOURS",
     "_EXCHANGE_HOURS",
     "_FX_VENUES_24_7",
     "_XCAL_CACHE",
@@ -48,7 +46,6 @@ __all__ = [
     "_is_trading_holiday",
     "_non_trading_result",
     "_resolve_trading_status",
-    "get_session_metadata",
     "is_non_trading_day",
     "non_trading_day_reason",
 ]
@@ -402,10 +399,3 @@ def _get_session_metadata(venue: str, target_date: date) -> dict[str, str | bool
     _db._compute_utc_hours(cfg, target_date, calendar_name, venue, result)
 
     return result
-
-
-# Public aliases so sibling TradFi adapters (e.g. Massive) reuse the SAME
-# trading-hours/holiday session-metadata logic instead of duplicating it —
-# single SSOT for TradFi session enrichment across reference-data sources.
-EXCHANGE_HOURS = _EXCHANGE_HOURS
-get_session_metadata = _get_session_metadata

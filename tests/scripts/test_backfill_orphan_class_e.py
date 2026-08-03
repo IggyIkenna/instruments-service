@@ -439,3 +439,64 @@ class TestRecordCellsRecordsEveryCell:
         # tradfi/prediction/cefi cells are not chain-scoped → chain omitted from row_key
         assert "chain" not in by_day["2020-01-02"]["row_key"]  # type: ignore[operator]
         assert by_day["2020-01-02"]["source"] == "tardis"
+
+
+class TestSplitDexPoolsFakeHistory:
+    """Regression for defi_solana_dex_pools_fake_history_recurrence_prd_bucket_2026_07_23.md —
+    the 34-combination Orca/Raydium fake-history population must never reach record_captured
+    via the ordinary backfill path (mirrors backfill_orphan_class_e_sports.py's
+    split_pre_floor)."""
+
+    def test_excludes_only_the_known_orca_raydium_dex_pools_window(self) -> None:
+        rows = [
+            {"venue": "ORCA", "data_type": "dex_pools", "day": "2025-01-01"},
+            {"venue": "RAYDIUM", "data_type": "dex_pools", "day": "2025-01-17"},
+            {"venue": "ORCA", "data_type": "dex_pools", "day": "2025-01-18"},  # one day outside window -> legit
+            {"venue": "ORCA", "data_type": "dex_pool_state", "day": "2025-01-08"},  # canonical dt -> legit
+            {"venue": "KAMINO", "data_type": "dex_pools", "day": "2025-01-08"},  # different venue -> legit
+            {"venue": "RAYDIUM", "data_type": "trades", "day": "2025-01-08"},  # different data_type -> legit
+        ]
+        legit, excluded = _mod.split_dex_pools_fake_history(rows)
+        assert {(r["venue"], r["day"]) for r in excluded} == {("ORCA", "2025-01-01"), ("RAYDIUM", "2025-01-17")}
+        assert len(legit) == 4
+
+    def test_empty_input_returns_empty_both(self) -> None:
+        legit, excluded = _mod.split_dex_pools_fake_history([])
+        assert legit == []
+        assert excluded == []
+
+
+class TestSplitUnknownPrefixRows:
+    """Regression for the 2026-07-23 defi orphan-sweep finding: 8 of defi's 15,865,384
+    class-E rows sat under an unrecognised top-level bucket prefix
+    (``agent-sample-test-jupiter/`` — an agent's own smoke-test artifacts leaked into the
+    PROD bucket), and ``classify_object`` happily classed them E_orphan_real anyway
+    because it never checks the sweep's OWN bucket-prefix-taxonomy "unknown" signal before
+    labelling an object an orphan. These must NEVER reach ``record_captured`` — see
+    ``defi_orphan_sweep_test_artifact_prod_leak_2026_07_24.md``."""
+
+    def test_excludes_rows_under_an_unrecognised_top_level_prefix(self) -> None:
+        bucket = "market-data-tick-defi-prd-test-project"
+        rows = [
+            {  # genuine service-data path (raw_tick_data/ top-level) -> legit
+                "uri": f"gs://{bucket}/raw_tick_data/by_date/day=2021-04-21/"
+                "pipeline_mode=batch_onchain_subgraph/asset_group=defi/venue=BALANCER/"
+                "chain=ETHEREUM/instrument_type=pool/data_type=dex_pool_state/"
+                "_migrated_balancer_ETHEREUM_2021-04-21.parquet",
+            },
+            {  # test-artifact leak under an unrecognised top-level prefix -> excluded
+                "uri": f"gs://{bucket}/agent-sample-test-jupiter/raw_tick_data/by_date/"
+                "day=2026-07-22/pipeline_mode=batch_onchain_rpc/asset_group=defi/"
+                "venue=JUPITER/chain=SOLANA/instrument_type=dex_pool/data_type=dex_quote/"
+                "SOL_to_USDC_0.parquet",
+            },
+        ]
+        legit, excluded = _mod.split_unknown_prefix_rows(bucket, rows)
+        assert len(legit) == 1
+        assert len(excluded) == 1
+        assert "agent-sample-test-jupiter" in excluded[0]["uri"]
+
+    def test_empty_input_returns_empty_both(self) -> None:
+        legit, excluded = _mod.split_unknown_prefix_rows("bkt", [])
+        assert legit == []
+        assert excluded == []

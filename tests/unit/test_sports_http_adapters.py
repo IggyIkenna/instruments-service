@@ -483,12 +483,19 @@ class TestApiFootballAdapterHttp:
         assert standings[0]["rank"] == 1
 
     @pytest.mark.asyncio
-    async def test_get_standings_empty_on_error(self) -> None:
+    async def test_get_standings_error_propagates(self) -> None:
+        """Fix (sports_adapter_dead_code_fallback_duplicate_audit_2026_08_01 finding 2):
+        get_standings must propagate a fetch failure to attempted_failed, not
+        silently masquerade as an honest empty standings table — matching every
+        sibling per-entity fetch method in this file.
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
         mock_session = _make_aiohttp_mock({}, status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            standings = await adapter.get_standings(39)
-        assert standings == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="HTTP 500"),
+        ):
+            await adapter.get_standings(39)
 
     @pytest.mark.asyncio
     async def test_get_injuries(self) -> None:
@@ -505,12 +512,18 @@ class TestApiFootballAdapterHttp:
         assert len(injuries) == 1
 
     @pytest.mark.asyncio
-    async def test_get_injuries_error_returns_empty(self) -> None:
+    async def test_get_injuries_error_propagates(self) -> None:
+        """Root-cause fix (api_football_injuries_silent_empty_swallow_2026_07_13):
+        get_injuries is DATE-WIDE (not per-fixture) — a fetch failure must
+        propagate to attempted_failed, not silently masquerade as 0 injuries.
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
         mock_session = _make_aiohttp_mock({}, status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            injuries = await adapter.get_injuries("2026-03-22")
-        assert injuries == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="HTTP 500"),
+        ):
+            await adapter.get_injuries("2026-03-22")
 
     @pytest.mark.asyncio
     async def test_get_fixture_statistics(self) -> None:
@@ -527,12 +540,19 @@ class TestApiFootballAdapterHttp:
         assert len(stats) == 1
 
     @pytest.mark.asyncio
-    async def test_get_fixture_statistics_error_returns_empty(self) -> None:
+    async def test_get_fixture_statistics_error_propagates(self) -> None:
+        """Root-cause fix (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25): a hard fetch failure must propagate so
+        ``_gather_per_fixture_rows._fetch_one`` records ``attempted_failed``,
+        not silently masquerade as 0 stat rows (``empty_confirmed``).
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
         mock_session = _make_aiohttp_mock({}, status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            stats = await adapter.get_fixture_statistics(123456)
-        assert stats == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="HTTP 500"),
+        ):
+            await adapter.get_fixture_statistics(123456)
 
     @pytest.mark.asyncio
     async def test_get_fixture_events(self) -> None:
@@ -549,12 +569,19 @@ class TestApiFootballAdapterHttp:
         assert len(events) == 1
 
     @pytest.mark.asyncio
-    async def test_get_fixture_events_error_returns_empty(self) -> None:
+    async def test_get_fixture_events_error_propagates(self) -> None:
+        """Root-cause fix (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25): a hard fetch failure must propagate so
+        ``_gather_per_fixture_rows._fetch_one`` records ``attempted_failed``,
+        not silently masquerade as 0 events (``empty_confirmed``).
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
         mock_session = _make_aiohttp_mock({}, status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            events = await adapter.get_fixture_events(123456)
-        assert events == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="HTTP 500"),
+        ):
+            await adapter.get_fixture_events(123456)
 
     @pytest.mark.asyncio
     async def test_get_fixture_lineups(self) -> None:
@@ -578,12 +605,19 @@ class TestApiFootballAdapterHttp:
         assert len(lineups) == 1
 
     @pytest.mark.asyncio
-    async def test_get_fixture_lineups_error_returns_empty(self) -> None:
+    async def test_get_fixture_lineups_error_propagates(self) -> None:
+        """Root-cause fix (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25): a hard fetch failure must propagate so
+        ``_gather_per_fixture_rows._fetch_one`` records ``attempted_failed``,
+        not silently masquerade as 0 lineup rows (``empty_confirmed``).
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
         mock_session = _make_aiohttp_mock({}, status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            lineups = await adapter.get_fixture_lineups(123456)
-        assert lineups == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="HTTP 500"),
+        ):
+            await adapter.get_fixture_lineups(123456)
 
     @pytest.mark.asyncio
     async def test_get_fixture_player_stats(self) -> None:
@@ -608,12 +642,19 @@ class TestApiFootballAdapterHttp:
         assert len(stats) == 1
 
     @pytest.mark.asyncio
-    async def test_get_fixture_player_stats_error_returns_empty(self) -> None:
+    async def test_get_fixture_player_stats_error_propagates(self) -> None:
+        """Root-cause fix (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25): a hard fetch failure must propagate so
+        ``_gather_per_fixture_rows._fetch_one`` records ``attempted_failed``,
+        not silently masquerade as 0 player-stat rows (``empty_confirmed``).
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
         mock_session = _make_aiohttp_mock({}, status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            stats = await adapter.get_fixture_player_stats(123456)
-        assert stats == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="HTTP 500"),
+        ):
+            await adapter.get_fixture_player_stats(123456)
 
     def test_headers_raises_without_key(self) -> None:
         adapter = ApiFootballAdapter()
@@ -912,7 +953,13 @@ class TestApiFootballRateLimitRetry:
 
     @pytest.mark.asyncio
     async def test_hard_api_error_not_retried(self) -> None:
-        """A hard plan/token error is NOT retried — propagates to _emit_fetch_failed."""
+        """A hard plan/token error is NOT retried — emits, then propagates.
+
+        Root-cause fix (api_football_injuries_silent_empty_swallow_2026_07_13):
+        get_injuries is DATE-WIDE — a hard envelope error must surface as
+        attempted_failed (via propagation to the caller), never a silent
+        empty-list "0 injuries" honest-absence.
+        """
         adapter = ApiFootballAdapter(api_key="test-key")
 
         hard_error_body = {
@@ -951,11 +998,11 @@ class TestApiFootballRateLimitRetry:
                 new_callable=AsyncMock,
             ),
             patch.object(adapter, "_emit_fetch_failed", side_effect=_capture_emit),
+            pytest.raises(ApiFootballResponseError),
         ):
-            result = await adapter.get_injuries("2026-06-21")
+            await adapter.get_injuries("2026-06-21")
 
-        # Hard error → returned empty list + _emit_fetch_failed called once
-        assert result == []
+        # Hard error → emitted once, then propagated (NOT swallowed to [])
         assert len(emit_calls) == 1
         # Only 1 HTTP call made — no retry
         assert mock_resp.json.call_count == 1

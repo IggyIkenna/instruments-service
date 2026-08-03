@@ -16,7 +16,23 @@ ARG PROJECT_ID
 # Digest-pinned UTL base image (QG STEP 5.79 -- reproducible builds + UTL/UAC provenance).
 # Refreshed by the dependency-update fan-out (update-dependency-version.yml) on base-image
 # republish; cloudbuild may override at build time: --build-arg BASE_IMAGE_DIGEST=sha256:...
-ARG BASE_IMAGE_DIGEST=sha256:a0359e0362ea3b9b570c7b69d58780e70918e3e74e1c179273db71d558064f76
+#
+# Rebuild trigger 2026-07-15 22:45Z: pulls the UTL base image bundling the new UAC
+# (YAHOO_FINANCE phantom-venue REMOVED uac@fec3f110 + CBOE ohlcv_24h treasury capability
+# uac@2ace1fca). This operationalizes the YAHOO_FINANCE removal in the expected-universe
+# enumeration jobs (they enumerate VENUES_BY_ASSET_GROUP["tradfi"] via UAC, so the new UAC
+# stops them seeding phantom YAHOO_FINANCE expected-coverage rows into the MTDS tradfi tick
+# manifest).
+# CORRECTION: the prior pin sha256:b7c57243 (UTL base cut 2026-07-15 17:54:46Z) had YAHOO
+# removed but PREDATED uac@7754661a (2026-07-15 18:14:29Z, "add venue_data_type_has_batch_source"),
+# so the enum crashed at runtime with `ImportError: cannot import name
+# 'venue_data_type_has_batch_source' from 'unified_api_contracts'` (enumerate_expected_universe.py
+# now imports that symbol). Bumped to the newer UTL 0.55.0/latest base (cut 2026-07-15 23:27:01Z)
+# which bundles all of {YAHOO removed, CBOE ohlcv_24h, venue_data_type_has_batch_source} — verified
+# in-image (cloudbuild=70dbc75f-c8db-4245-b3bb-fd175829f6b3, SUCCESS).
+# Digest sha256:be51b33f... = UTL AR 0.55.0/latest.
+# Issue: tradfi_unreachable_databento_data_types_mbp10_ohlcv_coarse_calendar_2026_07_15.md.
+ARG BASE_IMAGE_DIGEST=sha256:cc310a9f8e1781a01483a9faaedc5112060eb612f68fab69a5ff5d2f2d7a74a9
 ARG BASE_IMAGE=asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-library/unified-trading-library@${BASE_IMAGE_DIGEST}
 FROM --platform=linux/amd64 ${BASE_IMAGE}
 
@@ -53,8 +69,19 @@ COPY . .
 ARG SETUPTOOLS_SCM_PRETEND_VERSION
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 
-# Install service dependencies (base image already has UTL + UAC pre-installed)
-RUN uv pip install --system --no-sources -e .
+# Install service dependencies (base image already has UTL + UAC pre-installed).
+# uv does NOT read pip.conf's extra-index-url (pip-only convention) and its
+# keyring-subprocess integration 401s against GAR in this container (unlike pip's
+# in-process keyring import, which works) — see
+# cloud_build_unified_api_contracts_publish_ordering_race_2026_07_29.md. Fix: mount a
+# freshly-minted access token (same auth-precheck mechanism already proven against this
+# exact index) as a BuildKit secret, scoped to only this RUN layer — never baked into an
+# image layer or history.
+# Retry-with-backoff (3 attempts, ~45s total budget): hardens against the exact
+# publish-ordering-race window this doc tracks recurring on the next cross-repo floor-bump.
+RUN --mount=type=secret,id=gar_token \
+    UV_EXTRA_INDEX_URL="https://oauth2accesstoken:$(cat /run/secrets/gar_token)@asia-northeast1-python.pkg.dev/central-element-323112/unified-libraries/simple/" \
+    sh -c 'i=1; until uv pip install --system --no-sources -e .; do [ "$i" -ge 3 ] && { echo "uv pip install failed after 3 attempts" >&2; exit 1; }; w=$((15 * i)); echo "uv pip install failed (attempt $i/3) -- retrying in ${w}s"; sleep "$w"; i=$((i + 1)); done'
 
 # Create data directories
 RUN mkdir -p /app/instruments-service/data/samples /app/instruments-service/logs

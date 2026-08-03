@@ -14,10 +14,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from unified_api_contracts._instrument_enums import OptionType
-from unified_api_contracts.internal import InstrumentType
+from unified_api_contracts.internal import InstrumentType, MarginType
 
 from instruments_service.reference_data.adapters.cefi.deribit_options_adapter import (
     DeribitOptionsReferenceDataAdapter,
+    _build_deribit_option_symbol,
     _parse_option,
 )
 
@@ -98,12 +99,53 @@ class TestParseOption:
         assert rec.strike == Decimal("90000")
         assert rec.option_type == OptionType.CALL
         assert rec.expiry == datetime(2026, 4, 25, 8, 0, tzinfo=UTC)
-        assert rec.instrument_key == "DERIBIT:OPTION:BTC-25APR26-90000-C"
+        # Target format (operator ruling 2026-07-18, quote ALWAYS present):
+        # VENUE:OPTION:BASE-QUOTE@LIN|INV-YYYYMMDD-STRIKE-C|P. This fixture's
+        # settlement_currency=BTC (coin-settled) → inverse → USD quote.
+        assert rec.instrument_key == "DERIBIT:OPTION:BTC-USD@INV-20260425-90000-C"
+        assert rec.margin_type == MarginType.INVERSE
+        assert rec.quote_asset == "USD"
+
+    def test_parses_linear_usdc_settled_call(self) -> None:
+        """Real Deribit linear (USDC-quoted, USDC-settled) options coexist with
+        the classic inverse family — quote_currency is the reliable signal.
+        """
+        item = {
+            "instrument_name": "BTC_USDC-25APR26-90000-C",
+            "base_currency": "BTC",
+            "quote_currency": "USDC",
+            "settlement_currency": "USDC",
+            "strike": 90000,
+            "option_type": "call",
+            "expiration_timestamp": _EXP_NEAR,
+        }
+        rec = _parse_option(item)
+        assert rec is not None
+        assert rec.instrument_key == "DERIBIT:OPTION:BTC-USDC@LIN-20260425-90000-C"
+        assert rec.margin_type == MarginType.LINEAR
+        assert rec.quote_asset == "USDC"
 
     def test_malformed_returns_none(self) -> None:
         assert _parse_option({"instrument_name": ""}) is None
         assert _parse_option({"instrument_name": "X", "option_type": "call"}) is None  # no strike
         assert _parse_option("not-a-dict") is None
+
+
+class TestBuildDeribitOptionSymbol:
+    def test_includes_quote_linear_and_inverse(self) -> None:
+        expiry = datetime(2019, 4, 5, tzinfo=UTC)
+        inverse = _build_deribit_option_symbol("BTC", "USD", MarginType.INVERSE, expiry, Decimal("3250"), "C")
+        assert inverse == "BTC-USD@INV-20190405-3250-C"
+        linear = _build_deribit_option_symbol("BTC", "USDC", MarginType.LINEAR, expiry, Decimal("3250"), "C")
+        assert linear == "BTC-USDC@LIN-20190405-3250-C"
+
+    def test_marker_without_quote_raises_fail_loud(self) -> None:
+        """Operator ruling 2026-07-18: a Deribit option always carries a resolved
+        marker, so an empty quote is a contradiction — RAISE, never emit base-only.
+        """
+        expiry = datetime(2019, 4, 5, tzinfo=UTC)
+        with pytest.raises(ValueError, match=r"marker.*quote|quote"):
+            _build_deribit_option_symbol("BTC", "", MarginType.INVERSE, expiry, Decimal("3250"), "C")
 
 
 class TestOptionsChain:
@@ -122,8 +164,8 @@ class TestOptionsChain:
         assert len(chain.calls) == 2
         assert len(chain.puts) == 1
         # mark IV stored FRACTIONAL (62.5% → 0.625).
-        assert chain.mark_iv_by_instrument["DERIBIT:OPTION:BTC-25APR26-90000-C"] == Decimal("0.625")
-        assert chain.mark_iv_by_instrument["DERIBIT:OPTION:BTC-25APR26-100000-C"] == Decimal("0.5825")
+        assert chain.mark_iv_by_instrument["DERIBIT:OPTION:BTC-USD@INV-20260425-90000-C"] == Decimal("0.625")
+        assert chain.mark_iv_by_instrument["DERIBIT:OPTION:BTC-USD@INV-20260425-100000-C"] == Decimal("0.5825")
         assert chain.underlying_mark == Decimal("95000.0")
 
     @pytest.mark.asyncio

@@ -125,6 +125,72 @@ class TestFetchUnderstatXg:
         mock_mw.write.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_nested_league_dict_and_noncanonical_name_captures_not_empty(self) -> None:
+        """Regression (understat XG capture): the REAL adapter returns fixture
+        'league' as a NESTED CanonicalLeague dict, and _canonical_league_id
+        UPPER-cases (Bundesliga -> BUNDESLIGA). Two coupled bugs made XG record
+        empty despite fixtures existing:
+          (1) the flatten exploded the nested 'league' dict into league_* columns,
+              leaving NO flat 'league' key -> the whole capture block was skipped;
+          (2) the captured-set tracked the RAW league name while the honest-absence
+              loop subtracts the CANONICAL, so a non-already-uppercase league got
+              empty written OVER its capture (only EPL, raw==canonical, survived).
+        Asserts record_captured fires for the canonical league and record_empty
+        does NOT. The prior happy-path used a STRING league + identity canonical,
+        so it could not catch either bug.
+        Ref: plans/active/issues/understat_bulk_download_backfill_2026_06_29."""
+        fixtures = [
+            {
+                "h_title": "Bayern",
+                "a_title": "Dortmund",
+                # NESTED CanonicalLeague dict — the real _coerce_adapter_output shape.
+                "league": {"league_id": "Bundesliga", "name": "Bundesliga"},
+                "date": _DATE,
+                "kickoff_utc": f"{_DATE} 15:00:00",
+                "h": {"goals": 2},
+                "a": {"goals": 1},
+            }
+        ]
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures = AsyncMock(return_value=fixtures)
+        mock_adapter._fetch_error_count = 0
+        mock_mw = MagicMock()
+        with _stack(
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", MagicMock(return_value=mock_mw)),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("BUNDESLIGA")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            # REAL canonicalisation: UPPER-case so raw 'Bundesliga' != canonical 'BUNDESLIGA'.
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid).upper(),
+            ),
+            patch("instruments_service.engine.orchestrator._is_in_canonical_write_universe", return_value=True),
+            patch("instruments_service.engine.orchestrator._sports_ref_source", return_value="understat"),
+            patch(
+                "unified_api_contracts.sports.build_fixture_id",
+                return_value="BUNDESLIGA:BAYERN_v_DORTMUND:2026-01-15",
+            ),
+            patch("unified_api_contracts.sports.resolve_understat_team", side_effect=lambda t: t.upper()),
+        ):
+            await _fetch_understat_xg(date=_DATE, bucket=_BUCKET, force=True)
+        captured_leagues = {c.kwargs.get("league_id") for c in mock_mw.record_captured.call_args_list}
+        assert "BUNDESLIGA" in captured_leagues, f"XG must CAPTURE the league; got captured={captured_leagues}"
+        empty_leagues = {c.kwargs["row_key"].get("league_id") for c in mock_mw.record_empty.call_args_list}
+        assert "BUNDESLIGA" not in empty_leagues, (
+            f"captured league must not ALSO be recorded empty; empty={empty_leagues}"
+        )
+
+    @pytest.mark.asyncio
     async def test_exception_records_failed_per_league(self) -> None:
         mock_adapter = MagicMock()
         mock_adapter.get_fixtures = AsyncMock(side_effect=RuntimeError("network error"))
@@ -246,7 +312,6 @@ class TestFetchUnderstatXg:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
             result = await _fetch_understat_xg(date=_DATE, bucket=_BUCKET)
@@ -399,7 +464,6 @@ class TestRunUnderstatShotsDate:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
             result = await _run_understat_shots_date(date=_DATE, bucket=_BUCKET)
@@ -571,6 +635,195 @@ class TestFetchWeatherData:
         assert result.get("weather") == 1
 
     @pytest.mark.asyncio
+    async def test_fixtures_read_finds_data_only_present_at_canonical_prefix(self) -> None:
+        """Regression (2026-07-08 stale-path fix).
+
+        Before the fix, ``_fetch_weather_data`` listed ONLY the legacy bare
+        ``entity=fixtures/`` prefix (no ``pipeline_mode=``) — real fixtures
+        data is written per-league under the canonical ``pipeline_mode=``
+        hive segment and was never found there, so real fixture-having dates
+        were silently treated as ``empty_confirmed``. This mock storage
+        returns fixture data ONLY when the requested prefix carries
+        ``pipeline_mode=batch_api_football/entity=fixtures`` — everything
+        else (the legacy bare prefix, the weather-existence checks) returns
+        empty — so a pass here proves the read genuinely consults the
+        canonical per-league location rather than relying on side_effect
+        call-order coincidence.
+        """
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_weather_match_window = AsyncMock(return_value={"temperature": 15.0})
+        mock_adapter_cls = MagicMock(return_value=mock_adapter)
+
+        fixture_df = pd.DataFrame({"venue_name": ["Anfield"], "league_id": ["EPL"]})
+        buf = io.BytesIO()
+        fixture_df.to_parquet(buf)
+        parquet_bytes = buf.getvalue()
+
+        canonical_blob = MagicMock()
+        canonical_blob.name = (
+            f"sports_reference/by_date/day={_DATE}/pipeline_mode=batch_api_football/"
+            "entity=fixtures/league=EPL/fixtures.parquet"
+        )
+
+        def list_blobs_side_effect(**kwargs: object) -> list[MagicMock]:
+            prefix = str(kwargs.get("prefix", ""))
+            if "pipeline_mode=batch_api_football/entity=fixtures" in prefix:
+                return [canonical_blob]
+            # Legacy bare fixtures prefix (the pre-fix stale path) and the
+            # weather existing-data checks all find nothing.
+            return []
+
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = list_blobs_side_effect
+        mock_storage.download_bytes.return_value = parquet_bytes
+
+        fake_coords = {"ANFIELD": SimpleNamespace(latitude=53.43, longitude=-2.96)}
+
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.open_meteo.OpenMeteoAdapter",
+                mock_adapter_cls,
+            ),
+            patch("unified_api_contracts.registry.sports_venue_coordinates.VENUE_COORDINATES", new=fake_coords),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET, api_key="test-key")
+
+        # Pre-fix, this would be {} with a spurious EXPECTED_NO_FIXTURE
+        # record_empty — the legacy-only probe never sees the canonical data.
+        mock_mw.record_captured_from_counts.assert_called()
+        mock_mw.record_empty.assert_not_called()
+        assert result.get("weather") == 1
+
+    @pytest.mark.asyncio
+    async def test_incremental_rerun_preserves_previously_captured_venue(self) -> None:
+        """Regression (2026-07-08 merge-bug fix).
+
+        Simulates an incremental re-run: ANFIELD's weather was already
+        captured (found via the canonical ``pipeline_mode=`` weather prefix),
+        and this run adds a new venue (OLD_TRAFFORD). Before the fix, the
+        "merge with existing" step re-derived a hardcoded LEGACY-ONLY weather
+        prefix (no ``pipeline_mode=``) instead of reusing the already-resolved
+        canonical prefix — real captured data (like ANFIELD's row here) was
+        never found there, so the per-league write silently dropped it,
+        writing ONLY the newly-fetched venue. This mock storage returns
+        weather data ONLY for the canonical prefix; a pass here proves the
+        merge step reuses that same canonical location and both venues
+        survive the write.
+        """
+        mock_mw = MagicMock()
+        mock_mw_cls = MagicMock(return_value=mock_mw)
+        mock_adapter = MagicMock()
+        mock_adapter.get_weather_match_window = AsyncMock(return_value={"temperature": 12.0})
+        mock_adapter_cls = MagicMock(return_value=mock_adapter)
+
+        fixture_df = pd.DataFrame({"venue_name": ["Anfield", "Old Trafford"], "league_id": ["EPL", "EPL"]})
+        fixtures_buf = io.BytesIO()
+        fixture_df.to_parquet(fixtures_buf)
+        fixtures_bytes = fixtures_buf.getvalue()
+
+        existing_weather_df = pd.DataFrame(
+            {"venue_id": ["ANFIELD"], "date": [_DATE], "latitude": [53.43], "longitude": [-2.96]}
+        )
+        weather_buf = io.BytesIO()
+        existing_weather_df.to_parquet(weather_buf)
+        weather_bytes = weather_buf.getvalue()
+
+        fixtures_blob = MagicMock()
+        fixtures_blob.name = (
+            f"sports_reference/by_date/day={_DATE}/pipeline_mode=batch_api_football/"
+            "entity=fixtures/league=EPL/fixtures.parquet"
+        )
+        weather_blob = MagicMock()
+        weather_blob.name = (
+            f"sports_reference/by_date/day={_DATE}/pipeline_mode=batch_open_meteo/entity=weather/weather.parquet"
+        )
+
+        def list_blobs_side_effect(**kwargs: object) -> list[MagicMock]:
+            prefix = str(kwargs.get("prefix", ""))
+            if "pipeline_mode=batch_api_football/entity=fixtures" in prefix:
+                return [fixtures_blob]
+            if "pipeline_mode=batch_open_meteo/entity=weather" in prefix:
+                # Real data lives ONLY at the canonical (pipeline_mode=) weather
+                # prefix — the legacy bare prefix (the pre-fix merge step's
+                # hardcoded, wrong location) has nothing.
+                return [weather_blob]
+            return []
+
+        def download_bytes_side_effect(**kwargs: object) -> bytes:
+            blob_path = str(kwargs.get("blob_path", ""))
+            if "entity=fixtures" in blob_path:
+                return fixtures_bytes
+            return weather_bytes
+
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = list_blobs_side_effect
+        mock_storage.download_bytes.side_effect = download_bytes_side_effect
+
+        fake_coords = {
+            "ANFIELD": SimpleNamespace(latitude=53.43, longitude=-2.96),
+            "OLD_TRAFFORD": SimpleNamespace(latitude=53.46, longitude=-2.29),
+        }
+
+        mock_sink = MagicMock()
+        mock_gated_write = MagicMock()
+        with _stack(
+            patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch(
+                "instruments_service.reference_data.adapters.sports.adapters.open_meteo.OpenMeteoAdapter",
+                mock_adapter_cls,
+            ),
+            patch("unified_api_contracts.registry.sports_venue_coordinates.VENUE_COORDINATES", new=fake_coords),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL")],
+            ),
+            patch("instruments_service.engine.orchestrator._gated_sink_write", mock_gated_write),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, **kw: df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._canonical_league_id",
+                side_effect=lambda lid: str(lid),
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = await _fetch_weather_data(date=_DATE, bucket=_BUCKET, api_key="test-key")
+
+        # Only the NEW venue (OLD_TRAFFORD) triggers a fresh API call...
+        mock_adapter.get_weather_match_window.assert_called_once()
+        # ...but the WRITTEN data must carry BOTH venues — pre-fix, the merge
+        # step found zero existing blobs (wrong prefix) and this would be 1.
+        assert mock_gated_write.call_count == 1
+        written_df = mock_gated_write.call_args.kwargs["data"]
+        assert len(written_df) == 2, (
+            f"Expected merged write of 2 venues (ANFIELD preserved + OLD_TRAFFORD new), got {len(written_df)}"
+        )
+        assert set(written_df["venue_id"]) == {"ANFIELD", "OLD_TRAFFORD"}
+        assert result.get("weather") == 2
+
+    @pytest.mark.asyncio
     async def test_fixture_parquet_no_venue_name_column(self) -> None:
         """Fixture parquet without 'venue_name' column → record_empty and return."""
         mock_mw = MagicMock()
@@ -623,7 +876,6 @@ class TestFetchWeatherData:
                 return_value=[_mk_league("EPL")],
             ),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
         ):
@@ -727,7 +979,6 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
@@ -737,7 +988,19 @@ class TestFetchSfiData:
 
     @pytest.mark.asyncio
     async def test_match_descriptors_exception_writes_record_failed(self) -> None:
-        """Exception in get_match_descriptors_for_date → record_failed per league."""
+        """Exception in get_match_descriptors_for_date → record_failed PER LEAGUE.
+
+        Regression (sports_data_sources_canonical_completion, 2026-07-14): the
+        top-level failure handler must write ONLY per-expected-league
+        ``record_failed`` rows (each carrying a real ``league_id``), NEVER a
+        blank-``league_id`` date-aggregate row. A date-aggregate failed row can
+        never be superseded by the per-league success writes (the success path
+        keys on a real canonical ``league_id`` and writes no blank date-level
+        row), so it would sit ``attempted_failed`` forever even after a later
+        re-attempt genuinely captures every league — the exact class that left
+        the 10 SFI_PROGRESSIVE_STATS orphans un-closeable across residual-closer
+        re-runs (mirrors the footystats PREDICTIONS + weather WEATHER fixes).
+        """
         mock_mw = MagicMock()
         mock_mw_cls = MagicMock(return_value=mock_mw)
         mock_adapter = MagicMock()
@@ -748,11 +1011,13 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
             patch("instruments_service.engine.orchestrator._sports_ref_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_mw_cls),
-            patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
+            patch(
+                "unified_api_contracts.sports.get_expected_leagues_for_source",
+                return_value=[_mk_league("EPL"), _mk_league("LA_LIGA")],
+            ),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
             patch("instruments_service.engine.orchestrator._classify_adapter_failure", return_value="RuntimeError"),
@@ -760,6 +1025,14 @@ class TestFetchSfiData:
         ):
             result = await _fetch_sfi_data(date=_DATE, api_key="key", bucket=_BUCKET)
         mock_mw.record_failed.assert_called()
+        # Every record_failed row_key MUST carry a real league_id — no blank
+        # date-aggregate row.
+        failed_league_ids = {c.kwargs["row_key"].get("league_id") for c in mock_mw.record_failed.call_args_list}
+        assert None not in failed_league_ids, (
+            "top-level SFI failure handler wrote a blank-league_id date-aggregate "
+            f"record_failed row (unsupersedable orphan); row_keys={failed_league_ids}"
+        )
+        assert failed_league_ids == {"EPL", "LA_LIGA"}
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
@@ -783,7 +1056,6 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
@@ -819,7 +1091,6 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.SOCCER_FOOTBALL_INFO_IDS", sfi_ids),
             patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="abc123"),
@@ -863,7 +1134,6 @@ class TestFetchSfiData:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.get_leagues_needing_refresh", return_value=["EPL"]),
             patch("instruments_service.engine.orchestrator.SOCCER_FOOTBALL_INFO_IDS", sfi_ids),
             patch("instruments_service.engine.orchestrator.get_provider_league_id", return_value="abc123"),
@@ -1106,7 +1376,6 @@ class TestFetchFootystatsPredictions:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
             result = await _fetch_footystats_predictions(date=_DATE, api_key="key", bucket=_BUCKET)
@@ -1163,7 +1432,6 @@ class TestFetchFootystatsMatches:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=future_floor),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch("instruments_service.engine.orchestrator.log_event"),
         ):
             result = await _fetch_footystats_matches(date=_DATE, api_key="key", bucket=_BUCKET)
@@ -1222,7 +1490,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_POST_SEASON",
@@ -1251,7 +1518,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_PRE_SEASON",
@@ -1279,7 +1545,6 @@ class TestOffSeasonSeasonWindowGuard:
             ),
             patch("instruments_service.engine.orchestrator._should_skip_shard", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_POST_SEASON",
@@ -1312,7 +1577,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator._read_sfi_league_mapping", return_value=None),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_POST_SEASON",
@@ -1340,7 +1604,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_PRE_SEASON",
@@ -1368,7 +1631,6 @@ class TestOffSeasonSeasonWindowGuard:
             patch("unified_api_contracts.sports.get_expected_leagues_for_source", return_value=[_mk_league("EPL")]),
             patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
             patch("instruments_service.engine.orchestrator.get_source_coverage_start", return_value=None),
-            patch("instruments_service.engine.orchestrator.is_in_known_gap", return_value=False),
             patch(
                 "instruments_service.engine.orchestrator.footystats_season_status_for_day",
                 return_value="EXPECTED_POST_SEASON",

@@ -13,7 +13,7 @@ slot 3 audit:
 
 - HYPERLIQUID 30,658 rows in ``attempted_failed/LegacyBlankErrorReasonError``
   — sampled 5/5 ✅ have real parquet data at the canonical GCS path
-- LIGHTER-ZKSYNC + PACIFICA-SOLANA: similar mis-flip pattern (15/15 GCS
+- LIGHTER-ZKSYNC + PACIFICA (Solana): similar mis-flip pattern (15/15 GCS
   spot-check blobs found across 3 recent dates)
 
 These rows were wrongly classified by ``reconcile_legacy_blank_to_typed_reason.py``

@@ -19,6 +19,10 @@ from instruments_service.reference_data.adapters.defi.sanctum import (
 )
 
 _EXPECTED_DEPLOY_DATE = datetime(2023, 6, 1, tzinfo=UTC)
+# INF's own genesis (pre-existing Socean stake pool, rebranded 2024-01-25) predates
+# the Sanctum-marketplace-brand floor above by ~20 months — verified 2026-07-22,
+# see UAC LST_TOKEN_GENESIS["sanctumSOL"] + sanctum.py's module docstring.
+_EXPECTED_INF_DEPLOY_DATE = datetime(2021, 10, 15, tzinfo=UTC)
 
 
 def test_venue() -> None:
@@ -44,21 +48,51 @@ async def test_inf_record_fields() -> None:
     assert inf.venue == "SANCTUM-SOLANA"
     assert inf.instrument_key == "SANCTUM-SOLANA:LST:INF"
     assert inf.raw_symbol == _INF_MINT
-    assert inf.instrument_type == InstrumentType.YIELD_BEARING
+    # 2026-07-09: field fixed to match the `:LST:` key segment (key/field
+    # consistency fix, C4 — same class as PERP-vs-PERPETUAL; see lido.py's
+    # module docstring).
+    assert inf.instrument_type == InstrumentType.LST
     assert inf.base_asset == "SOL"
     assert inf.underlying == "SOL"
     assert inf.status == InstrumentStatus.ACTIVE
-    assert inf.available_from_datetime == _EXPECTED_DEPLOY_DATE
+    # INF gets its OWN, earlier genesis (2026-07-22 fix) — NOT the shared
+    # marketplace-brand floor other Sanctum-listed tokens use.
+    assert inf.available_from_datetime == _EXPECTED_INF_DEPLOY_DATE
     assert inf.base_asset_contract_address == _INF_MINT
     assert inf.base_asset_decimals == 9
 
 
 @pytest.mark.asyncio
+async def test_jupsol_and_lainesol_use_shared_marketplace_floor() -> None:
+    """Regression guard: only INF gets the earlier per-token genesis override —
+    jupSOL/laineSOL (genuinely newer, Sanctum-marketplace-native pools) must keep
+    the shared 2023-06-01 floor, never inherit INF's 2021-10-15 date."""
+    records = await SanctumReferenceDataAdapter().get_instruments()
+    jupsol = next(r for r in records if r.instrument_key.endswith(":JUPSOL"))
+    lainesol = next(r for r in records if r.instrument_key.endswith(":LAINESOL"))
+    assert jupsol.available_from_datetime == _EXPECTED_DEPLOY_DATE
+    assert lainesol.available_from_datetime == _EXPECTED_DEPLOY_DATE
+
+
+@pytest.mark.asyncio
 async def test_get_instruments_filters_on_instrument_type() -> None:
     adapter = SanctumReferenceDataAdapter()
-    assert await adapter.get_instruments(instrument_type="yield_bearing")
+    # Guard accepts both the real field value (LST) and the legacy
+    # YIELD_BEARING value for back-compat (2026-07-09 fix).
+    assert await adapter.get_instruments(instrument_type=InstrumentType.LST)
+    assert await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
     assert await adapter.get_instruments(instrument_type="perpetual") == []
     assert await adapter.get_instruments(instrument_type="spot") == []
+
+
+@pytest.mark.asyncio
+async def test_all_records_have_lst_type_and_matching_key_segment() -> None:
+    """C4 regression guard: key's `:LST:` segment and instrument_type field must agree."""
+    records = await SanctumReferenceDataAdapter().get_instruments()
+    assert records
+    for rec in records:
+        assert rec.instrument_type == InstrumentType.LST
+        assert ":LST:" in rec.instrument_key
 
 
 @pytest.mark.asyncio

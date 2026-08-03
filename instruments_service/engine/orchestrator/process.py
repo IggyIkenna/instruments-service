@@ -27,6 +27,7 @@ split, and mutable caches remain package-level attributes.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from instruments_service.engine.orchestrator.process_completeness import _completeness_and_retry
@@ -45,7 +46,11 @@ from instruments_service.engine.orchestrator.process_preflight import (
     _freshness_preflight,
     _promote_redo_all_for_recovery,
 )
-from instruments_service.engine.orchestrator.process_write import _validate_records, _write_all_venues
+from instruments_service.engine.orchestrator.process_write import (
+    _NON_VENUE_GRAIN_VENUE_NAMES,
+    _validate_records,
+    _write_all_venues,
+)
 from instruments_service.engine.orchestrator.process_zero_records import _handle_zero_records
 
 if TYPE_CHECKING:
@@ -70,64 +75,58 @@ def _fixtures_fetch_failed(
     Guard on ``not skip_urdi``: when the URDI fetch was skipped (enrichment-only
     / per-fixture entities) no fixtures fetch was attempted, so an empty
     ``non_error_venues`` is NOT a failure (→ keep the honest-absence path).
+
+    Root-cause fix (api_football_fixtures_fetch_failed_false_positive_2026_07_13):
+    ``active_venues`` for a sports run also carries the ENRICHMENT-ONLY pseudo-
+    venues (FOOTYSTATS/UNDERSTAT/TRANSFERMARKT/SOCCER_FOOTBALL_INFO/OPEN_METEO) —
+    these are fetched later, in stage 7 enrichment, and are NEVER part of this
+    stage-4 URDI instruments fetch, so they can never appear in
+    ``non_error_venues`` regardless of whether the day's fixtures actually
+    fetched cleanly. Checking membership against the raw ``active_venues`` list
+    made EVERY zero-fixture sports day register as a fetch failure the moment
+    the run's venue set included more than just the fixtures-fetching venue
+    (``API_FOOTBALL``) — silently converting legitimate
+    ``empty_confirmed(EXPECTED_NO_FIXTURE)`` days into false
+    ``attempted_failed(FIXTURES_FETCH_FAILED)`` rows for every prediction
+    league in one shot. Only check venues that actually participate in this
+    fetch: exclude ``_NON_VENUE_GRAIN_VENUE_NAMES`` (process_write.py's venue-
+    grain SSOT), keeping ``API_FOOTBALL`` itself in the check since it IS the
+    literal fixtures-fetch venue.
     """
-    return (
-        not skip_urdi
-        and bool(active_venues)
-        and not all(v in non_error_venues for v in active_venues)
-    )
+    _checkable_venues = [v for v in active_venues if v not in (_NON_VENUE_GRAIN_VENUE_NAMES - {"API_FOOTBALL"})]
+    return not skip_urdi and bool(_checkable_venues) and not all(v in non_error_venues for v in _checkable_venues)
 
 
-async def process_instruments(
-    date: str | _orch.datetime,
+@dataclass
+class _VenuePreflightOutcome:
+    """Result of stages 1-1b: either an ``early_return`` short-circuit value
+    (venue filter / freshness pre-flight / enrichment-only fast path all hit),
+    or the resolved venue + sports-entity state to continue processing with."""
+
+    early_return: dict[str, int] | None
+    active_venues: list[str]
+    is_sports_run: bool
+    missing_entities: list[str]
+    core_entities: list[str]
+    per_fixture_entities: list[str]
+
+
+async def _resolve_venues_and_preflight(
+    *,
+    date: str,
     asset_groups: list[str],
-    redo_all: bool = False,
-    api_keys: dict[str, str] | None = None,
-    venue_override: list[str] | None = None,
-    mode: str = "batch",
-    sports_entity_filter: str | None = None,
-    sports_provider: str | None = None,
-    league_filter: list[str] | None = None,
-    season_override: int | None = None,
-    recovery_fixture_ids: frozenset[int] | None = None,
-    source: str | None = None,
-) -> dict[str, int]:
-    """Process instruments for a single date and set of asset groups.
-
-    Args:
-        sports_provider: When set, only run this data provider (e.g. OPEN_METEO,
-            API_FOOTBALL, TRANSFERMARKT). Maps to venue filter + entity scope.
-        league_filter: When set, only process these canonical league IDs
-            (e.g. ["EPL", "BUNDESLIGA"]). Default None = all prediction leagues.
-        recovery_fixture_ids: af_fixture_id allowlist for targeted per-fixture
-            recovery. When set, the per-fixture entity handlers
-            (PLAYER_STATS / FIXTURE_STATS / FIXTURE_EVENTS / FIXTURE_LINEUPS)
-            filter fixture_ids to this set BEFORE calling api_football, and
-            the per-league parquet writes do read-modify-write merges so
-            existing fixtures' rows are preserved. Bypasses date-level
-            pre-flight skip — already-captured (date, league) cells are
-            still drilled into for these specific fixture_ids.
-
-    Returns:
-        Dict mapping venue → record count written.
-
-    Raises:
-        RuntimeError: If URDI returns zero total records (fail the shard).
-    """
-    _ = _orch.get_config()  # ensure config is initialized
-
-    # Normalise date: BatchIO passes datetime objects from get_date_range(),
-    # but all downstream code (URDI, date filter, partition keys) needs str YYYY-MM-DD.
-    if isinstance(date, _orch.datetime):
-        date = date.strftime("%Y-%m-%d")
-
-    # venue_override bypasses category lookup when --venues filter is active (sharding)
-    venues = venue_override if venue_override is not None else _orch.get_venues_for_asset_groups(asset_groups)
-
-    # Recovery-mode hint: promote redo_all=True when recovery is active so the
-    # per-provider per-day pre-flight skip is bypassed (full rationale on the helper).
-    redo_all = _promote_redo_all_for_recovery(recovery_fixture_ids=recovery_fixture_ids, redo_all=redo_all)
-
+    venues: list[str],
+    redo_all: bool,
+    api_keys: dict[str, str] | None,
+    sports_provider: str | None,
+    sports_entity_filter: str | None,
+    season_override: int | None,
+    recovery_fixture_ids: frozenset[int] | None,
+) -> _VenuePreflightOutcome:
+    """Stages 1-1b: venue availability, ``--sports-provider`` filter, freshness
+    pre-flight, and its enrichment-only fast path — the setup work
+    ``process_instruments`` does before the URDI fetch, factored out to keep
+    that function under ``MAX_FUNCTION_LINES``."""
     # 1. Skip venues not yet launched
     active_venues = [v for v in venues if _orch.is_venue_available(v, date)]
 
@@ -145,11 +144,25 @@ async def process_instruments(
             season_override=season_override,
         )
         if provider_result is not None:
-            return provider_result
+            return _VenuePreflightOutcome(
+                early_return=provider_result,
+                active_venues=active_venues,
+                is_sports_run=False,
+                missing_entities=[],
+                core_entities=[],
+                per_fixture_entities=[],
+            )
 
     if not active_venues:
         _orch.logger.info("No active venues for date=%s asset_groups=%s", date, asset_groups)
-        return {}
+        return _VenuePreflightOutcome(
+            early_return={},
+            active_venues=active_venues,
+            is_sports_run=False,
+            missing_entities=[],
+            core_entities=[],
+            per_fixture_entities=[],
+        )
 
     is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in asset_groups)
 
@@ -167,26 +180,126 @@ async def process_instruments(
         redo_all=redo_all,
     )
     if preflight.skip:
-        return {}
-    _sports_missing_entities = preflight.missing_entities
-    _sports_core_entities = preflight.core_entities
-    _sports_per_fixture_entities = preflight.per_fixture_entities
+        return _VenuePreflightOutcome(
+            early_return={},
+            active_venues=active_venues,
+            is_sports_run=is_sports_run,
+            missing_entities=[],
+            core_entities=[],
+            per_fixture_entities=[],
+        )
 
     # Fast path: if only specific sports entities are missing (instruments done),
     # skip URDI fetch and jump to targeted sports enrichment.
-    if _sports_missing_entities and api_keys:
+    if preflight.missing_entities and api_keys:
         fast_path_counts = await _enrichment_only_fast_path(
             date=date,
             asset_groups=asset_groups,
             api_keys=api_keys,
-            missing_entities=_sports_missing_entities,
-            core_entities=_sports_core_entities,
-            per_fixture_entities=_sports_per_fixture_entities,
+            missing_entities=preflight.missing_entities,
+            core_entities=preflight.core_entities,
+            per_fixture_entities=preflight.per_fixture_entities,
             recovery_fixture_ids=recovery_fixture_ids,
             redo_all=redo_all,
         )
         if fast_path_counts is not None:
-            return fast_path_counts
+            return _VenuePreflightOutcome(
+                early_return=fast_path_counts,
+                active_venues=active_venues,
+                is_sports_run=is_sports_run,
+                missing_entities=preflight.missing_entities,
+                core_entities=preflight.core_entities,
+                per_fixture_entities=preflight.per_fixture_entities,
+            )
+
+    return _VenuePreflightOutcome(
+        early_return=None,
+        active_venues=active_venues,
+        is_sports_run=is_sports_run,
+        missing_entities=preflight.missing_entities,
+        core_entities=preflight.core_entities,
+        per_fixture_entities=preflight.per_fixture_entities,
+    )
+
+
+async def process_instruments(
+    date: str | _orch.datetime,
+    asset_groups: list[str],
+    redo_all: bool = False,
+    api_keys: dict[str, str] | None = None,
+    venue_override: list[str] | None = None,
+    mode: str = "batch",
+    sports_entity_filter: str | None = None,
+    sports_provider: str | None = None,
+    league_filter: list[str] | None = None,
+    season_override: int | None = None,
+    recovery_fixture_ids: frozenset[int] | None = None,
+    run_tag: str = "batch",
+) -> dict[str, int]:
+    """Process instruments for a single date and set of asset groups.
+
+    Args:
+        sports_provider: When set, only run this data provider (e.g. OPEN_METEO,
+            API_FOOTBALL, TRANSFERMARKT). Maps to venue filter + entity scope.
+        league_filter: When set, only process these canonical league IDs
+            (e.g. ["EPL", "BUNDESLIGA"]). Default None = all prediction leagues.
+        recovery_fixture_ids: af_fixture_id allowlist for targeted per-fixture
+            recovery. When set, the per-fixture entity handlers
+            (PLAYER_STATS / FIXTURE_STATS / FIXTURE_EVENTS / FIXTURE_LINEUPS)
+            filter fixture_ids to this set BEFORE calling api_football, and
+            the per-league parquet writes do read-modify-write merges so
+            existing fixtures' rows are preserved. Bypasses date-level
+            pre-flight skip — already-captured (date, league) cells are
+            still drilled into for these specific fixture_ids.
+        run_tag: GCS output prefix tag from the CLI ``--run-tag`` flag
+            (instruments_service_run_tag_flag_not_applied_2026_07_08).
+            ``"batch"`` (default) writes to the standard path; any other
+            value (e.g. ``"t1-recon"``) routes sports_reference writes under
+            that tag's own namespace via ``apply_run_tag()``. Stashed onto
+            the package-level ``_orch._RUN_TAG`` for the duration of this
+            call — consumed by ``_sports_ref_sink_for()``.
+
+    Returns:
+        Dict mapping venue → record count written.
+
+    Raises:
+        RuntimeError: If URDI returns zero total records (fail the shard).
+    """
+    _ = _orch.get_config()  # ensure config is initialized
+    _orch._RUN_TAG = run_tag or "batch"
+
+    # Normalise date: BatchIO passes datetime objects from get_date_range(),
+    # but all downstream code (URDI, date filter, partition keys) needs str YYYY-MM-DD.
+    if isinstance(date, _orch.datetime):
+        date = date.strftime("%Y-%m-%d")
+
+    # venue_override bypasses category lookup when --venues filter is active (sharding)
+    venues = venue_override if venue_override is not None else _orch.get_venues_for_asset_groups(asset_groups)
+
+    # Recovery-mode hint: promote redo_all=True when recovery is active so the
+    # per-provider per-day pre-flight skip is bypassed (full rationale on the helper).
+    redo_all = _promote_redo_all_for_recovery(recovery_fixture_ids=recovery_fixture_ids, redo_all=redo_all)
+
+    # 1-1b. Venue availability + --sports-provider filter + freshness
+    # pre-flight (+ its enrichment-only fast path) — see
+    # _resolve_venues_and_preflight for the full stage breakdown.
+    preflight_outcome = await _resolve_venues_and_preflight(
+        date=date,
+        asset_groups=asset_groups,
+        venues=venues,
+        redo_all=redo_all,
+        api_keys=api_keys,
+        sports_provider=sports_provider,
+        sports_entity_filter=sports_entity_filter,
+        season_override=season_override,
+        recovery_fixture_ids=recovery_fixture_ids,
+    )
+    if preflight_outcome.early_return is not None:
+        return preflight_outcome.early_return
+    active_venues = preflight_outcome.active_venues
+    is_sports_run = preflight_outcome.is_sports_run
+    _sports_missing_entities = preflight_outcome.missing_entities
+    _sports_per_fixture_entities = preflight_outcome.per_fixture_entities
 
     _orch.log_event(
         "PROCESSING_STARTED",
@@ -201,7 +314,6 @@ async def process_instruments(
         api_keys=api_keys,
         date=date,
         mode=mode,
-        source=source,
         skip_urdi=_skip_urdi,
     )
     records = fetch_outcome.records
@@ -219,7 +331,7 @@ async def process_instruments(
         )
 
     # 3. Filter to instruments active on the requested date + enrich.
-    records, date_dt, defi_venue_set = _filter_and_enrich_records(
+    records, date_dt, defi_venue_set, pre_launch_venues = _filter_and_enrich_records(
         records=records,
         date=date,
         asset_groups=asset_groups,
@@ -246,6 +358,7 @@ async def process_instruments(
             sports_entity_filter=sports_entity_filter,
             season_override=season_override,
             fixtures_fetch_failed=fixtures_fetch_failed,
+            pre_launch_venues=pre_launch_venues,
         )
 
     # 5. Schema validation — per-record failure isolation (hard_schema_enforcement Phase 2).
@@ -261,7 +374,6 @@ async def process_instruments(
         asset_groups=asset_groups,
         api_keys=api_keys,
         mode=mode,
-        source=source,
         active_venues=active_venues,
         league_filter=league_filter,
         sports_entity_filter=sports_entity_filter,
@@ -285,7 +397,6 @@ async def _write_enrich_and_finalize(
     asset_groups: list[str],
     api_keys: dict[str, str] | None,
     mode: str,
-    source: str | None,
     active_venues: list[str],
     league_filter: list[str] | None,
     sports_entity_filter: str | None,
@@ -334,7 +445,6 @@ async def _write_enrich_and_finalize(
         asset_groups=asset_groups,
         api_keys=api_keys,
         mode=mode,
-        source=source,
         bucket=write_outcome.bucket,
         sink=write_outcome.sink,
         sampler=write_outcome.sampler,

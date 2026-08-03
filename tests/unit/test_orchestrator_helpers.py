@@ -12,13 +12,12 @@ from unified_api_contracts.internal import InstrumentRecord
 
 from instruments_service.engine.orchestrator import (
     _build_defi_venues,
-    _extract_fixture_venue_ids,
     _get_instruments_bucket,
-    _load_venue_coordinates,
     _validate_predictions_null_rates,
     _write_catalogue_record,
     _write_fixture_mapping,
     _write_venue,
+    expand_cefi_tardis_endpoints,
     filter_defi_instruments_by_relevance,
     filter_instruments_by_date,
     get_venues_for_asset_groups,
@@ -77,9 +76,13 @@ class TestRejectJunkInstruments:
     def test_cjk_base_asset_is_rejected(self) -> None:
         """The 2026-06-24 audit junk (龙虾/币安人生/我踏马来了) is rejected by non-ASCII base."""
         records = [
-            _make_record(instrument_key="BITGET-FUTURES:PERPETUAL:龙虾-USDT", venue="BITGET-FUTURES", base_asset="龙虾"),
+            _make_record(
+                instrument_key="BITGET-FUTURES:PERPETUAL:龙虾-USDT", venue="BITGET-FUTURES", base_asset="龙虾"
+            ),
             _make_record(instrument_key="ASTER:PERP:我踏马来了USDT", venue="ASTER", base_asset="我踏马来了"),
-            _make_record(instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生"),
+            _make_record(
+                instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生"
+            ),
         ]
         kept = reject_junk_instruments(records)
         assert kept == []
@@ -101,9 +104,15 @@ class TestRejectJunkInstruments:
     def test_legitimate_instruments_pass_through(self) -> None:
         """Normal ASCII instruments (incl. Binance stocks AAPL/XAU) are kept."""
         records = [
-            _make_record(instrument_key="BINANCE-FUTURES:PERPETUAL:BTC-USDT", venue="BINANCE-FUTURES", base_asset="BTC"),
-            _make_record(instrument_key="BINANCE-FUTURES:PERPETUAL:AAPL-USDT", venue="BINANCE-FUTURES", base_asset="AAPL"),
-            _make_record(instrument_key="BINANCE-FUTURES:PERPETUAL:XAU-USDT", venue="BINANCE-FUTURES", base_asset="XAU"),
+            _make_record(
+                instrument_key="BINANCE-FUTURES:PERPETUAL:BTC-USDT", venue="BINANCE-FUTURES", base_asset="BTC"
+            ),
+            _make_record(
+                instrument_key="BINANCE-FUTURES:PERPETUAL:AAPL-USDT", venue="BINANCE-FUTURES", base_asset="AAPL"
+            ),
+            _make_record(
+                instrument_key="BINANCE-FUTURES:PERPETUAL:XAU-USDT", venue="BINANCE-FUTURES", base_asset="XAU"
+            ),
         ]
         kept = reject_junk_instruments(records)
         assert len(kept) == 3
@@ -111,9 +120,51 @@ class TestRejectJunkInstruments:
     def test_mixed_keeps_only_clean(self) -> None:
         """A mixed batch keeps the clean records and drops only the junk."""
         good = _make_record(instrument_key="BINANCE-SPOT:SPOT_PAIR:ETH-USDT", venue="BINANCE-SPOT", base_asset="ETH")
-        junk = _make_record(instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生")
+        junk = _make_record(
+            instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生"
+        )
         kept = reject_junk_instruments([good, junk])
         assert kept == [good]
+
+    def test_accented_latin_sports_team_names_are_kept(self) -> None:
+        """Ordinary accented-Latin sports fixture names must NOT be rejected as junk.
+
+        Regression for `issues/sports_features_layer_findings_sweep_2026_07_18.md` §D
+        (2026-07-30): the prior blanket `field.isascii()` check dropped ~9.8% of a
+        sampled sports date's real fixtures for legitimate Iberian/Latin American
+        team names. Pins the exact 3 names the source doc measured live.
+        """
+        records = [
+            _make_record(
+                instrument_key="SPAIN_PRIMERA_DIVISION_RFEF_GROUP_2:SANLUQUENO_v_ALBACETE",
+                venue="API_FOOTBALL",
+                base_asset="Sanluqueño vs Albacete",
+            ),
+            _make_record(
+                instrument_key="PORTUGAL_LIGA_3:UNIAO_DE_LEIRIA_v_UNIAO_SANTAREM",
+                venue="API_FOOTBALL",
+                base_asset="União de Leiria vs União Santarém",
+            ),
+            _make_record(
+                instrument_key="BOLIVIA_PRIMERA_DIVISION:NACIONAL_POTOSI_v_SAN_JOSE",
+                venue="API_FOOTBALL",
+                base_asset="Nacional Potosí vs San José",
+            ),
+        ]
+        kept = reject_junk_instruments(records)
+        assert kept == records
+
+    def test_cjk_junk_still_rejected_after_latin_script_narrowing(self) -> None:
+        """The narrowed guard must still reject the original CJK/meme junk it was built for."""
+        records = [
+            _make_record(
+                instrument_key="BITGET-FUTURES:PERPETUAL:龙虾-USDT", venue="BITGET-FUTURES", base_asset="龙虾"
+            ),
+            _make_record(
+                instrument_key="BINANCE-SPOT:SPOT_PAIR:币安人生-USDT", venue="BINANCE-SPOT", base_asset="币安人生"
+            ),
+        ]
+        assert reject_junk_instruments(records) == []
 
 
 # ---------------------------------------------------------------------------
@@ -125,16 +176,19 @@ class TestCanonicalManifestVenueChainCefiOnChain:
     """On-chain CeFi perp CLOBs keep their full venue + chain="" (asset_group=cefi)."""
 
     def test_on_chain_cefi_perps_not_split_to_defi_shape(self) -> None:
-        """LIGHTER-ZKSYNC / PACIFICA-SOLANA / EXTENDED-STARKNET → (full_venue, "").
+        """LIGHTER-ZKSYNC / EXTENDED-STARKNET → (full_venue, "").
 
         Regression for the G1.3 320-row contamination: the manifest writer split
         these glued cefi venues on their KNOWN_CHAIN suffix → manifest
         asset_group=defi + chain=<L2>. They are cefi venues (VENUE_TO_ASSET_GROUP=="cefi",
         like HYPERLIQUID/ASTER) and MUST carry chain="" so _cat resolves to cefi.
+        (PACIFICA (Solana) was a third venue in this tuple until removed entirely
+        2026-07-16 -- operator ruling: all Solana perp DEXes dropped except
+        Jupiter, not integrated.)
         """
         from instruments_service.engine.orchestrator import _canonical_manifest_venue_chain
 
-        for venue in ("LIGHTER-ZKSYNC", "PACIFICA-SOLANA", "EXTENDED-STARKNET"):
+        for venue in ("LIGHTER-ZKSYNC", "EXTENDED-STARKNET"):
             mv, mc = _canonical_manifest_venue_chain(venue)
             assert (mv, mc) == (venue, ""), f"{venue}: expected ({venue!r}, '') got ({mv!r}, {mc!r})"
 
@@ -205,6 +259,58 @@ class TestGetVenuesForCategories:
         venues_upper = get_venues_for_asset_groups(["CEFI"])
         venues_lower = get_venues_for_asset_groups(["cefi"])
         assert venues_upper == venues_lower
+
+
+class TestExpandCefiTardisEndpoints:
+    """Regression coverage for coinbase_bare_name_migration_2026_07_06.md Step S2.
+
+    Bare ``COINBASE`` no longer appears in UAC's ``VENUES_BY_ASSET_GROUP["cefi"]``
+    input list (``COINBASE-SPOT`` is the canonical cefi spot venue, migrated in Step
+    S3), so the ``elif venue == "COINBASE"`` alias branch was dead code and was
+    deleted.
+    """
+
+    def test_expand_cefi_tardis_endpoints_no_bare_coinbase_input(self) -> None:
+        """A bare-COINBASE-free input list passes COINBASE-SPOT through unchanged."""
+        result = expand_cefi_tardis_endpoints(["COINBASE-SPOT", "BINANCE-SPOT"])
+        assert result == ["COINBASE-SPOT", "BINANCE-SPOT"]
+
+    def test_expand_cefi_tardis_endpoints_okx_still_splits(self) -> None:
+        """OKX splitting is unaffected by the COINBASE alias removal."""
+        result = expand_cefi_tardis_endpoints(["OKX", "COINBASE-SPOT"])
+        assert result == ["OKX-SPOT", "OKX-SWAP", "OKX-FUTURES", "COINBASE-SPOT"]
+
+    def test_expand_cefi_tardis_endpoints_bare_coinbase_no_longer_expanded(self) -> None:
+        """If bare COINBASE is ever fed in (should not happen post-S3), it now
+        passes through unchanged rather than being silently expanded to
+        COINBASE-SPOT — the alias-expansion branch is gone."""
+        result = expand_cefi_tardis_endpoints(["COINBASE"])
+        assert result == ["COINBASE"]
+
+    def test_cefi_coinbase_spot_expected_set_survives_fold_inversion(self) -> None:
+        """COINBASE-SPOT's real EXPECTED set is {(spot_pair, trades)} post-S1/S3.
+
+        ``book_snapshot_5`` is correctly ABSENT — UAC's execution_fidelity
+        trades-only override for CeFi COINBASE drops it (independent of this
+        migration; the override matches on the venue's base-token prefix, so it
+        applies whether the key is bare ``COINBASE`` or ``COINBASE-SPOT``). The
+        D2a itype-gate authority switch must not silently drop this pair after
+        the S1 ``_CEFI_VENUE_FOLD`` anchor inversion.
+        """
+        import importlib.util
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location("_eu", repo_root / "scripts" / "expected_universe.py")
+        assert spec is not None and spec.loader is not None
+        eu = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(eu)
+
+        expected = eu.build_expected("cefi")
+        coinbase_spot = {t for t in expected if t[0] == "COINBASE-SPOT"}
+        assert coinbase_spot == {("COINBASE-SPOT", "spot_pair", "trades")}, (
+            f"COINBASE-SPOT EXPECTED set drifted: {coinbase_spot}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -327,9 +433,7 @@ class TestVenueProducerUACInvariant:
         is_sports = set(get_venues_for_asset_groups(["SPORTS"]))
         uac_sports = set(VENUES_BY_ASSET_GROUP["sports"])
         overlap = is_sports & uac_sports
-        assert not overlap, (
-            f"IS sports and UAC sports must be disjoint (two-registry model): overlap={overlap}"
-        )
+        assert not overlap, f"IS sports and UAC sports must be disjoint (two-registry model): overlap={overlap}"
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +600,8 @@ class TestBuildDefiVenues:
 
     def test_includes_solana_venues(self) -> None:
         venues = _build_defi_venues()
-        assert "DRIFT-SOLANA" in venues
+        # DRIFT (Solana) removed 2026-07-16 (operator ruling: all Solana perp
+        # DEXes dropped except Jupiter, not integrated).
         assert "KAMINO-SOLANA" in venues
         assert "RAYDIUM-SOLANA" in venues
         assert "ORCA-SOLANA" in venues
@@ -756,6 +861,12 @@ class TestWriteVenueCanonicalPartition:
     matches the canonical manifest venue and deployment-ui pool-breakdown can
     resolve the parquet. SSOT:
     plans/active/issues/defi_coverage_capability_alignment_2026_05_22.md Bug 5.
+
+    ``_write_venue`` builds its own per-shard hive sink internally
+    (``_instrument_availability_sink_for``, operator R2 2026-07-21) rather than using
+    the ``sink`` argument directly, so ``get_data_sink`` is patched — mirrors the
+    established pattern in ``test_orchestrator_process.py::TestWriteVenue`` and
+    ``test_orchestrator_futures_contracts.py``.
     """
 
     def _run(self, venue_in: str) -> dict[str, object]:
@@ -773,6 +884,7 @@ class TestWriteVenueCanonicalPartition:
         with (
             patch("instruments_service.engine.orchestrator._gated_sink_write", side_effect=_capture),
             patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=MagicMock()),
             patch(
                 "instruments_service.engine.orchestrator.stamp_available_at_explicit",
                 side_effect=lambda d, when: d,
@@ -782,22 +894,26 @@ class TestWriteVenueCanonicalPartition:
         return captured
 
     def test_glued_defi_venue_partition_canonicalized(self) -> None:
+        # partition is now {} — day/pipeline_mode/asset_group/venue live in the
+        # hive sink PREFIX (operator R2, 2026-07-21), never the partition dict
+        # (alphabetical-sort trap); the canonicalized venue is asserted via the
+        # explicit `venue=` kwarg instead.
         captured = self._run("AAVEV3-ARBITRUM")
-        assert captured["partition"]["venue"] == "AAVE_V3-ARBITRUM"  # type: ignore[index]
+        assert captured["partition"] == {}
         assert captured["venue"] == "AAVE_V3-ARBITRUM"
 
     def test_already_canonical_defi_venue_unchanged(self) -> None:
         captured = self._run("AAVE_V3-ARBITRUM")
-        assert captured["partition"]["venue"] == "AAVE_V3-ARBITRUM"  # type: ignore[index]
+        assert captured["venue"] == "AAVE_V3-ARBITRUM"
 
     def test_glued_uniswap_v3_canonicalized(self) -> None:
         captured = self._run("UNISWAPV3-ETHEREUM")
-        assert captured["partition"]["venue"] == "UNISWAP_V3-ETHEREUM"  # type: ignore[index]
+        assert captured["venue"] == "UNISWAP_V3-ETHEREUM"
 
     def test_non_defi_venue_passes_through(self) -> None:
         # CeFi venue (no DeFi chain) must NOT be rewritten.
         captured = self._run("BINANCE")
-        assert captured["partition"]["venue"] == "BINANCE"  # type: ignore[index]
+        assert captured["venue"] == "BINANCE"
 
 
 # ---------------------------------------------------------------------------
@@ -882,215 +998,9 @@ class TestValidatePredictionsNullRates:
         assert violations == []
 
 
-# ---------------------------------------------------------------------------
-# _load_venue_coordinates
-# ---------------------------------------------------------------------------
-
-
-class TestLoadVenueCoordinates:
-    """Tests for _load_venue_coordinates (lines 7409-7441)."""
-
-    def test_blob_not_found_returns_empty(self) -> None:
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = False
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
-            result = _load_venue_coordinates("test-bucket")
-        assert result == {}
-
-    def test_parquet_missing_venue_id_column_returns_empty(self, tmp_path) -> None:
-        df = pd.DataFrame({"latitude": [53.43], "longitude": [-2.96]})
-        local_path = str(tmp_path / "venues.parquet")
-        df.to_parquet(local_path)
-
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert result == {}
-
-    def test_parquet_missing_lat_lon_columns_returns_empty(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue_id": ["v1"]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert result == {}
-
-    def test_valid_parquet_returns_coords(self, tmp_path) -> None:
-        df = pd.DataFrame(
-            {
-                "venue_id": ["v1", "v2"],
-                "latitude": [53.43, 51.5],
-                "longitude": [-2.96, -0.12],
-            }
-        )
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert "v1" in result
-        assert result["v1"] == (53.43, -2.96)
-        assert "v2" in result
-
-    def test_zero_coords_skipped(self, tmp_path) -> None:
-        df = pd.DataFrame(
-            {
-                "venue_id": ["v_zero"],
-                "latitude": [0.0],
-                "longitude": [0.0],
-            }
-        )
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert "v_zero" not in result
-
-    def test_gcs_exception_returns_empty(self) -> None:
-        with patch(
-            "instruments_service.engine.orchestrator.get_storage_client",
-            side_effect=RuntimeError("GCS down"),
-        ):
-            result = _load_venue_coordinates("test-bucket")
-        assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# _extract_fixture_venue_ids
-# ---------------------------------------------------------------------------
-
-
-class TestExtractFixtureVenueIds:
-    """Tests for _extract_fixture_venue_ids (lines 7444-7479)."""
-
-    def test_no_blob_returns_empty(self) -> None:
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = False
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == []
-
-    def test_venue_dict_ids_extracted(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue": [{"venue_id": "V1"}, {"venue_id": "V2"}]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == ["V1", "V2"]
-
-    def test_venue_string_ids_extracted(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue": ["ANFIELD", "OLD_TRAFFORD"]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == ["ANFIELD", "OLD_TRAFFORD"]
-
-    def test_duplicate_venue_ids_deduplicated(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue": ["ANFIELD", "ANFIELD", "OLD_TRAFFORD"]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == ["ANFIELD", "OLD_TRAFFORD"]
-
-    def test_no_venue_column_returns_empty(self, tmp_path) -> None:
-        df = pd.DataFrame({"fixture_id": ["f1", "f2"]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == []
-
-    def test_gcs_exception_returns_empty(self) -> None:
-        with patch(
-            "instruments_service.engine.orchestrator.get_storage_client",
-            side_effect=RuntimeError("GCS down"),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == []
-
-    def test_venue_dict_without_venue_id_key_skipped(self, tmp_path) -> None:
-        df = pd.DataFrame({"venue": [{"other_key": "xyz"}, {"venue_id": "V1"}]})
-        mock_storage = MagicMock()
-        mock_blob = MagicMock()
-        mock_blob.exists.return_value = True
-        mock_blob.download_to_filename.side_effect = lambda path: df.to_parquet(path)
-        mock_storage.bucket.return_value.blob.return_value = mock_blob
-
-        with (
-            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.engine.orchestrator.tempfile.gettempdir", return_value=str(tmp_path)),
-        ):
-            result = _extract_fixture_venue_ids("test-bucket", "2026-01-15")
-        assert result == ["V1"]
-
-
-def test_derive_instrument_type_single_type_stamps_real_type() -> None:
-    """Audit §K: a single-type venue df → the real instrument_type is stamped."""
-    from instruments_service.engine.orchestrator import _derive_instrument_type
+def test_split_by_instrument_type_single_type_one_group() -> None:
+    """Audit §K: a single-type venue df → exactly one group, stamped with the real type."""
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
 
     df = pd.DataFrame(
         [
@@ -1098,26 +1008,98 @@ def test_derive_instrument_type_single_type_stamps_real_type() -> None:
             {"instrument_key": "ETH-PERP", "instrument_type": "PERPETUAL"},
         ]
     )
-    assert _derive_instrument_type(df) == "PERPETUAL"
+    groups = _split_by_instrument_type(df)
+    assert [g[0] for g in groups] == ["PERPETUAL"]
+    assert len(groups[0][1]) == 2
 
 
-def test_derive_instrument_type_mixed_types_blank() -> None:
-    """A mixed-type venue df → "" (a single tag would misrepresent the shard)."""
-    from instruments_service.engine.orchestrator import _derive_instrument_type
+def test_split_by_instrument_type_mixed_types_one_group_per_type() -> None:
+    """A mixed-type venue df (e.g. Deribit) → one group PER distinct type, never blended."""
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
 
     df = pd.DataFrame(
         [
             {"instrument_key": "BTC-PERP", "instrument_type": "PERPETUAL"},
             {"instrument_key": "BTC-USDT", "instrument_type": "SPOT_PAIR"},
+            {"instrument_key": "BTC-OPT", "instrument_type": "OPTION"},
         ]
     )
-    assert _derive_instrument_type(df) == ""
+    groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
+    assert groups == {"PERPETUAL": 1, "SPOT_PAIR": 1, "OPTION": 1}
 
 
-def test_derive_instrument_type_absent_or_empty_blank() -> None:
-    """No instrument_type column, an empty df, or all-blank values → "" (honest blank)."""
-    from instruments_service.engine.orchestrator import _derive_instrument_type
+def test_split_by_instrument_type_absent_or_empty_single_blank_group() -> None:
+    """No instrument_type column, an empty df, or all-blank values → one "" group (honest blank)."""
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
 
-    assert _derive_instrument_type(pd.DataFrame([{"instrument_key": "X"}])) == ""
-    assert _derive_instrument_type(pd.DataFrame(columns=["instrument_type"])) == ""
-    assert _derive_instrument_type(pd.DataFrame([{"instrument_type": ""}, {"instrument_type": None}])) == ""
+    no_col = _split_by_instrument_type(pd.DataFrame([{"instrument_key": "X"}]))
+    assert [g[0] for g in no_col] == [""]
+
+    empty_df = _split_by_instrument_type(pd.DataFrame(columns=["instrument_type"]))
+    assert [g[0] for g in empty_df] == [""]
+
+    blank_vals = _split_by_instrument_type(pd.DataFrame([{"instrument_type": ""}, {"instrument_type": None}]))
+    assert [g[0] for g in blank_vals] == [""]
+    assert len(blank_vals[0][1]) == 2
+
+
+def test_split_by_instrument_type_canonicalizes_legacy_lowercase_aliases() -> None:
+    """Defensive guard (2026-07-16 CeFi legacy-lowercase-dupes fix): a stray
+    lowercase ``perpetual``/``spot`` value is canonicalised to the UAC
+    ``InstrumentType`` value BEFORE grouping, so it lands in the SAME manifest
+    row_key as any already-canonical-cased sibling row instead of minting a new
+    permanently-duplicated lowercase key.
+    """
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
+
+    df = pd.DataFrame(
+        [
+            {"instrument_key": "BTC-PERP-1", "instrument_type": "perpetual"},
+            {"instrument_key": "BTC-PERP-2", "instrument_type": "PERPETUAL"},
+            {"instrument_key": "BTC-USDT", "instrument_type": "spot"},
+        ]
+    )
+    groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
+    assert groups == {"PERPETUAL": 2, "SPOT_PAIR": 1}
+
+
+def test_split_by_instrument_type_canonicalizes_extended_legacy_aliases() -> None:
+    """2026-07-18 extension: the additional legacy spellings measured live on
+    COINBASE-SPOT (``spot_pair``) and BYBIT (``futures_chain``/``perp``) also
+    canonicalise to their UAC ``InstrumentType`` value before grouping, landing in
+    the SAME manifest row_key as an already-canonical sibling instead of minting a
+    new permanently-duplicated key.
+
+    2026-07-20 extension (distinct_values_noncanonical_audit_2026_07_20.md): added
+    ``options_chain`` for parity with ``futures_chain`` — CME emits both bundle-grain
+    spellings (``DERIBIT``/``CME``: ``futures_chain``/``options_chain``), and only the
+    FUTURE half had an alias entry, leaving OPTION-side rows to mint their own
+    duplicate row_key.
+    """
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
+
+    df = pd.DataFrame(
+        [
+            {"instrument_key": "AAPLX-USDT-1", "instrument_type": "spot_pair"},
+            {"instrument_key": "AAPLX-USDT-2", "instrument_type": "SPOT_PAIR"},
+            {"instrument_key": "BTC-FUT-1", "instrument_type": "futures_chain"},
+            {"instrument_key": "BTC-FUT-2", "instrument_type": "FUTURE"},
+            {"instrument_key": "ETH-PERP-1", "instrument_type": "perp"},
+            {"instrument_key": "BTC-OPT-1", "instrument_type": "options_chain"},
+            {"instrument_key": "BTC-OPT-2", "instrument_type": "OPTION"},
+        ]
+    )
+    groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
+    assert groups == {"SPOT_PAIR": 2, "FUTURE": 2, "PERPETUAL": 1, "OPTION": 2}
+
+
+def test_split_by_instrument_type_blank_and_none_are_not_canonicalized() -> None:
+    """Blank/None stays the honest "" group key — the legacy-alias guard is
+    forward-only defense-in-depth against stray lowercase spellings, never a
+    fabricator of a type for a genuinely absent value (see the row_key-permanence
+    contract in ``_split_by_instrument_type``'s docstring)."""
+    from instruments_service.engine.orchestrator import _split_by_instrument_type
+
+    df = pd.DataFrame([{"instrument_type": ""}, {"instrument_type": None}, {"instrument_type": "PERPETUAL"}])
+    groups = {itype: len(sub) for itype, sub in _split_by_instrument_type(df)}
+    assert groups == {"": 2, "PERPETUAL": 1}

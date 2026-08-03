@@ -61,7 +61,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
-from google.cloud import storage
+from unified_trading_library import get_storage_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -141,9 +141,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame, str]:
-    client = storage.Client(project=PROJECT_ID)
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(MANIFEST_BLOB)
+    client = get_storage_client(provider="gcp", project_id=PROJECT_ID)
     logger.info("Loading manifest from gs://%s/%s", bucket_name, MANIFEST_BLOB)
     with tempfile.NamedTemporaryFile(
         prefix=f"recon-nan-{asset_group}-",
@@ -151,7 +149,7 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
         delete=False,
     ) as tf:
         local_path = tf.name
-    blob.download_to_filename(local_path)
+    client.download_file(bucket_name, MANIFEST_BLOB, local_path)
     df = pd.read_parquet(local_path)
     logger.info("Manifest rows: %d", len(df))
     return df, local_path
@@ -227,10 +225,8 @@ def _write_manifest(
     local_path: str,
 ) -> None:
     df.to_parquet(local_path, index=False)
-    client = storage.Client(project=PROJECT_ID)
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(MANIFEST_BLOB)
-    blob.upload_from_filename(local_path)
+    client = get_storage_client(provider="gcp", project_id=PROJECT_ID)
+    client.upload_file(bucket_name, MANIFEST_BLOB, local_path)
     logger.info("Uploaded updated manifest to gs://%s/%s", bucket_name, MANIFEST_BLOB)
 
 
@@ -256,7 +252,11 @@ def main() -> int:
     )
 
     if args.apply_flips:
-        if os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower() not in ("1", "true", "yes"):
+        if os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower() not in (  # noqa: qg-empty-fallback — env-var check, membership test handles absence correctly
+            "1",
+            "true",
+            "yes",
+        ):
             logger.error("--apply-flips requires MANIFEST_PER_VM_SHARDS=true.")
             _emit_event("RECONCILER_FAILED", reason="missing_per_vm_shards_env")
             return 4
@@ -317,10 +317,10 @@ def main() -> int:
             writer.writerow(
                 [
                     orig_idx,
-                    row.get("asset_group", ""),
-                    row.get("venue", ""),
-                    row.get("data_type", ""),
-                    row.get("date", ""),
+                    row.get("asset_group", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
+                    row.get("venue", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
+                    row.get("data_type", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
+                    row.get("date", ""),  # noqa: qg-empty-fallback — display-only report cell; absent field prints blank
                     gcs_path,
                     f"{nan_ratio:.4f}" if nan_ratio is not None else "n/a",
                     action,

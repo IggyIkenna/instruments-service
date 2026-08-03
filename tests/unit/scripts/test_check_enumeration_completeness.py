@@ -3,7 +3,7 @@
 Tests cover:
   - Carve-out table assertions (each expected-absence row from the codex table is NOT a hole)
   - Deribit options_chain bundle IS a hole when absent from ENUMERATED
-  - ASTER missing book_snapshot_5 / liquidations is NOT a hole
+  - ASTER book_snapshot_5 IS a hole when absent (live-wire capability, uac@3652f99f); ASTER liquidations still not in MVP
   - HYPERLIQUID missing liquidations is NOT a hole
   - UPBIT derivative_ticker absent (capability carve-out) is NOT a hole
   - completeness_pct and denominator_complete behaviour
@@ -139,30 +139,41 @@ class TestDeribitOptionsChainCarveOut:
 
 
 # ---------------------------------------------------------------------------
-# Test: carve-out — ASTER has no book_snapshot_5, no liquidations
-#   Source: absent from VENUE_DATA_TYPE_CAPABILITIES["ASTER"]
+# Test: ASTER capability profile — book_snapshot_5 is live-wire from 2026-06-23,
+# liquidations still carved out (not in MVP scope).
+#   Source: VENUE_DATA_TYPE_CAPABILITIES["ASTER"] (uac@3652f99f 2026-07-07,
+#   cefi_layer1_denominator_gaps-008 UAC ASTER capability flip).
 # ---------------------------------------------------------------------------
 
 
-class TestAsterCarveOut:
+class TestAsterCapabilities:
+    """REVISED 2026-07-15 (operator ruling, supersedes the 2026-06-23/uac@3652f99f +
+    2026-07-13 BLK-afc672cf history this class previously asserted): ASTER
+    book_snapshot_5 IS a declared live-wire capability (captured going forward by the
+    live WS connector) but has NO batch/historical source — its REST book endpoint is
+    current-snapshot-only. "Short of magic cannot physically be retrieved" BATCH combos
+    are excluded from the BATCH EXPECTED matrix entirely (UAC
+    ``VENUE_DATA_TYPE_NO_BATCH_SOURCE`` + this module's Carve-out 1b) — no
+    expected_unattempted, no empty_confirmed, no Layer-1 hole requirement either.
+    See plans/active/issues/
+    cefi_live_only_data_types_vs_layer1_denominator_contradiction_2026_07_12.md."""
+
     def test_aster_book_snapshot_5_not_in_expected(self, mod: ModuleType) -> None:
-        """book_snapshot_5 is NOT expected for ASTER (absent from VENUE_DATA_TYPE_CAPABILITIES)."""
+        """book_snapshot_5 is NOT expected for ASTER's BATCH matrix — no batch source exists
+        (live-only capability; VENUE_DATA_TYPE_NO_BATCH_SOURCE Carve-out 1b)."""
         expected = mod._build_expected_tuples("cefi")
         aster_bs5 = {(v, it, dt) for (v, it, dt) in expected if v == "ASTER" and dt == "book_snapshot_5"}
-        assert len(aster_bs5) == 0, (
-            f"ASTER book_snapshot_5 should NOT be in EXPECTED (venue capability absent): {aster_bs5}"
-        )
+        assert aster_bs5 == set(), f"ASTER book_snapshot_5 should NOT be in the BATCH EXPECTED matrix: {aster_bs5}"
 
     def test_aster_liquidations_not_in_expected(self, mod: ModuleType) -> None:
-        """liquidations is NOT expected for ASTER (absent from VENUE_DATA_TYPE_CAPABILITIES)."""
+        """liquidations is NOT expected for ASTER — capability present but liquidations not in MVP scope."""
         expected = mod._build_expected_tuples("cefi")
         aster_liq = {(v, it, dt) for (v, it, dt) in expected if v == "ASTER" and dt == "liquidations"}
-        assert len(aster_liq) == 0, (
-            f"ASTER liquidations should NOT be in EXPECTED (venue capability absent): {aster_liq}"
-        )
+        assert len(aster_liq) == 0, f"ASTER liquidations should NOT be in EXPECTED (not in MVP scope): {aster_liq}"
 
     def test_aster_book_snapshot_5_absent_from_manifest_is_not_a_hole(self, mod: ModuleType) -> None:
-        """A manifest with no ASTER book_snapshot_5 rows has 0 missing for that tuple."""
+        """A manifest with no ASTER book_snapshot_5 rows is NOT a Layer-1 hole — the tuple
+        is not in the BATCH EXPECTED matrix at all (no batch source exists to close it)."""
         df = _make_manifest(
             [
                 {"capture_status": "captured", "venue": "ASTER", "instrument_type": "perpetual", "data_type": "trades"},
@@ -172,7 +183,7 @@ class TestAsterCarveOut:
         aster_bs5_missing = [
             m for m in result.missing_tuples if m.venue == "ASTER" and m.data_type == "book_snapshot_5"
         ]
-        assert len(aster_bs5_missing) == 0, "ASTER book_snapshot_5 should NOT be a Layer-1 hole (it is a carve-out)"
+        assert len(aster_bs5_missing) == 0, "ASTER book_snapshot_5 must NOT be a Layer-1 hole (no batch source)"
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +312,19 @@ class TestCompletenessMetrics:
             assert len(result.missing_tuples) > 0
 
     def test_completeness_pct_is_correct_fraction(self, mod: ModuleType) -> None:
-        """completeness_pct = |EXPECTED ∩ ENUMERATED| / |EXPECTED| * 100."""
-        expected = mod._build_expected_tuples("cefi")
+        """completeness_pct = |EXPECTED ∩ ENUMERATED| / |EXPECTED| * 100.
+
+        Uses the ALIGNED (canonical-key-deduped) expected set, not the raw
+        ``_build_expected_tuples()`` output — since unified-api-contracts@11adf279
+        (2026-07-21, already-committed, clean, unrelated to this session's diff)
+        registered OKX-FUTURES, whose (instrument_type, data_type) tuples
+        canonical-key-collide with pre-existing bare "OKX" tuples (both denote the
+        same underlying capability), the raw count (76) now exceeds the aligned
+        count (71) the function actually computes internally. Comparing against
+        the raw set risked double-counting a colliding key across `half`.
+        """
+        expected_by_key = mod._canonicalise_tuple_set("cefi", mod._build_expected_tuples("cefi"))
+        expected = list(expected_by_key.values())
         if not expected:
             pytest.skip("Empty EXPECTED — cannot compute pct")
 
@@ -325,7 +347,13 @@ class TestCompletenessMetrics:
         )
 
     def test_missing_instrument_type_column_yields_empty_enumerated(self, mod: ModuleType) -> None:
-        """If the 'instrument_type' column is absent, ENUMERATED = empty → all expected missing."""
+        """If the 'instrument_type' column is absent, ENUMERATED = empty → all expected missing.
+
+        Compares against the ALIGNED expected-key count, not the raw
+        ``_build_expected_tuples()`` count — see
+        ``test_completeness_pct_is_correct_fraction`` for why they now differ
+        (unified-api-contracts@11adf279 OKX-FUTURES/OKX canonical-key collision).
+        """
         df = pd.DataFrame(
             [
                 {"capture_status": "captured", "venue": "DERIBIT", "data_type": "trades"},
@@ -333,9 +361,9 @@ class TestCompletenessMetrics:
         )
         result = mod.check_enumeration_completeness("cefi", df)
         # Without instrument_type, ENUMERATED is empty → all expected are holes
-        expected = mod._build_expected_tuples("cefi")
-        if expected:
-            assert len(result.missing_tuples) == len(expected)
+        expected_by_key = mod._canonicalise_tuple_set("cefi", mod._build_expected_tuples("cefi"))
+        if expected_by_key:
+            assert len(result.missing_tuples) == len(expected_by_key)
             assert not result.denominator_complete
 
 
@@ -553,15 +581,57 @@ class TestCanonNormalisers:
 
     def test_cefi_venue_suffix_fold(self, mod: ModuleType) -> None:
         """Tardis-suffix + legacy venue dialects fold to the UAC canonical venue
-        (Decision 6, check-folds-suffixes); UAC-canonical suffixed venues do NOT fold."""
+        (Decision 6, check-folds-suffixes); UAC-canonical suffixed venues do NOT fold.
+        OKX-SPOT stopped folding 2026-07-10 (Option A follow-through) — it is now
+        its own declared cefi venue with its own EXPECTED entry, same as BYBIT-SPOT."""
         assert mod._canon_venue("cefi", "OKX-SWAP") == "OKX"
-        assert mod._canon_venue("cefi", "OKX-SPOT") == "OKX"
+        assert mod._canon_venue("cefi", "OKX-SPOT") == "OKX-SPOT"
         assert mod._canon_venue("cefi", "okex-futures") == "OKX"
-        assert mod._canon_venue("cefi", "COINBASE-SPOT") == "COINBASE"
         assert mod._canon_venue("cefi", "CRYPTOFACILITIES") == "KRAKEN-FUTURES"
         assert mod._canon_venue("cefi", "BITFINEX-DERIVATIVES") == "BITFINEX-FUTURES"
         assert mod._canon_venue("cefi", "BYBIT-SPOT") == "BYBIT-SPOT"
         assert mod._canon_venue("cefi", "KRAKEN-FUTURES") == "KRAKEN-FUTURES"
+
+    def test_cefi_bare_coinbase_folds_up_to_coinbase_spot(self, mod: ModuleType) -> None:
+        """coinbase_bare_name_migration_2026_07_06 S1 (Option A fold invert):
+        the canonical EXPECTED token for spot Coinbase is COINBASE-SPOT, so
+        legacy bare-COINBASE writer/EXPECTED tokens fold UP to COINBASE-SPOT
+        instead of COINBASE-SPOT folding DOWN to bare COINBASE."""
+        assert mod._canon_venue("cefi", "COINBASE") == "COINBASE-SPOT"
+        assert mod._canon_venue("cefi", "COINBASE-SPOT") == "COINBASE-SPOT"
+
+    def test_legacy_bare_coinbase_and_coinbase_spot_writer_rows_are_equivalent(self, mod: ModuleType) -> None:
+        """Regression guard (plan §3): a manifest row stamped bare COINBASE
+        (legacy pre-2026-06-23 writer rows) and one stamped COINBASE-SPOT (the
+        current writer token) for the same (itype, dt) MUST canonicalise to
+        the identical comparison key. This is the exact D2a-safety property
+        the S1 fold invert exists for — a writer-side dialect difference must
+        never manufacture a spurious stray or a spurious hole, regardless of
+        which token happens to be canonical."""
+        key_bare = mod._canon_key("cefi", "COINBASE", "spot_pair", "trades")
+        key_qualified = mod._canon_key("cefi", "COINBASE-SPOT", "spot_pair", "trades")
+        assert key_bare == key_qualified == ("COINBASE-SPOT", "spot_pair", "trades")
+
+    def test_cefi_coinbase_spot_expected_set_survives_fold_inversion(self, mod: ModuleType) -> None:
+        """The itype-gate authority switch must not silently zero COINBASE's EXPECTED
+        set after the fold anchor inverts: COINBASE-SPOT's (spot_pair, trades) EXPECTED
+        tuple must be present, matching UAC's DataTypeCapability["COINBASE-SPOT"].
+
+        book_snapshot_5 is intentionally ABSENT here (not a bug) — operator decision #6
+        (instruments_remaining_work_audit_2026_07_10.md, "COINBASE (INTX) should be
+        reduced to trades-only data_type" — book-snapshot-class data is expensive for
+        this venue) scopes COINBASE-SPOT to trades-only via the cefi per-venue MVP
+        override (get_mvp_data_types_for_cefi_venue), landed concurrently in this same
+        session. This test asserts against the real EXPECTED output, not the raw
+        DataTypeCapability declaration, so it stays honest if that scoping changes.
+        """
+        expected = mod._build_expected_tuples("cefi")
+        canon_expected = {
+            (mod._canon_venue("cefi", v), mod._canon_instrument_type("cefi", v, i), mod._canon_data_type("cefi", d))
+            for v, i, d in expected
+        }
+        assert ("COINBASE-SPOT", "spot_pair", "trades") in canon_expected
+        assert ("COINBASE-SPOT", "spot_pair", "book_snapshot_5") not in canon_expected
 
     def test_prediction_token_folds_to_prediction_market(self, mod: ModuleType) -> None:
         """Kalshi `prediction` itype folds to the canonical `prediction_market` grain."""

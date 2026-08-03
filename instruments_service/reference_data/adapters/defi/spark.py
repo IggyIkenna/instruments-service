@@ -6,11 +6,11 @@ follows the **Messari standardized lending schema** (entity ``Market``)
 rather than the Aave-V3 ``Reserve`` schema. Field names and scaling differ
 materially from ``aave_v3.py`` so Spark needs its own adapter.
 
-Each Spark market produces two ``InstrumentRecord`` entries with
-``instrument_type=InstrumentType.LENDING``:
+Each Spark market produces two ``InstrumentRecord`` entries:
 
-- ``A_TOKEN`` (the spToken / supply position)
-- ``DEBT_TOKEN`` (the variable-debt position) — only when borrowing is enabled
+- ``instrument_type=InstrumentType.A_TOKEN`` (the spToken / supply position)
+- ``instrument_type=InstrumentType.DEBT_TOKEN`` (the variable-debt position) —
+  only when borrowing is enabled
 
 DeFi metadata fields are populated to mirror the aave_v3 adapter's Phase 2a
 behaviour:
@@ -40,6 +40,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import get_subgraph_id
 from unified_trading_library import log_event
 
@@ -133,7 +134,7 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Spark lending markets as instruments."""
-        if instrument_type not in (None, InstrumentType.LENDING):
+        if instrument_type not in (None, InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN):
             return []
 
         url = self._resolve_api_url()
@@ -291,7 +292,6 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": underlying_str,
-            "instrument_type": InstrumentType.LENDING,
             "base_asset": sym_upper,
             "quote_asset": "",
             "tick_size": Decimal("0.000001"),
@@ -313,18 +313,30 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
         }
 
         a_symbol = f"A{sym_upper}"
+        a_token_instrument_key = build_instrument_id(venue_tag, InstrumentType.A_TOKEN, a_symbol, passthrough=True)
         results: list[InstrumentRecord] = [
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:A_TOKEN:{a_symbol}",
+                instrument_key=a_token_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=a_token_instrument_key,
+                instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             )
         ]
 
         if bool(market.get("canBorrowFrom", False)):
             debt_symbol = f"DEBT{sym_upper}"
+            debt_token_instrument_key = build_instrument_id(
+                venue_tag, InstrumentType.DEBT_TOKEN, debt_symbol, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:DEBT_TOKEN:{debt_symbol}",
+                    instrument_key=debt_token_instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=debt_token_instrument_key,
+                    instrument_type=InstrumentType.DEBT_TOKEN,
                     **base_kwargs,
                 )
             )

@@ -52,10 +52,21 @@ def _get_instruments_bucket_for_asset_group(asset_group: str) -> str:
     Prediction resolves via the dedicated flat kind ``instruments-store-prediction``
     (the bucket-name SSOT omits a ``PREDICTION`` entry from the per-asset_group
     ``instruments-store`` dict — see :func:`resolve_instruments_store_kind`).
+
+    Test-aware (2026-08-02, DP-VM-002 agt-299005): mirrors
+    ``engine.orchestrator.catalogue._get_instruments_bucket``'s ``IS_TEST_RUN`` handling —
+    a ``--test-run`` invocation sets ``DEPLOYMENT_ENV=staging`` (required for the
+    ``uts-test-sa`` IAM identity, per
+    ``pipeline_e2e_check_missing_env_flag_test_bucket_403_2026_08_01.md``), so resolving
+    without an explicit ``deployment_env`` fell through to the ambient
+    ``DEPLOYMENT_ENV_SHORT`` ("stg") — a bucket tier that is never provisioned. Only this
+    module's ``cleanup()`` final-flush path called this without the override; the
+    catalogue helper used by the rest of the orchestrator was already correct.
     """
     normalized_group = asset_group.lower()
     kind, kind_ag = resolve_instruments_store_kind(normalized_group)
-    return resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag)
+    deployment_env = "test" if engine_orchestrator.get_config().is_test_run else None
+    return resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag, deployment_env=deployment_env)
 
 
 def _get_instruments_bucket(asset_group: str = "SPORTS") -> str:
@@ -91,11 +102,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # calling api_football, and the per-league parquet writes use
         # read-modify-write semantics to preserve existing fixtures' rows.
         self._recovery_fixture_ids: frozenset[int] | None = None
-        # Reference-data source override (--source). When "massive", TradFi venues
-        # route to the Massive adapter (instead of Databento) + the MASSIVE_API_KEY
-        # is fetched via a MASSIVE pseudo-venue added to the key reloader. None ⇒
-        # default (Databento for TradFi).
-        self._source: str | None = None
+        # GCS output prefix tag (--run-tag). "batch" (default) = no prefix;
+        # any other value (e.g. "t1-recon") routes sports_reference writes
+        # under that tag's own namespace via UTL apply_run_tag() — see
+        # engine_orchestrator._RUN_TAG and _sports_ref_sink_for()
+        # (instruments_service_run_tag_flag_not_applied_2026_07_08).
+        self._run_tag: str = "batch"
         # Phase 2 stall detection: a long multi-day instruments backfill MUST stream a
         # PIPELINE_HEARTBEAT after each date completes so a hung/idle IS VM trips
         # DP_VM_STALL rather than sitting RUNNING with no progress. rows_captured_cum
@@ -141,11 +153,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._wire_cli_filters_from_args()
 
         active_venues = get_venues_for_asset_groups(asset_groups)
-        # When --source massive, add the MASSIVE pseudo-venue so the key reloader
-        # fetches MASSIVE_API_KEY (keyed as the "massive" data source) alongside
-        # the venue keys. UAC VENUE_TO_DATA_SOURCE["MASSIVE"]="massive".
-        if self._source == "massive":
-            active_venues = [*active_venues, "MASSIVE"]
         self._start_key_reloader(active_venues)
         self._start_heartbeat_timer(asset_groups)
 
@@ -157,7 +164,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
             asset_group=primary_ag.lower(),
             data_type="instruments",
             rows_captured_cum=lambda: self._rows_captured_cum,
-            source=self._source or "",
+            source="",
             extra={"service": "instruments", "cadence": "60s-timer"},
         )
         self._heartbeat_timer.start()
@@ -166,9 +173,9 @@ class InstrumentsHandler(UnifiedServiceHandler):
         """Map instruments CLI flags from parsed args onto handler fields."""
         venues_arg: list[str] | None = getattr(self.args, "venues", None) if self.args else None
         if venues_arg:
-            self._venue_override = venues_arg
-            logger.info("Venue override from CLI: %s", venues_arg)
-            earliest = earliest_venue_date(venues_arg)
+            self._venue_override = [v.upper() for v in venues_arg]
+            logger.info("Venue override from CLI: %s", self._venue_override)
+            earliest = earliest_venue_date(self._venue_override)
             if earliest:
                 logger.info("Earliest venue launch date: %s (dates before this will be skipped)", earliest)
 
@@ -198,10 +205,10 @@ class InstrumentsHandler(UnifiedServiceHandler):
         if recovery_path_arg:
             self._recovery_fixture_ids = self._load_recovery_fixture_ids(recovery_path_arg)
 
-        source_arg: str | None = getattr(self.args, "source", None) if self.args else None
-        if source_arg:
-            self._source = source_arg.strip().lower()
-            logger.info("Reference-data source override from CLI: %s", self._source)
+        run_tag_arg: str | None = getattr(self.args, "run_tag", None) if self.args else None
+        self._run_tag = (run_tag_arg or "batch").strip() or "batch"
+        if self._run_tag != "batch":
+            logger.info("Run-tag from CLI: %s (sports_reference writes route under %s/)", self._run_tag, self._run_tag)
 
         trigger_arg: str | None = getattr(self.args, "trigger", None) if self.args else None
         if trigger_arg:
@@ -319,7 +326,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
             league_filter=self._league_filter,
             season_override=self._season_override,
             recovery_fixture_ids=self._recovery_fixture_ids,
-            source=self._source,
+            run_tag=self._run_tag,
         )
         self._emit_date_heartbeat(date, asset_groups, result)
         return result
@@ -347,7 +354,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 asset_group=primary_ag.lower(),
                 data_type="instruments",
                 rows_captured_cum=self._rows_captured_cum,
-                source=self._source or "",
+                source="",
                 extra={"service": "instruments", "date": date, "venues_ok": len(result)},
             )
         except Exception as exc:  # defensive — heartbeat must never abort the backfill
@@ -383,8 +390,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # Publish DATA_READY coordination event so downstream services
         # (e.g. market-tick-data-service) know instrument data is available.
         # Only fires in live mode; publish_coordination_event raises ValueError
-        # in batch mode so we guard with suppress.
-        with contextlib.suppress(RuntimeError, ValueError):
+        # in batch mode so we guard with suppress. Mock-mode's LocalFsEventSink
+        # doesn't implement publish_coordination_event at all (AttributeError) --
+        # suppress that too so cleanup() never crashes the process under
+        # CLOUD_MOCK_MODE=true (real repro: instruments-service --mode live
+        # --asset-group cefi under mock mode, 2026-07-30).
+        with contextlib.suppress(RuntimeError, ValueError, AttributeError):
             publish_coordination_event(
                 "DATA_READY",
                 payload={
@@ -400,7 +411,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
         if _args2 is not None:
             cli_asset_groups_cleanup = getattr(_args2, "asset_group", None) or getattr(_args2, "category", None)
         if cli_asset_groups_cleanup and any(c.upper() in ("SPORTS", "ALL") for c in cli_asset_groups_cleanup):
-            with contextlib.suppress(RuntimeError, ValueError):
+            with contextlib.suppress(RuntimeError, ValueError, AttributeError):
                 publish_coordination_event(
                     "SPORTS_LIVE_STATS",
                     payload={

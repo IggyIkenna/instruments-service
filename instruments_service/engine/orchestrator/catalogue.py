@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -29,7 +31,6 @@ __all__ = [
     "_check_emission_policy",
     "_get_instruments_bucket",
     "_write_catalogue_record",
-    "refresh_catalogue",
     "resolve_instruments_store_kind",
 ]
 
@@ -134,7 +135,7 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
         _sports_prefixes = ("API_FOOTBALL", "TRANSFERMARKT", "FOOTYSTATS", "SFI", "UNDERSTAT", "WEATHER")
         if venue_str.startswith(_sports_prefixes):
             if venue_str == "API_FOOTBALL":
-                manifest_data_type = "FIXTURES"
+                manifest_data_type = FIXTURES_SCHEDULE
             else:
                 for pfx in _sports_prefixes:
                     if venue_str.startswith(pfx + "_"):
@@ -145,7 +146,12 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
             manifest_venue = ""
         # DeFi: split AAVE_V3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM
         elif "-" in venue_str:
-            manifest_data_type = "instrument-catalog"  # UTL preflight filters on this
+            # Canonical value is "instruments" (operator decision 2026-07-16, P9 Q2) — matches
+            # REFERENCE_DATA_TYPE in migrate_instruments_store_v9.py and the live batched-writer
+            # path (_write_venue's manifest-not-None branch, writers.py). This legacy per-venue
+            # path is unreachable from the current orchestrator (_write_all_venues always passes
+            # a ManifestWriter), kept in sync for correctness if ever revived.
+            manifest_data_type = "instruments"
             try:
                 from unified_api_contracts.registry.capability_declarations._defi import (
                     KNOWN_CHAINS,
@@ -200,32 +206,3 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
             operation="manifest_writer",
             shard=path,
         )
-
-
-async def refresh_catalogue(
-    asset_groups: list[str] | None = None,
-    api_keys: dict[str, str] | None = None,
-) -> dict[str, str]:
-    """Rebuild the canonical instrument catalogue for the requested asset groups.
-
-    For each group in :data:`CATALOGUE_SUPPORTED_ASSET_GROUPS` this uses
-    :class:`CatalogueBuilder` to fetch instruments through URDI and writes
-    the result to ``reference_data/instruments/{asset_group}/all.parquet``.
-
-    Returns a mapping of ``asset_group -> written URI`` for observability.
-    """
-    from instruments_service.reference_data.catalogue import (
-        CATALOGUE_SUPPORTED_ASSET_GROUPS,
-        CatalogueBuilder,
-    )
-
-    builder = CatalogueBuilder(api_keys=api_keys)
-    target = [c.upper() for c in (asset_groups or list(CATALOGUE_SUPPORTED_ASSET_GROUPS))]
-    written: dict[str, str] = {}
-    for ag in target:
-        if ag not in CATALOGUE_SUPPORTED_ASSET_GROUPS:
-            _orch.logger.warning("refresh_catalogue: skipping unknown asset_group=%s", ag)
-            continue
-        records = await builder.build_asset_group_async(ag)
-        written[ag] = builder.write_to_gcs(records, ag)
-    return written

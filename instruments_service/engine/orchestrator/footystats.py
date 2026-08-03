@@ -63,7 +63,6 @@ async def _fetch_footystats_predictions(
       sports_reference/by_date/day={date}/entity=footystats_predictions/
         fetched_at_hour={YYYY-MM-DDTHH}/league={league_id}/footystats_predictions.parquet
     """
-    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key)
     # v9: entity-specific sink so pipeline_mode= lands in the GCS path prefix.
     sink = _orch._sports_ref_sink_for(bucket, date, "footystats_predictions")
     counts: dict[str, int] = {}
@@ -75,7 +74,6 @@ async def _fetch_footystats_predictions(
         service_name="instruments-service",
         catalogue_bucket=bucket,
     )
-    _row_key: dict[str, str] = {"date": date, "data_type": "PREDICTIONS"}
     # Per-league skip: only skip the date when every expected canonical
     # footystats league has a (captured | empty_confirmed) row for it.
     # See ``_should_skip_date_for_per_league`` for the bug this fixes.
@@ -97,25 +95,22 @@ async def _fetch_footystats_predictions(
         return counts
     attempt_ts = _orch.datetime.now(_orch.UTC)
 
-    # Coverage-start / known-gap guard for PREDICTIONS — skip without an API
-    # call when FootyStats hasn't launched or the date is in a gap window.
+    # Coverage-start guard for PREDICTIONS — skip without an API call when
+    # FootyStats hasn't launched yet.
     _ftp_floor = _orch.get_source_coverage_start("footystats", data_type="PREDICTIONS")
     _ftp_pre_cutoff = bool(_ftp_floor) and date < _ftp_floor.isoformat()
-    _ftp_in_known_gap = _orch.is_in_known_gap("footystats", "PREDICTIONS", date)
-    if _ftp_pre_cutoff or _ftp_in_known_gap:
-        _orch.logger.info(
-            "FootyStats predictions: skipping date=%s (%s)",
-            date,
-            "pre-coverage-start" if _ftp_pre_cutoff else "known-gap",
-        )
-        _ftp_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _ftp_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+    if _ftp_pre_cutoff:
+        _orch.logger.info("FootyStats predictions: skipping date=%s (pre-coverage-start)", date)
+        _ftp_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
         for _exp_lid in sorted(_ft_expected):
             pred_manifest.record_expected_empty(
                 row_key={"date": date, "data_type": "PREDICTIONS", "league_id": _exp_lid},
                 reason=_ftp_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                source=_orch._sports_ref_source("footystats_predictions"),
             )
+        pred_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -133,8 +128,14 @@ async def _fetch_footystats_predictions(
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                source=_orch._sports_ref_source("footystats_predictions"),
             )
+        pred_manifest.write()
         return counts
+
+    # T0/T1 dependency gate: fires only when we're actually about to attempt
+    # a fetch (past every skip/guard above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key, date=date, bucket=bucket)
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
@@ -184,6 +185,13 @@ async def _fetch_footystats_predictions(
                     "; ".join(violations),
                 )
             counts["footystats_predictions"] = len(df)
+            # Fixture-calendar completion tracking — leagues captured this date.
+            # Mirrors the MATCHES pattern (footystats.py _fetch_footystats_matches)
+            # so cup/continental competitions with no fixture today still resolve
+            # to a terminal empty_confirmed(EXPECTED_NO_FIXTURE) row instead of
+            # leaving pending_fetch un-typed forever.
+            _captured_leagues: set[str] = set()
+            _pred_failed_leagues: set[str] = set()
 
             # Write per-league partitioned files when canonical_fixture_id is available.
             if "canonical_fixture_id" in df.columns:
@@ -197,37 +205,84 @@ async def _fetch_footystats_predictions(
                     _pred_canonical = _orch._canonical_league_id(_pred_lid_str)
                     if not _orch._is_in_canonical_write_universe(_pred_canonical):
                         continue
+                    if _pred_canonical not in set(_ft_expected):
+                        # Same out-of-subscription write-gate gap as MATCHES
+                        # (root-caused 2026-07-08): don't let incidental
+                        # bulk-endpoint rows for a PRED_NO_FOOTYSTATS league
+                        # masquerade as `captured` PREDICTIONS coverage.
+                        _orch.logger.debug(
+                            "FootyStats predictions: dropping out-of-subscription "
+                            "league=%s date=%s (not in footystats PREDICTIONS "
+                            "expected-leagues set)",
+                            _pred_canonical,
+                            date,
+                        )
+                        continue
                     _pred_clean = _pred_league_df.drop(columns=["_pred_league"])
                     _stamped_pred_clean = _orch.stamp_available_at_explicit(
                         _pred_clean, when=_orch.datetime.now(_orch.UTC)
                     )
-                    _orch._gated_sink_write(
-                        sink,
-                        data=_stamped_pred_clean,
-                        partition={
-                            "entity": "footystats_predictions",
-                            "fetched_at_hour": fetched_at_hour,
-                            "league": _pred_lid_str,
-                        },
-                        venue="footystats",
-                        entity="footystats_predictions",
-                        filename="footystats_predictions.parquet",
-                    )
-                    pred_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
-                        row_key={
-                            "date": date,
-                            "data_type": "PREDICTIONS",
-                            "league_id": _pred_canonical,
-                        },
-                        df=_stamped_pred_clean,
-                        asset_group="sports",
-                        instrument_type="",
-                        data_type="PREDICTIONS",
-                        league_id=_pred_canonical,
-                        pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
-                        source=_orch._sports_ref_source("footystats_predictions"),
-                        service_emission_state=None,
-                    )
+                    # Shard-level isolation (codex/04-architecture/shard-level-
+                    # failure-isolation.md — sports shard atom is per-league):
+                    # a write/record failure for ONE league must not abort the
+                    # loop over the OTHER expected leagues for this date, and
+                    # must not leave a captured manifest row with no
+                    # corresponding durable write (the
+                    # phantom_captured_no_parquet_at_canonical_path class,
+                    # root-caused 2026-07-13).
+                    try:
+                        _orch._gated_sink_write(
+                            sink,
+                            data=_stamped_pred_clean,
+                            partition={
+                                "entity": "footystats_predictions",
+                                "fetched_at_hour": fetched_at_hour,
+                                "league": _pred_lid_str,
+                            },
+                            venue="footystats",
+                            entity="footystats_predictions",
+                            filename="footystats_predictions.parquet",
+                        )
+                        pred_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                            row_key={
+                                "date": date,
+                                "data_type": "PREDICTIONS",
+                                "league_id": _pred_canonical,
+                            },
+                            df=_stamped_pred_clean,
+                            asset_group="sports",
+                            instrument_type="",
+                            data_type="PREDICTIONS",
+                            league_id=_pred_canonical,
+                            pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                            source=_orch._sports_ref_source("footystats_predictions"),
+                            service_emission_state=None,
+                        )
+                        _captured_leagues.add(_pred_canonical)
+                    except Exception as _pred_league_exc:
+                        _pred_league_err = _orch._classify_adapter_failure(_pred_league_exc, "footystats")
+                        _orch.log_event(
+                            "ADAPTER_FETCH_FAILED",
+                            details={
+                                "venue": "footystats",
+                                "endpoint": "get_fixture_predictions",
+                                "date": date,
+                                "league_id": _pred_canonical,
+                                "error": str(_pred_league_exc),
+                                "error_code": _pred_league_err,
+                            },
+                        )
+                        pred_manifest.record_failed(
+                            row_key={
+                                "date": date,
+                                "data_type": "PREDICTIONS",
+                                "league_id": _pred_canonical,
+                            },
+                            error=_pred_league_err,
+                            attempted_at=attempt_ts,
+                            pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                        )
+                        _pred_failed_leagues.add(_pred_canonical)
 
                 if not _without_league.empty:
                     _pred_unmapped = _without_league.drop(columns=["_pred_league"])
@@ -278,6 +333,24 @@ async def _fetch_footystats_predictions(
                     source=_orch._sports_ref_source("footystats_predictions"),
                     service_emission_state=None,
                 )
+
+            # Honest-coverage per-league: record_empty for expected footystats
+            # leagues with no predictions on this date (cup/continental
+            # competitions don't play every day). Mirrors the MATCHES pattern
+            # above — without this, a no-fixture cup date left pending_fetch
+            # un-typed forever instead of resolving to a terminal state.
+            # Leagues whose write raised (_pred_failed_leagues) already carry
+            # an honest record_failed row from the per-league write loop above
+            # — excluding them here prevents a same-run record_empty from
+            # masking that failure.
+            for _exp_lid in sorted(set(_ft_expected) - _captured_leagues - _pred_failed_leagues):
+                pred_manifest.record_empty(
+                    row_key={"date": date, "data_type": "PREDICTIONS", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                    pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
+                    source=_orch._sports_ref_source("footystats_predictions"),
+                )
             pred_manifest.write()
 
             _orch.logger.info(
@@ -287,16 +360,18 @@ async def _fetch_footystats_predictions(
             )
         else:
             _orch.logger.info("FootyStats predictions: no predictive data for date=%s", date)
-            # Honest-coverage: legitimate empty (no predictions for this date).
-            # footystats catalog refresh tagged canonical BATCH_FOOTYSTATS
-            # (Q2=(A) flip 2026-05-12; resolves
-            # footystats_pipeline_mode_gap_2026_05_12.md workaround).
-            pred_manifest.record_empty(
-                row_key=_row_key,
-                attempted_at=attempt_ts,
-                reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
-                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
-            )
+            # Honest-coverage per-league: emit record_empty for ALL expected
+            # leagues — mirrors the MATCHES pattern (per-league granularity,
+            # not a single date-aggregate row) so cup/continental competitions
+            # with no fixture today resolve to a terminal typed state.
+            for _exp_lid in sorted(set(_ft_expected)):
+                pred_manifest.record_empty(
+                    row_key={"date": date, "data_type": "PREDICTIONS", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                    pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
+                    source=_orch._sports_ref_source("footystats_predictions"),
+                )
             pred_manifest.write()
     except Exception as exc:
         _orch.classify_and_emit_error(
@@ -316,13 +391,25 @@ async def _fetch_footystats_predictions(
                 "error_code": _err_code,
             },
         )
-        # Shard isolation: do not raise; record the failed attempt.
-        pred_manifest.record_failed(
-            row_key=_row_key,
-            error=_err_code,
-            attempted_at=attempt_ts,
-            pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
-        )
+        # Shard isolation: do not raise; record the failed attempt PER EXPECTED
+        # LEAGUE, not a single blank-``league_id`` date-aggregate row. A
+        # date-aggregate failed row can never be superseded by the per-league
+        # ``record_captured``/``record_empty`` writes elsewhere in this
+        # function (they always key on a real canonical ``league_id``), so it
+        # would sit ``attempted_failed`` forever even after a LATER re-attempt
+        # genuinely captures every league for this date — root-caused
+        # 2026-07-14 as the reason the footystats PREDICTIONS TimeoutError
+        # residual never cleared across repeated residual-closer re-attempts
+        # (mirrors the ``_record_weather_failed`` per-league pattern in
+        # ``weather.py``). See
+        # plans/active/sports_data_sources_canonical_completion_2026_07_13.md.
+        for _exp_lid in sorted(set(_ft_expected)):
+            pred_manifest.record_failed(
+                row_key={"date": date, "data_type": "PREDICTIONS", "league_id": _exp_lid},
+                error=_err_code,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("PREDICTIONS"),
+            )
         with _orch.contextlib.suppress(Exception):
             pred_manifest.write()
 
@@ -396,13 +483,11 @@ async def _fetch_footystats_matches(
     GCS path: sports_reference/by_date/day={date}/entity=footystats_matches/
               footystats_matches.parquet
     """
-    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key)
     sink = _orch._sports_ref_sink_for(bucket, date, "footystats_matches")
     counts: dict[str, int] = {}
 
     # Honest-coverage pre-flight + attempt-stamp.
     _ft_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-    _row_key: dict[str, str] = {"date": date, "data_type": "MATCHES"}
     from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
@@ -421,24 +506,21 @@ async def _fetch_footystats_matches(
         return counts
     attempt_ts = _orch.datetime.now(_orch.UTC)
 
-    # Coverage-start / known-gap guard for MATCHES.
+    # Coverage-start guard for MATCHES.
     _ftm_floor = _orch.get_source_coverage_start("footystats", data_type="MATCHES")
     _ftm_pre_cutoff = bool(_ftm_floor) and date < _ftm_floor.isoformat()
-    _ftm_in_known_gap = _orch.is_in_known_gap("footystats", "MATCHES", date)
-    if _ftm_pre_cutoff or _ftm_in_known_gap:
-        _orch.logger.info(
-            "FootyStats matches: skipping date=%s (%s)",
-            date,
-            "pre-coverage-start" if _ftm_pre_cutoff else "known-gap",
-        )
-        _ftm_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _ftm_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+    if _ftm_pre_cutoff:
+        _orch.logger.info("FootyStats matches: skipping date=%s (pre-coverage-start)", date)
+        _ftm_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
         for _exp_lid in sorted(_ft_expected):
             _ft_manifest.record_expected_empty(
                 row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
                 reason=_ftm_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                source=_orch._sports_ref_source("footystats_matches"),
             )
+        _ft_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -456,8 +538,14 @@ async def _fetch_footystats_matches(
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                source=_orch._sports_ref_source("footystats_matches"),
             )
+        _ft_manifest.write()
         return counts
+
+    # T0/T1 dependency gate: fires only when we're actually about to attempt
+    # a fetch (past every skip/guard above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key, date=date, bucket=bucket)
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
@@ -518,6 +606,7 @@ async def _fetch_footystats_matches(
 
             # Write per-league partitioned files using canonical_fixture_id.
             _captured_leagues: set[str] = set()
+            _ft_failed_leagues: set[str] = set()
             if "canonical_fixture_id" in df.columns:
                 df["_ft_league"] = df["canonical_fixture_id"].str.split(":").str[0]
                 _has_league = df["_ft_league"].notna() & (df["_ft_league"] != "")
@@ -529,31 +618,81 @@ async def _fetch_footystats_matches(
                     _ft_canonical = _orch._canonical_league_id(_ft_lid_str)
                     if not _orch._is_in_canonical_write_universe(_ft_canonical):
                         continue
+                    if _ft_canonical not in set(_ft_expected):
+                        # League canonicalizes fine and is tracked elsewhere
+                        # (e.g. api_football), but is NOT on our FootyStats
+                        # subscription for MATCHES (PRED_NO_FOOTYSTATS, e.g.
+                        # CHILE_PRIMERA/K_LEAGUE_1/LIGA_MX/ARGENTINA_PRIMERA).
+                        # The bulk /todays-matches endpoint can still return
+                        # incidental rows for it; writing those as `captured`
+                        # would fool the dynamic "≥1 captured row = covered"
+                        # heuristic in the footystats coverage-typing tooling
+                        # into seeding a full-history expected-universe
+                        # denominator that this loop (scoped to _ft_expected)
+                        # never systematically backfills — a permanent,
+                        # unclosable pending_fetch gap (root-caused 2026-07-08).
+                        _orch.logger.debug(
+                            "FootyStats matches: dropping out-of-subscription "
+                            "league=%s date=%s (not in footystats MATCHES "
+                            "expected-leagues set)",
+                            _ft_canonical,
+                            date,
+                        )
+                        continue
                     _ft_clean = _ft_league_df.drop(columns=["_ft_league"])
                     _stamped_ft_df = _orch.stamp_available_at_explicit(_ft_clean, when=_orch.datetime.now(_orch.UTC))
-                    _orch._gated_sink_write(
-                        sink,
-                        data=_stamped_ft_df,
-                        partition={
-                            "entity": "footystats_matches",
-                            "league": _ft_canonical,
-                        },
-                        venue="footystats",
-                        entity="footystats_matches",
-                        filename="footystats_matches.parquet",
-                    )
-                    _ft_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
-                        row_key={"date": date, "data_type": "MATCHES", "league_id": _ft_canonical},
-                        df=_stamped_ft_df,
-                        asset_group="sports",
-                        instrument_type="",
-                        data_type="MATCHES",
-                        league_id=_ft_canonical,
-                        pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
-                        source=_orch._sports_ref_source("footystats_matches"),
-                        service_emission_state=None,
-                    )
-                    _captured_leagues.add(_ft_canonical)
+                    # Shard-level isolation (codex/04-architecture/shard-level-
+                    # failure-isolation.md — sports shard atom is per-league):
+                    # a write/record failure for ONE league must not abort the
+                    # loop over the OTHER expected leagues for this date, and
+                    # must not leave a captured manifest row with no
+                    # corresponding durable write (the
+                    # phantom_captured_no_parquet_at_canonical_path class,
+                    # root-caused 2026-07-13 — the SEGUNDA_DIVISION cluster).
+                    try:
+                        _orch._gated_sink_write(
+                            sink,
+                            data=_stamped_ft_df,
+                            partition={
+                                "entity": "footystats_matches",
+                                "league": _ft_canonical,
+                            },
+                            venue="footystats",
+                            entity="footystats_matches",
+                            filename="footystats_matches.parquet",
+                        )
+                        _ft_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                            row_key={"date": date, "data_type": "MATCHES", "league_id": _ft_canonical},
+                            df=_stamped_ft_df,
+                            asset_group="sports",
+                            instrument_type="",
+                            data_type="MATCHES",
+                            league_id=_ft_canonical,
+                            pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                            source=_orch._sports_ref_source("footystats_matches"),
+                            service_emission_state=None,
+                        )
+                        _captured_leagues.add(_ft_canonical)
+                    except Exception as _ft_league_exc:
+                        _ft_league_err = _orch._classify_adapter_failure(_ft_league_exc, "footystats")
+                        _orch.log_event(
+                            "ADAPTER_FETCH_FAILED",
+                            details={
+                                "venue": "footystats",
+                                "endpoint": "get_fixtures",
+                                "date": date,
+                                "league_id": _ft_canonical,
+                                "error": str(_ft_league_exc),
+                                "error_code": _ft_league_err,
+                            },
+                        )
+                        _ft_manifest.record_failed(
+                            row_key={"date": date, "data_type": "MATCHES", "league_id": _ft_canonical},
+                            error=_ft_league_err,
+                            attempted_at=attempt_ts,
+                            pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                        )
+                        _ft_failed_leagues.add(_ft_canonical)
 
                 if not _without_league.empty:
                     _orch.logger.warning(
@@ -576,13 +715,17 @@ async def _fetch_footystats_matches(
             # leagues with no matches on this date (off-season / no fixtures).
             # Mirrors the XG adapter pattern at the understat block below.
             # footystats-served MATCHES tagged canonical BATCH_FOOTYSTATS
-            # (Q2=(A) flip 2026-05-12).
-            for _exp_lid in sorted(set(_ft_expected) - _captured_leagues):
+            # (Q2=(A) flip 2026-05-12). Leagues whose write raised
+            # (_ft_failed_leagues) already carry an honest record_failed row
+            # from the per-league write loop above — excluding them here
+            # prevents a same-run record_empty from masking that failure.
+            for _exp_lid in sorted(set(_ft_expected) - _captured_leagues - _ft_failed_leagues):
                 _ft_manifest.record_empty(
                     row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch._pipeline_mode_for_sports_data_type("MATCHES"),
+                    source=_orch._sports_ref_source("footystats_matches"),
                 )
             _ft_manifest.write()
             _orch.logger.info("FootyStats matches: %d rows written for date=%s", len(df), date)
@@ -597,6 +740,7 @@ async def _fetch_footystats_matches(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch._pipeline_mode_for_sports_data_type("MATCHES"),
+                    source=_orch._sports_ref_source("footystats_matches"),
                 )
             _ft_manifest.write()
     except Exception as exc:
@@ -617,13 +761,18 @@ async def _fetch_footystats_matches(
                 "error_code": _err_code,
             },
         )
-        # Shard isolation: do not raise; record the failed attempt.
-        _ft_manifest.record_failed(
-            row_key=_row_key,
-            error=_err_code,
-            attempted_at=attempt_ts,
-            pipeline_mode=_orch._pipeline_mode_for_sports_data_type("MATCHES"),
-        )
+        # Shard isolation: do not raise; record the failed attempt PER EXPECTED
+        # LEAGUE, not a single blank-``league_id`` date-aggregate row — see the
+        # matching comment in ``_fetch_footystats_predictions`` for why a
+        # date-aggregate failed row can never be superseded by this function's
+        # per-league writes (root-caused 2026-07-14).
+        for _exp_lid in sorted(set(_ft_expected)):
+            _ft_manifest.record_failed(
+                row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
+                error=_err_code,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("MATCHES"),
+            )
         with _orch.contextlib.suppress(Exception):
             _ft_manifest.write()
 
@@ -729,7 +878,6 @@ async def _fetch_footystats_odds(
     Removal reversed 2026-06-27 (operator decision #6 REVERSED): footystats ODDS
     are pre-match snapshot reference data (predictive signal); stays in IS.
     """
-    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key)
     sink = _orch._sports_ref_sink_for(bucket, date, "footystats_odds")
     counts: dict[str, int] = {}
     fetched_at_ts = _orch.pd.Timestamp.now(tz="UTC")
@@ -739,7 +887,6 @@ async def _fetch_footystats_odds(
         service_name="instruments-service",
         catalogue_bucket=bucket,
     )
-    _row_key: dict[str, str] = {"date": date, "data_type": "ODDS"}
     from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
@@ -758,6 +905,10 @@ async def _fetch_footystats_odds(
         return counts
     attempt_ts = _orch.datetime.now(_orch.UTC)
     _scheduled_fixture_map = _load_scheduled_footystats_fixture_map(bucket, date)
+
+    # T0/T1 dependency gate: fires only when we're actually about to attempt
+    # a fetch (past the skip check above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+    adapter = _orch.create_sports_reference_adapter("footystats", api_key=api_key, date=date, bucket=bucket)
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
@@ -826,6 +977,16 @@ async def _fetch_footystats_odds(
                         date,
                     )
             counts["footystats_odds"] = len(df)
+            # Fixture-calendar completion tracking — leagues captured this date.
+            # Mirrors the MATCHES/PREDICTIONS pattern (root-caused 2026-07-08,
+            # footystats_matches_predictions_fetch_gaps-005/006): without this,
+            # an expected league with no fixture today (while OTHER leagues DO
+            # have fixtures, so odds_rows is non-empty) gets no manifest row at
+            # all — neither captured nor empty_confirmed — leaving it
+            # pending_fetch forever regardless of how many times a backfill
+            # VM re-runs.
+            _captured_leagues: set[str] = set()
+            _odds_failed_leagues: set[str] = set()
 
             if "canonical_fixture_id" in df.columns:
                 df["_odds_league"] = df["canonical_fixture_id"].str.split(":").str[0]
@@ -835,42 +996,94 @@ async def _fetch_footystats_odds(
 
                 for _odds_lid, _odds_league_df in _with_league.groupby("_odds_league"):
                     _odds_lid_str = str(_odds_lid)
+                    _odds_league_canonical = _orch._canonical_league_id(_odds_lid_str)
+                    if not _orch._is_in_canonical_write_universe(_odds_league_canonical):
+                        continue
+                    if _odds_league_canonical not in set(_ft_expected):
+                        # Same out-of-subscription write-gate gap as MATCHES/PREDICTIONS
+                        # (root-caused 2026-07-08, instruments-service@1af6c92): don't let
+                        # incidental bulk-endpoint rows for a PRED_NO_FOOTYSTATS league
+                        # masquerade as `captured` ODDS coverage.
+                        _orch.logger.debug(
+                            "FootyStats odds: dropping out-of-subscription "
+                            "league=%s date=%s (not in footystats ODDS "
+                            "expected-leagues set)",
+                            _odds_league_canonical,
+                            date,
+                        )
+                        continue
                     _odds_clean = _odds_league_df.drop(columns=["_odds_league"])
                     _stamped_odds_clean = _orch.stamp_available_at_explicit(
                         _odds_clean, when=_orch.datetime.now(_orch.UTC)
                     )
-                    _orch._gated_sink_write(
-                        sink,
-                        data=_stamped_odds_clean,
-                        partition={
-                            "entity": "footystats_odds",
-                            "fetched_at_hour": fetched_at_hour,
-                            "league": _odds_lid_str,
-                        },
-                        venue="footystats",
-                        entity="footystats_odds",
-                        filename="footystats_odds.parquet",
-                    )
-                    odds_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
-                        row_key={
-                            "date": date,
-                            "data_type": "ODDS",
-                            "league_id": _orch._canonical_league_id(_odds_lid_str),
-                        },
-                        df=_stamped_odds_clean,
-                        asset_group="sports",
-                        instrument_type="",
-                        data_type="ODDS",
-                        league_id=_orch._canonical_league_id(_odds_lid_str),
-                        pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
-                        source=_orch._sports_ref_source("footystats_odds"),
-                        service_emission_state=None,
-                        expected_root_clusters={
-                            str(fid): 1 for fid in _stamped_odds_clean["canonical_fixture_id"].dropna().unique() if fid
-                        },
-                        cluster_extractor=lambda sym: sym,
-                        cluster_symbol_column="canonical_fixture_id",
-                    )
+                    # Shard-level isolation (codex/04-architecture/shard-level-
+                    # failure-isolation.md — sports shard atom is per-league):
+                    # a write/record failure for ONE league must not abort the
+                    # loop over the OTHER expected leagues for this date, and
+                    # must not leave a captured manifest row with no
+                    # corresponding durable write (the
+                    # phantom_captured_no_parquet_at_canonical_path class,
+                    # root-caused 2026-07-13).
+                    try:
+                        _orch._gated_sink_write(
+                            sink,
+                            data=_stamped_odds_clean,
+                            partition={
+                                "entity": "footystats_odds",
+                                "fetched_at_hour": fetched_at_hour,
+                                "league": _odds_lid_str,
+                            },
+                            venue="footystats",
+                            entity="footystats_odds",
+                            filename="footystats_odds.parquet",
+                        )
+                        odds_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                            row_key={
+                                "date": date,
+                                "data_type": "ODDS",
+                                "league_id": _odds_league_canonical,
+                            },
+                            df=_stamped_odds_clean,
+                            asset_group="sports",
+                            instrument_type="",
+                            data_type="ODDS",
+                            league_id=_odds_league_canonical,
+                            pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                            source=_orch._sports_ref_source("footystats_odds"),
+                            service_emission_state=None,
+                            expected_root_clusters={
+                                str(fid): 1
+                                for fid in _stamped_odds_clean["canonical_fixture_id"].dropna().unique()
+                                if fid
+                            },
+                            cluster_extractor=lambda sym: sym,
+                            cluster_symbol_column="canonical_fixture_id",
+                        )
+                        _captured_leagues.add(_odds_league_canonical)
+                    except Exception as _odds_league_exc:
+                        _odds_league_err = _orch._classify_adapter_failure(_odds_league_exc, "footystats")
+                        _orch.log_event(
+                            "ADAPTER_FETCH_FAILED",
+                            details={
+                                "venue": "footystats",
+                                "endpoint": "get_fixture_odds_snapshot",
+                                "date": date,
+                                "league_id": _odds_league_canonical,
+                                "error": str(_odds_league_exc),
+                                "error_code": _odds_league_err,
+                            },
+                        )
+                        odds_manifest.record_failed(
+                            row_key={
+                                "date": date,
+                                "data_type": "ODDS",
+                                "league_id": _odds_league_canonical,
+                            },
+                            error=_odds_league_err,
+                            attempted_at=attempt_ts,
+                            pipeline_mode=_orch.PipelineMode.BATCH_FOOTYSTATS,
+                        )
+                        _odds_failed_leagues.add(_odds_league_canonical)
 
                 if not _without_league.empty:
                     _odds_unmapped = _without_league.drop(columns=["_odds_league"])
@@ -905,6 +1118,21 @@ async def _fetch_footystats_odds(
                         cluster_extractor=lambda sym: sym,
                         cluster_symbol_column="canonical_fixture_id",
                     )
+
+                # Honest-coverage per-league: record_empty for expected footystats
+                # leagues with no odds/fixture on this date (mirrors MATCHES/PREDICTIONS).
+                # Leagues whose write raised (_odds_failed_leagues) already carry
+                # an honest record_failed row from the per-league write loop above
+                # — excluding them here prevents a same-run record_empty from
+                # masking that failure.
+                for _exp_lid in sorted(set(_ft_expected) - _captured_leagues - _odds_failed_leagues):
+                    odds_manifest.record_empty(
+                        row_key={"date": date, "data_type": "ODDS", "league_id": _exp_lid},
+                        attempted_at=attempt_ts,
+                        reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                        pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+                        source=_orch._sports_ref_source("footystats_odds"),
+                    )
             else:
                 _stamped_odds_df = _orch.stamp_available_at_explicit(df, when=_orch.datetime.now(_orch.UTC))
                 _orch._gated_sink_write(
@@ -934,12 +1162,17 @@ async def _fetch_footystats_odds(
             _orch.logger.info("FootyStats odds: %d rows written for date=%s", len(df), date)
         else:
             _orch.logger.info("FootyStats odds: no odds data and no scheduled fixtures for date=%s", date)
-            odds_manifest.record_empty(
-                row_key=_row_key,
-                attempted_at=attempt_ts,
-                reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
-                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
-            )
+            # Honest-coverage: emit per-league record_empty for ALL expected
+            # leagues (mirrors the MATCHES/PREDICTIONS all-empty branch) rather
+            # than a single date-aggregate row with no league_id.
+            for _exp_lid in sorted(set(_ft_expected)):
+                odds_manifest.record_empty(
+                    row_key={"date": date, "data_type": "ODDS", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                    reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                    pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+                    source=_orch._sports_ref_source("footystats_odds"),
+                )
             odds_manifest.write()
     except Exception as exc:
         _orch.classify_and_emit_error(
@@ -959,12 +1192,16 @@ async def _fetch_footystats_odds(
                 "error_code": _err_code,
             },
         )
-        odds_manifest.record_failed(
-            row_key=_row_key,
-            error=_err_code,
-            attempted_at=attempt_ts,
-            pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
-        )
+        # Per-league (not a blank-``league_id`` date-aggregate row) — see the
+        # matching comment in ``_fetch_footystats_predictions`` (root-caused
+        # 2026-07-14).
+        for _exp_lid in sorted(set(_ft_expected)):
+            odds_manifest.record_failed(
+                row_key={"date": date, "data_type": "ODDS", "league_id": _exp_lid},
+                error=_err_code,
+                attempted_at=attempt_ts,
+                pipeline_mode=_orch._pipeline_mode_for_sports_data_type("ODDS"),
+            )
         with _orch.contextlib.suppress(Exception):
             odds_manifest.write()
 

@@ -15,6 +15,7 @@ from unified_api_contracts import (
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -57,6 +58,16 @@ _FUNDING_PROBE_CONCURRENCY = 2
 _FUNDING_PROBE_TIMEOUT_S = 20.0
 _FUNDING_PROBE_RETRIES = 4
 _FUNDING_PROBE_BACKOFF_BASE_S = 1.0
+
+# Real margin type (2026-07-09, instrument_id_format_canonicalization_2026_07_08.md
+# finding 1's PERPETUAL scope-expansion) — confirmed live via
+# hyperliquid.gitbook.io/hyperliquid-docs/trading/contract-specifications:
+# "Instrument type | Linear perpetual". USDC vault collateral, USD-notional
+# quote — margin/PnL is quote-currency-denominated (linear), not coin-margined
+# (inverse). Derives the @LIN/@INV instrument_id marker FROM this field so the
+# two can never drift out of sync.
+_MARGIN_TYPE = MarginType.LINEAR
+_MARGIN_MARKER = _MARGIN_TYPE.value[:3].upper()
 
 
 def _classify_hyperliquid_error(exc: Exception, status: int | None = None) -> str:
@@ -151,16 +162,38 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
             name = cast(str, asset.name)
             sz_decimals: int = asset.szDecimals or 3
             lot = Decimal(10) ** -sz_decimals
+            hl_instrument_key = build_instrument_id(
+                "HYPERLIQUID", InstrumentType.PERPETUAL, f"{name}-USD@{_MARGIN_MARKER}"
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"HYPERLIQUID:PERP:{name}",
+                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
+                    # (2026-07-08 canonicalization — dropped the PERP shorthand, added
+                    # the real settlement currency; HYPERLIQUID quotes/settles in USD
+                    # notionally even though the vault collateral token is USDC,
+                    # matching ``quote_asset`` below. 2026-07-09 scope-expansion — added
+                    # the real @LIN margin marker, see _MARGIN_TYPE above for the
+                    # verification method). SSOT:
+                    # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
+                    # finding 1 (2026-07-09 PERPETUAL scope-expansion) + finding 3+4;
+                    # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
+                    # Routed through the shared UAC builder (2026-07-09 retrofit,
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) — the
+                    # marker is embedded in the symbol passed to the builder (PERPETUAL's
+                    # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
+                    # convention DeFi POOL fee-tiers already use).
+                    instrument_key=hl_instrument_key,
+                    # No CeFi raw-code-to-human-name translation gap (see other CeFi
+                    # adapters' identical comment) — canonical_instrument_id mirrors
+                    # instrument_key.
+                    canonical_instrument_id=hl_instrument_key,
                     venue=self.venue,
                     raw_symbol=name,
                     instrument_type=InstrumentType.PERPETUAL,
                     base_asset=name,
                     quote_asset="USD",
                     settle_asset="USDC",
-                    margin_type=MarginType.LINEAR,
+                    margin_type=_MARGIN_TYPE,
                     tick_size=Decimal("0.001"),
                     min_size=lot,
                     contract_size=Decimal("1"),

@@ -2,7 +2,15 @@
 
 Discovers the Renzo liquid restaking token (ezETH) on Ethereum mainnet and on
 Renzo's canonical-bridge L2s (Arbitrum). Tokens are returned as InstrumentRecord
-with instrument_type="YIELD_BEARING".
+with instrument_type=RESTAKING (operator decision 2026-07-20/22,
+distinct_values_noncanonical_audit_2026_07_20.md — ezETH carries EigenLayer AVS
+slashing risk stacked on base ETH staking slashing, distinct from a plain LST;
+was InstrumentType.LST until this classification landed). The ``instrument_key``
+/``canonical_instrument_id`` string keeps its legacy ``:LST:`` segment
+deliberately unchanged — this is a values-only reclassification of the
+``instrument_type`` column, not an id/GCS-partition-path rename (mirrors the
+EQUITY_PERP/TOKENIZED_EQUITY precedent: old id segments outlive a
+reclassification so persisted rows + external string consumers stay parseable).
 
 References:
 - https://www.renzoprotocol.com/
@@ -21,6 +29,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -29,6 +38,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ...utils.defi_utils import build_spot_asset_record
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +108,12 @@ class RenzoReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Renzo LRT tokens as yield-bearing instruments."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (
+            None,
+            InstrumentType.LST,
+            InstrumentType.YIELD_BEARING,
+            InstrumentType.RESTAKING,
+        ):
             return []
 
         results: list[InstrumentRecord] = []
@@ -111,12 +126,16 @@ class RenzoReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
+            instrument_key = build_instrument_id(venue_tag, InstrumentType.LST, symbol, passthrough=True)
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:LST:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
-                    instrument_type=InstrumentType.YIELD_BEARING,
+                    instrument_type=InstrumentType.RESTAKING,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000001"),
@@ -132,6 +151,18 @@ class RenzoReferenceDataAdapter(BaseReferenceDataAdapter):
                     base_asset_decimals=_EZETH_DECIMALS,
                 )
             )
+            # SPOT_ASSET sibling (P4-B): the LRT receipt token itself (ezETH — NOT its
+            # "ETH" economic-peg label) as a directly-queryable on-chain instrument,
+            # reusing the SAME address/decimals just resolved above — no re-fetch.
+            spot_asset = build_spot_asset_record(
+                venue=venue_tag,
+                symbol=symbol,
+                contract_address=address,
+                decimals=_EZETH_DECIMALS,
+                available_from_datetime=deploy_date,
+            )
+            if spot_asset is not None:
+                results.append(spot_asset)
 
         logger.info("Renzo: fetched %d LRT instruments on %s", len(results), self._chain)
         return results

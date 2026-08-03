@@ -275,8 +275,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         )
         if not self._api_key:
             logger.warning(
-                "api_football /status: no API key available — using registry fallback "
-                "(per_minute=%d daily=%d)",
+                "api_football /status: no API key available — using registry fallback (per_minute=%d daily=%d)",
                 fallback_per_minute,
                 fallback_daily,
             )
@@ -385,6 +384,58 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         )
         return result
 
+    async def get_fixtures_by_ids(
+        self,
+        fixture_ids: list[int],
+    ) -> list[tuple[CanonicalFixture, dict[str, object]]]:
+        """Fetch specific fixtures directly by ``af_fixture_id``, regardless of date/league.
+
+        API endpoint: ``GET /fixtures?ids=<id>-<id>-...`` (hyphen-joined, max 20
+        ids per call per api-football's documented limit -- batched here).
+
+        Root-cause fix for the api_football season-cache date-filter miss
+        (``api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19.md``,
+        the "648 season fixtures, 0 matches for a flagged date" anomaly):
+        a fixture captured under date ``D`` can be POSTPONED/RESCHEDULED by
+        the league to a different real-world date after capture. The season
+        cache (``_fetch_season_fixtures_with_raw``) always reflects the
+        CURRENT live schedule, so ``fx.kickoff_utc.date().isoformat() == D``
+        filtering can never find that fixture under its original date again
+        -- not a bug in the season fetch or the league resolution, just a
+        genuinely different real-world date. This direct by-id lookup is the
+        only way to get a rescheduled fixture's current status without
+        already knowing its new date.
+
+        Returns:
+            ``[(canonical_fixture, raw_af_item), ...]`` for every fixture id
+            that still resolves (api-football silently omits an id from the
+            response if it's invalid/removed -- callers should not assume
+            the result count matches the input count).
+        """
+        if not fixture_ids:
+            return []
+
+        url = f"{_BASE_URL}/fixtures"
+        paired: list[tuple[CanonicalFixture, dict[str, object]]] = []
+        batch_size = 20  # api-football's documented max ids-per-call.
+        for i in range(0, len(fixture_ids), batch_size):
+            batch = fixture_ids[i : i + batch_size]
+            params: dict[str, str] = {"ids": "-".join(str(fid) for fid in batch)}
+            try:
+                raw_rows = await self._fetch_and_extract(url, params)
+            except Exception as exc:
+                error_code = self._classify_error(exc)
+                self._emit_fetch_failed(error_code, exc)
+                raise
+            paired.extend(_parse_fixture_list_with_raw(raw_rows))
+
+        logger.info(
+            "Fetched %d/%d fixture(s) by direct id lookup",
+            len(paired),
+            len(fixture_ids),
+        )
+        return paired
+
     async def get_fixtures(
         self,
         date: str,
@@ -417,9 +468,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             for lid in league_ids:
                 season_year = _effective_season_for_league(lid, reference_date=ref_date)
                 season_pairs = await self._fetch_season_fixtures_with_raw(lid, season_year)
-                fixtures.extend(
-                    fx for fx, _ in season_pairs if fx.kickoff_utc.date().isoformat() == date
-                )
+                fixtures.extend(fx for fx, _ in season_pairs if fx.kickoff_utc.date().isoformat() == date)
             logger.info("Fetched %d fixtures for date=%s (season cache)", len(fixtures), date)
             return fixtures
 
@@ -469,9 +518,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             for lid in league_ids:
                 season_year = _effective_season_for_league(lid, reference_date=ref_date)
                 season_pairs = await self._fetch_season_fixtures_with_raw(lid, season_year)
-                paired.extend(
-                    (fx, raw) for fx, raw in season_pairs if fx.kickoff_utc.date().isoformat() == date
-                )
+                paired.extend((fx, raw) for fx, raw in season_pairs if fx.kickoff_utc.date().isoformat() == date)
             logger.info("Fetched %d fixtures (with raw) for date=%s (season cache)", len(paired), date)
             return paired
 
@@ -678,7 +725,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         raw_rows: list[dict[str, object]] = []
         response_list = _extract_response(raw_response)
@@ -787,8 +834,21 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         try:
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
+            # Root-cause fix (api_football_injuries_silent_empty_swallow_2026_07_13):
+            # unlike the OTHER 4 "per-fixture" methods sharing this docstring/shape
+            # (get_fixture_statistics/get_fixture_lineups/get_fixture_events/
+            # get_fixture_player_stats), ``get_injuries`` is DATE-WIDE, not
+            # per-fixture — there is no per-shard granularity to protect by
+            # swallowing a hard failure to ``[]``. Swallowing here silently
+            # converted a genuine hard API error (bad plan/token/params — see
+            # ``ApiFootballResponseError``) into a false "0 injuries returned,
+            # honest absence" (``empty_confirmed``) for the WHOLE date — exactly
+            # the "silent-empty manifest bug" ``0db24503`` fixed for the venue
+            # fetch path, left unfixed here. Emit for observability, then
+            # re-raise so the caller's ``except`` records ``attempted_failed``
+            # (mirrors ``get_teams``'s ``raise`` after ``_emit_fetch_failed``).
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         # INJURIES — single dict per row; no chain.from_iterable needed.
         results = [normalize_api_football_injury(row) for row in raw_rows]
@@ -805,7 +865,15 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         ball_possession_pct, …).
 
         Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
-        response is retried rather than recorded as ``attempted_failed``.
+        response is retried rather than recorded as ``attempted_failed``. A
+        HARD failure (anything ``_fetch_and_extract`` re-raises immediately,
+        e.g. daily-quota exhaustion) is re-raised here too — the caller
+        (``_gather_per_fixture_rows._fetch_one``) is the ONLY place that
+        increments ``entity_failures``, so swallowing to ``[]`` would make a
+        real fetch failure indistinguishable from a genuine zero-row result
+        and get silently recorded ``empty_confirmed`` instead of
+        ``attempted_failed`` (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25).
         """
         url = f"{_BASE_URL}/fixtures/statistics"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -813,7 +881,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         # Each raw_rows item is one team-stats block; the normalizer returns
         # list[dict] of length 1 per team. Flatten across all teams.
@@ -834,7 +902,15 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         IDs + names, event_type/detail/comments).
 
         Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
-        response is retried rather than recorded as ``attempted_failed``.
+        response is retried rather than recorded as ``attempted_failed``. A
+        HARD failure (anything ``_fetch_and_extract`` re-raises immediately,
+        e.g. daily-quota exhaustion) is re-raised here too — the caller
+        (``_gather_per_fixture_rows._fetch_one``) is the ONLY place that
+        increments ``entity_failures``, so swallowing to ``[]`` would make a
+        real fetch failure indistinguishable from a genuine zero-row result
+        and get silently recorded ``empty_confirmed`` instead of
+        ``attempted_failed`` (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25).
         """
         url = f"{_BASE_URL}/fixtures/events"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -842,7 +918,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         # Each raw_rows item is one event; the normalizer returns list[dict]
         # of length 1. chain.from_iterable preserves caller symmetry with the
@@ -866,7 +942,15 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         is_starter).
 
         Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
-        response is retried rather than recorded as ``attempted_failed``.
+        response is retried rather than recorded as ``attempted_failed``. A
+        HARD failure (anything ``_fetch_and_extract`` re-raises immediately,
+        e.g. daily-quota exhaustion) is re-raised here too — the caller
+        (``_gather_per_fixture_rows._fetch_one``) is the ONLY place that
+        increments ``entity_failures``, so swallowing to ``[]`` would make a
+        real fetch failure indistinguishable from a genuine zero-row result
+        and get silently recorded ``empty_confirmed`` instead of
+        ``attempted_failed`` (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25).
         """
         url = f"{_BASE_URL}/fixtures/lineups"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -874,7 +958,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         # Each raw_rows item is one team's lineup block; the normalizer
         # returns list[dict] with ~18 rows (startXI + substitutes).
@@ -891,7 +975,15 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         Returns 33+ stat fields per player.
 
         Uses ``_fetch_and_extract`` so that a JSON-envelope ``rateLimit``
-        response is retried rather than recorded as ``attempted_failed``.
+        response is retried rather than recorded as ``attempted_failed``. A
+        HARD failure (anything ``_fetch_and_extract`` re-raises immediately,
+        e.g. daily-quota exhaustion) is re-raised here too — the caller
+        (``_gather_per_fixture_rows._fetch_one``) is the ONLY place that
+        increments ``entity_failures``, so swallowing to ``[]`` would make a
+        real fetch failure indistinguishable from a genuine zero-row result
+        and get silently recorded ``empty_confirmed`` instead of
+        ``attempted_failed`` (api_football_per_fixture_hard_failure_silently_
+        recorded_empty_2026_07_25).
         """
         url = f"{_BASE_URL}/fixtures/players"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -899,7 +991,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             raw_rows = await self._fetch_and_extract(url, params)
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
-            return []
+            raise
 
         results: list[CanonicalPlayerPerformance] = []
         for row in raw_rows:
@@ -921,11 +1013,22 @@ class ApiFootballResponseError(RuntimeError):
     ``is_rate_limit`` is set to ``True`` when the errors dict contains a
     ``rateLimit`` key — so callers can distinguish transient quota exhaustion
     (retryable via minute-boundary sleep) from hard API errors (plan/token/params).
+
+    ``error_key`` (root-cause fix, api_football_injuries_error_misclassification_
+    2026_07_13) carries the RAW envelope error dict's key (``"plan"`` /
+    ``"token"`` / ``"requests"`` / ``"dates"`` / etc — whichever populated) so
+    ``_classify_adapter_failure`` can pass a real UAC-matchable code to
+    ``classify_venue_error`` instead of falling back to this exception's class
+    name (``"ApiFootballResponseError"``, which never matches any
+    ``VENUE_ERRORS_SPORTS["api_football"]`` entry — those are keyed by HTTP
+    status / domain codes, not Python class names). Blank when ``errors`` was
+    a list (no dict key available) or absent.
     """
 
-    def __init__(self, message: str, *, is_rate_limit: bool = False) -> None:
+    def __init__(self, message: str, *, is_rate_limit: bool = False, error_key: str = "") -> None:
         super().__init__(message)
         self.is_rate_limit = is_rate_limit
+        self.error_key = error_key
 
 
 def _raise_on_api_errors(raw: object) -> None:
@@ -939,15 +1042,19 @@ def _raise_on_api_errors(raw: object) -> None:
     Sets ``is_rate_limit=True`` when the error key is ``rateLimit`` — callers
     use this to distinguish transient quota exhaustion (retryable after sleeping
     to the next UTC minute) from hard plan/token/param errors (not retryable).
+    Sets ``error_key`` to the dict's own key (e.g. ``"plan"``) so hard failures
+    carry real UAC-classifiable provenance instead of a generic class name.
     """
     if not isinstance(raw, dict):
         return
     errors = raw.get("errors")
     if isinstance(errors, dict) and errors:
         is_rate_limit = "rateLimit" in errors
+        _error_key = next(iter(errors)) if not is_rate_limit else "rateLimit"
         raise ApiFootballResponseError(
             f"API-Football returned errors: {errors!r}",
             is_rate_limit=is_rate_limit,
+            error_key=_error_key,
         )
     if isinstance(errors, list) and errors:
         raise ApiFootballResponseError(f"API-Football returned errors: {errors!r}")

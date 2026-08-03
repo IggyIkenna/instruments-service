@@ -46,7 +46,6 @@ async def _fetch_understat_xg(
     GCS path: sports_reference/by_date/day={date}/entity=understat_xg/
               understat_xg.parquet
     """
-    adapter = _orch.create_sports_reference_adapter("understat")
     sink = _orch._sports_ref_sink_for(bucket, date, "understat_xg")
     counts: dict[str, int] = {}
 
@@ -88,25 +87,22 @@ async def _fetch_understat_xg(
     # reflect the attempt time, not the manifest write time.
     attempt_ts = _orch.datetime.now(_orch.UTC)
 
-    # Coverage-start / known-gap guard — emit expected-empty rows without an
-    # API call for dates before Understat's coverage window or in a gap window.
+    # Coverage-start guard — emit expected-empty rows without an API call for
+    # dates before Understat's coverage window.
     _us_floor = _orch.get_source_coverage_start("understat", data_type="XG")
     _us_pre_cutoff = bool(_us_floor) and date < _us_floor.isoformat()
-    _us_in_known_gap = _orch.is_in_known_gap("understat", "XG", date)
-    if _us_pre_cutoff or _us_in_known_gap:
-        _orch.logger.info(
-            "Understat xG: skipping date=%s (%s)",
-            date,
-            "pre-coverage-start" if _us_pre_cutoff else "known-gap",
-        )
-        _us_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _us_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+    if _us_pre_cutoff:
+        _orch.logger.info("Understat xG: skipping date=%s (pre-coverage-start)", date)
+        _us_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
         for _exp_lid in sorted(_expected_understat_leagues):
             xg_manifest.record_expected_empty(
                 row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
                 reason=_us_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                source=_orch._sports_ref_source("understat_xg"),
             )
+        xg_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -124,8 +120,14 @@ async def _fetch_understat_xg(
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                source=_orch._sports_ref_source("understat_xg"),
             )
+        xg_manifest.write()
         return counts
+
+    # T0/T1 dependency gate: fires only when we're actually about to attempt
+    # a fetch (past every skip/guard above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+    adapter = _orch.create_sports_reference_adapter("understat", date=date, bucket=bucket)
 
     try:
         from unified_api_contracts.sports import build_fixture_id, resolve_understat_team
@@ -142,6 +144,20 @@ async def _fetch_understat_xg(
                             flat[f"{k}_{sub_k}"] = str(sub_v) if sub_v is not None else None
                     else:
                         flat[k] = str(v) if v is not None else None
+                # Reconstruct the flat 'league' key. ``_coerce_adapter_output``
+                # carries the CanonicalLeague as a NESTED dict under 'league', so
+                # the flatten loop above explodes it into league_league_id /
+                # league_name / ... and leaves NO flat 'league' key. Both the
+                # fixture_id build below and the per-league capture groupby key on
+                # 'league' — so without this the whole XG capture block is silently
+                # skipped and every league records empty_confirmed despite fixtures
+                # existing (regression: a 2026-05-07 bulk run recorded empty for
+                # ~all XG match-days while the xG parquets sit in GCS — manifest
+                # under-reports XG as 4,444 captured / 301,667 empty). The
+                # league_id the CanonicalLeague carries IS the understat league
+                # name (EPL / La_Liga / …), matching the shots path's league_name.
+                if "league" not in flat:
+                    flat["league"] = flat.get("league_league_id") or flat.get("league_name")
                 # Build canonical fixture_id from team names + date
                 home_name = flat.get("h_title") or ""
                 away_name = flat.get("a_title") or ""
@@ -176,7 +192,15 @@ async def _fetch_understat_xg(
                     _xg_canonical = _orch._canonical_league_id(_xg_lid_str)
                     if not _orch._is_in_canonical_write_universe(_xg_canonical):
                         continue
-                    _captured_leagues.add(_xg_lid_str)
+                    # Track the CANONICAL id (record_captured below keys on
+                    # _xg_canonical, and the honest-absence loop subtracts against
+                    # _expected_understat_leagues which is canonical). Tracking the
+                    # RAW _xg_lid_str here left every non-already-uppercase league
+                    # (Bundesliga/La_Liga/Serie_A/Ligue_1 — all but EPL) OUT of the
+                    # captured set, so the record_empty loop then overwrote the just
+                    # -captured row with empty_confirmed. Only EPL (raw==canonical)
+                    # survived. Pairs with the flat-'league' reconstruction above.
+                    _captured_leagues.add(_xg_canonical)
                     # C.6: available_at = kickoff + 24h already set on df at line ~5688 (understat
                     # data scraped the day after). Preserve it; fill NaT rows (missing kickoff_utc)
                     # with wall-clock as fallback. Do NOT override with stamp_available_at_explicit.
@@ -229,6 +253,7 @@ async def _fetch_understat_xg(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                    source=_orch._sports_ref_source("understat_xg"),
                 )
             xg_manifest.write()
             _orch.logger.info("Understat xG: %d rows written for date=%s", len(df), date)
@@ -274,6 +299,7 @@ async def _fetch_understat_xg(
                         attempted_at=attempt_ts,
                         reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                        source=_orch._sports_ref_source("understat_xg"),
                     )
             else:
                 _orch.logger.info("Understat xG: no fixtures for date=%s", date)
@@ -285,6 +311,7 @@ async def _fetch_understat_xg(
                         attempted_at=attempt_ts,
                         reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                        source=_orch._sports_ref_source("understat_xg"),
                     )
             xg_manifest.write()
     except Exception as exc:
@@ -376,24 +403,21 @@ async def _run_understat_shots_date(
 
     attempt_ts = _orch.datetime.now(_orch.UTC)
 
-    # Coverage-start / known-gap guard for XG_SHOTS.
+    # Coverage-start guard for XG_SHOTS.
     _uss_floor = _orch.get_source_coverage_start("understat", data_type="XG_SHOTS")
     _uss_pre_cutoff = bool(_uss_floor) and date < _uss_floor.isoformat()
-    _uss_in_known_gap = _orch.is_in_known_gap("understat", "XG_SHOTS", date)
-    if _uss_pre_cutoff or _uss_in_known_gap:
-        _orch.logger.info(
-            "Understat XG_SHOTS: skipping date=%s (%s)",
-            date,
-            "pre-coverage-start" if _uss_pre_cutoff else "known-gap",
-        )
-        _uss_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _uss_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+    if _uss_pre_cutoff:
+        _orch.logger.info("Understat XG_SHOTS: skipping date=%s (pre-coverage-start)", date)
+        _uss_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
         for _exp_lid in sorted(_expected_leagues):
             shots_manifest.record_expected_empty(
                 row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
                 reason=_uss_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                source=_orch._sports_ref_source("understat_xg_shots"),
             )
+        shots_manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -411,7 +435,9 @@ async def _run_understat_shots_date(
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                source=_orch._sports_ref_source("understat_xg_shots"),
             )
+        shots_manifest.write()
         return counts
 
     try:
@@ -448,7 +474,29 @@ async def _run_understat_shots_date(
                 continue
             _captured_leagues.add(lid)
             df = _orch.pd.DataFrame(shot_rows)
-            df["available_at"] = _orch.pd.Timestamp(_orch.datetime.now(_orch.UTC))
+            # Conform the shots df to the SPORTS_XG_SHOTS contract before BOTH the
+            # sink-write (GCS parquet) and record_captured (schema validation).
+            # normalize_understat_shot is SOURCE-shaped (understat's raw shot has
+            # xG only — no per-shot xA, no at-time-of-shot score/period; raw
+            # h_goals/a_goals are the FINAL score, not per-shot), so:
+            #  * xa — contract column understat can't populate → nullable-null (other
+            #    shot sources may carry it); the normalizer omits it, the write path
+            #    fills the contract column.
+            #  * home_goals / away_goals / period — honestly null for understat, but
+            #    the contract dtype is int64, and a None-filled column infers to
+            #    object → RowSchemaValidationError. Cast to pandas nullable Int64
+            #    (the validator's dtype table accepts Int64 for int64).
+            #  * available_at — pd.Timestamp of a Python datetime is us-precision
+            #    under pandas 2.x; the contract (_DATA_AVAILABLE_AT) is datetime64[ns,UTC].
+            # Before the lookup_contract fix (UAC) this mismatch was masked because
+            # the schema lookup MISSED and validation was skipped; now it runs.
+            if "xa" not in df.columns:
+                df["xa"] = float("nan")
+            df["xa"] = _orch.pd.to_numeric(df["xa"], errors="coerce")  # float64 (not object)
+            for _icol in ("home_goals", "away_goals", "period"):
+                if _icol in df.columns:
+                    df[_icol] = df[_icol].astype("Int64")
+            df["available_at"] = _orch.pd.Timestamp(_orch.datetime.now(_orch.UTC)).as_unit("ns")
             _orch._gated_sink_write(
                 sink,
                 data=df,
@@ -461,7 +509,15 @@ async def _run_understat_shots_date(
                 row_key={"date": date, "data_type": "XG_SHOTS", "league_id": lid},
                 df=df,
                 asset_group="sports",
-                instrument_type="shot",
+                # Manifest-row instrument_type for ALL sports reference types is "" (blank):
+                # every existing XG_SHOTS row + every XG row + all sports types use "".
+                # Shot-vs-match granularity is encoded by data_type (XG_SHOTS vs XG), not
+                # this column. Writing "shot" here made the captured atom diverge from the
+                # seeded expected_unattempted rows (dedup key includes instrument_type) →
+                # duplicate rows that never promote. Match the convention so captured
+                # supersedes the seed. ("shot" stays in the SPORTS_XG_SHOTS contract + the
+                # parquet columns.)
+                instrument_type="",
                 data_type="XG_SHOTS",
                 league_id=lid,
                 pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
@@ -491,6 +547,7 @@ async def _run_understat_shots_date(
                     attempted_at=attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_UNDERSTAT,
+                    source=_orch._sports_ref_source("understat_xg_shots"),
                 )
         shots_manifest.write()
         _orch.logger.info(

@@ -255,6 +255,92 @@ class TestApiFootballFetchSeasonFixturesWithRaw:
 
 
 # ---------------------------------------------------------------------------
+# ApiFootballAdapter — get_fixtures_by_ids (reschedule root-cause fix)
+# ---------------------------------------------------------------------------
+
+
+class TestApiFootballGetFixturesByIds:
+    """get_fixtures_by_ids — direct-by-id lookup, bypassing the season-cache
+    date filter that can never find a POSTPONED/RESCHEDULED fixture again
+    under its original captured date (see
+    api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19.md)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_empty_input_returns_empty_no_call(self) -> None:
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        with patch.object(adapter, "_fetch_and_extract", side_effect=RuntimeError("should not call")):
+            result = await adapter.get_fixtures_by_ids([])
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_single_batch_returns_pairs(self) -> None:
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        raw_response = {"response": [_minimal_fixture_item(fixture_id=1498613)]}
+        session_cm = _make_session_cm(raw_response)
+
+        with patch("aiohttp.ClientSession", return_value=session_cm):
+            result = await adapter.get_fixtures_by_ids([1498613])
+
+        assert len(result) == 1
+        _canonical_fx, raw_item = result[0]
+        assert raw_item["fixture"]["id"] == 1498613
+
+    @pytest.mark.asyncio
+    async def test_batches_at_twenty_ids(self) -> None:
+        """More than 20 ids splits into multiple ``ids=`` calls (api-football's documented cap)."""
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+        calls: list[dict[str, str]] = []
+
+        async def _fake_fetch_and_extract(url: str, params: dict[str, str]) -> list[dict]:
+            calls.append(params)
+            return [_minimal_fixture_item(fixture_id=1)]
+
+        fixture_ids = list(range(1, 26))  # 25 ids -> two batches (20 + 5)
+        with patch.object(adapter, "_fetch_and_extract", side_effect=_fake_fetch_and_extract):
+            result = await adapter.get_fixtures_by_ids(fixture_ids)
+
+        assert len(calls) == 2
+        assert calls[0]["ids"].count("-") == 19  # 20 ids joined by 19 hyphens
+        assert calls[1]["ids"].count("-") == 4  # 5 ids joined by 4 hyphens
+        assert len(result) == 2  # one parsed fixture per batch in this fake
+
+    @pytest.mark.asyncio
+    async def test_exception_emits_and_reraises(self) -> None:
+        from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+            ApiFootballAdapter,
+        )
+
+        adapter = ApiFootballAdapter(api_key="test-key")
+
+        with (
+            patch.object(adapter, "_fetch_and_extract", side_effect=RuntimeError("api down")),
+            patch.object(adapter, "_emit_fetch_failed") as mock_emit,
+            pytest.raises(RuntimeError, match="api down"),
+        ):
+            await adapter.get_fixtures_by_ids([1498613])
+
+        mock_emit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # ApiFootballAdapter — _fetch_league_fixtures_with_raw
 # ---------------------------------------------------------------------------
 
@@ -890,9 +976,7 @@ class TestApiFootballLiveQuota:
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.headers = {"X-RateLimit-Limit": "1200"}
-        resp.json = AsyncMock(
-            return_value={"response": {"requests": {"current": 100, "limit_day": 300000}}}
-        )
+        resp.json = AsyncMock(return_value={"response": {"requests": {"current": 100, "limit_day": 300000}}})
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=resp)
         ctx.__aexit__ = AsyncMock(return_value=False)

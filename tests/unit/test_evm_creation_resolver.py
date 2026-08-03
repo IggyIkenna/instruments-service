@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
+from unified_api_contracts.registry import get_venue_prefix
+from unified_api_contracts.registry.chain_env import get_protocol_launch_date
 
 from instruments_service.reference_data.utils.evm_creation_resolver import (
     LENDING_PROTOCOL_DEPLOY_DATES,
@@ -76,9 +78,9 @@ class TestGetProtocolFloorDate:
         # Spark gained a UAC ``PROTOCOL_LAUNCH_DATES`` entry 2026-05-08 (Tab 14
         # audit: ("ETHEREUM", "SPARK") = 2023-03-07; earliest Messari
         # ``marketDailySnapshots`` event 2023-03-07 04:31:11 UTC). The local
-        # ``LENDING_PROTOCOL_DEPLOY_DATES`` fallback was 2023-05-09 which
-        # over-clipped 63 days of legitimate Spark history; UAC SSOT now
-        # tightens the floor to subgraph reality.
+        # ``LENDING_PROTOCOL_DEPLOY_DATES`` fallback had 2023-05-09 (over-clipping
+        # 63 days of legitimate Spark history) — removed entirely by the
+        # 2026-07-27 Bug-class-3 sweep since UAC now always wins here anyway.
         dt = get_protocol_floor_date("spark", "ETHEREUM")
         assert dt == datetime(2023, 3, 7, tzinfo=UTC)
 
@@ -87,6 +89,53 @@ class TestGetProtocolFloorDate:
             dt = get_protocol_floor_date("aave_v3", chain)
             assert dt.tzinfo == UTC
             assert dt.year >= 2020
+
+    def test_aave_v3_gnosis_uses_local_fallback(self) -> None:
+        # GNOSIS is the one aave_v3 chain UAC PROTOCOL_LAUNCH_DATES does not track —
+        # the sole surviving entry in LENDING_PROTOCOL_DEPLOY_DATES post Bug-class-3 sweep.
+        dt = get_protocol_floor_date("aave_v3", "GNOSIS")
+        assert dt == datetime(2023, 10, 1, tzinfo=UTC)
+
+    @pytest.mark.parametrize(
+        ("protocol", "chain", "expected"),
+        [
+            # Bug-class-3 sweep (2026-07-27): these protocol/chain pairs used to have
+            # a LENDING_PROTOCOL_DEPLOY_DATES local fallback entry that was dead code
+            # (UAC PROTOCOL_LAUNCH_DATES already covered them, several with a DIFFERENT,
+            # more-correct date than the stale local value). Removed the local entries;
+            # this locks in that UAC alone now correctly resolves each pair.
+            ("morpho", "ETHEREUM", datetime(2023, 12, 28, tzinfo=UTC)),
+            ("morpho", "BASE", datetime(2024, 6, 18, tzinfo=UTC)),
+            ("fluid", "ETHEREUM", datetime(2024, 2, 15, tzinfo=UTC)),
+            ("euler_v2", "ETHEREUM", datetime(2024, 8, 1, tzinfo=UTC)),
+            ("euler_v2", "ARBITRUM", datetime(2024, 8, 1, tzinfo=UTC)),
+            ("radiant", "ETHEREUM", datetime(2023, 7, 18, tzinfo=UTC)),
+            ("radiant", "ARBITRUM", datetime(2022, 7, 25, tzinfo=UTC)),
+            ("radiant", "BSC", datetime(2022, 9, 21, tzinfo=UTC)),
+            ("venus", "BSC", datetime(2020, 10, 8, tzinfo=UTC)),
+            ("venus", "ETHEREUM", datetime(2023, 6, 1, tzinfo=UTC)),
+            ("benqi", "AVALANCHE", datetime(2021, 8, 19, tzinfo=UTC)),
+        ],
+    )
+    def test_formerly_local_only_protocols_now_resolve_via_uac(
+        self, protocol: str, chain: str, expected: datetime
+    ) -> None:
+        assert get_protocol_floor_date(protocol, chain) == expected
+
+    def test_no_dead_redundant_local_entries(self) -> None:
+        # Shape lock: LENDING_PROTOCOL_DEPLOY_DATES should carry ONLY
+        # (protocol, chain) pairs UAC PROTOCOL_LAUNCH_DATES does not track — any
+        # other entry is dead code in the UAC-first cascade and a latent-stale-date
+        # footgun waiting to happen (Bug-class-3). As of the 2026-07-27 sweep that's
+        # exactly one pair.
+        for protocol, chains in LENDING_PROTOCOL_DEPLOY_DATES.items():
+            venue_prefix = get_venue_prefix(protocol)
+            for chain in chains:
+                uac_date = get_protocol_launch_date(chain, venue_prefix) if venue_prefix else None
+                assert uac_date is None, (
+                    f"{protocol}/{chain} has a UAC PROTOCOL_LAUNCH_DATES entry ({uac_date}) — "
+                    "the LENDING_PROTOCOL_DEPLOY_DATES fallback for it is dead code, remove it"
+                )
 
 
 # ---------------------------------------------------------------------------

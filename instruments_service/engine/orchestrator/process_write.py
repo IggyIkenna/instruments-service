@@ -22,10 +22,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from typing import TYPE_CHECKING
 
-from unified_api_contracts import source_string_for
-from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
+from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
@@ -37,6 +38,7 @@ __all__ = [
     "_asset_group_for_venue",
     "_records_to_dataframe",
     "_validate_records",
+    "_venue_bucket_resolver",
     "_write_all_venues",
     "_write_tradfi_non_trading_day_entries",
 ]
@@ -101,6 +103,13 @@ def _asset_group_for_venue(venue_str: str) -> str:
     if "-" in venue_str:
         return "defi"
     return "sports"
+
+
+def _venue_bucket_resolver(*, asset_groups: list[str], primary_bucket: str) -> Callable[[str], str]:
+    """Per-venue bucket resolver: primary_bucket for single-AG runs, per-venue AG bucket for multi-AG (Finding C)."""
+    if len(asset_groups) == 1 and asset_groups[0].upper() != "ALL":
+        return lambda _venue: primary_bucket
+    return lambda venue: _orch._get_instruments_bucket(_asset_group_for_venue(venue))
 
 
 @dataclass
@@ -172,8 +181,29 @@ def _validate_records(
     return valid_records, validation_failed_venues
 
 
+def _fixture_date_to_date(raw: str | None) -> date | None:
+    """Convert the fixture-match side-table's ISO ``fixture_date`` string to a
+    ``date`` for the InstrumentRecord/parquet ``fixture_date`` column.
+
+    Type boundary: ``FixtureMatchAttributes.fixture_date`` is ``str | None`` (a
+    faithful mirror of the resolver's ``fixture_date.isoformat()``), while the
+    shipped InstrumentRecord/``INSTRUMENTS_PARQUET_SCHEMA`` field is ``date |
+    None``. A blank or non-ISO value degrades to ``None`` (honest-absence) rather
+    than raising into the shared write path.
+    """
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return None
+
+
 def _records_to_dataframe(records: list[_orch.InstrumentRecord]) -> _orch.pd.DataFrame:
     """Serialize InstrumentRecord list to a flat DataFrame for parquet writes."""
+    from instruments_service.reference_data.adapters.prediction.fixture_match import (  # noqa: qg-inside-import
+        fixture_match_for_instrument_key,
+    )
     from instruments_service.reference_data.adapters.prediction.polymarket import (  # noqa: qg-inside-import
         _clob_token_ids_for_condition_id,
     )
@@ -194,6 +224,22 @@ def _records_to_dataframe(records: list[_orch.InstrumentRecord]) -> _orch.pd.Dat
             _tids = _clob_token_ids_for_condition_id(_ik)
             if _tids:
                 d["clob_token_ids"] = _tids
+            # Prediction (Polymarket/Kalshi soccer): materialise the six additive
+            # fixture-match columns from the per-instrument side-table (keyed by
+            # instrument_key, stamped in the prediction parse path) — the SAME join
+            # shape as clob_token_ids above. Convert at the type boundary: the
+            # side-table types af_league_id as int + fixture_date as str, but the
+            # shipped InstrumentRecord/parquet columns are str + date. No-op for
+            # every non-prediction / non-soccer row (lookup returns None → all six
+            # stay the model default None, so cefi/tradfi/defi are unaffected).
+            _fm = fixture_match_for_instrument_key(_ik)
+            if _fm is not None:
+                d["af_league_id"] = None if _fm.af_league_id is None else str(_fm.af_league_id)
+                d["home_team_canonical_id"] = _fm.home_team_canonical_id
+                d["away_team_canonical_id"] = _fm.away_team_canonical_id
+                d["fixture_date"] = _fixture_date_to_date(_fm.fixture_date)
+                d["af_fixture_id"] = _fm.af_fixture_id
+                d["af_fixture_match_status"] = _fm.af_fixture_match_status
         rows.append(d)
     return _orch.pd.DataFrame(rows)
 
@@ -204,15 +250,15 @@ def _write_sports_fixture_venue(
     venue_df: _orch.pd.DataFrame,
     date: str,
     league_filter: list[str] | None,
-    sink: _orch.DataSink,
+    bucket: str,
     manifest: _orch.ManifestWriter,
     counts: dict[str, int],
     sampler: _orch.SamplingService,
 ) -> None:
-    """League-based sharding: partition sports fixtures by league_id.
-
-    instrument_key format: {LEAGUE}:{HOME}_v_{AWAY}:{DATE} — extract league_id
-    as the part before the first colon.
+    """League-based sharding: partition sports fixtures by league_id (instrument_key
+    format ``{LEAGUE}:{HOME}_v_{AWAY}:{DATE}``). Writes via the full-hive
+    ``_instrument_availability_sink_for`` prefix, ``league=`` TRAILING after
+    ``venue=`` (sports-exception ruling, cross-asset-canonical-target-ssot.md §8).
     """
     _sports_df = venue_df.copy()
     _sports_df["_league_id"] = _sports_df["instrument_key"].str.split(":").str[0]
@@ -229,14 +275,14 @@ def _write_sports_fixture_venue(
         _captured_lids.add(_league_id_str)
         _league_df_clean = _league_df.drop(columns=["_league_id"])
         _stamped_fixture_df = _orch.stamp_available_at_explicit(_league_df_clean, when=_orch.datetime.now(_orch.UTC))
+        _pm = str(_orch.PipelineMode.BATCH_API_FOOTBALL)
+        _hive_sink = _orch._instrument_availability_sink_for(
+            bucket, date=date, pipeline_mode=_pm, asset_group="sports", venue=venue_str
+        )
         _orch._gated_sink_write(
-            sink,
+            _hive_sink,
             data=_stamped_fixture_df,
-            partition={
-                "day": date,
-                "venue": venue_str,
-                "league": _canonical_lid_str,
-            },
+            partition={"league": _canonical_lid_str},
             filename="instruments.parquet",
             venue=venue_str,
             entity="instruments",
@@ -244,22 +290,22 @@ def _write_sports_fixture_venue(
         manifest.record_captured(  # QG-allow: emission-policy-not-applicable
             row_key={
                 "date": date,
-                "data_type": "FIXTURES",
+                "data_type": FIXTURES_SCHEDULE,
                 "league_id": _canonical_lid_str,
             },
             df=_stamped_fixture_df,
             asset_group="sports",
             instrument_type="",
-            data_type="FIXTURES",
+            data_type=FIXTURES_SCHEDULE,
             league_id=_canonical_lid_str,
             pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
-            # FIXTURES is multi-source (api_football + footystats) →
+            # FIXTURES_SCHEDULE is multi-source (api_football + footystats) →
             # explicit source required (data_source_provenance Phase 4).
             # This branch is the API_FOOTBALL venue (venue_str filter).
             source="api_football",
             service_emission_state=None,
         )
-        counts[f"FIXTURES/{_league_id_str}"] = len(_league_df_clean)
+        counts[f"{FIXTURES_SCHEDULE}/{_league_id_str}"] = len(_league_df_clean)
         if sampler.enable_sampling:
             sampler.generate_csv_sample(
                 _league_df_clean,
@@ -273,23 +319,69 @@ def _write_sports_fixture_venue(
     # returned zero for that league. Season window comes from UAC
     # get_league_fixture_calendar — only leagues whose season
     # actually covers this date are claimed empty.
+    # Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15,
+    # see plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
+    # TWO bugs previously left a pre-existing stale FIXTURES attempted_failed
+    # row permanently un-superseded even on a genuinely clean re-fetch:
+    #   1. Off-season leagues (``get_league_fixture_calendar`` returns []) hit
+    #      a bare ``continue`` — NEITHER captured NOR empty was ever written
+    #      for that (date, league) cell, so a stale row from before this
+    #      off-season check existed (or from any other bug) could never be
+    #      cleared. Now write a terminal ``record_empty`` with
+    #      ``EXPECTED_PAUSED_LEAGUE`` (the existing off-season reason used by
+    #      ``sports_reference_core.py`` for INJURIES/TEAMS/STANDINGS) instead
+    #      of silently skipping.
+    #   2. Neither this loop's ``record_empty`` calls NOR the off-season skip
+    #      touched ``counts``, which is the ONLY per-league write signal
+    #      ``process_completeness.py`` reads (via ``_fold_written_venues``) to
+    #      decide whether ``API_FOOTBALL`` is a real "0 records" venue. A
+    #      league-scoped run whose target league had zero fixtures (the
+    #      common, correct case) always left ``counts`` FIXTURES-empty, so
+    #      completeness misclassified the whole venue as
+    #      ``SOURCE_RETURNED_ZERO`` and stamped a REDUNDANT blanket
+    #      ``{date, venue}`` row — live-verified (2026-07-15) to interfere
+    #      with the correct per-league row landing in the same per-VM shard
+    #      flush. Stamping ``counts[f"FIXTURES_SCHEDULE/{league}"] = 0`` for every
+    #      league this loop handles (mirrors the captured branch's
+    #      ``counts[...] = len(...)``) makes ``written_venues`` correctly
+    #      include ``API_FOOTBALL`` whenever ANY per-league write (captured OR
+    #      honest-empty) happened, so the wrong blanket stamp no longer fires.
     _fx_attempt_ts = _orch.datetime.now(_orch.UTC)
     _expected_af_lids = {league.league_id for league in _orch.get_expected_leagues_for_source("api_football")}
     if league_filter:
         _expected_af_lids &= set(league_filter)
-    for _exp_lid in sorted(_expected_af_lids - _captured_lids):
+    _mlids = _orch._manifest_captured_leagues_for_data_type(
+        bucket=manifest.catalogue_bucket, date=date, data_type=FIXTURES_SCHEDULE
+    )
+    if _mlids is None:
+        return
+    for _exp_lid in sorted(_expected_af_lids - _captured_lids - _mlids):
         if not _orch.get_league_fixture_calendar(_exp_lid, date, date):
+            manifest.record_empty(
+                row_key={
+                    "date": date,
+                    "data_type": FIXTURES_SCHEDULE,
+                    "league_id": _exp_lid,
+                },
+                attempted_at=_fx_attempt_ts,
+                reason=_orch.EmptyConfirmedReason.EXPECTED_PAUSED_LEAGUE,
+                pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                source="api_football",
+            )
+            counts[f"{FIXTURES_SCHEDULE}/{_exp_lid}"] = 0
             continue
         manifest.record_empty(
             row_key={
                 "date": date,
-                "data_type": "FIXTURES",
+                "data_type": FIXTURES_SCHEDULE,
                 "league_id": _exp_lid,
             },
             attempted_at=_fx_attempt_ts,
             reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
             pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+            source="api_football",
         )
+        counts[f"{FIXTURES_SCHEDULE}/{_exp_lid}"] = 0
 
 
 def _write_prediction_venue(
@@ -302,6 +394,7 @@ def _write_prediction_venue(
     manifest: _orch.ManifestWriter,
     counts: dict[str, int],
     sampler: _orch.SamplingService,
+    bucket: str,
 ) -> None:
     """PREDICTION: bundle by canonical_question_group per the UAC SSOT.
 
@@ -315,6 +408,9 @@ def _write_prediction_venue(
     Polymarket + Kalshi share this path: both prediction venues classify per
     the UAC ``classify_*_to_canonical_group`` SSOT and bundle on the same axis
     so MTDS reads + features compute apply identically.
+
+    ``sink``/``lifecycle_sink`` are call-site compatibility only — the full-hive
+    prefix (R2, 2026-07-21) writes via ``_instrument_availability_sink_for(bucket, ...)``.
     """
     _pred_df = venue_df.copy()
     _pred_df["_canonical_group"] = _pred_df.apply(
@@ -325,23 +421,6 @@ def _write_prediction_venue(
     for _group_raw, _group_df in _pred_df.groupby("_canonical_group"):
         _group_str = str(_group_raw)
         _group_df_clean = _group_df.drop(columns=["_canonical_group"])
-        # Manifest row: data_type=prediction_canonical_question_group
-        # (the bundled data_type per UAC BUNDLED_DATA_TYPES SSOT),
-        # underlying=<canonical_group> (the per-bundle cluster
-        # identity, mirroring options_chain root-bucketing).
-        _stamped_group_df = _orch.stamp_available_at_explicit(_group_df_clean, when=_orch.datetime.now(_orch.UTC))
-        _orch._gated_sink_write(
-            sink,
-            data=_stamped_group_df,
-            partition={
-                "day": date,
-                "venue": venue_str,
-                "canonical_question_group": _group_str,
-            },
-            filename="instruments.parquet",
-            venue=venue_str,
-            entity="instruments",
-        )
         # The cqg manifest data_type (prediction_canonical_question_group) is MULTI-source
         # in UAC SOURCE_PRIORITY (polymarket_clob + kalshi) → record_captured REQUIRES an
         # explicit venue-derived source=. Resolve a cqg-specific pipeline_mode whose source
@@ -356,6 +435,22 @@ def _write_prediction_venue(
             _orch.PipelineMode.BATCH_POLYMARKET_CLOB
             if _manifest_venue == "POLYMARKET"
             else _orch.PipelineMode.BATCH_KALSHI
+        )
+        # Manifest row: data_type=prediction_canonical_question_group
+        # (the bundled data_type per UAC BUNDLED_DATA_TYPES SSOT),
+        # underlying=<canonical_group> (the per-bundle cluster
+        # identity, mirroring options_chain root-bucketing).
+        _stamped_group_df = _orch.stamp_available_at_explicit(_group_df_clean, when=_orch.datetime.now(_orch.UTC))
+        _hive_sink = _orch._instrument_availability_sink_for(
+            bucket, date=date, pipeline_mode=str(_cqg_pm), asset_group="prediction", venue=venue_str
+        )
+        _orch._gated_sink_write(
+            _hive_sink,
+            data=_stamped_group_df,
+            partition={"canonical_question_group": _group_str},
+            filename="instruments.parquet",
+            venue=venue_str,
+            entity="instruments",
         )
         manifest.record_captured(  # QG-allow: emission-policy-not-applicable
             row_key={
@@ -403,6 +498,7 @@ def _write_prediction_venue(
             manifest_venue=_manifest_venue,
             manifest=manifest,
             pipeline_mode=_pred_pm,
+            bucket=bucket,
         )
 
 
@@ -414,19 +510,13 @@ def _write_tradfi_non_trading_day_entries(
     manifest_for_venue: Callable[[str], _orch.ManifestWriter],
 ) -> set[str]:
     """Write 0-count manifest entries for TRADFI venues that returned 0 instruments
-    because the date is a non-trading day (weekend/holiday).
-
-    Without this, those venues have no manifest entry and appear as permanent gaps
-    in the data status. ``manifest_for_venue`` allows the caller to route each
-    venue to the correct per-group manifest (required for ALL-group runs).
-
-    Returns the set of non-trading venue names that were stamped so the caller can
-    suppress regular parquet writes for them (see the per-venue loop in
-    ``_write_all_venues``).
-    """
-    tradfi_empty = {
-        v for v in (non_error_venues - set(counts.keys())) if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"
-    }
+    because the date is a non-trading day (weekend/holiday) — without this those
+    venues have no manifest entry and appear as permanent gaps in the data status.
+    ``manifest_for_venue`` routes each venue to the correct per-group manifest
+    (required for ALL-group runs). Returns the set of non-trading venue names
+    stamped, so the caller can suppress regular parquet writes for them (see the
+    per-venue loop in ``_write_all_venues``)."""
+    tradfi_empty = {v for v in (non_error_venues - set(counts.keys())) if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"}
     if not tradfi_empty:
         return set()
     target_dt = _orch.date_type.fromisoformat(date)
@@ -443,6 +533,11 @@ def _write_tradfi_non_trading_day_entries(
             reason=_reason,
             attempted_at=_nt_attempt_ts,
             pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            # C-#6 contract: an explicit BATCH source must equal
+            # source_string_for(pipeline_mode) — see
+            # plans/active/issues/manifest_record_expected_empty_blank_source_2026_07_08.md.
+            source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+            available_at=_nt_attempt_ts.isoformat(),
         )
         counts[venue] = 0
     _orch.logger.info(
@@ -462,21 +557,13 @@ def _pre_stamp_non_trading_tradfi(
     counts: dict[str, int],
 ) -> set[str]:
     """Identify tradfi venues that are non-trading on ``date`` and pre-stamp
-    ``empty_confirmed`` for them before the per-venue write loop runs.
-
-    Scoped to venues that *actually ran* this call (present in ``non_error_venues``
-    or appearing in ``records``) so a CEFI-only call never stamps CME/NASDAQ.
-
-    FX is declared 24/7 — ``is_non_trading_day("FX", …)`` always returns ``False``
-    and FX will never appear in the returned set.
-
-    Returns the set of non-trading tradfi venues that were stamped (callers suppress
-    parquet writes for these venues to avoid writing look-back artefacts as captured).
-    """
-    _attempted = {
-        v for v in (non_error_venues | {r.venue for r in records})
-        if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"
-    }
+    ``empty_confirmed`` for them before the per-venue write loop runs. Scoped to
+    venues that *actually ran* this call (present in ``non_error_venues`` or
+    appearing in ``records``) so a CEFI-only call never stamps CME/NASDAQ. FX is
+    declared 24/7 (``is_non_trading_day("FX", …)`` always ``False``) so it never
+    appears in the returned set. Callers suppress parquet writes for the returned
+    venues to avoid writing look-back artefacts as captured."""
+    _attempted = {v for v in (non_error_venues | {r.venue for r in records}) if VENUE_TO_ASSET_GROUP.get(v) == "tradfi"}
     target_dt = _orch.date_type.fromisoformat(date)
     non_trading: set[str] = {v for v in _attempted if _orch.is_non_trading_day(v, target_dt)}
     if not non_trading:
@@ -489,6 +576,8 @@ def _pre_stamp_non_trading_tradfi(
             reason=_nt_reason,
             attempted_at=_nt_attempt_ts,
             pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+            available_at=_nt_attempt_ts.isoformat(),
         )
         counts[_ntv] = 0
     _orch.logger.info(
@@ -523,10 +612,8 @@ def _write_all_venues(
             "sample_dir": _orch._uc.csv_sample_dir,
         }
     )
-    # ALL runs use per-venue bucket routing; single-AG runs share one bucket.
-    # _is_all_run is the discriminator — "ALL" is not a valid bucket key.
     _raw_primary = asset_groups[0] if asset_groups else None
-    _is_all_run = _raw_primary is None or _raw_primary.upper() == "ALL"
+    _is_all_run = _raw_primary is None or _raw_primary.upper() == "ALL" or len(asset_groups) > 1
     # Primary bucket: "sports" for ALL runs (downstream sports stages need one bucket).
     primary_asset_group: str | None = "sports" if _is_all_run else _raw_primary
     bucket = _orch._get_instruments_bucket(primary_asset_group)
@@ -555,11 +642,7 @@ def _write_all_venues(
             _extra_manifests[b] = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=b)
         return _extra_manifests[b]
 
-    def _get_venue_bucket(venue_str: str) -> str:
-        """For ALL runs, resolve the correct per-group bucket; otherwise use primary."""
-        if not _is_all_run:
-            return bucket
-        return _orch._get_instruments_bucket(_asset_group_for_venue(venue_str))
+    _get_venue_bucket = _venue_bucket_resolver(asset_groups=asset_groups, primary_bucket=bucket)
 
     # Identify tradfi venues that are non-trading on this date and pre-stamp
     # empty_confirmed for them.  Scoped to venues that actually ran (union of
@@ -589,7 +672,7 @@ def _write_all_venues(
                     venue_df=venue_df,
                     date=date,
                     league_filter=league_filter,
-                    sink=_v_sink,
+                    bucket=_v_bucket,
                     manifest=_v_manifest,
                     counts=counts,
                     sampler=sampler,
@@ -604,6 +687,7 @@ def _write_all_venues(
                     manifest=_v_manifest,
                     counts=counts,
                     sampler=sampler,
+                    bucket=_v_bucket,
                 )
             elif venue_str in _non_trading_tradfi:
                 # Non-trading day for this TradFi venue: the adapter returned records
@@ -788,6 +872,8 @@ def _seed_expected_unattempted_for_target_universe(
                 reason=_pre_launch_reason,
                 attempted_at=_seed_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+                available_at=_seed_ts.isoformat(),
             )
             _pre_launch_stamped += 1
             continue
@@ -797,6 +883,7 @@ def _seed_expected_unattempted_for_target_universe(
             row_key=row_key,
             attempted_at=_seed_ts,
             pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            available_at=_seed_ts.isoformat(),
         )
         _seeded += 1
     if _seeded:

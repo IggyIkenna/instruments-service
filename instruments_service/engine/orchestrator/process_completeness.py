@@ -19,10 +19,13 @@ split, and mutable caches remain package-level attributes.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
-from unified_api_contracts.sports import get_league
+from unified_api_contracts import VENUE_TO_ASSET_GROUP, source_string_for
+from unified_api_contracts.sports import FIXTURES_SCHEDULE, get_league
+
+from .process_write import _NON_VENUE_GRAIN_VENUE_NAMES, _venue_bucket_resolver
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
@@ -32,6 +35,7 @@ else:  # pragma: no cover - runtime namespace indirection
 __all__ = [
     "_completeness_and_retry",
     "_detect_thin_day_venues",
+    "_fold_written_venues",
 ]
 
 # G1.2 — thin-day partial-capture detection constants.
@@ -44,6 +48,63 @@ _THIN_DAY_MIN_HISTORY: int = 2
 _THIN_DAY_ABS_FLOOR: int = 20  # counts below this are never CeFi (sports days, etc.)
 
 
+def _fold_written_venues(counts: dict[str, int], expected_venues: set[str]) -> set[str]:
+    """Fold composite ``counts`` keys back to their bare venue name for completeness comparison.
+
+    ``counts`` keys are not always bare venue names: PREDICTION's per-venue write
+    stage (``_write_prediction_venue``) buckets by canonical_question_group and
+    keys ``counts`` with the composite ``"{VENUE}/{GROUP}"`` (e.g. ``"KALSHI/OTHER"``),
+    so a real KALSHI/POLYMARKET write never produces a bare ``"KALSHI"``/``"POLYMARKET"``
+    entry in ``counts.keys()``. Comparing that raw key set against ``expected_venues``
+    (bare names from ``active_venues``) then classifies a venue that wrote thousands of
+    real rows as "fetched OK but 0 records after filtering" and stamps a dishonest
+    ``SOURCE_RETURNED_ZERO`` empty_confirmed row instead of crediting the real capture —
+    see
+    ``plans/active/issues/prediction_universe_capture_dead_since_07_01_2026_07_06.md``
+    (2026-07-13 progress entry).
+
+    Fold each composite key to its bare venue whenever the prefix (before the first
+    ``"/"``) is itself a configured venue for this run — every canonical_question_group
+    under one venue collapses onto that one venue, matching ``expected_venues``'s
+    granularity 1:1 (so completeness counts/percentages stay meaningful). Bare
+    CEFI/DEFI/TRADFI keys (no ``"/"``) fold to themselves (no-op).
+
+    Sports' ``"FIXTURES_SCHEDULE/{league_id}"`` composite keys get the SAME
+    treatment, folded to ``API_FOOTBALL`` (the venue that owns the FIXTURES
+    stage-6 write) when it's in ``expected_venues`` — ``"FIXTURES_SCHEDULE"``
+    itself is a data_type, never a venue name, so the generic
+    prefix-in-expected_venues check above never matches it on its own.
+
+    Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15, see
+    plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
+    without this, a league-scoped FIXTURES run whose target league legitimately
+    had zero fixtures that day (the common case — off-season, mid-week rest day,
+    etc; ``_write_sports_fixture_venue`` now always stamps
+    ``counts["FIXTURES_SCHEDULE/{league}"] = 0`` for such leagues) left
+    ``written_venues`` without an ``API_FOOTBALL`` entry, so this function
+    misclassified the whole venue as ``SOURCE_RETURNED_ZERO`` (0 records after
+    filtering) and stamped a REDUNDANT blanket ``{date, venue}`` row —
+    live-verified to collide with (and drop) the correct per-league
+    honest-absence row in the same per-VM manifest-shard flush, permanently
+    orphaning any pre-existing stale ``attempted_failed`` row for that (date,
+    league) FIXTURES cell (612 such rows found stuck, all with real per-league
+    keys, genuinely re-fetched clean on every re-attempt yet never cleared).
+    Folding ``FIXTURES_SCHEDULE/*`` to ``API_FOOTBALL`` here makes
+    ``written_venues`` correctly reflect ANY per-league write (captured OR
+    honest-empty), so the wrong blanket stamp no longer fires at all.
+    """
+    folded: set[str] = set()
+    for key in counts:
+        prefix = key.split("/", 1)[0]
+        if prefix == FIXTURES_SCHEDULE and "API_FOOTBALL" in expected_venues:
+            folded.add("API_FOOTBALL")
+        elif prefix in expected_venues:
+            folded.add(prefix)
+        else:
+            folded.add(key)
+    return folded
+
+
 async def _completeness_and_retry(
     *,
     counts: dict[str, int],
@@ -53,7 +114,6 @@ async def _completeness_and_retry(
     asset_groups: list[str],
     api_keys: dict[str, str] | None,
     mode: str,
-    source: str | None,
     bucket: str,
     sink: _orch.DataSink,
     sampler: _orch.SamplingService,
@@ -87,7 +147,40 @@ async def _completeness_and_retry(
     failing.
     """
     expected_venues = set(active_venues)
-    written_venues = set(counts.keys())
+    written_venues = _fold_written_venues(counts, expected_venues)
+
+    # Root-cause fix (api_football_write_path_blank_data_type_2026_07_13): sports
+    # ENRICHMENT-ONLY provider names (FOOTYSTATS, UNDERSTAT, TRANSFERMARKT,
+    # SOCCER_FOOTBALL_INFO, OPEN_METEO) are pseudo-venues pulled into
+    # ``active_venues`` for category-config purposes, but they are NOT
+    # venue-grain — they are fetched in stage 7 enrichment (never in this stage's
+    # ``counts``, i.e. the stage-4 URDI fetch) and their honest-absence/failure is
+    # materialised on the (date, data_type[, league_id]) grain by dedicated
+    # per-entity honest-coverage hooks elsewhere (sports_reference_core.py /
+    # footystats.py / weather.py / transfermarkt.py / sfi.py). Left unexcluded,
+    # they permanently land in ``missing_shards`` below and the generic
+    # CeFi/TradFi-shaped corrective write in ``_finalize_completeness``
+    # (``row_key={"date", "venue"}``, no ``data_type``) stamps a blank-``data_type``
+    # ``attempted_failed``/``expected_empty`` row that can never reconcile against
+    # any real sports cell.
+    #
+    # ``API_FOOTBALL`` itself is DELIBERATELY KEPT in ``expected_venues`` (unlike
+    # its 5 enrichment-only siblings) — its top-level FIXTURES fetch DOES run in
+    # THIS stage-4 fetch, so it is genuinely venue-grain here; removing it too
+    # would silently drop the only safety net that catches a total API_FOOTBALL
+    # fetch failure during a combined "ALL"-asset-group run (where
+    # ``_fixtures_fetch_failed``'s zero-records branch never fires because
+    # cefi/tradfi/defi still produced records). ``_finalize_completeness`` below
+    # maps a genuinely-missing ``API_FOOTBALL`` to ``data_type="FIXTURES_SCHEDULE"`` (same
+    # convention already used by ``process_preflight.py``'s
+    # ``_build_expected_entities``) instead of leaving ``data_type`` blank.
+    #
+    # ``_NON_VENUE_GRAIN_VENUE_NAMES`` is the same SSOT frozenset
+    # ``_write_all_venues`` uses to exclude these names from venue-grain EU
+    # seeding (process_write.py); POLYMARKET/KALSHI (prediction) are excluded
+    # from THIS narrower set deliberately — this fix is scoped to the confirmed
+    # sports bug, not a blanket prediction-venue change.
+    expected_venues -= _NON_VENUE_GRAIN_VENUE_NAMES - {"API_FOOTBALL", "POLYMARKET", "KALSHI"}
 
     # Sports: scope expected venues by league coverage.
     # Understat covers ~6 leagues, FootyStats ~50, SFI varies.
@@ -102,6 +195,12 @@ async def _completeness_and_retry(
     # is only needed for full-spectrum runs that haven't pre-decided.
     if is_sports_run and not (sports_entity_filter or recovery_fixture_ids is not None):
         expected_venues = _scope_sports_expected_venues(expected_venues=expected_venues, date=date)
+
+    # Per-venue bucket resolver for this stage's honest-coverage diagnostic writers —
+    # mirrors _write_all_venues's per-venue routing so a combined multi-AG run stamps
+    # each venue's row in its OWN asset_group bucket, not always the run's primary
+    # `bucket` (Finding C row 1, api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md).
+    venue_bucket = _venue_bucket_resolver(asset_groups=asset_groups, primary_bucket=bucket)
 
     # Venues where the adapter succeeded but no records survived date/relevance filtering
     # are not "missing" — the data source simply had nothing for this date.
@@ -118,8 +217,14 @@ async def _completeness_and_retry(
         # Routes via record_zero_rows(was_expected=False) — the adapter ran without error
         # and the absence is honest (no live instrument expected on this day for these
         # venues). FetchEvidence: http_status=200, response_received=True, rows=0.
+        #
+        # Per-venue bucket routing (mirrors _write_all_venues's _get_venue_bucket):
+        # a combined multi-AG run must stamp each venue's honest-coverage row in that
+        # venue's OWN asset_group bucket, not always the run's primary bucket — see
+        # api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md's
+        # follow-up todo (the same bug class as that doc's Finding C row 1).
         _empty_ok_ts = _orch.datetime.now(_orch.UTC)
-        _empty_ok_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+        _empty_ok_manifests: dict[str, _orch.ManifestWriter] = {}
         for _eov in sorted(empty_ok_venues):
             _eov_evidence = _orch.FetchEvidence(
                 http_status=200,
@@ -130,7 +235,12 @@ async def _completeness_and_retry(
                 attempted_at=_empty_ok_ts,
                 error_signal="",
             )
-            _empty_ok_manifest.record_zero_rows(
+            _eov_bucket = venue_bucket(_eov)
+            if _eov_bucket not in _empty_ok_manifests:
+                _empty_ok_manifests[_eov_bucket] = _orch.ManifestWriter(
+                    service_name="instruments-service", catalogue_bucket=_eov_bucket
+                )
+            _empty_ok_manifests[_eov_bucket].record_zero_rows(
                 row_key={"date": date, "venue": _eov},
                 attempted_at=_empty_ok_ts,
                 reason=_orch.EmptyConfirmedReason.SOURCE_RETURNED_ZERO.value,
@@ -138,7 +248,8 @@ async def _completeness_and_retry(
                 pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
                 fetch_evidence=_eov_evidence,
             )
-        _empty_ok_manifest.close()
+        for _m in _empty_ok_manifests.values():
+            _m.close()
         _orch.logger.info(
             "Honest-coverage: wrote SOURCE_RETURNED_ZERO empty_confirmed for %d empty-ok venue(s) on date=%s: %s",
             len(empty_ok_venues),
@@ -162,7 +273,6 @@ async def _completeness_and_retry(
         asset_groups=asset_groups,
         api_keys=api_keys,
         mode=mode,
-        source=source,
         bucket=bucket,
         sink=sink,
         sampler=sampler,
@@ -175,6 +285,8 @@ async def _completeness_and_retry(
         written_venues=written_venues,
         missing_shards=missing_shards,
         bucket=bucket,
+        venue_bucket=venue_bucket,
+        asset_groups=asset_groups,
     )
 
 
@@ -189,9 +301,13 @@ def _scope_sports_expected_venues(
         _fixture_leagues: set[str] = set()
         _sports_bucket = _orch._get_instruments_bucket("SPORTS")
         if _sports_bucket:
-            _idx = _orch.read_availability_index(_sports_bucket)
+            # Slim read: only date/data_type/league_id are used below. The
+            # full-schema read decodes all 42 columns of the sports index
+            # (measured: 6.2 GiB peak RSS per call) — see
+            # sports_is_daily_enum_backfill_oom_at_32gi_ceiling_2026_07_27.md.
+            _idx = _orch.read_availability_index(_sports_bucket, columns=["date", "data_type", "league_id"])
             if not _idx.empty and "league_id" in _idx.columns:
-                _fix_rows = _idx[(_idx["date"] == date) & (_idx["data_type"] == "FIXTURES")]
+                _fix_rows = _idx[(_idx["date"] == date) & (_idx["data_type"] == FIXTURES_SCHEDULE)]
                 _fixture_leagues = {
                     str(lid).upper() for lid in _fix_rows["league_id"].dropna().unique() if str(lid).strip()
                 }
@@ -254,7 +370,6 @@ async def _retry_missing_venues(
     asset_groups: list[str],
     api_keys: dict[str, str] | None,
     mode: str,
-    source: str | None,
     bucket: str,
     sink: _orch.DataSink,
     sampler: _orch.SamplingService,
@@ -294,7 +409,6 @@ async def _retry_missing_venues(
                 api_keys=api_keys,
                 date=date,
                 mode=mode,
-                source=source,
             )
         retry_records = retry_result.records
         # Update retryable set from this attempt's failures
@@ -333,8 +447,9 @@ async def _retry_missing_venues(
                         )
                     retry_manifest.close()
 
-        # Recalculate missing
-        written_venues = set(counts.keys())
+        # Recalculate missing (same composite-key fold as the initial computation —
+        # see _fold_written_venues docstring).
+        written_venues = _fold_written_venues(counts, expected_venues)
         missing_shards = expected_venues - written_venues
         recovered = len(retry_venues) - len(missing_shards & set(retry_venues))
         if recovered:
@@ -370,13 +485,13 @@ def _detect_thin_day_venues(
     """
     if not written_venues:
         return set()
+    _required = {"asset_group", "capture_status", "venue", "date", "instrument_count"}
     try:
-        _idx = _orch.read_availability_index(bucket)
+        _idx = _orch.read_availability_index(bucket, columns=sorted(_required))
     except Exception as exc:  # fail-open: never let a read error block capture progress
         _orch.logger.debug("G1.2 thin-day check skipped (index unavailable): %s", exc)
         return set()
 
-    _required = {"asset_group", "capture_status", "venue", "date", "instrument_count"}
     if not _required.issubset(_idx.columns):
         return set()  # index schema doesn't include the expected columns — skip silently
 
@@ -407,6 +522,106 @@ def _detect_thin_day_venues(
     return thin
 
 
+def _catalog_completeness_fraction(*, written_venues: set[str], expected_venues: set[str]) -> float:
+    """Fraction of the EXPECTED venue set actually written — always in [0, 1].
+
+    ``written_venues`` legitimately exceeds ``expected_venues`` on scoped
+    runs: the provider filter (``--sports-provider=API_FOOTBALL``) narrows
+    ``expected_venues`` to the filtered provider while the run still writes
+    sibling venues (WEATHER/open-meteo, per-fixture entity venues), and the
+    empty-ok / validation-failed subtractions above shrink expected further.
+    The naive ``len(written) / len(expected)`` then exceeds 1.0 and
+    ``publish_with_policy`` raises ``InvalidCompletenessFractionError`` —
+    which killed every full sports T1 fixtures run at finalize on 2026-07-15
+    (``uts-prod-instruments-service-sports-fixtures`` executions failing with
+    ``got 4.0``). Completeness of the expected set is the INTERSECTION over
+    expected; bonus venues outside the expected scope neither help nor hurt.
+    Empty expected set → 1.0 (nothing was required, nothing is missing).
+    """
+    if not expected_venues:
+        return 1.0
+    return len(written_venues & expected_venues) / len(expected_venues)
+
+
+def _stamp_missing_shards_attempted_failed(
+    *,
+    missing_shards: set[str],
+    date: str,
+    venue_bucket: Callable[[str], str],
+) -> None:
+    """Honest-coverage: write attempted_failed (or expected_empty) for permanently-missing shards.
+
+    Fix 3: a TradFi venue missing because the adapter failed but the date is a
+    non-trading day (weekend/holiday) gets empty_confirmed instead of
+    attempted_failed — the absence is expected, not a failure to retry.
+
+    Per-venue bucket routing (Finding C row 1,
+    api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md's
+    follow-up todo): each missing venue's row lands in ITS OWN asset_group
+    bucket via ``venue_bucket``, not always the run's primary bucket.
+    """
+    _failed_attempt_ts = _orch.datetime.now(_orch.UTC)
+    _failed_manifests: dict[str, _orch.ManifestWriter] = {}
+
+    def _failed_manifest_for(_b: str) -> _orch.ManifestWriter:
+        if _b not in _failed_manifests:
+            _failed_manifests[_b] = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=_b)
+        return _failed_manifests[_b]
+
+    _missing_date_dt = _orch.date_type.fromisoformat(date)
+    _nt_stamped: list[str] = []
+    _failed_stamped: list[str] = []
+    for _failed_venue in sorted(missing_shards):
+        _fv_manifest = _failed_manifest_for(venue_bucket(_failed_venue))
+        if VENUE_TO_ASSET_GROUP.get(_failed_venue) == "tradfi" and _orch.is_non_trading_day(
+            _failed_venue, _missing_date_dt
+        ):
+            # Non-trading day — honest absence, not a fetch failure.
+            _nt_reason = _orch.non_trading_day_reason(_failed_venue, _missing_date_dt) or "EXPECTED_WEEKEND"
+            _fv_manifest.record_expected_empty(
+                row_key={"date": date, "venue": _failed_venue},
+                reason=_nt_reason,
+                attempted_at=_failed_attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                source=source_string_for(_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE),
+            )
+            _nt_stamped.append(_failed_venue)
+        else:
+            # Root-cause fix (api_football_write_path_blank_data_type_2026_07_13):
+            # API_FOOTBALL is not a real venue — its manifest cell is keyed by
+            # data_type (FIXTURES_SCHEDULE), same remap convention already used by
+            # process_preflight.py's _build_expected_entities. A blank {"date","venue"}
+            # key for it produced a permanently-orphaned blank-data_type
+            # attempted_failed row that could never reconcile against a real sports cell.
+            _failed_row_key: dict[str, str] = (
+                {"date": date, "data_type": FIXTURES_SCHEDULE}
+                if _failed_venue == "API_FOOTBALL"
+                else {"date": date, "venue": _failed_venue}
+            )
+            _fv_manifest.record_failed(
+                row_key=_failed_row_key,
+                error=_orch.RecordFailedReason.UNCLASSIFIED_ADAPTER_ERROR,
+                attempted_at=_failed_attempt_ts,
+                pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            )
+            _failed_stamped.append(_failed_venue)
+    for _m in _failed_manifests.values():
+        _m.close()
+    if _nt_stamped:
+        _orch.logger.info(
+            "Honest-coverage (Fix 3): wrote non-trading-day empty_confirmed for %d TradFi venues on date=%s: %s",
+            len(_nt_stamped),
+            date,
+            _nt_stamped,
+        )
+    if _failed_stamped:
+        _orch.logger.info(
+            "Honest-coverage: wrote attempted_failed manifest rows for %d permanently-missing venues: %s",
+            len(_failed_stamped),
+            _failed_stamped,
+        )
+
+
 def _finalize_completeness(
     *,
     counts: dict[str, int],
@@ -415,6 +630,8 @@ def _finalize_completeness(
     written_venues: set[str],
     missing_shards: set[str],
     bucket: str,
+    venue_bucket: Callable[[str], str],
+    asset_groups: list[str],
 ) -> dict[str, int]:
     """Final completeness assessment + honest-coverage manifest rows.
 
@@ -464,54 +681,10 @@ def _finalize_completeness(
         )
 
     # Honest-coverage: venues still missing after all retries are permanently-failed
-    # shards.  Write attempted_failed rows so the manifest gap is explicit rather
-    # than silently absent.  Shard isolation preserved — no raise, just records.
-    #
-    # Fix 3: for TradFi venues that are in missing_shards because the adapter failed
-    # (raised an exception) but the date is a non-trading day (weekend/holiday),
-    # stamp empty_confirmed(EXPECTED_WEEKEND/EXPECTED_HOLIDAY) instead of
-    # attempted_failed — the absence is expected, not a failure to be retried.
+    # shards. Shard isolation preserved — no raise, just records. Per-venue bucket
+    # routing (Finding C row 1, api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md).
     if missing_shards:
-        _failed_attempt_ts = _orch.datetime.now(_orch.UTC)
-        _failed_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-        _missing_date_dt = _orch.date_type.fromisoformat(date)
-        _nt_stamped: list[str] = []
-        _failed_stamped: list[str] = []
-        for _failed_venue in sorted(missing_shards):
-            if VENUE_TO_ASSET_GROUP.get(_failed_venue) == "tradfi" and _orch.is_non_trading_day(
-                _failed_venue, _missing_date_dt
-            ):
-                # Non-trading day — honest absence, not a fetch failure.
-                _nt_reason = _orch.non_trading_day_reason(_failed_venue, _missing_date_dt) or "EXPECTED_WEEKEND"
-                _failed_manifest.record_expected_empty(
-                    row_key={"date": date, "venue": _failed_venue},
-                    reason=_nt_reason,
-                    attempted_at=_failed_attempt_ts,
-                    pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
-                )
-                _nt_stamped.append(_failed_venue)
-            else:
-                _failed_manifest.record_failed(
-                    row_key={"date": date, "venue": _failed_venue},
-                    error=_orch.RecordFailedReason.UNCLASSIFIED_ADAPTER_ERROR,
-                    attempted_at=_failed_attempt_ts,
-                    pipeline_mode=_orch.PipelineMode.BATCH_INSTRUMENTS_SERVICE,
-                )
-                _failed_stamped.append(_failed_venue)
-        _failed_manifest.close()
-        if _nt_stamped:
-            _orch.logger.info(
-                "Honest-coverage (Fix 3): wrote non-trading-day empty_confirmed for %d TradFi venues on date=%s: %s",
-                len(_nt_stamped),
-                date,
-                _nt_stamped,
-            )
-        if _failed_stamped:
-            _orch.logger.info(
-                "Honest-coverage: wrote attempted_failed manifest rows for %d permanently-missing venues: %s",
-                len(_failed_stamped),
-                _failed_stamped,
-            )
+        _stamp_missing_shards_attempted_failed(missing_shards=missing_shards, date=date, venue_bucket=venue_bucket)
 
     # G1.2 — thin-day partial-capture correction.  A written venue whose count is
     # < 50% of its trailing 14-day median is a partial capture that must route to
@@ -519,11 +692,24 @@ def _finalize_completeness(
     # thinned snapshot as the full universe (the BINANCE-FUTURES 678→47 class).
     # Writes a corrective record_failed row; consolidator last-write-wins semantics
     # ensure it supersedes the earlier record_captured for this (date, venue) key.
-    _thin_venues = _detect_thin_day_venues(
-        counts=counts,
-        written_venues=written_venues,
-        date=date,
-        bucket=bucket,
+    #
+    # CeFi-only by design (_THIN_DAY_ABS_FLOOR docstring: "never CeFi (sports
+    # days, etc.)") — skip the call (and its availability-index read) entirely
+    # when this run has no CeFi asset group in scope. Before this guard, every
+    # non-CeFi date (sports/tradfi/defi/prediction) paid a full
+    # read_availability_index() decode of the sports index (measured: 6.2 GiB
+    # peak RSS per call, unconditionally, once per date) for a check that could
+    # only ever find zero CeFi rows — see
+    # sports_is_daily_enum_backfill_oom_at_32gi_ceiling_2026_07_27.md.
+    _thin_venues = (
+        _detect_thin_day_venues(
+            counts=counts,
+            written_venues=written_venues,
+            date=date,
+            bucket=bucket,
+        )
+        if "cefi" in {ag.lower() for ag in asset_groups}
+        else set()
     )
     if _thin_venues:
         _thin_ts = _orch.datetime.now(_orch.UTC)
@@ -548,7 +734,9 @@ def _finalize_completeness(
     # but always allows write through. Per UAC seed Phase 6.8 PART B.
     _emission = _orch._check_emission_policy(
         date=date,
-        completeness_fraction=len(written_venues) / len(expected_venues) if expected_venues else 1.0,
+        completeness_fraction=_catalog_completeness_fraction(
+            written_venues=written_venues, expected_venues=expected_venues
+        ),
     )
     _orch.logger.debug(
         "catalog_snapshot emission decision date=%s: %s (completeness=%.3f)",

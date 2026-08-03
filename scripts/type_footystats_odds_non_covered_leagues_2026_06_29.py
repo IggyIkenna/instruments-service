@@ -73,11 +73,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("DEPLOYMENT_ENV_SHORT must be set (e.g. prd). Refusing.")
         return 1
 
-    instance = os.environ.get("VM_NAME", "")
+    instance = os.environ.get("VM_NAME", "")  # noqa: qg-empty-fallback — unset VM_NAME => `not instance` refuses --apply below
     if args.apply and (os.environ.get("MANIFEST_PER_VM_SHARDS") != "true" or not instance):
-        logger.error(
-            "--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. Refusing."
-        )
+        logger.error("--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. Refusing.")
         return 1
 
     bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
@@ -94,8 +92,10 @@ def main(argv: list[str] | None = None) -> int:
         df["error_reason"] = pd.array([None] * len(df), dtype="string")
 
     # Determine covered leagues: any league with ≥1 captured footystats ODDS row.
-    odds_rows = df[(df["data_type"].astype("string").str.upper() == "ODDS") &
-                   (df.get("source", pd.Series("", index=df.index)).astype("string") == "footystats")]
+    odds_rows = df[
+        (df["data_type"].astype("string").str.upper() == "ODDS")
+        & (df.get("source", pd.Series("", index=df.index)).astype("string") == "footystats")
+    ]
     captured_leagues: frozenset[str] = frozenset(
         odds_rows[odds_rows["capture_status"].astype("string") == "captured"]["league_id"]
         .astype("string")

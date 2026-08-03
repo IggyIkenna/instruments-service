@@ -30,6 +30,7 @@ from instruments_service.engine.orchestrator import (
     _compute_prediction_shards,
     _extract_prediction_canonical_group,
     _get_defi_manifest_high_watermarks,
+    _get_manifest_high_watermarks,
     _should_skip_date_for_per_league,
     _write_market_lifecycle,
     clear_defi_universe_cache,
@@ -158,6 +159,116 @@ class TestGetDefiManifestHighWatermarks:
             result = _get_defi_manifest_high_watermarks()
         assert result["AAVE_V3-ETHEREUM"] == 120
         assert result["UNISWAP_V3-ETHEREUM"] == 50
+
+
+# ---------------------------------------------------------------------------
+# _get_manifest_high_watermarks — the generalized, asset-group-parameterized
+# helper that _get_defi_manifest_high_watermarks now delegates to. Todo 6 of
+# cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md.
+# ---------------------------------------------------------------------------
+
+
+class TestGetManifestHighWatermarksGeneralized:
+    def test_cefi_asset_group_reads_cefi_bucket(self) -> None:
+        """A non-DEFI asset_group resolves via the same bucket-lookup mechanism."""
+        index_df = pd.DataFrame(
+            {
+                "venue": ["LIGHTER-ZKSYNC", "LIGHTER-ZKSYNC", "EXTENDED-STARKNET"],
+                "instrument_count": [213, 18, 10],
+                "date": ["2026-06-25", "2026-06-26", "2026-06-20"],
+            }
+        )
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="cefi-test-bucket",
+            ) as mock_bucket,
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                return_value=index_df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_venue_epoch",
+                return_value=None,
+            ),
+        ):
+            result = _get_manifest_high_watermarks("CEFI")
+        mock_bucket.assert_called_once_with("CEFI")
+        assert result["LIGHTER-ZKSYNC"] == 213  # max across the two rows, not the latest
+        assert result["EXTENDED-STARKNET"] == 10
+
+    def test_exception_returns_empty_dict(self) -> None:
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="test-bucket",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                side_effect=RuntimeError("GCS unavailable"),
+            ),
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+        ):
+            result = _get_manifest_high_watermarks("TRADFI")
+        assert result == {}
+
+    def test_defi_matches_original_wrapper(self) -> None:
+        """asset_group='DEFI' reproduces _get_defi_manifest_high_watermarks() exactly."""
+        index_df = pd.DataFrame(
+            {
+                "venue": ["AAVE_V3-ETHEREUM"],
+                "instrument_count": [100],
+                "date": ["2026-01-01"],
+            }
+        )
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="test-bucket",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                return_value=index_df,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_venue_epoch",
+                return_value=None,
+            ),
+        ):
+            generic_result = _get_manifest_high_watermarks("DEFI")
+            wrapper_result = _get_defi_manifest_high_watermarks()
+        assert generic_result == wrapper_result == {"AAVE_V3-ETHEREUM": 100}
+
+    def test_read_availability_index_is_column_projected(self) -> None:
+        """Must not decode the full ~1.58 GB defi index — only venue/instrument_count/date are read.
+
+        Regression guard for read_availability_index_bare_defi_callers_2026_07_27.md: a bare
+        (unprojected) call on a defi-asset-group bucket is one cache-miss from an OOM. Pins the
+        exact columns= list so a future edit can't silently drop back to a bare call.
+        """
+        index_df = pd.DataFrame(
+            {
+                "venue": ["AAVE_V3-ETHEREUM"],
+                "instrument_count": [100],
+                "date": ["2026-01-01"],
+            }
+        )
+        with (
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="test-bucket",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                return_value=index_df,
+            ) as mock_read,
+            patch(
+                "instruments_service.engine.orchestrator._get_venue_epoch",
+                return_value=None,
+            ),
+        ):
+            _get_manifest_high_watermarks("DEFI")
+        mock_read.assert_called_once_with("test-bucket", columns=["venue", "instrument_count", "date"])
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +576,36 @@ class TestShouldSkipDateForPerLeague:
         assert result is True
         assert mock_read.call_count == 1
 
+    def test_index_read_uses_slim_date_filtered_columns(self) -> None:
+        """Regression guard: the single read must be slim + date-filtered, not
+        the full unfiltered index -- a long backfill VM calls this once per
+        date across thousands of dates, and the full sports index is ~6.5 GB
+        decoded. Same fix pattern as mtds_backfill_vm_startup_oom_rc137_2026_07_14.
+        """
+        manifest = self._make_manifest()
+        df = self._index_df({"EPL": (CaptureStatus.CAPTURED.value, "")})
+        with patch(
+            "instruments_service.engine.orchestrator.read_availability_index",
+            return_value=df,
+        ) as mock_read:
+            _should_skip_date_for_per_league(
+                manifest,
+                date=self._DATE,
+                data_type=self._DATA_TYPE,
+                expected_canonical_leagues=["EPL"],
+                force=False,
+            )
+        _, kwargs = mock_read.call_args
+        assert kwargs.get("filters") == [("date", "==", self._DATE)]
+        assert kwargs.get("columns") is not None and set(kwargs["columns"]) >= {
+            "date",
+            "service_name",
+            "data_type",
+            "league_id",
+            "capture_status",
+            "error_reason",
+        }
+
 
 # ---------------------------------------------------------------------------
 # _extract_prediction_canonical_group
@@ -573,6 +714,7 @@ class TestWriteMarketLifecycle:
                 side_effect=lambda df, **kw: df,
             ),
             patch("instruments_service.engine.orchestrator._gated_sink_write"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
         ):
             _write_market_lifecycle(
                 sink=mock_sink,
@@ -582,6 +724,7 @@ class TestWriteMarketLifecycle:
                 manifest_venue="POLYMARKET",
                 manifest=mock_manifest,
                 pipeline_mode=MagicMock(),
+                bucket="test-bucket",
             )
 
         mock_manifest.record_captured_from_counts.assert_called_once()
@@ -600,6 +743,7 @@ class TestWriteMarketLifecycle:
             manifest_venue="POLYMARKET",
             manifest=mock_manifest,
             pipeline_mode=MagicMock(),
+            bucket="test-bucket",
         )
 
         mock_manifest.record_captured_from_counts.assert_not_called()
@@ -625,6 +769,7 @@ class TestWriteMarketLifecycle:
                 manifest_venue="POLYMARKET",
                 manifest=mock_manifest,
                 pipeline_mode=MagicMock(),
+                bucket="test-bucket",
             )
 
     def test_settled_rows_get_settled_status(self) -> None:
@@ -988,3 +1133,261 @@ class TestAllGroupExpansionNocrash:
         assert all(c == "sports" for c in bucket_calls), (
             f"_get_instruments_bucket must be called with 'sports' for ALL runs, got: {bucket_calls}"
         )
+
+
+class TestMultiAssetGroupListTriggersPerVenueBucketRouting:
+    """Regression: an explicit multi-value --asset-group list (not the "ALL"
+    sentinel) must ALSO trigger per-venue bucket routing in _write_all_venues.
+
+    Before the fix, _is_all_run only checked asset_groups[0] == "ALL" -- a
+    genuine multi-value list like ["SPORTS", "CEFI"] left _is_all_run False,
+    so _get_venue_bucket() returned the single SPORTS-primary bucket for
+    EVERY venue, silently misrouting a real CEFI capture into
+    instruments-store-sports. Root-caused as Finding C in
+    api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md (2
+    phantom rows -- UNISWAP_V3-BASE/defi + BITGET-FUTURES/cefi, both dated
+    2026-06-26 -- found sitting in the live sports manifest).
+    """
+
+    @staticmethod
+    def _make_cefi_record() -> InstrumentRecord:
+        return InstrumentRecord(
+            instrument_key="BTC:SPOT:BTCUSDT",
+            venue="BINANCE-SPOT",
+            instrument_type="SPOT_PAIR",
+            base_asset="BTC",
+            quote_asset="USDT",
+            tick_size=Decimal("0.01"),
+            available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
+        )
+
+    def test_explicit_multi_ag_list_routes_cefi_venue_to_cefi_bucket(self) -> None:
+        """asset_groups=["SPORTS", "CEFI"] (no "ALL" sentinel) must resolve the
+        CEFI venue's write via the cefi bucket, not the sports-primary one."""
+        from instruments_service.engine.orchestrator.process_write import _write_all_venues
+
+        record = self._make_cefi_record()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+
+        bucket_calls: list[str | None] = []
+
+        def _capturing_get_bucket(ag: str | None = None) -> str:
+            bucket_calls.append(ag)
+            return f"test-bucket-{ag}"
+
+        write_venue_calls: list[str] = []
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", side_effect=_capturing_get_bucket),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=MagicMock()),
+            patch("instruments_service.engine.orchestrator.DomainValidationService"),
+            patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=False),
+            patch(
+                "instruments_service.engine.orchestrator._write_venue",
+                side_effect=lambda venue, *a, **k: write_venue_calls.append(venue),
+            ),
+        ):
+            _write_all_venues(
+                records=[record],
+                date="2026-06-26",
+                asset_groups=["SPORTS", "CEFI"],
+                league_filter=None,
+                non_error_venues={"BINANCE-SPOT"},
+            )
+
+        assert write_venue_calls == ["BINANCE-SPOT"]
+        # The primary bucket is always resolved once up front ("sports", since
+        # a multi-AG run's primary hardcodes to sports) -- the regression is
+        # that the CEFI venue's OWN bucket must ALSO be resolved (not skipped
+        # in favour of silently reusing the sports-primary bucket for it).
+        assert "cefi" in bucket_calls, f"_get_instruments_bucket must be called with 'cefi', got: {bucket_calls}"
+
+
+class TestFreshnessPreflightStaleScopeEscape:
+    """Regression: a stale-not-missing entity under --sports-entity must stay
+    in scope, not silently fall back to the legacy unscoped fetch-everything
+    path.
+
+    Before the fix, _freshness_preflight() built missing_entities only from
+    the `missing` set, never `stale`. A stale=[FIXTURES]/missing=[] date
+    (the schema-version re-fetch trigger, not a first-time capture) therefore
+    produced missing_entities=[], which _fetch_sports_reference_block's
+    `entities_to_fetch=missing_entities if missing_entities else None`
+    resolves to None — the legacy unscoped "fetch every reference block"
+    path, bypassing --sports-entity entirely. Measured impact: a FIXTURES-
+    only backfill VM burned ~7000 shared, singleton-locked API-Football
+    calls fetching teams/stats/events/lineups/player_stats for one date.
+    See sports_freshness_preflight_stale_scope_escape_burns_shared_quota_2026_07_25.md.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stale_not_missing_entity_stays_in_scope(self) -> None:
+        """stale=[FIXTURES]/missing=[] under --sports-entity FIXTURES must
+        yield missing_entities == ["FIXTURES"], never an empty list (which
+        would resolve to the unscoped None fallback downstream)."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, ["FIXTURES"], []),
+            ),
+        ):
+            outcome = _freshness_preflight(
+                date="2020-06-06",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="FIXTURES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        assert outcome.missing_entities == ["FIXTURES"], (
+            f"stale-not-missing FIXTURES must contribute to missing_entities, got: {outcome.missing_entities}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stale_and_missing_entities_both_included_deduped(self) -> None:
+        """stale + missing entities are unioned (deduped) into missing_entities,
+        never just the missing half."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, ["FIXTURES"], ["FIXTURES"]),
+            ),
+        ):
+            outcome = _freshness_preflight(
+                date="2020-06-06",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="FIXTURES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        assert outcome.missing_entities == ["FIXTURES"]
+
+
+class TestFreshnessPreflightFixturesEntityScopePerLeague:
+    """Regression: --sports-entity FIXTURES must use the real per-league
+    completeness check, not the coarse any-league-has-a-row match.
+
+    Before this fix, an entity-scoped FIXTURES run's `expected` was the
+    literal CLI string "FIXTURES" (not the FIXTURES_SCHEDULE constant), which
+    never matched `_SPORTS_PER_LEAGUE_ENTITIES` -- so it fell through to
+    `check_shard_freshness`, which marks the WHOLE date fresh once ANY single
+    league (even a frozen pre-migration legacy row) has a matching row. A
+    curated league added after that legacy row existed would never be
+    re-fetched. The fix routes this case through `_should_skip_date_for_per_league`
+    (the same per-league completeness check STANDINGS/INJURIES/PREDICTIONS
+    already use) against the current api_football expected-league universe.
+    See sports_freshness_preflight_stale_scope_escape_burns_shared_quota_2026_07_25.md.
+    """
+
+    @pytest.mark.asyncio
+    async def test_coarse_check_shard_freshness_is_never_called(self) -> None:
+        """check_shard_freshness must not be invoked for entity-scoped FIXTURES
+        -- confirms the per-league path is actually taken, not the coarse one."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=MagicMock()),
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[SimpleNamespace(league_id="EPL"), SimpleNamespace(league_id="LA_LIGA")],
+            ) as mock_get_expected,
+            patch(
+                "instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=True
+            ) as mock_per_league,
+            patch("instruments_service.engine.orchestrator.check_shard_freshness") as mock_coarse,
+        ):
+            outcome = _freshness_preflight(
+                date="2026-04-18",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="FIXTURES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        mock_coarse.assert_not_called()
+        mock_get_expected.assert_called_once_with("api_football")
+        mock_per_league.assert_called_once()
+        _, kwargs = mock_per_league.call_args
+        assert kwargs["date"] == "2026-04-18"
+        assert kwargs["expected_canonical_leagues"] == ["EPL", "LA_LIGA"]
+        assert kwargs["force"] is False
+        assert outcome.skip is True
+
+    @pytest.mark.asyncio
+    async def test_genuine_per_league_gap_is_not_skipped(self) -> None:
+        """A curated league missing from the manifest (per-league check
+        returns False) must NOT be coarse-skipped, and must stay in scope
+        (missing_entities == ["FIXTURES"], never empty -> never the unscoped
+        fetch-everything fallback)."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=MagicMock()),
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[SimpleNamespace(league_id="EPL"), SimpleNamespace(league_id="NEW_CURATED_LEAGUE")],
+            ),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league", return_value=False),
+            patch("instruments_service.engine.orchestrator.check_shard_freshness") as mock_coarse,
+        ):
+            outcome = _freshness_preflight(
+                date="2026-04-18",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="FIXTURES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        mock_coarse.assert_not_called()
+        assert outcome.skip is False
+        assert outcome.missing_entities == ["FIXTURES"]
+
+    @pytest.mark.asyncio
+    async def test_non_fixtures_entity_scope_still_uses_existing_defer_path(self) -> None:
+        """A real per-league entity OTHER than FIXTURES (e.g. INJURIES) must
+        keep using the existing unconditional-defer branch, unaffected by
+        this fix -- confirms the new branch is scoped tightly to the FIXTURES
+        alias set, not sports entity-scoping in general."""
+        from instruments_service.engine.orchestrator.process_preflight import _freshness_preflight
+
+        with (
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator._should_skip_date_for_per_league") as mock_per_league,
+            patch("instruments_service.engine.orchestrator.check_shard_freshness") as mock_coarse,
+        ):
+            outcome = _freshness_preflight(
+                date="2026-04-18",
+                asset_groups=["SPORTS"],
+                active_venues=["API_FOOTBALL"],
+                is_sports_run=True,
+                sports_entity_filter="INJURIES",
+                recovery_fixture_ids=None,
+                redo_all=False,
+            )
+
+        mock_coarse.assert_not_called()
+        mock_per_league.assert_not_called()
+        assert outcome.skip is False
+        assert outcome.missing_entities == ["INJURIES"]

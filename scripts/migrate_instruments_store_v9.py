@@ -396,6 +396,22 @@ def _kv(rel: str) -> dict[str, str]:
     return {s.split("=", 1)[0]: s.split("=", 1)[1] for s in rel.split("/") if "=" in s}
 
 
+def _collapse_doubled_day(rel: str, day: str) -> str:
+    """Collapse a doubled ``day={D}/day={D}/`` segment down to one.
+
+    Regression window ~2026-05-05..2026-05-22 (a since-fixed instruments-store ``by_date`` writer nested a
+    second ``day=`` segment for these dates — see
+    ``plans/active/issues/defi_migration_audit_log_2026_07_24.md``). Only collapses an EXACT, adjacent
+    ``day={D}/day={D}/`` duplicate (both copies share the same value, confirmed on every known-doubled
+    object) — never guesses at a mismatched pair, so a rel where the second ``day=`` differs is left alone
+    and falls through to the normal (single-``day=``) insert path unchanged.
+    """
+    doubled = f"day={day}/day={day}/"
+    if doubled not in rel:
+        return rel
+    return rel.replace(doubled, f"day={day}/", 1)
+
+
 def canonical_object_rel(rel: str, asset_group: str) -> str | None:
     """Map a current instruments-store object rel-path → its canonical v9 rel, or ``None`` to skip.
 
@@ -404,6 +420,10 @@ def canonical_object_rel(rel: str, asset_group: str) -> str | None:
           ``venue=``; ``pipeline_mode`` left of ``asset_group`` per the canonical rule).
     sports     ``sports_reference/by_date/day={D}/entity={E}/league={L}/{folder}.parquet``
         → insert ``pipeline_mode={M}/`` after ``day={D}/`` (preserve entity=/league=), M from the entity SSOT.
+
+    A pre-existing doubled ``day={D}/day={D}/`` segment (writer regression, see
+    ``_collapse_doubled_day``) is collapsed to a single ``day={D}/`` BEFORE the insert, so the projected
+    path is never malformed as ``day={D}/pipeline_mode=.../asset_group=.../day={D}/venue=...``.
 
     Idempotent: a rel already carrying ``/pipeline_mode=`` returns unchanged. Object-backed only (CF-10) —
     caller lists real objects.
@@ -416,6 +436,7 @@ def canonical_object_rel(rel: str, asset_group: str) -> str | None:
     day = kv.get("day")
     if not day:
         return None
+    rel = _collapse_doubled_day(rel, day)
     if asset_group == "sports":
         if not rel.startswith(SPORTS_PREFIX + "/"):
             return None

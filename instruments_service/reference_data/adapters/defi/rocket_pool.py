@@ -1,7 +1,9 @@
 """Rocket Pool reference data adapter — instrument discovery for the rETH LST.
 
 Discovers the Rocket Pool liquid staking token (rETH) on Ethereum.
-Token is returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Token is returned as InstrumentRecord with instrument_type="LST" (fixed
+2026-07-08 — key/field mismatch, same class as PERP-vs-PERPETUAL; see
+`lido.py`'s module docstring for the full rationale).
 
 References:
 - https://rocketpool.net/
@@ -15,6 +17,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -71,7 +74,7 @@ class RocketPoolReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Rocket Pool LST tokens as yield-bearing instruments."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.LST, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -82,12 +85,17 @@ class RocketPoolReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
+            instrument_key = build_instrument_id(venue_tag, InstrumentType.LST, symbol, passthrough=True)
+
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:LST:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
-                    instrument_type=InstrumentType.YIELD_BEARING,
+                    instrument_type=InstrumentType.LST,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000001"),

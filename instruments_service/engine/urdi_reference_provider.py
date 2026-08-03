@@ -74,7 +74,6 @@ async def fetch_instruments_for_all_venues(
     api_keys: dict[str, str] | None = None,
     date: str | None = None,
     mode: str = "batch",
-    source: str | None = None,
 ) -> VenueFetchResult:
     """Fetch canonical InstrumentRecord[] for all configured venues via URDI.
 
@@ -149,7 +148,6 @@ async def fetch_instruments_for_all_venues(
                 api_keys=api_keys,
                 date=date,
                 mode=mode,
-                source=source,
                 batch_venues=batch_venues,
                 failed=failed,
             )
@@ -259,7 +257,6 @@ async def _fetch_one_venue(
     api_keys: dict[str, str] | None,
     date: str | None,
     mode: str,
-    source: str | None,
     batch_venues: set[str],
     failed: list[VenueErrorClassification],
 ) -> list[InstrumentRecord]:
@@ -272,11 +269,7 @@ async def _fetch_one_venue(
     """
     async with sem:
         try:
-            # Source-aware credential routing: when source="massive", a TradFi
-            # venue that defaults to Databento needs the MASSIVE key, not the
-            # Databento key — resolve the data_source against the effective source.
-            effective_key = "massive" if (source == "massive" and adapter_key == "databento") else adapter_key
-            data_source = ADAPTER_DATA_SOURCES.get(effective_key, "")
+            data_source = ADAPTER_DATA_SOURCES.get(adapter_key, "")
             api_key = (api_keys or {}).get(data_source) if data_source else None
             adapter = get_adapter_for_canonical_venue(
                 canonical,
@@ -284,7 +277,6 @@ async def _fetch_one_venue(
                 date=date,
                 extra_api_keys=api_keys,
                 mode=mode,
-                source=source,
             )
             # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
             records = await adapter.get_instruments_cached(instrument_type=instrument_type, date=date)
@@ -398,16 +390,3 @@ async def _fetch_one_venue(
                 )
             )
             return []
-
-
-async def fetch_instruments_via_urdi(
-    venue: str,
-    instrument_type: str | None = None,
-    api_keys: dict[str, str] | None = None,
-    date: str | None = None,
-) -> list[InstrumentRecord]:
-    """Single-venue fetch. Delegates to fetch_instruments_for_all_venues."""
-    result = await fetch_instruments_for_all_venues(
-        [venue], instrument_type=instrument_type, api_keys=api_keys, date=date
-    )
-    return result.records

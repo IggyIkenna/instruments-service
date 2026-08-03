@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from instruments_service.reference_data.adapters.prediction.kalshi import KalshiReferenceDataAdapter
+from instruments_service.reference_data.adapters.prediction.kalshi import (
+    _MAX_SERIES_TOTAL,
+    _SERIES_CATEGORIES,
+    KalshiReferenceDataAdapter,
+)
 
 
 def _make_cm(resp: object) -> MagicMock:
@@ -62,6 +66,13 @@ class TestKalshiAdapter:
             results = await adapter.get_instruments()
         assert len(results) >= 1
         assert results[0].venue == "KALSHI"
+        # prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2 ("249-b"):
+        # canonical_question_group is a write-back of the classification already
+        # computed for `underlying` — never None for a real market (the classifier
+        # is non-Optional, OTHER is the catch-all), so the instruments-service
+        # catalogue-rollup cqg grain can read it back per-row.
+        assert results[0].canonical_question_group is not None
+        assert results[0].canonical_question_group != ""
 
     @pytest.mark.asyncio
     async def test_get_instruments_uses_open_status_filter_not_active(self) -> None:
@@ -284,7 +295,9 @@ class TestKalshiAdapter:
             results = await adapter.get_instruments()
 
         tickers = {r.instrument_key for r in results}
-        assert "KXBTCD-26JUN23-T90000" in tickers, f"Series-scoped capture must include KXBTCD markets; got: {tickers}"
+        assert "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN23-T90000" in tickers, (
+            f"Series-scoped capture must include KXBTCD markets; got: {tickers}"
+        )
 
     @pytest.mark.asyncio
     async def test_series_scoped_per_series_failure_is_shard_isolated(self) -> None:
@@ -362,7 +375,9 @@ class TestKalshiAdapter:
             results = await adapter.get_instruments()  # must NOT raise
 
         tickers = {r.instrument_key for r in results}
-        assert "KXETHD-26JUN23-T3000" in tickers, f"KXETHD market must survive when KXBTCD fetch 500s; got: {tickers}"
+        assert "KALSHI:PREDICTION_MARKET:KXETHD-26JUN23-T3000" in tickers, (
+            f"KXETHD market must survive when KXBTCD fetch 500s; got: {tickers}"
+        )
 
     @pytest.mark.asyncio
     async def test_series_scoped_429_is_retried_not_dropped(self) -> None:
@@ -439,7 +454,9 @@ class TestKalshiAdapter:
 
         tickers = {r.instrument_key for r in results}
         assert btc_calls["n"] >= 2, "KXBTCD page must be retried after the 429"
-        assert "KXBTCD-26JUN23-T90000" in tickers, f"429 must be retried, not dropped; got: {tickers}"
+        assert "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN23-T90000" in tickers, (
+            f"429 must be retried, not dropped; got: {tickers}"
+        )
 
     @pytest.mark.asyncio
     async def test_series_scoped_skips_historical_path(self) -> None:
@@ -565,7 +582,9 @@ class TestKalshiAdapter:
             results = await adapter.get_instruments(date="2026-06-23")  # on/after cutoff = live
 
         tickers = {r.instrument_key for r in results}
-        assert "KXBTCD-26JUN23-T90000" in tickers, f"current-day batch must run series-scoped; got: {tickers}"
+        assert "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN23-T90000" in tickers, (
+            f"current-day batch must run series-scoped; got: {tickers}"
+        )
 
     def test_parse_kalshi_creds_rsa_blob(self) -> None:
         """RSA credential JSON blob → (api_key_id, private_key_pem); enables signing."""
@@ -611,3 +630,21 @@ class TestKalshiAdapter:
         # exactly one call — the /historical/cutoff lookup; no market pagination
         mock_session_obj.get.assert_called_once()
         assert "historical/cutoff" in mock_session_obj.get.call_args.args[0]
+
+    def test_series_categories_include_commodities(self) -> None:
+        """Regression: Kalshi's own ``/series/KXGOLDD`` reports category="Commodities",
+        not Crypto/Economics/Financials — before "Commodities" was in
+        ``_SERIES_CATEGORIES``, the series-scoped discovery never fetched it even
+        though ``classify_kalshi_to_canonical_group`` already maps
+        KXGOLDD -> GOLD_UP_DOWN_DAILY, so real, currently-open daily gold markets
+        were silently never captured (confirmed live 2026-07-31)."""
+        assert "Commodities" in _SERIES_CATEGORIES
+
+    def test_max_series_total_absorbs_commodities_without_starving_prior_categories(self) -> None:
+        """Regression: live-measured 2026-07-31 — Commodities contributes exactly 12
+        non-OTHER classified series (KXGOLDD and 11 siblings). ``_MAX_SERIES_TOTAL``
+        must be at least the pre-Commodities budget (350) plus that amount, else
+        adding Commodities silently steals scan quota from Sports/Politics (an A/B
+        live comparison showed Sports records drop 1440->978 when Commodities
+        shares the old 350 cap)."""
+        assert _MAX_SERIES_TOTAL >= 350 + 12

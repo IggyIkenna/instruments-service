@@ -137,9 +137,7 @@ class TestPreLaunchStampingInSeeder:
 
     def test_existing_captured_row_not_overwritten_by_pre_launch(self) -> None:
         """An existing captured row is NEVER overwritten, even when date is pre-launch."""
-        manifest = _FakeManifest(
-            prior={("2020-01-01", "HYPERLIQUID", ""): (CaptureStatus.CAPTURED.value, "")}
-        )
+        manifest = _FakeManifest(prior={("2020-01-01", "HYPERLIQUID", ""): (CaptureStatus.CAPTURED.value, "")})
         _seed_expected_unattempted_for_target_universe(
             manifest=manifest,  # pyright: ignore[reportArgumentType]
             date="2020-01-01",
@@ -152,9 +150,7 @@ class TestPreLaunchStampingInSeeder:
 
     def test_existing_attempted_failed_not_overwritten(self) -> None:
         """An existing attempted_failed row is NEVER overwritten by a pre-launch stamp."""
-        manifest = _FakeManifest(
-            prior={("2020-01-01", "BYBIT", ""): (CaptureStatus.ATTEMPTED_FAILED.value, "")}
-        )
+        manifest = _FakeManifest(prior={("2020-01-01", "BYBIT", ""): (CaptureStatus.ATTEMPTED_FAILED.value, "")})
         _seed_expected_unattempted_for_target_universe(
             manifest=manifest,  # pyright: ignore[reportArgumentType]
             date="2020-01-01",
@@ -218,9 +214,7 @@ class TestEmptyOkVenuesGetSourceReturnedZero:
             ) -> None:
                 # Fix 2 routes through record_zero_rows(was_expected=False).
                 if not was_expected:
-                    _captured_records.append(
-                        {"row_key": dict(row_key), "reason": reason, "evidence": fetch_evidence}
-                    )
+                    _captured_records.append({"row_key": dict(row_key), "reason": reason, "evidence": fetch_evidence})
 
             def record_empty(self, **_kw: object) -> None:
                 pass
@@ -261,7 +255,6 @@ class TestEmptyOkVenuesGetSourceReturnedZero:
                     asset_groups=["PREDICTION"],
                     api_keys=None,
                     mode="batch",
-                    source=None,
                     bucket="prediction-bucket",
                     sink=MagicMock(),
                     sampler=MagicMock(),
@@ -281,6 +274,177 @@ class TestEmptyOkVenuesGetSourceReturnedZero:
         ev = src_zero[0]["evidence"]
         assert isinstance(ev, FetchEvidence), f"Expected FetchEvidence, got {type(ev)}"
         assert ev.proves_honest_absence(), f"FetchEvidence must prove honest absence: {ev}"
+
+
+# ---------------------------------------------------------------------------
+# Venue-vs-composite-key fold — real PREDICTION writes must NOT be misread as
+# empty (regression for prediction_universe_capture_dead_since_07_01_2026_07_06.md,
+# 2026-07-13 progress entry: KALSHI/POLYMARKET genuinely wrote real rows under
+# the composite manifest key "{VENUE}/{GROUP}" (e.g. "KALSHI/OTHER") but the
+# shard-completeness stage compared BARE venue names against `counts.keys()`,
+# so `written_venues` never contained bare "KALSHI" and the venue was
+# misclassified as empty_ok → dishonest SOURCE_RETURNED_ZERO.
+# ---------------------------------------------------------------------------
+
+
+class TestFoldWrittenVenues:
+    """`_fold_written_venues` collapses composite counts keys onto bare venues."""
+
+    def test_prediction_composite_keys_fold_to_bare_venue(self) -> None:
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _fold_written_venues,
+        )
+
+        counts = {"KALSHI/OTHER": 1422, "KALSHI/BTC_UP_DOWN_DAILY": 12, "POLYMARKET/OTHER": 7577}
+        folded = _fold_written_venues(counts, {"KALSHI", "POLYMARKET"})
+        assert folded == {"KALSHI", "POLYMARKET"}
+
+    def test_sports_fixtures_composite_keys_fold_to_api_football(self) -> None:
+        """``"FIXTURES_SCHEDULE/{league_id}"`` folds to ``API_FOOTBALL`` when it's expected.
+
+        Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15,
+        see plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
+        previously this composite key was left UNFOLDED (``"FIXTURES_SCHEDULE"``
+        is a data_type, never a venue name, so the generic
+        prefix-in-expected_venues check never matched it) — a league-scoped
+        FIXTURES run whose target league legitimately had zero fixtures that
+        day (off-season, rest day, etc — the common case) always left
+        ``written_venues`` without ``API_FOOTBALL``, so completeness
+        misclassified the whole venue as ``SOURCE_RETURNED_ZERO`` and stamped
+        a REDUNDANT blanket ``{date, venue}`` row that live-verified to
+        collide with (and drop) the correct per-league honest-absence row in
+        the same per-VM manifest shard flush — permanently orphaning any
+        pre-existing stale ``attempted_failed`` row for that (date, league)
+        FIXTURES cell.
+        """
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _fold_written_venues,
+        )
+
+        counts = {"FIXTURES_SCHEDULE/39": 10, "FIXTURES_SCHEDULE/61": 4}
+        folded = _fold_written_venues(counts, {"API_FOOTBALL"})
+        assert folded == {"API_FOOTBALL"}
+
+    def test_sports_fixtures_composite_keys_untouched_when_api_football_not_expected(self) -> None:
+        """When ``API_FOOTBALL`` isn't in ``expected_venues`` (out of scope for
+        this run), a ``"FIXTURES_SCHEDULE/*"`` key must pass through unfolded —
+        the API_FOOTBALL-specific fold only applies when that venue is
+        actually expected this run.
+        """
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _fold_written_venues,
+        )
+
+        counts = {"FIXTURES_SCHEDULE/39": 10}
+        folded = _fold_written_venues(counts, {"SOME_OTHER_VENUE"})
+        assert folded == {"FIXTURES_SCHEDULE/39"}
+
+    def test_bare_cefi_keys_are_noop(self) -> None:
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _fold_written_venues,
+        )
+
+        counts = {"BINANCE-FUTURES": 678}
+        folded = _fold_written_venues(counts, {"BINANCE-FUTURES"})
+        assert folded == {"BINANCE-FUTURES"}
+
+
+class TestPredictionCompositeWriteNotMisreadAsEmpty:
+    """Regression: real KALSHI/POLYMARKET writes under composite manifest keys
+    must NOT trigger the empty_ok / SOURCE_RETURNED_ZERO path."""
+
+    def test_kalshi_real_composite_write_not_stamped_source_returned_zero(self) -> None:
+        import asyncio
+
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _completeness_and_retry,
+        )
+
+        _captured_records: list[dict[str, object]] = []
+        _failed_records: list[dict[str, object]] = []
+
+        class _CapturingManifest:
+            def __init__(self, *_: object, **__: object) -> None:
+                pass
+
+            def record_zero_rows(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                was_expected: bool,
+                fetch_evidence: FetchEvidence | None = None,
+                **_kw: object,
+            ) -> None:
+                if not was_expected:
+                    _captured_records.append({"row_key": dict(row_key), "reason": reason, "evidence": fetch_evidence})
+
+            def record_empty(self, **_kw: object) -> None:
+                pass
+
+            def record_failed(self, *, row_key: Mapping[str, object], **_kw: object) -> None:
+                _failed_records.append(dict(row_key))
+
+            def record_expected_empty(self, **_: object) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=_CapturingManifest,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._check_emission_policy",
+                return_value=MagicMock(
+                    service_emission_state="PUBLISHED",
+                    completeness_fraction=1.0,
+                ),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch(
+                "instruments_service.engine.orchestrator.is_non_trading_day",
+                return_value=False,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                side_effect=Exception("no index in this unit test"),
+            ),
+        ):
+            asyncio.run(
+                _completeness_and_retry(
+                    # KALSHI wrote real rows under the composite manifest key
+                    # ("{VENUE}/{GROUP}") that _write_prediction_venue actually uses.
+                    counts={"KALSHI/OTHER": 1422, "KALSHI/KXNFLGAME": 8},
+                    date="2026-07-09",
+                    date_dt=MagicMock(),
+                    defi_venue_set=None,
+                    asset_groups=["PREDICTION"],
+                    api_keys=None,
+                    mode="batch",
+                    bucket="prediction-bucket",
+                    sink=MagicMock(),
+                    sampler=MagicMock(),
+                    active_venues=["KALSHI"],
+                    non_error_venues={"KALSHI"},
+                    validation_failed_venues=set(),
+                    retryable_venues=[],
+                    is_sports_run=False,
+                    sports_entity_filter=None,
+                    recovery_fixture_ids=None,
+                )
+            )
+
+        # KALSHI genuinely wrote 1,430 rows across 2 canonical_question_groups —
+        # must NOT be classified empty_ok, so no dishonest SOURCE_RETURNED_ZERO.
+        src_zero = [r for r in _captured_records if r.get("reason") == EmptyConfirmedReason.SOURCE_RETURNED_ZERO.value]
+        assert not src_zero, f"KALSHI wrote real data — must not get SOURCE_RETURNED_ZERO; got {src_zero}"
+        # Nor should it be treated as a permanently-missing shard (attempted_failed).
+        assert not any(r.get("venue") == "KALSHI" for r in _failed_records), (
+            f"KALSHI wrote real data — must not be in missing_shards/attempted_failed; got {_failed_records}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +505,8 @@ class TestTradfiNonTradingDayInMissingShards:
                 written_venues={"NASDAQ"},
                 missing_shards={"NYSE"},
                 bucket="tradfi-bucket",
+                venue_bucket=lambda _v: "tradfi-bucket",
+                asset_groups=["tradfi"],
             )
 
         # NYSE missing on non-trading day → empty_confirmed with EXPECTED_WEEKEND reason.
@@ -402,11 +568,186 @@ class TestTradfiNonTradingDayInMissingShards:
                 written_venues={"DERIBIT"},
                 missing_shards={"BYBIT"},
                 bucket="cefi-bucket",
+                venue_bucket=lambda _v: "cefi-bucket",
+                asset_groups=["cefi"],
             )
 
         assert len(_failed_calls) == 1, f"Expected 1 attempted_failed, got {_failed_calls}"
         assert _failed_calls[0]["row_key"]["venue"] == "BYBIT"
         assert _expected_empty_calls == [], f"No empty_confirmed expected for BYBIT: {_expected_empty_calls}"
+
+
+# ---------------------------------------------------------------------------
+# Completeness-stage multi-AG bucket routing — follow-up todo from Finding C
+# row 1, api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md:
+# process_completeness.py's honest-coverage ManifestWriter instances (the
+# empty-ok-venues record_zero_rows loop and the missing-shards
+# record_failed/record_expected_empty loop) must route each venue to its OWN
+# asset_group bucket during a combined multi-AG run, mirroring
+# _write_all_venues's existing _get_venue_bucket per-venue routing — not
+# always the run's primary bucket.
+# ---------------------------------------------------------------------------
+
+
+class TestCompletenessStageMultiAssetGroupBucketRouting:
+    @staticmethod
+    def _bucket_for(asset_group: str | None) -> str:
+        return f"bucket-{asset_group}"
+
+    def test_empty_ok_venue_routes_to_own_asset_group_bucket(self) -> None:
+        """A non-primary-AG venue that ran clean but wrote 0 records must get its
+        SOURCE_RETURNED_ZERO stamp in ITS OWN bucket, not the run's primary bucket."""
+        import asyncio
+
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _completeness_and_retry,
+        )
+
+        _captured: list[dict[str, object]] = []
+
+        class _CapturingManifest:
+            def __init__(self, *_: object, catalogue_bucket: str, **__: object) -> None:
+                self._bucket = catalogue_bucket
+
+            def record_zero_rows(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                was_expected: bool,
+                **_kw: object,
+            ) -> None:
+                if not was_expected:
+                    _captured.append({"row_key": dict(row_key), "bucket": self._bucket})
+
+            def record_empty(self, **_kw: object) -> None:
+                pass
+
+            def record_failed(self, **_kw: object) -> None:
+                pass
+
+            def record_expected_empty(self, **_kw: object) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=_CapturingManifest,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                side_effect=self._bucket_for,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._check_emission_policy",
+                return_value=MagicMock(
+                    service_emission_state="PUBLISHED",
+                    completeness_fraction=1.0,
+                ),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=False),
+        ):
+            asyncio.run(
+                _completeness_and_retry(
+                    counts={},
+                    date="2026-06-26",
+                    date_dt=MagicMock(),
+                    defi_venue_set=None,
+                    # Combined multi-AG run: SPORTS is primary, CEFI is non-primary.
+                    asset_groups=["SPORTS", "CEFI"],
+                    api_keys=None,
+                    mode="batch",
+                    bucket="bucket-sports",
+                    sink=MagicMock(),
+                    sampler=MagicMock(),
+                    # BYBIT is a CEFI venue (VENUE_TO_ASSET_GROUP) that ran OK but wrote 0 rows.
+                    active_venues=["BYBIT"],
+                    non_error_venues={"BYBIT"},
+                    validation_failed_venues=set(),
+                    retryable_venues=[],
+                    is_sports_run=False,
+                    sports_entity_filter=None,
+                    recovery_fixture_ids=None,
+                )
+            )
+
+        assert _captured, f"expected a SOURCE_RETURNED_ZERO stamp for BYBIT; got none (buckets seen: {_captured})"
+        assert _captured[0]["bucket"] == "bucket-cefi", (
+            f"BYBIT (a CEFI venue, non-primary in this SPORTS+CEFI run) must stamp its honest-coverage "
+            f"row in the cefi bucket, not the run's primary sports bucket — got {_captured[0]['bucket']}"
+        )
+
+    def test_missing_shard_non_primary_ag_routes_to_own_bucket(self) -> None:
+        """A missing (never-fetched) non-primary-AG venue's attempted_failed row
+        must land in ITS OWN bucket, not the run's primary bucket."""
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _finalize_completeness,
+        )
+        from instruments_service.engine.orchestrator.process_write import _venue_bucket_resolver
+
+        _failed_calls: list[dict[str, object]] = []
+
+        class _CapturingManifest:
+            def __init__(self, *_: object, catalogue_bucket: str, **__: object) -> None:
+                self._bucket = catalogue_bucket
+
+            def record_failed(self, *, row_key: Mapping[str, object], **_kw: object) -> None:
+                _failed_calls.append({"row_key": dict(row_key), "bucket": self._bucket})
+
+            def record_expected_empty(self, **_kw: object) -> None:
+                pass
+
+            def record_empty(self, **_: object) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch("instruments_service.engine.orchestrator.ManifestWriter", side_effect=_CapturingManifest),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                side_effect=self._bucket_for,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._check_emission_policy",
+                return_value=MagicMock(
+                    service_emission_state="PUBLISHED",
+                    completeness_fraction=1.0,
+                ),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=False),
+            # written_venues is non-empty here, so the CeFi-scoped G1.2 thin-day check
+            # (asset_groups includes "CEFI") reaches its availability-index read —
+            # short-circuit it deterministically rather than hitting real GCS.
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                side_effect=Exception("no index in this unit test"),
+            ),
+        ):
+            venue_bucket = _venue_bucket_resolver(asset_groups=["SPORTS", "CEFI"], primary_bucket="bucket-sports")
+            _finalize_completeness(
+                counts={"API_FOOTBALL": 5},
+                date="2026-06-26",
+                expected_venues={"API_FOOTBALL", "BYBIT"},
+                written_venues={"API_FOOTBALL"},
+                missing_shards={"BYBIT"},
+                bucket="bucket-sports",
+                venue_bucket=venue_bucket,
+                asset_groups=["SPORTS", "CEFI"],
+            )
+
+        assert len(_failed_calls) == 1, f"Expected 1 attempted_failed, got {_failed_calls}"
+        assert _failed_calls[0]["row_key"]["venue"] == "BYBIT"
+        assert _failed_calls[0]["bucket"] == "bucket-cefi", (
+            f"BYBIT (a CEFI venue, non-primary in this SPORTS+CEFI run) must land its attempted_failed "
+            f"row in the cefi bucket, not the run's primary sports bucket — got {_failed_calls[0]['bucket']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -660,3 +1001,147 @@ class TestZeroRecordsNonSportsFixedForFX:
                     active_venues=["BYBIT", "DERIBIT"],
                     mode="batch",
                 )
+
+
+class TestZeroRecordsNoAdapterYetVenueDoesNotCrash:
+    """Fix for a real production crash: an explicitly-requested (``--venue``
+    override) TradFi venue that is UAC-declared ``NO_ADAPTER_YET`` (i.e. no URDI
+    adapter is built yet) must resolve as an honest 0-result absence, never a
+    hard failure.
+
+    Fixture note (2026-07-15): this class formerly used ``YAHOO_FINANCE`` — a
+    legacy source-as-venue artifact that was REMOVED from every venue-shaped UAC
+    registry that day (source-as-venue modeling error; Yahoo is a *source*, not
+    a *venue*). ``FX`` was then the sole ``NO_ADAPTER_YET`` venue in the tradfi
+    asset group, so it was the canonical fixture for the adapterless-tradfi-venue
+    short-circuit under test.
+
+    Fixture note (2026-07-23): FX now HAS a real adapter (``FxReferenceDataAdapter``
+    — a static UAC ``FX_SPOT_PAIRS`` list, no vendor call needed;
+    ``VENUE_TO_ADAPTER_KEY["FX"] == "fx"``), so there is no longer any real tradfi
+    venue permanently declared ``NO_ADAPTER_YET`` to use as a live fixture. Rather
+    than couple this test to whichever venue happens to be adapterless-du-jour (a
+    real config gap gets FIXED, not preserved to keep a test's fixture alive), each
+    test now ``patch.dict``-overrides ``VENUE_TO_ADAPTER_KEY["FX"]`` back to
+    ``NO_ADAPTER_YET`` for its own scope — testing the genuine short-circuit branch
+    on a real, calendar-known tradfi venue name without asserting anything about
+    FX's actual current adapter status.
+
+    What the short-circuit guards: ``_zero_records_non_sports`` filters every
+    ``NO_ADAPTER_YET`` venue out of ``tradfi_active`` (``v not in
+    _no_adapter_active``). Without the dedicated short-circuit, a lone
+    ``NO_ADAPTER_YET`` venue that returned 0 records would therefore leave
+    ``tradfi_active`` empty and fall straight through to the terminal
+    ``raise RuntimeError`` (URDI-returned-zero shard failure) — turning an
+    honest, already-declared adapterless absence into a hard error. The
+    short-circuit instead returns ``{venue: 0}`` and stamps an honest
+    ``EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE`` manifest row. (For a tradfi
+    venue that is *also* absent from the session/calendar SSOT the alternative
+    failure mode is ``UndeclaredTradfiVenueError`` from ``is_non_trading_day`` —
+    the short-circuit returns before that call is ever reached either way.)
+    """
+
+    def test_sole_no_adapter_yet_venue_returns_zero_counts_cleanly(self) -> None:
+        """FX alone in active_venues must return {"FX": 0} AND stamp an honest
+        empty_confirmed manifest row (no silent absence, no RuntimeError)."""
+        from unified_api_contracts.registry import NO_ADAPTER_YET
+
+        from instruments_service.engine.orchestrator import process_zero_records
+        from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
+
+        _expected_empty_calls: list[dict[str, object]] = []
+
+        class _CapManifest:
+            def __init__(self, *_: object, **__: object) -> None:
+                pass
+
+            def record_expected_empty(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                **_kw: object,
+            ) -> None:
+                _expected_empty_calls.append({"row_key": dict(row_key), "reason": reason})
+
+            def write(self) -> None:
+                pass
+
+        # FX now has a real adapter (2026-07-23) — override VENUE_TO_ADAPTER_KEY for
+        # this test's scope only, to exercise the genuine NO_ADAPTER_YET short-circuit
+        # without depending on any specific venue's live adapter status (see the class
+        # docstring's 2026-07-23 fixture note). ManifestWriter/_get_instruments_bucket
+        # ARE patched here (the manifest-stamp behavior needs a real bucket/writer in
+        # production, not in a unit test).
+        with (
+            patch.dict(process_zero_records.VENUE_TO_ADAPTER_KEY, {"FX": NO_ADAPTER_YET}),
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=_CapManifest,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="tradfi-bucket",
+            ),
+        ):
+            result = _zero_records_non_sports(
+                date="2026-07-09",
+                asset_groups=["TRADFI"],
+                active_venues=["FX"],
+                mode="batch",
+            )
+
+        assert result == {"FX": 0}, f"Expected clean zero-count dict; got {result}"
+        assert len(_expected_empty_calls) == 1
+        assert _expected_empty_calls[0]["row_key"] == {"date": "2026-07-09", "venue": "FX"}
+        assert _expected_empty_calls[0]["reason"] == "EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE"
+
+    def test_no_adapter_yet_venue_mixed_with_real_tradfi_venue_excluded_from_calendar_check(
+        self,
+    ) -> None:
+        """FX (NO_ADAPTER_YET) mixed with a real tradfi venue is excluded from
+        tradfi_active (never passed to is_non_trading_day) while the real venue
+        still gets the normal calendar treatment.
+        """
+        from unified_api_contracts.registry import NO_ADAPTER_YET
+
+        from instruments_service.engine.orchestrator import process_zero_records
+        from instruments_service.engine.orchestrator.process_zero_records import _zero_records_non_sports
+
+        _checked_venues: list[str] = []
+
+        with (
+            patch.dict(process_zero_records.VENUE_TO_ADAPTER_KEY, {"FX": NO_ADAPTER_YET}),
+            patch(
+                "instruments_service.engine.orchestrator.is_non_trading_day",
+                side_effect=lambda v, _d: (_checked_venues.append(v), True)[1],
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.non_trading_day_reason",
+                return_value="EXPECTED_WEEKEND",
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=lambda *_a, **_k: SimpleNamespace(
+                    record_expected_empty=lambda **_kw: None, write=lambda: None
+                ),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                return_value="tradfi-bucket",
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+        ):
+            result = _zero_records_non_sports(
+                date="2026-06-21",
+                asset_groups=["TRADFI"],
+                active_venues=["CME", "FX"],
+                mode="batch",
+            )
+
+        # is_non_trading_day must never have been called with FX (NO_ADAPTER_YET) — only CME.
+        assert "FX" not in _checked_venues, (
+            f"FX (NO_ADAPTER_YET) must never reach is_non_trading_day; checked={_checked_venues}"
+        )
+        assert "CME" in _checked_venues
+        assert result == {"CME": 0}, f"Expected only CME stamped as non-trading; got {result}"

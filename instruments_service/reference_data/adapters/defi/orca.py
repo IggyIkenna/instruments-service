@@ -1,7 +1,7 @@
 """Orca Whirlpool reference data adapter -- instrument discovery via REST API.
 
 Discovers Orca concentrated liquidity (Whirlpool) pools on Solana.
-Pools are returned as InstrumentRecord with instrument_type="POOL".
+Pools are returned as InstrumentRecord with instrument_type="SOLANA_AMM_POOL".
 
 Data source: Orca Whirlpool API (https://api.mainnet.orca.so).
 Reference: https://docs.orca.so/
@@ -12,10 +12,10 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import build_pool_identity, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_solana_protocol_url
-from unified_trading_library import log_event
+from unified_trading_library import log_event, resolve_solana_token_symbol
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -47,10 +47,36 @@ def _classify_orca_error(exc: Exception, status: int | None = None) -> str:
     return "UNKNOWN"
 
 
+async def _resolve_pool_token_symbol(token: object) -> str:
+    """Return a Whirlpool token's real symbol, resolving on-chain when blank.
+
+    Operator ruling 2026-07-21 (``defi_consolidated_closeout_2026_07_18.md``,
+    "eliminate the address/UUID fallback"): the Orca REST payload's
+    ``tokenA``/``tokenB`` blob always carries the token's Solana mint address
+    (``mint``) even on the rare response where ``symbol`` is blank — so a
+    blank symbol is not a dead end. Falls back to the shared UTL
+    token-metadata resolver (the static ``solana-labs/token-list``) BEFORE
+    ever giving up. Returns ``""`` only when BOTH the REST payload AND the
+    resolver have no answer for that mint — the caller drops the pool on an
+    empty symbol, same as before this fix.
+    """
+    if not isinstance(token, dict):
+        return ""
+    raw_symbol = token.get("symbol")
+    if raw_symbol:
+        return str(raw_symbol).upper()
+    mint = token.get("mint")
+    if isinstance(mint, str) and mint:
+        resolved = await resolve_solana_token_symbol(mint)
+        if resolved:
+            return resolved.upper()
+    return ""
+
+
 class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
     """Orca Whirlpool reference data: concentrated liquidity pool discovery.
 
-    Each Orca Whirlpool produces one instrument with instrument_type="POOL"
+    Each Orca Whirlpool produces one instrument with instrument_type="SOLANA_AMM_POOL"
     and symbol=f"{tokenA}/{tokenB}".
     """
 
@@ -98,7 +124,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Orca Whirlpool pools as instruments."""
-        if instrument_type not in (None, InstrumentType.POOL):
+        if instrument_type not in (None, InstrumentType.SOLANA_AMM_POOL):
             return []
 
         url = f"{_BASE_URL}/v1/whirlpool/list"
@@ -123,7 +149,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         for pool in pools:
             if not isinstance(pool, dict):
                 continue
-            record = self._build_pool_record(pool)
+            record = await self._build_pool_record(pool)
             if record:
                 results.append(record)
 
@@ -145,7 +171,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
 
         return results
 
-    def _build_pool_record(
+    async def _build_pool_record(
         self,
         pool: dict[str, object],
     ) -> InstrumentRecord | None:
@@ -154,11 +180,13 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         if not address:
             return None
 
-        # Extract token symbols and decimals from tokenA/tokenB
+        # Extract token symbols and decimals from tokenA/tokenB — each symbol is
+        # resolved via _resolve_pool_token_symbol (real on-chain mint lookup
+        # before giving up; see its docstring for the 2026-07-21 ruling).
         token_a = pool.get("tokenA") or {}
         token_b = pool.get("tokenB") or {}
-        sym_a = str(token_a.get("symbol", "")).upper() if isinstance(token_a, dict) else ""
-        sym_b = str(token_b.get("symbol", "")).upper() if isinstance(token_b, dict) else ""
+        sym_a = await _resolve_pool_token_symbol(token_a)
+        sym_b = await _resolve_pool_token_symbol(token_b)
         if not sym_a or not sym_b:
             return None
 
@@ -191,15 +219,33 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         venue_tag = self.venue
+        # Canonical 3-segment glued pool id (VENUE-CHAIN:POOL:BASE-QUOTE[-DISC]) built via
+        # the UAC SSOT builder -- the Whirlpool tick-spacing is folded INTO the symbol
+        # segment hyphen-glued (...:SOL-USDC-WP64), NEVER a 4th colon (Wave B convergence,
+        # defi_consolidated_closeout_2026_07_18). instrument_id stays the pool ADDRESS
+        # (raw_symbol / pool_address, case-preserved -- base/quote are set, so the builder's
+        # address-lowercasing fallback never touches the glued symbol).
         tick_spacing = pool.get("tickSpacing", "")
-        instrument_key = f"{venue_tag}:POOL:{base}-{quote}:WP{tick_spacing}"
+        discriminator = f"WP{tick_spacing}" if tick_spacing not in (None, "") else None
+        instrument_key = build_pool_identity(
+            venue=venue_tag,
+            chain=self._chain,
+            pool_address=str(address),
+            base_asset=base,
+            quote_asset=quote,
+            fee=discriminator,
+        ).glued_pair_id
 
         return InstrumentRecord(
             instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key (the
+            # symbolic 3-seg glued id); the pool ADDRESS is the separate machine id (raw_symbol).
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=str(address),
             pool_address=str(address),
-            instrument_type=InstrumentType.POOL,
+            instrument_type=InstrumentType.SOLANA_AMM_POOL,
             base_asset=base,
             quote_asset=quote,
             tick_size=Decimal("0.000001"),

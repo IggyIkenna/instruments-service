@@ -1,7 +1,10 @@
 """Symbiotic reference data adapter — instrument discovery for Symbiotic restaking vaults.
 
 Discovers Symbiotic restaking vaults on Ethereum. Vaults are returned as
-InstrumentRecord with instrument_type="YIELD_BEARING".
+InstrumentRecord with instrument_type="YIELD_BEARING" (fixed 2026-07-08 — the
+`instrument_key`'s middle segment previously said the shorthand `VAULT`, which
+is not a real `InstrumentType` enum member; see `karak.py`'s module docstring
+for the full rationale).
 
 Pure static-registry adapter: get_instruments returns a hardcoded curated list of
 primary Symbiotic collateral vaults with no network access. Tests are
@@ -23,6 +26,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -98,7 +102,7 @@ class SymbioticReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Symbiotic restaking vaults as yield-bearing instruments."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -109,9 +113,13 @@ class SymbioticReferenceDataAdapter(BaseReferenceDataAdapter):
             vault_address = vault["vault_address"]
             underlying = vault["underlying"]
 
+            instrument_key = build_instrument_id(venue_tag, InstrumentType.YIELD_BEARING, symbol, passthrough=True)
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:VAULT:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=vault_address,
                     instrument_type=InstrumentType.YIELD_BEARING,

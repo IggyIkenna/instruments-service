@@ -29,10 +29,12 @@ def main() -> int:
     only = sys.argv[1] if len(sys.argv) > 1 else None
     st = get_storage_client(project_id=PID)
     df = pd.read_parquet(io.BytesIO(st.download_bytes(IS_PRD, "_index/availability_index.parquet")))
-    # defi instrument-catalog captured cells carry per-(date,venue,chain) instrument_count
+    # defi instrument-catalog captured cells carry per-(date,venue,chain) instrument_count.
+    # "instruments" is canonical (operator decision 2026-07-16, P9 Q2); "instrument-catalog" kept
+    # for legacy pre-migration rows.
     m = (df["asset_group"].astype(str) == "defi") & (df["capture_status"].astype(str) == "captured")
     if "data_type" in df:
-        m &= df["data_type"].astype(str).isin(["instrument-catalog", ""])
+        m &= df["data_type"].astype(str).isin(["instruments", "instrument-catalog", ""])
     d = df[m].copy()
     d["date"] = d["date"].astype(str)
     d["venue"] = d["venue"].astype(str)
