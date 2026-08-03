@@ -913,7 +913,7 @@ def test_tradfi_v2_leaf_seed_keeps_instrument_id_blank_underlying() -> None:
         )
     )
     assert len(rows) == 1
-    assert rows[0].instrument_type == "equity"
+    assert rows[0].instrument_type == "EQUITY"
     assert rows[0].instrument_id == "AAPL", "leaf seed must keep its real instrument_id"
     assert rows[0].underlying == "", "leaf seed must carry a blank underlying"
 
@@ -987,8 +987,11 @@ def test_tradfi_v2_bundle_capture_suppresses_via_full_enumerate_v2() -> None:
     assert len(bundle_keys) == len(set(bundle_keys)), "bundle seeds must be emitted once per underlying (no dupes)"
 
 
-def test_tradfi_v2_equity_and_etf_seed_canonical_lowercase() -> None:
-    """``EQUITY`` / ``ETF`` leaves also seed the lowercase writer grain."""
+def test_tradfi_v2_equity_and_etf_seed_canonical_uppercase() -> None:
+    """``EQUITY`` / ``ETF`` leaves seed the UPPERCASE writer grain (post the 2026-08-03
+    fix routing the seeder through the same UTL casing canon the writer uses — see
+    tradfi_combo_casing_direction_ssot_contradiction_2026_08_03.md; was lowercase
+    before that fix, matching the writer's pre-seam behavior)."""
     catalog = [
         _make_tradfi_entry(instrument_id="AAPL", instrument_type="EQUITY", venue="NASDAQ", available_from="2025-01-01"),
         _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NASDAQ", available_from="2025-01-01"),
@@ -996,10 +999,10 @@ def test_tradfi_v2_equity_and_etf_seed_canonical_lowercase() -> None:
     # 2024-06-01 → NOT_LISTED; 2025-06-01 alive keeps the lifecycle-overlap filter happy.
     rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
     seeded = {(r.instrument_id, r.instrument_type) for r in rows}
-    assert ("AAPL", "equity") in seeded
-    assert ("SPY", "etf") in seeded
-    # never the raw uppercase leaf
-    assert not any(r.instrument_type in {"EQUITY", "ETF"} for r in rows)
+    assert ("AAPL", "EQUITY") in seeded
+    assert ("SPY", "ETF") in seeded
+    # never the stale lowercase leaf
+    assert not any(r.instrument_type in {"equity", "etf"} for r in rows)
 
 
 # ---------------------------------------------------------------------------
@@ -2074,15 +2077,16 @@ def test_tradfi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -
 def test_tradfi_v2_alive_date_in_present_set_skipped() -> None:
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]
     date_axis = _date_axis("2024-06-01")
-    # present_set carries the CANONICAL WRITER grain (lowercase ``etf``) — the
-    # instrument_type the MTDS writer actually stamps for a captured cell. The seed
-    # now also normalises to ``etf``, so the captured cell suppresses the seed.
+    # present_set carries the CANONICAL WRITER grain (UPPERCASE ``ETF``, post the
+    # UTL casing-canon seam — tradfi_combo_casing_direction_ssot_contradiction_2026_08_03.md)
+    # — the instrument_type the MTDS writer actually stamps for a captured cell. The
+    # seed now also normalises to ``ETF``, so the captured cell suppresses the seed.
     key = _row_key_from_dict(
         {
             "venue": "NASDAQ",
             "chain": "",
             "data_type": "ohlcv_1m",
-            "instrument_type": "etf",
+            "instrument_type": "ETF",
             "instrument_id": "SPY",
             "league_id": "",
             "date": "2024-06-01",
@@ -2114,16 +2118,18 @@ def test_tradfi_v2_denominator_is_could_exist_universe_not_just_manifest() -> No
     captured = _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NASDAQ")
     uncaptured = _make_tradfi_entry(instrument_id="QQQ", instrument_type="ETF", venue="NASDAQ")
     date_axis = _date_axis("2024-06-01")
-    # present_set keyed at the canonical lowercase writer grain (``etf``) — what the
-    # writer records; the seed now normalises to the same grain so the captured cell
-    # is suppressed (the raw uppercase ``ETF`` would never match a real capture).
+    # present_set keyed at the canonical UPPERCASE writer grain (``ETF``, post the UTL
+    # casing-canon seam — tradfi_combo_casing_direction_ssot_contradiction_2026_08_03.md)
+    # — what the writer records; the seed now normalises to the same grain so the
+    # captured cell is suppressed (a stale lowercase ``etf`` would never match a real
+    # capture).
     present_set = {
         _row_key_from_dict(
             {
                 "venue": "NASDAQ",
                 "chain": "",
                 "data_type": "ohlcv_1m",
-                "instrument_type": "etf",
+                "instrument_type": "ETF",
                 "instrument_id": "SPY",
                 "league_id": "",
                 "date": "2024-06-01",
@@ -3490,15 +3496,44 @@ def test_canonical_writer_instrument_type_tradfi_future_cme_is_futures_chain() -
 
 
 def test_canonical_writer_instrument_type_tradfi_combo_is_combo() -> None:
-    """A CME COMBO (spread) leaf seeds instrument_type=combo (writer keeps its own partition)."""
+    """A CME COMBO (spread) leaf seeds instrument_type=COMBO (writer keeps its own
+    partition, canonicalized UPPERCASE per the UTL casing-canon seam — see
+    tradfi_combo_casing_direction_ssot_contradiction_2026_08_03.md)."""
     entry = _make_tradfi_entry(instrument_id="ESM6-ESU6", instrument_type="COMBO", venue="CME")
-    assert enumerator_module._canonical_writer_instrument_type("tradfi", entry) == "combo"
+    assert enumerator_module._canonical_writer_instrument_type("tradfi", entry) == "COMBO"
 
 
 def test_canonical_writer_instrument_type_tradfi_equity_passthrough() -> None:
-    """Regression: a NASDAQ EQUITY leaf still seeds the lowercase passthrough type."""
+    """Regression: a NASDAQ EQUITY leaf seeds the UPPERCASE passthrough type, matching
+    the writer's post-seam canonical casing (was lowercase before the 2026-08-03 fix)."""
     entry = _make_tradfi_entry(instrument_id="AAPL", instrument_type="EQUITY", venue="NASDAQ")
-    assert enumerator_module._canonical_writer_instrument_type("tradfi", entry) == "equity"
+    assert enumerator_module._canonical_writer_instrument_type("tradfi", entry) == "EQUITY"
+
+
+def test_canonical_writer_instrument_type_matches_utl_writer_canon_for_every_tradfi_leaf() -> None:
+    """Regression for tradfi_combo_casing_direction_ssot_contradiction_2026_08_03.md:
+    the seeder's output MUST equal the shared UTL canon the writer itself calls at the
+    ManifestWriter seam, for every leaf type this seeder handles — else a seeded
+    expected_unattempted cell can never be converted by its real capture (the
+    manifest consolidator's dedup key is case-sensitive, no UPPER()/LOWER()
+    normalization)."""
+    cases = [
+        ("FUTURE", "CME"),  # bundles to futures_chain (permanent lowercase exclusion)
+        ("COMBO", "CME"),  # bundles to combo -> canon'd COMBO
+        ("EQUITY", "NASDAQ"),  # passthrough -> canon'd EQUITY
+        ("ETF", "NYSE"),  # passthrough -> canon'd ETF
+        ("INDEX", "CBOE"),  # passthrough -> canon'd INDEX
+        ("SPOT_PAIR", "FX"),  # passthrough -> canon'd SPOT_PAIR
+    ]
+    for instrument_type, venue in cases:
+        entry = _make_tradfi_entry(instrument_id="X", instrument_type=instrument_type, venue=venue)
+        seeded = enumerator_module._canonical_writer_instrument_type("tradfi", entry)
+        # The writer's own bundle/leaf grain choice is independent of casing; feed
+        # the seeder's un-canonicalized grain choice through the SAME canon fn to
+        # confirm the seeder never re-diverges from the writer by hand-rolling casing.
+        bundle_it = enumerator_module.bundle_instrument_type_for_leaf("tradfi", instrument_type, venue)
+        raw_grain = bundle_it if bundle_it is not None else instrument_type.strip().lower()
+        assert seeded == enumerator_module.canonicalize_manifest_instrument_type("tradfi", raw_grain)
 
 
 def test_rollup_bundle_grain_tradfi_future_collapses_to_futures_chain() -> None:

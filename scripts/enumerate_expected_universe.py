@@ -138,6 +138,7 @@ from unified_api_contracts.registry.venue_trading_calendar import (
     non_trading_day_reason,
 )
 from unified_trading_library import MANIFEST_SCHEMA_VERSION, resolve_bucket_name
+from unified_trading_library.canonical import canonicalize_manifest_instrument_type  # noqa: qg-deep-import
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1716,32 +1717,36 @@ def _canonical_writer_instrument_type(asset_group: str, instr: InstrumentCatalog
     the shard atoms differ and a capture can never convert the seed (the seed
     stays permanently ``expected_unattempted`` and deflates honest-coverage).
 
+    **Fixed 2026-08-03** (`tradfi_combo_casing_direction_ssot_contradiction_2026_08_03.md`):
+    this function used to return the raw lowercase bundle/leaf grain directly. Since
+    the 2026-07-27 UTL casing-canon seam (`unified-trading-library@688e49bc`), the
+    MTDS writer now canonicalizes every tradfi manifest-column `instrument_type` to
+    UPPERCASE (`combo`→`COMBO`, `future`→`FUTURE`, etc. — `futures_chain`/
+    `options_chain` stay permanently lowercase) via
+    :func:`canonicalize_manifest_instrument_type` at the shared `ManifestWriter`
+    write seam — but this seeder kept emitting the OLD lowercase grain, so a
+    newly-seeded `combo`/`future`/`equity`/etc. cell could never be superseded by
+    its real (now-uppercase) capture (the manifest consolidator's dedup key is
+    case-sensitive — no `UPPER()`/`LOWER()` normalization in
+    `unified_trading_library.manifest_consolidator._dedup_key_sql`). Routing the
+    final grain through the SAME shared canon the writer uses closes that gap and
+    makes the two impossible to drift apart again (single source of truth), rather
+    than re-hardcoding a casing assumption a second time.
+
     The IS catalogue carries the RAW leaf type UPPERCASE (``FUTURE`` / ``EQUITY``
-    / ``ETF`` / ``SPOT_PAIR`` / ``INDEX``), but MTDS writes captured cells at the
-    CANONICAL BUNDLED grain LOWERCASE (``future`` / ``equity`` / ``etf`` /
-    ``combo`` / ``futures_chain`` / ``options_chain``) — the writer reads the
-    ``instrument_type=`` hive path segment which the capture emits in canonical
-    form. The UAC ``bundle_instrument_type_for_leaf`` / ``grain_for_instrument_type``
-    helpers are the SSOT for that mapping (the same pair ``_rollup_bundle_grain``
-    uses to collapse OPTION/COMBO leaves to one per-underlying ``options_chain``
-    entry); so:
+    / ``ETF`` / ``SPOT_PAIR`` / ``INDEX``); the UAC ``bundle_instrument_type_for_leaf``
+    / ``grain_for_instrument_type`` helpers are the SSOT for the bundle-vs-leaf
+    mapping (the same pair ``_rollup_bundle_grain`` uses to collapse OPTION/COMBO
+    leaves to one per-underlying ``options_chain`` entry); so:
 
     * a bundle leaf (``option`` at any tradfi venue → ``options_chain``; ``combo`` at
-      a tradfi venue → ``combo``; a CME/ICE-venue-overlaid ``future`` → ``futures_chain``)
-      → its bundle instrument_type. NOTE (2026-06-22): TradFi ``combo`` rolls up to its
-      OWN ``instrument_type=combo`` (the writer keeps a distinct ``combo`` partition),
-      and TradFi ``future`` at CME/ICE bundles to ``futures_chain`` via the
-      ``FUTURE_BUNDLE_VENUES["tradfi"]`` overlay — both matching the writer grain;
+      a tradfi venue → ``combo``→canon'd to ``COMBO``; a CME/ICE-venue-overlaid
+      ``future`` → ``futures_chain``) → its bundle instrument_type, canonicalized;
     * a passthrough leaf (``future`` at a NON-bundling venue / ``equity`` / ``etf`` /
-      ``spot_pair`` / ``index``) → the canonical-lowercase leaf type (``.strip().lower()``);
-      for tradfi the lowercase form already equals the UAC canonical alias for every
-      type (``FUTURE``→``future`` etc — no per-type aliasing needed);
-    * an already-canonical bundle entry (``options_chain`` / ``futures_chain`` — e.g.
-      the synthetic rows ``_rollup_bundle_grain`` already produced, or a bundle entry
-      direct from the catalogue) → returned unchanged (``bundle_instrument_type_for_leaf``
-      returns ``None`` for the ``options_chain`` / ``futures_chain`` bundle types, so the
-      ``.lower()`` fall-through keeps it intact; a synthetic ``combo`` bundle entry instead
-      resolves to ``combo`` via the leaf map, which is likewise its correct canonical type).
+      ``spot_pair`` / ``index``) → the canonicalized (now UPPERCASE) leaf type;
+    * an already-canonical bundle entry (``options_chain`` / ``futures_chain``) →
+      returned unchanged (``canonicalize_manifest_instrument_type``'s permanent
+      bundle-grain exclusion, matching the writer's own permanent exclusion).
 
     De-dup note: leaf types keep a per-contract ``instrument_id``, so two leaves
     never collapse to one cell here; the OPTION/COMBO→underlying collapse (which
@@ -1750,8 +1755,8 @@ def _canonical_writer_instrument_type(asset_group: str, instr: InstrumentCatalog
     """
     bundle_it = bundle_instrument_type_for_leaf(asset_group, instr.instrument_type, instr.venue)
     if bundle_it is not None:
-        return bundle_it
-    return (instr.instrument_type or "").strip().lower()
+        return canonicalize_manifest_instrument_type(asset_group, bundle_it)
+    return canonicalize_manifest_instrument_type(asset_group, (instr.instrument_type or "").strip().lower())
 
 
 #: TradFi data_types we actually FETCH from Databento at L0/free (``ohlcv-1s`` /
