@@ -62,18 +62,32 @@ Usage::
     # EXECUTE one asset_group (writes PROD — human-reviewed step, VM-only per the heavy-I/O rule)
     python scripts/migrate_instrument_availability_hive_2026_08_03.py \\
         --asset-group cefi --apply-prod --confirm-prod-write --workers 32
+
+    # RESOLVE content_mismatch (todo 6 of instrument_availability_hive_migration_unrecognized_
+    # shapes_and_content_mismatch_2026_08_03.md, per todo 4's ruled "superset wins" policy —
+    # downloads + parses BOTH sides per pair, writes PROD when the flat side wins/ties)
+    python scripts/migrate_instrument_availability_hive_2026_08_03.py \\
+        --asset-group defi --apply-prod --confirm-prod-write --resolve-content-mismatch --workers 16
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
-from unified_trading_library import gcs_copy_object, gcs_describe_object, get_storage_client, resolve_bucket_name
+import pandas as pd
+from unified_trading_library import (
+    gcs_copy_object,
+    gcs_describe_object,
+    gcs_read_object_with_generation,
+    get_storage_client,
+    resolve_bucket_name,
+)
 
 ASSET_GROUPS = ("cefi", "defi", "tradfi", "sports", "prediction")
 
@@ -315,13 +329,156 @@ def apply_asset_group(*, asset_group: str, workers: int = 32) -> ApplyResult:
     return result
 
 
+_FUTURES_CONTRACTS_IDENTITY_COLUMN = "contract_symbol"
+_DEFAULT_IDENTITY_COLUMN = "raw_symbol"
+
+
+def _identity_column_for(path: str) -> str:
+    """Stable cross-generation identity column for the parquet at *path*.
+
+    Ruled todo-4 methodology (instrument_availability_hive_migration_unrecognized_shapes_and_
+    content_mismatch_2026_08_03.md): ``instrument_key`` is NOT a stable identity across writer
+    generations (e.g. flat ``DERIBIT:FUTURE:BTC-27SEP19`` vs hive ``DERIBIT:FUTURE:BTC@INV-20190927``
+    are the SAME instrument) -- ``raw_symbol`` (``contract_symbol`` for ``futures_contracts.parquet``,
+    a distinct 16-column schema with no ``raw_symbol``) is the stable cross-generation identity key.
+    """
+    return (
+        _FUTURES_CONTRACTS_IDENTITY_COLUMN
+        if path.rsplit("/", 1)[-1] == "futures_contracts.parquet"
+        else _DEFAULT_IDENTITY_COLUMN
+    )
+
+
+def _identity_set(data: bytes, column: str) -> frozenset[str]:
+    """Non-null identity-column values in parquet *data* -- column-pruned read, never the full frame."""
+    df = pd.read_parquet(io.BytesIO(data), columns=[column])
+    return frozenset(v for v in df[column].tolist() if v is not None)
+
+
+@dataclass
+class MismatchResolution:
+    src: str
+    dst: str
+    outcome: str  # "flat_wins" | "hive_wins" | "tie_flat_bytes" | "disjoint_needs_review" | "failed"
+    detail: str | None = None
+
+
+def _resolve_one_mismatch(bucket: str, src: str, dst: str) -> MismatchResolution:
+    """Resolve ONE content_mismatch pair per the ruled todo-4 "superset wins" policy.
+
+    Per-object completeness compare (not a blanket side-label/timestamp rule): the identity-set
+    SUPERSET side's bytes become authoritative for the hive target -- whichever original path held
+    them. Equal-membership-but-different-bytes ties (schema_version/column-order/float-precision
+    drift) default to the flat side's bytes (keeps single-writer provenance, matches the tool's
+    existing copy direction). Genuinely disjoint sets (neither is a superset of the other) are NOT
+    auto-resolved -- flagged for manual per-object review/union, per the ruling's explicit backstop.
+    """
+    src_uri = f"gs://{bucket}/{src}"
+    dst_uri = f"gs://{bucket}/{dst}"
+    column = _identity_column_for(src)
+    try:
+        flat_bytes, _ = gcs_read_object_with_generation(src_uri)
+        hive_bytes, _ = gcs_read_object_with_generation(dst_uri)
+        if flat_bytes is None or hive_bytes is None:
+            return MismatchResolution(src, dst, "failed", "source or target vanished mid-resolve")
+        flat_ids = _identity_set(flat_bytes, column)
+        hive_ids = _identity_set(hive_bytes, column)
+        if flat_ids == hive_ids:
+            gcs_copy_object(src_uri, dst_uri)
+            return MismatchResolution(src, dst, "tie_flat_bytes")
+        if flat_ids > hive_ids:
+            gcs_copy_object(src_uri, dst_uri)
+            return MismatchResolution(src, dst, "flat_wins")
+        if hive_ids > flat_ids:
+            return MismatchResolution(src, dst, "hive_wins")
+        return MismatchResolution(
+            src, dst, "disjoint_needs_review", f"flat={len(flat_ids)} hive={len(hive_ids)} ids, neither is a superset"
+        )
+    except Exception as exc:
+        return MismatchResolution(src, dst, "failed", f"{type(exc).__name__}: {exc}")
+
+
+@dataclass
+class ResolveResult:
+    asset_group: str
+    flat_wins: int = 0
+    hive_wins: int = 0
+    tie_flat_bytes: int = 0
+    disjoint: list[tuple[str, str, str | None]] = field(default_factory=list)
+    failed: list[tuple[str, str, str | None]] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.failed
+
+
+def resolve_content_mismatches(*, asset_group: str, workers: int = 16) -> ResolveResult:
+    """Re-derive the current content_mismatch population (the same safe, idempotent re-scan+verify
+    path already run twice today -- ``apply_asset_group`` never deletes, copy-if-missing is a no-op
+    on already-migrated objects) and resolve each pair per the ruled todo-4 policy.
+    """
+    bucket = _bucket_for(asset_group)
+    apply_result = apply_asset_group(asset_group=asset_group, workers=workers)
+    pairs: list[tuple[str, str]] = []
+    for src in apply_result.content_mismatch:
+        dst = hive_target_for(src, asset_group)
+        if dst is not None:
+            pairs.append((src, dst))
+    result = ResolveResult(asset_group=asset_group)
+    print(f"  resolving {len(pairs):,} content_mismatch pairs in {bucket}...", flush=True)
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = [pool.submit(_resolve_one_mismatch, bucket, src, dst) for src, dst in pairs]
+        for done, fut in enumerate(as_completed(futures), start=1):
+            res = fut.result()
+            if res.outcome == "flat_wins":
+                result.flat_wins += 1
+            elif res.outcome == "hive_wins":
+                result.hive_wins += 1
+            elif res.outcome == "tie_flat_bytes":
+                result.tie_flat_bytes += 1
+            elif res.outcome == "disjoint_needs_review":
+                result.disjoint.append((res.src, res.dst, res.detail))
+            elif res.outcome == "failed":
+                result.failed.append((res.src, res.dst, res.detail))
+            else:
+                raise ValueError(f"unrecognized resolution outcome {res.outcome!r} for {res.src!r}")
+            if done % 2000 == 0:
+                print(f"  progress: {done:,}/{len(pairs):,} pairs resolved", flush=True)
+    return result
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--asset-group", required=True, choices=ASSET_GROUPS)
     ap.add_argument("--apply-prod", action="store_true")
     ap.add_argument("--confirm-prod-write", action="store_true")
     ap.add_argument("--workers", type=int, default=32, help="concurrent per-object workers (default 32)")
+    ap.add_argument(
+        "--resolve-content-mismatch",
+        action="store_true",
+        help="Resolve todo-4's ruled 'superset wins' content_mismatch population instead of the copy-up "
+        "(requires --apply-prod --confirm-prod-write; downloads + parses both sides per pair).",
+    )
     args = ap.parse_args()
+
+    if args.apply_prod and args.confirm_prod_write and args.resolve_content_mismatch:
+        t0 = time.monotonic()
+        rr = resolve_content_mismatches(asset_group=args.asset_group, workers=args.workers)
+        elapsed = time.monotonic() - t0
+        print(
+            f"\n=== RESOLVE CONTENT_MISMATCH asset_group={rr.asset_group} ({elapsed:.1f}s) ===\n"
+            f"  flat_wins:         {rr.flat_wins:,}\n"
+            f"  hive_wins:         {rr.hive_wins:,}\n"
+            f"  tie_flat_bytes:    {rr.tie_flat_bytes:,}\n"
+            f"  disjoint (review): {len(rr.disjoint):,}\n"
+            f"  failed:            {len(rr.failed):,}",
+            flush=True,
+        )
+        if rr.disjoint:
+            print(f"  !!! DISJOINT (needs manual review): {rr.disjoint[:5]}")
+        if rr.failed:
+            print(f"  !!! FAILED: {rr.failed[:5]}")
+        return 0 if rr.ok else 1
 
     if args.apply_prod and args.confirm_prod_write:
         t0 = time.monotonic()
