@@ -337,14 +337,22 @@ class TestPromoteCatalogueDedupAwareGuard:
         """A non-cefi asset_group must never have Phase D dedup applied to its
         current-catalogue count — the SAME 2-row off-by-one-shaped duplicate
         (irrelevant content for a non-cefi AG, used only as inert row data here)
-        stays un-deduped, so an equivalent shrink is still blocked."""
+        stays un-deduped, so an equivalent shrink is still blocked.
+
+        Uses an ACTIVE (``available_to=None``) variant of the fixture, not the
+        delisted original — the delisted original would ALSO satisfy the
+        asset-group-agnostic ``shrink_benign_no_active_loss`` auto-accept added
+        2026-08-03 (see ``TestPromoteCatalogueBenignShrinkAutoAccept``), which
+        would defeat this test's actual point (isolating the cefi-only Phase D
+        mechanism from that separate, broader safety check)."""
         monkeypatch.setattr(rollup, "log_event", lambda *args, **kwargs: None)
         bucket, env = "instruments-store-defi-prd-test", "prod"
         canonical_blob = f"{env}/{rollup.CATALOG_FILENAME}"
-        current_payload = _to_parquet_bytes(_off_by_one_option_rows())
+        active_rows = [{**row, "available_to": None} for row in _off_by_one_option_rows()]
+        current_payload = _to_parquet_bytes(active_rows)
         storage = _FakeStorage(canonical_blob, current_payload)
 
-        new_df = pd.DataFrame([_off_by_one_option_rows()[0]])  # 1 row vs raw current=2
+        new_df = pd.DataFrame([active_rows[0]])  # 1 row vs raw current=2, dropped row is ACTIVE
 
         code = rollup.promote_catalogue(
             storage,
@@ -356,3 +364,115 @@ class TestPromoteCatalogueDedupAwareGuard:
             dry_run=True,
         )
         assert code == 1, "dedup-aware guard is cefi-only; other asset groups must be unaffected"
+
+
+class TestPromoteCatalogueBenignShrinkAutoAccept:
+    """``shrink_benign_no_active_loss`` (DP-CATALOG-001 cefi, 2026-08-03): a
+    shrink whose ENTIRE drop-list is already-delisted rows auto-accepts,
+    regardless of asset_group or which dedup pass would eventually explain it —
+    live incident: the self-widening 21-day window re-derived a transient
+    off-by-one duplicate for a DERIBIT contract expired the day before
+    ``window_start``, which Phase D correctly collapsed but which the OLD
+    dedup-aware guard (Phase D re-run on ``current`` ALONE) could never
+    discover, because the duplicate's second half never existed in the STORED
+    current catalogue — only in this run's fresh window re-derivation."""
+
+    def test_shrink_touching_only_delisted_rows_auto_accepts(
+        self, rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        events: list[tuple[str, dict[str, object]]] = []
+        monkeypatch.setattr(rollup, "log_event", lambda name, *, severity, details: events.append((name, details)))
+        bucket, env = "instruments-store-cefi-prd-test", "prod"
+        canonical_blob = f"{env}/{rollup.CATALOG_FILENAME}"
+        delisted_deribit_row = {
+            "venue": "DERIBIT",
+            "instrument_type": "FUTURE",
+            "raw_symbol": "BTC-12JUL26",
+            "instrument_id": "DERIBIT:FUTURE:BTC-USD@INV-20260712",
+            "canonical_instrument_id": "DERIBIT:FUTURE:BTC-USD@INV-20260712",
+            "base_asset": "BTC",
+            "margin_type": "inverse",
+            "expiry": "2026-07-12",
+            "available_from": "2026-06-12",
+            "available_to": "2026-07-12",
+        }
+        active_row = {
+            "venue": "OKX",
+            "instrument_type": "PERPETUAL",
+            "raw_symbol": "BTC-USDT-SWAP",
+            "instrument_id": "OKX:PERPETUAL:BTC-USDT@LIN",
+            "canonical_instrument_id": "OKX:PERPETUAL:BTC-USDT@LIN",
+            "base_asset": "BTC",
+            "margin_type": "linear",
+            "expiry": None,
+            "available_from": "2024-01-01",
+            "available_to": None,
+        }
+        current_payload = _to_parquet_bytes([delisted_deribit_row, active_row])
+        storage = _FakeStorage(canonical_blob, current_payload)
+
+        # The delisted DERIBIT row vanishes from the freshly-rolled candidate
+        # (simulating Phase D's post-merge off-by-one collapse); the active row
+        # is untouched — new=1 < current=2, but dropped_active=0.
+        new_df = pd.DataFrame([active_row])
+
+        code = rollup.promote_catalogue(
+            storage,
+            bucket,
+            env,
+            new_df,
+            asset_group="cefi",
+            allow_shrink=False,
+            dry_run=True,
+        )
+        assert code == 0, "a shrink touching ONLY already-delisted rows must auto-accept, not block"
+        assert any(name == "CATALOGUE_SHRINK_BENIGN_AUTO_ACCEPTED" for name, _ in events)
+        assert not any(name == "CATALOGUE_SHRINK_BLOCKED" for name, _ in events)
+
+    def test_shrink_touching_one_active_row_still_blocks(
+        self, rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sanity counter-case: if even ONE dropped row is active, the benign
+        auto-accept must NOT fire — this is the same invariant
+        `test_genuine_active_row_drop_still_trips_guard` already covers for the
+        pure-count-based cefi path; repeated here to pin the drop_diagnostics-
+        based path specifically."""
+        events: list[tuple[str, dict[str, object]]] = []
+        monkeypatch.setattr(rollup, "log_event", lambda name, *, severity, details: events.append((name, details)))
+        bucket, env = "instruments-store-cefi-prd-test", "prod"
+        canonical_blob = f"{env}/{rollup.CATALOG_FILENAME}"
+        active_row_a = {
+            "venue": "OKX",
+            "instrument_type": "PERPETUAL",
+            "raw_symbol": "BTC-USDT-SWAP",
+            "instrument_id": "OKX:PERPETUAL:BTC-USDT@LIN",
+            "canonical_instrument_id": "OKX:PERPETUAL:BTC-USDT@LIN",
+            "base_asset": "BTC",
+            "margin_type": "linear",
+            "expiry": None,
+            "available_from": "2024-01-01",
+            "available_to": None,
+        }
+        active_row_b = {
+            **active_row_a,
+            "raw_symbol": "ETH-USDT-SWAP",
+            "instrument_id": "OKX:PERPETUAL:ETH-USDT@LIN",
+            "base_asset": "ETH",
+        }
+        current_payload = _to_parquet_bytes([active_row_a, active_row_b])
+        storage = _FakeStorage(canonical_blob, current_payload)
+
+        new_df = pd.DataFrame([active_row_a])  # genuinely drops active_row_b
+
+        code = rollup.promote_catalogue(
+            storage,
+            bucket,
+            env,
+            new_df,
+            asset_group="cefi",
+            allow_shrink=False,
+            dry_run=True,
+        )
+        assert code == 1, "a shrink touching an ACTIVE row must still block, even via the new diagnostic path"
+        assert any(name == "CATALOGUE_SHRINK_BLOCKED" for name, _ in events)
+        assert not any(name == "CATALOGUE_SHRINK_BENIGN_AUTO_ACCEPTED" for name, _ in events)
