@@ -34,12 +34,15 @@ DATA_FLOOR = "2020-06-06"  # SSOT: codex/02-data/sports-2020-06-data-floor.md
 SCHEDULE_DEFINING_DATA_TYPES = frozenset({"FIXTURES", "FIXTURES_SCHEDULE"})
 
 # entity -> MVP-only (True) or all-383 (False), per SPORTS_ENTITY_LEAGUE_COVERAGE
+# LEAGUES excluded: writer path retired 2026-05-07 (manifest_migration_master C.1 audit) and
+# its shard atom never had a league_id axis (SportsPathLayout.PER_DAY_BARE) -- a per-(date,
+# league_id) denominator is categorically wrong for it. See
+# plans/active/issues/sports_af_full_entity_completion_2026_08_03.md for the full verdict.
 ENTITIES: dict[str, bool] = {
     "PLAYER_STATS": True,
     "INJURIES": False,
     "STANDINGS": False,
     "TEAMS": False,
-    "LEAGUES": False,
 }
 
 
@@ -83,7 +86,7 @@ def main() -> int:
         )
         grand_total_needed += len(needed)
 
-    print(f"\nGrand total needed shards across all 5 entities: {grand_total_needed}", file=sys.stderr)
+    print(f"\nGrand total needed shards across all {len(ENTITIES)} entities: {grand_total_needed}", file=sys.stderr)
     return 0
 
 

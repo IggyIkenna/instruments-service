@@ -76,13 +76,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
-from google.cloud import storage
+from unified_trading_library import get_storage_client, resolve_bucket_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-PROJECT_ID = "central-element-323112"
-SPORTS_BUCKET = f"instruments-store-sports-{PROJECT_ID}"
+SPORTS_BUCKET = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
 MANIFEST_BLOB = "_index/availability_index.parquet"
 RETIRED_DATA_TYPE = "LEAGUES"
 NEW_REASON = "EXPECTED_DEPRECATED_DATA_TYPE"
@@ -111,21 +110,11 @@ def main() -> int:
         )
         return 1
 
-    client = storage.Client(project=PROJECT_ID)
-    bucket = client.bucket(SPORTS_BUCKET)
-    blob = bucket.blob(MANIFEST_BLOB)
+    client = get_storage_client()
 
     logger.info("Loading sports manifest from gs://%s/%s", SPORTS_BUCKET, MANIFEST_BLOB)
-    with tempfile.NamedTemporaryFile(prefix="migrate-leagues-", suffix=".parquet", delete=False) as _tf:
-        manifest_path = _tf.name
-    try:
-        blob.download_to_filename(manifest_path)
-        df = pd.read_parquet(manifest_path)
-    finally:
-        import contextlib
-
-        with contextlib.suppress(OSError):
-            os.unlink(manifest_path)
+    raw = client.download_bytes(SPORTS_BUCKET, MANIFEST_BLOB)
+    df = pd.read_parquet(io.BytesIO(raw))
     logger.info("Manifest rows: %d", len(df))
 
     # Find rows with data_type=LEAGUES that need flipping.
@@ -192,9 +181,8 @@ def main() -> int:
 
     out = io.BytesIO()
     df.to_parquet(out, index=False)
-    out.seek(0)
     logger.info("Uploading flipped manifest (%d rows total, %d flipped)", len(df), n_to_flip)
-    blob.upload_from_file(out, content_type="application/octet-stream")
+    client.upload_bytes(SPORTS_BUCKET, MANIFEST_BLOB, out.getvalue(), content_type="application/octet-stream")
     logger.info("Done. CSV audit at %s", csv_path)
     return 0
 
