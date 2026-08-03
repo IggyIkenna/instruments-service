@@ -1253,6 +1253,14 @@ class TestGwFalseEmptyWritePath20260714:
             patch("instruments_service.engine.orchestrator.is_league_entity_covered", return_value=True),
             patch("instruments_service.engine.orchestrator.get_league_fixture_calendar", return_value=["match"]),
             patch("instruments_service.engine.orchestrator._list_present_parquet_leagues", return_value=set()),
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                return_value=pd.DataFrame(columns=["date", "data_type", "league_id", "capture_status"]),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._read_per_league_entity_df",
+                return_value=None,
+            ),
         ):
             await _fetch_sports_reference_data(
                 "2025-11-08",
@@ -1312,6 +1320,14 @@ class TestGwFalseEmptyWritePath20260714:
                 "instruments_service.engine.orchestrator._list_present_parquet_leagues",
                 return_value={"LA_LIGA"},
             ) as mock_present,
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                return_value=pd.DataFrame(columns=["date", "data_type", "league_id", "capture_status"]),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._read_per_league_entity_df",
+                return_value=None,
+            ),
         ):
             await _fetch_sports_reference_data(
                 "2025-11-08",
