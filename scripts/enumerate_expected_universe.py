@@ -3701,7 +3701,17 @@ def _rollup_present_bundle_grain(df: pd.DataFrame, asset_group: str) -> pd.DataF
         is_leaf_by_key[key] = (
             grain_for_instrument_type(asset_group, it, venue) == GRAIN_BUNDLE_BY_UNDERLYING and b_it is not None
         )
-        bundle_it_by_key[key] = b_it
+        # Manifest-column casing (tradfi_combo_casing_direction_ssot_contradiction_
+        # 2026_08_03.md): _canonical_writer_instrument_type now routes the SEED side
+        # through canonicalize_manifest_instrument_type (combo -> COMBO; futures_chain/
+        # options_chain stay lowercase, the permanent bundle-grain exclusion). Without
+        # applying the SAME canon here, a re-keyed PRESENT-set row would stay forced to
+        # the raw (lowercase) bundle_it — reopening the identical shard-atom mismatch
+        # this rollup exists to close, just on the present-set side instead of the seed
+        # side. canonicalize_manifest_instrument_type is a no-op for futures_chain/
+        # options_chain and for non-tradfi/cefi asset_groups, so this only changes
+        # tradfi's own non-excluded bundle type (combo) to UPPERCASE.
+        bundle_it_by_key[key] = canonicalize_manifest_instrument_type(asset_group, b_it) if b_it is not None else None
 
     if not any(is_leaf_by_key.values()):
         return df  # fast no-op path — no bundle-grain leaves in this manifest slice
