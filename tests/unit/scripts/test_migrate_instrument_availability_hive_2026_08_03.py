@@ -64,6 +64,44 @@ _ALREADY_HIVE = _CEFI_HIVE
 # Within the scanned instrument_availability/by_date/ prefix (so a real GCS listing WOULD return it)
 # but missing the venue= segment entirely -- an unrecognized shape, not a flat-candidate or hive object.
 _UNRECOGNIZED = "instrument_availability/by_date/day=2026-07-26/some_other_shape.parquet"
+# Sports league-sharded FLAT shape (todo 2 of instrument_availability_hive_migration_unrecognized_
+# shapes_and_content_mismatch_2026_08_03.md) -- league= BEFORE venue=, confirmed live 2026-08-02.
+_SPORTS_LEAGUE_FLAT = (
+    "instrument_availability/by_date/day=2026-08-02/league=ARGENTINA_PRIMERA_NACIONAL/"
+    "venue=API_FOOTBALL/instruments.parquet"
+)
+_SPORTS_LEAGUE_HIVE = (
+    "instrument_availability/by_date/day=2026-08-02/pipeline_mode=batch_api_football/"
+    "asset_group=sports/venue=API_FOOTBALL/league=ARGENTINA_PRIMERA_NACIONAL/instruments.parquet"
+)
+# Prediction canonical_question_group-BEFORE-day FLAT shape (todo 3 of
+# instrument_availability_hive_migration_unrecognized_shapes_and_content_mismatch_2026_08_03.md) --
+# group= BEFORE day=, confirmed live (last write 2026-07-22T00:37:29Z, not written since).
+_PRED_GROUP_FIRST_FLAT = (
+    "instrument_availability/by_date/canonical_question_group=BTC_UP_DOWN_HOURLY/"
+    "day=2026-07-13/venue=POLYMARKET/instruments.parquet"
+)
+_PRED_GROUP_FIRST_HIVE = (
+    "instrument_availability/by_date/day=2026-07-13/pipeline_mode=batch_polymarket_clob/"
+    "asset_group=prediction/venue=POLYMARKET/canonical_question_group=BTC_UP_DOWN_HOURLY/instruments.parquet"
+)
+_PRED_GROUP_FIRST_FLAT_KALSHI = (
+    "instrument_availability/by_date/canonical_question_group=OTHER/day=2026-07-13/venue=KALSHI/instruments.parquet"
+)
+# Prediction market_lifecycle legacy FLAT shape (same todo, adjacent finding) -- day=/group=/venue=
+# (venue third, not immediately after day=, so it never matched _FLAT_RE). Confirmed live, same
+# cutover timing as the shape above.
+_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT = (
+    "market_lifecycle/by_canonical_group/day=2026-07-22/group=BTC_UP_DOWN_DAILY/"
+    "venue=POLYMARKET/market_lifecycle.parquet"
+)
+_PRED_LIFECYCLE_DAY_GROUP_VENUE_HIVE = (
+    "market_lifecycle/by_canonical_group/day=2026-07-22/pipeline_mode=batch_polymarket_gamma_api/"
+    "asset_group=prediction/venue=POLYMARKET/group=BTC_UP_DOWN_DAILY/market_lifecycle.parquet"
+)
+_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT_KALSHI = (
+    "market_lifecycle/by_canonical_group/day=2026-07-22/group=OTHER/venue=KALSHI/market_lifecycle.parquet"
+)
 
 
 class TestHiveTargetFor:
@@ -112,6 +150,53 @@ class TestHiveTargetFor:
         idx_venue = result.index("venue=")
         assert idx_day < idx_pm < idx_ag < idx_venue
 
+    def test_sports_league_flat_maps_to_hive_with_trailing_league(self) -> None:
+        assert _mod.hive_target_for(_SPORTS_LEAGUE_FLAT, "sports") == _SPORTS_LEAGUE_HIVE
+
+    def test_sports_league_flat_uses_batch_api_football_pipeline_mode(self) -> None:
+        result = _mod.hive_target_for(_SPORTS_LEAGUE_FLAT, "sports")
+        assert result is not None
+        assert "pipeline_mode=batch_api_football/asset_group=sports/venue=API_FOOTBALL" in result
+
+    def test_sports_league_key_is_trailing_after_venue(self) -> None:
+        result = _mod.hive_target_for(_SPORTS_LEAGUE_FLAT, "sports")
+        assert result is not None
+        idx_venue = result.index("venue=")
+        idx_league = result.index("league=")
+        assert idx_venue < idx_league
+        assert result.endswith("league=ARGENTINA_PRIMERA_NACIONAL/instruments.parquet")
+
+    def test_sports_league_flat_not_recognized_for_other_asset_groups(self) -> None:
+        # The league-before-venue shape is sports-specific; other asset_groups never emit it,
+        # so hive_target_for must not (mis)recognize it under a different asset_group.
+        assert _mod.hive_target_for(_SPORTS_LEAGUE_FLAT, "cefi") is None
+
+    def test_prediction_group_first_flat_maps_to_hive_with_trailing_group(self) -> None:
+        assert _mod.hive_target_for(_PRED_GROUP_FIRST_FLAT, "prediction") == _PRED_GROUP_FIRST_HIVE
+
+    def test_prediction_group_first_flat_kalshi_uses_kalshi_pipeline_mode(self) -> None:
+        result = _mod.hive_target_for(_PRED_GROUP_FIRST_FLAT_KALSHI, "prediction")
+        assert result is not None
+        assert "pipeline_mode=batch_kalshi/asset_group=prediction/venue=KALSHI" in result
+        assert result.endswith("canonical_question_group=OTHER/instruments.parquet")
+
+    def test_prediction_group_first_flat_not_recognized_for_other_asset_groups(self) -> None:
+        # canonical_question_group= is a prediction-only concept -- guard against misrecognition.
+        assert _mod.hive_target_for(_PRED_GROUP_FIRST_FLAT, "cefi") is None
+
+    def test_prediction_lifecycle_day_group_venue_flat_maps_to_hive_with_trailing_group(self) -> None:
+        result = _mod.hive_target_for(_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT, "prediction")
+        assert result == _PRED_LIFECYCLE_DAY_GROUP_VENUE_HIVE
+
+    def test_prediction_lifecycle_day_group_venue_flat_kalshi_uses_batch_instruments_service(self) -> None:
+        result = _mod.hive_target_for(_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT_KALSHI, "prediction")
+        assert result is not None
+        assert "pipeline_mode=batch_instruments_service/asset_group=prediction/venue=KALSHI" in result
+        assert result.endswith("group=OTHER/market_lifecycle.parquet")
+
+    def test_prediction_lifecycle_day_group_venue_flat_not_recognized_for_other_asset_groups(self) -> None:
+        assert _mod.hive_target_for(_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT, "cefi") is None
+
 
 class TestScan:
     def _mock_client(self, names: list[str]) -> MagicMock:
@@ -143,6 +228,29 @@ class TestScan:
         result = _mod.scan(client, "instruments-store-cefi-prd", "cefi")
         # market_lifecycle prefix is never queried for non-prediction asset groups.
         assert result.candidate_count == 1
+
+    def test_sports_scan_recognizes_league_sharded_candidates(self) -> None:
+        client = self._mock_client([_SPORTS_LEAGUE_FLAT, _ALREADY_HIVE, _UNRECOGNIZED])
+        result = _mod.scan(client, "instruments-store-sports-prd", "sports")
+        assert result.candidate_count == 1
+        assert result.candidates[0] == (_SPORTS_LEAGUE_FLAT, _SPORTS_LEAGUE_HIVE)
+
+    def test_prediction_scan_recognizes_group_first_and_lifecycle_day_group_venue_candidates(self) -> None:
+        client = self._mock_client(
+            [
+                _PRED_GROUP_FIRST_FLAT,
+                _PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT,
+                _ALREADY_HIVE,
+                _UNRECOGNIZED,
+            ]
+        )
+        result = _mod.scan(client, "instruments-store-prediction-prd", "prediction")
+        assert result.candidate_count == 2
+        assert (_PRED_GROUP_FIRST_FLAT, _PRED_GROUP_FIRST_HIVE) in result.candidates
+        assert (
+            _PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT,
+            _PRED_LIFECYCLE_DAY_GROUP_VENUE_HIVE,
+        ) in result.candidates
 
 
 class TestProcessOneObject:
@@ -216,4 +324,149 @@ class TestBucketFor:
         with patch.object(_mod, "resolve_bucket_name", return_value="instruments-store-cefi-prd") as mock_rbn:
             result = _mod._bucket_for("cefi")
         mock_rbn.assert_called_once_with(cloud="gcp", kind="instruments-store", asset_group="cefi")
-        assert result == "instruments-store-cefi-prd"
+
+
+# ---------------------------------------------------------------------------
+# todo 6 -- content_mismatch resolver (ruled "superset wins" policy, todo 4)
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityColumnFor:
+    def test_futures_contracts_uses_contract_symbol(self) -> None:
+        assert _mod._identity_column_for(_TRADFI_FUTURES_FLAT) == "contract_symbol"
+
+    def test_instruments_parquet_uses_raw_symbol(self) -> None:
+        assert _mod._identity_column_for(_CEFI_FLAT) == "raw_symbol"
+
+
+class TestIdentitySet:
+    def test_extracts_non_null_values(self) -> None:
+        import pandas as pd
+
+        buf = pd.DataFrame({"raw_symbol": ["BTC-USD", "ETH-USD", None]}).to_parquet(index=False)
+        assert _mod._identity_set(buf, "raw_symbol") == frozenset({"BTC-USD", "ETH-USD"})
+
+
+class TestResolveOneMismatch:
+    @staticmethod
+    def _parquet(symbols: list[str]) -> bytes:
+        import pandas as pd
+
+        return pd.DataFrame({"raw_symbol": symbols}).to_parquet(index=False)
+
+    def test_flat_strict_superset_wins_and_copies(self) -> None:
+        flat = self._parquet(["A", "B", "C"])
+        hive = self._parquet(["A", "B"])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "flat_wins"
+        mock_copy.assert_called_once_with(f"gs://bkt/{_CEFI_FLAT}", f"gs://bkt/{_CEFI_HIVE}")
+
+    def test_hive_strict_superset_wins_no_write(self) -> None:
+        flat = self._parquet(["A"])
+        hive = self._parquet(["A", "B", "C"])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "hive_wins"
+        mock_copy.assert_not_called()
+
+    def test_tied_membership_defaults_to_flat_bytes(self) -> None:
+        flat = self._parquet(["A", "B"])
+        hive = self._parquet(["A", "B"])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "tie_flat_bytes"
+        mock_copy.assert_called_once()
+
+    def test_disjoint_sets_flagged_not_auto_resolved(self) -> None:
+        flat = self._parquet(["A", "B"])
+        hive = self._parquet(["C", "D"])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "disjoint_needs_review"
+        assert res.detail is not None
+        mock_copy.assert_not_called()
+
+    def test_vanished_object_flagged_failed(self) -> None:
+        flat = self._parquet(["A"])
+        with patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (None, 0)]):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "failed"
+        assert "vanished" in (res.detail or "")
+
+    def test_unexpected_exception_flagged_failed(self) -> None:
+        with patch.object(_mod, "gcs_read_object_with_generation", side_effect=RuntimeError("boom")):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "failed"
+        assert "boom" in (res.detail or "")
+
+    def test_futures_contracts_pair_compares_on_contract_symbol(self) -> None:
+        import pandas as pd
+
+        flat = pd.DataFrame({"contract_symbol": ["ESH26", "ESM26"]}).to_parquet(index=False)
+        hive = pd.DataFrame({"contract_symbol": ["ESH26"]}).to_parquet(index=False)
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _TRADFI_FUTURES_FLAT, _CEFI_HIVE)
+        assert res.outcome == "flat_wins"
+        mock_copy.assert_called_once()
+
+
+class TestResolveContentMismatches:
+    def test_aggregates_outcomes_and_counts_by_type(self) -> None:
+        apply_result = _mod.ApplyResult(asset_group="cefi", content_mismatch=[_CEFI_FLAT])
+        resolution = _mod.MismatchResolution(_CEFI_FLAT, _CEFI_HIVE, "flat_wins")
+        with (
+            patch.object(_mod, "_bucket_for", return_value="bkt"),
+            patch.object(_mod, "apply_asset_group", return_value=apply_result),
+            patch.object(_mod, "hive_target_for", return_value=_CEFI_HIVE),
+            patch.object(_mod, "_resolve_one_mismatch", return_value=resolution),
+        ):
+            result = _mod.resolve_content_mismatches(asset_group="cefi", workers=2)
+        assert result.flat_wins == 1
+        assert result.hive_wins == 0
+        assert result.ok
+
+    def test_disjoint_and_failed_collected_for_review(self) -> None:
+        apply_result = _mod.ApplyResult(asset_group="cefi", content_mismatch=[_CEFI_FLAT, _CEFI_FLAT])
+        outcomes = [
+            _mod.MismatchResolution(_CEFI_FLAT, _CEFI_HIVE, "disjoint_needs_review", "flat=1 hive=1 ids"),
+            _mod.MismatchResolution(_CEFI_FLAT, _CEFI_HIVE, "failed", "boom"),
+        ]
+        with (
+            patch.object(_mod, "_bucket_for", return_value="bkt"),
+            patch.object(_mod, "apply_asset_group", return_value=apply_result),
+            patch.object(_mod, "hive_target_for", return_value=_CEFI_HIVE),
+            patch.object(_mod, "_resolve_one_mismatch", side_effect=outcomes),
+        ):
+            result = _mod.resolve_content_mismatches(asset_group="cefi", workers=2)
+        assert len(result.disjoint) == 1
+        assert len(result.failed) == 1
+        assert not result.ok
+
+    def test_unmapped_src_skipped(self) -> None:
+        apply_result = _mod.ApplyResult(asset_group="cefi", content_mismatch=[_CEFI_FLAT])
+        with (
+            patch.object(_mod, "_bucket_for", return_value="bkt"),
+            patch.object(_mod, "apply_asset_group", return_value=apply_result),
+            patch.object(_mod, "hive_target_for", return_value=None),
+            patch.object(_mod, "_resolve_one_mismatch") as mock_resolve,
+        ):
+            result = _mod.resolve_content_mismatches(asset_group="cefi", workers=2)
+        mock_resolve.assert_not_called()
+        assert result.flat_wins == 0
+        assert result.ok
