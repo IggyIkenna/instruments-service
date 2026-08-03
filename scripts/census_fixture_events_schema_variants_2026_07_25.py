@@ -131,10 +131,22 @@ def main() -> int:
             variant = classify(cols)
             fixture_ids: list[str] | None = None
             if variant != "canonical_13col":
-                try:
-                    df = pd.read_parquet(f"gs://{BUCKET}/{p}", columns=["fixture_id"])
-                    fixture_ids = sorted({str(v) for v in df["fixture_id"].dropna().unique()})
-                except Exception:
+                # The fixture-id column name varies by variant (af_prefixed_10col
+                # carries af_fixture_id, not fixture_id) -- probing the actual
+                # schema instead of hardcoding "fixture_id" avoids silently
+                # dropping every af_prefixed_10col object from the recovery set
+                # (2026-08-03 finding: this exact bug left 2,383 objects
+                # permanently untargeted across every prior census in this
+                # campaign, since the hardcoded-column read always raised and
+                # was swallowed into an empty fixture_ids list).
+                id_col = next((c for c in ("fixture_id", "af_fixture_id") if c in cols), None)
+                if id_col is not None:
+                    try:
+                        df = pd.read_parquet(f"gs://{BUCKET}/{p}", columns=[id_col])
+                        fixture_ids = sorted({str(v) for v in df[id_col].dropna().unique()})
+                    except Exception:
+                        fixture_ids = []
+                else:
                     fixture_ids = []
             return league, variant, fixture_ids
         return league, ("read_error" if read_error else "missing"), None
