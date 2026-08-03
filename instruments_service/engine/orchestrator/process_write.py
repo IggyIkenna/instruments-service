@@ -250,15 +250,15 @@ def _write_sports_fixture_venue(
     venue_df: _orch.pd.DataFrame,
     date: str,
     league_filter: list[str] | None,
-    sink: _orch.DataSink,
+    bucket: str,
     manifest: _orch.ManifestWriter,
     counts: dict[str, int],
     sampler: _orch.SamplingService,
 ) -> None:
-    """League-based sharding: partition sports fixtures by league_id.
-
-    instrument_key format: {LEAGUE}:{HOME}_v_{AWAY}:{DATE} — extract league_id
-    as the part before the first colon.
+    """League-based sharding: partition sports fixtures by league_id (instrument_key
+    format ``{LEAGUE}:{HOME}_v_{AWAY}:{DATE}``). Writes via the full-hive
+    ``_instrument_availability_sink_for`` prefix, ``league=`` TRAILING after
+    ``venue=`` (sports-exception ruling, cross-asset-canonical-target-ssot.md §8).
     """
     _sports_df = venue_df.copy()
     _sports_df["_league_id"] = _sports_df["instrument_key"].str.split(":").str[0]
@@ -275,14 +275,14 @@ def _write_sports_fixture_venue(
         _captured_lids.add(_league_id_str)
         _league_df_clean = _league_df.drop(columns=["_league_id"])
         _stamped_fixture_df = _orch.stamp_available_at_explicit(_league_df_clean, when=_orch.datetime.now(_orch.UTC))
+        _pm = str(_orch.PipelineMode.BATCH_API_FOOTBALL)
+        _hive_sink = _orch._instrument_availability_sink_for(
+            bucket, date=date, pipeline_mode=_pm, asset_group="sports", venue=venue_str
+        )
         _orch._gated_sink_write(
-            sink,
+            _hive_sink,
             data=_stamped_fixture_df,
-            partition={
-                "day": date,
-                "venue": venue_str,
-                "league": _canonical_lid_str,
-            },
+            partition={"league": _canonical_lid_str},
             filename="instruments.parquet",
             venue=venue_str,
             entity="instruments",
@@ -672,7 +672,7 @@ def _write_all_venues(
                     venue_df=venue_df,
                     date=date,
                     league_filter=league_filter,
-                    sink=_v_sink,
+                    bucket=_v_bucket,
                     manifest=_v_manifest,
                     counts=counts,
                     sampler=sampler,

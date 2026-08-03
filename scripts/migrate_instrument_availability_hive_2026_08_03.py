@@ -87,6 +87,18 @@ _FLAT_RE = re.compile(
     rf"^({re.escape(INSTRUMENT_AVAILABILITY_ROOT)}|{re.escape(MARKET_LIFECYCLE_ROOT)})/day=([^/]+)/venue=([^/]+)/(.+)$"
 )
 
+# Sports league-sharded FLAT shape (API_FOOTBALL only, instrument_availability tree only — sports has
+# no market_lifecycle analogue): ``<root>/day={D}/league={L}/venue={V}/<tail>``. ``league=`` sits
+# BEFORE ``venue=`` in this legacy flat shape — inverse-ordered from the ruled hive's TRAILING
+# ``league=`` position (operator ruling on todo 1 of
+# instrument_availability_hive_migration_unrecognized_shapes_and_content_mismatch_2026_08_03.md,
+# recorded in cross-asset-canonical-target-ssot.md §8 sports-exception banner). ``_FLAT_RE`` above
+# never matches this shape (it expects ``venue=`` immediately after ``day=``), so every such object
+# was previously bucketed into "unrecognized shapes (ignored)".
+_SPORTS_LEAGUE_FLAT_RE = re.compile(
+    rf"^{re.escape(INSTRUMENT_AVAILABILITY_ROOT)}/day=([^/]+)/league=([^/]+)/venue=([^/]+)/(.+)$"
+)
+
 
 def _bucket_for(asset_group: str) -> str:
     if asset_group == "prediction":
@@ -105,17 +117,28 @@ def _pipeline_mode_for(root: str, asset_group: str, venue: str) -> str:
             return "batch_polymarket_clob"
         if venue_upper == "KALSHI":
             return "batch_kalshi"
+    if asset_group == "sports" and venue_upper == "API_FOOTBALL":
+        return "batch_api_football"
     return "batch_instruments_service"
 
 
 def hive_target_for(flat_path: str, asset_group: str) -> str | None:
     """Map a FLAT object path to its full-hive target path, or None if not a recognized flat shape."""
     m = _FLAT_RE.match(flat_path)
-    if not m:
-        return None
-    root, day, venue, tail = m.groups()
-    pipeline_mode = _pipeline_mode_for(root, asset_group, venue)
-    return f"{root}/day={day}/pipeline_mode={pipeline_mode}/asset_group={asset_group}/venue={venue}/{tail}"
+    if m:
+        root, day, venue, tail = m.groups()
+        pipeline_mode = _pipeline_mode_for(root, asset_group, venue)
+        return f"{root}/day={day}/pipeline_mode={pipeline_mode}/asset_group={asset_group}/venue={venue}/{tail}"
+    if asset_group == "sports":
+        m_league = _SPORTS_LEAGUE_FLAT_RE.match(flat_path)
+        if m_league:
+            day, league, venue, tail = m_league.groups()
+            pipeline_mode = _pipeline_mode_for(INSTRUMENT_AVAILABILITY_ROOT, asset_group, venue)
+            return (
+                f"{INSTRUMENT_AVAILABILITY_ROOT}/day={day}/pipeline_mode={pipeline_mode}/"
+                f"asset_group=sports/venue={venue}/league={league}/{tail}"
+            )
+    return None
 
 
 @dataclass
