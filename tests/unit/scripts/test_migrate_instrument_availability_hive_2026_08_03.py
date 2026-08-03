@@ -64,6 +64,16 @@ _ALREADY_HIVE = _CEFI_HIVE
 # Within the scanned instrument_availability/by_date/ prefix (so a real GCS listing WOULD return it)
 # but missing the venue= segment entirely -- an unrecognized shape, not a flat-candidate or hive object.
 _UNRECOGNIZED = "instrument_availability/by_date/day=2026-07-26/some_other_shape.parquet"
+# Sports league-sharded FLAT shape (todo 2 of instrument_availability_hive_migration_unrecognized_
+# shapes_and_content_mismatch_2026_08_03.md) -- league= BEFORE venue=, confirmed live 2026-08-02.
+_SPORTS_LEAGUE_FLAT = (
+    "instrument_availability/by_date/day=2026-08-02/league=ARGENTINA_PRIMERA_NACIONAL/"
+    "venue=API_FOOTBALL/instruments.parquet"
+)
+_SPORTS_LEAGUE_HIVE = (
+    "instrument_availability/by_date/day=2026-08-02/pipeline_mode=batch_api_football/"
+    "asset_group=sports/venue=API_FOOTBALL/league=ARGENTINA_PRIMERA_NACIONAL/instruments.parquet"
+)
 
 
 class TestHiveTargetFor:
@@ -112,6 +122,27 @@ class TestHiveTargetFor:
         idx_venue = result.index("venue=")
         assert idx_day < idx_pm < idx_ag < idx_venue
 
+    def test_sports_league_flat_maps_to_hive_with_trailing_league(self) -> None:
+        assert _mod.hive_target_for(_SPORTS_LEAGUE_FLAT, "sports") == _SPORTS_LEAGUE_HIVE
+
+    def test_sports_league_flat_uses_batch_api_football_pipeline_mode(self) -> None:
+        result = _mod.hive_target_for(_SPORTS_LEAGUE_FLAT, "sports")
+        assert result is not None
+        assert "pipeline_mode=batch_api_football/asset_group=sports/venue=API_FOOTBALL" in result
+
+    def test_sports_league_key_is_trailing_after_venue(self) -> None:
+        result = _mod.hive_target_for(_SPORTS_LEAGUE_FLAT, "sports")
+        assert result is not None
+        idx_venue = result.index("venue=")
+        idx_league = result.index("league=")
+        assert idx_venue < idx_league
+        assert result.endswith("league=ARGENTINA_PRIMERA_NACIONAL/instruments.parquet")
+
+    def test_sports_league_flat_not_recognized_for_other_asset_groups(self) -> None:
+        # The league-before-venue shape is sports-specific; other asset_groups never emit it,
+        # so hive_target_for must not (mis)recognize it under a different asset_group.
+        assert _mod.hive_target_for(_SPORTS_LEAGUE_FLAT, "cefi") is None
+
 
 class TestScan:
     def _mock_client(self, names: list[str]) -> MagicMock:
@@ -143,6 +174,12 @@ class TestScan:
         result = _mod.scan(client, "instruments-store-cefi-prd", "cefi")
         # market_lifecycle prefix is never queried for non-prediction asset groups.
         assert result.candidate_count == 1
+
+    def test_sports_scan_recognizes_league_sharded_candidates(self) -> None:
+        client = self._mock_client([_SPORTS_LEAGUE_FLAT, _ALREADY_HIVE, _UNRECOGNIZED])
+        result = _mod.scan(client, "instruments-store-sports-prd", "sports")
+        assert result.candidate_count == 1
+        assert result.candidates[0] == (_SPORTS_LEAGUE_FLAT, _SPORTS_LEAGUE_HIVE)
 
 
 class TestProcessOneObject:
