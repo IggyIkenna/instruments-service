@@ -288,7 +288,7 @@ def _classify_venue_write(venue_str: str) -> tuple[str, str, str, str, str, _orc
         # (pipeline_mode=BATCH_INSTRUMENTS_SERVICE). Per the C-#6
         # source⇔pipeline_mode contract (2026-06-07) a BATCH row's
         # explicit source must equal source_string_for(pipeline_mode),
-        # so we do NOT stamp the vendor (massive/databento) here — the
+        # so we do NOT stamp the vendor (databento) here — the
         # source auto-resolves (blank/instruments_service). Which vendor
         # served the snapshot is the adapter's routing concern, not a
         # per-row manifest tag for producer rows.

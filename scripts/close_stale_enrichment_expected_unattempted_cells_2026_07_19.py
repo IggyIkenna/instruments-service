@@ -118,7 +118,7 @@ def _dry_run_report(
 def _apply(
     bucket: str, stuck_cells: pd.DataFrame, fixtures_empty_reason_by_date_league: dict[tuple[str, str], str]
 ) -> dict[str, int]:
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket, per_vm_shards=True)
     counts = close_stale_enrichment_cells(
         manifest=manifest,
         stuck_cells=stuck_cells,

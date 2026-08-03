@@ -38,6 +38,7 @@ __all__ = [
     "_asset_group_for_venue",
     "_records_to_dataframe",
     "_validate_records",
+    "_venue_bucket_resolver",
     "_write_all_venues",
     "_write_tradfi_non_trading_day_entries",
 ]
@@ -102,6 +103,13 @@ def _asset_group_for_venue(venue_str: str) -> str:
     if "-" in venue_str:
         return "defi"
     return "sports"
+
+
+def _venue_bucket_resolver(*, asset_groups: list[str], primary_bucket: str) -> Callable[[str], str]:
+    """Per-venue bucket resolver: primary_bucket for single-AG runs, per-venue AG bucket for multi-AG (Finding C)."""
+    if len(asset_groups) == 1 and asset_groups[0].upper() != "ALL":
+        return lambda _venue: primary_bucket
+    return lambda venue: _orch._get_instruments_bucket(_asset_group_for_venue(venue))
 
 
 @dataclass
@@ -604,10 +612,6 @@ def _write_all_venues(
             "sample_dir": _orch._uc.csv_sample_dir,
         }
     )
-    # Any run spanning >1 asset_group (the "ALL" sentinel OR an explicit
-    # multi-value --asset-group list) needs per-venue bucket routing -- else
-    # non-primary-AG rows land in the primary AG's bucket alone (Finding C,
-    # api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md).
     _raw_primary = asset_groups[0] if asset_groups else None
     _is_all_run = _raw_primary is None or _raw_primary.upper() == "ALL" or len(asset_groups) > 1
     # Primary bucket: "sports" for ALL runs (downstream sports stages need one bucket).
@@ -638,11 +642,7 @@ def _write_all_venues(
             _extra_manifests[b] = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=b)
         return _extra_manifests[b]
 
-    def _get_venue_bucket(venue_str: str) -> str:
-        """For ALL runs, resolve the correct per-group bucket; otherwise use primary."""
-        if not _is_all_run:
-            return bucket
-        return _orch._get_instruments_bucket(_asset_group_for_venue(venue_str))
+    _get_venue_bucket = _venue_bucket_resolver(asset_groups=asset_groups, primary_bucket=bucket)
 
     # Identify tradfi venues that are non-trading on this date and pre-stamp
     # empty_confirmed for them.  Scoped to venues that actually ran (union of

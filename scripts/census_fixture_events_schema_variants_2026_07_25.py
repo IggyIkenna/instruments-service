@@ -102,7 +102,16 @@ def main() -> int:
     ap.add_argument("--out-census", default="scripts/_fixture_events_census_2026_07_25.json")
     args = ap.parse_args()
 
-    manifest = pd.read_parquet(f"gs://{BUCKET}/_index/availability_index.parquet")
+    # Read via the UTL storage client (same credential path every other read in
+    # this script already uses) rather than pandas/pyarrow's native gs:// reader,
+    # which resolves ADC independently and can silently go stale mid-session
+    # (2026-08-03: this bare pd.read_parquet("gs://...") call started failing
+    # with a NOT_FOUND on an object confirmed to exist via `gcloud storage
+    # objects describe`, while every UTL-backed read in this same script kept
+    # working -- an ADC/credential-path mismatch, not a real absence).
+    _manifest_client = get_storage_client()
+    _manifest_bytes = _manifest_client.download_bytes(BUCKET, "_index/availability_index.parquet")
+    manifest = pd.read_parquet(io.BytesIO(_manifest_bytes))
     fe = manifest[(manifest["data_type"] == "FIXTURE_EVENTS") & (manifest["capture_status"] == "captured")]
     fe = fe.drop_duplicates(subset=["date", "league_id"])
     if args.limit:
@@ -131,10 +140,22 @@ def main() -> int:
             variant = classify(cols)
             fixture_ids: list[str] | None = None
             if variant != "canonical_13col":
-                try:
-                    df = pd.read_parquet(f"gs://{BUCKET}/{p}", columns=["fixture_id"])
-                    fixture_ids = sorted({str(v) for v in df["fixture_id"].dropna().unique()})
-                except Exception:
+                # The fixture-id column name varies by variant (af_prefixed_10col
+                # carries af_fixture_id, not fixture_id) -- probing the actual
+                # schema instead of hardcoding "fixture_id" avoids silently
+                # dropping every af_prefixed_10col object from the recovery set
+                # (2026-08-03 finding: this exact bug left 2,383 objects
+                # permanently untargeted across every prior census in this
+                # campaign, since the hardcoded-column read always raised and
+                # was swallowed into an empty fixture_ids list).
+                id_col = next((c for c in ("fixture_id", "af_fixture_id") if c in cols), None)
+                if id_col is not None:
+                    try:
+                        df = pd.read_parquet(f"gs://{BUCKET}/{p}", columns=[id_col])
+                        fixture_ids = sorted({str(v) for v in df[id_col].dropna().unique()})
+                    except Exception:
+                        fixture_ids = []
+                else:
                     fixture_ids = []
             return league, variant, fixture_ids
         return league, ("read_error" if read_error else "missing"), None

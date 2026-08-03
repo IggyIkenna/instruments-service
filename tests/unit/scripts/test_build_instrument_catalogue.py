@@ -508,7 +508,10 @@ def test_rollup_defi_pool_emits_dual_form_ids(rollup: ModuleType) -> None:
     # glued_pair_id is the canonical 3-segment form (fee hyphen-glued INTO the symbol
     # segment, never a 4th colon) after the UAC POOL-key 4→3-seg convergence
     # (operator ruling 2026-07-18); the retired `…:USDC-WETH:500` shape is gone.
-    assert row["glued_pair_id"] == "UNISWAP_V3-POLYGON:POOL:USDC-WETH-500"
+    # Fee value is the structured bps column (5, real basis points) — corrected
+    # 2026-08-03 to prefer ``pool_fee_tier`` over the legacy key's raw on-wire
+    # feeTier token (500), per finding 2 bug 3.
+    assert row["glued_pair_id"] == "UNISWAP_V3-POLYGON:POOL:USDC-WETH-5"
     assert row["pool_address"] == "0x45dda9cb7c25131df268515131f647d726f50608"
 
 
@@ -545,7 +548,55 @@ def test_rollup_defi_pool_dual_form_round_trips_via_converter(rollup: ModuleType
     assert parsed.chain == "ARBITRUM"
     assert parsed.base_asset == "AAVE"
     assert parsed.quote_asset == "USDC"
-    assert parsed.fee == "100"
+    # Structured bps column (1, real basis points) wins over the legacy key's raw
+    # on-wire feeTier token (100) — corrected 2026-08-03, finding 2 bug 3.
+    assert parsed.fee == "1"
+
+
+def test_rollup_defi_pool_bps_fee_wins_over_legacy_key_garbage(rollup: ModuleType) -> None:
+    """Regression, live 2026-08-03 (finding 2 bug 3): a row whose per-day
+    ``instrument_key`` still carries an old-format 4-segment legacy value (real
+    example found in ``prod/catalog.parquet``: ``BALANCER-AVALANCHE:POOL:
+    USDC-DAI.E:0.0`` — colon-before-fee, float-string garbage) must NOT leak that
+    garbage into the re-derived ``glued_pair_id`` when a clean structured
+    ``pool_fee_tier`` bps value is available. Before the 2026-08-03 precedence fix,
+    ``_fee_from_instrument_key`` fired first and reproduced the colon + ``0.0``
+    garbage on every regen."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BALANCER-AVALANCHE:POOL:USDC-DAI.E:0.0",
+                            "venue": "BALANCER-AVALANCHE",
+                            "instrument_type": "POOL",
+                            "raw_symbol": "0x26ed04762e97810c0e551e22d3601fed13e7b2c4",
+                            "pool_address": "0x26ed04762e97810c0e551e22d3601fed13e7b2c4",
+                            "base_asset": "USDC",
+                            "quote_asset": "DAI.E",
+                            "pool_fee_tier": 30.0,
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["glued_pair_id"] == "BALANCER-AVALANCHE:POOL:USDC-DAI.E-30"
+
+
+def test_bps_fee_str_helper(rollup: ModuleType) -> None:
+    """``_bps_fee_str`` strips a pandas float64 artifact (``30.0`` -> ``"30"``) and
+    is blank-safe."""
+    f = rollup._bps_fee_str
+    assert f(30.0) == "30"
+    assert f(5) == "5"
+    assert f("100") == "100"
+    assert f(None) == ""
+    assert f("") == ""
 
 
 def test_rollup_solana_amm_pool_discriminator_survives_into_glued_pair_id(rollup: ModuleType) -> None:

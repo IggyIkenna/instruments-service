@@ -215,7 +215,9 @@ async def _run_ref(ref_plan: dict[str, list[str]], api_key: str, conc: int, tall
         async with sem:
             for attempt in range(1, 4):
                 try:
-                    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET)
+                    manifest = ManifestWriter(
+                        service_name="instruments-service", catalogue_bucket=BUCKET, per_vm_shards=True
+                    )
                     await _fetch_sports_reference_data(
                         date=date,
                         api_key=api_key,

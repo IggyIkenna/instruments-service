@@ -68,59 +68,6 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
         """Return the venue identifier."""
         return "open_meteo"
 
-    async def get_weather(
-        self,
-        venue_lat: float,
-        venue_lon: float,
-        date: str,
-    ) -> CanonicalWeather | None:
-        """Fetch weather data for a venue location and date.
-
-        Args:
-            venue_lat: Venue latitude.
-            venue_lon: Venue longitude.
-            date: Date string in YYYY-MM-DD format.
-
-        Returns:
-            WeatherData with temperature, wind, rain, humidity, or None on failure.
-        """
-        # Use archive-api for historical dates (>3 months ago), forecast for recent/future.
-        # If api_key is set, use Pro-tier customer-* endpoints (unlimited + faster).
-        cutoff = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
-        if self._api_key:
-            url = _CUSTOMER_ARCHIVE_URL if date < cutoff else f"{_CUSTOMER_BASE_URL}/forecast"
-        else:
-            url = "https://archive-api.open-meteo.com/v1/archive" if date < cutoff else f"{_BASE_URL}/forecast"
-        params: dict[str, str] = {
-            "latitude": str(venue_lat),
-            "longitude": str(venue_lon),
-            "hourly": ("temperature_2m,precipitation,wind_speed_10m,relative_humidity_2m,cloud_cover,weather_code"),
-            "start_date": date,
-            "end_date": date,
-            "timezone": "UTC",
-        }
-        if self._api_key:
-            params["apikey"] = self._api_key
-
-        try:
-            async with self._make_session() as session:
-                raw_response = await self._get_with_retry(session, url, params=params)
-        except Exception as exc:
-            error_code = self._classify_error(exc)
-            self._emit_fetch_failed(error_code, exc)
-            return None
-
-        result = _parse_weather_response(raw_response, venue_lat, venue_lon, date)
-        if result is not None:
-            logger.info(
-                "Fetched weather for (%.2f, %.2f) on %s: %.1f°C",
-                venue_lat,
-                venue_lon,
-                date,
-                result.temperature_celsius,
-            )
-        return result
-
     async def get_weather_match_window(
         self,
         venue_lat: float,
