@@ -92,6 +92,14 @@ _SOURCE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     "open_meteo": PipelineMode.BATCH_OPEN_METEO,
     "transfermarkt": PipelineMode.BATCH_TRANSFERMARKT,
     "soccer_football_info": PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+    # odds_api / mdps_odds_horizon_bucket — the raw MTDS tick shapes (TRADES,
+    # ODDS_HORIZON_BUCKET). Added 2026-08-03: missing here meant a resolved
+    # source of "odds_api"/"mdps_odds_horizon_bucket" still fell through to the
+    # BATCH_INSTRUMENTS_SERVICE default below, producing a (source, pipeline_mode)
+    # pair the writer's PipelineModeSourceMismatchError check would reject — see
+    # sports_manifest_blank_venue_captured_rows_2026_07_27.md.
+    "odds_api": PipelineMode.BATCH_ODDS_API,
+    "mdps_odds_horizon_bucket": PipelineMode.BATCH_MDPS_ODDS_HORIZON_BUCKET,
 }
 
 
@@ -108,13 +116,24 @@ def resolve_source_and_mode(data_type: str, fallback_source: str) -> tuple[str, 
     __init__.py); the mode follows the resolved source. Resolution: keep the entity-map source when
     SOURCE_PRIORITY allows it, else take the SOURCE_PRIORITY primary; data_types
     with no SOURCE_PRIORITY entry (e.g. PLAYER_STATS) keep the entity-map source.
+
+    ``data_type`` is probed as-is first, then retried ``.upper()`` (found
+    2026-08-03: this script's callers pass the raw lower-case GCS path segment —
+    "trades"/"odds_horizon_bucket" — but ``SOURCE_PRIORITY`` keys sports entries
+    upper-case only, so the as-is probe always missed and silently fell through to
+    the BATCH_INSTRUMENTS_SERVICE producer-fallback; mirrors the same documented
+    sports case-fallback in ``unified_trading_library.pipeline_mode_resolver``.
+    See ``sports_manifest_blank_venue_captured_rows_2026_07_27.md``.)
     """
     from unified_api_contracts import get_source_priority
 
     try:
         allowed = get_source_priority("sports", data_type)
     except KeyError:
-        allowed = []
+        try:
+            allowed = get_source_priority("sports", data_type.upper())
+        except KeyError:
+            allowed = []
     source = fallback_source if (fallback_source in allowed or not allowed) else allowed[0]
     return source, _SOURCE_TO_PIPELINE_MODE.get(source, PipelineMode.BATCH_INSTRUMENTS_SERVICE)
 
