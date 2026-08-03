@@ -110,7 +110,7 @@ class TestWriteSportsFixtureVenueOscillationGuard:
                 venue_df=venue_df,
                 date=_date,
                 league_filter=None,
-                sink=MagicMock(),
+                bucket="test-bucket",
                 manifest=mock_manifest,
                 counts={},
                 sampler=MagicMock(enable_sampling=False),
@@ -155,7 +155,7 @@ class TestWriteSportsFixtureVenueOscillationGuard:
                 venue_df=venue_df,
                 date=_date,
                 league_filter=None,
-                sink=MagicMock(),
+                bucket="test-bucket",
                 manifest=mock_manifest,
                 counts={},
                 sampler=MagicMock(enable_sampling=False),
@@ -164,6 +164,65 @@ class TestWriteSportsFixtureVenueOscillationGuard:
         emitted_leagues = {c.kwargs["row_key"]["league_id"] for c in mock_manifest.record_empty.call_args_list}
         assert emitted_leagues == {"LA_LIGA"}
         assert mock_manifest.record_captured.call_count == 1
+
+    def test_captured_league_writes_full_hive_sink_with_trailing_league(self) -> None:
+        """Regression (todo 2 of instrument_availability_hive_migration_unrecognized_shapes_and_
+        content_mismatch_2026_08_03.md): the writer must build its sink via
+        ``_instrument_availability_sink_for`` (full canonical hive prefix — day/pipeline_mode/
+        asset_group/venue baked in) and pass ONLY ``league=`` through the write() partition dict,
+        never the old flat ``{day, venue, league}`` partition (which sorted alphabetically to the
+        non-canonical ``day=/league=/venue=`` shape confirmed live 2026-08-02)."""
+        _date = "2026-08-02"
+        venue_df = pd.DataFrame(
+            {
+                "instrument_key": ["ARGENTINA_PRIMERA_NACIONAL:BOCA_v_RIVER:20260802"],
+                "venue": ["API_FOOTBALL"],
+            }
+        )
+        mock_manifest = MagicMock()
+        mock_manifest.catalogue_bucket = "test-bucket"
+        mock_hive_sink = MagicMock()
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[MagicMock(league_id="ARGENTINA_PRIMERA_NACIONAL")],
+            ),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
+            patch("instruments_service.engine.orchestrator.get_league_fixture_calendar", return_value=["x"]),
+            patch(
+                "instruments_service.engine.orchestrator._instrument_availability_sink_for",
+                return_value=mock_hive_sink,
+            ) as mock_sink_for,
+            patch("instruments_service.engine.orchestrator._gated_sink_write") as mock_write,
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda df, when: df,
+            ),
+            patch("instruments_service.engine.orchestrator._is_in_canonical_write_universe", return_value=True),
+        ):
+            _write_sports_fixture_venue(
+                venue_str="API_FOOTBALL",
+                venue_df=venue_df,
+                date=_date,
+                league_filter=None,
+                bucket="instruments-store-sports-prd",
+                manifest=mock_manifest,
+                counts={},
+                sampler=MagicMock(enable_sampling=False),
+            )
+
+        mock_sink_for.assert_called_once_with(
+            "instruments-store-sports-prd",
+            date=_date,
+            pipeline_mode="batch_api_football",
+            asset_group="sports",
+            venue="API_FOOTBALL",
+        )
+        mock_write.assert_called_once()
+        assert mock_write.call_args.args[0] is mock_hive_sink
+        assert mock_write.call_args.kwargs["partition"] == {"league": "ARGENTINA_PRIMERA_NACIONAL"}
+        assert mock_write.call_args.kwargs["filename"] == "instruments.parquet"
 
     def test_manifest_read_failure_skips_empty_emission_entirely(self) -> None:
         """Fail-safe: a manifest-read error must not risk masking — no
@@ -190,7 +249,7 @@ class TestWriteSportsFixtureVenueOscillationGuard:
                 venue_df=venue_df,
                 date=_date,
                 league_filter=None,
-                sink=MagicMock(),
+                bucket="test-bucket",
                 manifest=mock_manifest,
                 counts={},
                 sampler=MagicMock(enable_sampling=False),
