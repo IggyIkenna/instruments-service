@@ -139,6 +139,13 @@ class TestWriteSportsFixtureVenueOscillationGuard:
             ),
             patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
             patch("instruments_service.engine.orchestrator.get_league_fixture_calendar", return_value=["x"]),
+            # The writer builds its sink via _instrument_availability_sink_for() ->
+            # get_data_sink() BEFORE _gated_sink_write() is reached — an unmocked
+            # real sink construction attempts google.auth.default() -> GCE metadata
+            # ping, which pytest_socket blocks in CI (SocketConnectBlockedError on
+            # 169.254.169.254). Same established pattern as
+            # test_captured_league_writes_full_hive_sink_with_trailing_league below.
+            patch("instruments_service.engine.orchestrator._instrument_availability_sink_for", return_value=MagicMock()),
             patch("instruments_service.engine.orchestrator._gated_sink_write"),
             patch(
                 "instruments_service.engine.orchestrator.stamp_available_at_explicit",
