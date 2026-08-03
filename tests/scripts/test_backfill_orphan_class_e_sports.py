@@ -74,9 +74,9 @@ def test_source_and_mode_resolution_lower_case_data_type() -> None:
         "mdps_odds_horizon_bucket",
         PipelineMode.BATCH_MDPS_ODDS_HORIZON_BUCKET,
     )
-    # No SOURCE_PRIORITY entry under any casing (TRADES_INPLAY) — falls through to
-    # the producer fallback, same as any other unregistered data_type.
-    assert _mod.resolve_source_and_mode("trades_inplay", "") == ("", PipelineMode.BATCH_INSTRUMENTS_SERVICE)
+    # TRADES_INPLAY registered 2026-08-03 (UAC SOURCE_PRIORITY only, same odds_api
+    # writer family as TRADES) — resolves via the same .upper() retry.
+    assert _mod.resolve_source_and_mode("trades_inplay", "") == ("odds_api", PipelineMode.BATCH_ODDS_API)
 
 
 def test_reverify_drops_now_covered_rows() -> None:
