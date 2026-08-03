@@ -69,6 +69,9 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
         super().__init__(project_id=project_id, api_key=api_key)
         self._api_football_key = api_football_api_key
         self._fixture_cache: dict[str, str] = {}  # "LEAGUE:HOME:AWAY:DATE" → fixture_id
+        # Phase-E Leg-1: lazy resolver for the additive af_fixture_id soccer join
+        # (reads the shared FIXTURES parquet once per league/day; see fixture_match.py).
+        self._fixture_match_resolver_instance: _pm.PredictionFixtureResolver | None = None
         self._last_raw_page_size: int = 0
         # Captured during get_instruments() — available via get_market_metadata()
         self._last_markets: list[PolymarketGammaMarket] = []
@@ -82,6 +85,19 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
     def venue(self) -> str:
         """Return the venue identifier."""
         return "POLYMARKET"
+
+    @property
+    def _fixture_match_resolver(self) -> _pm.PredictionFixtureResolver:
+        """Lazily-built resolver for the Phase-E Leg-1 soccer af_fixture_id join.
+
+        One instance per adapter run so the per-(league, day) fixtures lookup is
+        downloaded once and reused for every soccer market on that day (mirrors
+        MTDS's ``OddsApiAdapter.fixture_resolver``). Its GCS reads degrade to
+        honest-absence, so this is safe to build even with no cloud creds.
+        """
+        if self._fixture_match_resolver_instance is None:
+            self._fixture_match_resolver_instance = _pm.PredictionFixtureResolver()
+        return self._fixture_match_resolver_instance
 
     def get_market_metadata_df(self) -> pd.DataFrame:
         """Return captured market metadata from the last ``get_instruments()`` call.
@@ -165,9 +181,7 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
             if date:
                 try:
                     await self._fetch_clob_markets(date, now)
-                    _pm.logger.info(
-                        "Polymarket: CLOB token-id supplement completed for date=%s", date
-                    )
+                    _pm.logger.info("Polymarket: CLOB token-id supplement completed for date=%s", date)
                 except Exception as exc:
                     _pm.logger.warning(
                         "Polymarket: CLOB token-id supplement failed for date=%s: %s — "
@@ -264,7 +278,15 @@ class PolymarketReferenceDataAdapter(PolymarketClobMixin, PolymarketParsingMixin
             # the cell ``attempted_failed`` instead. Single-venue pagination loop (NOT
             # a per-venue/per-shard loop) → raising respects shard-level failure
             # isolation; mirrors ``_fetch_all_raw_clob_markets``.
-            raise
+            # Wrap as RuntimeError (CF-11): the bare ``aiohttp.ClientError`` /
+            # ``ClientResponseError`` (4xx/429/5xx from ``raise_for_status``) is NOT in
+            # ``_fetch_one_venue``'s except-ladder, so a bare re-raise propagates UNCAUGHT
+            # through the caller's ``asyncio.gather`` (no ``return_exceptions=True``) and
+            # crashes the whole multi-venue batch. RuntimeError IS caught there → the cell
+            # records ``attempted_failed`` (mirrors cefi ``aster.py``/``hyperliquid.py``).
+            raise RuntimeError(
+                f"Polymarket gamma/markets fetch failed (error_code={error_code}, retry_safe={retry_safe}): {exc}"
+            ) from exc
 
         raw_list = cast("list[object]", raw_json)
         results: list[InstrumentRecord] = []

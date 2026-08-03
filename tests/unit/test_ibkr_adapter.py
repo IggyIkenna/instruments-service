@@ -246,6 +246,52 @@ class TestIBKRAdapter:
         assert result is not None
         assert "ES" in result.instrument_key
 
+    def test_instrument_key_is_venue_type_symbol(self) -> None:
+        """2026-07-08 fix: instrument_key must be VENUE:TYPE:SYMBOL (was SYMBOL:RAW_CODE:CCY
+        — the wrong segment order, IBKR's raw secType code instead of the canonical
+        InstrumentType, and no venue token at all). A plain STK contract's canonical
+        type is EQUITY, not the generic crypto-style SPOT_PAIR — _SEC_TYPE_MAP
+        previously collapsed STK/CASH/BOND all into SPOT_PAIR despite
+        canonical_id_builder.py already defining distinct EQUITY/CURRENCY/BOND types
+        for exactly this (same 2026-07-08 fix)."""
+        adapter = IBKRReferenceDataAdapter()
+        raw = {"symbol": "AAPL", "secType": "STK", "currency": "USD"}
+        result = adapter._contract_details_to_instrument(raw)
+        assert result is not None
+        assert result.instrument_key == "IBKR:EQUITY:AAPL"
+
+    def test_instrument_key_future_type_uses_canonical_type(self) -> None:
+        """A FUT contract's key uses the canonical FUTURE type, not IBKR's raw "FUT" code."""
+        adapter = IBKRReferenceDataAdapter()
+        raw = {
+            "symbol": "ES",
+            "secType": "FUT",
+            "currency": "USD",
+            "lastTradeDateOrContractMonth": "20260320",
+        }
+        result = adapter._contract_details_to_instrument(raw)
+        assert result is not None
+        assert result.instrument_key == "IBKR:FUTURE:ES"
+
+    def test_instrument_key_cash_folds_in_quote_currency(self) -> None:
+        """A CASH (FX) contract's payload is BASE-QUOTE, not the bare base currency —
+        ib_insync.Forex("EURUSD") carries symbol="EUR"/currency="USD" separately, so a
+        bare "EUR" payload would lose real pair identity. CASH's canonical type is
+        CURRENCY (2026-07-08 fix), not SPOT_PAIR."""
+        adapter = IBKRReferenceDataAdapter()
+        raw = {"symbol": "EUR", "secType": "CASH", "currency": "USD"}
+        result = adapter._contract_details_to_instrument(raw)
+        assert result is not None
+        assert result.instrument_key == "IBKR:CURRENCY:EUR-USD"
+
+    def test_instrument_key_bond_type_uses_canonical_type(self) -> None:
+        """2026-07-08 fix: a BOND contract's canonical type is BOND, not SPOT_PAIR."""
+        adapter = IBKRReferenceDataAdapter()
+        raw = {"symbol": "T", "secType": "BOND", "currency": "USD"}
+        result = adapter._contract_details_to_instrument(raw)
+        assert result is not None
+        assert result.instrument_key == "IBKR:BOND:T"
+
     def test_contract_details_no_multiplier_defaults_to_one(self) -> None:
         """_contract_details_to_instrument defaults contract_size to 1 when multiplier absent."""
 

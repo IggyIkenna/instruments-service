@@ -1,18 +1,22 @@
 """Morpho Blue reference data adapter — instrument discovery via Morpho API.
 
-Discovers Morpho Blue isolated lending markets on Ethereum.
-Markets are returned as InstrumentRecord with instrument_type="LENDING".
+Discovers Morpho Blue isolated lending markets on Ethereum. Each market emits
+a supply-side ``A_TOKEN`` instrument (collateral deposited into the market)
+and a borrow-side ``DEBT_TOKEN`` instrument (loan asset borrowed against that
+collateral) — the same A_TOKEN/DEBT_TOKEN split ``aave_v3.py`` uses per
+reserve (defi_lending_atoken_debttoken_instrument_split_2026_07_07.md).
 
 Data source: Morpho Blue GraphQL API (blue-api.morpho.org).
 Reference: https://morpho.org/
 """
 
 import logging
+import re
 from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_trading_library import log_event
 
@@ -44,6 +48,23 @@ _MORPHO_CHAIN_IDS: dict[str, int] = {
     "OPTIMISM": 10,
     "POLYGON": 137,
 }
+
+# A raw ERC-20 `symbol()` is vendor/contract-controlled, unsanitized input — most are plain
+# tickers, but real exceptions exist (confirmed live 2026-08-01: a GMX GM-vault collateral
+# asset on Morpho-Arbitrum reports symbol `GM:ETH/USD[WETH-USDC]`). `:` is the canonical id's
+# own reserved VENUE:TYPE:SYMBOL delimiter — an embedded `:` makes
+# `build_canonical_instrument_id(..., passthrough=True)` raise ValueError (canonical_id_builder's
+# fail-loud double-wrapped-id guard), which would abort this method's per-chain loop entirely
+# since callers don't wrap per-market (instrument_id_format_canonicalization_2026_07_08.md
+# finding 6). `/` and brackets are also stripped: a stray `/` in a symbol that ends up in a
+# GCS object path would silently create unintended subdirectories.
+_UNSAFE_SYMBOL_CHARS = re.compile(r"[:/\[\]]")
+
+
+def _sanitize_symbol(symbol: str) -> str:
+    """Strip characters that would corrupt the canonical id delimiter or a GCS path."""
+    return _UNSAFE_SYMBOL_CHARS.sub("", symbol)
+
 
 _MARKETS_QUERY_TEMPLATE = """
 query {{
@@ -87,7 +108,7 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Morpho Blue lending markets as instruments."""
-        if instrument_type not in (None, "lending_market"):
+        if instrument_type not in (None, InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN):
             return []
 
         chain_id = _MORPHO_CHAIN_IDS.get(self._chain)
@@ -156,26 +177,36 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         floor_date = get_protocol_floor_date("morpho", self._chain)
         for market in markets:
-            record = self._market_to_record(market, venue_tag, floor_date)
-            if record is not None:
-                results.append(record)
+            results.extend(self._market_to_records(market, venue_tag, self._chain, floor_date))
 
         logger.info(
-            "Morpho %s: fetched %d lending markets from %d API results", self._chain, len(results), len(markets)
+            "Morpho %s: fetched %d lending/debt instruments from %d API results",
+            self._chain,
+            len(results),
+            len(markets),
         )
         return results
 
     @staticmethod
-    def _market_to_record(
+    def _market_to_records(
         market: dict[str, object],
         venue_tag: str,
+        chain: str,
         available_since: datetime | None = None,
-    ) -> InstrumentRecord | None:
-        """Convert a raw Morpho market dict to an InstrumentRecord, or None if filtered."""
+    ) -> list[InstrumentRecord]:
+        """Convert a raw Morpho market dict into its A_TOKEN + DEBT_TOKEN pair.
+
+        Each isolated Morpho market produces two instruments — a supply-side
+        ``A_TOKEN`` (collateral deposited into the market, earns yield) and a
+        borrow-side ``DEBT_TOKEN`` (loan asset borrowed against that
+        collateral, accrues interest) — mirroring ``aave_v3.py``'s
+        ``_build_reserve_records`` split. Returns ``[]`` if the market is
+        filtered (malformed payload / missing identity fields).
+        """
         loan_asset = market.get("loanAsset")
         collateral_asset = market.get("collateralAsset")
         if not isinstance(loan_asset, dict) or not isinstance(collateral_asset, dict):
-            return None
+            return []
 
         loan_symbol = str(loan_asset.get("symbol", ""))
         collateral_symbol = str(collateral_asset.get("symbol", ""))
@@ -185,10 +216,15 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         market_key = str(market.get("marketId", ""))
 
         if not collateral_symbol or not market_key:
-            return None
+            return []
 
-        symbol = f"{collateral_symbol}-{loan_symbol}"
-        instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}:{market_key[:8]}"
+        # Dash-separate the market-key disambiguator, not colon — colon is the
+        # reserved top-level VENUE:TYPE:SYMBOL delimiter, so a 3rd colon inside the
+        # symbol segment is ambiguous to any naive split(":") parser (operator
+        # decision 2026-07-08, instrument_id_format_canonicalization finding 6).
+        # The raw asset symbols themselves are sanitized first — see
+        # _sanitize_symbol's docstring for the real GM-vault case this guards.
+        pair_key = f"{_sanitize_symbol(collateral_symbol)}-{_sanitize_symbol(loan_symbol)}-{market_key[:8]}"
 
         # DeFi metadata: Morpho Blue uses the bytes32 uniqueKey as the
         # canonical market identifier; surface that as pool_address along
@@ -215,30 +251,65 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         else:
             loan_decimals = None
 
-        return InstrumentRecord(
-            instrument_key=instrument_key,
-            venue=venue_tag,
-            raw_symbol=market_key,
-            instrument_type=InstrumentType.LENDING,
-            base_asset=collateral_symbol,
-            quote_asset=loan_symbol,
-            tick_size=Decimal("0.000001"),
-            min_size=Decimal("0.000001"),
-            contract_size=Decimal("1"),
-            expiry=None,
-            strike=None,
-            option_type=None,
-            status=InstrumentStatus.ACTIVE,
-            available_from_datetime=available_since or get_protocol_floor_date("morpho", "ETHEREUM"),
+        resolved_since = available_since or get_protocol_floor_date("morpho", "ETHEREUM")
+
+        base_kwargs = {
+            "venue": venue_tag,
+            "raw_symbol": market_key,
+            "base_asset": collateral_symbol,
+            "quote_asset": loan_symbol,
+            "tick_size": Decimal("0.000001"),
+            "min_size": Decimal("0.000001"),
+            "contract_size": Decimal("1"),
+            "expiry": None,
+            "strike": None,
+            "option_type": None,
+            "status": InstrumentStatus.ACTIVE,
+            "available_from_datetime": resolved_since,
             # DeFi metadata
-            pool_address=market_key,
-            base_asset_contract_address=coll_addr,
-            base_asset_decimals=coll_decimals,
-            base_asset_symbol_onchain=collateral_symbol or None,
-            quote_asset_contract_address=loan_addr,
-            quote_asset_decimals=loan_decimals,
-            quote_asset_symbol_onchain=loan_symbol or None,
+            "pool_address": market_key,
+            "base_asset_contract_address": coll_addr,
+            "base_asset_decimals": coll_decimals,
+            "base_asset_symbol_onchain": collateral_symbol or None,
+            "quote_asset_contract_address": loan_addr,
+            "quote_asset_decimals": loan_decimals,
+            "quote_asset_symbol_onchain": loan_symbol or None,
+        }
+
+        a_token_instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI,
+            "morpho",
+            InstrumentType.A_TOKEN,
+            f"A{pair_key}",
+            chain=chain,
+            passthrough=True,
         )
+        debt_token_instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI,
+            "morpho",
+            InstrumentType.DEBT_TOKEN,
+            f"DEBT{pair_key}",
+            chain=chain,
+            passthrough=True,
+        )
+        return [
+            InstrumentRecord(
+                instrument_key=a_token_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=a_token_instrument_key,
+                instrument_type=InstrumentType.A_TOKEN,
+                **base_kwargs,
+            ),
+            InstrumentRecord(
+                instrument_key=debt_token_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=debt_token_instrument_key,
+                instrument_type=InstrumentType.DEBT_TOKEN,
+                **base_kwargs,
+            ),
+        ]
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single instrument by identifier."""

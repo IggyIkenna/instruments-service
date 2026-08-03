@@ -39,6 +39,8 @@ from unified_trading_library import (
     InstrumentDomainConfig,
     TickerUniverseConfig,
     TimeSeriesConfigStore,
+    get_cloud_provider,
+    resolve_bucket_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -204,7 +206,11 @@ def main() -> None:
         "--bucket",
         type=str,
         default=None,
-        help="Config store bucket name. Defaults to config-store-{project-id}.",
+        help=(
+            "Config store bucket name. Defaults to the canonical env-tiered config-store "
+            "bucket via resolve_bucket_name(kind='config-store') (the flat "
+            "config-store-{project-id} bucket is retired)."
+        ),
     )
     parser.add_argument(
         "--verbose",
@@ -255,7 +261,7 @@ def main() -> None:
         logger.error("--project-id is required for --upload mode")
         sys.exit(1)
 
-    bucket: str = args.bucket or f"config-store-{args.project_id}"
+    bucket: str = args.bucket or resolve_bucket_name(cloud=get_cloud_provider(), kind="config-store")
 
     logger.info("Uploading to bucket=%s, project=%s", bucket, args.project_id)
 

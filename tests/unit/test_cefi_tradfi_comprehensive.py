@@ -355,8 +355,40 @@ class TestTardisHelperFunctions:
     def test_infer_margin_type_spot_returns_none(self) -> None:
         assert _infer_margin_type(InstrumentType.SPOT_PAIR, "USDT", "BTCUSDT", "binance") is None
 
-    def test_infer_margin_type_okx_coin_margined(self) -> None:
-        assert _infer_margin_type(InstrumentType.PERPETUAL, "USD", "BTC-USD_UM-SWAP", "okex") == MarginType.INVERSE
+    def test_infer_margin_type_okx_um_dated_future_is_linear(self) -> None:
+        """Real bug fix 2026-07-09: the ``_UM`` infix means LINEAR (USD-Margined),
+        not INVERSE — verified against the LIVE OKX public API 2026-07-09:
+        BTC-USD_UM-260710 is a real, currently-listed OKX-FUTURES row with
+        ctType=linear (settleCcy="USD" is a synthetic cross-margin unit,
+        ctValCcy=BTC). The old code treated any ``_UM``/``_CM`` infix as
+        "coin-margined" -> INVERSE, which was backwards for every real OKX
+        ``_UM`` instrument.
+        """
+        assert (
+            _infer_margin_type(InstrumentType.FUTURE, "USD", "BTC-USD_UM-260710", "okex-futures") == MarginType.LINEAR
+        )
+
+    def test_infer_margin_type_okx_bare_dated_future_is_inverse(self) -> None:
+        """Real: BTC-USD-260710 (no ``_UM`` infix) is the genuinely coin-margined
+        sibling of the linear BTC-USD_UM-260710 above — live-verified
+        ctType=inverse, settleCcy=BTC. Previously fell through to the generic
+        LINEAR default (no OKX branch existed at all for the bare-USD case) —
+        backwards the other direction.
+        """
+        assert _infer_margin_type(InstrumentType.FUTURE, "USD", "BTC-USD-260710", "okex-futures") == MarginType.INVERSE
+
+    def test_infer_margin_type_okx_swap_bare_usd_is_inverse(self) -> None:
+        """Real: BTC-USD-SWAP (OKX-SWAP) is the live, currently-listed
+        coin-margined perpetual — ctType=inverse, settleCcy=BTC. SWAP instIds
+        never carry ``_UM``/``_CM`` at all (0 of 416 real live rows).
+        """
+        assert _infer_margin_type(InstrumentType.PERPETUAL, "USD", "BTC-USD-SWAP", "okex-swap") == MarginType.INVERSE
+
+    def test_infer_margin_type_okx_swap_usdt_is_linear(self) -> None:
+        """Real: BTC-USDT-SWAP (OKX-SWAP) is the live, currently-listed
+        USDT-margined linear perpetual — ctType=linear, settleCcy=USDT.
+        """
+        assert _infer_margin_type(InstrumentType.PERPETUAL, "USDT", "BTC-USDT-SWAP", "okex-swap") == MarginType.LINEAR
 
     def test_infer_margin_type_binance_coin_margined(self) -> None:
         assert _infer_margin_type(InstrumentType.FUTURE, "USD", "BTCUSD_PERP", "binance-futures") == MarginType.INVERSE
@@ -386,6 +418,15 @@ class TestTardisHelperFunctions:
         # quote now PASSES — the CEFI_BASE_ASSET_UNIVERSE majors whitelist is no
         # longer a gate for spot/perp/future (small-coin funding is valuable).
         assert _passes_asset_filter("OBSCURECOIN123", "USDT", "PERPETUAL") is True
+
+    def test_passes_asset_filter_binance_equity_perp_base(self) -> None:
+        # 2026-07-18 Binance full-listing widen: a NEW equity-perp base (US
+        # EQUITY or the new HK_EQUITY category) on a canonical USDT quote RESOLVES
+        # / passes the filter — the CEFI_BASE_ASSET_UNIVERSE whitelist was removed
+        # 2026-06-23, so equity perps are never dropped; the equity identity rides
+        # the is_equity_perp catalogue tag (stamped at rollup), not this gate.
+        assert _passes_asset_filter("APP", "USDT", "PERPETUAL", "BINANCE-FUTURES") is True
+        assert _passes_asset_filter("TENCENT", "USDT", "PERPETUAL", "BINANCE-FUTURES") is True
 
     def test_passes_asset_filter_invalid_quote(self) -> None:
         assert _passes_asset_filter("BTC", "INVALIDQUOTE", "PERPETUAL") is False
@@ -495,6 +536,28 @@ class TestTardisHelperFunctions:
     def test_parse_combo_legs_box(self) -> None:
         legs = _parse_deribit_combo_legs("BTC-BOX-25APR26-80000_85000_90000_95000", "DERIBIT")
         assert len(legs) == 4
+
+    def test_parse_combo_legs_5_leg_structure_dropped_not_truncated(self) -> None:
+        """A structure code resolving to 5+ real legs is DROPPED entirely (empty
+        list), not silently truncated to 4 — operator spec 2026-07-09 (1-4 legs
+        hard cap, canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md),
+        mirroring the CME/CBOE hard cap already covered by
+        test_g1c_xcbf_spreads_decompose_to_combo. No real Deribit structure code
+        currently resolves to 5+ legs (every entry in _DERIBIT_COMBO_STRUCTURES
+        tops out at 4), so this patches in a fake 5-leg code as a backstop check."""
+        from instruments_service.reference_data.adapters.cefi.tardis import combos as combos_module
+
+        fake_structures = dict(combos_module._DERIBIT_COMBO_STRUCTURES)
+        fake_structures["FAKE5"] = [
+            ("C", "BUY", 1),
+            ("C", "SELL", 1),
+            ("C", "BUY", 1),
+            ("C", "SELL", 1),
+            ("C", "BUY", 1),
+        ]
+        with patch.object(combos_module, "_DERIBIT_COMBO_STRUCTURES", fake_structures):
+            legs = _parse_deribit_combo_legs("BTC-FAKE5-25APR26-1_2_3_4_5", "DERIBIT")
+        assert legs == []
 
 
 class TestTardisAdapter:
@@ -1076,6 +1139,10 @@ class TestCCXTAdapterComprehensive:
         assert result.instrument_type == InstrumentType.OPTION
         assert result.strike == Decimal("50000.0")
         assert result.option_type == OptionType.CALL
+        # Operator ruling 2026-07-18: the quote is ALWAYS present — DERIBIT included.
+        # A BTC inverse option is USD-quoted → id carries BASE-QUOTE@INV (no longer
+        # the dropped BTC@INV form that hit the fail-loud builder).
+        assert result.instrument_key == "DERIBIT:OPTION:BTC-USD@INV-20260627-50000-C"
 
     def test_parse_ccxt_market_option_without_strike_returns_none(self) -> None:
         """Options without strike are skipped (combo/conditional)."""
@@ -2218,22 +2285,29 @@ class TestDatabentoHelpers:
     # ── _parse_cme_calendar_spread_legs ───────────────────────────────────
 
     def test_parse_cme_spread_legs_valid(self) -> None:
-        # This may return None if ES isn't in the exchange code registry
-        # Test that the function handles the format correctly
-        result = _parse_cme_calendar_spread_legs("ESM6-ESU6", "CME")
-        if result is not None:
-            assert len(result) == 2
-            assert result[0].side == "BUY"
-            assert result[1].side == "SELL"
+        # ES is a registered exchange code (SP500 futures) — legs decompose to
+        # venue-free, human-readable product-root keys (2026-07-08
+        # canonicalization fix: _parse_cme_calendar_spread_legs dropped its
+        # `venue` parameter — the leg key is `TYPE:SYMBOL` only, venue is
+        # already carried once at the combo's own top-level `VENUE:COMBO:...`
+        # id — and now resolves the human product root via
+        # _resolve_product_root instead of the raw ticker).
+        result = _parse_cme_calendar_spread_legs("ESM6-ESU6")
+        assert result is not None
+        assert len(result) == 2
+        assert result[0].side == "BUY"
+        assert result[1].side == "SELL"
+        assert result[0].instrument_key == "FUTURE:SP500"
+        assert result[1].instrument_key == "FUTURE:SP500"
 
     def test_parse_cme_spread_legs_no_dash(self) -> None:
-        assert _parse_cme_calendar_spread_legs("ESM6", "CME") is None
+        assert _parse_cme_calendar_spread_legs("ESM6") is None
 
     def test_parse_cme_spread_legs_empty_parts(self) -> None:
-        assert _parse_cme_calendar_spread_legs("-", "CME") is None
+        assert _parse_cme_calendar_spread_legs("-") is None
 
     def test_parse_cme_spread_legs_three_parts(self) -> None:
-        assert _parse_cme_calendar_spread_legs("A-B-C", "CME") is None
+        assert _parse_cme_calendar_spread_legs("A-B-C") is None
 
     # ── _resolve_trading_status ───────────────────────────────────────────
 
@@ -2628,6 +2702,15 @@ class TestAsterUnsupportedCapabilityGuard:
 # Phase 4: DeribitComboReferenceDataAdapter
 # =============================================================================
 
+# reason: DERIBIT-COMBO deregistered from VENUE_TO_ADAPTER_KEY by unified-api-contracts@11adf279
+# (2026-07-21, already-committed, clean, unrelated to this session's diff) pending the leg-aware
+# signed-weight spec rework -- see 'Combo cross-AG hand-off' P2 in defi_consolidated_closeout_2026_07_18.md
+# Track 1. Re-enable once DERIBIT-COMBO routing is re-registered under that work.
+_DERIBIT_COMBO_DEREGISTERED_SKIP_REASON = (
+    "DERIBIT-COMBO deregistered from VENUE_TO_ADAPTER_KEY by unified-api-contracts@11adf279 -- "
+    "see 'Combo cross-AG hand-off' P2 in defi_consolidated_closeout_2026_07_18.md Track 1."
+)
+
 
 class TestDeribitComboAdapter:
     """Tests for DeribitComboReferenceDataAdapter."""
@@ -2872,6 +2955,31 @@ class TestDeribitComboAdapter:
         assert adapter._parse_combo_instrument({"id": "BTC-FS-19JUN26_PERP", "legs": []}, "BTC", now) is None
 
     @pytest.mark.asyncio
+    async def test_parse_combo_instrument_5_legs_dropped_not_truncated(self) -> None:
+        """A combo whose ``legs`` array carries 5+ real legs is dropped ENTIRELY
+        (record is None), not truncated to 4 — operator spec 2026-07-09 (1-4 legs
+        hard cap, canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md),
+        mirroring the CME/CBOE hard cap covered by
+        test_g1c_xcbf_spreads_decompose_to_combo (test_databento_tardis_adapter.py)."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        now = datetime.now(UTC)
+        item = {
+            "id": "BTC-FAKE5COMBO",
+            "legs": [
+                {"amount": 1, "instrument_name": "BTC-19JUN26-69000-C"},
+                {"amount": -1, "instrument_name": "BTC-19JUN26-70000-C"},
+                {"amount": 1, "instrument_name": "BTC-19JUN26-71000-C"},
+                {"amount": -1, "instrument_name": "BTC-19JUN26-72000-C"},
+                {"amount": 1, "instrument_name": "BTC-19JUN26-73000-C"},
+            ],
+        }
+        assert adapter._parse_combo_instrument(item, "BTC", now) is None
+
+    @pytest.mark.asyncio
     async def test_parse_combo_instrument_invalid_timestamp(self) -> None:
         """Invalid creation_timestamp falls back to now (combo with legs still parses)."""
         from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
@@ -2905,12 +3013,17 @@ class TestDeribitComboAdapter:
             results = await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
         assert results == []
 
+    @pytest.mark.skip(reason=_DERIBIT_COMBO_DEREGISTERED_SKIP_REASON)
     def test_factory_contains_deribit_combo(self) -> None:
-        """DERIBIT-COMBO is registered in the factory adapter map."""
+        """DERIBIT-COMBO is registered in the factory adapter map. Batch/default
+        routes to Tardis (historical combo universe); the live-only REST
+        adapter (deribit_combo) is still registered in _ADAPTERS and used via
+        the mode="live" seam in get_adapter_for_canonical_venue — see
+        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14)."""
         from unified_api_contracts.registry import VENUE_TO_ADAPTER_KEY
 
         from instruments_service.reference_data.factory import _ADAPTERS
 
         assert "DERIBIT-COMBO" in VENUE_TO_ADAPTER_KEY
-        assert VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"] == "deribit_combo"
+        assert VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"] == "tardis"
         assert "deribit_combo" in _ADAPTERS

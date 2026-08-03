@@ -2,8 +2,7 @@
 
 Targets the specific uncovered branches identified in the 85% → 90% coverage push:
 - Module-level bucket helpers (_get_instruments_bucket_for_asset_group, _get_instruments_bucket)
-- preflight(): --source massive adds MASSIVE pseudo-venue
-- _wire_cli_filters_from_args(): venues+earliest_date, recovery_fixture_ids, source arg
+- _wire_cli_filters_from_args(): venues+earliest_date, recovery_fixture_ids
 - _load_recovery_fixture_ids(): GCS path, local path, exception, missing column
 - process(): date normalisation when "T" present
 - cleanup(): ManifestWriter flush branch + sports coordination event branch
@@ -60,12 +59,45 @@ def test_get_instruments_bucket_for_asset_group_delegates_to_resolve() -> None:
             "instruments_service.cli.instruments_handler.resolve_bucket_name",
             return_value="test-sports-bucket",
         ) as mock_resolve_bucket,
+        patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
     ):
+        mock_cfg.return_value.is_test_run = False
         result = _get_instruments_bucket_for_asset_group("SPORTS")
 
     assert result == "test-sports-bucket"
     mock_resolve_kind.assert_called_once_with("sports")
-    mock_resolve_bucket.assert_called_once_with(cloud="gcp", kind="instruments-store", asset_group="sports")
+    mock_resolve_bucket.assert_called_once_with(
+        cloud="gcp", kind="instruments-store", asset_group="sports", deployment_env=None
+    )
+
+
+def test_get_instruments_bucket_for_asset_group_test_run_resolves_test_tier() -> None:
+    """DP-VM-002 (2026-08-02, agt-299005): IS_TEST_RUN must resolve deployment_env="test"
+    explicitly — NOT the ambient DEPLOYMENT_ENV_SHORT default, which resolves the
+    never-provisioned "-stg-" tier whenever a --test-run leg sets DEPLOYMENT_ENV=staging
+    (required for the uts-test-sa IAM identity). Mirrors
+    engine.orchestrator.catalogue._get_instruments_bucket's already-correct handling.
+    """
+    from instruments_service.cli.instruments_handler import _get_instruments_bucket_for_asset_group
+
+    with (
+        patch(
+            "instruments_service.cli.instruments_handler.resolve_instruments_store_kind",
+            return_value=("instruments-store", "sports"),
+        ),
+        patch(
+            "instruments_service.cli.instruments_handler.resolve_bucket_name",
+            return_value="instruments-store-sports-test-test-project",
+        ) as mock_resolve_bucket,
+        patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
+    ):
+        mock_cfg.return_value.is_test_run = True
+        result = _get_instruments_bucket_for_asset_group("SPORTS")
+
+    assert result == "instruments-store-sports-test-test-project"
+    mock_resolve_bucket.assert_called_once_with(
+        cloud="gcp", kind="instruments-store", asset_group="sports", deployment_env="test"
+    )
 
 
 def test_get_instruments_bucket_alias_calls_through() -> None:
@@ -81,45 +113,12 @@ def test_get_instruments_bucket_alias_calls_through() -> None:
             "instruments_service.cli.instruments_handler.resolve_bucket_name",
             return_value="alias-sports-bucket",
         ),
+        patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
     ):
+        mock_cfg.return_value.is_test_run = False
         result = _get_instruments_bucket("SPORTS")
 
     assert result == "alias-sports-bucket"
-
-
-# ---------------------------------------------------------------------------
-# preflight(): --source massive
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_preflight_source_massive_adds_venue() -> None:
-    """Line 123: when _source == 'massive', MASSIVE is appended to active_venues."""
-    handler = _make_handler()
-    handler._source = "massive"
-
-    captured_venues: list[str] = []
-    mock_reloader = MagicMock()
-    mock_reloader.current_keys = {}
-
-    def _capture_start_reloader(venues: list[str]) -> None:
-        captured_venues.extend(venues)
-        handler._key_reloader = mock_reloader
-        mock_reloader.start()
-
-    with (
-        patch(
-            "instruments_service.cli.instruments_handler.get_venues_for_asset_groups",
-            return_value=["BINANCE"],
-        ),
-        patch(
-            "instruments_service.cli.instruments_handler.clear_defi_universe_cache",
-        ),
-        patch.object(handler, "_start_key_reloader", side_effect=_capture_start_reloader),
-    ):
-        await handler.preflight()
-
-    assert "MASSIVE" in captured_venues
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +136,11 @@ def test_wire_cli_filters_venues_with_earliest_date() -> None:
     args.league = None
     args.season = None
     args.recovery_fixture_ids = None
-    args.source = None
     args.trigger = None
     args.lookback_days = None
     args.lookahead_days = None
     args.force_window = False
+    args.run_tag = None
     handler.args = args
 
     with patch(
@@ -154,6 +153,37 @@ def test_wire_cli_filters_venues_with_earliest_date() -> None:
     assert handler._venue_override == ["NYSE"]
 
 
+def test_wire_cli_filters_venues_uppercased_regardless_of_cli_casing() -> None:
+    """Regression (sports_venue_override_case_mismatch_false_attempted_failed_2026_07_31):
+    a lowercase --venues CLI value must be normalised to uppercase before it is
+    stored, so it matches the uppercase-keyed UAC VENUE_TO_ADAPTER_KEY registry
+    lookup downstream. Mirrors the sports_provider_arg.upper() precedent two
+    lines below in the same method."""
+    handler = _make_handler()
+    args = MagicMock()
+    args.venues = ["api_football"]
+    args.sports_entity = None
+    args.sports_provider = None
+    args.league = None
+    args.season = None
+    args.recovery_fixture_ids = None
+    args.trigger = None
+    args.lookback_days = None
+    args.lookahead_days = None
+    args.force_window = False
+    args.run_tag = None
+    handler.args = args
+
+    with patch(
+        "instruments_service.cli.instruments_handler.earliest_venue_date",
+        return_value=None,
+    ) as mock_earliest:
+        handler._wire_cli_filters_from_args()
+
+    assert handler._venue_override == ["API_FOOTBALL"]
+    mock_earliest.assert_called_once_with(["API_FOOTBALL"])
+
+
 def test_wire_cli_filters_recovery_fixture_ids() -> None:
     """Line 160: when recovery_fixture_ids arg is set, _load_recovery_fixture_ids is called."""
     handler = _make_handler()
@@ -164,11 +194,11 @@ def test_wire_cli_filters_recovery_fixture_ids() -> None:
     args.league = None
     args.season = None
     args.recovery_fixture_ids = "/tmp/recovery.parquet"
-    args.source = None
     args.trigger = None
     args.lookback_days = None
     args.lookahead_days = None
     args.force_window = False
+    args.run_tag = None
     handler.args = args
 
     expected_ids = frozenset([1, 2, 3])
@@ -177,28 +207,6 @@ def test_wire_cli_filters_recovery_fixture_ids() -> None:
 
     mock_load.assert_called_once_with("/tmp/recovery.parquet")
     assert handler._recovery_fixture_ids == expected_ids
-
-
-def test_wire_cli_filters_source_arg() -> None:
-    """Lines 164-165: when source arg is set, _source is normalised to lowercase."""
-    handler = _make_handler()
-    args = MagicMock()
-    args.venues = None
-    args.sports_entity = None
-    args.sports_provider = None
-    args.league = None
-    args.season = None
-    args.recovery_fixture_ids = None
-    args.source = "MASSIVE"
-    args.trigger = None
-    args.lookback_days = None
-    args.lookahead_days = None
-    args.force_window = False
-    handler.args = args
-
-    handler._wire_cli_filters_from_args()
-
-    assert handler._source == "massive"
 
 
 # ---------------------------------------------------------------------------

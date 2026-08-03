@@ -75,11 +75,35 @@ def _canonical_league_id(lid_raw: object) -> str:
     - provider-suffixed (e.g. "EPL_39") → Pass 2 strips suffix → "EPL"
     - numeric (e.g. "39") → Pass 1 resolves → "EPL" → Pass 2 no-op
     - unknown numeric (e.g. "9999") → Pass 1 no-op → Pass 2 no-op → "9999"
+
+    A Pass-1 miss on a numeric id is loud, never silent (2026-07-24,
+    ``sports_fixtures_schedule_noncanonical_raw_league_id_folders_2026_07_24.md``):
+    every caller downstream either gates the returned value against the
+    canonical write-universe (``_is_in_canonical_write_universe``, which
+    silently drops an unresolved id) or, historically, wrote it straight to
+    disk as a ``league=<raw_id>`` partition (before that gate existed) — both
+    outcomes previously left no trace that a registry lookup missed. The
+    miss itself is not a bug in THIS function (non-lossy passthrough is the
+    documented, tested CF-7 invariant — see ``TestCanonicalLeagueIdCF7`` in
+    ``test_orchestrator_sports_pipeline.py``); the bug was the total absence
+    of a signal when it happens. Root cause is near-always a stale UAC
+    version at write time for a league the registry gains LATER (dated proof:
+    ``CHINA_SUPER_LEAGUE``/af_id=169, registered ``unified-api-contracts@beec78aa``
+    2026-07-21, but fixtures_schedule shards for it exist dated 2026-05-05/06).
     """
     s = str(lid_raw).strip()
     # Pass 1: numeric → canonical via api_football id lookup
     if s and s.isdigit():
         league = _orch.get_league_by_api_football_id(int(s))
+        if league is None:
+            _orch.logger.warning(
+                "CANONICAL_LEAGUE_ID_LOOKUP_MISS: api_football_id=%s has no UAC registry entry — "
+                "passing through as a raw numeric id (non-lossy by design). If this id IS a currently "
+                "registered league, the writing process is running a stale UAC version; any row written "
+                "under this id will land under a non-canonical league=%s partition until re-processed.",
+                s,
+                s,
+            )
         s = league.league_id if league is not None else s
     # Pass 2: strip provider-id suffix via UAC canonicalizer (CF-7 write-path)
     return _orch._uac_canonicalize_league_id(s)
@@ -195,6 +219,72 @@ def _lifecycle_columns_from_af_response(af_response: dict[str, object]) -> dict[
     }
 
 
+def _status_from_af_response(af_response: dict[str, object] | None) -> tuple[str, str]:
+    """Extract API-Football's ``fixture.status.{short,long}`` from the raw fixture response.
+
+    Returns ``(status_short, status_long)`` — e.g. ``("FT", "Match Finished")``. The
+    ``CanonicalFixture`` model does NOT carry a ``status`` attribute at all (same gap
+    already fixed for ``round`` via ``_round_from_af_response`` — see that function's
+    docstring), so the previous ``getattr(fx, "status", None) or "NS"`` ALWAYS hit the
+    default: every FIXTURES row ever written via this path was persisted with
+    ``status_short="NS"`` regardless of the real match outcome, even fixtures that had
+    already finished. This is NOT a staleness/re-fetch problem (a forced live re-fetch
+    reproduces the identical "NS" write) — the raw response used to build the row already
+    carries the correct status the whole time, it was simply never read. Downstream,
+    ``instruments_service/engine/orchestrator/sports_fixtures.py::_read_fixture_ids_from_gcs``
+    filters on ``status_short in {FT,AET,PEN}`` to find fixtures eligible for per-fixture
+    enrichment (events/lineups/stats/player_stats) — with every row permanently "NS",
+    enrichment could never resolve ANY date written via this path, however many times the
+    backfill fleet relaunched. Issue:
+    api_football_enrichment_stale_ns_fixture_status_and_gate_reader_inconsistency_2026_07_19
+    (correction — the issue doc's original title/summary attributed this to stale caching;
+    the actual mechanism is this simple missing-field read). Empty strings on any absence
+    (no raw / no fixture block / no status block) — honest blank, never a fabricated
+    placeholder; callers already default those to ``("NS", "Unknown")`` same as before.
+    """
+    if not af_response:
+        return "", ""
+    fixture = af_response.get("fixture")
+    if not isinstance(fixture, dict):
+        return "", ""
+    status = fixture.get("status")
+    if not isinstance(status, dict):
+        return "", ""
+    short = status.get("short")
+    long_ = status.get("long")
+    return (
+        str(short).strip() if short is not None else "",
+        str(long_).strip() if long_ is not None else "",
+    )
+
+
+def _round_from_af_response(af_response: dict[str, object] | None) -> str:
+    """Extract API-Football's ``league.round`` from the raw fixture response.
+
+    ``round`` is the competition-phase label ("Regular Season - 30", "Relegation
+    Round", "Quarter-finals") — the SOLE input to
+    ``adapters/sports/competition_phase.classify_competition_phase``, which the
+    ML pipeline uses to separate relegation/playoff/knockout dynamics from
+    ordinary league games. The CanonicalFixture model does NOT carry it (nor
+    does the ``ApiFootballLeague`` schema), so the previous
+    ``getattr(fx, "round", "")`` defaulted every row to "" — leaving
+    ``competition_phase`` UNKNOWN and ``is_promotion_relegation`` a false-not-null
+    everywhere (issue: sports_fixture_round_not_captured_competition_phase_
+    unknown_2026_07_17). But the value is present all along in the RAW response
+    dict ``af_response`` (which the writer already threads for the Q5/Q6 overlay
+    via ``_lifecycle_columns_from_af_response``): api-football nests it at
+    ``item["league"]["round"]``. Read it there — same source, same pattern, no
+    new fetch. Empty string on any absence (no raw / no league block / no round
+    key) — honest blank, never a fabricated placeholder."""
+    if not af_response:
+        return ""
+    league = af_response.get("league")
+    if not isinstance(league, dict):
+        return ""
+    rnd = league.get("round")
+    return str(rnd).strip() if rnd is not None else ""
+
+
 def _flatten_canonical_fixture_for_disk(
     fx: object,
     day: str,
@@ -202,8 +292,10 @@ def _flatten_canonical_fixture_for_disk(
 ) -> dict[str, object]:
     """Flatten a CanonicalFixture into a dict matching SPORTS_FIXTURES SchemaContract.
 
-    Returns the full flat schema (43 columns). Defaults required-non-null
-    columns the canonical model doesn't carry (``round``, ``status_long``).
+    Returns the full flat schema (43 columns). ``round`` comes from the raw
+    ``af_response`` (``league.round``) via :func:`_round_from_af_response` — the
+    CanonicalFixture model does not carry it; ``status_long`` is still defaulted
+    (it is genuinely absent from both the model and the raw fixture block).
 
     Q5/Q6 lifecycle columns (HT/ET/PEN phase timestamps + score distinction +
     ``went_to_*`` + ``match_result``) are populated from ``af_response`` when the
@@ -262,6 +354,8 @@ def _flatten_canonical_fixture_for_disk(
     else:
         lifecycle_cols = _orch._empty_lifecycle_columns()
 
+    status_short_raw, status_long_raw = _status_from_af_response(af_response)
+
     row: dict[str, object] = {
         "af_fixture_id": af_fixture_id,
         "referee_name": getattr(referee, "name", None) if referee is not None else None,
@@ -272,12 +366,15 @@ def _flatten_canonical_fixture_for_disk(
         "venue_id": _orch._af_id_from_canonical(venue) if venue is not None else None,
         "venue_name": getattr(venue, "name", None) if venue is not None else None,
         "venue_city": getattr(venue, "city", None) if venue is not None else None,
-        "status_long": getattr(fx, "status", None) or "Unknown",
-        "status_short": getattr(fx, "status", None) or "NS",
+        "status_long": status_long_raw or getattr(fx, "status", None) or "Unknown",
+        "status_short": status_short_raw or getattr(fx, "status", None) or "NS",
         "status_elapsed_time": None,
         "af_league_id": _orch._af_id_from_canonical(league) if league is not None else None,
         "season": season_int,
-        "round": getattr(fx, "round", "") or "",
+        # From the raw af_response's league.round (see _round_from_af_response) —
+        # NOT getattr(fx, "round") (CanonicalFixture has no such field, so that
+        # was "" on every row). Falls back to any fx.round for non-af sources.
+        "round": _round_from_af_response(af_response) or (getattr(fx, "round", "") or ""),
         "af_home_id": af_home_id,
         "af_away_id": af_away_id,
         "af_winner_id": af_winner_id,
@@ -362,8 +459,18 @@ def _should_skip_date_for_per_league(
         # No bucket = no index = nothing captured yet; never skip.
         return False
 
-    # ONE index read (TTL-cached) — NOT one per league.
-    index = _orch.read_availability_index(bucket)
+    # ONE index read per date — slim + date-filtered, not the full unfiltered
+    # corpus. The 2026-06-22 fix (see docstring above) already cut this from
+    # one read per LEAGUE to one read per DATE, but a long backfill VM still
+    # calls this once per date across thousands of dates; each full-corpus
+    # decode is ~6.5 GB for the sports bucket. Same fix pattern as
+    # ``mtds_backfill_vm_startup_oom_rc137_2026_07_14`` (~14.86 GiB -> ~5 MB
+    # for a single-day filter on a comparably large index).
+    index = _orch.read_availability_index(
+        bucket,
+        columns=["date", "service_name", "data_type", "league_id", "capture_status", "error_reason"],
+        filters=[("date", "==", date)],
+    )
     if index.empty:
         return False
 

@@ -10,6 +10,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -57,14 +58,24 @@ class EthenaReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return sUSDe as a yield-bearing instrument."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
             return []
 
         venue_tag = f"ETHENA-{self._chain}"
 
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, venue_tag, InstrumentType.YIELD_BEARING, "sUSDe", passthrough=True
+        )
+
         results: list[InstrumentRecord] = [
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:YIELD_BEARING:sUSDe",
+                # Routed through the shared canonical builder (2026-07-09 retrofit,
+                # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
+                # no output change.
+                instrument_key=instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=instrument_key,
                 venue=venue_tag,
                 raw_symbol=_SUSDE_ADDRESS,
                 base_asset_contract_address=_SUSDE_ADDRESS,

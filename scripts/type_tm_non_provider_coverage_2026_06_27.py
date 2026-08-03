@@ -55,20 +55,65 @@ _NO_PROVIDER_COVERAGE_REASON = "EXPECTED_NO_PROVIDER_COVERAGE"
 # get_expected_leagues_for_source("transfermarkt")) — these are handled by the VM.
 # All OTHER expected_unattempted PLAYER_VALUES leagues in the gap range are
 # cup competitions / lower divisions NOT covered by the TM provider.
-_TM_COVERED_LEAGUES: frozenset[str] = frozenset({
-    "ALLSVENSKAN", "ARGENTINA_PRIMERA", "ARGENTINA_PRIMERA_NACIONAL", "AUSTRIAN_2_LIGA",
-    "AUSTRIAN_BUNDESLIGA", "A_LEAGUE", "BELGIAN_FIRST_B", "BRASILEIRAO", "BRASILEIRAO_SERIE_B",
-    "BUNDESLIGA", "BUNDESLIGA_2", "CHILE_PRIMERA", "CHILE_PRIMERA_B", "DANISH_1ST_DIVISION",
-    "DANISH_SUPERLIGA", "EERSTE_DIVISIE", "EKSTRAKLASA", "ELITESERIEN", "ENG_CHAMPIONSHIP",
-    "ENG_LEAGUE_ONE", "ENG_LEAGUE_TWO", "ENG_NATIONAL_LEAGUE", "EPL", "EREDIVISIE",
-    "FRANCE_NATIONAL", "GREEK_SUPER_LEAGUE", "GREEK_SUPER_LEAGUE_2", "J1_LEAGUE", "J2_LEAGUE",
-    "JUPILER_PRO", "K_LEAGUE_1", "K_LEAGUE_2", "LA_LIGA", "LIGA_3", "LIGA_EXPANSION_MX",
-    "LIGA_MX", "LIGA_PORTUGAL_2", "LIGUE_1", "LIGUE_2", "MLS", "NORWAY_1_DIVISJON",
-    "POLAND_I_LIGA", "PRIMEIRA_LIGA", "PRIMERA_RFEF", "SCOTTISH_CHAMPIONSHIP",
-    "SCOTTISH_PREMIERSHIP", "SEGUNDA_DIVISION", "SERIE_A", "SERIE_B", "SUPERETTAN",
-    "SUPER_LIG", "SWISS_CHALLENGE_LEAGUE", "SWISS_SUPER_LEAGUE", "TFF_FIRST_LEAGUE",
-    "USL_CHAMPIONSHIP",
-})
+_TM_COVERED_LEAGUES: frozenset[str] = frozenset(
+    {
+        "ALLSVENSKAN",
+        "ARGENTINA_PRIMERA",
+        "ARGENTINA_PRIMERA_NACIONAL",
+        "AUSTRIAN_2_LIGA",
+        "AUSTRIAN_BUNDESLIGA",
+        "A_LEAGUE",
+        "BELGIAN_FIRST_B",
+        "BRASILEIRAO",
+        "BRASILEIRAO_SERIE_B",
+        "BUNDESLIGA",
+        "BUNDESLIGA_2",
+        "CHILE_PRIMERA",
+        "CHILE_PRIMERA_B",
+        "DANISH_1ST_DIVISION",
+        "DANISH_SUPERLIGA",
+        "EERSTE_DIVISIE",
+        "EKSTRAKLASA",
+        "ELITESERIEN",
+        "ENG_CHAMPIONSHIP",
+        "ENG_LEAGUE_ONE",
+        "ENG_LEAGUE_TWO",
+        "ENG_NATIONAL_LEAGUE",
+        "EPL",
+        "EREDIVISIE",
+        "FRANCE_NATIONAL",
+        "GREEK_SUPER_LEAGUE",
+        "GREEK_SUPER_LEAGUE_2",
+        "J1_LEAGUE",
+        "J2_LEAGUE",
+        "JUPILER_PRO",
+        "K_LEAGUE_1",
+        "K_LEAGUE_2",
+        "LA_LIGA",
+        "LIGA_3",
+        "LIGA_EXPANSION_MX",
+        "LIGA_MX",
+        "LIGA_PORTUGAL_2",
+        "LIGUE_1",
+        "LIGUE_2",
+        "MLS",
+        "NORWAY_1_DIVISJON",
+        "POLAND_I_LIGA",
+        "PRIMEIRA_LIGA",
+        "PRIMERA_RFEF",
+        "SCOTTISH_CHAMPIONSHIP",
+        "SCOTTISH_PREMIERSHIP",
+        "SEGUNDA_DIVISION",
+        "SERIE_A",
+        "SERIE_B",
+        "SUPERETTAN",
+        "SUPER_LIG",
+        "SWISS_CHALLENGE_LEAGUE",
+        "SWISS_SUPER_LEAGUE",
+        "TFF_FIRST_LEAGUE",
+        "USL_CHAMPIONSHIP",
+    }
+)
 
 # Gap range dates
 _GAP_START = "2026-02-20"
@@ -105,11 +150,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("DEPLOYMENT_ENV_SHORT must be set (e.g. prd). Refusing.")
         return 1
 
-    instance = os.environ.get("VM_NAME", "")
+    instance = os.environ.get("VM_NAME", "")  # noqa: qg-empty-fallback — unset VM_NAME => `not instance` refuses --apply below
     if args.apply and (os.environ.get("MANIFEST_PER_VM_SHARDS") != "true" or not instance):
-        logger.error(
-            "--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. Refusing."
-        )
+        logger.error("--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique>. Refusing.")
         return 1
 
     bucket = resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")

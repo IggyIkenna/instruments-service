@@ -198,6 +198,19 @@ def _write_per_league_parquet(
     canonical_league_id: str,
     rows: list[dict[str, object]],
 ) -> int:
+    if not rows:
+        # Defensive guard (sports_player_stats_empty_write_followups_2026_07_26):
+        # the sole caller only invokes this per (day, league) key that a
+        # defaultdict(list) actually accumulated >=1 row under, so `rows` is
+        # never empty in practice today — but this function's own signature
+        # allows it, and unconditionally writing an empty pd.DataFrame(rows)
+        # is exactly the bug class that silently destroyed 240 PLAYER_STATS
+        # objects in the incident this todo follows up on. Refuse rather than
+        # trust the caller forever.
+        raise ValueError(
+            f"_write_per_league_parquet called with 0 rows for day={day} league={canonical_league_id} "
+            "-- refusing to write an empty canonical fixtures object."
+        )
     df = pd.DataFrame(rows)
     df = _post_fill_available_at(df)
     buf = io.BytesIO()
@@ -448,8 +461,15 @@ async def _run(args: argparse.Namespace) -> int:
             n_fixtures_this_pair,
         )
 
-    # Final flush — write the per-VM manifest shard to GCS.
-    manifest.flush()
+    # Guaranteed drain BEFORE the coroutine returns, not via atexit: atexit's
+    # process_final=True drain (which close() also performs) races the asyncio
+    # event loop's own executor teardown ("cannot schedule new futures after
+    # interpreter shutdown"), silently dropping buffered writes. flush() alone
+    # does NOT force the per-VM shard rewrite (only close()/atexit do) — call
+    # close() explicitly here, while the loop is still alive, so the per-VM
+    # shard write for this script's run is never left to the racy atexit path.
+    # See plans/active/issues/manifest_atexit_drain_races_asyncio_shutdown_2026_07_09.md.
+    manifest.close()
     logger.info(
         "Recovery complete: %d (league, season) pairs processed, %d days written, %d fixtures written, %d failed pairs",
         total,

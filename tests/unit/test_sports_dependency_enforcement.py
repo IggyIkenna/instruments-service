@@ -66,6 +66,27 @@ def _patch_storage(monkeypatch: pytest.MonkeyPatch, present_paths: set[str]) -> 
     monkeypatch.setattr(sports_dependency, "get_storage_client", _factory)
 
 
+def _patch_manifest_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch the manifest-slice primary check to a miss (empty DataFrame) so
+    these GCS-probe-focused tests exercise the fallback path unchanged, exactly
+    as before the manifest-slice primary check was added.
+    """
+    monkeypatch.setattr(
+        sports_dependency,
+        "read_availability_index",
+        lambda *_a, **_k: pd.DataFrame(columns=["date", "data_type", "capture_status"]),
+    )
+
+
+def _patch_manifest_captured(monkeypatch: pytest.MonkeyPatch, date: str, data_type: str = "FIXTURES") -> None:
+    """Patch the manifest-slice primary check to a HIT — a captured fixtures row
+    for ``date`` — so the primary path satisfies the dependency without touching
+    GCS at all.
+    """
+    df = pd.DataFrame({"date": [date], "data_type": [data_type], "capture_status": ["captured"]})
+    monkeypatch.setattr(sports_dependency, "read_availability_index", lambda *_a, **_k: df)
+
+
 class TestVenueRequiresApiFootball:
     """venue_requires_api_football returns True only for enrichment venues."""
 
@@ -115,12 +136,15 @@ class TestVenueRequiresApiFootball:
 
 
 class TestCheckApiFootballDependency:
-    """check_api_football_dependency reads GCS and raises DependencyError."""
+    """check_api_football_dependency: manifest-slice primary, GCS-probe fallback."""
 
     def test_passes_when_canonical_fixtures_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Manifest miss -> falls through to the GCS-probe fallback (unchanged
+        pre-manifest-slice behaviour)."""
         bucket = "instruments-store-sports-test-project"
         date = "2026-04-14"
         canonical_path = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+        _patch_manifest_empty(monkeypatch)
         _patch_storage(monkeypatch, {canonical_path})
 
         # Should not raise
@@ -130,6 +154,7 @@ class TestCheckApiFootballDependency:
         bucket = "instruments-store-sports-test-project"
         date = "2026-04-14"
         raw_path = f"sports_reference/by_date/day={date}/entity=api_football/api_football.parquet"
+        _patch_manifest_empty(monkeypatch)
         _patch_storage(monkeypatch, {raw_path})
 
         check_api_football_dependency(date=date, bucket=bucket)
@@ -139,6 +164,7 @@ class TestCheckApiFootballDependency:
 
         bucket = "instruments-store-sports-test-project"
         date = "2026-04-14"
+        _patch_manifest_empty(monkeypatch)
         _patch_storage(monkeypatch, set())  # no data
 
         with pytest.raises(DependencyError) as exc_info:
@@ -164,6 +190,7 @@ class TestCheckApiFootballDependency:
             def bucket(self, _name: str) -> Any:
                 raise RuntimeError("GCS transport error")
 
+        _patch_manifest_empty(monkeypatch)
         monkeypatch.setattr(
             sports_dependency,
             "get_storage_client",
@@ -172,6 +199,112 @@ class TestCheckApiFootballDependency:
 
         with pytest.raises(DependencyError):
             check_api_football_dependency(date="2026-04-14", bucket="instruments-store-sports-test-project")
+
+    def test_manifest_hit_satisfies_dependency_without_gcs_probe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Primary path: a captured FIXTURES_SCHEDULE manifest row satisfies the
+        dependency WITHOUT any GCS probe firing at all."""
+        bucket = "instruments-store-sports-test-project"
+        date = "2026-04-14"
+        _patch_manifest_captured(monkeypatch, date, data_type="FIXTURES_SCHEDULE")
+
+        def _marker(*_a: Any, **_k: Any) -> None:
+            raise AssertionError("manifest hit should short-circuit before any GCS probe")
+
+        monkeypatch.setattr(sports_dependency, "get_storage_client", _marker)
+
+        check_api_football_dependency(date=date, bucket=bucket)  # must not raise
+
+    def test_manifest_hit_on_legacy_fixtures_data_type_satisfies_dependency(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-2026-07-14-cutover era: data_type=FIXTURES (not the split
+        FIXTURES_SCHEDULE) also satisfies the manifest-slice check."""
+        bucket = "instruments-store-sports-test-project"
+        date = "2025-06-15"
+        _patch_manifest_captured(monkeypatch, date, data_type="FIXTURES")
+
+        def _marker(*_a: Any, **_k: Any) -> None:
+            raise AssertionError("manifest hit should short-circuit before any GCS probe")
+
+        monkeypatch.setattr(sports_dependency, "get_storage_client", _marker)
+
+        check_api_football_dependency(date=date, bucket=bucket)  # must not raise
+
+    def test_manifest_read_failure_falls_back_to_gcs_probe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A manifest read failure (e.g. consolidator staleness) must not raise
+        DependencyError by itself — it falls through to the GCS-probe fallback,
+        which still succeeds if the data is really there."""
+        bucket = "instruments-store-sports-test-project"
+        date = "2026-04-14"
+        canonical_path = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+
+        def _explode(*_a: Any, **_k: Any) -> pd.DataFrame:
+            raise RuntimeError("manifest consolidator stale")
+
+        monkeypatch.setattr(sports_dependency, "read_availability_index", _explode)
+        _patch_storage(monkeypatch, {canonical_path})
+
+        check_api_football_dependency(date=date, bucket=bucket)  # must not raise
+
+    def test_manifest_captured_status_required_not_just_any_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A manifest row that ISN'T capture_status=='captured' (e.g. an
+        attempted_failed row) must NOT satisfy the dependency on its own — the
+        check falls through to the GCS-probe fallback, matching the old
+        probe's stricter "data genuinely exists" semantics."""
+        bucket = "instruments-store-sports-test-project"
+        date = "2026-04-14"
+        df = pd.DataFrame({"date": [date], "data_type": ["FIXTURES_SCHEDULE"], "capture_status": ["attempted_failed"]})
+        monkeypatch.setattr(sports_dependency, "read_availability_index", lambda *_a, **_k: df)
+        _patch_storage(monkeypatch, set())  # no GCS data either -> must raise
+
+        from unified_trading_library import DependencyError
+
+        with pytest.raises(DependencyError):
+            check_api_football_dependency(date=date, bucket=bucket)
+
+
+class TestManifestShowsFixturesCaptured:
+    """_manifest_shows_fixtures_captured — the manifest-slice primary check in isolation."""
+
+    def test_captured_fixtures_schedule_row_returns_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        df = pd.DataFrame({"date": ["2026-04-14"], "data_type": ["FIXTURES_SCHEDULE"], "capture_status": ["captured"]})
+        monkeypatch.setattr(sports_dependency, "read_availability_index", lambda *_a, **_k: df)
+        assert sports_dependency._manifest_shows_fixtures_captured("2026-04-14", "bucket") is True
+
+    def test_captured_legacy_fixtures_row_returns_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        df = pd.DataFrame({"date": ["2025-06-15"], "data_type": ["FIXTURES"], "capture_status": ["captured"]})
+        monkeypatch.setattr(sports_dependency, "read_availability_index", lambda *_a, **_k: df)
+        assert sports_dependency._manifest_shows_fixtures_captured("2025-06-15", "bucket") is True
+
+    def test_unrelated_data_type_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A captured row for a DIFFERENT data_type (e.g. WEATHER) must not
+        satisfy the api-football fixtures dependency."""
+        df = pd.DataFrame({"date": ["2026-04-14"], "data_type": ["WEATHER"], "capture_status": ["captured"]})
+        monkeypatch.setattr(sports_dependency, "read_availability_index", lambda *_a, **_k: df)
+        assert sports_dependency._manifest_shows_fixtures_captured("2026-04-14", "bucket") is False
+
+    def test_attempted_failed_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        df = pd.DataFrame(
+            {"date": ["2026-04-14"], "data_type": ["FIXTURES_SCHEDULE"], "capture_status": ["attempted_failed"]}
+        )
+        monkeypatch.setattr(sports_dependency, "read_availability_index", lambda *_a, **_k: df)
+        assert sports_dependency._manifest_shows_fixtures_captured("2026-04-14", "bucket") is False
+
+    def test_empty_manifest_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        empty = pd.DataFrame(columns=["date", "data_type", "capture_status"])
+        monkeypatch.setattr(sports_dependency, "read_availability_index", lambda *_a, **_k: empty)
+        assert sports_dependency._manifest_shows_fixtures_captured("2026-04-14", "bucket") is False
+
+    def test_read_failure_returns_false_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A manifest read failure (transient error, consolidator staleness, ...)
+        must return False — never propagate/raise — so the caller falls
+        through to the GCS-probe fallback."""
+
+        def _explode(*_a: Any, **_k: Any) -> pd.DataFrame:
+            raise RuntimeError("manifest consolidator stale")
+
+        monkeypatch.setattr(sports_dependency, "read_availability_index", _explode)
+        assert sports_dependency._manifest_shows_fixtures_captured("2026-04-14", "bucket") is False
 
 
 class TestFactoryDependencyWiring:
@@ -208,6 +341,7 @@ class TestFactoryDependencyWiring:
     def test_footystats_with_date_and_missing_dep_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from unified_trading_library import DependencyError
 
+        _patch_manifest_empty(monkeypatch)
         _patch_storage(monkeypatch, set())
 
         with pytest.raises(DependencyError):
@@ -222,6 +356,7 @@ class TestFactoryDependencyWiring:
         bucket = "instruments-store-sports-test-project"
         date = "2026-04-14"
         canonical_path = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+        _patch_manifest_empty(monkeypatch)
         _patch_storage(monkeypatch, {canonical_path})
 
         adapter = create_sports_reference_adapter("footystats", api_key="k", date=date, bucket=bucket)
@@ -230,6 +365,7 @@ class TestFactoryDependencyWiring:
     def test_understat_with_missing_dep_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from unified_trading_library import DependencyError
 
+        _patch_manifest_empty(monkeypatch)
         _patch_storage(monkeypatch, set())
 
         with pytest.raises(DependencyError):
@@ -245,6 +381,7 @@ class TestFactoryDependencyWiring:
         """
         from unified_trading_library import DependencyError
 
+        _patch_manifest_empty(monkeypatch)
         _patch_storage(monkeypatch, set())
 
         with pytest.raises(DependencyError):

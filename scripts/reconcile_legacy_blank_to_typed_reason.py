@@ -605,8 +605,8 @@ def main() -> int:
                         "chain": str(row.get("chain", "")),
                         "data_type": str(row.get("data_type", "")),
                         "instrument_type": str(row.get("instrument_type", "")),
-                        "instrument_id": str(row.get("instrument_id", "")),
-                        "league_id": str(row.get("league_id", "")),
+                        "instrument_id": str(row.get("instrument_id", "")),  # noqa: qg-empty-fallback -- diagnostic audit-row summary; blank is a legitimate absent-field value here, not a correctness dependency
+                        "league_id": str(row.get("league_id", "")),  # noqa: qg-empty-fallback -- diagnostic audit-row summary; blank is a legitimate absent-field value here, not a correctness dependency
                         "old_capture_status": "empty_confirmed",
                         "new_capture_status": new_status,
                         "old_reason": current_reason,

@@ -1,27 +1,52 @@
-"""Unit tests for measure_honest_coverage.py — Bug 1 (freshest bucket) + Bug 2 (prd/non-prd merge)
-+ v2 new projections (by_venue_instrument_type, by_venue_instrument_type_data_type, by_day,
-layer_1, schema_version, instrument_gates_download).
+"""Unit tests for measure_honest_coverage.py — pinned-primary bucket selection + Bug 2
+(prd/non-prd merge) + v2 new projections (by_venue_instrument_type,
+by_venue_instrument_type_data_type, by_day, layer_1, schema_version,
+instrument_gates_download).
 
 Covers:
-1. Freshest-bucket selection: even when the non-prd bucket has MORE rows, the bucket with
-   the newer blob.updated timestamp is selected as primary (Bug 1 fix).
-2. Merge with date column: primary prd rows override secondary stale rows on (date, venue,
+1. Pinned-primary selection (hardened 2026-07-06): primary is pinned by tuple order
+   (``-prd`` first by construction), NOT by ``blob.updated`` mtime. Surgery on the
+   legacy bucket that bumps its mtime past prd no longer flips roles.
+2. ``--primary-bucket`` CLI override wins over the tuple-order pin when accessible;
+   silently falls back to the pin when the named bucket is inaccessible.
+3. Surgery-signal warning: a secondary bucket with newer ``blob.updated`` than primary
+   logs a WARNING (informational; does not affect selection).
+4. Merge with date column: primary prd rows override secondary stale rows on (date, venue,
    data_type) key; expected_unattempted rows from secondary that have no prd counterpart
    are retained (Bug 2 fix).
-3. Merge without date column: fallback to concat (no dedup, warning logged).
-4. --no-merge flag: skips the secondary-bucket read, uses freshest-wins only.
-5. v2: schema_version=2 in payload.
+5. Merge without date column: fallback to concat (no dedup, warning logged).
+6. --no-merge flag: skips the secondary-bucket read, uses primary-only.
+7. v2: schema_version=2 in payload.
 6. v2: by_venue_instrument_type aggregation present and correct.
 7. v2: by_venue_instrument_type_data_type aggregation present and correct.
 8. v2: by_day aggregation present and correct.
 9. v2: layer_1 block present; instrument_gates_download / denominator_complete / layer1_completeness_pct
    additive fields on by_asset_group[ag].
 10. v2: instrument_type column absent → graceful degradation (empty projections, warning logged).
+
+Column-prune hardening (defence-in-depth, 2026-07-16 — see data_status_page_ux_and_canonicalisation
+plan § P1 "remaining hardening"): _read_parquet_safe/_read_parquet_eu_only now pass
+``read_dictionary=<columns>`` so the parquet's on-disk PLAIN_DICTIONARY encoding survives as pandas
+``category`` dtype instead of being expanded into a python-object string per row (measured ~38.6x
+memory reduction on a real 1.96M-row bucket; see the plan's Progress Log for the cited numbers).
+That dtype change has two correctness footguns which are also covered here:
+11. ``_read_parquet_safe`` (all 4 fallback tiers) returns ``category`` dtype for the columns it reads,
+    with values identical to a plain object-dtype read (real local-parquet round-trip, not mocked).
+12. ``_merge_manifests``'s priority column stays correct (numeric sort, not category-discovery-order
+    sort) even when ``capture_status`` is ``category`` dtype — ``Series.map()`` on a Categorical
+    returns a Categorical result whose default sort order is NOT the numeric value order, which would
+    silently pick the wrong "best status" per shard without the ``.astype("int64")`` guard.
+13. ``_compute_coverage``'s groupby calls pass ``observed=True`` so a category dtype grouper column
+    never synthesises a phantom empty group for an unobserved category combination (which would
+    otherwise inject bogus zero-count venue/data_type/instrument_type cells into the coverage output).
+14. Categorical-input and object-dtype-input runs of ``_compute_coverage`` produce byte-identical
+    output for the same underlying data (dtype is an implementation detail, not a behavior change).
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,12 +77,6 @@ def _utc(year: int, month: int, day: int) -> datetime:
     return datetime(year, month, day, tzinfo=UTC)
 
 
-def _make_blob_mock(updated: datetime | None) -> MagicMock:
-    blob = MagicMock()
-    blob.updated = updated
-    return blob
-
-
 def _make_df_with_day(rows: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
@@ -67,35 +86,47 @@ def _make_df_no_day(rows: list[dict[str, object]]) -> pd.DataFrame:
     return df.drop(columns=["date"], errors="ignore")
 
 
-class TestFreshestBucketSelection:
-    """Bug 1: prefer the bucket with the most recent blob.updated, not the most rows."""
+class TestPinnedPrimarySelection:
+    """Pinned-primary bucket selection (hardened 2026-07-06 vs. surgery-bumped mtimes).
 
-    def test_freshest_wins_over_most_rows(self, mod: ModuleType) -> None:
-        """prd bucket (5M rows, updated 2026-06-28) beats legacy (35M rows, updated 2026-06-08)."""
-        prd_bucket = f"market-data-tick-cefi-prd-{mod.PROJECT_ID}"
-        legacy_bucket = f"market-data-tick-cefi-{mod.PROJECT_ID}"
+    PRIMARY is the first accessible candidate in ``_MANIFEST_BUCKET_CANDIDATES`` tuple
+    order (which places ``-prd`` first for every asset_group). ``blob.updated`` mtime
+    is logged for visibility but no longer drives selection.
+    """
 
+    def test_prd_wins_over_legacy_by_tuple_order(self, mod: ModuleType) -> None:
+        """prd (fewer rows, first in tuple) beats legacy (more rows) — row count irrelevant.
+
+        Row counts reduced 1000x from the original 5M/35M (2026-07-16 — unrelated pre-existing
+        flake found while shipping the column-prune hardening below: the 5M/35M
+        list-of-identical-dicts -> pd.DataFrame construction reproducibly hung under
+        pytest-xdist on this host, CPU-idle for 4+ minutes past a 280s pytest-timeout —
+        an execnet/xdist IPC stall, not a real slowdown in the code under test. The
+        assertion only needs "legacy has strictly more rows than prd" to prove row count
+        isn't a tiebreaker; 5_000/35_000 preserves that at negligible construction cost.
+        """
         prd_updated = _utc(2026, 6, 28)
         legacy_updated = _utc(2026, 6, 8)
 
-        prd_df = _make_df_with_day([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
-        ] * 5_000_000)
-        legacy_df = _make_df_with_day([
-            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-01"},
-        ] * 35_000_000)
+        prd_df = _make_df_with_day(
+            [
+                {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
+            ]
+            * 5_000
+        )
+        legacy_df = _make_df_with_day(
+            [
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "BINANCE",
+                    "data_type": "tick",
+                    "date": "2026-06-01",
+                },
+            ]
+            * 35_000
+        )
 
-        prd_blob = _make_blob_mock(prd_updated)
-        legacy_blob = _make_blob_mock(legacy_updated)
-
-        def fake_get_blob(path: str) -> MagicMock:
-            # Called on gcs_client.bucket(name).get_blob(path)
-            # We intercept via side_effect on the bucket mock
-            raise AssertionError("Should not be called directly — mocked via _get_blob_updated")
-
-        def fake_get_blob_updated(
-            client: object, bucket_name: str
-        ) -> datetime | None:
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
             if "prd" in bucket_name:
                 return prd_updated
             return legacy_updated
@@ -113,29 +144,74 @@ class TestFreshestBucketSelection:
             result = mod._read_manifest("cefi", merge=False)
 
         assert result is not None
-        # Primary should be the prd bucket (5M rows fresh), not legacy (35M stale)
-        assert len(result) == 5_000_000
+        assert len(result) == 5_000
         assert (result["capture_status"] == "captured").all()
 
-    def test_row_count_tiebreaker_when_timestamps_equal(self, mod: ModuleType) -> None:
-        """When timestamps are identical, fall back to row count (more rows wins)."""
+    def test_pinned_primary_wins_when_secondary_mtime_is_newer(
+        self, mod: ModuleType, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Legacy surgery bumps its mtime past prd — pinned prd still wins (regression guard)."""
+        # This is the exact 2026-07-03 ASTER-corrective-pass scenario: rewriting the
+        # legacy cefi index bumped its blob.updated past prd's. Under the old mtime-based
+        # selection, roles flipped and prd's captured-only tuples dropped from ENUMERATED.
+        prd_updated = _utc(2026, 6, 28)
+        legacy_updated_after_surgery = _utc(2026, 7, 3)  # newer than prd
+
+        prd_df = _make_df_with_day(
+            [
+                {"capture_status": "captured", "venue": "BINANCE-FUTURES", "data_type": "future", "date": "2026-06-29"},
+            ]
+        )
+        legacy_df = _make_df_with_day(
+            [
+                {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "t", "date": "2026-06-01"},
+            ]
+        )
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return prd_updated if "prd" in bucket_name else legacy_updated_after_surgery
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+            caplog.at_level("WARNING"),
+        ):
+            result = mod._read_manifest("cefi", merge=False)
+
+        # PINNED primary wins even though legacy has newer mtime.
+        assert result is not None
+        assert len(result) == 1
+        assert result.iloc[0]["capture_status"] == "captured"
+        # Surgery-signal warning fired so operators can see the anomaly in logs.
+        assert any("SURGERY-SIGNAL" in r.message for r in caplog.records), (
+            "expected SURGERY-SIGNAL warning when secondary bucket has newer mtime"
+        )
+
+    def test_row_count_no_longer_a_tiebreaker(self, mod: ModuleType) -> None:
+        """Under pinned selection, prd wins regardless of row count when both accessible."""
         same_ts = _utc(2026, 6, 28)
 
-        small_df = _make_df_with_day([
-            {"capture_status": "captured", "venue": "A", "data_type": "t", "date": "2026-06-28"},
-        ])
-        large_df = _make_df_with_day([
-            {"capture_status": "expected_unattempted", "venue": "B", "data_type": "t", "date": "2026-06-28"},
-            {"capture_status": "expected_unattempted", "venue": "C", "data_type": "t", "date": "2026-06-28"},
-        ])
+        small_prd = _make_df_with_day(
+            [
+                {"capture_status": "captured", "venue": "A", "data_type": "t", "date": "2026-06-28"},
+            ]
+        )
+        large_legacy = _make_df_with_day(
+            [
+                {"capture_status": "expected_unattempted", "venue": "B", "data_type": "t", "date": "2026-06-28"},
+                {"capture_status": "expected_unattempted", "venue": "C", "data_type": "t", "date": "2026-06-28"},
+            ]
+        )
 
         def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
             return same_ts
 
         def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
-            if "prd" in bucket_name:
-                return small_df.copy()
-            return large_df.copy()
+            return small_prd.copy() if "prd" in bucket_name else large_legacy.copy()
 
         with (
             patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
@@ -144,15 +220,18 @@ class TestFreshestBucketSelection:
         ):
             result = mod._read_manifest("cefi", merge=False)
 
-        # With same timestamp, more rows wins as tiebreaker
+        # prd (1 row) wins over legacy (2 rows) — pinned by tuple order, not row count.
         assert result is not None
-        assert len(result) == 2
+        assert len(result) == 1
+        assert result.iloc[0]["capture_status"] == "captured"
 
     def test_inaccessible_primary_falls_back_to_secondary(self, mod: ModuleType) -> None:
         """If prd bucket is not accessible, use legacy bucket."""
-        legacy_df = _make_df_with_day([
-            {"capture_status": "expected_unattempted", "venue": "X", "data_type": "t", "date": "2026-01-01"},
-        ])
+        legacy_df = _make_df_with_day(
+            [
+                {"capture_status": "expected_unattempted", "venue": "X", "data_type": "t", "date": "2026-01-01"},
+            ]
+        )
 
         def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
             if "prd" in bucket_name:
@@ -175,24 +254,148 @@ class TestFreshestBucketSelection:
         assert len(result) == 1
 
 
+class TestPrimaryBucketOverride:
+    """``--primary-bucket=<name>`` operator override for surgery/debugging."""
+
+    def test_override_wins_over_tuple_pin_when_accessible(self, mod: ModuleType) -> None:
+        """Override selects legacy as primary even though prd is first in tuple + accessible."""
+        prd_df = _make_df_with_day(
+            [
+                {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
+            ]
+        )
+        legacy_df = _make_df_with_day(
+            [
+                {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "t", "date": "2026-01-01"},
+                {"capture_status": "expected_unattempted", "venue": "OLD2", "data_type": "t", "date": "2026-01-02"},
+            ]
+        )
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return _utc(2026, 6, 28) if "prd" in bucket_name else _utc(2026, 6, 8)
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        legacy_bucket = f"market-data-tick-cefi-{mod.PROJECT_ID}"
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+        ):
+            result = mod._read_manifest(
+                "cefi",
+                merge=False,
+                primary_bucket_override=legacy_bucket,
+            )
+
+        # Override wins → legacy's 2 rows are primary.
+        assert result is not None
+        assert len(result) == 2
+        assert (result["capture_status"] == "expected_unattempted").all()
+
+    def test_override_falls_back_to_pin_when_not_accessible(
+        self, mod: ModuleType, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Override to a name not in accessible candidates → tuple-order pin wins + warning."""
+        prd_df = _make_df_with_day(
+            [
+                {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
+            ]
+        )
+        legacy_df = _make_df_with_day(
+            [
+                {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "t", "date": "2026-01-01"},
+            ]
+        )
+
+        def fake_get_blob_updated(client: object, bucket_name: str) -> datetime | None:
+            return _utc(2026, 6, 28) if "prd" in bucket_name else _utc(2026, 6, 8)
+
+        def fake_read_parquet_safe(bucket_name: str) -> pd.DataFrame | None:
+            return prd_df.copy() if "prd" in bucket_name else legacy_df.copy()
+
+        with (
+            patch.object(mod, "_get_blob_updated", side_effect=fake_get_blob_updated),
+            patch.object(mod, "_read_parquet_safe", side_effect=fake_read_parquet_safe),
+            patch("google.cloud.storage.Client"),
+            caplog.at_level("WARNING"),
+        ):
+            result = mod._read_manifest(
+                "cefi",
+                merge=False,
+                primary_bucket_override="does-not-exist-in-candidates",
+            )
+
+        # Fell back to tuple-order pin → prd is primary.
+        assert result is not None
+        assert len(result) == 1
+        assert result.iloc[0]["capture_status"] == "captured"
+        # Fallback warning logged so operator notices the typo/miss.
+        assert any(
+            "not accessible" in r.message and "does-not-exist-in-candidates" in r.message for r in caplog.records
+        )
+
+
 class TestManifestMerge:
     """Bug 2: prd/non-prd merge correctly combines rows, preferring prd's capture_status."""
 
     def test_merge_with_date_column_deduplicates_on_shard_key(self, mod: ModuleType) -> None:
         """Primary (prd) captured rows override secondary expected_unattempted for same shard."""
-        primary_df = _make_df_with_day([
-            # prd has live captured data for day 2026-06-28 (instrument_id enables per-shard dedup)
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "BTCUSDT"},
-            {"capture_status": "captured", "venue": "KRAKEN", "data_type": "tick", "date": "2026-06-28", "instrument_id": "ETHUSDT"},
-        ])
-        secondary_df = _make_df_with_day([
-            # non-prd has stale expected_unattempted for the same instruments — should be overridden
-            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "BTCUSDT"},
-            {"capture_status": "expected_unattempted", "venue": "KRAKEN", "data_type": "tick", "date": "2026-06-28", "instrument_id": "ETHUSDT"},
-            # unique skeleton rows from non-prd (older days without prd coverage)
-            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-01-01", "instrument_id": "BTCUSDT"},
-            {"capture_status": "expected_unattempted", "venue": "KRAKEN", "data_type": "tick", "date": "2026-01-01", "instrument_id": "ETHUSDT"},
-        ])
+        primary_df = _make_df_with_day(
+            [
+                # prd has live captured data for day 2026-06-28 (instrument_id enables per-shard dedup)
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "tick",
+                    "date": "2026-06-28",
+                    "instrument_id": "BTCUSDT",
+                },
+                {
+                    "capture_status": "captured",
+                    "venue": "KRAKEN",
+                    "data_type": "tick",
+                    "date": "2026-06-28",
+                    "instrument_id": "ETHUSDT",
+                },
+            ]
+        )
+        secondary_df = _make_df_with_day(
+            [
+                # non-prd has stale expected_unattempted for the same instruments — should be overridden
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "BINANCE",
+                    "data_type": "tick",
+                    "date": "2026-06-28",
+                    "instrument_id": "BTCUSDT",
+                },
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "KRAKEN",
+                    "data_type": "tick",
+                    "date": "2026-06-28",
+                    "instrument_id": "ETHUSDT",
+                },
+                # unique skeleton rows from non-prd (older days without prd coverage)
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "BINANCE",
+                    "data_type": "tick",
+                    "date": "2026-01-01",
+                    "instrument_id": "BTCUSDT",
+                },
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "KRAKEN",
+                    "data_type": "tick",
+                    "date": "2026-01-01",
+                    "instrument_id": "ETHUSDT",
+                },
+            ]
+        )
 
         result = mod._merge_manifests(primary_df, secondary_df)
 
@@ -212,15 +415,43 @@ class TestManifestMerge:
     def test_merge_instrument_id_prevents_cross_instrument_collapse(self, mod: ModuleType) -> None:
         """With instrument_id in both DFs, different instruments on the same (date,venue,data_type)
         are kept separately — not collapsed by the 3-column fallback key."""
-        primary_df = _make_df_with_day([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "BTCUSDT"},
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "ETHUSDT"},
-        ])
+        primary_df = _make_df_with_day(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "tick",
+                    "date": "2026-06-28",
+                    "instrument_id": "BTCUSDT",
+                },
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "tick",
+                    "date": "2026-06-28",
+                    "instrument_id": "ETHUSDT",
+                },
+            ]
+        )
         # Secondary (oracle eu_only): SOLUSDT is new (not in prd); BTCUSDT overlaps (prd wins)
-        secondary_df = _make_df_with_day([
-            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "SOLUSDT"},
-            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28", "instrument_id": "BTCUSDT"},
-        ])
+        secondary_df = _make_df_with_day(
+            [
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "BINANCE",
+                    "data_type": "tick",
+                    "date": "2026-06-28",
+                    "instrument_id": "SOLUSDT",
+                },
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "BINANCE",
+                    "data_type": "tick",
+                    "date": "2026-06-28",
+                    "instrument_id": "BTCUSDT",
+                },
+            ]
+        )
 
         result = mod._merge_manifests(primary_df, secondary_df)
 
@@ -241,15 +472,43 @@ class TestManifestMerge:
 
     def test_merge_status_priority_captured_beats_expected_unattempted(self, mod: ModuleType) -> None:
         """captured > attempted_failed > empty_confirmed > expected_unattempted."""
-        primary_df = _make_df_with_day([
-            {"capture_status": "captured", "venue": "A", "data_type": "t", "date": "2026-06-28", "instrument_id": "X"},
-            {"capture_status": "attempted_failed", "venue": "B", "data_type": "t", "date": "2026-06-28", "instrument_id": "Y"},
-        ])
-        secondary_df = _make_df_with_day([
-            # Same instruments overlap with primary — secondary's status should be dropped
-            {"capture_status": "expected_unattempted", "venue": "A", "data_type": "t", "date": "2026-06-28", "instrument_id": "X"},
-            {"capture_status": "expected_unattempted", "venue": "B", "data_type": "t", "date": "2026-06-28", "instrument_id": "Y"},
-        ])
+        primary_df = _make_df_with_day(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "A",
+                    "data_type": "t",
+                    "date": "2026-06-28",
+                    "instrument_id": "X",
+                },
+                {
+                    "capture_status": "attempted_failed",
+                    "venue": "B",
+                    "data_type": "t",
+                    "date": "2026-06-28",
+                    "instrument_id": "Y",
+                },
+            ]
+        )
+        secondary_df = _make_df_with_day(
+            [
+                # Same instruments overlap with primary — secondary's status should be dropped
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "A",
+                    "data_type": "t",
+                    "date": "2026-06-28",
+                    "instrument_id": "X",
+                },
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "B",
+                    "data_type": "t",
+                    "date": "2026-06-28",
+                    "instrument_id": "Y",
+                },
+            ]
+        )
 
         result = mod._merge_manifests(primary_df, secondary_df)
 
@@ -263,14 +522,18 @@ class TestManifestMerge:
         self, mod: ModuleType, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Without date column, fallback to concat (no dedup); warning is logged."""
-        primary_df = _make_df_no_day([
-            {"capture_status": "captured", "venue": "X", "data_type": "t"},
-            {"capture_status": "captured", "venue": "Y", "data_type": "t"},
-        ])
-        secondary_df = _make_df_no_day([
-            {"capture_status": "expected_unattempted", "venue": "X", "data_type": "t"},
-            {"capture_status": "expected_unattempted", "venue": "Z", "data_type": "t"},
-        ])
+        primary_df = _make_df_no_day(
+            [
+                {"capture_status": "captured", "venue": "X", "data_type": "t"},
+                {"capture_status": "captured", "venue": "Y", "data_type": "t"},
+            ]
+        )
+        secondary_df = _make_df_no_day(
+            [
+                {"capture_status": "expected_unattempted", "venue": "X", "data_type": "t"},
+                {"capture_status": "expected_unattempted", "venue": "Z", "data_type": "t"},
+            ]
+        )
 
         import logging
 
@@ -282,14 +545,23 @@ class TestManifestMerge:
         assert any("double-count" in r.message for r in caplog.records)
 
     def test_no_merge_flag_skips_secondary(self, mod: ModuleType) -> None:
-        """With merge=False, only the freshest bucket is used — secondary is not merged."""
-        prd_df = _make_df_with_day([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
-        ])
-        legacy_df = _make_df_with_day([
-            {"capture_status": "expected_unattempted", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
-            {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "tick", "date": "2025-01-01"},
-        ])
+        """With merge=False, only the primary (pinned) bucket is used — secondary is not merged."""
+        prd_df = _make_df_with_day(
+            [
+                {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
+            ]
+        )
+        legacy_df = _make_df_with_day(
+            [
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "BINANCE",
+                    "data_type": "tick",
+                    "date": "2026-06-28",
+                },
+                {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "tick", "date": "2025-01-01"},
+            ]
+        )
 
         prd_updated = _utc(2026, 6, 28)
         legacy_updated = _utc(2026, 6, 8)
@@ -303,9 +575,7 @@ class TestManifestMerge:
         merge_calls: list[str] = []
         original_merge = mod._merge_manifests
 
-        def tracking_merge(
-            df_primary: pd.DataFrame, df_secondary: pd.DataFrame
-        ) -> pd.DataFrame:
+        def tracking_merge(df_primary: pd.DataFrame, df_secondary: pd.DataFrame) -> pd.DataFrame:
             merge_calls.append("called")
             return original_merge(df_primary, df_secondary)
 
@@ -326,12 +596,16 @@ class TestManifestMerge:
 
     def test_merge_enabled_by_default_calls_merge(self, mod: ModuleType) -> None:
         """With merge=True (default), _merge_manifests is called when 2 buckets accessible."""
-        prd_df = _make_df_with_day([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
-        ])
-        legacy_df = _make_df_with_day([
-            {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "tick", "date": "2025-01-01"},
-        ])
+        prd_df = _make_df_with_day(
+            [
+                {"capture_status": "captured", "venue": "BINANCE", "data_type": "tick", "date": "2026-06-28"},
+            ]
+        )
+        legacy_df = _make_df_with_day(
+            [
+                {"capture_status": "expected_unattempted", "venue": "OLD", "data_type": "tick", "date": "2025-01-01"},
+            ]
+        )
 
         prd_updated = _utc(2026, 6, 28)
         legacy_updated = _utc(2026, 6, 8)
@@ -349,9 +623,7 @@ class TestManifestMerge:
         merge_calls: list[str] = []
         original_merge = mod._merge_manifests
 
-        def tracking_merge(
-            df_primary: pd.DataFrame, df_secondary: pd.DataFrame
-        ) -> pd.DataFrame:
+        def tracking_merge(df_primary: pd.DataFrame, df_secondary: pd.DataFrame) -> pd.DataFrame:
             merge_calls.append("called")
             return original_merge(df_primary, df_secondary)
 
@@ -428,10 +700,21 @@ def _compute_coverage_with_stub(
 
     class _FakeChecker:
         @staticmethod
-        def check_enumeration_completeness(
-            ag: str, df_arg: object, *, diagnose: bool = False
-        ) -> object:
+        def check_enumeration_completeness(ag: str, df_arg: object, *, diagnose: bool = False) -> object:
             return stub_result
+
+        @staticmethod
+        def filter_manifest_to_expected(
+            ag: str,
+            df_arg: object,
+            *,
+            expected: object | None = None,
+        ) -> object:
+            # Passthrough — Layer-2 projection tests exercise the raw counts,
+            # not the MVP read-time gate.  The gate itself is exercised by
+            # test_filter_manifest_to_expected.py against the real EXPECTED
+            # matrix from build_expected.
+            return df_arg
 
     with patch.object(mod, "_get_completeness_module", return_value=_FakeChecker()):
         return mod._compute_coverage(dfs)
@@ -442,10 +725,17 @@ class TestV2SchemaVersion:
 
     def test_layer1_block_present_in_compute_coverage(self, mod: ModuleType) -> None:
         """layer_1 block must be present in _compute_coverage output."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(mod, {"cefi": df})
         assert "layer_1" in coverage, "layer_1 block must be present in coverage output"
 
@@ -455,12 +745,24 @@ class TestV2ByVenueInstrumentType:
 
     def test_by_venue_instrument_type_present(self, mod: ModuleType) -> None:
         """by_venue_instrument_type must be present in the output."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-            {"capture_status": "expected_unattempted", "venue": "DERIBIT", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "options_chain"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "DERIBIT",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "options_chain",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(mod, {"cefi": df})
 
         assert "by_venue_instrument_type" in coverage
@@ -475,14 +777,31 @@ class TestV2ByVenueInstrumentType:
 
     def test_by_venue_instrument_type_correct_counts(self, mod: ModuleType) -> None:
         """counts per (venue, instrument_type) are correct."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BYBIT", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "perpetual"},
-            {"capture_status": "attempted_failed", "venue": "BYBIT", "data_type": "book_snapshot_5",
-             "date": "2026-06-28", "instrument_type": "perpetual"},
-            {"capture_status": "expected_unattempted", "venue": "DERIBIT", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "futures_chain"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BYBIT",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "perpetual",
+                },
+                {
+                    "capture_status": "attempted_failed",
+                    "venue": "BYBIT",
+                    "data_type": "book_snapshot_5",
+                    "date": "2026-06-28",
+                    "instrument_type": "perpetual",
+                },
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "DERIBIT",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "futures_chain",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(mod, {"cefi": df})
 
         bybit_perp = coverage["by_venue_instrument_type"]["cefi"]["BYBIT"]["perpetual"]
@@ -497,9 +816,11 @@ class TestV2ByVenueInstrumentType:
 
     def test_by_venue_instrument_type_empty_when_column_absent(self, mod: ModuleType) -> None:
         """When instrument_type column is absent, by_venue_instrument_type is empty."""
-        df = pd.DataFrame([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades", "date": "2026-06-28"},
-        ])
+        df = pd.DataFrame(
+            [
+                {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades", "date": "2026-06-28"},
+            ]
+        )
         coverage = _compute_coverage_with_stub(mod, {"cefi": df})
 
         assert "by_venue_instrument_type" in coverage
@@ -507,17 +828,177 @@ class TestV2ByVenueInstrumentType:
         assert coverage["by_venue_instrument_type"]["cefi"] == {}
 
 
+class TestChainEnumeration:
+    """by_chain aggregation (chain-enum 2026-07-18) — the distinct chains present
+    per asset_group, keys UN-collapsed so canonical-drift stays visible."""
+
+    def test_by_chain_present_and_keyed_by_raw_chain(self, mod: ModuleType) -> None:
+        """by_chain[ag] keys are the raw distinct chain values, counts per status."""
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "AAVE_V3",
+                    "data_type": "lending_indices",
+                    "date": "2026-06-28",
+                    "instrument_type": "LENDING",
+                    "chain": "ETHEREUM",
+                },
+                {
+                    "capture_status": "captured",
+                    "venue": "UNISWAP_V3",
+                    "data_type": "dex_pool_state",
+                    "date": "2026-06-28",
+                    "instrument_type": "POOL",
+                    "chain": "ETHEREUM",
+                },
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "KAMINO",
+                    "data_type": "lending_indices",
+                    "date": "2026-06-28",
+                    "instrument_type": "SOLANA_LENDING",
+                    # lower-case drift value — MUST survive uncollapsed
+                    "chain": "solana",
+                },
+            ]
+        )
+        coverage = _compute_coverage_with_stub(mod, {"defi": df})
+
+        assert "by_chain" in coverage
+        defi_chains = coverage["by_chain"]["defi"]
+        assert set(defi_chains.keys()) == {"ETHEREUM", "solana"}
+        assert defi_chains["ETHEREUM"]["captured"] == 2
+        assert defi_chains["ETHEREUM"]["total"] == 2
+        assert defi_chains["solana"]["expected_unattempted"] == 1
+        assert defi_chains["solana"]["captured"] == 0
+
+    def test_by_chain_empty_when_column_absent(self, mod: ModuleType) -> None:
+        """A bucket parquet without a chain column yields an empty by_chain[ag]."""
+        df = pd.DataFrame(
+            [
+                {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades", "date": "2026-06-28"},
+            ]
+        )
+        coverage = _compute_coverage_with_stub(mod, {"cefi": df})
+
+        assert "by_chain" in coverage
+        assert coverage["by_chain"]["cefi"] == {}
+
+
+class TestInstrumentTypeCaseInsensitivity:
+    """D1 migration robustness (plans/active/issues/
+    honest_coverage_harness_instrument_type_case_break_on_d1_migration_2026_07_20.md).
+
+    The manifest ``instrument_type`` column moves from its current lowercase writer
+    grain to the UPPERCASE catalogue enum under the D1 ruling. A shard whose history
+    spans both spellings (mixed-case during the migration cutover window) must be
+    counted as ONE covered shard by the Layer-2 drill-down projections, never
+    silently split into two cells keyed by casing (which would make a fully-covered
+    shard look partially/newly uncovered purely from a case artifact).
+    """
+
+    def test_lowercase_and_uppercase_rows_merge_into_one_shard(self, mod: ModuleType) -> None:
+        """A legacy-lowercase captured row + a new-uppercase captured row for the
+        SAME (venue, instrument_type, data_type) shard merge into ONE
+        by_venue_instrument_type[_data_type] cell with BOTH counted captured —
+        not split into two separately-keyed, worse-looking cells."""
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-07-25",
+                    "instrument_type": "SPOT_PAIR",
+                },
+            ]
+        )
+        coverage = _compute_coverage_with_stub(mod, {"cefi": df})
+
+        cefi_vit = coverage["by_venue_instrument_type"]["cefi"]
+        assert "BINANCE" in cefi_vit
+        # Exactly ONE itype key for BINANCE — the case variants merged, not split.
+        assert len(cefi_vit["BINANCE"]) == 1, (
+            f"expected the lowercase/uppercase rows to merge into one shard, got keys "
+            f"{list(cefi_vit['BINANCE'].keys())}"
+        )
+        merged = next(iter(cefi_vit["BINANCE"].values()))
+        assert merged["captured"] == 2
+        assert merged["total"] == 2
+        assert merged["coverage_pct"] == 100.0
+
+        cefi_vitdt = coverage["by_venue_instrument_type_data_type"]["cefi"]["BINANCE"]
+        assert len(cefi_vitdt) == 1
+        merged_dt = next(iter(cefi_vitdt.values()))
+        assert "trades" in merged_dt
+        assert merged_dt["trades"]["captured"] == 2
+
+    def test_uppercase_only_shard_counts_as_covered_same_as_lowercase(self, mod: ModuleType) -> None:
+        """A shard whose ONLY manifest rows are the post-D1 UPPERCASE spelling counts
+        as covered identically to the pre-migration lowercase spelling — case alone
+        must never change whether a shard is deemed covered."""
+        df_lower = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "OKX",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "perpetual",
+                },
+            ]
+        )
+        df_upper = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "OKX",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "PERPETUAL",
+                },
+            ]
+        )
+        cov_lower = _compute_coverage_with_stub(mod, {"cefi": df_lower})
+        cov_upper = _compute_coverage_with_stub(mod, {"cefi": df_upper})
+
+        lower_cell = cov_lower["by_venue_instrument_type"]["cefi"]["OKX"]["perpetual"]
+        upper_cell = cov_upper["by_venue_instrument_type"]["cefi"]["OKX"]["PERPETUAL"]
+        assert lower_cell["captured"] == upper_cell["captured"] == 1
+        assert lower_cell["coverage_pct"] == upper_cell["coverage_pct"] == 100.0
+
+
 class TestV2ByVenueInstrumentTypeDataType:
     """by_venue_instrument_type_data_type aggregation."""
 
     def test_structure_is_correct(self, mod: ModuleType) -> None:
         """4-level nesting: ag → venue → itype → data_type → counts."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "book_snapshot_5",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "book_snapshot_5",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(mod, {"cefi": df})
 
         assert "by_venue_instrument_type_data_type" in coverage
@@ -535,12 +1016,24 @@ class TestV2ByDay:
 
     def test_by_day_present(self, mod: ModuleType) -> None:
         """by_day must be present in the output."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-            {"capture_status": "expected_unattempted", "venue": "DERIBIT", "data_type": "trades",
-             "date": "2026-06-27", "instrument_type": "futures_chain"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "DERIBIT",
+                    "data_type": "trades",
+                    "date": "2026-06-27",
+                    "instrument_type": "futures_chain",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(mod, {"cefi": df})
 
         assert "by_day" in coverage
@@ -552,10 +1045,16 @@ class TestV2ByDay:
 
     def test_by_day_empty_when_date_absent(self, mod: ModuleType) -> None:
         """When date column is absent, by_day is empty."""
-        df = pd.DataFrame([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "instrument_type": "spot_pair"},
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(mod, {"cefi": df})
         assert coverage["by_day"]["cefi"] == {}
 
@@ -565,10 +1064,17 @@ class TestV2Layer1Integration:
 
     def test_layer1_block_present(self, mod: ModuleType) -> None:
         """layer_1 must be a top-level key in coverage output."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(mod, {"cefi": df})
         assert "layer_1" in coverage
         assert "by_asset_group" in coverage["layer_1"]
@@ -576,13 +1082,23 @@ class TestV2Layer1Integration:
 
     def test_instrument_gates_download_true_when_incomplete(self, mod: ModuleType) -> None:
         """instrument_gates_download=True when denominator_complete=False."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(
-            mod, {"cefi": df},
-            denominator_complete=False, completeness_pct=90.0, denominator_status="INCOMPLETE",
+            mod,
+            {"cefi": df},
+            denominator_complete=False,
+            completeness_pct=90.0,
+            denominator_status="INCOMPLETE",
         )
 
         ag_cell = coverage["by_asset_group"]["cefi"]
@@ -593,13 +1109,23 @@ class TestV2Layer1Integration:
 
     def test_instrument_gates_download_false_when_complete(self, mod: ModuleType) -> None:
         """instrument_gates_download=False when denominator_complete=True."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(
-            mod, {"cefi": df},
-            denominator_complete=True, completeness_pct=100.0, denominator_status="COMPLETE",
+            mod,
+            {"cefi": df},
+            denominator_complete=True,
+            completeness_pct=100.0,
+            denominator_status="COMPLETE",
         )
 
         ag_cell = coverage["by_asset_group"]["cefi"]
@@ -610,13 +1136,23 @@ class TestV2Layer1Integration:
 
     def test_instrument_gates_download_true_when_undefined(self, mod: ModuleType) -> None:
         """instrument_gates_download=True and completeness_pct=None when UNDEFINED."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(
-            mod, {"cefi": df},
-            denominator_complete=False, completeness_pct=None, denominator_status="UNDEFINED",
+            mod,
+            {"cefi": df},
+            denominator_complete=False,
+            completeness_pct=None,
+            denominator_status="UNDEFINED",
         )
 
         ag_cell = coverage["by_asset_group"]["cefi"]
@@ -627,12 +1163,24 @@ class TestV2Layer1Integration:
 
     def test_existing_keys_preserved(self, mod: ModuleType) -> None:
         """All v1 keys must still be present in the output (byte-compatible)."""
-        df = _make_df_v2([
-            {"capture_status": "captured", "venue": "BINANCE", "data_type": "trades",
-             "date": "2026-06-28", "instrument_type": "spot_pair"},
-            {"capture_status": "empty_confirmed", "venue": "BINANCE", "data_type": "book_snapshot_5",
-             "date": "2026-06-27", "instrument_type": "spot_pair"},
-        ])
+        df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+                {
+                    "capture_status": "empty_confirmed",
+                    "venue": "BINANCE",
+                    "data_type": "book_snapshot_5",
+                    "date": "2026-06-27",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
         coverage = _compute_coverage_with_stub(mod, {"cefi": df})
 
         # All v1 keys must be present
@@ -641,6 +1189,518 @@ class TestV2Layer1Integration:
         assert "by_venue_data_type" in coverage
         # v1 per-cell fields
         ag_cell = coverage["by_asset_group"]["cefi"]
-        for key in ("captured", "empty_confirmed", "attempted_failed", "expected_unattempted",
-                    "total", "coverage_pct", "all_shards_coverage_pct"):
+        for key in (
+            "captured",
+            "empty_confirmed",
+            "attempted_failed",
+            "expected_unattempted",
+            "total",
+            "coverage_pct",
+            "all_shards_coverage_pct",
+        ):
             assert key in ag_cell, f"v1 field '{key}' missing from by_asset_group[cefi]"
+
+
+# ===========================================================================
+# Column-prune hardening (defence-in-depth, 2026-07-16) — read_dictionary
+# category-dtype preservation + its two correctness footguns (categorical
+# .map() sort order, groupby phantom-group generation with observed=False).
+# ===========================================================================
+
+
+class TestReadParquetSafeColumnSelection:
+    """_read_parquet_safe reads with read_dictionary — real local-parquet round-trip.
+
+    A local file is used (not a GCS mock) so the test exercises the ACTUAL pandas/
+    pyarrow dtype behavior, not just that the right kwarg was passed. pandas'
+    read_parquet is monkeypatched to redirect the gs:// URI to a local path while
+    forwarding every kwarg (columns, read_dictionary, filters) unchanged.
+    """
+
+    def _write_local_index(self, path: Path, *, with_iid: bool = True, with_itype: bool = True) -> pd.DataFrame:
+        rows: dict[str, list[object]] = {
+            "capture_status": ["captured", "expected_unattempted"] * 500,
+            "venue": ["BINANCE", "KRAKEN"] * 500,
+            "data_type": ["trades"] * 1000,
+            "date": ["2026-06-28"] * 1000,
+        }
+        if with_iid:
+            rows["instrument_id"] = [f"SYM{i % 50}" for i in range(1000)]
+        if with_itype:
+            rows["instrument_type"] = ["spot_pair", "perpetual"] * 500
+        df = pd.DataFrame(rows)
+        df.to_parquet(path, engine="pyarrow")
+        return df
+
+    def _patch_read_parquet_to_local(self, mod: ModuleType, local_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        real_read_parquet = pd.read_parquet
+
+        def fake_read_parquet(uri: str, **kwargs: object) -> pd.DataFrame:
+            assert uri.startswith("gs://"), f"expected a gs:// URI, got {uri!r}"
+            return real_read_parquet(local_path, **kwargs)
+
+        monkeypatch.setattr(mod.pd, "read_parquet", fake_read_parquet)
+
+    def test_full_read_preserves_dictionary_encoding_as_category(
+        self, mod: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tier 1 (all 6 columns): instrument_id comes back as category dtype with identical values."""
+        local_path = tmp_path / "availability_index.parquet"
+        source_df = self._write_local_index(local_path)
+        self._patch_read_parquet_to_local(mod, local_path, monkeypatch)
+
+        result = mod._read_parquet_safe("fake-bucket")
+
+        assert result is not None
+        assert len(result) == 1000
+        assert str(result["instrument_id"].dtype) == "category"
+        assert set(result["instrument_id"].unique()) == set(source_df["instrument_id"].unique())
+        assert result["instrument_id"].nunique() == 50
+        # Values are unchanged, not just the dtype label — spot check a few rows.
+        assert result["instrument_id"].tolist() == source_df["instrument_id"].tolist()
+        assert result["capture_status"].tolist() == source_df["capture_status"].tolist()
+
+    def test_fallback_tier_without_instrument_id_still_returns_category_dtype(
+        self, mod: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Legacy bucket lacking instrument_id: falls back to tier 2, other columns still categorical."""
+        local_path = tmp_path / "availability_index.parquet"
+        source_df = self._write_local_index(local_path, with_iid=False)
+        self._patch_read_parquet_to_local(mod, local_path, monkeypatch)
+
+        result = mod._read_parquet_safe("fake-bucket")
+
+        assert result is not None
+        assert "instrument_id" not in result.columns
+        assert len(result) == 1000
+        assert str(result["venue"].dtype) == "category"
+        assert str(result["instrument_type"].dtype) == "category"
+        assert result["venue"].tolist() == source_df["venue"].tolist()
+
+    def test_eu_only_read_preserves_category_dtype(
+        self, mod: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_read_parquet_eu_only also gets the read_dictionary treatment (dtype-consistent with primary)."""
+        local_path = tmp_path / "availability_index.parquet"
+        self._write_local_index(local_path)
+        self._patch_read_parquet_to_local(mod, local_path, monkeypatch)
+
+        result = mod._read_parquet_eu_only("fake-bucket")
+
+        assert result is not None
+        assert (result["capture_status"] == "expected_unattempted").all()
+        assert str(result["instrument_id"].dtype) == "category"
+
+
+class TestCategoricalDtypeCorrectness:
+    """Regression coverage for the two footguns introduced by category-dtype columns.
+
+    Both were found empirically (real pandas 2.3.3 behavior) while implementing the
+    read_dictionary hardening, NOT assumed — see the inline comments in
+    measure_honest_coverage.py at _merge_manifests and _compute_coverage's groupby calls.
+    """
+
+    def test_merge_priority_correct_with_categorical_capture_status(self, mod: ModuleType) -> None:
+        """Regression: Series.map() on a Categorical returns a Categorical whose default sort
+        order is category-discovery order, NOT numeric value order — verified directly:
+        mapping {captured:0, attempted_failed:1, expected_unattempted:3} over a Categorical
+        ['captured','expected_unattempted','attempted_failed'] sorts as [1,0,3] uncast vs the
+        correct [0,1,3] after .astype('int64'). Without the guard in _merge_manifests, the
+        "best status wins" merge would keep the WRONG status per shard.
+        """
+        primary_df = pd.DataFrame(
+            {
+                "date": pd.Categorical(["2026-06-28", "2026-06-28"]),
+                "venue": pd.Categorical(["BINANCE", "BINANCE"]),
+                "instrument_id": pd.Categorical(["BTCUSDT", "ETHUSDT"]),
+                "data_type": pd.Categorical(["tick", "tick"]),
+                "capture_status": pd.Categorical(["captured", "attempted_failed"]),
+            }
+        )
+        secondary_df = pd.DataFrame(
+            {
+                "date": pd.Categorical(["2026-06-28", "2026-06-28"]),
+                "venue": pd.Categorical(["BINANCE", "BINANCE"]),
+                "instrument_id": pd.Categorical(["BTCUSDT", "ETHUSDT"]),
+                "data_type": pd.Categorical(["tick", "tick"]),
+                "capture_status": pd.Categorical(["expected_unattempted", "expected_unattempted"]),
+            }
+        )
+
+        result = mod._merge_manifests(primary_df, secondary_df)
+
+        assert len(result) == 2
+        btc = result[result["instrument_id"] == "BTCUSDT"].iloc[0]
+        eth = result[result["instrument_id"] == "ETHUSDT"].iloc[0]
+        # Primary's higher-priority status must win for BOTH shards — if the categorical
+        # sort-order bug were present, the wrong row could survive drop_duplicates instead.
+        assert btc["capture_status"] == "captured"
+        assert eth["capture_status"] == "attempted_failed"
+
+    def test_compute_coverage_no_phantom_groups_with_categorical_columns(self, mod: ModuleType) -> None:
+        """Regression: groupby(observed=False) (pandas default) would synthesise an empty
+        group for every category combination that was declared but never co-occurs in the
+        data — injecting bogus zero-count cells. observed=True must suppress this.
+        """
+        df = pd.DataFrame(
+            {
+                "capture_status": pd.Categorical(["captured", "expected_unattempted"]),
+                "venue": pd.Categorical(["BINANCE", "DERIBIT"]),
+                "data_type": pd.Categorical(["trades", "trades"]),
+                "date": pd.Categorical(["2026-06-28", "2026-06-28"]),
+                "instrument_type": pd.Categorical(["spot_pair", "options_chain"]),
+            }
+        )
+        coverage = _compute_coverage_with_stub(mod, {"cefi": df})
+
+        vdt = coverage["by_venue_data_type"]["cefi"]
+        # Only the two ACTUALLY-observed (venue, data_type) combos may appear — no phantom
+        # (DERIBIT would be a phantom source only if venue/data_type categories diverged from
+        # what's observed; the real risk is at the (venue, instrument_type) / 4-way levels
+        # where BINANCE never appears with options_chain and DERIBIT never appears with
+        # spot_pair in this data).
+        assert set(vdt.keys()) == {"BINANCE", "DERIBIT"}
+        assert set(vdt["BINANCE"].keys()) == {"trades"}
+        assert set(vdt["DERIBIT"].keys()) == {"trades"}
+
+        vit = coverage["by_venue_instrument_type"]["cefi"]
+        # BINANCE must NOT have an options_chain cell, and DERIBIT must NOT have a
+        # spot_pair cell — those are the phantom combinations observed=False would add.
+        assert "options_chain" not in vit["BINANCE"], "phantom empty group leaked into by_venue_instrument_type"
+        assert "spot_pair" not in vit["DERIBIT"], "phantom empty group leaked into by_venue_instrument_type"
+        assert set(vit["BINANCE"].keys()) == {"spot_pair"}
+        assert set(vit["DERIBIT"].keys()) == {"options_chain"}
+
+    def test_compute_coverage_identical_for_categorical_vs_object_dtype(self, mod: ModuleType) -> None:
+        """dtype must be an implementation detail: categorical-column input and plain
+        object-dtype input over the SAME rows must produce byte-identical coverage output.
+        """
+        rows = [
+            {
+                "capture_status": "captured",
+                "venue": "BINANCE",
+                "data_type": "trades",
+                "date": "2026-06-28",
+                "instrument_type": "spot_pair",
+            },
+            {
+                "capture_status": "expected_unattempted",
+                "venue": "DERIBIT",
+                "data_type": "trades",
+                "date": "2026-06-27",
+                "instrument_type": "options_chain",
+            },
+            {
+                "capture_status": "attempted_failed",
+                "venue": "BINANCE",
+                "data_type": "book_snapshot_5",
+                "date": "2026-06-28",
+                "instrument_type": "spot_pair",
+            },
+        ]
+        df_object = pd.DataFrame(rows)
+        df_categorical = df_object.astype(
+            {
+                "capture_status": "category",
+                "venue": "category",
+                "data_type": "category",
+                "date": "category",
+                "instrument_type": "category",
+            }
+        )
+
+        coverage_object = _compute_coverage_with_stub(mod, {"cefi": df_object})
+        coverage_categorical = _compute_coverage_with_stub(mod, {"cefi": df_categorical})
+
+        assert coverage_object == coverage_categorical
+
+
+class TestSameDayMergeOnWrite:
+    """Regression coverage for deployment_api_honest_coverage_regression_2026_07_26.md.
+
+    A same-day run that measures only a SUBSET of asset_groups (e.g. a manual
+    ``--asset-group cefi`` dev/debug invocation — an explicitly documented normal
+    usage of launch-measure-honest-coverage-vm.sh) used to silently overwrite the
+    whole day's coverage.json, erasing every OTHER asset_group a prior run that
+    same day had already measured (observed in prod 2026-07-25/2026-07-26: two
+    consecutive days' coverage.json held only ``cefi``, though the scheduled
+    ``--asset-group all`` cron ran and completed successfully both days).
+    """
+
+    def _payload(
+        self,
+        *,
+        asset_groups_requested: list[str],
+        asset_groups_measured: list[str],
+        by_asset_group: dict[str, object],
+        generated_at: str = "2026-07-27T00:35:00Z",
+    ) -> dict[str, object]:
+        failed = [ag for ag in asset_groups_requested if ag not in asset_groups_measured]
+        return {
+            "generated_at": generated_at,
+            "date": "2026-07-27",
+            "schema_version": 2,
+            "asset_groups_requested": asset_groups_requested,
+            "asset_groups_measured": asset_groups_measured,
+            "asset_groups_failed": failed,
+            "partial": bool(failed),
+            "by_asset_group": by_asset_group,
+            "by_venue": {ag: {} for ag in asset_groups_measured},
+            "by_venue_data_type": {ag: {} for ag in asset_groups_measured},
+            "by_venue_instrument_type": {ag: {} for ag in asset_groups_measured},
+            "by_venue_instrument_type_data_type": {ag: {} for ag in asset_groups_measured},
+            "by_day": {ag: {} for ag in asset_groups_measured},
+            "by_chain": {ag: {} for ag in asset_groups_measured},
+            "layer_1": {"by_asset_group": {ag: {"completeness_pct": 100.0} for ag in asset_groups_measured}},
+        }
+
+    def test_narrow_run_preserves_other_asset_groups_from_existing_full_run(self, mod: ModuleType) -> None:
+        """A same-day ``cefi``-only run must not erase defi/tradfi/sports/prediction."""
+        existing = self._payload(
+            asset_groups_requested=["cefi", "defi", "tradfi", "sports", "prediction"],
+            asset_groups_measured=["cefi", "defi", "tradfi", "sports", "prediction"],
+            by_asset_group={
+                "cefi": {"captured": 100},
+                "defi": {"captured": 200},
+                "tradfi": {"captured": 300},
+                "sports": {"captured": 400},
+                "prediction": {"captured": 500},
+            },
+            generated_at="2026-07-27T00:35:00Z",
+        )
+        narrow_run = self._payload(
+            asset_groups_requested=["cefi"],
+            asset_groups_measured=["cefi"],
+            by_asset_group={"cefi": {"captured": 999}},  # fresher cefi data
+            generated_at="2026-07-27T22:30:00Z",
+        )
+
+        merged = mod._merge_with_existing(narrow_run, existing)
+
+        # Every asset_group the existing full run measured is still present —
+        # this is the exact behavior that was missing before the fix.
+        assert set(merged["asset_groups_measured"]) == {"cefi", "defi", "tradfi", "sports", "prediction"}
+        assert merged["asset_groups_failed"] == []
+        assert merged["partial"] is False
+        # The touched group (cefi) got the FRESH data, not the stale existing cell.
+        assert merged["by_asset_group"]["cefi"] == {"captured": 999}
+        # Untouched groups are byte-identical to what the existing file had.
+        assert merged["by_asset_group"]["defi"] == {"captured": 200}
+        assert merged["by_asset_group"]["tradfi"] == {"captured": 300}
+        assert merged["by_asset_group"]["sports"] == {"captured": 400}
+        assert merged["by_asset_group"]["prediction"] == {"captured": 500}
+        # Latest run's provenance wins for the scalar fields.
+        assert merged["generated_at"] == "2026-07-27T22:30:00Z"
+
+    def test_full_run_supersedes_a_prior_narrow_run(self, mod: ModuleType) -> None:
+        """A subsequent full ``all`` run fully refreshes every group (no stale leftovers)."""
+        existing = self._payload(
+            asset_groups_requested=["cefi"],
+            asset_groups_measured=["cefi"],
+            by_asset_group={"cefi": {"captured": 1}},
+        )
+        full_run = self._payload(
+            asset_groups_requested=["cefi", "defi", "tradfi", "sports", "prediction"],
+            asset_groups_measured=["cefi", "defi", "tradfi", "sports", "prediction"],
+            by_asset_group={
+                "cefi": {"captured": 111},
+                "defi": {"captured": 222},
+                "tradfi": {"captured": 333},
+                "sports": {"captured": 444},
+                "prediction": {"captured": 555},
+            },
+        )
+
+        merged = mod._merge_with_existing(full_run, existing)
+
+        assert set(merged["asset_groups_measured"]) == {"cefi", "defi", "tradfi", "sports", "prediction"}
+        assert merged["by_asset_group"]["cefi"] == {"captured": 111}
+
+    def test_partial_failure_of_a_group_not_in_existing_file_is_recorded(self, mod: ModuleType) -> None:
+        """Requesting a group that fails to load (and was never measured before) stays marked failed."""
+        existing = self._payload(
+            asset_groups_requested=["cefi"],
+            asset_groups_measured=["cefi"],
+            by_asset_group={"cefi": {"captured": 1}},
+        )
+        # `defi` was requested this run but failed to load (OOM etc.) — not in by_asset_group.
+        failing_run = self._payload(
+            asset_groups_requested=["defi"],
+            asset_groups_measured=[],
+            by_asset_group={},
+        )
+
+        merged = mod._merge_with_existing(failing_run, existing)
+
+        assert merged["asset_groups_measured"] == ["cefi"]
+        assert merged["asset_groups_failed"] == ["defi"]
+        assert merged["partial"] is True
+
+    def test_read_existing_payload_returns_none_when_object_missing(self, mod: ModuleType) -> None:
+        """First run of the day (no prior coverage.json) — merge is a no-op via None."""
+        mock_blob = MagicMock()
+        mock_blob.download_as_text.side_effect = Exception("404 Not Found")
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_client = MagicMock()
+        mock_client.bucket.return_value = mock_bucket
+
+        with patch("google.cloud.storage.Client", return_value=mock_client):
+            result = mod._read_existing_payload("2026-07-27")
+
+        assert result is None
+
+    def test_read_existing_payload_returns_none_on_malformed_json(self, mod: ModuleType) -> None:
+        mock_blob = MagicMock()
+        mock_blob.download_as_text.return_value = "{not valid json"
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_client = MagicMock()
+        mock_client.bucket.return_value = mock_bucket
+
+        with patch("google.cloud.storage.Client", return_value=mock_client):
+            result = mod._read_existing_payload("2026-07-27")
+
+        assert result is None
+
+    def test_write_output_merges_with_existing_gcs_object_before_upload(self, mod: ModuleType) -> None:
+        """End-to-end: _write_output reads-merges-writes instead of blind-overwriting."""
+        existing_payload = self._payload(
+            asset_groups_requested=["cefi", "defi"],
+            asset_groups_measured=["cefi", "defi"],
+            by_asset_group={"cefi": {"captured": 1}, "defi": {"captured": 2}},
+        )
+        mock_blob = MagicMock()
+        mock_blob.download_as_text.return_value = json.dumps(existing_payload)
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_client = MagicMock()
+        mock_client.bucket.return_value = mock_bucket
+
+        narrow_run = self._payload(
+            asset_groups_requested=["cefi"],
+            asset_groups_measured=["cefi"],
+            by_asset_group={"cefi": {"captured": 999}},
+        )
+
+        with patch("google.cloud.storage.Client", return_value=mock_client):
+            mod._write_output(narrow_run, None)
+
+        assert mock_blob.upload_from_string.call_count == 1
+        uploaded = json.loads(mock_blob.upload_from_string.call_args[0][0])
+        # defi survives even though this run only touched cefi.
+        assert uploaded["by_asset_group"]["defi"] == {"captured": 2}
+        assert uploaded["by_asset_group"]["cefi"] == {"captured": 999}
+        assert set(uploaded["asset_groups_measured"]) == {"cefi", "defi"}
+
+
+class TestPerAssetGroupStreaming:
+    """Real column-prune refactor (2026-08-01) — see issues/honest_coverage_nightly_cron
+    _undersized_and_launcher_ssot_drift_2026_07_16.md.  main() now reads/computes/
+    releases one asset_group's manifest at a time instead of holding every requested
+    asset_group's primary DataFrame in memory simultaneously.  These tests prove:
+      1. _accumulate_coverage correctly folds a single ag's _compute_coverage() output
+         into a running accumulator across multiple calls.
+      2. Streaming (N separate single-ag _compute_coverage calls, merged) produces
+         BYTE-IDENTICAL output to the old batched (one _compute_coverage call over a
+         dict of all ags) approach — the refactor changes only *when* each ag's
+         DataFrame is read/released, never the read columns, the merge key, or the
+         per-ag computation itself.
+    """
+
+    def test_init_coverage_accumulator_shape(self, mod: ModuleType) -> None:
+        acc = mod._init_coverage_accumulator()
+        for key in mod._MERGEABLE_BY_AG_KEYS:
+            assert acc[key] == {}
+        assert acc["layer_1"] == {"by_asset_group": {}}
+
+    def test_accumulate_coverage_merges_two_asset_groups(self, mod: ModuleType) -> None:
+        acc = mod._init_coverage_accumulator()
+        cefi_coverage = {
+            "by_asset_group": {"cefi": {"captured": 1}},
+            "by_venue": {"cefi": {"BINANCE": {"captured": 1}}},
+            "by_venue_data_type": {"cefi": {}},
+            "by_venue_instrument_type": {"cefi": {}},
+            "by_venue_instrument_type_data_type": {"cefi": {}},
+            "by_day": {"cefi": {}},
+            "by_chain": {"cefi": {}},
+            "layer_1": {"by_asset_group": {"cefi": {"completeness_pct": 100.0}}},
+        }
+        defi_coverage = {
+            "by_asset_group": {"defi": {"captured": 2}},
+            "by_venue": {"defi": {"UNISWAP": {"captured": 2}}},
+            "by_venue_data_type": {"defi": {}},
+            "by_venue_instrument_type": {"defi": {}},
+            "by_venue_instrument_type_data_type": {"defi": {}},
+            "by_day": {"defi": {}},
+            "by_chain": {"defi": {}},
+            "layer_1": {"by_asset_group": {"defi": {"completeness_pct": 50.0}}},
+        }
+
+        mod._accumulate_coverage(acc, cefi_coverage)
+        mod._accumulate_coverage(acc, defi_coverage)
+
+        assert acc["by_asset_group"] == {"cefi": {"captured": 1}, "defi": {"captured": 2}}
+        assert acc["by_venue"]["cefi"] == {"BINANCE": {"captured": 1}}
+        assert acc["by_venue"]["defi"] == {"UNISWAP": {"captured": 2}}
+        assert acc["layer_1"]["by_asset_group"] == {
+            "cefi": {"completeness_pct": 100.0},
+            "defi": {"completeness_pct": 50.0},
+        }
+
+    def test_streaming_equals_batch_for_multiple_asset_groups(self, mod: ModuleType) -> None:
+        """The core equivalence proof: streaming one-ag-at-a-time == batching all ags."""
+        cefi_df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-28",
+                    "instrument_type": "spot_pair",
+                },
+                {
+                    "capture_status": "attempted_failed",
+                    "venue": "BINANCE",
+                    "data_type": "trades",
+                    "date": "2026-06-29",
+                    "instrument_type": "spot_pair",
+                },
+            ]
+        )
+        defi_df = _make_df_v2(
+            [
+                {
+                    "capture_status": "captured",
+                    "venue": "UNISWAP",
+                    "data_type": "swaps",
+                    "date": "2026-06-28",
+                    "instrument_type": "amm_pool",
+                    "chain": "ETHEREUM",
+                },
+            ]
+        )
+        sports_df = _make_df_v2(
+            [
+                {
+                    "capture_status": "expected_unattempted",
+                    "venue": "APIFOOTBALL",
+                    "data_type": "odds",
+                    "date": "2026-06-28",
+                    "instrument_type": "match",
+                },
+            ]
+        )
+
+        # Old behavior: one _compute_coverage call over a dict of every ag.
+        batched = _compute_coverage_with_stub(
+            mod, {"cefi": cefi_df.copy(), "defi": defi_df.copy(), "sports": sports_df.copy()}
+        )
+
+        # New behavior: stream one ag at a time, accumulating via _accumulate_coverage.
+        streamed = mod._init_coverage_accumulator()
+        for ag, df in (("cefi", cefi_df), ("defi", defi_df), ("sports", sports_df)):
+            ag_coverage = _compute_coverage_with_stub(mod, {ag: df})
+            mod._accumulate_coverage(streamed, ag_coverage)
+
+        assert streamed == batched

@@ -1,7 +1,9 @@
 """Sanctum reference data adapter — instrument discovery for Sanctum LST marketplace.
 
 Discovers Sanctum-native liquid staking tokens (LSTs) on Solana.
-Tokens are returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Tokens are returned as InstrumentRecord with instrument_type="LST" (fixed
+2026-07-09 — key/field mismatch, same class as PERP-vs-PERPETUAL; see
+`lido.py`'s module docstring for the full rationale).
 
 Pure static-registry adapter: get_instruments returns a hardcoded catalogue of
 Sanctum-listed LSTs with active TVL. No network access required. Tests are
@@ -18,14 +20,26 @@ References:
 - INF mint: 5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm
 - jupSOL (Jupiter Staked SOL) mint: jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v
 - laineSOL (Laine Staked SOL) mint: LAinEtNLgpmCP9Rvsf5Hn8W6EhNiKLZMTlkPradhmPuA
-- Launch date: 2023-06-01 (conservative mainnet-launch floor from UAC chain_env.py).
+- Launch date (jupSOL/laineSOL): 2023-06-01 (conservative Sanctum-marketplace-launch
+  floor from UAC chain_env.py — not independently re-verified this session; the safe
+  direction if imprecise, since it can only under-report, never fabricate, coverage).
+- Launch date (INF): 2021-10-15 — INF's own mint predates the "Sanctum" brand by ~2.3
+  years (verified 2026-07-22: CoinGecko lists this exact mint as `socean-staked-sol`,
+  i.e. it's the pre-existing Socean stake-pool token, rebranded "Sanctum Infinity" on
+  2024-01-25 without a new mint). Using the shared 2023-06-01 marketplace-launch floor
+  for INF specifically would honestly-but-wrongly report ~20 months of real history as
+  `EXPECTED_INSTRUMENT_NOT_LISTED` — see UAC `LST_TOKEN_GENESIS["sanctumSOL"]` (the
+  SSOT this adapter now reads for INF) and `lst_rate_honest_coverage_2026_07_21.md`
+  Phase 5 #4 for the full on-chain/DefiLlama verification trail.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.registry import get_lst_token_genesis
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -40,11 +54,26 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CHAIN = "SOLANA"
 
-# Sanctum v1 mainnet launch (2023-06-01) — conservative floor per UAC chain_env.py.
+# Sanctum marketplace v1 mainnet launch (2023-06-01) — conservative floor per UAC
+# chain_env.py. Correct default for marketplace-native pools (jupSOL, laineSOL);
+# NOT correct for INF (see _INF_AVAILABLE_FROM_DATETIME below — INF predates the
+# Sanctum brand itself).
 _SANCTUM_DEPLOY_DATE: datetime = get_protocol_floor_date("sanctum")
 
 # INF (Sanctum Infinity) — meta-LST that auto-reallocates across top Solana LSTs.
 _INF_MINT = "5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm"
+
+# INF-specific availability floor — reads UAC's LST_TOKEN_GENESIS["sanctumSOL"]
+# (the same mint, "sanctumSOL" is the MTDS/UAC token key for this exact address;
+# see market-tick-data-service solana_lst_archival.py's "sanctumSOL / INF" naming)
+# rather than the shared _SANCTUM_DEPLOY_DATE marketplace-brand floor, since that
+# floor postdates INF's real on-chain genesis by ~20 months (2026-07-22 finding).
+# Falls back to the shared marketplace floor only if the UAC key were ever removed
+# (should not happen in practice; never crashes the adapter either way).
+_inf_genesis = get_lst_token_genesis("sanctumSOL")
+_INF_AVAILABLE_FROM_DATETIME: datetime = (
+    datetime.fromisoformat(_inf_genesis).replace(tzinfo=UTC) if _inf_genesis else _SANCTUM_DEPLOY_DATE
+)
 
 # jupSOL (Jupiter Staked SOL) — Jupiter's stake pool LST.
 # Mint verified against Jupiter docs and sanctum.so marketplace (2026-05-14).
@@ -81,9 +110,11 @@ class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
     """Sanctum reference data: LST token discovery for the Sanctum marketplace.
 
     Returns InstrumentRecord entries for the top Sanctum-listed LSTs (INF + jupSOL + laineSOL).
-    Sanctum launched on Solana mainnet 2023-06-01. INF is a yield-bearing
-    meta-LST; its exchange rate vs SOL appreciates as Solana staking rewards
-    accrue across Sanctum's diversified stake pool allocation.
+    The Sanctum marketplace brand launched 2023-06-01 (jupSOL/laineSOL's floor); INF's
+    own on-chain genesis is much earlier (2021-10-15, the pre-existing Socean pool it
+    was rebranded from — see module docstring). INF is a yield-bearing meta-LST; its
+    exchange rate vs SOL appreciates as Solana staking rewards accrue across Sanctum's
+    diversified stake pool allocation.
     """
 
     def __init__(
@@ -105,7 +136,7 @@ class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Sanctum LST tokens as yield-bearing instruments."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.LST, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -115,13 +146,25 @@ class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
             symbol = token["symbol"]
             mint = token["mint_address"]
             underlying = token["underlying"]
+            # INF gets its own verified-earlier genesis (pre-existing Socean pool);
+            # every other Sanctum-marketplace-native token uses the shared floor.
+            available_from = _INF_AVAILABLE_FROM_DATETIME if symbol == "INF" else _SANCTUM_DEPLOY_DATE
 
+            instrument_key = build_canonical_instrument_id(
+                AssetGroup.DEFI, venue_tag, InstrumentType.LST, symbol, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:LST:{symbol}",
+                    # Routed through the shared canonical builder (2026-07-09 retrofit,
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
+                    # no output change.
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=mint,
-                    instrument_type=InstrumentType.YIELD_BEARING,
+                    instrument_type=InstrumentType.LST,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000000001"),
@@ -132,7 +175,7 @@ class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
                     option_type=None,
                     status=InstrumentStatus.ACTIVE,
                     underlying=underlying,
-                    available_from_datetime=_SANCTUM_DEPLOY_DATE,
+                    available_from_datetime=available_from,
                     base_asset_contract_address=mint,
                     base_asset_decimals=_SPL_DECIMALS,
                 )

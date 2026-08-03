@@ -1,17 +1,27 @@
-# Contributing to Instruments Service
+# Contributing to instruments-service
+
+> The workspace-wide rules (git discipline, quality gates, the 8 code rules, CI verification) live in
+> the auto-loaded workspace `CLAUDE.md` (symlinked at `.claude/CLAUDE.md`) and its codex SSOTs. This
+> file is the service-local quick reference; **the codex is authoritative** where they differ:
+>
+> - Shipping pipeline / quickmerge / LDR→main promote / branch protection →
+>   `codex/08-workflows/ci-cd-flow.md`
+> - Quality gates → `codex/06-coding-standards/quality-gates.md`
+> - Per-slot worktrees → `codex/05-infrastructure/per-tab-worktrees.md`
 
 ## Development Workflow
 
 ### Session Start
 
-Before starting work, sync with main:
+Each clone tracks the integration branch `live-defi-rollout` (LDR) directly — there is no `main`
+working branch. Sync before starting work:
 
 ```bash
-git checkout main
-git pull origin main
+git pull --ff-only origin live-defi-rollout
 ```
 
-Check for any conflicts with local uncommitted work. If conflicts exist, resolve them or ask for guidance.
+Check for conflicts with local uncommitted work. If conflicts exist, resolve them or ask for
+guidance — never force-push a shared branch.
 
 ### Making Changes
 
@@ -19,201 +29,95 @@ Check for any conflicts with local uncommitted work. If conflicts exist, resolve
 
 1. **Make code changes**
 2. **Write unit tests** for your changes
-3. **Run tests locally**:
-   ```bash
-   python -m pytest tests/unit/test_your_change.py -v
-   ```
-4. **Verify all tests pass**
-5. **ONLY THEN commit and push**
+3. **Commit** with a conventional commit message (include the `Quickmerge: agent` trailer)
+4. **Run quality gates** (Pass 1): `bash scripts/quality-gates.sh` — must exit 0. Never run
+   `pytest`/`ruff`/`basedpyright` standalone; the gate is the entrypoint.
+5. **ONLY THEN ship** via quickmerge (Pass 2, below)
 
-### Committing Changes: Enhanced Quickmerge
+### Shipping: quickmerge (agent mode)
 
-Use the enhanced quickmerge script:
+Code reaches the integration branch **only** through quickmerge — a raw `git push` of code is
+banned (it dodges the dependency gates). After a green `quality-gates.sh`:
 
 ```bash
-bash scripts/quickmerge.sh "descriptive commit message"
+bash scripts/quickmerge.sh "feat(...): descriptive commit message" --agent --files '<your files>'
 ```
 
 **What quickmerge does**:
 
-1. Syncs with latest main (pulls updates)
-2. Creates timestamped branch
-3. Commits all changes (pre-commit hooks run: ruff format, linting)
-4. Pushes branch to GitHub
-5. Creates PR with auto-merge enabled
-6. **Stays on PR branch** (you can continue working)
+1. Verifies the `.qg_last_passed_sha` sentinel == HEAD (refuses if QG did not pass on this exact
+   SHA — never pass `--skip-*` to dodge it)
+2. Commits + pushes to `live-defi-rollout`
+3. The standing LDR→`main` promote job (`ldr-to-main-promote-fleet.yml`, every 15 min) opens the
+   promote PR; the `quality-gates-v2` required check gates it
 
-**After quickmerge**:
-
-- You're on the PR branch (e.g., `auto/20260209-170726-29618`)
-- PR is waiting for CI to pass (~3-5 minutes)
-- You can continue making changes on this branch
-- When CI passes, PR auto-merges to main
-
-### Multiple Quickmerges in One Session
-
-When you're ready to submit more changes:
-
-```bash
-# Make new changes + tests
-# Run tests locally
-bash scripts/quickmerge.sh "next set of changes"
-```
-
-Quickmerge will:
-
-- Pull latest main (including your previous PR if it merged)
-- Create NEW branch from updated main
-- Include your current changes
-- Submit new PR
-- Keep you on the new branch
+`per-repo quickmerge.sh` is a symlink to the PM SSOT — do not edit it locally.
 
 ### End of Session
 
-Manually sync with main to verify all PRs merged:
+Verify nothing is left unpushed:
 
 ```bash
-git checkout main
-git pull origin main
-gh pr list  # Check if any PRs are still open
-```
-
-If a PR failed CI:
-
-```bash
-git checkout auto/timestamp  # The failed PR branch
-# Fix issues
-git add -A && git commit -m "fix: address CI failures"
-git push  # Updates the existing PR
+git rev-list --count HEAD ^origin/live-defi-rollout   # must be 0
 ```
 
 ### Critical Rules
 
 **NEVER**:
 
-- ❌ Run quickmerge without tests
-- ❌ Run quickmerge with failing tests
-- ❌ Push directly to main (`git push origin main` will be rejected)
-- ❌ Use `--no-verify` to skip hooks
-- ❌ Work on main branch (always work on PR branches)
+- ❌ Run quickmerge without a green `quality-gates.sh`
+- ❌ Push code directly to `live-defi-rollout` or `main` (both rejected / banned — ship via quickmerge)
+- ❌ Use `--no-verify` or any `--skip-*` flag to dodge the QG sentinel
+- ❌ Force-push a shared branch
 
 **ALWAYS**:
 
-- ✅ Write tests BEFORE quickmerge
-- ✅ Run tests locally BEFORE quickmerge
+- ✅ Write tests before shipping
+- ✅ Run `bash scripts/quality-gates.sh` (green) before quickmerge
 - ✅ Let pre-commit hooks run (ruff format/check)
-- ✅ Wait for CI to pass before depending on merged code
+- ✅ Verify CI after every push (`gh run list --branch live-defi-rollout`; required check = `quality-gates-v2`)
 
 ### Test Requirements
 
 Every code change MUST include tests:
 
-**For new features**:
-
-- Unit tests covering happy path
-- Unit tests covering edge cases (holidays, UTC spanning, etc.)
-- Integration tests if feature touches multiple components
-
-**For bug fixes**:
-
-- Unit test reproducing the bug
-- Unit test verifying the fix
-
-**For refactors**:
-
-- Ensure existing tests still pass
-- Add tests for any new behavior
-
-### Pre-Commit Hooks
-
-Hooks run automatically on commit:
-
-- `ruff check --fix` - Linting with auto-fix
-- `ruff format` - Code formatting
-- `trim trailing whitespace`
-- `fix end of files`
-- `check yaml/toml`
-
-If hooks modify files, the commit aborts. Review changes and commit again.
+- **New features**: unit tests covering happy path + edge cases (holidays, UTC spanning, etc.);
+  integration tests if the feature touches multiple components
+- **Bug fixes**: a unit test reproducing the bug + a unit test verifying the fix
+- **Refactors**: existing tests still pass; add tests for any new behaviour
 
 ### Quality Gates (CI)
 
-GitHub Actions runs on every PR:
-
-1. Ruff version check (must match local)
-2. Linting (`ruff check`)
-3. Formatting (`ruff format --check`)
-4. Unit tests (`pytest tests/unit/`)
-5. Integration tests (if present)
-
-PRs only auto-merge if ALL checks pass.
+`quality-gates-v2` runs on every promote PR (the single required check across all repos). Local
+`bash scripts/quality-gates.sh` runs the same gate set: ruff version check, `ruff check`,
+`ruff format --check`, `basedpyright`, unit tests, and the workspace code-rule bans (no `os.getenv`,
+no `Any`, no inline `gs://`, UTC datetimes only, etc.). See
+`codex/06-coding-standards/quality-gates.md`.
 
 ### Branch Protection
 
-Main branch has protection enabled:
-
-- Requires pull request
-- Requires quality gates to pass
-- No force push
-- No direct push
-
-This is why quickmerge is required.
+Branch protection is centrally managed via ruleset + classic protection (rolled out from PM,
+not per-repo). `live-defi-rollout` and `main` reject direct code pushes; `main` is a reconciled
+projection back-merged to LDR. See `.github/BRANCH_PROTECTION.md` and
+`codex/08-workflows/ci-cd-flow.md`.
 
 ### Working with Multiple Agents/Sessions
 
-**Problem**: If multiple Cursor sessions work on same repo simultaneously, changes can conflict.
-
-**Solution**:
-
-- Each session works on its own PR branch
-- Quickmerge handles syncing with main
-- If conflict detected, quickmerge stops and alerts you
-- Resolve conflicts, then retry quickmerge
-
-### Troubleshooting
-
-**"No changes to commit"**:
-
-- You already ran quickmerge recently
-- No new changes since last commit
-
-**"Merge conflict detected"**:
-
-- Someone else merged to main
-- Your changes conflict with theirs
-- Resolve conflicts in files marked with `<<<<<<<`
-- Run `git add -A` then retry quickmerge
-
-**"PR failed CI"**:
-
-```bash
-gh pr view auto/timestamp  # Check failure details
-gh pr checks auto/timestamp  # See which check failed
-git checkout auto/timestamp  # Fix on that branch
-# Fix issue
-git add -A && git commit -m "fix: CI failure"
-git push  # Updates existing PR, re-runs CI
-```
-
-**"Lost changes after quickmerge"**:
-
-- Changes are NOT lost
-- They're on the PR branch (not main)
-- Check: `git branch -a | grep auto/`
-- Checkout the branch: `git checkout auto/timestamp`
+Each slot is its own `git clone --reference` on `live-defi-rollout` (see
+`codex/05-infrastructure/per-tab-worktrees.md`). Never edit files another agent has dirty; if a
+push to LDR is rejected as behind, `git pull --rebase --autostash` keeping both sides' work, then
+re-ship — never force-resolve a conflict for a green push.
 
 ### File Locations
 
 - Source code: `instruments_service/`
 - Tests: `tests/unit/`, `tests/integration/`, `tests/e2e/`
-- Config: `instruments_service/config.py`
+- Config: `instruments_service/config/`
 - Scripts: `scripts/`
 - Documentation: `docs/`
 
 ### For More Details
 
-See workspace-level documentation:
-
-- `.cursorrules` - Global development rules
-- `unified-trading-deployment-v2/docs/` - Architecture docs
-- `unified-trading-deployment-v2/configs/checklist.template.yaml` - Production checklist
+- Workspace rules: the auto-loaded `CLAUDE.md` (symlinked `.claude/CLAUDE.md`)
+- Setup: `docs/SETUP_GUIDE.md`
+- Adapter model: `docs/ADAPTER_ARCHITECTURE.md`

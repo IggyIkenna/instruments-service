@@ -33,7 +33,7 @@ Usage::
     cd instruments-service
     .venv/bin/python scripts/fill_missing_player_stats.py --dry-run
     .venv/bin/python scripts/fill_missing_player_stats.py --concurrency 4
-    .venv/bin/python scripts/fill_missing_player_stats.py --start-date 2020-06-06 --end-date 2026-05-04
+    .venv/bin/python scripts/fill_missing_player_stats.py --start-date 2018-01-01 --end-date 2026-05-04
     .venv/bin/python scripts/fill_missing_player_stats.py --limit 50  # spot-check 50 dates
 """
 
@@ -52,6 +52,7 @@ import pandas as pd
 from google.cloud import storage
 from unified_api_contracts.sports import (
     get_expected_leagues_for_source,
+    get_source_coverage_start,
 )
 from unified_trading_library import ApiKeyReloader, ManifestWriter, UnifiedCloudConfig
 
@@ -61,7 +62,13 @@ logger = logging.getLogger(__name__)
 BUCKET = "instruments-store-sports-central-element-323112"
 DATA_TYPE = "PLAYER_STATS"
 SOURCE = "api_football"
-DEFAULT_START = "2020-06-06"  # api_football PLAYER_STATS coverage override per UAC
+# Derived from the UAC coverage SSOT, never hardcoded: this was pinned at the
+# literal "2020-06-06" until 2026-07-15, which silently went stale the moment the
+# floors were amended to reality (the api_football per-fixture overrides were
+# deleted; PLAYER_STATS now inherits the source-wide 2018-01-01). Reading the SSOT
+# keeps the backfill window honest across future floor moves.
+_COVERAGE_START = get_source_coverage_start(SOURCE, DATA_TYPE)
+DEFAULT_START = _COVERAGE_START.isoformat() if _COVERAGE_START is not None else "2018-01-01"
 DEFAULT_END = date_type.today().isoformat()
 
 

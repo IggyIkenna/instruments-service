@@ -4,7 +4,10 @@ Discovers Convex Finance's primary yield-bearing tokens on Ethereum:
 - CVX: Convex governance + staking token (earns protocol fees from Curve LP boosting)
 - cvxCRV: CRV staked via Convex (earns veCRV rewards + trading fees)
 
-Tokens are returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Tokens are returned as InstrumentRecord with instrument_type="YIELD_BEARING"
+(fixed 2026-07-08 — the `instrument_key`'s middle segment previously said the
+shorthand `VAULT`, which is not a real `InstrumentType` enum member; see
+`karak.py`'s module docstring for the full rationale).
 
 Pure static-registry adapter: get_instruments returns a hardcoded token catalogue
 with no network access. Tests are credential-free and offline.
@@ -20,6 +23,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -82,7 +86,7 @@ class ConvexReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Convex yield tokens as yield-bearing instruments."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -93,9 +97,18 @@ class ConvexReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
+            instrument_key = build_canonical_instrument_id(
+                AssetGroup.DEFI, venue_tag, InstrumentType.YIELD_BEARING, symbol, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:VAULT:{symbol}",
+                    # Routed through the shared canonical builder (2026-07-09 retrofit,
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
+                    # no output change.
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
                     instrument_type=InstrumentType.YIELD_BEARING,

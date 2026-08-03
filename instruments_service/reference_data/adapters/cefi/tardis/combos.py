@@ -17,13 +17,29 @@ PERP in expiry position → BASE-PERPETUAL instrument name.
 
 from __future__ import annotations
 
+import logging
+
+from unified_api_contracts import build_leg
 from unified_api_contracts.internal import InstrumentLeg, InstrumentType
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "_DERIBIT_COMBO_STRUCTURES",
     "_DERIBIT_DUAL_EXPIRY_CODES",
     "_parse_deribit_combo_legs",
 ]
+
+# Hard cap on real combo/spread leg count (operator spec, 2026-07-09 —
+# canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md): 1-4 legs
+# supported; a real combo with 5+ legs is DROPPED (not captured, not
+# truncated) — logged with the real leg count rather than silently lost.
+# Mirrors the CME/CBOE hard cap already implemented in
+# instruments_service/reference_data/adapters/tradfi/databento/symbology.py.
+# Every structure code in _DERIBIT_COMBO_STRUCTURES currently tops out at 4
+# legs (condors/jelly-rolls), so this is a defensive backstop against a
+# future 5+-leg structure code being added without a matching cap check.
+_MAX_COMBO_LEGS = 4
 
 # Maps structure code → list of (option_type, side, ratio) per leg position.
 # option_type: "C", "P", or None (future/perp leg).
@@ -96,6 +112,10 @@ def _parse_deribit_combo_legs(raw_id: str, venue: str) -> list[InstrumentLeg]:
         BTC-CCAL-25APR26_3APR26-90000 → call calendar
 
     Returns empty list if symbol can't be parsed (caller skips the combo).
+    A structure code resolving to 5+ real legs is dropped ENTIRELY (empty
+    list, not a truncated 4-leg one) with the real leg count logged —
+    mirroring the CME/CBOE hard cap (operator spec 2026-07-09,
+    canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md).
     """
     # Split: BASE-CODE-REST
     # Base may contain underscore (BTC_USDC), so find the structure code.
@@ -118,6 +138,15 @@ def _parse_deribit_combo_legs(raw_id: str, venue: str) -> list[InstrumentLeg]:
     base = "-".join(parts[:code_idx])  # e.g. "BTC" or "BTC_USDC" or "ETH"
     rest = parts[code_idx + 1 :]  # everything after the code
     structure = _DERIBIT_COMBO_STRUCTURES[code]
+    if len(structure) > _MAX_COMBO_LEGS:
+        logger.warning(
+            "dropping Deribit combo with %d legs (hard cap is %d, code=%r, raw_id=%r)",
+            len(structure),
+            _MAX_COMBO_LEGS,
+            code,
+            raw_id,
+        )
+        return []
     is_dual_expiry = code in _DERIBIT_DUAL_EXPIRY_CODES
 
     # --- Future spread (FS): BASE-FS-EXP1_EXP2 ---
@@ -138,13 +167,7 @@ def _parse_deribit_combo_legs(raw_id: str, venue: str) -> list[InstrumentLeg]:
             else:
                 leg_name = f"{base}-{exp}"
                 leg_type = InstrumentType.FUTURE
-            legs.append(
-                InstrumentLeg(
-                    instrument_key=f"{venue}:{leg_type}:{leg_name}",
-                    side=side,
-                    ratio=ratio,
-                )
-            )
+            legs.append(build_leg(venue, leg_type, leg_name, side=side, ratio=ratio, passthrough=True))
         return legs
 
     # --- Calendar/diagonal (dual expiry): BASE-CODE-EXP1_EXP2-STRIKES ---
@@ -167,13 +190,8 @@ def _parse_deribit_combo_legs(raw_id: str, venue: str) -> list[InstrumentLeg]:
             strike = strikes[leg_idx % len(strikes)] if strikes else ""
             suffix = f"-{strike}-{opt_type}" if opt_type and strike else ""
             leg_name = f"{base}-{exp}{suffix}"
-            legs.append(
-                InstrumentLeg(
-                    instrument_key=f"{venue}:OPTION:{leg_name}" if opt_type else f"{venue}:FUTURE:{leg_name}",
-                    side=side,
-                    ratio=ratio,
-                )
-            )
+            leg_type = InstrumentType.OPTION if opt_type else InstrumentType.FUTURE
+            legs.append(build_leg(venue, leg_type, leg_name, side=side, ratio=ratio, passthrough=True))
         return legs
 
     # --- Single-expiry option combos: BASE-CODE-EXPIRY-K1_K2[_K3[_K4]] ---
@@ -192,11 +210,6 @@ def _parse_deribit_combo_legs(raw_id: str, venue: str) -> list[InstrumentLeg]:
         strike = strikes[min(i, len(strikes) - 1)] if strikes else ""
         suffix = f"-{strike}-{opt_type}" if opt_type and strike else ""
         leg_name = f"{base}-{expiry}{suffix}"
-        legs.append(
-            InstrumentLeg(
-                instrument_key=f"{venue}:OPTION:{leg_name}" if opt_type else f"{venue}:FUTURE:{leg_name}",
-                side=side,
-                ratio=ratio,
-            )
-        )
+        leg_type = InstrumentType.OPTION if opt_type else InstrumentType.FUTURE
+        legs.append(build_leg(venue, leg_type, leg_name, side=side, ratio=ratio, passthrough=True))
     return legs

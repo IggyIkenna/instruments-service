@@ -14,7 +14,6 @@ from instruments_service.engine.urdi_reference_provider import (
     URDI_SUPPORTED_VENUES,
     VenueFetchResult,
     fetch_instruments_for_all_venues,
-    fetch_instruments_via_urdi,
 )
 
 
@@ -189,32 +188,6 @@ async def test_fetch_injects_api_key():
     # adapter factory was called with api_key="my-graph-key" (morpho uses thegraph)
     call_kwargs = mock_factory.call_args
     assert call_kwargs is not None
-
-
-# ---------------------------------------------------------------------------
-# fetch_instruments_via_urdi (single-venue convenience)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_fetch_via_urdi_delegates_to_all_venues():
-    record = _make_record()
-    mock_adapter = MagicMock()
-    mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
-
-    with patch(
-        "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
-        return_value=mock_adapter,
-    ):
-        result = await fetch_instruments_via_urdi("MORPHO-ETHEREUM")
-
-    assert result == [record]
-
-
-@pytest.mark.asyncio
-async def test_fetch_via_urdi_unsupported_returns_empty():
-    result = await fetch_instruments_via_urdi("UNKNOWN_VENUE_999")
-    assert result == []
 
 
 @pytest.mark.asyncio

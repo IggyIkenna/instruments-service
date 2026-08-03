@@ -21,7 +21,8 @@ from decimal import Decimal, InvalidOperation
 import aiohttp
 from unified_api_contracts import UnsupportedCapabilityError, classify_venue_error
 from unified_api_contracts._instrument_enums import OptionType
-from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -75,6 +76,68 @@ def _emit_fetch_failed(endpoint: str, currency: str, error_code: str, exc: Excep
     )
 
 
+def _resolve_deribit_option_margin(item: dict[str, object], name: str) -> tuple[MarginType, str]:
+    """Resolve ``(margin_type, quote_asset)`` for a Deribit OPTION instrument.
+
+    Deribit is genuinely dual-margin-type — real inverse (USD-quoted,
+    BTC/ETH/…-settled) and real linear (USDC-quoted AND USDC-settled) options
+    coexist on the same venue (confirmed via live WS trades; see
+    ``docs/CEFI_INSTRUMENTS.md`` "Deribit margin types"). Deribit's own
+    ``quote_currency`` field is the reliable real signal — ``USD`` = inverse,
+    ``USDC`` = linear — used first. Falls back to ``settlement_currency``
+    (coin-settled → inverse, ``USDC``-settled → linear) and finally a
+    ``USDC``-in-``instrument_name`` heuristic for payloads that carry
+    neither field.
+    """
+    quote_ccy = str(item.get("quote_currency", "")).upper()
+    if quote_ccy == "USDC":
+        return MarginType.LINEAR, "USDC"
+    if quote_ccy == "USD":
+        return MarginType.INVERSE, "USD"
+    settlement = str(item.get("settlement_currency", "")).upper()
+    if settlement == "USDC":
+        return MarginType.LINEAR, "USDC"
+    if settlement:
+        return MarginType.INVERSE, "USD"
+    if "USDC" in name.upper():
+        return MarginType.LINEAR, "USDC"
+    return MarginType.INVERSE, "USD"
+
+
+def _build_deribit_option_symbol(
+    base: str, quote: str, margin_type: MarginType, expiry: datetime, strike: Decimal, option_right: str
+) -> str:
+    """Build the target OPTION symbol: ``BASE-QUOTE@LIN|INV-YYYYMMDD-STRIKE-C|P``.
+
+    Deribit-local mirror of the shared Bybit/Kraken-Futures/OKX dated-
+    derivative marker convention (``tardis/parsing.py::
+    _build_dated_derivative_canonical_symbol`` — not imported directly here
+    to avoid a cross-package private-symbol reach from ``cefi/`` into the
+    sibling ``cefi/tardis/`` package, which ``basedpyright --strict``
+    (``reportPrivateUsage``) rejects even though ``tardis/__init__.py``
+    re-exports it). ``YYYYMMDD`` per the operator's date-format decision
+    (string-sortable, unlike Deribit's native ``DDMMMYY``); the quote segment
+    is ALWAYS present (operator ruling 2026-07-18: quote present regardless of
+    venue/asset class — ``USDC`` for linear, ``USD`` for inverse), matching
+    PERPETUAL and every other margined venue.
+
+    Fail loud on the contradiction: a Deribit option always carries a resolved
+    ``@LIN``/``@INV`` marker, so an empty ``quote`` here means settlement is
+    indeterminable — raise rather than silently drop to a base-only symbol (the
+    mirror of ``tardis/parsing.py::_require_quote_when_marked``).
+    """
+    marker = "INV" if margin_type is MarginType.INVERSE else "LIN"
+    if not quote:
+        msg = (
+            f"Deribit option '@{marker}' marker resolved but quote asset is empty "
+            f"(base={base!r}) — a linear/inverse marker without a quote is a contradiction; "
+            f"refusing to emit a base-only id (operator ruling 2026-07-18)."
+        )
+        raise ValueError(msg)
+    strike_str = str(int(strike)) if strike == strike.to_integral_value() else format(strike.normalize(), "f")
+    return f"{base.upper()}-{quote.upper()}@{marker}-{expiry.strftime('%Y%m%d')}-{strike_str}-{option_right}"
+
+
 def _parse_option(item: object) -> InstrumentRecord | None:
     """Parse one Deribit ``kind=option`` instrument dict into an InstrumentRecord."""
     if not isinstance(item, dict):
@@ -92,13 +155,33 @@ def _parse_option(item: object) -> InstrumentRecord | None:
         expiry = datetime.fromtimestamp(int(item.get("expiration_timestamp", 0)) / 1000, tz=UTC)
     except (ValueError, OSError, OverflowError):
         return None
+    option_right = "C" if opt is OptionType.CALL else "P"
+    margin_type, quote_asset = _resolve_deribit_option_margin(item, name)
+    # Target canonical format (operator ruling 2026-07-18, superseding the
+    # 2026-07-08/09 "quote optional for dated derivatives" decision):
+    # VENUE:OPTION:BASE-QUOTE@LIN|INV-YYYYMMDD-STRIKE-C|P — quote ALWAYS present
+    # (USDC linear / USD inverse, resolved by _resolve_deribit_option_margin).
+    # Still routed through the shared UAC builder via passthrough=True (the same
+    # mechanism this adapter already used for the prior raw-DDMMMYY-passthrough
+    # format) — _build_deribit_option_symbol only computes the marker-embedded
+    # symbol string, matching the sibling Bybit/Kraken-Futures/OKX convention
+    # (tardis/parsing.py::_build_dated_derivative_canonical_symbol).
+    option_instrument_key = build_instrument_id(
+        "DERIBIT",
+        InstrumentType.OPTION,
+        _build_deribit_option_symbol(base, quote_asset, margin_type, expiry, strike, option_right),
+        passthrough=True,
+    )
     return InstrumentRecord(
-        instrument_key=f"DERIBIT:OPTION:{name}",
+        instrument_key=option_instrument_key,
+        # No CeFi raw-code-to-human-name translation gap (see other CeFi adapters'
+        # identical comment) — canonical_instrument_id mirrors instrument_key.
+        canonical_instrument_id=option_instrument_key,
         venue="DERIBIT",
         raw_symbol=name,
         instrument_type=InstrumentType.OPTION,
         base_asset=base,
-        quote_asset="USD",
+        quote_asset=quote_asset,
         settle_asset=str(item.get("settlement_currency", base)),
         underlying=base,
         status=InstrumentStatus.ACTIVE,
@@ -107,6 +190,7 @@ def _parse_option(item: object) -> InstrumentRecord | None:
         expiry=expiry,
         contract_size=Decimal("1"),
         timezone="UTC",
+        margin_type=margin_type,
     )
 
 
@@ -164,9 +248,7 @@ class DeribitOptionsReferenceDataAdapter(BaseReferenceDataAdapter):
                 return inst
         return None
 
-    async def get_options_chain(
-        self, underlying: str, expiry: datetime | None = None
-    ) -> CanonicalOptionsChain:
+    async def get_options_chain(self, underlying: str, expiry: datetime | None = None) -> CanonicalOptionsChain:
         """Build a CanonicalOptionsChain (strikes, calls, puts, mark IV) for one expiry.
 
         ``expiry=None`` → the nearest (soonest) expiry with active contracts.
@@ -232,9 +314,7 @@ class DeribitOptionsReferenceDataAdapter(BaseReferenceDataAdapter):
         await asyncio.gather(*[_one(leg) for leg in legs])
         return mark_iv, underlying_mark
 
-    async def get_expiry_calendar(
-        self, underlying: str, instrument_type: str = "OPTION"
-    ) -> CanonicalExpiryCalendar:
+    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "OPTION") -> CanonicalExpiryCalendar:
         """Return the distinct option expiries for an underlying."""
         async with self._make_session() as session:
             opts = await self._fetch_options_for_currency(session, underlying.upper())

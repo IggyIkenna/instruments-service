@@ -42,7 +42,9 @@ if TYPE_CHECKING:
 
 import aiohttp as aiohttp
 from unified_api_contracts import (
+    AssetGroup,
     PolymarketGammaMarket,
+    build_canonical_instrument_id,
     classify_venue_error,
 )
 from unified_api_contracts.external.polymarket import (
@@ -50,7 +52,7 @@ from unified_api_contracts.external.polymarket import (
     get_canonical_league_for_polymarket_series,
     get_canonical_team_for_polymarket,
 )
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentType
 from unified_api_contracts.prediction import (
     PredictionMarketMapper,
 )
@@ -59,12 +61,18 @@ from unified_api_contracts.predictions import (
     CanonicalQuestionGroup,
     MarketLifecycle,
     classify_polymarket_to_canonical_group,
+    parse_polymarket_sports_fixture,
+    underlying_for_group,
+    validate_canonical_question_group,
+    validate_prediction_instrument_type,
 )
 from unified_api_contracts.sports import (
     POLYMARKET_MARKET_TO_CANONICAL,
     build_crypto_prediction_id,
+    build_fixture_id,
     build_macro_prediction_id,
     build_prediction_instrument_id,
+    build_team_id,
     slugify_canonical_name,
 )
 from unified_trading_library import log_event
@@ -75,6 +83,13 @@ from ....schemas import (
     CanonicalOptionsChain,
     FundingRateRef,
     OHLCVRef,
+)
+from ..fixture_match import (
+    FixtureMatchAttributes,
+    FixtureMatchStatus,
+    PredictionFixtureResolver,
+    fixture_match_for_instrument_key,
+    register_fixture_match,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,20 +155,25 @@ __all__ = [
     "_QUESTION_SUFFIX",
     "_SINGLE_TEAM_PATTERN",
     "_VS_PATTERN",
+    "AssetGroup",
     "BaseReferenceDataAdapter",
     "CanonicalExpiryCalendar",
     "CanonicalOptionsChain",
     "CanonicalQuestionGroup",
     "ClassVar",
     "Decimal",
+    "FixtureMatchAttributes",
+    "FixtureMatchStatus",
     "FundingRateRef",
     "InstrumentRecord",
+    "InstrumentType",
     "MarketLifecycle",
     "OHLCVRef",
     "PolymarketClobMixin",
     "PolymarketGammaMarket",
     "PolymarketParsingMixin",
     "PolymarketReferenceDataAdapter",
+    "PredictionFixtureResolver",
     "PredictionMarketMapper",
     "_classify_polymarket_error",
     "_clob_token_ids_for_condition_id",
@@ -170,22 +190,31 @@ __all__ = [
     "_selection_from_outcomes",
     "adapter",
     "aiohttp",
+    "build_canonical_instrument_id",
     "build_crypto_prediction_id",
+    "build_fixture_id",
     "build_macro_prediction_id",
     "build_prediction_instrument_id",
+    "build_team_id",
     "cast",
     "classify_polymarket_to_canonical_group",
     "classify_venue_error",
     "clob",
     "datetime",
+    "fixture_match_for_instrument_key",
     "get_canonical_league_for_polymarket_series",
     "get_canonical_team_for_polymarket",
     "log_event",
     "logger",
     "logging",
     "markets",
+    "parse_polymarket_sports_fixture",
     "parsing",
     "re",
+    "register_fixture_match",
     "slugify_canonical_name",
     "time",
+    "underlying_for_group",
+    "validate_canonical_question_group",
+    "validate_prediction_instrument_type",
 ]

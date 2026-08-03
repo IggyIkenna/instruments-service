@@ -26,90 +26,8 @@ else:  # pragma: no cover - runtime namespace indirection
     from instruments_service.engine.orchestrator._pkg_ref import orch_namespace as _orch
 
 __all__ = [
-    "_extract_fixture_venue_ids",
     "_fetch_weather_data",
-    "_load_venue_coordinates",
 ]
-
-
-def _load_venue_coordinates(bucket: str) -> dict[str, tuple[float, float]]:
-    """Load venue_id → (lat, lon) lookup from the global venues.parquet.
-
-    Returns an empty dict if the file does not exist or cannot be read.
-    The venues.parquet is written by ``_write_venues_from_teams`` at:
-        sports_reference/venues/venues.parquet
-    """
-    venues_path = "sports_reference/venues/venues.parquet"
-    try:
-        storage = _orch.get_storage_client()
-        blob = storage.bucket(bucket).blob(venues_path)
-        if not blob.exists():
-            _orch.logger.info("Weather: venues.parquet not found at gs://%s/%s", bucket, venues_path)
-            return {}
-        local = f"{_orch.tempfile.gettempdir()}/_weather_venues.parquet"
-        blob.download_to_filename(local)
-        venues_df = _orch.pd.read_parquet(local)
-        if "venue_id" not in venues_df.columns:
-            _orch.logger.warning("Weather: venues.parquet missing 'venue_id' column")
-            return {}
-        coords: dict[str, tuple[float, float]] = {}
-        has_lat = "latitude" in venues_df.columns
-        has_lon = "longitude" in venues_df.columns
-        if not has_lat or not has_lon:
-            _orch.logger.warning("Weather: venues.parquet missing latitude/longitude columns")
-            return {}
-        for _, row in venues_df.iterrows():
-            vid = str(row["venue_id"])
-            lat = row["latitude"]
-            lon = row["longitude"]
-            # pandas returns NaN for missing values, not None
-            if _orch.pd.notna(lat) and _orch.pd.notna(lon):
-                lat_f = float(lat)
-                lon_f = float(lon)
-                if lat_f != 0.0 and lon_f != 0.0:
-                    coords[vid] = (lat_f, lon_f)
-        return coords
-    except Exception as exc:
-        _orch.logger.debug("Weather: could not load venues.parquet: %s", exc)
-        return {}
-
-
-def _extract_fixture_venue_ids(bucket: str, date: str) -> list[str]:
-    """Extract venue_ids from the fixtures parquet for a given date.
-
-    Fixtures store the ``venue`` field as a dict with a ``venue_id`` key.
-    Returns deduplicated venue IDs for fixtures on the requested date.
-    """
-    prefix = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
-    try:
-        storage = _orch.get_storage_client()
-        blob = storage.bucket(bucket).blob(prefix)
-        if not blob.exists():
-            _orch.logger.debug("Weather: no fixtures parquet at gs://%s/%s", bucket, prefix)
-            return []
-        local = f"{_orch.tempfile.gettempdir()}/_weather_fixtures_{date}.parquet"
-        blob.download_to_filename(local)
-        df = _orch.pd.read_parquet(local)
-        venue_ids: list[str] = []
-        if "venue" in df.columns:
-            for venue_val in df["venue"].dropna():
-                if isinstance(venue_val, dict):
-                    vid = venue_val.get("venue_id")
-                    if vid:
-                        venue_ids.append(str(vid))
-                elif isinstance(venue_val, str):
-                    venue_ids.append(venue_val)
-        # Deduplicate while preserving order
-        seen: set[str] = set()
-        unique: list[str] = []
-        for vid in venue_ids:
-            if vid not in seen:
-                seen.add(vid)
-                unique.append(vid)
-        return unique
-    except Exception as exc:
-        _orch.logger.debug("Weather: could not read fixtures for date=%s: %s", date, exc)
-        return []
 
 
 async def _fetch_weather_data(
@@ -197,25 +115,22 @@ async def _fetch_weather_data(
                 source="open_meteo",
             )
 
-    # Coverage-start / known-gap guard — skip the date without any API call
-    # when Open-Meteo hasn't launched yet or is in a registered gap window.
+    # Coverage-start guard — skip the date without any API call when
+    # Open-Meteo hasn't launched yet.
     _om_floor = _orch.get_source_coverage_start("open_meteo", data_type="WEATHER")
     _om_pre_cutoff = bool(_om_floor) and date < _om_floor.isoformat()
-    _om_in_known_gap = _orch.is_in_known_gap("open_meteo", "WEATHER", date)
-    if _om_pre_cutoff or _om_in_known_gap:
-        _orch.logger.info(
-            "Weather: skipping date=%s (%s)",
-            date,
-            "pre-coverage-start" if _om_pre_cutoff else "known-gap",
-        )
-        _om_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _om_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+    if _om_pre_cutoff:
+        _orch.logger.info("Weather: skipping date=%s (pre-coverage-start)", date)
+        _om_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START"
         for _exp_lid in sorted(_expected_weather_league_ids):
             manifest.record_expected_empty(
-                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid, "source": "open_meteo"},
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 reason=_om_reason,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+                source="open_meteo",
             )
+        manifest.write()
         return counts
 
     # Season-window guard — when EVERY expected league is in its off-season
@@ -229,39 +144,38 @@ async def _fetch_weather_data(
             if _status is None:
                 continue
             manifest.record_expected_empty(
-                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid, "source": "open_meteo"},
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 reason=_status,
                 attempted_at=attempt_ts,
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+                source="open_meteo",
             )
+        manifest.write()
         return counts
 
     # UAC venue coordinates: SCREAMING_SNAKE keys → (lat, lon)
     from unified_api_contracts.registry import VENUE_COORDINATES
 
-    # 1. Read fixtures for this date — get venue_name + kickoff hour
+    # 1. Read fixtures for this date — get venue_name + kickoff hour.
+    #
+    # Bug fix (2026-07-08): this previously listed the LEGACY bare prefix
+    # (``entity=fixtures/`` with no ``pipeline_mode=`` segment), which real
+    # fixtures data has fully migrated away from — the real writer partitions
+    # per-league under a canonical ``pipeline_mode=`` hive segment
+    # (``entity=fixtures/league={L}/fixtures.parquet``). The stale bare-prefix
+    # probe always found zero blobs, so this function treated every date as
+    # having no fixtures and silently skipped real weather fetching
+    # (recording ``empty_confirmed`` when fixtures actually existed).
+    # ``_read_per_league_entity_df`` lists the canonical per-league prefix
+    # first, falling back to the legacy per-league prefix — the same
+    # canonical-then-legacy pattern already proven correct elsewhere in this
+    # package (``footystats._load_scheduled_footystats_fixture_map``,
+    # ``sports_dependency.py::_prefix_has_object``).
+    storage_client = _orch.get_storage_client()
     fixtures_df = None
     _fixtures_read_failed = False
     try:
-        fixtures_prefix = f"sports_reference/by_date/day={date}/entity=fixtures/"
-        storage_client = _orch.get_storage_client()
-        blobs = list(storage_client.list_blobs(bucket=bucket, prefix=fixtures_prefix, max_results=50))
-        parquet_blobs = [b for b in blobs if b.name.endswith(".parquet")]
-        if parquet_blobs:
-            frames = []
-            for blob_meta in parquet_blobs:
-                data = storage_client.download_bytes(bucket=bucket, blob_path=blob_meta.name)
-                _frame = _orch.pd.read_parquet(_orch.io.BytesIO(data))
-                # Hive-partition enrichment: per-league fixtures parquets encode
-                # league_id in the GCS path (league=X/) but may omit it from the
-                # data columns. Extract and inject so _venue_to_leagues can be built.
-                if "league_id" not in _frame.columns:
-                    _league_m = re.search(r"/league=([^/]+)/", blob_meta.name)
-                    if _league_m:
-                        _frame = _frame.copy()
-                        _frame["league_id"] = _league_m.group(1)
-                frames.append(_frame)
-            fixtures_df = _orch.pd.concat(frames, ignore_index=True) if frames else None
+        fixtures_df = _orch._read_per_league_entity_df(bucket, date, "fixtures", inject_league_id=True)
     except Exception as exc:
         _orch.logger.warning("Weather: could not read fixtures for date=%s: %s", date, exc)
         _fixtures_read_failed = True
@@ -342,6 +256,12 @@ async def _fetch_weather_data(
     # 3. Check existing weather data — only fetch venues not already covered.
     # Enables incremental runs: add more venue coords → re-run → only new venues fetched.
     existing_venue_ids: set[str] = set()
+    # Bound before the try (not just inside it) so the merge step further below
+    # can safely reuse the resolved location — it's only ever read there when
+    # ``existing_venue_ids`` is non-empty, which can only happen after this
+    # try block assigns a real value, but a static analyzer can't correlate
+    # that across the two blocks without an explicit default.
+    weather_prefix: str = f"sports_reference/by_date/day={date}/entity=weather/"
     try:
         # v9: probe canonical path (pipeline_mode= in prefix) first, then legacy.
         _w_pm = _orch._sports_ref_pm("weather")
@@ -356,6 +276,12 @@ async def _fetch_weather_data(
                 wdf = _orch.pd.read_parquet(_orch.io.BytesIO(wdata))
                 if "venue_id" in wdf.columns:
                     existing_venue_ids = set(wdf["venue_id"].dropna().astype(str).unique())
+    # GCS list/download + parquet-parse boundary: neither the GCS SDK's exception
+    # surface (network/auth) nor pyarrow's parquet-parse errors are a small closed
+    # set here, and this is a best-effort existence probe by design — any failure
+    # correctly degrades to "treat as no existing weather data, fetch everything"
+    # (the same outcome as a confirmed-empty prefix). Audited 2026-07-25, left
+    # broad: instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
     except Exception:
         pass  # No existing weather — fetch everything
 
@@ -494,13 +420,24 @@ async def _fetch_weather_data(
             new_df["available_at"] = _orch.pd.Timestamp(date, tz="UTC") + _orch.pd.Timedelta(hours=12)
 
         # Merge with existing weather data (append new venues to existing).
-        # Note: existing parquet may live at the bare or per-league path; we
-        # walk the prefix and concatenate everything we find — the per-league
-        # write loop below dedups by (venue_id, league_id) implicitly because
-        # group-by partitions are mutually exclusive on league_id.
+        # Note: existing parquet may live at the canonical or legacy per-date
+        # path; we walk the prefix and concatenate everything we find — the
+        # per-league write loop below dedups by (venue_id, league_id)
+        # implicitly because group-by partitions are mutually exclusive on
+        # league_id.
+        #
+        # Bug fix (2026-07-08): this previously re-derived a LEGACY-ONLY
+        # prefix (no ``pipeline_mode=``) instead of reusing ``weather_prefix``
+        # (already resolved canonical-then-legacy above, at the exact
+        # location ``existing_venue_ids`` was read from). The real writer
+        # (``_sports_ref_sink_for`` → canonical ``pipeline_mode=`` path) never
+        # populates the legacy-only prefix, so this merge always found zero
+        # blobs and silently wrote ONLY the newly-fetched venues — dropping
+        # previously-captured venues' weather data on any incremental re-run
+        # that added new venues for an already-partially-covered date (a real
+        # data-loss bug, not just a missed performance win).
         if existing_venue_ids:
             try:
-                weather_prefix = f"sports_reference/by_date/day={date}/entity=weather/"
                 for wb in storage_client.list_blobs(bucket=bucket, prefix=weather_prefix, max_results=20):
                     if wb.name.endswith(".parquet"):
                         wdata = storage_client.download_bytes(bucket=bucket, blob_path=wb.name)
@@ -514,6 +451,11 @@ async def _fetch_weather_data(
                             date,
                             wb.name,
                         )
+            # GCS list/download + parquet-parse boundary: same best-effort merge
+            # rationale as the probe above — any failure here correctly falls back to
+            # writing the newly-fetched data only, the safe/non-data-losing default.
+            # Audited 2026-07-25, left broad:
+            # instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
             except Exception:
                 pass  # Write new data only if merge fails
 
@@ -524,6 +466,7 @@ async def _fetch_weather_data(
         # date, we duplicate the row into each league's parquet — downstream
         # readers join on (date, league_id) so duplication is correct.
         _captured_leagues: set[str] = set()
+        _w_failed_leagues: set[str] = set()
         _league_venue_count: dict[str, int] = {}
         _orphan_count = 0
 
@@ -550,16 +493,53 @@ async def _fetch_weather_data(
 
             for _lid_v, _frames in _per_league_frames.items():
                 _w_lid_df = _orch.pd.concat(_frames, ignore_index=True)
-                _captured_leagues.add(_lid_v)
-                _league_venue_count[_lid_v] = _league_venue_count.get(_lid_v, 0) + len(_w_lid_df)
-                _orch._gated_sink_write(
-                    sink,
-                    data=_orch.stamp_available_at_explicit(_w_lid_df, when=_orch.datetime.now(_orch.UTC)),
-                    partition={"entity": "weather", "league": _orch._canonical_league_id(_lid_v)},
-                    filename="weather.parquet",
-                    venue="open_meteo",
-                    entity="weather",
-                )
+                # Shard-level isolation (codex/04-architecture/shard-level-
+                # failure-isolation.md — sports shard atom is per-league): a
+                # write failure for ONE league must not abort the loop over
+                # the OTHER leagues for this date, and must not mark the
+                # league captured (_captured_leagues / _league_venue_count)
+                # before its write is confirmed — doing so ahead of the write
+                # (the prior ordering) risked a captured manifest row with no
+                # corresponding durable write (the
+                # phantom_captured_no_parquet_at_canonical_path class,
+                # root-caused 2026-07-13) once the later per-league
+                # record_captured_from_counts loop ran off these dicts.
+                try:
+                    _orch._gated_sink_write(
+                        sink,
+                        data=_orch.stamp_available_at_explicit(_w_lid_df, when=_orch.datetime.now(_orch.UTC)),
+                        partition={"entity": "weather", "league": _orch._canonical_league_id(_lid_v)},
+                        filename="weather.parquet",
+                        venue="open_meteo",
+                        entity="weather",
+                    )
+                    _captured_leagues.add(_lid_v)
+                    _league_venue_count[_lid_v] = _league_venue_count.get(_lid_v, 0) + len(_w_lid_df)
+                except Exception as _w_league_exc:
+                    _w_league_err = _orch._classify_adapter_failure(_w_league_exc, "open_meteo")
+                    _orch.log_event(
+                        "ADAPTER_FETCH_FAILED",
+                        details={
+                            "venue": "open_meteo",
+                            "endpoint": "weather_sink_write",
+                            "date": date,
+                            "league_id": _orch._canonical_league_id(_lid_v),
+                            "error": str(_w_league_exc),
+                            "error_code": _w_league_err,
+                        },
+                    )
+                    manifest.record_failed(
+                        row_key={
+                            "date": date,
+                            "data_type": "WEATHER",
+                            "league_id": _orch._canonical_league_id(_lid_v),
+                        },
+                        error=_w_league_err,
+                        attempted_at=attempt_ts,
+                        pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
+                        source="open_meteo",
+                    )
+                    _w_failed_leagues.add(_lid_v)
 
             if _orphan_count > 0:
                 _orch.logger.warning(
@@ -584,6 +564,7 @@ async def _fetch_weather_data(
         # Initialise tracking vars so the manifest write block below is safe
         # when no weather rows were captured this run.
         _captured_leagues = set()
+        _w_failed_leagues = set()
         _league_venue_count = {}
 
     # Honest-coverage manifest write — per-league sharding so data-status UI
@@ -606,8 +587,11 @@ async def _fetch_weather_data(
                 pipeline_mode=_orch.PipelineMode.BATCH_OPEN_METEO,
                 service_emission_state=None,
             )
-        # Per-league empty_confirmed for in-season leagues with no captured weather
-        for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues):
+        # Per-league empty_confirmed for in-season leagues with no captured weather.
+        # Leagues whose write raised (_w_failed_leagues) already carry an honest
+        # record_failed row from the per-league write loop above — excluding them
+        # here prevents a same-run record_empty from masking that failure.
+        for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues - _w_failed_leagues):
             manifest.record_empty(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 attempted_at=attempt_ts,

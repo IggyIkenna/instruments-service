@@ -26,6 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from unified_api_contracts.sports import FIXTURES_SCHEDULE
+
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
 else:  # pragma: no cover - runtime namespace indirection
@@ -128,7 +130,7 @@ def clear_fixture_leagues_cache() -> None:
 
 
 def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
-    """Return the set of league_ids that have a FIXTURES manifest row on ``date``.
+    """Return the set of league_ids that have a FIXTURES_SCHEDULE manifest row on ``date``.
 
     Reads + groups the availability index ONCE per bucket (see
     ``_FIXTURE_LEAGUES_BY_DATE_CACHE`` rationale), then serves every date from the
@@ -138,9 +140,13 @@ def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
     by_date = _FIXTURE_LEAGUES_BY_DATE_CACHE.get(bucket)
     if by_date is None:
         by_date = {}
-        _index_df = _orch.read_availability_index(bucket)
+        # Slim read: only date/data_type/league_id are used below. The
+        # full-schema read decodes all 42 columns of the sports index
+        # (measured: 6.2 GiB peak RSS per call) — see
+        # sports_is_daily_enum_backfill_oom_at_32gi_ceiling_2026_07_27.md.
+        _index_df = _orch.read_availability_index(bucket, columns=["date", "data_type", "league_id"])
         if not _index_df.empty and "league_id" in _index_df.columns:
-            _fix_only = _index_df.loc[_index_df["data_type"] == "FIXTURES", ["date", "league_id"]].dropna(
+            _fix_only = _index_df.loc[_index_df["data_type"] == FIXTURES_SCHEDULE, ["date", "league_id"]].dropna(
                 subset=["league_id"]
             )
             for _date_val, _grp in _fix_only.groupby("date"):
@@ -150,11 +156,11 @@ def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
     return set(by_date.get(date, frozenset()))
 
 
-# Sports per-league entities (FIXTURES + PREDICTIONS + MATCHES + ODDS +
+# Sports per-league entities (FIXTURES_SCHEDULE + PREDICTIONS + MATCHES + ODDS +
 # 5 per-fixture downstreams + ...) write one manifest row per
 # (date, data_type, league_id). The coarse `check_shard_freshness`
 # only checks "is data_type present for this date" — once any league
-# has e.g. FIXTURES for date X, the whole date is "fresh" and
+# has e.g. FIXTURES_SCHEDULE for date X, the whole date is "fresh" and
 # skipped, so other-league missing rows never get re-fetched.
 # Per-league freshness lives in the entity handlers themselves
 # (`_should_skip_date_for_per_league`); skip the coarse pre-flight
@@ -164,7 +170,7 @@ def _fixture_leagues_for_date(bucket: str, date: str) -> set[str]:
 # OTHER leagues kept the date "fresh" at the coarse level.
 _SPORTS_PER_LEAGUE_ENTITIES: frozenset[str] = frozenset(
     {
-        "FIXTURES",
+        FIXTURES_SCHEDULE,
         "PREDICTIONS",
         "MATCHES",
         "STANDINGS",
@@ -181,6 +187,19 @@ _SPORTS_PER_LEAGUE_ENTITIES: frozenset[str] = frozenset(
         "ODDS_HORIZON_BUCKET",
     }
 )
+
+# Legacy/canonical alias pair for the same underlying per-league fixture-
+# schedule data. ``--sports-entity FIXTURES`` (the launcher's documented CLI
+# option, unchanged since before the FIXTURES->FIXTURES_SCHEDULE manifest
+# migration) restricts ``expected`` to the literal string "FIXTURES"
+# (`_build_expected_entities`'s entity-scope override below), which does NOT
+# match ``_SPORTS_PER_LEAGUE_ENTITIES`` (keyed on the ``FIXTURES_SCHEDULE``
+# constant) — so an entity-scoped FIXTURES run fell through to the coarse
+# ``check_shard_freshness`` path instead of a real per-league check. Tracked
+# for full canonicalisation (retire the "FIXTURES" literal) in
+# `scripts/restamp_fixtures_manifest_legacy_atom_2026_07_24.py`'s follow-up;
+# this alias set is the narrow fix needed now, not that migration.
+_FIXTURES_ENTITY_ALIASES: frozenset[str] = frozenset({"FIXTURES", FIXTURES_SCHEDULE})
 
 
 @dataclass
@@ -315,9 +334,7 @@ async def _sports_provider_short_circuit(
             )
             result.update(match_result)
         if not _ef or _ef == "ODDS":
-            odds_result = await _orch._fetch_footystats_odds(
-                date=date, api_key=fs_key, bucket=bucket, force=redo_all
-            )
+            odds_result = await _orch._fetch_footystats_odds(date=date, api_key=fs_key, bucket=bucket, force=redo_all)
             result.update(odds_result)
     elif sports_provider == "TRANSFERMARKT":
         tm_key = _keys.get("transfermarkt")
@@ -397,9 +414,9 @@ def _build_expected_entities(
     Core: leagues/teams/standings/injuries (slow-moving, fetched every run).
     Per-fixture: fixture_stats/events/lineups/player_stats (one API call per
     completed fixture, rate-limited to 1 req/sec — expensive to re-fetch).
-    Remap venue names to match manifest data_type entries (API_FOOTBALL → FIXTURES).
+    Remap venue names to match manifest data_type entries (API_FOOTBALL → FIXTURES_SCHEDULE).
     """
-    expected = ["FIXTURES" if v == "API_FOOTBALL" else v for v in active_venues]
+    expected = [FIXTURES_SCHEDULE if v == "API_FOOTBALL" else v for v in active_venues]
     _active_venues_set_freshness = set(active_venues)
     if is_sports_run:
         expected.extend(core_entities)
@@ -506,9 +523,7 @@ def _freshness_preflight(
     #     defer to per-league handlers (check_shard_freshness is never reached),
     #     so the bucket choice does not affect non-sports freshness.
     _raw_primary = asset_groups[0] if asset_groups else None
-    primary_asset_group = (
-        "sports" if (_raw_primary is None or _raw_primary.upper() == "ALL") else _raw_primary
-    )
+    primary_asset_group = "sports" if (_raw_primary is None or _raw_primary.upper() == "ALL") else _raw_primary
     bucket = _orch._get_instruments_bucket(primary_asset_group)
 
     expected, core_entities, per_fixture_entities = _build_expected_entities(
@@ -530,15 +545,44 @@ def _freshness_preflight(
     _freshness_max_age = 0.0 if date < _date_cutoff else 24.0
 
     _has_sports_per_league_in_scope = bool(set(expected) & _SPORTS_PER_LEAGUE_ENTITIES)
+    _is_fixtures_entity_scoped = bool(sports_entity_filter) and sports_entity_filter in _FIXTURES_ENTITY_ALIASES
 
-    if is_sports_run and _has_sports_per_league_in_scope:
+    if is_sports_run and _is_fixtures_entity_scoped:
+        # An entity-scoped FIXTURES run's `expected` is the literal CLI string
+        # ("FIXTURES"), which the coarse `check_shard_freshness` below matches
+        # against ANY league's row for the date — once one league has an old
+        # (possibly pre-migration) row, the WHOLE date is marked fresh and
+        # every other league's genuinely-missing FIXTURES_SCHEDULE row is
+        # never re-fetched. Reuse the same per-league completeness check every
+        # other api_football-sourced entity (STANDINGS/INJURIES/PREDICTIONS)
+        # already gets — see `_should_skip_date_for_per_league` — against the
+        # CURRENT curated write-gate universe, not just "does any row exist".
+        _fx_manifest = _orch.ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+        _fx_expected_leagues = [lg.league_id for lg in _orch.get_expected_leagues_for_source("api_football")]
+        is_fresh = _orch._should_skip_date_for_per_league(
+            _fx_manifest,
+            date=date,
+            data_type=FIXTURES_SCHEDULE,
+            expected_canonical_leagues=_fx_expected_leagues,
+            force=redo_all,
+        )
+        stale: list[str] = []
+        missing: list[str] = [] if is_fresh else list(expected)
+        if not is_fresh:
+            _orch.logger.info(
+                "date=%s: per-league FIXTURES check found a genuine gap (not just any-league coarse match) — "
+                "will fetch (expected=%s)",
+                date,
+                expected,
+            )
+    elif is_sports_run and _has_sports_per_league_in_scope:
         # Defer to per-league checks in the entity handlers. Treat all
         # expected entities as "missing" at the date level so the
         # downstream per-entity dispatch fires; each handler does its
         # own per-league `_should_skip_date_for_per_league`.
         is_fresh = False
-        stale: list[str] = []
-        missing: list[str] = list(expected)
+        stale = []
+        missing = list(expected)
         _orch.logger.info(
             "date=%s: deferring pre-flight to per-league entity handlers (sports per-league mode; expected=%s)",
             date,
@@ -565,12 +609,20 @@ def _freshness_preflight(
             per_fixture_entities=per_fixture_entities,
         )
 
-    # Per-entity skip: pass the exact missing list so _fetch_sports_reference_data
-    # only fetches entities that are actually absent from the manifest.
+    # Per-entity skip: pass the exact missing+stale list so
+    # _fetch_sports_reference_data only fetches entities that are actually
+    # absent OR stale in the manifest. An empty missing_entities under an
+    # explicit --sports-entity scope falls back to the legacy unscoped
+    # fetch-everything path in _fetch_sports_reference_block — so a
+    # stale-not-missing entity (e.g. a schema-version re-fetch trigger) MUST
+    # also contribute here, or it silently escapes the CLI scope and burns
+    # the shared, singleton-locked API-Football quota (measured: ~7000
+    # unscoped calls on one date; see
+    # sports_freshness_preflight_stale_scope_escape_burns_shared_quota_2026_07_25.md).
     missing_entities: list[str] = []
-    if is_sports_run and missing:
-        missing_entities = list(missing)
-        missing_set = set(missing)
+    if is_sports_run and (missing or stale):
+        missing_entities = list(dict.fromkeys([*missing, *stale]))
+        missing_set = set(missing_entities)
         core_missing = missing_set & set(core_entities)
         pf_missing = [e for e in per_fixture_entities if e in missing_set]
         instruments_missing = missing_set - set(core_entities) - set(per_fixture_entities)
@@ -708,6 +760,7 @@ async def _enrichment_only_fast_path(
                     attempted_at=_enr_attempt_ts,
                     reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                    source=_orch._sports_ref_source(entity_short),
                 )
     sports_manifest.write()
     _orch.logger.info(

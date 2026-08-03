@@ -30,13 +30,18 @@ def test_venue() -> None:
 async def test_get_instruments_yields_ezeth_record() -> None:
     adapter = RenzoReferenceDataAdapter()
     records = await adapter.get_instruments()
-    assert len(records) == 1
+    # 1 LST + 1 SPOT_ASSET sibling (ezETH itself — P4-B) = 2.
+    assert len(records) == 2
     rec = records[0]
     assert isinstance(rec, InstrumentRecord)
     assert rec.venue == "RENZO-ETHEREUM"
     assert rec.instrument_key == "RENZO-ETHEREUM:LST:EZETH"
     assert rec.raw_symbol == _EZETH_ETH_ADDRESS
-    assert rec.instrument_type == InstrumentType.YIELD_BEARING
+    # Operator decision 2026-07-20/22 (distinct_values_noncanonical_audit_2026_07_20.md):
+    # ezETH is a liquid RESTAKING token (EigenLayer AVS slashing stacked on base ETH
+    # staking slashing), not a plain LST. The `:LST:` key segment is intentionally left
+    # unchanged (values-only reclassification, not an id rename — see renzo.py docstring).
+    assert rec.instrument_type == InstrumentType.RESTAKING
     assert rec.base_asset == "ETH"
     assert rec.underlying == "ETH"
     assert rec.status == InstrumentStatus.ACTIVE
@@ -44,12 +49,22 @@ async def test_get_instruments_yields_ezeth_record() -> None:
     assert rec.base_asset_contract_address == _EZETH_ETH_ADDRESS
     assert rec.base_asset_decimals == 18
 
+    spot_asset = next(r for r in records if r.instrument_type == InstrumentType.SPOT_ASSET)
+    assert spot_asset.instrument_key == "RENZO-ETHEREUM:SPOT_ASSET:EZETH"
+    # Names the actual on-chain receipt token (EZETH), not the "ETH" economic-peg
+    # label the primary LST record carries.
+    assert spot_asset.base_asset == "EZETH"
+    assert spot_asset.base_asset_contract_address == _EZETH_ETH_ADDRESS
+    assert spot_asset.base_asset_decimals == 18
+    assert spot_asset.available_from_datetime == _EXPECTED_ETH_DEPLOY_DATE
+
 
 @pytest.mark.asyncio
 async def test_get_instruments_arbitrum_yields_bridged_record() -> None:
     adapter = RenzoReferenceDataAdapter(chain="ARBITRUM")
     records = await adapter.get_instruments()
-    assert len(records) == 1
+    # 1 LST + 1 SPOT_ASSET sibling — P4-B.
+    assert len(records) == 2
     rec = records[0]
     assert rec.venue == "RENZO-ARBITRUM"
     assert rec.instrument_key == "RENZO-ARBITRUM:LST:EZETH"
@@ -58,11 +73,19 @@ async def test_get_instruments_arbitrum_yields_bridged_record() -> None:
     assert rec.available_from_datetime == _EXPECTED_ARB_DEPLOY_DATE
     assert rec.base_asset_contract_address == _EZETH_ARB_ADDRESS
 
+    spot_asset = next(r for r in records if r.instrument_type == InstrumentType.SPOT_ASSET)
+    assert spot_asset.instrument_key == "RENZO-ARBITRUM:SPOT_ASSET:EZETH"
+    assert spot_asset.base_asset == "EZETH"
+    assert spot_asset.base_asset_contract_address == _EZETH_ARB_ADDRESS
+
 
 @pytest.mark.asyncio
 async def test_get_instruments_filters_on_instrument_type() -> None:
     adapter = RenzoReferenceDataAdapter()
-    assert await adapter.get_instruments(instrument_type="yield_bearing")
+    assert await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
+    # RESTAKING is the token's real canonical type (2026-07-20/22 reclassification) —
+    # a caller filtering on it must not be rejected.
+    assert await adapter.get_instruments(instrument_type=InstrumentType.RESTAKING)
     assert await adapter.get_instruments(instrument_type="perpetual") == []
 
 

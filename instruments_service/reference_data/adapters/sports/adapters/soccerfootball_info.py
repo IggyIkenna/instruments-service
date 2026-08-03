@@ -8,6 +8,7 @@ Base URL: https://soccer-football-info.p.rapidapi.com
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta
 
 from unified_api_contracts.sports import (
@@ -330,19 +331,35 @@ def _safe_int(val: object) -> int | None:
         return None
 
 
-def _parse_timer_to_seconds(timer: str) -> int:
-    """Parse SFI timer string "MM:SS" to total seconds.
+_TIMER_RE = re.compile(r"^\s*(\d+):([0-5]\d)(?:\+(\d+):([0-5]\d))?\s*$")
 
-    Examples: "00:30" -> 30, "45:00" -> 2700, "90:00" -> 5400.
-    Falls back to 0 on parse errors.
+
+def _parse_timer_to_seconds(timer: str) -> int | None:
+    """Parse an SFI timer string to total seconds elapsed from kickoff.
+
+    SFI emits TWO timer formats:
+
+    * ``"MM:SS"`` — regular play. ``"00:30"`` -> 30, ``"45:00"`` -> 2700.
+    * ``"MM:SS+MM:SS"`` — STOPPAGE time, expressed as the period's nominal end
+      plus the amount played beyond it. ``"45:00+02:30"`` -> 2700 + 150 = 2850.
+
+    The stoppage form is ~15% of a fixture's snapshots (measured 2026-07-16:
+    31/212 rows on a real Brazil Serie A match) and covers the run-up to the
+    halftime whistle — the single most point-in-time-valuable window for
+    first-half odds. It previously fell through to ``0``, collapsing those rows
+    onto the genuine ``"00:00"`` pre-kickoff snapshot and silently corrupting
+    both the timer axis and any halftime detection built on it.
+
+    Returns ``None`` on an unparseable timer so the caller can drop the row
+    rather than fabricate a ``0`` that reads as "pre-kickoff".
     """
-    parts = timer.split(":")
-    if len(parts) == 2:
-        try:
-            return int(parts[0]) * 60 + int(parts[1])
-        except (ValueError, TypeError):
-            return 0
-    return 0
+    match = _TIMER_RE.match(timer)
+    if match is None:
+        return None
+    seconds = int(match.group(1)) * 60 + int(match.group(2))
+    if match.group(3) is not None:
+        seconds += int(match.group(3)) * 60 + int(match.group(4))
+    return seconds
 
 
 def _safe_float(val: object) -> float | None:
@@ -397,7 +414,26 @@ def _extract_team_stats(team_data: dict[str, object]) -> dict[str, object]:
 
 
 def _extract_odds(odds_data: dict[str, object]) -> dict[str, float | None]:
-    """Extract flat odds from an SFI nested odds object."""
+    """Extract flat odds from an SFI nested odds object.
+
+    Covers BOTH market families the progressive endpoint serves (verified
+    against the live API 2026-07-16):
+
+    * **Full-time** — ``1X2`` / ``asian_handicap`` / ``over_under`` /
+      ``asian_corner``.
+    * **First-half (HT)** — ``1h_result`` / ``1h_asian_handicap`` /
+      ``1h_goalline`` / ``1h_asian_corner``. These are the HT-RESULT market
+      family and were previously dropped on the floor, which is why
+      ``ht_odds_*_implied`` was structurally NULL in batch.
+
+    Missing prices arrive either as ``null`` or as the string sentinel ``"-"``;
+    ``_safe_float`` maps both to ``None`` rather than fabricating a number.
+
+    PIT: ``1h_*`` prices are a live forecast only while the first half is in
+    progress; they freeze at a settled quote encoding the HT scoreline once the
+    half ends. Capture is unconditional (we persist the whole series); the
+    halftime gate belongs to the consumer.
+    """
     result: dict[str, float | None] = {}
 
     # 1X2: {"1": "1.181", "X": "6.000", "2": "13.000"}
@@ -428,6 +464,36 @@ def _extract_odds(odds_data: dict[str, object]) -> dict[str, float | None]:
         result["odds_asian_corner_under"] = _safe_float(ac.get("u"))
         result["odds_asian_corner_line"] = _safe_float(ac.get("v"))
 
+    # --- First-half (HT) markets ---
+
+    # First-half 1X2: {"1": "2.600", "X": "2.250", "2": "4.000"}
+    h1_result = odds_data.get("1h_result")
+    if isinstance(h1_result, dict):
+        result["odds_h1_result_home"] = _safe_float(h1_result.get("1"))
+        result["odds_h1_result_draw"] = _safe_float(h1_result.get("X"))
+        result["odds_h1_result_away"] = _safe_float(h1_result.get("2"))
+
+    # First-half Asian Handicap: {"1": "1.875", "2": "1.925", "v": "-0.5"}
+    h1_ah = odds_data.get("1h_asian_handicap")
+    if isinstance(h1_ah, dict):
+        result["odds_h1_ah_home"] = _safe_float(h1_ah.get("1"))
+        result["odds_h1_ah_away"] = _safe_float(h1_ah.get("2"))
+        result["odds_h1_ah_line"] = _safe_float(h1_ah.get("v"))
+
+    # First-half goal line: {"o": "1.850", "u": "1.950", "v": "1.5"}
+    h1_gl = odds_data.get("1h_goalline")
+    if isinstance(h1_gl, dict):
+        result["odds_h1_goalline_over"] = _safe_float(h1_gl.get("o"))
+        result["odds_h1_goalline_under"] = _safe_float(h1_gl.get("u"))
+        result["odds_h1_goalline_line"] = _safe_float(h1_gl.get("v"))
+
+    # First-half Asian Corner: {"o": "2.025", "u": "1.775", "v": "3.5"}
+    h1_ac = odds_data.get("1h_asian_corner")
+    if isinstance(h1_ac, dict):
+        result["odds_h1_ac_over"] = _safe_float(h1_ac.get("o"))
+        result["odds_h1_ac_under"] = _safe_float(h1_ac.get("u"))
+        result["odds_h1_ac_line"] = _safe_float(h1_ac.get("v"))
+
     return result
 
 
@@ -443,10 +509,19 @@ def _normalize_sfi_progressive_stat(
 
     SFI progressive data includes per-team stats at 30-second intervals:
     goals, possession, shots, corners, fouls, cards, dangerous attacks,
-    xG, dominance index, and in-play odds.
+    xG, dominance index, and in-play odds — both full-time and first-half
+    (HT) market families.
+
+    Raises:
+        ValueError: when the snapshot's timer is unparseable. The caller
+            (``get_progressive_stats``) isolates this per row, so one bad
+            snapshot never fails the fixture — but we refuse to silently
+            coerce it to ``0``, which would masquerade as a pre-kickoff row.
     """
     timer = str(item.get("timer", "00:00"))
     timer_seconds = _parse_timer_to_seconds(timer)
+    if timer_seconds is None:
+        raise ValueError(f"unparseable SFI timer: {timer!r}")
     team = str(item.get("team", ""))
 
     # --- Extract nested team data if present (SFI live format) ---
@@ -520,6 +595,19 @@ def _normalize_sfi_progressive_stat(
         odds_asian_corner_over=odds_fields.get("odds_asian_corner_over"),
         odds_asian_corner_under=odds_fields.get("odds_asian_corner_under"),
         odds_asian_corner_line=odds_fields.get("odds_asian_corner_line"),
+        # --- First-half (HT) markets — the HT-RESULT family ---
+        odds_h1_result_home=odds_fields.get("odds_h1_result_home"),
+        odds_h1_result_draw=odds_fields.get("odds_h1_result_draw"),
+        odds_h1_result_away=odds_fields.get("odds_h1_result_away"),
+        odds_h1_ah_home=odds_fields.get("odds_h1_ah_home"),
+        odds_h1_ah_away=odds_fields.get("odds_h1_ah_away"),
+        odds_h1_ah_line=odds_fields.get("odds_h1_ah_line"),
+        odds_h1_goalline_over=odds_fields.get("odds_h1_goalline_over"),
+        odds_h1_goalline_under=odds_fields.get("odds_h1_goalline_under"),
+        odds_h1_goalline_line=odds_fields.get("odds_h1_goalline_line"),
+        odds_h1_ac_over=odds_fields.get("odds_h1_ac_over"),
+        odds_h1_ac_under=odds_fields.get("odds_h1_ac_under"),
+        odds_h1_ac_line=odds_fields.get("odds_h1_ac_line"),
         # ht_start_timer / ht_end_timer are set post-hoc by detect_halftime_window()
     )
 

@@ -171,6 +171,12 @@ def _write_master_append(
     Errors are non-blocking: classify + emit and return so a master-write
     failure never kills the main by_date/ write.
 
+    Concurrency note: ``master.parquet`` at this path is a SINGLE shared GCS
+    object, not per-VM sharded like the availability manifest — do not run
+    more than one process against the same entity concurrently, or the
+    read-modify-write cycle can race and GCS's per-object mutation rate limit
+    can 429 (see plans/active/issues/transfermarkt_master_table_gcs_429_concurrent_writers_2026_07_12.md).
+
     Args:
         bucket: GCS bucket name (already resolved via resolve_bucket_name).
         entity: Entity label used in the path (``teams``, ``team_mapping``,
@@ -323,7 +329,11 @@ def _cache_is_fresh(df: _orch.pd.DataFrame, ttl: _orch.timedelta) -> bool:
         now = _orch.datetime.now(_orch.UTC)
         oldest = timestamps.min().to_pydatetime()
         return (now - oldest) < ttl
-    except Exception:
+    # Known failure modes: `.min().to_pydatetime()` on a NaT (pandas raises ValueError,
+    # theoretically unreachable here since the isna() check above already returns early
+    # on any NaT, but kept as a belt-and-suspenders date-arithmetic guard) or a
+    # non-comparable dtype surfacing as TypeError on `now - oldest`.
+    except (ValueError, TypeError):
         return False
 
 
@@ -360,7 +370,6 @@ async def _fetch_transfermarkt_data(
         get_expected_leagues_for_source,
     )
 
-    adapter = _orch.create_sports_reference_adapter("transfermarkt", api_key=api_key)
     sink = _orch._sports_ref_sink_for(bucket, date, "player_values")
     counts: dict[str, int] = {}
 
@@ -432,6 +441,10 @@ async def _fetch_transfermarkt_data(
             manifest.write()
             return counts
 
+        # T0/T1 dependency gate: fires only when we're actually about to attempt
+        # a fetch (past every skip/guard above) — sports_t0_t1_dependency_gate_never_wired_2026_07_15.
+        adapter = _orch.create_sports_reference_adapter("transfermarkt", api_key=api_key, date=date, bucket=bucket)
+
         effective_season = season if season is not None else _orch.datetime.now(_orch.UTC).year
 
         # Cache short-circuit: skip API calls on non-trigger dates when we
@@ -443,8 +456,11 @@ async def _fetch_transfermarkt_data(
             _cached_df, _orch.timedelta(days=_orch._TRANSFERMARKT_CACHE_STALENESS_DAYS)
         ):
             try:
+                # Known failure mode: `date` isn't a valid ISO date string (fromisoformat
+                # raises ValueError). get_leagues_needing_refresh() itself is a pure
+                # registry list-comprehension — nothing else in this line raises.
                 _triggers_today = _orch.get_leagues_needing_refresh(_orch.date_type.fromisoformat(date))
-            except Exception:
+            except ValueError:
                 _triggers_today = ["__fallback__"]
             if not _triggers_today:
                 _cache_hit = True

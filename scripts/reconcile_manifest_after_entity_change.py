@@ -91,15 +91,42 @@ def _write_manifest(storage_client: object, bucket_name: str, df: pd.DataFrame) 
     storage_client.upload_from_file_obj(bucket_name, _INDEX_BLOB, out)  # type: ignore[attr-defined]
 
 
+def _find_repo_toplevel(start: Path) -> Path:
+    """Walk up from `start` to the invoking repo's own clone root (a dir holding `.git`).
+
+    Path-B per-slot topology: each repo is its OWN `git clone --reference` with a real
+    `.git` directory (never a worktree-file), so this correctly identifies THIS
+    invocation's clone — the slot's own `.tabs/<slot>/instruments-service`, or the
+    non-slotted workspace-root clone — regardless of how many directories deep the
+    script itself lives.
+    """
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    raise RuntimeError(
+        f"Could not locate the invoking repo's clone root — no `.git` found walking up "
+        f"from {start}. Cannot resolve the audit-CSV destination without it."
+    )
+
+
 def _default_csv_path(asset_group: str, entity_type: str, entity_key: str) -> Path:
     day = datetime.now(UTC).strftime("%Y-%m-%d")
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    # Walk up from scripts/ → instruments-service/ → .tabs/7/ → workspace root.
-    ws_root = Path(__file__).parents[4]
-    pm_dir = ws_root / "unified-trading-pm"
+    # unified-trading-pm is always a SIBLING clone of the invoking repo — under Path-B
+    # per-slot topology that's `.tabs/<slot>/unified-trading-pm`; under a non-slotted
+    # checkout it's the workspace-root clone. Deriving it from the repo's own identity
+    # (rather than a fixed `parents[N]` hop) makes both layouts resolve correctly without
+    # guessing a depth, and never silently lands on a DIFFERENT clone (e.g. the
+    # read-only root PM clone) the way the old parents[4] hop did.
+    repo_toplevel = _find_repo_toplevel(Path(__file__).parent)
+    pm_dir = repo_toplevel.parent / "unified-trading-pm"
     if not pm_dir.is_dir():
-        # Fallback: write alongside the script when workspace layout differs.
-        pm_dir = Path(__file__).parent
+        raise RuntimeError(
+            f"Cannot resolve the audit-CSV destination: no unified-trading-pm sibling "
+            f"clone found next to {repo_toplevel}. Expected {pm_dir} to exist. "
+            "Pass --output-csv explicitly to bypass auto-resolution rather than let this "
+            "write to an unintended location."
+        )
     out_dir = pm_dir / "audits" / "entity_lifecycle" / "by_date" / f"day={day}"
     out_dir.mkdir(parents=True, exist_ok=True)
     key_safe = entity_key.replace("/", "_").replace(":", "_").replace(" ", "_")

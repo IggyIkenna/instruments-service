@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import contextlib
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from unified_api_contracts.internal import InstrumentType, MarginType, OptionType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 if TYPE_CHECKING:
     from unified_api_contracts import TardisInstrumentDetail
@@ -34,12 +35,20 @@ else:  # pragma: no cover - runtime namespace indirection
 __all__ = [
     "_BITFINEX_BASE_ALIASES",
     "_BITFINEX_QUOTE_ALIASES",
+    "_BYBIT_MONTH_CODE_RE",
     "_DERIBIT_MONTHS",
     "_QUOTE_CURRENCIES",
     "_QUOTE_CURRENCIES_SET",
+    "_build_canonical_future_key",
+    "_build_canonical_option_key",
+    "_build_canonical_perpetual_key",
+    "_build_dated_derivative_canonical_symbol",
+    "_build_perpetual_canonical_symbol",
     "_infer_derivative_quote",
     "_infer_margin_type",
+    "_margin_marker",
     "_normalize_option_type",
+    "_parse_bybit_month_code_expiry",
     "_parse_ddmmmyy",
     "_parse_deribit_symbol_expiry",
     "_parse_expiry",
@@ -49,6 +58,7 @@ __all__ = [
     "_resolve_base_quote",
     "_resolve_bitfinex_spot",
     "_resolve_option_fields",
+    "_split_bybit_symbol",
     "_split_kraken_symbol",
     "_split_symbol",
 ]
@@ -301,7 +311,10 @@ def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str
     BTC-27MAR26-190000-C), the settlement currency is inferred from the
     exchange context:
       - deribit: USD (inverse) or USDC (linear)
-      - okex coin-margined (-USD_UM-): USD
+      - okex ``_UM``/``_CM``-marked dated futures (e.g. BTC-USD_UM-260710): USD
+        (the literal quote token only — real margin SIDE is a separate
+        question, resolved by ``_infer_margin_type``, NOT implied by this
+        "USD" value; verified against the live OKX public API 2026-07-09)
       - binance-futures COIN-M: USD
       - all others: USD as safe default for derivatives
     """
@@ -322,6 +335,34 @@ def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str
         kraken_base, kraken_quote = _split_kraken_symbol(upper_id)
         if kraken_base:
             return kraken_base, kraken_quote
+    # Bybit dated-derivative shapes the generic dash/quote-suffix logic below
+    # gets wrong: bare ``BASE-DDMMMYY`` (no quote in the symbol at all — e.g.
+    # ``BTC-01DEC23``, 255 real rows) and ``BASEQUOTE-DDMMMYY`` (quote
+    # concatenated into the left segment — e.g. ``BTCUSDT-25DEC26``, 360 real
+    # rows, which the generic derivative fallback below would otherwise leave
+    # un-split as base="BTCUSDT"), plus the legacy no-dash CME-style quarterly
+    # (``BTCUSDH22``, 46 real rows — quote "USD" glued directly before the
+    # month-code, unparseable by the generic suffix matcher; real bug: these
+    # were previously silently dropped by adapter.py's empty-quote guard).
+    # PERPETUAL ids (``BTCUSDT``/``BTCUSD`` — no dash, no month-code) fall
+    # through unchanged to the existing generic path below (already correct).
+    # Real evidence 2026-07-09 (api.tardis.dev/v1/exchanges/bybit).
+    #
+    # Bitget Futures' 16 dated quarterlies (e.g. ``BTCUSDH25``, verified
+    # 2026-07-14 via api.tardis.dev/v1/exchanges/bitget-futures) use the
+    # IDENTICAL no-dash CME-month-code shape as Bybit's legacy quarterlies —
+    # ``_split_bybit_symbol`` already handles it generically (its dash-based
+    # branches never match here since Bitget's futures carry no dash), so it
+    # is reused rather than duplicated. Real bug this fixes: with no branch
+    # for "bitget-futures", every FUTURE symbol here failed the generic
+    # suffix matcher (falls through to quote="", base="BTCUSDH25") and was
+    # silently dropped by the empty-quote guard in adapter.py — 0/16 real
+    # dated futures ever reached the catalogue (all 714 rows for
+    # BITGET-FUTURES were PERPETUAL only).
+    if exchange in ("bybit", "bitget-futures"):
+        bybit_base, bybit_quote = _split_bybit_symbol(upper_id)
+        if bybit_base:
+            return bybit_base, bybit_quote
     # Bitfinex derivatives use ``<BASE>F0:<QUOTE>F0`` — ``F0`` is Bitfinex's
     # "perpetual" marker, not a currency suffix. Examples:
     #   BTCF0:USTF0  → base=BTC,  quote=USDT (USDT-margined linear perp)
@@ -385,7 +426,9 @@ def _infer_derivative_quote(upper_id: str, exchange: str) -> str:
     # USDT-denominated: symbol contains USDT (e.g. BTCUSDT_PERP on some exchanges)
     if "USDT" in upper_id:
         return "USDT"
-    # OKX coin-margined: BTC-USD_UM-SWAP, BTC-USD_UM-260626
+    # OKX _UM/_CM-marked dated futures: BTC-USD_UM-SWAP, BTC-USD_UM-260626 —
+    # quote TOKEN is "USD" either way (margin SIDE is resolved separately by
+    # _infer_margin_type, not implied here).
     if "USD_UM" in upper_id or "USD_CM" in upper_id:
         return "USD"
     # Everything else: crypto derivatives default to USD settlement
@@ -406,15 +449,65 @@ def _infer_margin_type(
     None: spot instruments.
 
     Coin-margined patterns:
-      - quote == "USD" on binance-futures (COIN-M), deribit (inverse), OKX (USD_UM)
+      - quote == "USD" on binance-futures (COIN-M), deribit (inverse), bybit
+        (coin-margined — see below)
+      - OKX (okex/okex-swap/okex-futures) is NOT quote-inferable for dated
+        futures — real evidence 2026-07-09 (live OKX public
+        ``/api/v5/public/instruments``, instType=SWAP + FUTURES, all 105 real
+        FUTURES rows + 416 real SWAP rows): every dated-future instId
+        carrying the literal ``_UM`` infix (e.g. ``BTC-USD_UM-260710``) is
+        ``ctType=linear`` (``settleCcy="USD"`` — a synthetic cross-margin
+        unit, NOT the base asset; ``ctValCcy=BTC``); the bare sibling with NO
+        ``_UM`` (e.g. ``BTC-USD-260710``) is ``ctType=inverse``
+        (``settleCcy=BTC``, the real base asset). ``_CM`` is unobserved in
+        real OKX data today (0 of 105 rows) but is handled symmetrically as
+        the real inverse-side marker, mirroring Binance's own
+        USDⓈ-M(UM)/COIN-M(CM) naming. SWAP (perpetual) instIds never carry
+        ``_UM``/``_CM`` at all (0 of 416 real rows) — bare ``BTC-USD-SWAP``
+        is inverse, ``BTC-USDT-SWAP``/``BTC-USDC-SWAP`` is linear, ordinary
+        quote-inference applies. **Previously BACKWARDS**: the old
+        exchange-unscoped branch mapped any ``_UM``/``_CM`` infix straight to
+        INVERSE (the real ``ctType`` there is linear) and let every bare
+        USD-quoted OKX derivative fall through to the generic LINEAR default
+        (the real ``ctType`` there is inverse) — every real OKX-SWAP/
+        OKX-FUTURES derivative was mislabeled the opposite of its true margin
+        type.
+      - Kraken Futures (cryptofacilities) is NOT quote-inferable — real evidence
+        2026-07-09 (api.tardis.dev/v1/exchanges/cryptofacilities): ``PI_XBTUSD``
+        (real inverse perp) and ``PF_XBTUSD`` (real linear/multi-collateral perp)
+        coexist for the SAME BTC pair and both quote-resolve to ``USD`` via
+        ``_split_kraken_symbol`` — the same real-world proof case the operator
+        used to justify extending the ``@LIN``/``@INV`` marker to PERPETUAL
+        (instrument_id_format_canonicalization_2026_07_08.md, 2026-07-09 update).
+        Kraken encodes margin type in the raw instrument-type PREFIX instead:
+        ``PI_``/``FI_`` = inverse, ``PF_``/``FF_`` = linear (see
+        ``_KRAKEN_FUTURES_PREFIXES``) — checked before any quote-based rule.
       - Deribit has both inverse (USD-settled) and linear (USDC-settled) — distinguish by quote
     """
     if instrument_type not in (InstrumentType.FUTURE, InstrumentType.PERPETUAL, InstrumentType.OPTION):
         return None
     upper_id = raw_id.upper()
-    # OKX coin-margined: symbol contains USD_UM or USD_CM
-    if "USD_UM" in upper_id or "USD_CM" in upper_id:
-        return MarginType.INVERSE
+    # OKX (okex/okex-swap/okex-futures): see docstring for the real,
+    # live-verified 2026-07-09 evidence. "_UM" = linear, "_CM" = inverse
+    # (checked first — the infix is the only disambiguator, "USD" alone is
+    # ambiguous on OKX dated futures); no infix + bare USD quote (SWAP
+    # perpetuals, and the non-"_UM" dated-future sibling) = inverse.
+    if exchange in ("okex", "okex-swap", "okex-futures"):
+        if "USD_CM" in upper_id:
+            return MarginType.INVERSE
+        if "USD_UM" in upper_id:
+            return MarginType.LINEAR
+        if quote.upper() == "USD":
+            return MarginType.INVERSE
+    # Kraken Futures: margin type lives in the prefix, not the quote (see
+    # docstring — real PI_XBTUSD/PF_XBTUSD collision). Previously had no
+    # cryptofacilities branch at all, so every real inverse product (FI_/PI_-
+    # prefixed) silently fell through to the LINEAR default below.
+    if exchange == "cryptofacilities":
+        if upper_id.startswith(("PI_", "FI_")):
+            return MarginType.INVERSE
+        if upper_id.startswith(("PF_", "FF_")):
+            return MarginType.LINEAR
     # Binance COIN-M futures: exchange is "binance-futures" (USDT-M, has coin-M perps
     # on the same endpoint via USD quote) OR "binance-delivery" (the dedicated COIN-M
     # delivery endpoint — always inverse). Quote is USD (not USDT/USDC) for both.
@@ -422,6 +515,28 @@ def _infer_margin_type(
         return MarginType.INVERSE
     # Deribit inverse: settled in BTC/ETH (USD quote but coin-margined)
     if exchange == "deribit" and quote.upper() == "USD":
+        return MarginType.INVERSE
+    # Bybit coin-margined: quote resolves to bare "USD" for both the concatenated
+    # perpetual shape (BTCUSD/ETHUSD/… — 28 real vs 907 real USDT-quoted linear
+    # perpetuals) and the dated-future shapes _split_bybit_symbol resolves to USD
+    # (bare BASE-DDMMMYY and the legacy BASEUSD<month-code><YY> quarterly). Had no
+    # bybit branch at all, so every real inverse instrument (e.g. real
+    # BYBIT:PERPETUAL:BTC-USD) silently fell through to the LINEAR default below.
+    # Real evidence 2026-07-09 (api.tardis.dev/v1/exchanges/bybit).
+    if exchange == "bybit" and quote.upper() == "USD":
+        return MarginType.INVERSE
+    # Bitget Futures coin-margined ("delivery"/COIN-M) products quote-resolve to
+    # bare "USD" and are genuinely coin-margined -- live-verified 2026-07-14 via
+    # Bitget's own public REST (api.bitget.com/api/v2/mix/market/contracts?
+    # productType=coin-futures): BTCUSD/ETHUSD/... perpetuals + their dated-
+    # quarterly siblings (BTCUSDH25 etc, same symbol family) list
+    # supportMarginCoins=["BTC","ETH",...] (coin collateral), the same USD-quote-
+    # but-coin-settled shape as Bybit/Deribit/Binance-futures above. Had no
+    # bitget-futures branch at all -- every real inverse instrument here (the 16
+    # dated-quarterly FUTURE symbols the sibling _resolve_base_quote fix just made
+    # resolvable, plus any USD-quoted perpetual) silently fell through to the
+    # LINEAR default below.
+    if exchange == "bitget-futures" and quote.upper() == "USD":
         return MarginType.INVERSE
     # All other derivatives with stable quote (USDT, USDC) or default → linear
     return MarginType.LINEAR
@@ -440,9 +555,12 @@ def _passes_asset_filter(base: str, quote: str, instrument_type: str, venue: str
     not coin-curation:
       1. accepted-quote gate — USDT/USDC/USD fleet-wide, PLUS the per-venue
          extensions from the UAC SSOT ``accepted_quotes_for_venue`` (KRW is
-         accepted ONLY for UPBIT — the kimchi-premium venue, operator 2026-06-23).
-         Drops exotic cross pairs (BASE/EUR, BASE/BTC) elsewhere; derivatives
-         carry no quote and pass.
+         accepted ONLY for UPBIT — the kimchi-premium venue, operator 2026-06-23;
+         BTC is accepted ONLY for BITFINEX-FUTURES — Bitfinex's real BTC-margined
+         inverse perps like ETHF0:BTCF0, bug fix 2026-07-08). Drops exotic cross
+         pairs (BASE/EUR, BASE/BTC) elsewhere; most derivatives carry no quote
+         and pass trivially (Bitfinex derivatives is the exception — it DOES
+         resolve a real quote, so it goes through the gate above).
       2. OPTIONS underlyings stay restricted to ``CEFI_OPTIONS_UNDERLYINGS``
          (BTC/ETH) — a Deribit-options-per-coin explosion is a genuine
          data-volume constraint (DERIBIT already ~213k historical rows), and the
@@ -468,7 +586,7 @@ def _passes_asset_filter(base: str, quote: str, instrument_type: str, venue: str
 
 def _resolve_option_fields(
     item: TardisInstrumentDetail, instrument_type: str, raw_id: str
-) -> tuple[Decimal | None, str | None]:
+) -> tuple[Decimal | None, OptionType | None]:
     """Extract strike price and option type from Tardis item metadata.
 
     Falls back to parsing Deribit-style option symbol names
@@ -538,6 +656,88 @@ def _split_kraken_symbol(upper_id: str) -> tuple[str, str]:
     return "", ""
 
 
+#: Bybit's legacy coin-margined quarterly futures glue the quote directly onto
+#: the base with NO separator before a CME-style month-code + 2-digit year
+#: (e.g. ``BTCUSDH22`` = BTC, quote USD, Mar-2022 expiry). Only BTC/ETH carry
+#: this shape (46 real rows, live-verified 2026-07-09). Month codes actually
+#: observed on Bybit: H(Mar) M(Jun) U(Sep) Z(Dec) — the full IMM letter set is
+#: accepted defensively (F/G/J/K/N/Q/V/X unused today but harmless to match).
+_BYBIT_MONTH_CODE_RE = re.compile(r"^([A-Z0-9]+)USD([FGHJKMNQUVXZ])(\d{2})$")
+
+
+def _split_bybit_symbol(upper_id: str) -> tuple[str, str]:
+    """Split a Bybit dated-derivative ``raw_id`` into canonical ``(base, quote)``.
+
+    Handles the 2 real dash shapes and the 1 real no-dash shape Bybit's
+    FUTURE ids carry (live-verified 2026-07-09,
+    ``api.tardis.dev/v1/exchanges/bybit``); PERPETUAL ids (plain concatenated,
+    no dash, no month-code) are NOT handled here — they already resolve
+    correctly via the generic ``_split_symbol`` suffix matcher, so this
+    function returns ``("", "")`` for them and the caller falls through.
+
+    Returns ``("", "")`` when none of the 3 shapes match (caller falls back).
+    """
+    if "-" in upper_id:
+        left, _, _date_part = upper_id.partition("-")
+        # Quote concatenated into the left segment: BTCUSDT-25DEC26 → (BTC, USDT).
+        for q in ("USDT", "USDC"):
+            if left.endswith(q) and len(left) > len(q):
+                return left[: -len(q)], q
+        # No recognised quote suffix — Bybit's classic coin-margined quarterly,
+        # bare base only: BTC-01DEC23 → (BTC, USD) (implied inverse settlement).
+        return left, "USD"
+    # No-dash CME-style quarterly: BTCUSDH22 → (BTC, USD).
+    m = _BYBIT_MONTH_CODE_RE.match(upper_id)
+    if m:
+        return m.group(1), "USD"
+    return "", ""
+
+
+#: IMM/CME month-code letter → calendar month. Bybit's coin-margined
+#: quarterlies only actually cycle H/M/U/Z (Mar/Jun/Sep/Dec), but the full
+#: IMM set is accepted defensively here too, matching ``_BYBIT_MONTH_CODE_RE``.
+_BYBIT_MONTH_CODE_TO_MONTH: dict[str, int] = {
+    "F": 1,
+    "G": 2,
+    "H": 3,
+    "J": 4,
+    "K": 5,
+    "M": 6,
+    "N": 7,
+    "Q": 8,
+    "U": 9,
+    "V": 10,
+    "X": 11,
+    "Z": 12,
+}
+
+
+def _parse_bybit_month_code_expiry(raw_id: str) -> datetime | None:
+    """Parse expiry from Bybit's no-dash CME-month-code shape: ``BTCUSDH22``.
+
+    Bybit's legacy coin-margined quarterly futures settle on the LAST FRIDAY
+    of the contract month. Convention cross-checked 2026-07-09 against all 42
+    already-resolvable siblings of this shape (``api.tardis.dev/v1/exchanges/
+    bybit``): every one's Tardis ``availableTo`` timestamp lands exactly 1
+    calendar day after this function's computed Friday, with zero exceptions
+    (e.g. ``BTCUSDH22`` → last Friday of Mar-2022 = 2022-03-25,
+    ``availableTo`` = 2022-03-26). Returns UTC midnight of that Friday, or
+    ``None`` when ``raw_id`` doesn't match the shape.
+    """
+    m = _BYBIT_MONTH_CODE_RE.match(raw_id.upper())
+    if not m:
+        return None
+    month = _BYBIT_MONTH_CODE_TO_MONTH.get(m.group(2))
+    if month is None:
+        return None
+    year = 2000 + int(m.group(3))
+    next_month_first = datetime(year + 1, 1, 1, tzinfo=UTC) if month == 12 else datetime(year, month + 1, 1, tzinfo=UTC)
+    last_day_of_month = next_month_first - timedelta(days=1)
+    # Friday=4 under Python's Monday=0 weekday() convention.
+    offset_to_friday = (last_day_of_month.weekday() - 4) % 7
+    return last_day_of_month - timedelta(days=offset_to_friday)
+
+
 def _split_symbol(symbol: str) -> tuple[str, str]:
     """Split a concatenated symbol like BNBBTC into (BNB, BTC) using known quote currencies.
 
@@ -565,3 +765,148 @@ def _split_symbol(symbol: str) -> tuple[str, str]:
         if symbol.endswith(quote) and len(symbol) > len(quote):
             return symbol[: -len(quote)], quote
     return symbol, ""
+
+
+# ---------------------------------------------------------------------------
+# Canonical instrument_id construction — @LIN/@INV margin marker + YYYYMMDD
+# ---------------------------------------------------------------------------
+#
+# Operator-decided target format for dated derivatives AND perpetuals
+# (unified-trading-pm/plans/active/issues/instrument_id_format_canonicalization_
+# 2026_07_08.md finding 1, PERPETUAL scope expanded 2026-07-09):
+#   PERPETUAL: VENUE:PERPETUAL:BASE-QUOTE@LIN | VENUE:PERPETUAL:BASE-QUOTE@INV
+#   FUTURE:    VENUE:FUTURE:BASE-QUOTE@LIN|INV-YYYYMMDD
+#
+# Routes through the shared UAC builder's passthrough=True escape hatch: this
+# module computes the ALREADY-CORRECT @LIN/@INV-marker symbol string (the UAC
+# builder's own margin_type kwarg still only emits the superseded
+# "-linear-"/"-inverse-" word form), then build_instrument_id() wraps it as
+# VENUE:TYPE:SYMBOL verbatim — exactly the "raw exchange-native id that
+# already encodes its own expiry/strike/right" use case passthrough was built
+# for (deribit_options_adapter.py is the proof-of-concept precedent).
+#
+# Standalone + unit-tested here. Wiring these into adapter.py's live
+# instrument_key construction (currently VENUE:TYPE:BASE-QUOTE for
+# SPOT_PAIR/PERPETUAL, VENUE:TYPE:RAW_ID for FUTURE/OPTION — margin_type is
+# computed but never embedded) is a follow-up: adapter.py has a concurrent
+# sibling edit in flight this session and is out of scope for this change.
+
+
+def _margin_marker(margin_type: MarginType | None) -> str:
+    """Map a MarginType to its canonical ``LIN``/``INV`` token (no leading ``@``)."""
+    if margin_type is MarginType.INVERSE:
+        return "INV"
+    if margin_type is MarginType.LINEAR:
+        return "LIN"
+    return ""
+
+
+def _require_quote_when_marked(base: str, quote: str, marker: str) -> None:
+    """Fail loud when a resolved ``@LIN``/``@INV`` marker has no quote asset.
+
+    Operator ruling 2026-07-18: a linear/inverse marker with NO quote is a
+    contradiction — the marker exists precisely to disambiguate settlement
+    (``USDC`` vs ``USDT`` vs ``USD``), which is impossible without the quote —
+    so the canonical-id builder must NEVER silently drop to a base-only symbol.
+    That silent ``f"{base}-{quote}" if quote else base`` fallback is exactly how
+    265,538 DERIBIT rows lost their quote (``DERIBIT:FUTURE:AVAX@LIN-…`` — marker
+    present, quote dropped). An UNMARKED symbol (``margin_type`` unresolved →
+    no marker) keeps the bare-``BASE`` degrade; only the marker-present /
+    quote-absent contradiction raises.
+    """
+    if marker and not quote:
+        msg = (
+            f"Canonical-id builder: margin marker '@{marker}' resolved but quote asset is empty "
+            f"(base={base!r}) — a linear/inverse marker without a quote is a contradiction "
+            f"(settlement USDC/USDT/USD is indeterminable); refusing to emit a base-only id "
+            f"(operator ruling 2026-07-18: quote is mandatory whenever @LIN/@INV is present)."
+        )
+        raise ValueError(msg)
+
+
+def _build_perpetual_canonical_symbol(base: str, quote: str, margin_type: MarginType | None) -> str:
+    """Build the target PERPETUAL symbol: ``BASE-QUOTE@LIN`` / ``BASE-QUOTE@INV``.
+
+    No date suffix — perpetuals don't expire. Falls back to the bare ``BASE``
+    (no marker) ONLY when ``margin_type`` is unknown, so a caller with an
+    unresolved margin type doesn't silently invent one. When a marker DOES
+    resolve, the quote is mandatory — a marker without a quote raises
+    (``_require_quote_when_marked``), never silently drops to base-only.
+    """
+    marker = _margin_marker(margin_type)
+    _require_quote_when_marked(base, quote, marker)
+    core = f"{base.upper()}-{quote.upper()}" if quote else base.upper()
+    return f"{core}@{marker}" if marker else core
+
+
+def _build_dated_derivative_canonical_symbol(
+    base: str,
+    quote: str,
+    margin_type: MarginType | None,
+    expiry: datetime,
+    strike: Decimal | None = None,
+    option_right: str | None = None,
+) -> str:
+    """Build the target FUTURE/OPTION symbol: ``BASE-QUOTE@LIN|INV-YYYYMMDD[-STRIKE-C|P]``.
+
+    ``YYYYMMDD`` (not Deribit's native ``DDMMMYY``) — string-sortable, per the
+    operator's date-format decision. ``strike``/``option_right`` are appended
+    only when both are given (OPTION); FUTURE callers omit them. The quote is
+    mandatory whenever a marker resolves — a marker without a quote raises
+    (``_require_quote_when_marked``), never silently drops to base-only
+    (operator ruling 2026-07-18).
+    """
+    marker = _margin_marker(margin_type)
+    _require_quote_when_marked(base, quote, marker)
+    core = f"{base.upper()}-{quote.upper()}" if quote else base.upper()
+    if marker:
+        core = f"{core}@{marker}"
+    core = f"{core}-{expiry.strftime('%Y%m%d')}"
+    if strike is not None and option_right:
+        strike_str = str(int(strike)) if strike == strike.to_integral_value() else format(strike.normalize(), "f")
+        core = f"{core}-{strike_str}-{option_right}"
+    return core
+
+
+def _build_canonical_perpetual_key(venue: str, base: str, quote: str, margin_type: MarginType | None) -> str:
+    """Build the full ``VENUE:PERPETUAL:BASE-QUOTE@LIN|INV`` id via the shared UAC builder."""
+    symbol = _build_perpetual_canonical_symbol(base, quote, margin_type)
+    return build_instrument_id(venue, InstrumentType.PERPETUAL, symbol, passthrough=True)
+
+
+def _build_canonical_future_key(
+    venue: str,
+    base: str,
+    quote: str,
+    margin_type: MarginType | None,
+    expiry: datetime,
+) -> str:
+    """Build the full ``VENUE:FUTURE:BASE-QUOTE@LIN|INV-YYYYMMDD`` id via the shared UAC builder."""
+    symbol = _build_dated_derivative_canonical_symbol(base, quote, margin_type, expiry)
+    return build_instrument_id(venue, InstrumentType.FUTURE, symbol, passthrough=True)
+
+
+def _build_canonical_option_key(
+    venue: str,
+    base: str,
+    quote: str,
+    margin_type: MarginType | None,
+    expiry: datetime,
+    strike: Decimal,
+    option_right: str,
+) -> str:
+    """Build the full ``VENUE:OPTION:BASE[-QUOTE]@LIN|INV-YYYYMMDD-STRIKE-C|P`` id via the shared UAC builder.
+
+    The OPTION analog of :func:`_build_canonical_future_key` — no prior venue
+    wired into this shared builder set (Bybit, Kraken-Futures, OKX) lists
+    options, so this is the first ``strike``/``option_right`` consumer of
+    :func:`_build_dated_derivative_canonical_symbol` (which already accepted
+    them). Deribit is a genuine dual-margin-type venue (real inverse
+    USD-quoted BTC/ETH-settled options *and* real linear USDC-quoted/settled
+    options coexist — see ``docs/CEFI_INSTRUMENTS.md`` "Deribit margin
+    types"), so ``margin_type`` is required to disambiguate rather than
+    inferred here — callers resolve it from Deribit's own ``quote_currency``
+    field before calling this.
+    """
+    symbol = _build_dated_derivative_canonical_symbol(base, quote, margin_type, expiry, strike, option_right)
+    return build_instrument_id(venue, InstrumentType.OPTION, symbol, passthrough=True)

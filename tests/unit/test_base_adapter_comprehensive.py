@@ -22,6 +22,7 @@ from instruments_service.reference_data.base_adapter import (
     _RETRY_ATTEMPTS,
     _RETRYABLE_STATUS_CODES,
     BaseReferenceDataAdapter,
+    _RetryableStatusError,
 )
 from instruments_service.reference_data.schemas import (
     CanonicalExpiryCalendar,
@@ -169,26 +170,19 @@ class TestClearCache:
 
 
 # ---------------------------------------------------------------------------
-# _handle_retryable_response
+# _handle_response
 # ---------------------------------------------------------------------------
 
 
-class TestHandleRetryableResponse:
+class TestHandleResponse:
     @pytest.mark.asyncio
-    async def test_retryable_status_returns_none_on_non_last_attempt(self) -> None:
+    async def test_retryable_status_raises_retryable_status_error(self) -> None:
         adapter = _TestAdapter()
         mock_resp = MagicMock()
         mock_resp.status = 429
-        result = await adapter._handle_retryable_response(mock_resp, "https://test", attempt=0, delay=0.0)
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_retryable_status_raises_on_last_attempt(self) -> None:
-        adapter = _TestAdapter()
-        mock_resp = MagicMock()
-        mock_resp.status = 503
-        with pytest.raises(RuntimeError, match="HTTP 503"):
-            await adapter._handle_retryable_response(mock_resp, "https://test", attempt=_RETRY_ATTEMPTS - 1, delay=0.0)
+        with pytest.raises(_RetryableStatusError) as exc_info:
+            await adapter._handle_response(mock_resp, "https://test")
+        assert exc_info.value.status == 429
 
     @pytest.mark.asyncio
     async def test_success_returns_json(self) -> None:
@@ -197,7 +191,7 @@ class TestHandleRetryableResponse:
         mock_resp.status = 200
         mock_resp.json = AsyncMock(return_value={"data": "value"})
         mock_resp.raise_for_status = MagicMock()
-        result = await adapter._handle_retryable_response(mock_resp, "https://test", attempt=0, delay=0.0)
+        result = await adapter._handle_response(mock_resp, "https://test")
         assert result == {"data": "value"}
 
     @pytest.mark.asyncio
@@ -206,8 +200,9 @@ class TestHandleRetryableResponse:
         for status in _RETRYABLE_STATUS_CODES:
             mock_resp = MagicMock()
             mock_resp.status = status
-            result = await adapter._handle_retryable_response(mock_resp, "https://test", attempt=0, delay=0.0)
-            assert result is None
+            with pytest.raises(_RetryableStatusError) as exc_info:
+                await adapter._handle_response(mock_resp, "https://test")
+            assert exc_info.value.status == status
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +259,24 @@ class TestGetWithRetry:
 
         result = await adapter._get_with_retry(mock_session, "https://test")
         assert result == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_retryable_status_exhausted_raises_http_message(self) -> None:
+        adapter = _TestAdapter()
+
+        def _make_503_cm() -> MagicMock:
+            mock_resp = MagicMock()
+            mock_resp.status = 503
+            mock_cm = MagicMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+            mock_cm.__aexit__ = AsyncMock(return_value=None)
+            return mock_cm
+
+        mock_session = MagicMock()
+        mock_session.get.side_effect = [_make_503_cm() for _ in range(_RETRY_ATTEMPTS)]
+
+        with pytest.raises(RuntimeError, match=f"HTTP 503 from https://test after {_RETRY_ATTEMPTS} attempts"):
+            await adapter._get_with_retry(mock_session, "https://test")
 
     @pytest.mark.asyncio
     async def test_passes_params_and_headers(self) -> None:

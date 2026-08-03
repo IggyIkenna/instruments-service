@@ -54,6 +54,7 @@ from unified_api_contracts import (
     VenueMapping,
     classify_venue_error,
     get_prediction_leagues,
+    is_defi_force_include_pool,
     pipeline_mode_for_sports_entity,
 )
 from unified_api_contracts.internal import InstrumentRecord, PreflightSkipReason, validate_instrument_records
@@ -81,13 +82,13 @@ from unified_api_contracts.sports import (
     get_provider_league_id,
     get_source_coverage_start,
     is_any_league_refresh_date,
-    is_in_known_gap,
     is_transfer_window_open,
 )
 from unified_api_contracts.sports import (
     canonicalize_league_id as _uac_canonicalize_league_id,
 )
 from unified_trading_library import (
+    DEFAULT_AS_OF_COLUMNS,
     CaptureStatus,
     DataSink,
     DomainValidationService,
@@ -110,6 +111,7 @@ from unified_trading_library import (
     stamp_available_at_explicit,
 )
 from unified_trading_library import unified_config as _uc
+from unified_trading_library.config_interface.paths.registry import apply_run_tag  # noqa: qg-deep-import
 from unified_trading_library.fixtures import extract_match_lifecycle  # noqa: qg-deep-import
 
 from instruments_service.config import get_config
@@ -166,8 +168,15 @@ class _ModelDumpable(Protocol):
 # stamped with ``BATCH_FOOTYSTATS``. ODDS removal reversed 2026-06-27 (operator
 # decision): footystats ODDS are pre-match snapshot reference data that stays in IS.
 _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
-    # api_football catalog (FIXTURES + per-fixture entities + reference data)
+    # api_football catalog (FIXTURES + per-fixture entities + reference data).
+    # FIXTURES_SCHEDULE/FIXTURES_OUTCOMES are the post-split successor atoms of the
+    # retired "FIXTURES" literal (fixtures_manifest_legacy_backfill_2026_07_24.md) —
+    # kept alongside the legacy key (never looked up directly anymore, but harmless)
+    # so _pipeline_mode_for_sports_data_type() doesn't silently mis-attribute
+    # pipeline_mode via its caller's bare `except KeyError` fallback (writers.py).
     "FIXTURES": PipelineMode.BATCH_API_FOOTBALL,
+    "FIXTURES_SCHEDULE": PipelineMode.BATCH_API_FOOTBALL,
+    "FIXTURES_OUTCOMES": PipelineMode.BATCH_API_FOOTBALL,
     "INJURIES": PipelineMode.BATCH_API_FOOTBALL,
     "FIXTURE_LINEUPS": PipelineMode.BATCH_API_FOOTBALL,
     "FIXTURE_EVENTS": PipelineMode.BATCH_API_FOOTBALL,
@@ -203,9 +212,23 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
 # raises TimestampAlignmentError which per-shard try/except should catch and
 # route to manifest.record_failed. Flip to ``strict`` once warn-mode volume
 # baselines clean across sports adapters (see
-# ``plans/active/instruments_service_write_gate_validation_2026_04_22.md``).
+# ``plans/active/instruments_service_write_gate_validation_2026_04_22.md``). ``available_at``
+# EXCLUDED 2026-07-21 (write-time fetch_completed_at, not lookahead) — issue doc available_at_fetch_completed_at_mismatch
 # ---------------------------------------------------------------------------
-_WRITE_GATE = InstrumentsWriteGate(mode="strict")
+_INSTRUMENTS_SERVICE_AS_OF_COLUMNS: tuple[str, ...] = tuple(c for c in DEFAULT_AS_OF_COLUMNS if c != "available_at")
+_WRITE_GATE = InstrumentsWriteGate(mode="strict", check_columns=_INSTRUMENTS_SERVICE_AS_OF_COLUMNS)
+
+# ---------------------------------------------------------------------------
+# --run-tag CLI flag (instruments_service_run_tag_flag_not_applied_2026_07_08):
+# the active run's GCS output prefix tag. "batch" (default) = no prefix; any
+# other value (e.g. "t1-recon") routes writes under that tag's own namespace,
+# per unified-trading-pm/codex/08-workflows/t1-batch-dag.md's documented
+# {run_tag}/{service_name}/{date}/ convention. Set exactly once per process,
+# at the top of process_instruments(), from the parsed --run-tag CLI arg
+# threaded down via InstrumentsHandler._wire_cli_filters_from_args(). Consumed
+# by _sports_ref_sink_for() (sports_fixtures.py) via apply_run_tag().
+# ---------------------------------------------------------------------------
+_RUN_TAG: str = "batch"
 
 
 # ---------------------------------------------------------------------------
@@ -394,9 +417,6 @@ from instruments_service.engine.orchestrator.catalogue import (
     _write_catalogue_record as _write_catalogue_record,
 )
 from instruments_service.engine.orchestrator.catalogue import (
-    refresh_catalogue as refresh_catalogue,
-)
-from instruments_service.engine.orchestrator.catalogue import (
     resolve_instruments_store_kind as resolve_instruments_store_kind,
 )
 from instruments_service.engine.orchestrator.defi import (
@@ -478,6 +498,9 @@ from instruments_service.engine.orchestrator.sfi import (
     _write_sfi_league_mapping as _write_sfi_league_mapping,
 )
 from instruments_service.engine.orchestrator.sink import (
+    _assert_not_cross_domain_contamination as _assert_not_cross_domain_contamination,
+)
+from instruments_service.engine.orchestrator.sink import (
     _coerce_adapter_output as _coerce_adapter_output,
 )
 from instruments_service.engine.orchestrator.sink import (
@@ -505,6 +528,9 @@ from instruments_service.engine.orchestrator.sports import (
     _pipeline_mode_for_sports_data_type as _pipeline_mode_for_sports_data_type,
 )
 from instruments_service.engine.orchestrator.sports import (
+    _round_from_af_response as _round_from_af_response,
+)
+from instruments_service.engine.orchestrator.sports import (
     _set_cached_leagues as _set_cached_leagues,
 )
 from instruments_service.engine.orchestrator.sports import (
@@ -516,6 +542,15 @@ from instruments_service.engine.orchestrator.sports import (
 from instruments_service.engine.orchestrator.sports import (
     _should_skip_date_for_per_league as _should_skip_date_for_per_league,
 )
+from instruments_service.engine.orchestrator.sports import (
+    _status_from_af_response as _status_from_af_response,
+)
+from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+    _captured_fixture_ids_by_league as _captured_fixture_ids_by_league,
+)
+from instruments_service.engine.orchestrator.sports_fixture_prefetch_skip import (
+    _read_captured_league_fixture_ids_for_entity as _read_captured_league_fixture_ids_for_entity,
+)
 from instruments_service.engine.orchestrator.sports_fixtures import (
     _build_fixture_league_map_from_gcs as _build_fixture_league_map_from_gcs,
 )
@@ -526,10 +561,10 @@ from instruments_service.engine.orchestrator.sports_fixtures import (
     _per_league_fixtures_data_unchanged as _per_league_fixtures_data_unchanged,
 )
 from instruments_service.engine.orchestrator.sports_fixtures import (
-    _read_existing_per_league_fixture_ids as _read_existing_per_league_fixture_ids,
+    _read_fixture_ids_from_gcs as _read_fixture_ids_from_gcs,
 )
 from instruments_service.engine.orchestrator.sports_fixtures import (
-    _read_fixture_ids_from_gcs as _read_fixture_ids_from_gcs,
+    _read_per_league_entity_df as _read_per_league_entity_df,
 )
 from instruments_service.engine.orchestrator.sports_fixtures import (
     _resolve_sports_ref_blob as _resolve_sports_ref_blob,
@@ -560,6 +595,18 @@ from instruments_service.engine.orchestrator.sports_fixtures import (
 )
 from instruments_service.engine.orchestrator.sports_reference import (
     _fetch_sports_reference_data as _fetch_sports_reference_data,
+)
+from instruments_service.engine.orchestrator.sports_reference_core import (
+    _list_present_parquet_leagues as _list_present_parquet_leagues,
+)
+from instruments_service.engine.orchestrator.sports_reference_core import (
+    _manifest_captured_leagues_for_data_type as _manifest_captured_leagues_for_data_type,
+)
+from instruments_service.engine.orchestrator.sports_reference_fixture_entity_gates import (
+    _dedupe_player_stats_df as _dedupe_player_stats_df,
+)
+from instruments_service.engine.orchestrator.sports_reference_fixture_entity_gates import (
+    _normalize_fixture_events_schema as _normalize_fixture_events_schema,
 )
 from instruments_service.engine.orchestrator.transfermarkt import (
     _cache_is_fresh as _cache_is_fresh,
@@ -598,6 +645,9 @@ from instruments_service.engine.orchestrator.understat import (
     _run_understat_shots_date as _run_understat_shots_date,
 )
 from instruments_service.engine.orchestrator.venue_core import (
+    _CEFI_TRADFI_THIN_COLLAPSE_RATIO as _CEFI_TRADFI_THIN_COLLAPSE_RATIO,
+)
+from instruments_service.engine.orchestrator.venue_core import (
     _SPORTS_PROVIDER_VENUES as _SPORTS_PROVIDER_VENUES,
 )
 from instruments_service.engine.orchestrator.venue_core import (
@@ -605,6 +655,12 @@ from instruments_service.engine.orchestrator.venue_core import (
 )
 from instruments_service.engine.orchestrator.venue_core import (
     _VENUE_ADAPTER_EPOCH as _VENUE_ADAPTER_EPOCH,
+)
+from instruments_service.engine.orchestrator.venue_core import (
+    _enforce_monotonicity as _enforce_monotonicity,
+)
+from instruments_service.engine.orchestrator.venue_core import (
+    _get_manifest_high_watermarks as _get_manifest_high_watermarks,
 )
 from instruments_service.engine.orchestrator.venue_core import (
     _get_venue_epoch as _get_venue_epoch,
@@ -631,13 +687,7 @@ from instruments_service.engine.orchestrator.venue_core import (
     reject_junk_instruments as reject_junk_instruments,
 )
 from instruments_service.engine.orchestrator.weather import (
-    _extract_fixture_venue_ids as _extract_fixture_venue_ids,
-)
-from instruments_service.engine.orchestrator.weather import (
     _fetch_weather_data as _fetch_weather_data,
-)
-from instruments_service.engine.orchestrator.weather import (
-    _load_venue_coordinates as _load_venue_coordinates,
 )
 from instruments_service.engine.orchestrator.writers import (
     _build_market_lifecycle_df as _build_market_lifecycle_df,
@@ -646,7 +696,10 @@ from instruments_service.engine.orchestrator.writers import (
     _canonical_manifest_venue_chain as _canonical_manifest_venue_chain,
 )
 from instruments_service.engine.orchestrator.writers import (
-    _derive_instrument_type as _derive_instrument_type,
+    _instrument_availability_sink_for as _instrument_availability_sink_for,
+)
+from instruments_service.engine.orchestrator.writers import (
+    _split_by_instrument_type as _split_by_instrument_type,
 )
 from instruments_service.engine.orchestrator.writers import (
     _write_futures_contracts as _write_futures_contracts,
@@ -679,10 +732,12 @@ __all__ = [
     "SOCCER_FOOTBALL_INFO_IDS",
     "UTC",
     "_AF_LOGO_RE",
+    "_CEFI_TRADFI_THIN_COLLAPSE_RATIO",
     "_DEFI_VENUES",
     "_ENTITY_NAME_TO_PIPELINE_MODE",
     "_Q5_SCHEDULE_COLUMNS",
     "_Q6_OUTCOME_COLUMNS",
+    "_RUN_TAG",
     "_SERVICE_NAME",
     "_SFI_CACHE_STALENESS_HOURS",
     "_SOLANA_DEFI_VENUES",
@@ -719,6 +774,7 @@ __all__ = [
     "VenueMapping",
     "_ModelDumpable",
     "_af_id_from_canonical",
+    "_assert_not_cross_domain_contamination",
     "_build_defi_venues",
     "_build_fixture_league_map_from_gcs",
     "_build_market_lifecycle_df",
@@ -729,17 +785,18 @@ __all__ = [
     "_cached_teams_df",
     "_canonical_league_id",
     "_canonical_manifest_venue_chain",
+    "_captured_fixture_ids_by_league",
     "_check_emission_policy",
     "_classify_adapter_failure",
     "_coerce_adapter_output",
     "_compute_prediction_shards",
     "_count_per_venue",
+    "_dedupe_player_stats_df",
     "_defi_universe_cache",
     "_defi_universe_retryable",
-    "_derive_instrument_type",
     "_empty_lifecycle_columns",
     "_enforce_defi_monotonicity",
-    "_extract_fixture_venue_ids",
+    "_enforce_monotonicity",
     "_extract_prediction_canonical_group",
     "_fetch_footystats_matches",
     "_fetch_footystats_predictions",
@@ -752,19 +809,24 @@ __all__ = [
     "_gated_sink_write",
     "_get_defi_manifest_high_watermarks",
     "_get_instruments_bucket",
+    "_get_manifest_high_watermarks",
     "_get_or_fetch_defi_universe",
     "_get_venue_epoch",
+    "_instrument_availability_sink_for",
     "_is_in_canonical_write_universe",
     "_lifecycle_columns_from_af_response",
-    "_load_venue_coordinates",
+    "_list_present_parquet_leagues",
+    "_manifest_captured_leagues_for_data_type",
     "_master_blob_path",
     "_maybe_emit_drift_anomaly",
     "_merge_with_existing_per_league_parquet",
+    "_normalize_fixture_events_schema",
     "_normalize_wrapped_token",
     "_per_league_fixtures_data_unchanged",
     "_pipeline_mode_for_sports_data_type",
-    "_read_existing_per_league_fixture_ids",
+    "_read_captured_league_fixture_ids_for_entity",
     "_read_fixture_ids_from_gcs",
+    "_read_per_league_entity_df",
     "_read_sfi_league_mapping",
     "_read_transfermarkt_team_mapping",
     "_resolve_sports_ref_blob",
@@ -778,6 +840,7 @@ __all__ = [
     "_should_skip_date_for_per_league",
     "_should_skip_shard",
     "_snapshot_blob_path_player_values",
+    "_split_by_instrument_type",
     "_sports_ref_canonical_blob_path",
     "_sports_ref_legacy_blob_path",
     "_sports_ref_pm",
@@ -800,6 +863,7 @@ __all__ = [
     "_write_transfermarkt_team_mapping",
     "_write_venue",
     "_write_venues_from_teams",
+    "apply_run_tag",
     "assert_available_at_present",
     "asyncio",
     "build_futures_contracts",
@@ -847,7 +911,7 @@ __all__ = [
     "get_venues_for_asset_groups",
     "io",
     "is_any_league_refresh_date",
-    "is_in_known_gap",
+    "is_defi_force_include_pool",
     "is_league_entity_covered",
     "is_non_trading_day",
     "is_transfer_window_open",
@@ -865,7 +929,6 @@ __all__ = [
     "publish_with_policy",
     "re",
     "read_availability_index",
-    "refresh_catalogue",
     "resolve_bucket_name",
     "resolve_instruments_store_kind",
     "sfi",

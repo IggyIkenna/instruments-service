@@ -7,7 +7,7 @@ bounds NOW fire a specific ``EXPECTED_*`` reason via the extended
 
 Three integration scenarios:
 
-1. **Dry-run smoke** — planted catalog-before-listing row for DRIFT-SOLANA produces a
+1. **Dry-run smoke** — planted catalog-before-listing row for a DeFi venue produces a
    "would-correct → EXPECTED_INSTRUMENT_NOT_LISTED" CSV entry; an active-instrument
    row produces no correction entry; return code 0.
 2. **Apply-flips fixture** — same planted rows pass through the write path; the

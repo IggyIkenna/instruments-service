@@ -20,6 +20,7 @@ from unified_api_contracts import (
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -65,6 +66,16 @@ _FUNDING_PROBE_CONCURRENCY = 4
 _FUNDING_PROBE_TIMEOUT_S = 20.0
 _FUNDING_PROBE_RETRIES = 3
 _FUNDING_PROBE_BACKOFF_BASE_S = 0.5
+
+# Real margin type (2026-07-09, instrument_id_format_canonicalization_2026_07_08.md
+# finding 1's PERPETUAL scope-expansion) — confirmed live: docs.asterdex.com states
+# "Aster Perpetuals supports perpetual futures trading fully settled in USDT", and
+# the real live exchangeInfo pull already done 2026-07-08 (fapi.asterdex.com/fapi/v1/
+# exchangeInfo, 509 perp symbols) shows 100% stablecoin quoteAsset distribution
+# (504 USDT / 3 USD1 / 2 bare "U") — zero coin-margined (inverse) pairs. Derives the
+# @LIN/@INV instrument_id marker FROM this field so the two can never drift.
+_MARGIN_TYPE = MarginType.LINEAR
+_MARGIN_MARKER = _MARGIN_TYPE.value[:3].upper()
 
 
 def _classify_aster_error(exc: Exception, status: int | None = None) -> str:
@@ -193,16 +204,40 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
         # available_from is the true listing date (history-accurate universe).
         listing_dates = await self._probe_earliest_funding_dates([e[0] for e in eligible])
         for raw_symbol, base_asset, quote_asset, tick_size, lot_size in eligible:
+            aster_instrument_key = build_instrument_id(
+                "ASTER", InstrumentType.PERPETUAL, f"{base_asset}-{quote_asset}@{_MARGIN_MARKER}"
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"ASTER:PERP:{raw_symbol}",
+                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
+                    # (2026-07-08 canonicalization — dropped the PERP shorthand + the
+                    # raw concatenated exchange symbol in favour of the real
+                    # per-instrument settlement currency already parsed above
+                    # (confirmed live: 504/509 real ASTER perps quote USDT,
+                    # spot-checked via fapi.asterdex.com/fapi/v1/exchangeInfo
+                    # 2026-07-08. 2026-07-09 scope-expansion — added the real @LIN
+                    # margin marker, see _MARGIN_TYPE above for the verification
+                    # method). SSOT:
+                    # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
+                    # finding 1 (2026-07-09 PERPETUAL scope-expansion) + finding 3+4;
+                    # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
+                    # Routed through the shared UAC builder (2026-07-09 retrofit,
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) — the
+                    # marker is embedded in the symbol passed to the builder (PERPETUAL's
+                    # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
+                    # convention DeFi POOL fee-tiers already use).
+                    instrument_key=aster_instrument_key,
+                    # No CeFi raw-code-to-human-name translation gap (see other CeFi
+                    # adapters' identical comment) — canonical_instrument_id mirrors
+                    # instrument_key.
+                    canonical_instrument_id=aster_instrument_key,
                     venue="ASTER",
                     raw_symbol=raw_symbol,
                     instrument_type=InstrumentType.PERPETUAL,
                     base_asset=base_asset,
                     quote_asset=quote_asset,
                     settle_asset=quote_asset,
-                    margin_type=MarginType.LINEAR,
+                    margin_type=_MARGIN_TYPE,
                     tick_size=tick_size,
                     min_size=lot_size,
                     contract_size=Decimal("1"),

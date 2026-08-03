@@ -13,6 +13,9 @@ Plan: instruments_service_metadata_refactor_2026_04_29 Phase 2b.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
+import pytest
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
 
 from instruments_service.reference_data.adapters.defi.balancer import (
@@ -229,9 +232,10 @@ class TestUniswapV2MetadataPopulation:
 
 
 class TestBalancerMetadataPopulation:
-    def test_pool_record_populates_all_metadata_fields(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_record_populates_all_metadata_fields(self) -> None:
         adapter = BalancerReferenceDataAdapter(chain="ETHEREUM")
-        record = adapter._pool_to_record(_balancer_pool_fixture())
+        record = await adapter._pool_to_record(_balancer_pool_fixture())
         assert record is not None
         assert record.pool_address == "0x1111111111111111111111111111111111111111"
         # 0.003 * 10000 = 30 bps
@@ -244,17 +248,49 @@ class TestBalancerMetadataPopulation:
         assert record.quote_asset_contract_address == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
         assert record.quote_asset_decimals == 6
 
-    def test_pool_record_missing_swap_fee_yields_none(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_record_missing_swap_fee_yields_none(self) -> None:
         adapter = BalancerReferenceDataAdapter(chain="ETHEREUM")
         pool = _balancer_pool_fixture()
         # Drop the entire dynamicData block — swap fee absent
         pool["dynamicData"] = {"totalLiquidity": "1000000"}
-        record = adapter._pool_to_record(pool)
+        record = await adapter._pool_to_record(pool)
         assert record is not None
         assert record.pool_fee_tier is None
         # Other metadata still populated
         assert record.pool_address == pool["address"]
         assert record.base_asset_decimals == 18
+
+    @pytest.mark.asyncio
+    async def test_pool_record_blank_symbol_resolver_succeeds(self) -> None:
+        """A poolToken has an address but no symbol; the UTL resolver names it (NEW behavior,
+        2026-07-21 "eliminate the address/UUID fallback" ruling)."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+
+        adapter = BalancerReferenceDataAdapter(chain="ETHEREUM")
+        pool = _balancer_pool_fixture()
+        tokens = pool["poolTokens"]
+        assert isinstance(tokens, list)
+        del tokens[0]["symbol"]
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value="weth")):
+            record = await adapter._pool_to_record(pool)
+        assert record is not None
+        assert record.base_asset == "WETH"
+
+    @pytest.mark.asyncio
+    async def test_pool_record_blank_symbol_resolver_also_fails(self) -> None:
+        """A poolToken has an address but no symbol AND the resolver has no answer -> honest UNKNOWN."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+
+        adapter = BalancerReferenceDataAdapter(chain="ETHEREUM")
+        pool = _balancer_pool_fixture()
+        tokens = pool["poolTokens"]
+        assert isinstance(tokens, list)
+        del tokens[0]["symbol"]
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value=None)):
+            record = await adapter._pool_to_record(pool)
+        assert record is not None
+        assert record.base_asset == "UNKNOWN"
 
 
 # --- Curve ------------------------------------------------------------------

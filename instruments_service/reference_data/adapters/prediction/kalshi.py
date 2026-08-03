@@ -23,7 +23,9 @@ if TYPE_CHECKING:
 
 import aiohttp
 from unified_api_contracts import (
+    AssetGroup,
     KalshiMarket,
+    build_canonical_instrument_id,
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
@@ -32,7 +34,11 @@ from unified_api_contracts.predictions import (
     CanonicalQuestionGroup,
     MarketLifecycle,
     classify_kalshi_to_canonical_group,
+    parse_kalshi_sports_fixture,
+    underlying_for_group,
+    validate_canonical_question_group,
 )
+from unified_api_contracts.sports import build_fixture_id, build_team_id
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -41,6 +47,13 @@ from ...schemas import (
     CanonicalOptionsChain,
     FundingRateRef,
     OHLCVRef,
+)
+from .fixture_match import (
+    FixtureMatchAttributes,
+    PredictionFixtureResolver,
+    football_league_for_sports_underlying,
+    parse_kalshi_soccer_participants,
+    register_fixture_match,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,15 +76,29 @@ _HISTORICAL_GAP_EDGE_DAYS = 3
 # 2000 cap slots in the plain `/markets?status=open` snapshot. LIVE path only.
 # Cross-venue-relevant Kalshi categories to series-scope enumerate. Crypto /
 # Economics / Financials carry the crypto-daily + macro + index + FX families;
-# Sports carries the per-game markets (KX{LEAGUE}…GAME / *SPREAD / *TOTAL / *NRFI)
-# that map to the shared SPORTS_{LEAGUE}_{BETTYPE} groups; Politics is included so
-# election/geo markets are captured (the classifier currently OTHERs most — they
-# ride along for when they become canonically grouped). The non-OTHER classifier
-# filter keeps only cross-venue-relevant series, so adding broad categories is
-# cheap (all-in-memory classification; only matched series are fetched).
-_SERIES_CATEGORIES: tuple[str, ...] = ("Crypto", "Economics", "Financials", "Sports", "Politics")
+# Commodities carries GOLD_UP_DOWN_DAILY/CRUDE_OIL_UP_DOWN_DAILY/NATGAS_UP_DOWN_DAILY
+# (confirmed live 2026-07-31: Kalshi's own /series/KXGOLDD reports
+# category="Commodities", NOT one of Crypto/Economics/Financials — its real,
+# currently-open daily gold markets were silently never discovered before this
+# category was added, despite classify_kalshi_to_canonical_group already having
+# the KXGOLDD->GOLD_UP_DOWN_DAILY mapping wired); Sports carries the per-game
+# markets (KX{LEAGUE}…GAME / *SPREAD / *TOTAL / *NRFI) that map to the shared
+# SPORTS_{LEAGUE}_{BETTYPE} groups; Politics is included so election/geo markets
+# are captured (the classifier currently OTHERs most — they ride along for when
+# they become canonically grouped). The non-OTHER classifier filter keeps only
+# cross-venue-relevant series, so adding broad categories is cheap (all-in-memory
+# classification; only matched series are fetched).
+_SERIES_CATEGORIES: tuple[str, ...] = ("Crypto", "Economics", "Financials", "Commodities", "Sports", "Politics")
 _MAX_SERIES_PAGES = 5  # per-series page budget (≤1000 markets per series)
-_MAX_SERIES_TOTAL = 350  # ceiling on total series fetched across all categories
+# Ceiling on total series fetched across all categories. Was 350 pre-Commodities;
+# live-measured 2026-07-31 that Commodities alone contributes 12 non-OTHER
+# classified series (KXGOLDD/KXGOLDEOY/KXGOLDMON/KXGOLDH/KXGOLD15M/KXGOLDW/
+# KXGOLDYEAR/KXGOLDDIRY/KXGOLDVSSILVER/KXSILVERMON/KXSILVERW/KXSILVERD) — bumped
+# by exactly that amount so adding Commodities doesn't silently starve the
+# already-scanned categories (Sports in particular) of their prior share of the
+# shared cap, confirmed by an A/B live comparison (Sports records: 1440 without
+# Commodities in the scan vs 978 with it in, both hitting the old cap of 350).
+_MAX_SERIES_TOTAL = 362  # ceiling on total series fetched across all categories
 # Rate-limit guards for the series-scoped fan-out: ~40 non-OTHER series fired
 # back-to-back overruns Kalshi's read limit (HTTP 429). A small inter-series
 # delay (~3 req/s) keeps it under the limit, and a bounded exp-backoff retry
@@ -161,6 +188,24 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         self._kalshi_key_id, self._kalshi_private_key_pem = self._parse_kalshi_creds(api_key)
         self._loaded_private_key: RSAPrivateKey | None = None  # lazily loaded crypto key
         self._historical_cutoff: date_cls | None = None  # lazily resolved
+        # Phase-E Leg-2 (E2): lazy resolver for the additive af_fixture_id soccer
+        # join. Reads the shared FIXTURES parquet once per (league, day); GCS reads
+        # degrade to honest-absence, so it is safe to build even with no creds.
+        self._fixture_resolver_instance: PredictionFixtureResolver | None = None
+
+    @property
+    def _fixture_resolver(self) -> PredictionFixtureResolver:
+        """Lazily-built resolver for the Kalshi soccer af_fixture_id join (E2).
+
+        One instance per adapter run so the per-(league, day) FIXTURES lookup is
+        downloaded once and reused for every soccer market on that day (the SAME
+        caching contract + resolver plumbing the Polymarket path uses — no new GCS
+        walk). Its GCS reads degrade to ``NO_FIXTURE_DATA``, so building it with no
+        cloud creds is safe (unit-test context yields honest-absence, not a crash).
+        """
+        if self._fixture_resolver_instance is None:
+            self._fixture_resolver_instance = PredictionFixtureResolver()
+        return self._fixture_resolver_instance
 
     @property
     def venue(self) -> str:
@@ -767,21 +812,50 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         self._last_markets.append(market)
         event_ticker = market.event_ticker or ticker
         series_ticker = getattr(market, "series_ticker", None) or event_ticker
-        title = getattr(market, "title", None) or getattr(market, "subtitle", None) or ticker
+        # Human title from venue truth ONLY (no ticker fallback) — see ``question`` below:
+        # the ticker is NOT a human question, so a market with no real title must yield
+        # ``question=None`` (honest-absence), letting raw_symbol=event_ticker be the label
+        # floor, symmetric with the Polymarket adapter. ``title`` is used solely to build
+        # ``question`` now (the old ``symbol=`` consumer was removed).
+        title = getattr(market, "title", None) or getattr(market, "subtitle", None)
+        # question (uac InstrumentRecord.question): the human-readable market
+        # question/title threaded onto the record (previously computed and passed
+        # as symbol=, which InstrumentRecord does not declare, so pydantic's
+        # extra='ignore' silently DROPPED it every capture). The workflow measured
+        # `title — yes_sub_title` is 100% unique vs 43.3% for `title` alone
+        # (KalshiMarket carries yes_sub_title), so compose it when yes_sub_title is
+        # present; else the bare title. Honest-None left to raw_symbol as the floor.
+        yes_sub_title = getattr(market, "yes_sub_title", None)
+        if title and yes_sub_title:
+            question = f"{title} — {yes_sub_title}"
+        elif title:
+            question = title
+        else:
+            question = None  # honest-absence: no human title → raw_symbol is the floor
         base_asset = str(series_ticker)[:50] if series_ticker else ticker[:50]
         expiry = self._parse_close_time(market.close_time)
-        status_raw = getattr(market, "status", None)
-        is_active = str(status_raw).lower() == "active" if status_raw else True
         tick_raw = getattr(market, "tick_size", None)
         tick_size = Decimal(str(tick_raw)) if tick_raw else Decimal("0.01")
         min_order_raw = getattr(market, "min_order_size", None)
         min_order = Decimal(str(min_order_raw)) if min_order_raw else Decimal("1")
+        # Canonical question group — the SAME classifier classify_lifecycle() uses
+        # for MarketLifecycle.canonical_group (computed on the market-level ticker,
+        # matching classify_lifecycle's own convention). Computed ONCE here and
+        # threaded into classify_lifecycle() (reuse, not reclassify) per
+        # prediction_canonical_identity_migration_2026_07_08.md todo 1.
+        group = classify_kalshi_to_canonical_group(ticker=ticker) or CanonicalQuestionGroup.OTHER
+        # Re-drift guard (prediction_phase_ab_residuals_2026_07_24.md A2 / batch1 todo
+        # "route every prediction id/underlying/CQG writer through the shared canonical
+        # builder + a QG that fails a non-canonical ... on write") — group.value is a
+        # StrEnum member so this is always canonical today; validated anyway so a future
+        # classifier regression rejects at the writer instead of silently persisting.
+        validate_canonical_question_group(group.value)
         # Per CLAUDE.md "Prediction market lifecycle timing": carry
         # market_created_at + settlement_time on the InstrumentRecord so
         # MTDS CLOB capture + features-* compute can gate ticks. Full
         # lifecycle row (with canonical_question_group + current_status)
         # rides the MARKET_LIFECYCLE data_type alongside.
-        lifecycle = self.classify_lifecycle(market)
+        lifecycle = self.classify_lifecycle(market, group=group)
         # Universe-membership floor (fixes silent-empty KALSHI universe, 2026-06-22):
         # Kalshi's live `/markets?status=open` snapshot stamps `open_time` as an
         # intraday timestamp on the CURRENT day (e.g. 2026-06-22T13:21Z). The IS
@@ -795,10 +869,81 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         # tick-gating; this floor only governs day-grain universe membership.
         _created = lifecycle.market_created_at if lifecycle else None
         _afd = _created.replace(hour=0, minute=0, second=0, microsecond=0) if _created else None
+        # Canonical instrument_key: VENUE:TYPE:SYMBOL (2026-07-09 fix —
+        # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 7). Before this,
+        # instrument_key was the bare ticker with zero VENUE:TYPE: structure — the
+        # only asset group missing it. Kalshi tickers are already upper-case by
+        # convention, so this is byte-identical to passthrough=True for this venue
+        # (unlike Polymarket's condition_id, kept consistent by NOT passing
+        # passthrough=True here either — see polymarket/parsing.py's fuller note).
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.PREDICTION, self.venue, InstrumentType.PREDICTION_MARKET, ticker
+        )
+        # underlying (prediction_canonical_identity_migration_2026_07_08.md todo 1 /
+        # docs/PREDICTION_INSTRUMENTS.md § "Canonical identity model" §3 item 2): the
+        # SAME classify_kalshi_to_canonical_group() -> underlying_for_group() pipeline
+        # that already runs above for MarketLifecycle.canonical_group, applying
+        # cross_venue_mapping.py::_build_mapping()'s existing convention — sports
+        # fixtures don't have a single scalar underlying (None, "not applicable").
+        # Non-sports groups mostly resolve to a NAMED underlying (BTC, CPI, TRUMP,
+        # GEO_ISRAEL_IRAN, OSCARS, …) — PredictionUnderlying.OTHER.value is the
+        # honest catch-all reserved for genuinely-unclassified markets (cqg OTHER),
+        # not a blanket "politics/geo" bucket.
+        underlying_axis = underlying_for_group(group)
+        underlying = None if underlying_axis.value.startswith("SPORTS_") else underlying_axis.value
+        # Phase-E Leg-2 (prediction_consolidated_closeout_2026_07_18.md E2): additive
+        # af_fixture_id fixture-match stamp for Kalshi SOCCER markets. Kalshi encodes
+        # the two clubs in the human `title` ("Liverpool vs Brentford Winner?"), NOT in
+        # a team registry, so we parse the participant pair off the title and feed it
+        # into the SAME `validate_team_resolution` alias index + FIXTURES-parquet
+        # resolver the Polymarket path uses (A4's `resolve()` plumbing — no new GCS
+        # walk). A club whose Kalshi rendering IS in the alias index resolves to a real
+        # canonical id (→ MATCHED when the fixture parquet is present, else
+        # NO_FIXTURE_DATA); a rendering that is genuinely absent stays honest
+        # UNRESOLVED_TEAM_NAME (never a fake value). When the title carries no clean
+        # two-participant "X vs Y" pair (or there is no close date to key the day
+        # lookup), we fall back to the league-only honest-absence record. Side-table
+        # keyed by the SAME instrument_key process_write._records_to_dataframe joins by;
+        # parquet-column materialisation is the DEFERRED shared-file join.
+        _football = football_league_for_sports_underlying(underlying_axis.value)
+        if _football is not None:
+            _canonical_league_id, _af_league_id = _football
+            _participants = parse_kalshi_soccer_participants(title)
+            if _participants is not None and expiry is not None:
+                _home, _away = _participants
+                fixture_attrs = self._fixture_resolver.resolve(_canonical_league_id, _home, _away, expiry.date())
+            else:
+                fixture_attrs = FixtureMatchAttributes.team_unresolved(
+                    af_league_id=_af_league_id,
+                    fixture_date=expiry.date().isoformat() if expiry else None,
+                )
+            register_fixture_match(instrument_key, fixture_attrs)
+        # Fixture-pairing residual (prediction_satellite_ao_dispatch_batch6-008): mirror the
+        # Polymarket adapter's ALREADY-SHIPPED sports_canonical_instrument_id computation
+        # (polymarket/parsing.py::_build_instrument_id) so Kalshi sports markets ALSO get the
+        # Sports asset group's own local (no-network) fixture id stamped onto
+        # canonical_instrument_id, for EVERY league fixture_parsing.py covers (MLB/NFL/NBA/
+        # tennis/soccer) — not just the soccer af_fixture_id path above. Reuse, not
+        # reinvention: build_fixture_id/build_team_id are the SAME builders the Sports asset
+        # group's own catalogue uses, so a Kalshi and a Polymarket market on the identical
+        # real-world fixture with IDENTICAL venue-rendered team-name strings get
+        # byte-identical canonical_instrument_id. Honest-absence (None) when the title
+        # doesn't parse to a fixture (season-future/award — parse_kalshi_sports_fixture
+        # returns None), never a guessed id.
+        sports_canonical_instrument_id: str | None = None
+        if underlying_axis.value.startswith("SPORTS_"):
+            _fixture = parse_kalshi_sports_fixture(event_ticker or ticker, title or "")
+            if _fixture is not None:
+                sports_canonical_instrument_id = build_fixture_id(
+                    _fixture.league,
+                    build_team_id(_fixture.home),
+                    build_team_id(_fixture.away),
+                    _fixture.fixture_date.isoformat(),
+                )
         return InstrumentRecord(
-            instrument_key=ticker,
+            instrument_key=instrument_key,
             venue=self.venue,
-            symbol=str(title)[:100],
+            question=question,
             raw_symbol=event_ticker,
             instrument_type=InstrumentType.PREDICTION_MARKET,
             base_asset=base_asset,
@@ -811,10 +956,15 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             expiry=expiry,
             strike=None,
             option_type=None,
-            is_active=is_active,
-            updated_at=now,
             available_from_datetime=_afd,
             available_to_datetime=lifecycle.settlement_time if lifecycle else None,
+            underlying=underlying,
+            canonical_instrument_id=sports_canonical_instrument_id,
+            # Write-back of the classification already computed above (line ~830) for
+            # `underlying` / `classify_lifecycle` — reused here, not re-derived, so the
+            # instruments-service catalogue-rollup cqg grain can materialise.
+            # prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2 ("249-b").
+            canonical_question_group=group.value,
         )
 
     def _parse_close_time(self, close_time_raw: str | None) -> datetime | None:
@@ -854,12 +1004,23 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             return "settled"
         return "created"
 
-    def classify_lifecycle(self, market: KalshiMarket) -> MarketLifecycle | None:
+    def classify_lifecycle(
+        self, market: KalshiMarket, group: CanonicalQuestionGroup | None = None
+    ) -> MarketLifecycle | None:
         """Build a :class:`MarketLifecycle` for a Kalshi market.
 
         Returns ``None`` when ``ticker`` is missing or ``close_time`` is
         unparseable — without a resolution timestamp the cluster gate
         can't reason about whether the market overlaps a given day.
+
+        ``group`` lets a caller that already classified the market (e.g.
+        ``_parse_market()``, which also needs the group for
+        ``InstrumentRecord.underlying``) pass it in so this method doesn't
+        reclassify — per
+        ``prediction_canonical_identity_migration_2026_07_08.md`` todo 1
+        ("reuse the result, don't reclassify"). Defaults to ``None``, which
+        preserves the original self-contained behaviour for other callers
+        (``get_market_lifecycles()``, direct test invocations).
 
         Lifecycle field derivation:
 
@@ -903,7 +1064,9 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
 
             market_created_at = resolution_time - _td(days=30)
 
-        group = classify_kalshi_to_canonical_group(ticker=ticker) or CanonicalQuestionGroup.OTHER
+        if group is None:
+            group = classify_kalshi_to_canonical_group(ticker=ticker) or CanonicalQuestionGroup.OTHER
+        validate_canonical_question_group(group.value)
         settlement_lag = CANONICAL_GROUP_METADATA[group].settlement_lag
         settlement_time = resolution_time + settlement_lag
 

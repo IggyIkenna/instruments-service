@@ -65,7 +65,7 @@ class TestGetAdapterForCanonicalVenue:
         assert adapter._api_key == "test-key"
 
     def test_defi_solana_venue(self) -> None:
-        adapter = get_adapter_for_canonical_venue("DRIFT-SOLANA")
+        adapter = get_adapter_for_canonical_venue("KAMINO-SOLANA")
         assert adapter is not None
 
     def test_databento_with_date(self) -> None:
@@ -79,6 +79,26 @@ class TestGetAdapterForCanonicalVenue:
     def test_api_football_with_date(self) -> None:
         adapter = get_adapter_for_canonical_venue("API_FOOTBALL", date="2026-03-22")
         assert adapter is not None
+
+    def test_api_football_not_pooled_across_dates(self) -> None:
+        """2026-07-14 regression: the api_football URDI adapter bakes its
+        target date in at construction (``self._date``). Pooling it WITHOUT
+        the date in the pool key made every later date of a multi-date batch
+        run reuse the FIRST date's fixture universe → per-date filter saw 0
+        active instruments → the zero-record path stamped false
+        EXPECTED_NO_FIXTURE markers over real fixture days (GW enrichment
+        content-verification RED, issue
+        sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14).
+        """
+        clear_adapter_pool()
+        a1 = get_adapter_for_canonical_venue("API_FOOTBALL", date="2026-03-22")
+        a2 = get_adapter_for_canonical_venue("API_FOOTBALL", date="2026-03-23")
+        assert a1 is not a2, "api_football adapter must not be pooled across dates"
+        assert a1._date == "2026-03-22"
+        assert a2._date == "2026-03-23"
+        # Same date → pool hit is still fine.
+        a3 = get_adapter_for_canonical_venue("API_FOOTBALL", date="2026-03-22")
+        assert a3 is a1
 
 
 class TestClearAdapterPool:
@@ -102,8 +122,8 @@ class TestAdapterDataSources:
         assert ADAPTER_DATA_SOURCES["balancer"] == "balancer_api_v3"
 
     def test_solana_no_api_key(self) -> None:
-        assert ADAPTER_DATA_SOURCES["drift"] == ""
         assert ADAPTER_DATA_SOURCES["kamino"] == ""
+        assert ADAPTER_DATA_SOURCES["raydium"] == ""
 
 
 class TestCanonicalVenueToAdapter:
@@ -129,8 +149,8 @@ class TestCanonicalVenueToAdapter:
         assert "API_FOOTBALL" in VENUE_TO_ADAPTER_KEY
 
     def test_solana_defi_venues(self) -> None:
-        assert "DRIFT-SOLANA" in VENUE_TO_ADAPTER_KEY
         assert "KAMINO-SOLANA" in VENUE_TO_ADAPTER_KEY
+        assert "RAYDIUM-SOLANA" in VENUE_TO_ADAPTER_KEY
 
 
 class TestRunRefdataPreflight:
@@ -176,7 +196,7 @@ class TestCreateReferenceDataAdapterExtended:
             assert adapter is not None, f"Factory failed for venue {venue}"
 
     def test_solana_venues(self) -> None:
-        solana_venues = ["drift", "kamino", "raydium", "orca", "marinade"]
+        solana_venues = ["kamino", "raydium", "orca", "marinade"]
         for venue in solana_venues:
             adapter = create_reference_data_adapter(venue)
             assert adapter is not None, f"Factory failed for venue {venue}"

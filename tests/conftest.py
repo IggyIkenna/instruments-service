@@ -76,34 +76,6 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: mark test as integration test (requires external services)")
 
 
-def get_config(key: str, default: str | None = None) -> str | None:
-    """
-    Get configuration value from environment or instruments_config.
-
-    Args:
-        key: Configuration key to retrieve
-        default: Default value if key not found
-
-    Returns:
-        Configuration value or default
-    """
-    # First try environment variable via config
-    from unified_config_interface import UnifiedCloudConfig
-
-    config = UnifiedCloudConfig()
-    # For test configuration, allow fallback to raw os.getenv
-    env_value = getattr(config, key.lower(), None) or os.getenv(key)
-    if env_value is not None:
-        return env_value
-
-    # Then try instruments_config
-    config_key = key.lower()
-    if hasattr(instruments_config, config_key):
-        return getattr(instruments_config, config_key)
-
-    return default
-
-
 @pytest.fixture(scope="session")
 def gcp_auth_info():
     """Resolve GCP credentials using SA key file or ADC."""

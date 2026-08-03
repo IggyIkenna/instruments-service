@@ -73,7 +73,9 @@ def test_build_market_record_sol_usdc() -> None:
     assert record is not None
     assert isinstance(record, InstrumentRecord)
     assert record.venue == "PHOENIX-SOLANA"
-    assert record.instrument_key == "PHOENIX-SOLANA:SPOT:SOL-USDC"
+    # Key TYPE segment is the real SPOT_PAIR enum value (minted via
+    # build_canonical_instrument_id), not the pre-fix `:SPOT:` shorthand.
+    assert record.instrument_key == "PHOENIX-SOLANA:SPOT_PAIR:SOL-USDC"
     assert record.raw_symbol == "4DoNfFBfF7UokCC2FQzriy7yHK6DY6NVdYpuekQ5pRgg"
     assert record.instrument_type == InstrumentType.SPOT_PAIR
     assert record.base_asset == "SOL"

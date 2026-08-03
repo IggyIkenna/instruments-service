@@ -23,6 +23,21 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SMOKE_PATH = _REPO_ROOT / "scripts" / "smoke_matrix.py"
 
+# Shared fake GCP project id for the prediction-bucket resolution tests below.
+# NOT the real prod project id (the codex "Hardcoded prod project ID in tests"
+# gate flags that literal wherever it appears under tests/) — a single
+# project-id-SHAPED placeholder referenced from one constant instead of typed
+# inline at each call site. Audited 2026-07-25
+# (instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #2):
+# every one of the 5 sites that used to spell out the real project id is
+# either (a) `resolve_test_bucket("prediction", ...)`'s `project_id` arg, which
+# that function's prediction branch never reads at all (it delegates straight
+# to `resolve_bucket_name(kind="instruments-store-prediction", ...)` with no
+# project_id), or (b) a monkeypatched return value asserted only for
+# self-consistency — so this constant's actual value is never exercised as a
+# "real project-id-shaped string"; any placeholder is a safe drop-in.
+_TEST_PROJECT_ID = "test-project"
+
 
 def _load_smoke_module() -> ModuleType:
     """Import scripts/smoke_matrix.py as a module (scripts/ isn't packaged)."""
@@ -136,6 +151,31 @@ def test_enumerate_cells_sports_emits_api_football_first(smoke: ModuleType) -> N
     assert providers_in_order[0] == "API_FOOTBALL", f"expected API_FOOTBALL first, got: {providers_in_order[:3]}"
 
 
+def test_enumerate_cells_sports_includes_venue_routed_betfair(smoke: ModuleType) -> None:
+    """Bare BETFAIR is a real, credential-gated instruments-service adapter (unlike
+    ODDS_API/PINNACLE/etc, which are MTDS-owned NO_ADAPTER_YET) — it must be
+    enumerated as a venue-routed cell (sports_provider=None), not silently omitted."""
+    cells = smoke.enumerate_cells(asset_group_filter="SPORTS")
+    betfair_cells = [c for c in cells if c.venue == "BETFAIR"]
+    assert betfair_cells, "expected a venue-routed BETFAIR cell in SPORTS enumeration"
+    assert all(c.sports_provider is None for c in betfair_cells)
+
+
+def test_enumerate_cells_sports_venue_filter_selects_only_betfair(smoke: ModuleType) -> None:
+    cells = smoke.enumerate_cells(asset_group_filter="SPORTS", venue_filter="BETFAIR")
+    assert cells
+    assert all(c.venue == "BETFAIR" and c.sports_provider is None for c in cells)
+
+
+def test_enumerate_cells_sports_mtds_only_venue_returns_zero_cells(smoke: ModuleType) -> None:
+    """ODDS_API/PINNACLE/etc are MTDS-owned (NO_ADAPTER_YET in instruments-service's
+    own venue_adapter_keys.py, registry-consolidation Decision C 2026-06-29) — zero
+    cells here is the honest, correct answer, not a bug to route around."""
+    for venue in ("ODDS_API", "PINNACLE", "DRAFTKINGS", "FANDUEL"):
+        cells = smoke.enumerate_cells(asset_group_filter="SPORTS", venue_filter=venue)
+        assert cells == [], f"expected 0 cells for MTDS-only venue={venue}, got {cells}"
+
+
 # ---------------------------------------------------------------------------
 # Bucket / path resolution
 # ---------------------------------------------------------------------------
@@ -151,16 +191,161 @@ def test_resolve_test_bucket_honours_category(smoke: ModuleType, monkeypatch: py
     assert smoke.resolve_test_bucket("CEFI") == "instruments-store-cefi-test-test-project"
 
 
+def test_resolve_test_bucket_prediction_uses_flat_kind(smoke: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prediction MUST resolve the dedicated flat kind (``instruments-store-prediction``
+    -> abbreviated ``instruments-store-pred-{env}-{pid}``) via ``resolve_bucket_name`` with
+    ``deployment_env="test"`` — NOT the generic ``get_bucket_name``+string-mangle path,
+    which produced the non-existent long ``instruments-store-prediction-test-{pid}`` (404).
+    """
+    calls: list[dict[str, object]] = []
+
+    def _fake_resolve(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return f"instruments-store-pred-test-{_TEST_PROJECT_ID}"
+
+    monkeypatch.setattr(smoke, "resolve_bucket_name", _fake_resolve)
+    # get_bucket_name must NOT be reached for prediction — make it explode if it is.
+    monkeypatch.setattr(
+        smoke,
+        "get_bucket_name",
+        lambda *a, **k: pytest.fail("prediction must not fall through to get_bucket_name string-mangle"),
+    )
+    out = smoke.resolve_test_bucket("prediction", _TEST_PROJECT_ID)
+    assert out == f"instruments-store-pred-test-{_TEST_PROJECT_ID}"
+    assert "-prediction-test-" not in out  # the old 404 long form
+    assert calls == [{"cloud": "gcp", "kind": "instruments-store-prediction", "deployment_env": "test"}]
+
+
 def test_expected_write_prefix_sports_uses_sports_reference(smoke: ModuleType) -> None:
-    cell = smoke.SmokeCell(asset_group="SPORTS", venue="API_FOOTBALL", data_type="odds")
+    # Provider-routed SPORTS cell (as actually emitted by _enumerate_sports_cells —
+    # sports_provider is always set alongside venue for these) -> sports_reference/.
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="API_FOOTBALL", data_type="odds", sports_provider="API_FOOTBALL")
     prefix = smoke.expected_write_prefix(cell, "2026-04-20")
     assert prefix.startswith("sports_reference/by_date/day=2026-04-20/")
 
 
 def test_expected_write_prefix_non_sports_uses_instrument_availability(smoke: ModuleType) -> None:
+    """Full canonical hive (operator HARD RULE R2, 2026-07-21 —
+    instrument_availability_hive_canonicalisation_2026_07_21.md): day/pipeline_mode/
+    asset_group/venue, matching writers.py::_instrument_availability_sink_for exactly.
+    Verified against live GCS (2026-07-23): a real --test-run wrote parquets at exactly
+    this path shape; the old day/venue-only prefix this test asserted was stale and
+    caused every non-sports/non-prediction Phase-D smoke cell to false-fail."""
     cell = smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades")
     prefix = smoke.expected_write_prefix(cell, "2026-04-20")
-    assert prefix == "instrument_availability/by_date/day=2026-04-20/venue=BINANCE-FUTURES/"
+    assert prefix == (
+        "instrument_availability/by_date/day=2026-04-20/"
+        "pipeline_mode=batch_instruments_service/asset_group=cefi/venue=BINANCE-FUTURES/"
+    )
+
+
+def test_expected_write_prefix_venue_routed_sports_uses_instrument_availability(smoke: ModuleType) -> None:
+    """Bare BETFAIR (sports_provider=None) writes through the generic per-venue
+    instrument-catalog path, NOT sports_reference/ (which is provider-only). Same
+    hive-canonicalisation fix as the CEFI case above."""
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="BETFAIR", data_type="instruments")
+    prefix = smoke.expected_write_prefix(cell, "2026-04-20")
+    assert prefix == (
+        "instrument_availability/by_date/day=2026-04-20/"
+        "pipeline_mode=batch_instruments_service/asset_group=sports/venue=BETFAIR/"
+    )
+
+
+def test_expected_write_prefix_prediction_uses_cqg_base_list_prefix(smoke: ModuleType) -> None:
+    """PREDICTION writes the CQG-FIRST layout (``canonical_question_group=`` precedes
+    ``day=``/``venue=``), so no day-first literal prefix can match — ``expected_write_prefix``
+    returns the coarse base ``by_date/`` tree that day+venue substring-scoping lists under."""
+    cell = smoke.SmokeCell(asset_group="PREDICTION", venue="POLYMARKET", data_type="prediction")
+    prefix = smoke.expected_write_prefix(cell, "2026-07-15")
+    assert prefix == "instrument_availability/by_date/"
+    assert "day=" not in prefix and "venue=" not in prefix
+
+
+def test_verify_prediction_parquet_written_scoped_by_day_venue(smoke: ModuleType) -> None:
+    """The prediction write-verify counts ONLY the CQG-first ``instruments.parquet`` objects
+    for THIS day+venue, and skips other-day / other-venue / non-instruments objects. It also
+    proves the day-first prefix the other asset_groups use would match ZERO of them."""
+    day, venue = "2026-07-15", "POLYMARKET"
+    base = "instrument_availability/by_date"
+    hit_a = f"{base}/canonical_question_group=BTC_UP_DOWN_DAILY/day={day}/venue={venue}/instruments.parquet"
+    hit_b = f"{base}/canonical_question_group=ETH_UP_DOWN_DAILY/day={day}/venue={venue}/instruments.parquet"
+    other_day = f"{base}/canonical_question_group=BTC_UP_DOWN_DAILY/day=2026-07-14/venue={venue}/instruments.parquet"
+    other_venue = f"{base}/canonical_question_group=BTC_UP_DOWN_DAILY/day={day}/venue=KALSHI/instruments.parquet"
+    not_instruments = (
+        f"{base}/canonical_question_group=BTC_UP_DOWN_DAILY/day={day}/venue={venue}/market_lifecycle.parquet"
+    )
+    client = _FakeStorageClient(
+        parquet_blobs=[
+            _FakeBlob(hit_a),
+            _FakeBlob(hit_b),
+            _FakeBlob(other_day),
+            _FakeBlob(other_venue),
+            _FakeBlob(not_instruments),
+        ]
+    )
+    ok, n = smoke.verify_prediction_parquet_written("bkt", day, venue, client)
+    assert ok is True
+    assert n == 2  # only the two THIS-day THIS-venue instruments.parquet objects
+
+    # A GCS prefix-listing under the day-first prefix (what verify_parquet_written uses for
+    # cefi/tradfi/defi/sports) would return zero of these CQG-first objects — the exact bug.
+    day_first_prefix = f"instrument_availability/by_date/day={day}/venue={venue}/"
+    assert not any(name.startswith(day_first_prefix) for name in (hit_a, hit_b))
+
+
+def test_run_cell_prediction_passes_via_cqg_first_verify(
+    smoke: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end run_cell for a prediction venue cell: the CQG-first write-verify + manifest
+    row both resolve, so the cell passes (before the fix, the day-first prefix found 0)."""
+    monkeypatch.setattr(smoke, "get_project_id", lambda: _TEST_PROJECT_ID)
+    monkeypatch.setattr(
+        smoke,
+        "resolve_bucket_name",
+        lambda **kwargs: f"instruments-store-pred-test-{_TEST_PROJECT_ID}",
+    )
+    cell = smoke.SmokeCell(asset_group="PREDICTION", venue="POLYMARKET", data_type="prediction")
+    smoke_date = "2026-07-15"
+    cqg_obj = (
+        "instrument_availability/by_date/canonical_question_group=BTC_UP_DOWN_DAILY/"
+        f"day={smoke_date}/venue=POLYMARKET/instruments.parquet"
+    )
+    client = _FakeStorageClient(
+        parquet_blobs=[_FakeBlob(cqg_obj)],
+        manifest_blob=_FakeBlob(
+            "_index/availability_index.parquet",
+            exists_flag=True,
+            payload=_make_manifest_bytes(smoke_date, "PREDICTION", "POLYMARKET", "prediction"),
+        ),
+    )
+    result = smoke.run_cell(
+        cell=cell,
+        smoke_date=smoke_date,
+        subprocess_runner=lambda *a, **k: _FakeCompleted(rc=0),
+        storage_client=client,
+    )
+    assert result.status == "passed", f"expected passed, got {result.status} ({result.reason})"
+    assert result.parquet_count == 1
+    assert result.manifest_status == "captured"
+
+
+def test_build_cli_args_venue_routed_sports_uses_venues_flag(smoke: ModuleType) -> None:
+    """A sports_provider=None SPORTS cell (bare BETFAIR) must build --venues BETFAIR,
+    not silently omit any venue selector (which would run the full default SPORTS set)."""
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="BETFAIR", data_type="instruments")
+    argv = smoke.build_cli_args(cell, "2026-04-20")
+    assert "--venues" in argv
+    assert argv[argv.index("--venues") + 1] == "BETFAIR"
+    assert "--sports-provider" not in argv
+
+
+def test_build_cli_args_provider_routed_sports_uses_sports_provider_flag(smoke: ModuleType) -> None:
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="API_FOOTBALL", data_type="odds", sports_provider="API_FOOTBALL")
+    argv = smoke.build_cli_args(cell, "2026-04-20")
+    assert "--sports-provider" in argv
+    assert argv[argv.index("--sports-provider") + 1] == "API_FOOTBALL"
+    assert "--venues" not in argv
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +498,23 @@ def test_run_cell_fails_when_manifest_row_missing(
     )
     assert result.status == "failed"
     assert "no_matching_row" in result.reason or "manifest_status_invalid" in result.reason
+
+
+def test_verify_manifest_row_venue_routed_sports_filters_by_venue(smoke: ModuleType) -> None:
+    """A BETFAIR-style (sports_provider=None) SPORTS cell must filter on venue —
+    unlike a provider-routed cell, its manifest rows carry a real venue column."""
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="BETFAIR", data_type="instruments")
+    # Manifest has a row for a DIFFERENT SPORTS venue on the same date — must NOT
+    # false-match just because asset_group+date agree (that was the pre-fix bug:
+    # SPORTS cells universally skipped the venue filter).
+    other_venue_manifest = _make_manifest_bytes("2026-04-20", "SPORTS", "SOME_OTHER_VENUE", "instruments")
+    client = _FakeStorageClient(
+        parquet_blobs=[_FakeBlob("x.parquet")],
+        manifest_blob=_FakeBlob("_index/availability_index.parquet", exists_flag=True, payload=other_venue_manifest),
+    )
+    ok, status = smoke.verify_manifest_row(bucket="ignored", cell=cell, smoke_date="2026-04-20", storage_client=client)
+    assert not ok
+    assert status == "no_matching_row"
 
 
 def test_run_cell_skips_on_api_football_dependency_error(

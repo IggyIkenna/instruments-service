@@ -1,7 +1,17 @@
 """Lido reference data adapter — instrument discovery for LST tokens.
 
 Discovers Lido liquid staking tokens (stETH, wstETH) on Ethereum.
-Tokens are returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Tokens are returned as InstrumentRecord with instrument_type="LST" (fixed
+2026-07-08 — the `instrument_key`'s `:LST:` segment and the stamped
+`instrument_type` field previously disagreed, the same class of divergence as
+the PERP-vs-PERPETUAL key/field mismatch. `InstrumentType.LST` is a real,
+distinct enum member from `YIELD_BEARING` — the ledger asset resolver maps
+`LST` -> `LedgerAssetClass.LST` and `YIELD_BEARING` -> `LedgerAssetClass.VAULT_SHARE`
+(`unified_api_contracts/internal/reference/ledger_asset_resolution.py`), a real
+accounting-treatment distinction, not a cosmetic one. The key already correctly
+said `LST` and real downstream consumers (execution-service validators,
+strategy-service risk/PnL/settlement) already parse the key's `LST` segment
+directly — so the field was fixed to match the key, not the reverse.
 
 Reference: https://lido.fi/
 """
@@ -11,6 +21,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -74,7 +85,7 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Lido LST tokens as yield-bearing instruments."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.LST, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -85,13 +96,17 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
+            instrument_key = build_instrument_id(venue_tag, InstrumentType.LST, symbol, passthrough=True)
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:LST:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
                     base_asset_contract_address=address,
-                    instrument_type=InstrumentType.YIELD_BEARING,
+                    instrument_type=InstrumentType.LST,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000001"),

@@ -14,7 +14,8 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
-from unified_api_contracts.registry import SUBGRAPH_IDS
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
+from unified_api_contracts.registry import DEFI_MAJOR_ASSET_ADDRESS_LIST, SUBGRAPH_IDS
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -25,7 +26,12 @@ from ...schemas import (
     OHLCVRef,
 )
 from ...utils import date_to_block
-from ...utils.defi_utils import classify_graph_error, order_base_quote, parse_created_timestamp
+from ...utils.defi_utils import (
+    build_spot_asset_siblings_for_pool,
+    classify_graph_error,
+    order_base_quote,
+    parse_created_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +61,32 @@ query GetPools($first: Int!, $skip: Int!) {{
 _FETCH_LIMIT = 1000
 # The Graph caps skip at 5000 — max reachable = 5000 + 1000 = 6000 pools
 _MAX_SKIP = 5000
+
+# Bug fix (2026-07-08, `docs/DEFI_INSTRUMENTS.md` "Subgraph fetch" section): the
+# TVL-ranked pagination above applies the major-assets whitelist AFTER the ~6,000-pool
+# ranking cutoff, so a genuine major/major pool that happens to rank below the cutoff
+# on a given day was silently never fetched at all. This supplementary query asks the
+# subgraph directly for pools where BOTH token0 AND token1 are in the known major-asset
+# address list — guaranteeing every major/major pool is captured regardless of TVL rank.
+# Verified live against the production Uniswap V3 gateway (2026-07-08): this exact query
+# found a real DAI/USDT pool with totalValueLockedUSD ~= $0.0004 — many orders of magnitude
+# below the ~$2,195 TVL of the pool ranked #6000 in the plain TVL-ranked pagination — proving
+# the old two-stage pipeline would have silently dropped it.
+_MAJOR_ASSET_POOLS_QUERY_TEMPLATE = """
+query GetMajorAssetPools($first: Int!, $skip: Int!, $tokens: [Bytes!]!) {{
+    pools(
+        first: $first, skip: $skip, orderBy: totalValueLockedUSD, orderDirection: desc
+        where: {{ token0_in: $tokens, token1_in: $tokens }}{block_clause}
+    ) {{
+        id
+        feeTier
+        token0 {{ id symbol name decimals }}
+        token1 {{ id symbol name decimals }}
+        totalValueLockedUSD
+        createdAtTimestamp
+    }}
+}}
+"""
 
 # Algebra fork schema (Camelot V3, etc.) — no feeTier, uses directional feeZtO/feeOtZ
 _ALGEBRA_POOLS_QUERY_TEMPLATE = """
@@ -242,6 +274,27 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         if not all_pools:
             all_pools = await self._fetch_messari_pools(url)
 
+        # Supplementary: query directly for pools where both tokens are known major
+        # assets (see _MAJOR_ASSET_POOLS_QUERY_TEMPLATE above) — closes the TVL-ceiling
+        # coverage gap without replacing the TVL-ranked cascade above. Additive only:
+        # a failure here must not invalidate an otherwise-successful primary fetch, so
+        # it never sets self._cascade_errored. Ethereum-only for now (the address list
+        # is Ethereum-mainnet-derived; other chains keep the pre-existing TVL-ranked
+        # behavior — a known, documented remaining gap, not silently "fixed everywhere").
+        if self._chain == "ETHEREUM" and DEFI_MAJOR_ASSET_ADDRESS_LIST:
+            major_pools = await self._fetch_major_asset_pools(url, block_num)
+            if major_pools:
+                seen_ids = {p.get("id") for p in all_pools}
+                new_pools = [p for p in major_pools if p.get("id") not in seen_ids]
+                if new_pools:
+                    logger.info(
+                        "UniswapV3: major-asset direct query found %d additional pool(s) "
+                        "below the TVL-ranked cutoff on %s",
+                        len(new_pools),
+                        self._chain,
+                    )
+                all_pools.extend(new_pools)
+
         # All cascade legs exhausted with zero pools. If ANY leg genuinely errored (transient /
         # malformed / GraphQL-errors), the empty universe is NOT trustworthy — raise so discovery
         # records attempted_failed (DeFi-plan A8b). If every leg cleanly returned an empty result,
@@ -259,9 +312,66 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             record = self._build_pool_record(pool)
             if record:
                 results.append(record)
+                # SPOT_ASSET siblings (P4-B): one per resolvable token leg, reusing the
+                # SAME addresses/decimals already resolved on the pool record above.
+                results.extend(build_spot_asset_siblings_for_pool(record))
 
         logger.info("UniswapV3: fetched %d pool instruments on %s", len(results), self._chain)
         return results
+
+    async def _fetch_major_asset_pools(self, url: str, block_num: int | None) -> list[dict[str, object]]:
+        """Query pools where both tokens are known major assets, directly by address.
+
+        Supplementary to the TVL-ranked cascade in ``get_instruments`` — closes the
+        "genuine major-asset pool ranked below the ~6,000 TVL cutoff is never fetched"
+        gap (see ``docs/DEFI_INSTRUMENTS.md`` "Subgraph fetch" section). Failure here is
+        soft: logs and returns ``[]`` without setting ``self._cascade_errored``, since this
+        is an additive enhancement, not a required leg of the discovery cascade.
+        """
+        block_clause = f", block: {{number: {block_num}}}" if block_num else ""
+        query = _MAJOR_ASSET_POOLS_QUERY_TEMPLATE.format(block_clause=block_clause)
+        # The Graph stores/compares `Bytes` (address) entity fields lowercased — a
+        # mixed-case checksummed address in an `_in` filter silently matches nothing
+        # (verified live: checksummed input -> 0 pools, identical lowercased input ->
+        # 404 pools, same subgraph, same call). Never pass checksummed case here.
+        tokens = [addr.lower() for addr in DEFI_MAJOR_ASSET_ADDRESS_LIST]
+
+        all_pools: list[dict[str, object]] = []
+        skip = 0
+        try:
+            async with self._make_session() as session:
+                while skip <= _MAX_SKIP:
+                    variables = {"first": _FETCH_LIMIT, "skip": skip, "tokens": tokens}
+                    async with session.post(
+                        url,
+                        json={"query": query, "variables": variables},
+                        headers={"Content-Type": "application/json"},
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+
+                    if not isinstance(data, dict) or data.get("errors"):
+                        if data.get("errors") if isinstance(data, dict) else None:
+                            logger.debug(
+                                "UniswapV3 major-asset query returned errors on %s: %s",
+                                self._chain,
+                                data.get("errors"),
+                            )
+                        break
+
+                    page: list[dict[str, object]] = (data.get("data") or {}).get("pools") or []
+                    if not page:
+                        break
+
+                    all_pools.extend(page)
+                    if len(page) < _FETCH_LIMIT:
+                        break
+                    skip += _FETCH_LIMIT
+        except aiohttp.ClientError as exc:
+            logger.warning("UniswapV3 major-asset query failed on %s (non-fatal): %s", self._chain, exc)
+            return []
+
+        return all_pools
 
     async def _fetch_messari_pools(self, url: str) -> list[dict[str, object]]:
         """Fetch pools from Messari-schema subgraph and normalise to official format.
@@ -486,16 +596,26 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         else:
             base_token, quote_token = token1, token0
 
-        fee_str = str(fee_tier) if fee_tier else "0"
-        symbol = f"{base}-{quote}:{fee_str}"
-        venue_tag = f"{self._venue_prefix}-{self._chain}"
-        instrument_key = f"{venue_tag}:POOL:{symbol}"
-
-        available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))
-
         # Uniswap V3 feeTier is in hundredths-of-bps (e.g. 500 = 0.05%, 3000 = 0.3%).
         # Plan asks for basis points: feeTier / 100 (e.g. 3000 → 30 bps).
         pool_fee_tier_bps = self._parse_fee_tier_bps(fee_tier)
+        # Canonical DEX-pool key grammar (docs/DEFI_INSTRUMENTS.md "DEX pools" —
+        # instrument_id_format_canonicalization_2026_07_08.md finding 2): fee tier
+        # is DASH-separated (not colon) and a real basis-point value (not the raw
+        # on-wire feeTier), and is OMITTED entirely when no real fee tier exists
+        # (matching the target's "[-FEE_TIER]" optional-bracket grammar) rather
+        # than a fabricated "-0" placeholder.
+        symbol = f"{base}-{quote}-{pool_fee_tier_bps}" if pool_fee_tier_bps is not None else f"{base}-{quote}"
+        venue_tag = f"{self._venue_prefix}-{self._chain}"
+        # KNOWN NON-UNIQUENESS (defi_instrument_availability_duplicate_instrument_key_rows_2026_07_26.md,
+        # operator-ruled 2026-07-18 two-id model): this symbolic key is the human-readable/UI form only,
+        # NOT a uniqueness guarantee -- two distinct real pools can share base/quote/fee-tier and thus this
+        # exact key. The true unique machine key is `pool_address` (below); a consumer needing per-row
+        # uniqueness must key on (pool_address, chain), never on instrument_key alone.
+        instrument_key = build_instrument_id(venue_tag, InstrumentType.POOL, symbol, passthrough=True)
+
+        available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))
+
         base_decimals = self._parse_decimals(base_token.get("decimals"))
         quote_decimals = self._parse_decimals(quote_token.get("decimals"))
         if base_decimals is None or quote_decimals is None:
@@ -508,6 +628,9 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         return InstrumentRecord(
             instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=str(pool_id),
             instrument_type=InstrumentType.POOL,

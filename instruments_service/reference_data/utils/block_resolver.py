@@ -51,6 +51,12 @@ def _resolve_alchemy_key(alchemy_key: str | None) -> str | None:
     try:
         sc = get_secret_client()
         return sc.get_secret("alchemy-api-key").strip()
+    # Secret Manager client construction/access boundary: the ADC/credential exception
+    # surface (google.auth.exceptions.*) isn't a small closed set we can enumerate
+    # safely, and get_secret() already swallows the GCP-API-level errors internally
+    # (returns None) — the only local failure mode left, AttributeError from `.strip()`
+    # on that None, still needs the same "no key available" outcome. Audited 2026-07-25,
+    # left broad: instruments_service_codex_compliance_ceiling_drift_2026_07_20.md P3 #3.
     except Exception:
         logger.warning("date_to_block: cannot get alchemy-api-key from Secret Manager")
         return None

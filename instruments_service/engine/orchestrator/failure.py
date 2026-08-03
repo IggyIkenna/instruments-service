@@ -38,8 +38,20 @@ def _classify_adapter_failure(exc: Exception, venue: str) -> str:
     the exception's class name as the error code; if the venue/code pair is
     not known to UAC, we fall back to the exception class name itself so
     downstream dashboards can still group.
+
+    Root-cause fix (api_football_injuries_error_misclassification_2026_07_13):
+    some adapter exceptions carry a duck-typed ``error_key`` attribute — a
+    real, UAC-matchable provenance code extracted from the raw API error
+    envelope (e.g. ``ApiFootballResponseError.error_key`` = ``"plan"`` /
+    ``"token"`` / ``"rateLimit"`` — see api_football.py's ``_raise_on_api_errors``)
+    that classifies far better than the Python exception CLASS NAME (which
+    never matches a venue's ``VENUE_ERRORS_*`` table — those are keyed by
+    HTTP/domain codes, not class names). Prefer it when present + non-empty;
+    fall back to the class name for every exception type that doesn't carry
+    one (unaffected — this is a pure additive improvement, generic across
+    every venue this function classifies for).
     """
-    error_code = type(exc).__name__
+    error_code = getattr(exc, "error_key", "") or type(exc).__name__
     classification = _orch.classify_venue_error(venue, error_code)
     if classification is not None:
         return classification.error_code

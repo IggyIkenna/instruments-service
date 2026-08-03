@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import ClassVar
@@ -48,6 +48,29 @@ def _load_enumerator_module() -> ModuleType:
 enumerator_module = _load_enumerator_module()
 InstrumentCatalogEntry = enumerator_module.InstrumentCatalogEntry
 ExpectedRow = enumerator_module.ExpectedRow
+
+
+def _drop_v2_venue_grain(rows: list) -> list:
+    """Filter out the venue-grain pass from v2 enumerator output.
+
+    The v2 enumerators for tradfi/cefi/defi/prediction each yield a venue-grain
+    pass (via ``_yield_v2_*`` helpers) that mirrors the v1 legacy enumerators'
+    (venue, data_type, day) sentinel rows: tradfi emits non-trading-day rows
+    (``EXPECTED_WEEKEND`` / ``EXPECTED_HOLIDAY``); cefi/prediction emit
+    ``EXPECTED_PRE_VENUE_LAUNCH`` rows; defi emits ``EXPECTED_PRE_GENESIS_CHAIN``
+    + ``EXPECTED_INSTRUMENT_NOT_LISTED`` per-protocol rows and chain-level
+    gas_fees pre-genesis rows. All venue-grain rows carry
+    ``instrument_type=""`` / ``instrument_id=""`` so a fresh / empty catalogue
+    still emits the v1-equivalent sentinel matrix.
+
+    Per-instrument tests in this file assert per-instrument behavior against
+    catalogs and don't want the venue-grain pass to leak in (the v1↔v2 parity
+    was verified by ``tests/integration/test_enumerate_v2_superset_property.py``
+    before v1 was retired 2026-07-09 per
+    ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``;
+    that file's job was done once v1 was deleted, so it was removed too).
+    """
+    return [r for r in rows if r.instrument_id != "" or r.instrument_type != ""]
 
 
 # ---------------------------------------------------------------------------
@@ -135,9 +158,15 @@ def _make_tradfi_entry(
 
 def _make_sports_entry(
     instrument_id: str = "FIX-1234",
-    instrument_type: str = "FIXTURE",
+    # LEAGUE-grain, matching the real production catalogue (build_instrument_catalogue's
+    # SPORTS_LEAGUE_INSTRUMENT_TYPE = "league") and the enumerator's own
+    # _SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE filter added 2026-07-09 alongside the
+    # sports catalogue's new FIXTURE/TEAM/PLAYER-grain rows — _enumerate_v2_sports
+    # now skips any non-"league" instrument_type, so every existing per-league
+    # lifecycle test below relies on this default matching that filter.
+    instrument_type: str = enumerator_module._SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE,
     venue: str = "api_football",
-    league_id: str = "PL",
+    league_id: str = "EPL",
     available_from: str | None = "2024-01-10",
     available_to: str | None = "2024-01-15",
 ) -> InstrumentCatalogEntry:
@@ -279,7 +308,7 @@ def test_cefi_v2_pre_listing_yields_not_listed() -> None:
     """
     catalog = [_make_cefi_entry(available_from="2021-01-01", available_to=None, venue="BINANCE")]
     dates = _date_axis("2020-06-01", "2021-06-01")  # 2021-06-01 is alive → no row; 2020-06-01 → NOT_LISTED
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"])))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
     assert rows[0].asset_group == "cefi"
@@ -295,17 +324,17 @@ def test_cefi_v2_post_delisting_yields_delisted() -> None:
     """
     catalog = [_make_cefi_entry(available_from="2019-01-01", available_to="2022-12-31", venue="BINANCE")]
     dates = _date_axis("2022-06-01", "2023-06-01")  # 2022-06-01 alive → no row; 2023-06-01 → DELISTED
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"])))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
     assert rows[0].instrument_id == "BTC-USDT"
 
 
 def test_cefi_v2_live_instrument_skipped() -> None:
-    """Date within [available_from, available_to] → no row emitted."""
+    """Date within [available_from, available_to] → no per-instrument row emitted."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", available_to=None, venue="BINANCE")]
     dates = _date_axis("2023-06-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"])))
     assert rows == []
 
 
@@ -326,28 +355,80 @@ def test_cefi_v2_pre_venue_launch_beats_instrument_lifecycle() -> None:
     ]
     # 2024-08-01 is before venue launch (2024-09-01) AND after available_from (2024-01-01)
     dates = _date_axis("2024-08-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"])))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_PRE_VENUE_LAUNCH", "venue-launch date must override instrument lifecycle"
 
 
 def test_cefi_v2_empty_catalog() -> None:
-    """Empty catalog → no rows."""
-    rows = list(enumerator_module._enumerate_v2_cefi([], _date_axis("2024-01-01"), ["ohlcv_1d"]))
+    """Empty catalog → no per-instrument rows (venue-grain pre-venue-launch pass filtered out).
+
+    Venue-grain PRE_VENUE_LAUNCH sentinel coverage (empty-catalog case) was
+    verified against v1's output by
+    ``tests/integration/test_enumerate_v2_superset_property.py`` before that
+    file was retired alongside v1 (2026-07-09).
+    """
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi([], _date_axis("2024-01-01"), ["ohlcv_1d"])))
     assert rows == []
 
 
 def test_cefi_v2_multiple_data_types() -> None:
-    """One absent instrument x N data_types should produce N rows.
+    """One absent instrument x N data_types should produce N per-instrument rows.
 
     Window includes an alive date so the overlap filter does not skip the instrument.
     """
     catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
     dates = _date_axis("2020-01-01", "2025-06-01")  # 2025-06-01 alive → no row; 2020-01-01 → N NOT_LISTED rows
     data_types = ["ohlcv_1d", "ohlcv_1h", "book_snapshot_5"]
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, data_types))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, data_types)))
     assert len(rows) == len(data_types)
     assert {r.data_type for r in rows} == set(data_types)
+
+
+def test_cefi_v2_denominator_is_could_exist_universe_not_just_manifest() -> None:
+    """data_completion_cefi item ⑦ — the coverage DENOMINATOR is the COULD-EXIST universe, not just rows
+    already in the manifest. Two alive cefi instruments, ONE captured (in present_set): the enumerator
+    seeds ``expected_unattempted`` for the un-captured one and SKIPS the captured one — so the seeded
+    universe UNION manifest = {captured-cell, expected_unattempted-cell} is a SUPERSET of (or equal to)
+    the manifest. Adding a catalog instrument can only GROW the denominator (seed a new owed cell),
+    never shrink it / drop a captured cell. Mirrors
+    ``test_defi_v2_denominator_is_could_exist_universe_not_just_manifest`` /
+    ``test_tradfi_v2_denominator_is_could_exist_universe_not_just_manifest`` for the cefi
+    could-exist-denominator-seed campaign (the ``--catalog-path`` parquet + ``--apply-write`` run
+    against the canonical ``_index``)."""
+    captured = _make_cefi_entry(instrument_id="BTC-USDT", venue="BINANCE-FUTURES", available_from="2019-01-01")
+    uncaptured = _make_cefi_entry(instrument_id="ETH-USDT", venue="BINANCE-FUTURES", available_from="2019-01-01")
+    date_axis = _date_axis("2024-06-01")
+    # cefi present-set keying is underlying-aware (matches the enumerator's own default
+    # _pcols when present_cols is omitted — see test_cefi_v2_alive_date_in_present_set_skipped).
+    present_set = {
+        _row_key_from_dict(
+            {
+                "venue": "BINANCE-FUTURES",
+                "chain": "",
+                "data_type": "ohlcv_1d",
+                "instrument_type": "PERPETUAL",
+                "instrument_id": "BTC-USDT",
+                "underlying": "",
+                "league_id": "",
+                "date": "2024-06-01",
+            },
+            cols=enumerator_module._UNDERLYING_AWARE_PRESENT_COLS,
+        )
+    }
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_cefi(
+                [captured, uncaptured], date_axis, ["ohlcv_1d"], present_set=present_set
+            )
+        )
+    )
+    # exactly ONE owed cell — the un-captured instrument; the captured one is skipped (not dropped)
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].instrument_id == "ETH-USDT"
+    # denominator (captured 1 + expected_unattempted 1) ≥ manifest captured (1) — never shrinks
+    assert 1 + len(rows) >= len(present_set)
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +444,7 @@ def test_defi_v2_pre_chain_genesis_yields_pre_genesis() -> None:
     """
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
     dates = _date_axis("2020-01-01", "2022-06-01")  # 2022-06-01 alive → no row; 2020-01-01 → PRE_GENESIS
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"])))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_PRE_GENESIS_CHAIN"
     assert rows[0].chain == "ARBITRUM"
@@ -381,14 +462,14 @@ def test_defi_v2_chain_genesis_beats_available_from() -> None:
     """
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
     # Date before chain genesis → pre-genesis; 2022-06-01 is alive → no row
-    pre_genesis_rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2020-01-01", "2022-06-01"), ["lending_indices"])
+    pre_genesis_rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, _date_axis("2020-01-01", "2022-06-01"), ["lending_indices"]))
     )
     assert pre_genesis_rows[0].reason == "EXPECTED_PRE_GENESIS_CHAIN"
 
     # Date after chain genesis but before available_from → not_listed; 2022-06-01 is alive → no row
-    not_listed_rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2021-09-01", "2022-06-01"), ["lending_indices"])
+    not_listed_rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, _date_axis("2021-09-01", "2022-06-01"), ["lending_indices"]))
     )
     assert not_listed_rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
 
@@ -400,8 +481,8 @@ def test_defi_v2_delisted_instrument() -> None:
     """
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01", available_to="2023-06-30")]
     # 2023-01-01 is alive → no row; 2024-01-01 → DELISTED
-    rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2023-01-01", "2024-01-01"), ["lending_indices"])
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, _date_axis("2023-01-01", "2024-01-01"), ["lending_indices"]))
     )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
@@ -426,8 +507,8 @@ def test_defi_v2_pool_seeds_canonical_pool_address_id_and_lowercase_type() -> No
         available_to="2023-06-30",
     )._replace(raw_symbol=pool_addr)
     # 2024-01-01 > available_to → a DELISTED seed row; assert its canonical atoms.
-    rows = list(
-        enumerator_module._enumerate_v2_defi([entry], _date_axis("2023-01-01", "2024-01-01"), ["dex_pool_state"])
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi([entry], _date_axis("2023-01-01", "2024-01-01"), ["dex_pool_state"]))
     )
     assert len(rows) == 1
     row = rows[0]
@@ -438,8 +519,194 @@ def test_defi_v2_pool_seeds_canonical_pool_address_id_and_lowercase_type() -> No
     assert row.chain == "ARBITRUM"  # populated chain
 
 
+def test_defi_v2_solana_amm_pool_capture_flips_expected_unattempted_to_captured() -> None:
+    """F6 vocab-desync regression (defi_dex_pools_delete_order_stale_2026_07_20 / direction A).
+
+    A Solana AMM pool now stamps ``instrument_type=SOLANA_AMM_POOL`` (raydium/orca reference
+    adapters) — lowercased to ``solana_amm_pool`` by the writer + the enumerator. For the
+    ``expected_unattempted`` seed to CONVERT when MTDS captures the pool, all three coordinated
+    edits must hold together:
+      * C.1 adapter stamps ``SOLANA_AMM_POOL`` (this catalogue entry mirrors that),
+      * C.2 UAC ``valid_data_types_for_venue_instrument_type`` narrows RAYDIUM+solana_amm_pool to
+        the protocol's real ``dex_pool_state`` (else the cell is over-seeded / never emitted here),
+      * C.3 ``_ADDRESS_KEYED_ITYPES`` includes ``solana_amm_pool`` so the seed re-keys to the
+        base58 ``pool_address.lower()`` (the MTDS per-pool capture atom).
+
+    This asserts the FLIP on the SAME ``(venue, chain, data_type, instrument_id, day)`` atom: a
+    capture recorded under that atom removes the ``expected_unattempted`` seed (→ captured), and an
+    empty capture leaves it dangling. Skip any of C.1/C.2/C.3 and this test fails.
+    """
+    # 43-char Solana base58 pool address (matches _is_onchain_addr: 32<=len<=44 and isalnum).
+    pool_addr = "22WrmyTj8x2TRVQen3fxxi2r4Rn6JDHWoMTpsSmn8RUd"
+    entry = _make_defi_entry(
+        instrument_id="RAYDIUM-SOLANA:POOL:SOL-USDC:5",  # glued composite (catalogue form)
+        instrument_type="SOLANA_AMM_POOL",  # C.1 adapter stamp (uppercase catalogue form)
+        venue="RAYDIUM",
+        chain="SOLANA",
+        available_from="2024-01-01",
+        available_to=None,
+    )._replace(raw_symbol=pool_addr)
+    dates = _date_axis("2024-06-01")
+    present_cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+
+    # (a) Nothing captured → a dangling expected_unattempted seed on the CANONICAL atom.
+    uncaptured = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [entry], dates, ["dex_pool_state"], present_set=set(), present_cols=present_cols
+            )
+        )
+    )
+    assert len(uncaptured) == 1, "C.2 dropped dex_pool_state (over-seed / no emit) — UAC narrowing missing"
+    seed = uncaptured[0]
+    assert seed.capture_status == "expected_unattempted"
+    assert seed.data_type == "dex_pool_state"
+    assert seed.instrument_type == "solana_amm_pool"  # lowercased to the writer grain
+    assert seed.instrument_id == pool_addr.lower()  # C.3 re-key to pool_address, NOT the glued id
+    assert seed.venue == "RAYDIUM"
+    assert seed.chain == "SOLANA"
+
+    # (b) Capture the SAME atom → the seed flips to captured (no expected_unattempted emitted).
+    captured_atom = tuple(
+        {
+            "venue": seed.venue,
+            "chain": seed.chain,
+            "data_type": seed.data_type,
+            "instrument_type": seed.instrument_type,
+            "instrument_id": seed.instrument_id,
+            "league_id": "",
+            "date": seed.date,
+        }[c]
+        for c in present_cols
+    )
+    flipped = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [entry], dates, ["dex_pool_state"], present_set={captured_atom}, present_cols=present_cols
+            )
+        )
+    )
+    assert not [r for r in flipped if r.capture_status == "expected_unattempted"], (
+        "a solana_amm_pool capture on the canonical atom must flip the seed to captured (F6 desync)"
+    )
+
+
+def test_defi_v2_acquisition_pending_venue_yields_typed_empty_not_dangling() -> None:
+    """IS R2c residual reconciliation: an IS-listed instrument on a venue whose MTDS
+    acquisition has NOT landed (in UAC DEFI_INSTRUMENTS_NOT_YET_COLLECTED) becomes a
+    per-instrument empty_confirmed[EXPECTED_ACQUISITION_PENDING], NOT a dangling
+    expected_unattempted. IS-side analogue of MTDS record_catalogue_residual_empty.
+    """
+    from unified_api_contracts import EmptyConfirmedReason
+
+    # SANCTUM-SOLANA: IS adapter shipped, MTDS acquisition pending (in the UAC registry).
+    pending = _make_defi_entry(
+        instrument_id="SANCTUM-SOLANA:LST:INF",
+        instrument_type="LST",
+        venue="SANCTUM",
+        chain="SOLANA",
+        available_from="2024-01-01",
+        available_to=None,
+    )
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [pending],
+                _date_axis("2024-06-01"),
+                # LST instrument_type only ever validates against "lst_rates" in UAC
+                # PROTOCOL_CAPABILITIES (no LST protocol declares "staking_yields" —
+                # that data_type is YIELD/RESTAKING-only); "staking_yields" here would
+                # be filtered out by _row_data_types before the acquisition-pending
+                # branch is ever reached, making the assertion below vacuous.
+                ["lst_rates"],
+                present_set=set(),  # nothing captured — would otherwise dangle expected_unattempted
+                present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+            )
+        )
+    )
+    assert rows, "expected a residual row for the acquisition-pending venue"
+    for row in rows:
+        assert row.capture_status == "empty_confirmed"
+        assert row.reason == EmptyConfirmedReason.EXPECTED_ACQUISITION_PENDING.value
+        assert row.venue == "SANCTUM"
+        assert row.chain == "SOLANA"
+
+
+def test_defi_v2_reference_only_itype_yields_typed_empty_not_dangling() -> None:
+    """defi_nonpool_per_instrument_eu_has_no_reconciliation_path_2026_07_20: a
+    SPOT_ASSET/A_TOKEN/DEBT_TOKEN reference-only row has no per-day capture path by
+    construction, so it seeds empty_confirmed[EXPECTED_REFERENCE_ONLY_NO_CAPTURE_PATH]
+    directly (not a dangling expected_unattempted) even on a fully acquired venue.
+    """
+    from unified_api_contracts import EmptyConfirmedReason
+
+    a_token = _make_defi_entry(
+        instrument_id="AAVE_V3-ARBITRUM:A_TOKEN:USDC",
+        instrument_type="A_TOKEN",
+        venue="AAVE_V3",
+        chain="ARBITRUM",
+        available_from="2022-01-01",
+        available_to=None,
+    )._replace(raw_symbol="0x" + "1" * 40)
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [a_token],
+                _date_axis("2024-06-01"),
+                ["lending_indices"],
+                present_set=set(),  # nothing captured — would otherwise dangle expected_unattempted
+                present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+            )
+        )
+    )
+    assert rows, "expected a residual row for the reference-only instrument_type"
+    for row in rows:
+        assert row.capture_status == "empty_confirmed"
+        assert row.reason == EmptyConfirmedReason.EXPECTED_REFERENCE_ONLY_NO_CAPTURE_PATH.value
+        assert row.instrument_type == "a_token"
+
+
+def test_defi_v2_acquired_venue_stays_expected_unattempted() -> None:
+    """A live/acquired venue (NOT in DEFI_INSTRUMENTS_NOT_YET_COLLECTED) keeps the
+    dangling-until-captured expected_unattempted seed — the R2c reconciliation is
+    scoped strictly to acquisition-pending venues, never masking a real coverage gap.
+    """
+    live = _make_defi_entry(
+        instrument_id="AAVE_V3-ARBITRUM:LENDING:ETH-USDC",
+        instrument_type="LENDING",
+        venue="AAVE_V3",
+        chain="ARBITRUM",
+        available_from="2022-01-01",
+        available_to=None,
+    )
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [live],
+                _date_axis("2024-06-01"),
+                ["lending_indices"],
+                present_set=set(),
+                present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+            )
+        )
+    )
+    assert rows, "expected an expected_unattempted seed for the live venue"
+    for row in rows:
+        assert row.capture_status == "expected_unattempted"
+        assert row.reason == ""
+
+
 def test_defi_v2_empty_catalog() -> None:
-    rows = list(enumerator_module._enumerate_v2_defi([], _date_axis("2024-01-01"), ["lending_indices"]))
+    """Empty catalog → no per-instrument rows (venue-grain pre-launch pass filtered out).
+
+    Venue-grain PRE_GENESIS_CHAIN / INSTRUMENT_NOT_LISTED sentinel coverage
+    (empty-catalog case) was verified against v1's output by
+    ``tests/integration/test_enumerate_v2_superset_property.py`` before that
+    file was retired alongside v1 (2026-07-09).
+    """
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi([], _date_axis("2024-01-01"), ["lending_indices"]))
+    )
     assert rows == []
 
 
@@ -450,38 +717,70 @@ def test_defi_v2_empty_catalog() -> None:
 
 def test_tradfi_v2_pre_listing_yields_not_listed() -> None:
     # Window includes an alive date so the overlap filter does not skip the instrument.
+    # NOTE: 2022-06-01 is alive (after available_from) but predates NASDAQ's real UAC
+    # discovery floor (2023-04-15), so it now ALSO yields an honest-absence row —
+    # this is the behavior tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20
+    # fixes (previously this alive-but-pre-floor date fell through unclassified in
+    # v2 mode, seeding the generic expected_unattempted "todo" bucket instead).
+    # data_types=["ohlcv_1m"]: a real NASDAQ/ETF-valid data_type (unlike "ohlcv_1d",
+    # which unified-api-contracts@0c0f6953 registered as a genuine tradfi data_type
+    # for FRED, closing the "unknown data_type passes through" loophole this test
+    # used to rely on incidentally — see the same commit's smoke_matrix TRADFI target
+    # count pin update in test_pipeline_e2e_prediction.py for the sibling fix).
     catalog = [_make_tradfi_entry(available_from="2022-01-01")]
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-06-01"), ["ohlcv_1d"]))
-    assert len(rows) == 1
-    assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
-    assert rows[0].asset_group == "tradfi"
-    assert rows[0].chain == ""
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-06-01"), ["ohlcv_1m"]))
+    )
+    assert len(rows) == 2
+    by_date = {r.date: r for r in rows}
+    assert by_date["2021-01-01"].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
+    assert by_date["2021-01-01"].asset_group == "tradfi"
+    assert by_date["2021-01-01"].chain == ""
+    assert by_date["2022-06-01"].reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
 
 
 def test_tradfi_v2_delisted_instrument() -> None:
     # Window includes an alive date so the overlap filter does not skip the instrument.
+    # 2021-01-01 is alive but predates the real NASDAQ discovery floor (2023-04-15) →
+    # EXPECTED_PRE_SOURCE_COVERAGE_START (see the note above); 2022-01-01 → DELISTED.
     catalog = [_make_tradfi_entry(available_from="2020-01-01", available_to="2021-06-30")]
-    # 2021-01-01 is alive → no row; 2022-01-01 → DELISTED
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-01-01"), ["ohlcv_1d"]))
-    assert len(rows) == 1
-    assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-01-01"), ["ohlcv_1m"]))
+    )
+    assert len(rows) == 2
+    by_date = {r.date: r for r in rows}
+    assert by_date["2021-01-01"].reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert by_date["2022-01-01"].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
 def test_tradfi_v2_no_bounds_skips_all_dates() -> None:
-    """Instrument with no available_from/to → no rows (always alive)."""
+    """Instrument with no available_from/to (always alive) in LEGACY mode
+    (``present_set=None``, not provided here): dates ON/AFTER the real NASDAQ
+    discovery floor (2023-04-15) still skip (legacy mode never seeds the alive
+    generic bucket), but dates BEFORE the floor now yield an honest-absence row —
+    the discovery-floor check is a lifecycle-level classification (like
+    NOT_LISTED/DELISTED), not gated on ``present_set``, per
+    tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20."""
     catalog = [_make_tradfi_entry(available_from=None, available_to=None)]
-    rows = list(
-        enumerator_module._enumerate_v2_tradfi(
-            catalog,
-            _date_axis("2020-01-01", "2020-06-01", "2025-01-01"),
-            ["ohlcv_1d"],
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_tradfi(
+                catalog,
+                _date_axis("2020-01-01", "2020-06-01", "2025-01-01"),
+                ["ohlcv_1m"],
+            )
         )
     )
-    assert rows == []
+    assert len(rows) == 2
+    dates = {r.date for r in rows}
+    assert dates == {"2020-01-01", "2020-06-01"}
+    assert all(r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START" for r in rows)
 
 
 def test_tradfi_v2_empty_catalog() -> None:
-    rows = list(enumerator_module._enumerate_v2_tradfi([], _date_axis("2024-01-01"), ["ohlcv_1d"]))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi([], _date_axis("2024-01-01"), ["ohlcv_1d"]))
+    )
     assert rows == []
 
 
@@ -509,7 +808,9 @@ def test_tradfi_v2_future_seeds_canonical_lowercase_instrument_type() -> None:
     ]
     # Window spans the listing date so the lifecycle-overlap filter keeps the
     # instrument: 2024-06-01 → NOT_LISTED, 2025-06-01 → alive (no row in legacy mode).
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01", "2025-06-01"), ["ohlcv_1m"]))
+    )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
     assert rows[0].instrument_type == "futures_chain", "CME future seed must use the writer's futures_chain grain"
@@ -621,6 +922,14 @@ def test_tradfi_v2_bundle_capture_suppresses_via_full_enumerate_v2() -> None:
     """End-to-end (enumerate_v2 → rollup → tradfi): captured futures_chain/combo/options_chain
     cells with ``instrument_id=""`` + ``underlying=<U>`` SUPPRESS their seeds; the
     un-captured ones seed with a blank instrument_id. Covers all three bundle types.
+
+    Probes at ``data_type=ohlcv_1m`` (not ``trades``) — all three fixtures use MVP
+    underliers (ES, CL are real ``TradFiMvpRule`` underliers) and the tradfi MVP
+    data_type-narrowing gate (2026-07-14 fix,
+    tradfi_eu_not_draining_source_axis_drift_2026_06_24.md #2) narrows an
+    MVP-scoped bundle to ``{ohlcv_1m}`` only — ``trades`` would no longer survive
+    to be suppressed/seeded, which is orthogonal to what this test actually
+    verifies (bundle de-dup + present-set suppression mechanics).
     """
     catalog = [
         # futures_chain: CME outright future leaf → rolls up to futures_chain on underlying ES.
@@ -645,15 +954,15 @@ def test_tradfi_v2_bundle_capture_suppresses_via_full_enumerate_v2() -> None:
     # and ES combo only — CL options_chain stays UN-captured so it must seed.
     cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "underlying", "league_id", "date"]
     present = {
-        ("CME", "", "trades", "futures_chain", "", "ES", "", "2024-06-03"),
-        ("CME", "", "trades", "combo", "", "ES", "", "2024-06-03"),
+        ("CME", "", "ohlcv_1m", "futures_chain", "", "ES", "", "2024-06-03"),
+        ("CME", "", "ohlcv_1m", "combo", "", "ES", "", "2024-06-03"),
     }
     rows = list(
         enumerator_module.enumerate_v2(
             asset_group="tradfi",
             catalog=catalog,
             date_axis=axis,
-            data_types=["trades"],
+            data_types=["ohlcv_1m"],
             present_set=present,
             present_cols=cols,
         )
@@ -713,7 +1022,7 @@ def test_tradfi_v2_mvp_gate_includes_mvp_via_column() -> None:
     """A catalogue row tagged mvp=True IS seeded as expected_unattempted."""
     catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
     rows = list(
-        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2023-06-01"), ["ohlcv_1m"], present_set=set())
     )
     assert rows
     assert all(r.capture_status == "expected_unattempted" for r in rows)
@@ -776,7 +1085,7 @@ def test_sports_v2_pre_fixture_start_yields_not_listed() -> None:
     rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-05", "2024-01-12"), ["lineups"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
-    assert rows[0].league_id == "PL"
+    assert rows[0].league_id == "EPL"
     assert rows[0].asset_group == "sports"
 
 
@@ -808,6 +1117,104 @@ def test_sports_v2_league_id_propagated_to_row() -> None:
 def test_sports_v2_empty_catalog() -> None:
     rows = list(enumerator_module._enumerate_v2_sports([], _date_axis("2024-01-01"), ["lineups"]))
     assert rows == []
+
+
+def test_sports_v2_sentinel_league_id_never_emits_rows() -> None:
+    """Defense-in-depth guard for A1 (2026-07-08/09): a catalog entry whose
+    league_id resolves to a sentinel (e.g. "UNKNOWN") must yield ZERO rows,
+    even though the primary fix (build_instrument_catalogue's roll-up filter)
+    should mean such an entry never reaches this enumerator's catalog in the
+    first place. A real sibling league in the same call must be unaffected.
+    """
+    phantom = _make_sports_entry(
+        instrument_id="UNKNOWN", league_id="UNKNOWN", available_from="2025-12-15", available_to=None
+    )
+    real = _make_sports_entry(league_id="EPL", available_from="2024-01-10", available_to="2024-01-15")
+    rows = list(
+        enumerator_module._enumerate_v2_sports([phantom, real], _date_axis("2024-01-05", "2024-01-12"), ["lineups"])
+    )
+    assert all(r.league_id != "UNKNOWN" for r in rows)
+    assert any(r.league_id == "EPL" for r in rows)
+
+
+def test_sports_v2_deregistered_league_ids_never_emit_rows() -> None:
+    """2026-07-13 24-league de-registration ruling: a (stale) catalog entry whose
+    league_id is outside UAC ``LEAGUE_REGISTRY`` — a raw numeric api-football
+    long-tail id ("110") or an alias string ("RFPL"/"LA_LIGA_2") — must yield
+    ZERO per-league rows, even though the primary fix
+    (build_instrument_catalogue's registry-membership roll-up gate) should mean
+    such an entry never reaches this enumerator's catalog in the first place.
+    A registered sibling league in the same call must be unaffected.
+    """
+    dereg_entries = [
+        _make_sports_entry(instrument_id=lid, league_id=lid, available_from="2024-01-01", available_to=None)
+        for lid in ("110", "RFPL", "LA_LIGA_2")
+    ]
+    real = _make_sports_entry(league_id="EPL", available_from="2024-01-10", available_to="2024-01-15")
+    rows = list(
+        enumerator_module._enumerate_v2_sports(
+            [*dereg_entries, real], _date_axis("2024-01-05", "2024-01-12"), ["lineups"]
+        )
+    )
+    assert all(r.league_id not in {"110", "RFPL", "LA_LIGA_2"} for r in rows)
+    assert any(r.league_id == "EPL" for r in rows)
+
+
+def test_sports_v2_fixture_team_player_grain_rows_never_treated_as_leagues() -> None:
+    """Regression (2026-07-09): FIXTURE/TEAM/PLAYER-grain catalogue rows must be
+    invisible to the LEAGUE-grain enumeration loop.
+
+    The sports catalogue gained real fixture/team/player-grain rows
+    (build_instrument_catalogue.build_sports_fixture_team_player_catalogue)
+    alongside the pre-existing league-grain rows in the SAME catalog.parquet.
+    _enumerate_v2_sports treats every catalog entry's league_id as a per-league
+    lifecycle window and cross-products it against data_types x date_axis — if a
+    fixture row (a single day's availability window) or a team/player row (whose
+    league_id is a real Prediction league, same as a genuine league row) leaked
+    through, it would fabricate NOT_LISTED/DELISTED/expected_unattempted rows
+    from a non-league lifecycle, multiplying the denominator once per fixture/
+    team/player instead of once per league — exactly the could-exist-projection
+    inflation `sports_catalog_league_grain_only_scope_2026_07_08.md` warned
+    about. A real sibling LEAGUE row in the same call must still emit normally.
+    """
+    # All four entries share league_id="EPL" and an available_from on/after
+    # 2024-01-10 — each, if leaked through as if it were a league, would
+    # independently emit an EXPECTED_INSTRUMENT_NOT_LISTED row for the
+    # 2024-01-05 pre-listing date (available_from > 2024-01-05). Only
+    # real_league is a genuine "league"-grain row, so with the filter working
+    # exactly ONE NOT_LISTED row is emitted total; without it, FOUR (one per
+    # entry) — the sharpest possible discriminator for this regression.
+    fixture = _make_sports_entry(
+        instrument_id="ENG_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20240111",
+        instrument_type="fixture",
+        league_id="EPL",
+        available_from="2024-01-11",
+        available_to="2024-01-11",
+    )
+    team = _make_sports_entry(
+        instrument_id="ARSENAL",
+        instrument_type="team",
+        league_id="EPL",
+        available_from="2024-01-11",
+        available_to=None,
+    )
+    player = _make_sports_entry(
+        instrument_id="SAKA_B",
+        instrument_type="player",
+        league_id="EPL",
+        available_from="2024-01-11",
+        available_to=None,
+    )
+    real_league = _make_sports_entry(league_id="EPL", available_from="2024-01-10", available_to="2024-01-15")
+    rows = list(
+        enumerator_module._enumerate_v2_sports(
+            [fixture, team, player, real_league], _date_axis("2024-01-05", "2024-01-12"), ["lineups"]
+        )
+    )
+    not_listed = [r for r in rows if r.reason == "EXPECTED_INSTRUMENT_NOT_LISTED"]
+    assert len(not_listed) == 1, f"fixture/team/player rows leaked into league-grain enumeration: {rows!r}"
+    assert not_listed[0].league_id == "EPL"
+    assert not_listed[0].date == "2024-01-05"
 
 
 # ---------------------------------------------------------------------------
@@ -903,12 +1310,14 @@ def test_enumerate_v2_dispatch_cefi() -> None:
     Window includes an alive date so the overlap filter passes.
     """
     catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
-    rows = list(
-        enumerator_module.enumerate_v2(
-            asset_group="cefi",
-            catalog=catalog,
-            date_axis=_date_axis("2020-01-01", "2025-06-01"),  # 2025-06-01 alive → no row; 2020-01-01 → NOT_LISTED
-            data_types=["ohlcv_1d"],
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module.enumerate_v2(
+                asset_group="cefi",
+                catalog=catalog,
+                date_axis=_date_axis("2020-01-01", "2025-06-01"),  # 2025-06-01 alive → no row; 2020-01-01 → NOT_LISTED
+                data_types=["ohlcv_1d"],
+            )
         )
     )
     assert len(rows) == 1
@@ -929,7 +1338,19 @@ def test_enumerate_v2_invalid_asset_group_raises() -> None:
 
 
 def test_enumerate_v2_empty_catalog_returns_no_rows() -> None:
-    """Empty catalog → no rows regardless of asset_group."""
+    """Empty catalog → no per-instrument rows regardless of asset_group.
+
+    tradfi/cefi/defi/prediction additionally emit venue-grain sentinel rows
+    (tradfi: non-trading-day mirroring v1 ``_enumerate_tradfi``;
+    cefi/prediction: EXPECTED_PRE_VENUE_LAUNCH mirroring v1
+    ``_enumerate_cefi``/``_enumerate_prediction``; defi: per-protocol
+    EXPECTED_PRE_GENESIS_CHAIN + chain-level gas_fees pre-genesis mirroring
+    v1 ``_enumerate_defi`` + ``_enumerate_defi_gas_fees``). Those are filtered
+    out here so the assertion stays focused on the per-instrument denominator
+    (the venue-grain <-> v1 parity was verified separately by
+    ``tests/integration/test_enumerate_v2_superset_property.py`` before that
+    file was retired alongside v1 (2026-07-09)).
+    """
     for ag in ("cefi", "defi", "tradfi", "sports", "prediction"):
         rows = list(
             enumerator_module.enumerate_v2(
@@ -939,7 +1360,8 @@ def test_enumerate_v2_empty_catalog_returns_no_rows() -> None:
                 data_types=["ohlcv_1d"],
             )
         )
-        assert rows == [], f"expected no rows for empty catalog, got {rows} for {ag}"
+        rows = _drop_v2_venue_grain(rows)
+        assert rows == [], f"expected no per-instrument rows for empty catalog, got {rows} for {ag}"
 
 
 # ---------------------------------------------------------------------------
@@ -1052,8 +1474,8 @@ def test_v2_enumerators_dict_covers_all_5_asset_groups() -> None:
 _DEFAULT_COLS = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
 
 
-def _row_key_from_dict(d: dict[str, str]) -> tuple[str, ...]:
-    return tuple(d.get(c, "") for c in _DEFAULT_COLS)
+def _row_key_from_dict(d: dict[str, str], cols: list[str] = _DEFAULT_COLS) -> tuple[str, ...]:
+    return tuple(d.get(c, "") for c in cols)
 
 
 def test_cefi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
@@ -1061,7 +1483,9 @@ def test_cefi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> 
     catalog = [_make_cefi_entry(available_from="2019-01-01", available_to=None, venue="BINANCE")]
     date_axis = _date_axis("2023-06-01")
     present_set: set[tuple[str, ...]] = set()  # empty — no manifest rows
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=present_set))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=present_set))
+    )
     assert len(rows) == 1
     r = rows[0]
     assert r.capture_status == "expected_unattempted"
@@ -1072,9 +1496,13 @@ def test_cefi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> 
 
 
 def test_cefi_v2_alive_date_in_present_set_skipped() -> None:
-    """Alive instrument date already in manifest → no row emitted."""
+    """Alive instrument date already in manifest → no per-instrument row emitted."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
     date_axis = _date_axis("2023-06-01")
+    # cefi present-set keying is underlying-aware (matches the enumerator's own
+    # default _pcols when present_cols is omitted, per the bundle-shape fix —
+    # cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_2026_07_15.md).
+    # This entry is a LEAF (not bundle), so underlying="" on both sides — a no-op.
     key = _row_key_from_dict(
         {
             "venue": "BINANCE",
@@ -1083,27 +1511,466 @@ def test_cefi_v2_alive_date_in_present_set_skipped() -> None:
             # Match the canonical instrument_type the MVP-qualifying fixture emits.
             "instrument_type": "PERPETUAL",
             "instrument_id": "BTC-USDT",
+            "underlying": "",
             "league_id": "",
             "date": "2023-06-01",
-        }
+        },
+        cols=enumerator_module._UNDERLYING_AWARE_PRESENT_COLS,
     )
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set={key}))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set={key}))
+    )
     assert rows == []
 
 
 def test_cefi_v2_legacy_mode_alive_date_skipped() -> None:
-    """present_set=None (legacy mode) → alive dates produce no rows."""
+    """present_set=None (legacy mode) → alive dates produce no per-instrument rows."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
     date_axis = _date_axis("2023-06-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=None))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=None))
+    )
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# Per-(venue, data_type) start_date gate — cefi_layer1_denominator_gaps 2026_07_03 item -007
+#
+# The alive branch must consult get_venue_data_type_start_date(venue, dt) before
+# seeding expected_unattempted: dates before a data_type's UAC-declared start
+# emit EXPECTED_PRE_SOURCE_COVERAGE_START (empty_confirmed) instead. Prevents
+# the 17,282-row over-seed class purged 2026-07-03 (ASTER book_snapshot_5:
+# venue live from 2023-07-22 but the source archive did not cover book_snapshot_5
+# until the live-wire date). Reference scenario: HYPERLIQUID PERPETUAL trades —
+# venue launched 2023-06-14 but the S3 archive only ships trades from
+# 2025-03-22.
+# ---------------------------------------------------------------------------
+
+
+def test_cefi_v2_alive_date_before_dt_start_yields_pre_source_coverage_start() -> None:
+    """Alive date < get_venue_data_type_start_date(venue, dt) → EXPECTED_PRE_SOURCE_COVERAGE_START."""
+    # HYPERLIQUID trades start_date = 2025-03-22 (post-launch source floor).
+    catalog = [
+        _make_cefi_entry(
+            venue="HYPERLIQUID",
+            instrument_type="PERPETUAL",
+            instrument_id="BTC-USD",
+            available_from="2023-06-14",
+            base_asset="BTC",
+            mvp=True,
+        )
+    ]
+    date_axis = _date_axis("2024-06-01")  # post-venue-launch, pre-trades-start
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert r.capture_status == "empty_confirmed"
+    assert r.data_type == "trades"
+    assert r.venue == "HYPERLIQUID"
+    assert r.date == "2024-06-01"
+    # closed-set compliance
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+
+
+def test_cefi_v2_alive_date_on_dt_start_yields_expected_unattempted() -> None:
+    """Alive date >= get_venue_data_type_start_date(venue, dt) → expected_unattempted (unchanged)."""
+    catalog = [
+        _make_cefi_entry(
+            venue="HYPERLIQUID",
+            instrument_type="PERPETUAL",
+            instrument_id="BTC-USD",
+            available_from="2023-06-14",
+            base_asset="BTC",
+            mvp=True,
+        )
+    ]
+    # 2025-03-22 = the declared HYPERLIQUID trades start_date (inclusive).
+    date_axis = _date_axis("2025-03-22")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].reason == ""
+
+
+def test_cefi_v2_per_dt_start_gates_data_types_independently() -> None:
+    """Per-(venue, dt) start_date gate is applied PER data_type — the 17,282-row over-seed regression guard.
+
+    HYPERLIQUID: trades start_date=2025-03-22, book_snapshot_5 start_date=2023-04-15.
+    On 2024-06-01 (post-venue-launch 2023-06-14):
+      - trades: pre-source-coverage → EXPECTED_PRE_SOURCE_COVERAGE_START
+      - book_snapshot_5: post-source-coverage → expected_unattempted
+    """
+    catalog = [
+        _make_cefi_entry(
+            venue="HYPERLIQUID",
+            instrument_type="PERPETUAL",
+            instrument_id="BTC-USD",
+            available_from="2023-06-14",
+            base_asset="BTC",
+            mvp=True,
+        )
+    ]
+    date_axis = _date_axis("2024-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades", "book_snapshot_5"], present_set=set()))
+    )
+    by_dt = {r.data_type: r for r in rows}
+    assert by_dt["trades"].reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert by_dt["trades"].capture_status == "empty_confirmed"
+    assert by_dt["book_snapshot_5"].reason == ""
+    assert by_dt["book_snapshot_5"].capture_status == "expected_unattempted"
+
+
+def test_cefi_v2_dt_start_gate_no_start_date_permissive() -> None:
+    """Unknown venue/dt (no start_date registered) → gate is permissive (no emit change)."""
+    # ohlcv_1d on BINANCE (bare) — BINANCE-FUTURES has entries but bare BINANCE
+    # + non-cefi-standard data_type falls off the VENUE_DATA_TYPE_CAPABILITIES
+    # gate AND the VenueMapping venue-level fallback (bare BINANCE not indexed).
+    catalog = [_make_cefi_entry(venue="BINANCE", available_from="2019-01-01")]
+    date_axis = _date_axis("2019-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].reason == ""
+
+
+# ---------------------------------------------------------------------------
+# COVERAGE_EXCLUSIONS gate wiring (sports_manifest_canonicalisation_2026_06_01
+# item -008) — a declared, evidenced UAC bounded exclusion must take the cell
+# OUT OF MODEL (EXPECTED_UPSTREAM_OUT_OF_BOUNDS), checked BEFORE the
+# source-coverage-start floor. The production registry is empty by design, so
+# these tests monkeypatch ``is_out_of_bounds`` directly rather than
+# constructing a real (evidence-gated) CoverageExclusion.
+# ---------------------------------------------------------------------------
+
+
+def test_cefi_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over expected_unattempted seeding."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("cefi", "BINANCE-FUTURES", "trades")
+        ),
+    )
+    catalog = [_make_cefi_entry(venue="BINANCE-FUTURES", available_from="2019-01-01")]
+    date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+
+
+def test_cefi_v2_out_of_bounds_beats_pre_source_coverage_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The exclusion check runs BEFORE the dt_start_ts floor — a cell inside both
+    a declared exclusion and before the source floor must report the more
+    specific EXPECTED_UPSTREAM_OUT_OF_BOUNDS, not EXPECTED_PRE_SOURCE_COVERAGE_START."""
+    monkeypatch.setattr(enumerator_module, "is_out_of_bounds", lambda *_args, **_kwargs: True)
+    catalog = [
+        _make_cefi_entry(
+            venue="HYPERLIQUID", instrument_type="PERPETUAL", instrument_id="BTC-USD", available_from="2023-06-14"
+        )
+    ]
+    date_axis = _date_axis("2024-06-01")  # pre-trades-start (real HYPERLIQUID floor = 2025-03-22)
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["trades"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+
+
+def test_cefi_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_cefi_entry(venue="BINANCE-FUTURES", available_from="2019-01-01")]
+    date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over sports expected_unattempted seeding,
+    keyed on dt_source.get(dt) (e.g. FIXTURES → api_football)."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("sports", "api_football", "FIXTURES")
+        ),
+    )
+    catalog = [
+        _make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL", venue="api_football")
+    ]
+    date_axis = _date_axis("2024-01-12")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["FIXTURES"], present_set=set()))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.league_id == "EPL"
+    assert r.asset_group == "sports"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+
+
+def test_sports_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-01-12")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["lineups"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_defi_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over defi expected_unattempted seeding.
+
+    Item -010 (sports_manifest_canonicalisation_2026_06_01): extends the -008
+    cefi/sports wiring to the tradfi/defi/prediction loops, keyed on the
+    canonical protocol venue.
+    """
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("defi", "AAVE_V3", "lending_indices")
+        ),
+    )
+    catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
+    date_axis = _date_axis("2024-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+    assert r.asset_group == "defi"
+
+
+def test_defi_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
+    date_axis = _date_axis("2024-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_tradfi_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over tradfi expected_unattempted seeding,
+    checked BEFORE the Databento rolling-history floor clip (item -010)."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("tradfi", "NASDAQ", "ohlcv_1m")
+        ),
+    )
+    catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
+    date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+    assert r.asset_group == "tradfi"
+
+
+def test_tradfi_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_tradfi_entry(available_from="2019-01-01", venue="NASDAQ", mvp=True)]
+    date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_tradfi_v2_pre_discovery_floor_yields_expected_pre_source_coverage_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A date before the venue's UAC discovery floor must NOT seed the generic
+    expected_unattempted ("todo") bucket — issue
+    tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20. Instrument listed
+    long before the floor (mirrors the real NASDAQ/NYSE equities driving the
+    182,407-cell class) so ``EXPECTED_INSTRUMENT_NOT_LISTED`` never fires and the
+    discovery-floor branch is the one under test."""
+    monkeypatch.setattr(
+        enumerator_module.VenueMapping,
+        "get_instrument_discovery_start",
+        lambda self, venue: "2023-04-15" if venue == "NASDAQ" else None,
+    )
+    catalog = [_make_tradfi_entry(available_from="1980-01-01", venue="NASDAQ", mvp=True)]
+    date_axis = _date_axis("2023-04-14")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+    assert r.asset_group == "tradfi"
+
+
+def test_tradfi_v2_on_or_after_discovery_floor_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A date ON/AFTER the venue's discovery floor keeps seeding the normal
+    expected_unattempted ("todo") cell — the floor clip must not over-suppress
+    genuinely fillable dates."""
+    monkeypatch.setattr(
+        enumerator_module.VenueMapping,
+        "get_instrument_discovery_start",
+        lambda self, venue: "2023-04-15" if venue == "NASDAQ" else None,
+    )
+    catalog = [_make_tradfi_entry(available_from="1980-01-01", venue="NASDAQ", mvp=True)]
+    date_axis = _date_axis("2023-04-15")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_tradfi_v2_unknown_venue_discovery_floor_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A venue with no UAC discovery-floor entry (``get_instrument_discovery_start``
+    returns None) must be completely unaffected — falls back to existing behavior."""
+    monkeypatch.setattr(
+        enumerator_module.VenueMapping,
+        "get_instrument_discovery_start",
+        lambda self, venue: None,
+    )
+    catalog = [_make_tradfi_entry(available_from="1980-01-01", venue="NASDAQ", mvp=True)]
+    # Probed date must stay within ohlcv_1m's own Databento rolling-history floor
+    # (~16y trailing from today, unrelated to the venue-discovery floor under test
+    # here — that one is mocked off) or the seed gets clipped by that SEPARATE gate
+    # instead, for reasons orthogonal to this test's "no venue floor" intent.
+    date_axis = _date_axis("2023-06-01")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_tradfi_v2_discovery_floor_invariant_holds_independently_per_venue() -> None:
+    """Regression guard (tradfi_todo_cells_below_vendor_discovery_floor_2026_07_20): the
+    invariant "no cell below ITS OWN venue's UAC discovery floor may ever be seeded as the
+    generic todo bucket (blank-reason expected_unattempted)" must hold independently per
+    venue when MULTIPLE venues with DIFFERENT real floors are enumerated in the SAME pass —
+    not just correct in isolation for one hand-picked venue (the 3 tests above each use a
+    single-venue catalog). Sweeps the REAL (unmocked) ``VenueMapping`` floors for every
+    tradfi venue that currently has one, so this also catches a future floor-table edit that
+    forgets to keep a venue's enumerator behavior in sync — the exact class of drift the
+    182,407-cell incident was.
+    """
+    vm = enumerator_module.VenueMapping()
+    venues_with_floors = [
+        v for v in ("NASDAQ", "NYSE", "CME", "CBOE", "KRX", "FX") if vm.get_instrument_discovery_start(v)
+    ]
+    assert venues_with_floors, "expected at least one tradfi venue with a real UAC discovery floor"
+
+    for venue in venues_with_floors:
+        floor = vm.get_instrument_discovery_start(venue)
+        assert floor is not None  # narrows for date.fromisoformat below (filtered by the comprehension above)
+        day_before = date.fromisoformat(floor) - timedelta(days=1)
+        catalog = [
+            _make_tradfi_entry(instrument_id=f"{venue}-TEST", venue=venue, available_from="1980-01-01", mvp=True)
+        ]
+
+        below_rows = _drop_v2_venue_grain(
+            list(enumerator_module._enumerate_v2_tradfi(catalog, [day_before], ["ohlcv_1d"], present_set=set()))
+        )
+        below_todo = [r for r in below_rows if r.capture_status == "expected_unattempted" and r.reason == ""]
+        assert not below_todo, (
+            f"{venue}: {len(below_todo)} cell(s) below its real floor ({floor}) landed in the "
+            f"generic todo bucket instead of EXPECTED_PRE_SOURCE_COVERAGE_START"
+        )
+
+        on_floor_rows = _drop_v2_venue_grain(
+            list(
+                enumerator_module._enumerate_v2_tradfi(
+                    catalog, [date.fromisoformat(floor)], ["ohlcv_1d"], present_set=set()
+                )
+            )
+        )
+        # The floor date itself must never be caught by the PRE-floor clip specifically — it
+        # may legitimately land in a different empty_confirmed bucket (e.g.
+        # EXPECTED_SOURCE_DELIVERY_LAG) via unrelated logic, which is out of this invariant's
+        # scope; only EXPECTED_PRE_SOURCE_COVERAGE_START on/after the floor is the over-suppression
+        # failure mode this guards against.
+        assert not any(r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START" for r in on_floor_rows), (
+            f"{venue}: the floor date itself ({floor}) was over-suppressed by the pre-floor clip "
+            f"(EXPECTED_PRE_SOURCE_COVERAGE_START) — the floor date IS in-archive and must stay "
+            f"genuinely fillable"
+        )
+
+
+def test_prediction_v2_out_of_bounds_range_yields_upstream_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared COVERAGE_EXCLUSIONS range wins over prediction expected_unattempted seeding (item -010)."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "is_out_of_bounds",
+        lambda asset_group, source, data_type, day: (
+            (asset_group, source, data_type) == ("prediction", "POLYMARKET", "prediction_clob")
+        ),
+    )
+    catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
+    date_axis = _date_axis("2024-03-15")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set=set()))
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.reason == "EXPECTED_UPSTREAM_OUT_OF_BOUNDS"
+    assert r.capture_status == "empty_confirmed"
+    assert r.reason in EMPTY_CONFIRMED_REASONS
+    assert r.asset_group == "prediction"
+
+
+def test_prediction_v2_no_exclusion_declared_unaffected() -> None:
+    """Real production behavior: the registry is empty, so nothing changes for existing callers."""
+    catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
+    date_axis = _date_axis("2024-03-15")
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set=set()))
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
 
 
 def test_defi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
     """DeFi alive instrument date absent from manifest → expected_unattempted."""
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
     date_axis = _date_axis("2024-06-01")
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set=set()))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set=set()))
+    )
     assert len(rows) == 1
     r = rows[0]
     assert r.capture_status == "expected_unattempted"
@@ -1113,7 +1980,7 @@ def test_defi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> 
 
 
 def test_defi_v2_alive_date_in_present_set_skipped() -> None:
-    """DeFi alive date already in manifest → no row emitted."""
+    """DeFi alive date already in manifest → no per-instrument row emitted."""
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
     date_axis = _date_axis("2024-06-01")
     key = _row_key_from_dict(
@@ -1127,14 +1994,20 @@ def test_defi_v2_alive_date_in_present_set_skipped() -> None:
             "date": "2024-06-01",
         }
     )
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set={key}))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set={key}))
+    )
     assert rows == []
 
 
 def test_defi_v2_legacy_mode_alive_date_skipped() -> None:
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
-    rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2024-06-01"), ["lending_indices"], present_set=None)
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                catalog, _date_axis("2024-06-01"), ["lending_indices"], present_set=None
+            )
+        )
     )
     assert rows == []
 
@@ -1168,9 +2041,11 @@ def test_defi_v2_denominator_is_could_exist_universe_not_just_manifest() -> None
             }
         )
     }
-    rows = list(
-        enumerator_module._enumerate_v2_defi(
-            [captured, uncaptured], date_axis, ["lending_indices"], present_set=present_set
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                [captured, uncaptured], date_axis, ["lending_indices"], present_set=present_set
+            )
         )
     )
     # exactly ONE owed cell — the un-captured instrument; the captured one is skipped (not dropped)
@@ -1185,7 +2060,9 @@ def test_tradfi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -
     """TradFi alive instrument date absent from manifest → expected_unattempted."""
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]
     date_axis = _date_axis("2024-06-01")
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
+    )
     assert len(rows) == 1
     r = rows[0]
     assert r.capture_status == "expected_unattempted"
@@ -1211,14 +2088,16 @@ def test_tradfi_v2_alive_date_in_present_set_skipped() -> None:
             "date": "2024-06-01",
         }
     )
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set={key}))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set={key}))
+    )
     assert rows == []
 
 
 def test_tradfi_v2_legacy_mode_alive_date_skipped() -> None:
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]
-    rows = list(
-        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01"), ["ohlcv_1m"], present_set=None)
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01"), ["ohlcv_1m"], present_set=None))
     )
     assert rows == []
 
@@ -1251,8 +2130,12 @@ def test_tradfi_v2_denominator_is_could_exist_universe_not_just_manifest() -> No
             }
         )
     }
-    rows = list(
-        enumerator_module._enumerate_v2_tradfi([captured, uncaptured], date_axis, ["ohlcv_1m"], present_set=present_set)
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_tradfi(
+                [captured, uncaptured], date_axis, ["ohlcv_1m"], present_set=present_set
+            )
+        )
     )
     # exactly ONE owed cell — the un-captured instrument; the captured one is skipped (not dropped)
     assert len(rows) == 1
@@ -1264,26 +2147,26 @@ def test_tradfi_v2_denominator_is_could_exist_universe_not_just_manifest() -> No
 
 def test_sports_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
     """Sports alive fixture absent from manifest → expected_unattempted (league_id propagated)."""
-    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="PL")]
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
     date_axis = _date_axis("2024-01-12")
     rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["lineups"], present_set=set()))
     assert len(rows) == 1
     r = rows[0]
     assert r.capture_status == "expected_unattempted"
     assert r.reason == ""
-    assert r.league_id == "PL"
+    assert r.league_id == "EPL"
     assert r.asset_group == "sports"
 
 
 def test_sports_v2_alive_date_in_present_set_skipped() -> None:
     """League-grain present match: the captured atom is (data_type, league_id, date) —
     venue / instrument_id / instrument_type are blank-tolerant (excluded from the key)."""
-    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="PL")]
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
     date_axis = _date_axis("2024-01-12")
     present_cols = ["data_type", "league_id", "date"]
     # Captured row carries blank venue/instrument_id (the real sports manifest atom),
     # yet the league-grain key still matches the catalogue league.
-    key = tuple({"data_type": "lineups", "league_id": "PL", "date": "2024-01-12"}[c] for c in present_cols)
+    key = tuple({"data_type": "lineups", "league_id": "EPL", "date": "2024-01-12"}[c] for c in present_cols)
     rows = list(
         enumerator_module._enumerate_v2_sports(
             catalog, date_axis, ["lineups"], present_set={key}, present_cols=present_cols
@@ -1298,6 +2181,476 @@ def test_sports_v2_legacy_mode_alive_date_skipped() -> None:
         enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-12"), ["lineups"], present_set=None)
     )
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# Sports v2 mdps_odds_horizon_bucket expected-universe grain realignment
+# (2026-07-13) — plans/active/sports_data_sources_canonical_completion_2026_07_13.md
+# §1 "mdps_odds_horizon_bucket expected-universe grain realignment". MDPS's
+# real writer (market-data-processing-service/scripts/reprocess_sports_odds.py,
+# ``_MANIFEST_DATA_TYPE``) stamps the manifest ``data_type`` column lower-case
+# (``"odds_horizon_bucket"``) — a live manifest read confirmed 0 exceptions to
+# this across 123,642 real captured rows, vs every other sports source writing
+# the UAC ``SPORTS_DATA_TYPE_TO_SOURCE`` key verbatim UPPERCASE. Pre-fix, the
+# enumerator's present-set match + newly-seeded rows used the UAC-uppercase
+# ``ODDS_HORIZON_BUCKET`` unconditionally, so a genuinely captured atom could
+# never match (0 identity overlap, confirmed live) — this section proves the
+# ``_sports_manifest_data_type`` translation closes that gap.
+# ---------------------------------------------------------------------------
+
+
+def test_sports_v2_odds_horizon_bucket_present_set_matches_writer_lowercase_data_type() -> None:
+    """Present-set match key must use MDPS's real lower-case data_type string,
+    not the UAC-uppercase axis key — otherwise a genuinely captured atom is
+    perpetually reseeded as expected_unattempted (the pre-fix disjoint-cells bug)."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-01-12")
+    present_cols = ["data_type", "league_id", "date"]
+    key = tuple({"data_type": "odds_horizon_bucket", "league_id": "EPL", "date": "2024-01-12"}[c] for c in present_cols)
+    rows = list(
+        enumerator_module._enumerate_v2_sports(
+            catalog, date_axis, ["ODDS_HORIZON_BUCKET"], present_set={key}, present_cols=present_cols
+        )
+    )
+    assert rows == []
+
+
+def test_sports_v2_odds_horizon_bucket_seeds_lowercase_data_type_when_uncaptured() -> None:
+    """When genuinely uncaptured, the seeded expected_unattempted row must carry
+    the SAME lower-case data_type MDPS actually writes, so a future enumeration
+    pass's present-set match stays self-consistent with this run's own seed."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-01-12")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["ODDS_HORIZON_BUCKET"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].data_type == "odds_horizon_bucket"
+    assert rows[0].league_id == "EPL"
+
+
+def test_sports_v2_non_overridden_data_type_stays_uppercase(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every other sports data_type (no override entry) keeps its UAC-uppercase
+    string verbatim — the override map is narrowly scoped to
+    ODDS_HORIZON_BUCKET, not a blanket lower-casing of the whole sports
+    data_type axis."""
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", lambda days: {("EPL", "2024-06-05")})
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["XG"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].data_type == "XG"
+
+
+def test_sports_manifest_data_type_helper_identity_except_odds_horizon_bucket() -> None:
+    """Direct unit coverage of the translation helper itself."""
+    assert enumerator_module._sports_manifest_data_type("ODDS_HORIZON_BUCKET") == "odds_horizon_bucket"
+    for dt in ("MATCHES", "XG", "PLAYER_VALUES", "WEATHER", "SFI_PROGRESSIVE_STATS", "lineups"):
+        assert enumerator_module._sports_manifest_data_type(dt) == dt
+
+
+def test_sports_manifest_data_type_helper_maps_fixtures_to_fixtures_schedule() -> None:
+    """Fixtures manifest atom migration (instruments-service@e19c5a7a) — the enumerator
+    must seed FIXTURES_SCHEDULE, not the legacy FIXTURES literal, or expected-universe
+    runs silently re-pollute the manifest with the retired atom (2026-07-26 finding,
+    issues/fixtures_manifest_legacy_backfill_2026_07_24.md)."""
+    assert enumerator_module._sports_manifest_data_type("FIXTURES") == "FIXTURES_SCHEDULE"
+
+
+# ---------------------------------------------------------------------------
+# Sports v2 mdps_odds_horizon_bucket expected-universe VENUE grain realignment
+# (2026-07-14 follow-up) —
+# plans/active/sports_data_sources_canonical_completion_2026_07_13.md §1
+# (venue-grain follow-up). A SECOND, different grain mismatch on the SAME
+# source, found after the data_type fix above landed: MDPS's real writer
+# (reprocess_sports_odds.py, ``_MANIFEST_VENUE = "ODDS_API"``) stamps a real,
+# non-blank ``venue="ODDS_API"`` on every captured row for this source — the
+# ONE sports source whose captured atom does NOT carry a blank venue. Pre-fix,
+# the enumerator seeded expected_unattempted rows with ``venue=""``
+# unconditionally (correct for every OTHER sports source), so a genuinely
+# captured atom for THIS source could never retire its seed (0 identity
+# overlap on venue, confirmed live 2026-07-14: 200,259 blank-venue EU rows vs
+# 143,594 ``venue="ODDS_API"`` captured rows). This section proves the
+# ``_sports_manifest_venue`` translation closes that gap, mirroring the
+# data_type section above exactly.
+# ---------------------------------------------------------------------------
+
+
+def test_sports_v2_odds_horizon_bucket_seeds_odds_api_venue_when_uncaptured() -> None:
+    """When genuinely uncaptured, the seeded expected_unattempted row must carry
+    the SAME ``venue="ODDS_API"`` MDPS's real writer stamps on a captured row,
+    so a future full-key-based supersession (captured outranks
+    expected_unattempted) can actually retire this seed once the real capture
+    lands."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-01-12")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["ODDS_HORIZON_BUCKET"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+    assert rows[0].venue == "ODDS_API"
+    assert rows[0].data_type == "odds_horizon_bucket"
+
+
+def test_sports_v2_non_overridden_data_type_stays_blank_venue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every other sports data_type (no venue override entry) keeps its blank
+    ``venue=""`` — the venue override map is narrowly scoped to
+    ODDS_HORIZON_BUCKET only, not a blanket change to the whole sports venue
+    seeding convention."""
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", lambda days: {("EPL", "2024-06-05")})
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["XG"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].venue == ""
+
+
+def test_sports_manifest_venue_helper_identity_except_odds_horizon_bucket() -> None:
+    """Direct unit coverage of the venue translation helper itself."""
+    assert enumerator_module._sports_manifest_venue("ODDS_HORIZON_BUCKET") == "ODDS_API"
+    for dt in ("FIXTURES", "MATCHES", "XG", "PLAYER_VALUES", "WEATHER", "SFI_PROGRESSIVE_STATS", "lineups"):
+        assert enumerator_module._sports_manifest_venue(dt) == ""
+
+
+# ---------------------------------------------------------------------------
+# Sports v2 understat matchday-awareness (Root-cause writer fix, part (b)) —
+# plans/active/issues/sports_is_manifest_eu_regression_overwrite_2026_06_29.md
+# ---------------------------------------------------------------------------
+
+
+def test_sports_v2_understat_no_fixture_day_yields_expected_no_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A covered understat league with NO scheduled fixture that day → EXPECTED_NO_FIXTURE,
+    not a blank-reason expected_unattempted seed (the daily-forward-poll regression)."""
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", lambda days: set())
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-06-05")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["XG"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].reason == "EXPECTED_NO_FIXTURE"
+    assert rows[0].league_id == "EPL"
+    assert rows[0].capture_status != "expected_unattempted"
+
+
+def test_sports_v2_understat_fixture_day_falls_through_to_expected_unattempted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A covered understat league WITH a scheduled fixture that day is a real
+    pending_fetch → falls through to the normal expected_unattempted seed, never
+    silently typed."""
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", lambda days: {("EPL", "2024-06-05")})
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    date_axis = _date_axis("2024-06-05")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["XG"], present_set=set()))
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_understat_matchday_index_skipped_for_large_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Single-walk discipline: a date_axis larger than _MATCHDAY_INDEX_MAX_DAYS must
+    NEVER trigger the per-day fixture-index build (one GCS read per day) — a
+    full-history/backfill run falls back to the pre-existing non-matchday-aware
+    behaviour instead."""
+
+    def _boom(days: list[str]) -> set[tuple[str, str]]:
+        raise AssertionError("_build_understat_fixture_index must not be called for a large date_axis")
+
+    monkeypatch.setattr(enumerator_module, "_build_understat_fixture_index", _boom)
+    assert enumerator_module._MATCHDAY_INDEX_MAX_DAYS < 40
+    big_dates = [f"2024-01-{d:02d}" for d in range(1, 32)] + [f"2024-02-{d:02d}" for d in range(1, 10)]
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    date_axis = _date_axis(*big_dates)
+    # Must not raise — confirms the bound gates the expensive index build off.
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["XG"], present_set=set()))
+    assert all(r.capture_status == "expected_unattempted" for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Sports v2 api_football FIXTURES season-complete calendar gate (STEP-4
+# structural fix, phantom-pending forensics 2026-07-13): a truthset-evidenced
+# no-fixture day must seed EXPECTED_NO_FIXTURE (empty_confirmed), never a
+# phantom expected_unattempted; NO calendar evidence → seeding unchanged.
+# ---------------------------------------------------------------------------
+
+
+_AF_FRESH_EVIDENCE = datetime(2026, 1, 1, tzinfo=UTC)
+"""Evidence clock that postdates the end of every 2024/2025 test day (fresh)."""
+
+
+def _af_span(
+    start: str,
+    end: str,
+    *,
+    season: int = 2024,
+    evidence_built_at: datetime | None = _AF_FRESH_EVIDENCE,
+) -> object:
+    return enumerator_module._AfSeasonSpan(season=season, start=start, end=end, evidence_built_at=evidence_built_at)
+
+
+def _af_calendar(
+    fixture_days: set[tuple[str, str]] | None = None,
+    coverage: dict[str, tuple[object, ...]] | None = None,
+) -> object:
+    return enumerator_module._AfFixtureCalendar(
+        fixture_days=fixture_days or set(),
+        coverage=coverage if coverage is not None else {"EPL": (_af_span("2024-01-01", "2024-12-31"),)},
+    )
+
+
+def test_sports_v2_af_fixtures_no_fixture_day_yields_expected_no_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calendar covers the (league, day) and shows NO fixture → EXPECTED_NO_FIXTURE
+    (empty_confirmed), not a blank-reason expected_unattempted phantom seed."""
+    monkeypatch.setattr(enumerator_module, "_build_af_fixture_calendar", lambda: _af_calendar())
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == "EXPECTED_NO_FIXTURE"
+    assert rows[0].capture_status == "empty_confirmed"
+    assert rows[0].league_id == "EPL"
+
+
+def test_sports_v2_af_fixtures_match_day_falls_through_to_expected_unattempted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calendar covers the day AND shows a fixture → real pending fetch: the
+    expected_unattempted seed is kept (never silently typed away)."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "_build_af_fixture_calendar",
+        lambda: _af_calendar(fixture_days={("EPL", "2024-06-05")}),
+    )
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_af_fixtures_no_calendar_evidence_keeps_seeding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No calendar available at all (build returns None) → pre-existing alive-day
+    expected_unattempted seeding UNCHANGED (honest-coverage rule: never silently
+    shrink the denominator for unaudited leagues)."""
+    monkeypatch.setattr(enumerator_module, "_build_af_fixture_calendar", lambda: None)
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_af_fixtures_day_outside_coverage_keeps_seeding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calendar exists but the day is OUTSIDE every season-complete span for the
+    league → no evidence for that cell → seeding unchanged."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "_build_af_fixture_calendar",
+        lambda: _af_calendar(coverage={"EPL": (_af_span("2023-08-01", "2024-05-31"),)}),
+    )
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_af_calendar_from_dataframe_bridges_consecutive_seasons_only() -> None:
+    """Pure builder: consecutive seasons bridge the inter-season gap (evidenced
+    no-fixture territory); a season JUMP (2019 → 2021) does NOT cover the gap."""
+    df = pd.DataFrame(
+        [
+            {"canonical_league_id": "EPL", "season": 2023, "date": "2023-08-12"},
+            {"canonical_league_id": "EPL", "season": 2023, "date": "2024-05-19"},
+            {"canonical_league_id": "EPL", "season": 2024, "date": "2024-08-16"},
+            {"canonical_league_id": "EPL", "season": 2024, "date": "2025-05-25"},
+            {"canonical_league_id": "LIGA_X", "season": 2019, "date": "2019-08-01"},
+            {"canonical_league_id": "LIGA_X", "season": 2019, "date": "2020-05-01"},
+            {"canonical_league_id": "LIGA_X", "season": 2021, "date": "2021-08-01"},
+            {"canonical_league_id": "LIGA_X", "season": 2021, "date": "2022-05-01"},
+        ]
+    )
+    df["evidence_built_at"] = pd.Timestamp(_AF_FRESH_EVIDENCE)  # postdates every day below
+    cal = enumerator_module._af_calendar_from_dataframe(df)
+    assert cal is not None
+    # Consecutive EPL seasons kept as season-ordered spans (bridging happens at query time).
+    assert [(sp.start, sp.end) for sp in cal.coverage["EPL"]] == [
+        ("2023-08-12", "2024-05-19"),
+        ("2024-08-16", "2025-05-25"),
+    ]
+    # Inter-season gap day (no fixture, bridged consecutive seasons) → evidenced no-fixture day.
+    assert cal.is_no_fixture_day("EPL", "2024-06-05") is True
+    # A fixture day is never a no-fixture day.
+    assert cal.is_no_fixture_day("EPL", "2023-08-12") is False
+    # Outside every span → no evidence.
+    assert cal.is_no_fixture_day("EPL", "2025-06-01") is False
+    # Season jump: 2020 gap NOT covered.
+    assert [(sp.start, sp.end) for sp in cal.coverage["LIGA_X"]] == [
+        ("2019-08-01", "2020-05-01"),
+        ("2021-08-01", "2022-05-01"),
+    ]
+    assert cal.is_no_fixture_day("LIGA_X", "2020-09-15") is False
+
+
+def test_af_calendar_from_dataframe_empty_or_missing_columns_returns_none() -> None:
+    """No usable truthset rows → None → callers keep the pre-existing seeding."""
+    assert enumerator_module._af_calendar_from_dataframe(pd.DataFrame()) is None
+    assert enumerator_module._af_calendar_from_dataframe(pd.DataFrame([{"league_id": "EPL"}])) is None
+
+
+# ---------------------------------------------------------------------------
+# Evidence-freshness rule (fixture day-boundary staleness class, 2026-07-14
+# closeout of sports_fixtures_pending_eu_phantom_denominator_2026_07_13): an
+# EXPECTED_NO_FIXTURE verdict requires evidence built AFTER the stamped day
+# ended (UTC). Stale-covered days stay pending — never a stale absence stamp.
+# ---------------------------------------------------------------------------
+
+
+def test_af_truthset_built_at_parses_artifact_name_utc() -> None:
+    """Producer run_ts in the artifact NAME is the evidence clock (UTC);
+    unparseable names → None (can contribute fixture-days, never absences)."""
+    built = enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_20260713-172514.parquet")
+    assert built == datetime(2026, 7, 13, 17, 25, 14, tzinfo=UTC)
+    assert enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_partial.parquet") is None
+    assert enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_20261399-999999.parquet") is None
+
+
+def test_af_calendar_no_fixture_verdict_requires_post_day_end_evidence() -> None:
+    """Day covered + evidence postdates day-end → no-fixture verdict True;
+    same coverage but evidence predates day-end (or missing) → False."""
+    fresh = _af_calendar(
+        coverage={
+            "EPL": (_af_span("2024-01-01", "2024-12-31", evidence_built_at=datetime(2024, 6, 6, 0, 1, tzinfo=UTC)),)
+        }
+    )
+    assert fresh.is_no_fixture_day("EPL", "2024-06-05") is True
+    # Evidence built mid-day on the day itself (before 2024-06-06T00:00Z day end) → stale.
+    stale = _af_calendar(
+        coverage={
+            "EPL": (_af_span("2024-01-01", "2024-12-31", evidence_built_at=datetime(2024, 6, 5, 17, 25, tzinfo=UTC)),)
+        }
+    )
+    assert stale.is_no_fixture_day("EPL", "2024-06-05") is False
+    # No evidence clock at all (unparseable artifact name) → never an absence.
+    unclocked = _af_calendar(coverage={"EPL": (_af_span("2024-01-01", "2024-12-31", evidence_built_at=None),)})
+    assert unclocked.is_no_fixture_day("EPL", "2024-06-05") is False
+
+
+def test_af_calendar_bridged_gap_requires_both_adjacent_seasons_fresh() -> None:
+    """A bridged inter-season-gap day needs BOTH adjacent complete season
+    queries to postdate the day's end — a gap fixture would belong to one of
+    the two queries, but we cannot know which."""
+    both_fresh = _af_calendar(
+        coverage={
+            "EPL": (
+                _af_span("2023-08-12", "2024-05-19", season=2023),
+                _af_span("2024-08-16", "2025-05-25", season=2024),
+            )
+        }
+    )
+    assert both_fresh.is_no_fixture_day("EPL", "2024-06-05") is True
+    one_stale = _af_calendar(
+        coverage={
+            "EPL": (
+                _af_span("2023-08-12", "2024-05-19", season=2023, evidence_built_at=datetime(2024, 5, 20, tzinfo=UTC)),
+                _af_span("2024-08-16", "2025-05-25", season=2024),
+            )
+        }
+    )
+    assert one_stale.is_no_fixture_day("EPL", "2024-06-05") is False
+
+
+def test_sports_v2_af_fixtures_stale_evidence_keeps_pending_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enumerator branch: day covered by the calendar but the evidence PREDATES
+    the day's end → the pending (expected_unattempted) seed is kept — never a
+    stale EXPECTED_NO_FIXTURE stamp."""
+    monkeypatch.setattr(
+        enumerator_module,
+        "_build_af_fixture_calendar",
+        lambda: _af_calendar(
+            coverage={
+                "EPL": (
+                    _af_span("2024-01-01", "2024-12-31", evidence_built_at=datetime(2024, 6, 5, 12, 0, tzinfo=UTC)),
+                )
+            }
+        ),
+    )
+    catalog = [_make_sports_entry(available_from="2024-01-01", available_to=None, league_id="EPL")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_sports_v2_af_fixtures_allsvenskan_2026_07_13_day_boundary_regression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact ALLSVENSKAN 2026-07-13 scenario (issue doc 2026-07-14 closeout):
+    the 00:02Z 07-14 daily run built its calendar from the
+    ``fixtures_truthset_20260713-172514.parquet`` artifact (evidence built
+    17:25Z ON 2026-07-13 — BEFORE the day ended at 07-14T00:00Z) which had no
+    ALLSVENSKAN row for 07-13, and stamped EXPECTED_NO_FIXTURE while 3 real
+    matches existed (one captured mid-game, status=1H). With the freshness
+    rule the stale-covered day stays pending; only the fresh post-day-end
+    truthset (20260714-001053) may stamp absences for 07-13."""
+    stale_truthset = pd.DataFrame(
+        [
+            # Season-complete 2026 span straddling 2026-07-13, built 17:25Z 07-13
+            # — the query could not see the matches added/played that evening.
+            {"canonical_league_id": "ALLSVENSKAN", "season": 2026, "date": "2026-03-29"},
+            {"canonical_league_id": "ALLSVENSKAN", "season": 2026, "date": "2026-07-12"},
+            {"canonical_league_id": "ALLSVENSKAN", "season": 2026, "date": "2026-11-01"},
+        ]
+    )
+    stale_truthset["evidence_built_at"] = pd.Timestamp(
+        enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_20260713-172514.parquet")
+    )
+    stale_cal = enumerator_module._af_calendar_from_dataframe(stale_truthset)
+    assert stale_cal is not None
+    # The stale calendar covers 2026-07-13 but must NOT prove absence for it...
+    assert stale_cal.is_no_fixture_day("ALLSVENSKAN", "2026-07-13") is False
+    # ...while a fully-ended earlier day in the same span is still stampable.
+    assert stale_cal.is_no_fixture_day("ALLSVENSKAN", "2026-07-11") is True
+
+    monkeypatch.setattr(enumerator_module, "_build_af_fixture_calendar", lambda: stale_cal)
+    catalog = [_make_sports_entry(available_from="2026-03-01", available_to=None, league_id="ALLSVENSKAN")]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2026-07-13"), ["FIXTURES"], present_set=set())
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == ""  # pending — NOT a stale EXPECTED_NO_FIXTURE
+    assert rows[0].capture_status == "expected_unattempted"
+
+    # The fresh post-day-end truthset (built 00:10Z 07-14 > day end 00:00Z) may
+    # stamp a genuinely-empty 07-13; a day WITH a fixture row falls through.
+    fresh_truthset = stale_truthset.copy()
+    fresh_truthset["evidence_built_at"] = pd.Timestamp(
+        enumerator_module._af_truthset_built_at("_audits/fixtures_truthset_20260714-001053.parquet")
+    )
+    fresh_cal = enumerator_module._af_calendar_from_dataframe(fresh_truthset)
+    assert fresh_cal is not None
+    assert fresh_cal.is_no_fixture_day("ALLSVENSKAN", "2026-07-13") is True
+    with_fixture = pd.concat(
+        [
+            fresh_truthset,
+            pd.DataFrame([{"canonical_league_id": "ALLSVENSKAN", "season": 2026, "date": "2026-07-13"}]),
+        ],
+        ignore_index=True,
+    )
+    fresh_cal_with_fixture = enumerator_module._af_calendar_from_dataframe(with_fixture)
+    assert fresh_cal_with_fixture is not None
+    assert fresh_cal_with_fixture.is_no_fixture_day("ALLSVENSKAN", "2026-07-13") is False
 
 
 def test_prediction_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
@@ -1344,13 +2697,15 @@ def test_enumerate_v2_forwards_present_set_to_enumerator() -> None:
     """enumerate_v2() must forward present_set to the per-asset-group enumerator."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
     present_set: set[tuple[str, ...]] = set()  # empty → expected_unattempted
-    rows = list(
-        enumerator_module.enumerate_v2(
-            asset_group="cefi",
-            catalog=catalog,
-            date_axis=_date_axis("2023-06-01"),
-            data_types=["ohlcv_1d"],
-            present_set=present_set,
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module.enumerate_v2(
+                asset_group="cefi",
+                catalog=catalog,
+                date_axis=_date_axis("2023-06-01"),
+                data_types=["ohlcv_1d"],
+                present_set=present_set,
+            )
         )
     )
     assert len(rows) == 1
@@ -1360,13 +2715,15 @@ def test_enumerate_v2_forwards_present_set_to_enumerator() -> None:
 def test_enumerate_v2_with_present_set_none_skips_alive_dates() -> None:
     """enumerate_v2() with present_set=None must skip alive dates (legacy mode)."""
     catalog = [_make_tradfi_entry(available_from="2020-01-01")]
-    rows = list(
-        enumerator_module.enumerate_v2(
-            asset_group="tradfi",
-            catalog=catalog,
-            date_axis=_date_axis("2024-06-01"),
-            data_types=["ohlcv_1m"],
-            present_set=None,
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module.enumerate_v2(
+                asset_group="tradfi",
+                catalog=catalog,
+                date_axis=_date_axis("2024-06-01"),
+                data_types=["ohlcv_1m"],
+                present_set=None,
+            )
         )
     )
     assert rows == []
@@ -1393,15 +2750,17 @@ def test_empty_confirmed_rows_still_have_typed_reason_when_present_set_given() -
     Window includes an alive date so the overlap filter passes.
     """
     catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
-    rows = list(
-        enumerator_module.enumerate_v2(
-            asset_group="cefi",
-            catalog=catalog,
-            date_axis=_date_axis(
-                "2020-01-01", "2025-06-01"
-            ),  # 2025-06-01 alive → expected_unattempted; 2020-01-01 → NOT_LISTED
-            data_types=["ohlcv_1d"],
-            present_set=set(),  # providing present_set shouldn't affect lifecycle boundary rows
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module.enumerate_v2(
+                asset_group="cefi",
+                catalog=catalog,
+                date_axis=_date_axis(
+                    "2020-01-01", "2025-06-01"
+                ),  # 2025-06-01 alive → expected_unattempted; 2020-01-01 → NOT_LISTED
+                data_types=["ohlcv_1d"],
+                present_set=set(),  # providing present_set shouldn't affect lifecycle boundary rows
+            )
         )
     )
     not_listed = [r for r in rows if r.capture_status == "empty_confirmed"]
@@ -1429,12 +2788,19 @@ class TestG1EnumCefiFilter:
 
     def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
         catalog = [_make_cefi_entry(instrument_type=instrument_type)]
-        return list(
-            enumerator_module._enumerate_v2_cefi(
-                catalog,
-                _date_axis("2024-01-15"),
-                data_types or self._ALL_CEFI_DTS,
-                present_set=set(),
+        # G1 filter tests assert per-instrument validity-matrix behavior; drop the
+        # venue-grain pre-venue-launch pass so its universal data_type fan (for
+        # cefi venues whose launch_date > 2024-01-15 — e.g. LIGHTER-ZKSYNC,
+        # EXTENDED-STARKNET, KALSHI-PERP, POLYMARKET-PERP) doesn't leak into
+        # "data_types_emitted".
+        return _drop_v2_venue_grain(
+            list(
+                enumerator_module._enumerate_v2_cefi(
+                    catalog,
+                    _date_axis("2024-01-15"),
+                    data_types or self._ALL_CEFI_DTS,
+                    present_set=set(),
+                )
             )
         )
 
@@ -1498,12 +2864,17 @@ class TestG1EnumDefiFilter:
 
     def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
         catalog = [_make_defi_entry(instrument_type=instrument_type, chain="ETHEREUM")]
-        return list(
-            enumerator_module._enumerate_v2_defi(
-                catalog,
-                _date_axis("2024-01-15"),
-                data_types or self._ALL_DEFI_DTS,
-                present_set=set(),
+        # G1 filter tests assert per-instrument validity-matrix behavior; drop the
+        # venue-grain pre-launch pass so its per-protocol data_type fan doesn't
+        # leak into "data_types_emitted" for protocols still pre-launch on 2024-01-15.
+        return _drop_v2_venue_grain(
+            list(
+                enumerator_module._enumerate_v2_defi(
+                    catalog,
+                    _date_axis("2024-01-15"),
+                    data_types or self._ALL_DEFI_DTS,
+                    present_set=set(),
+                )
             )
         )
 
@@ -1515,7 +2886,9 @@ class TestG1EnumDefiFilter:
         protocol) → key invariant.
         ``lending_indices`` is in one hybrid POOL protocol (line ~592 in _defi.py) so
         it legitimately appears in the POOL union — NOT a cross-product there.
-        ``perp_funding`` is in GMX which uses _POOL → also legitimately in the union.
+        ``perp_funding`` had a similar hybrid-POOL exception via GMX until GMX venue
+        support was removed (2026-07-25, unified-trading-pm/plans/active/
+        defi_gmx_venue_removal_2026_07_25.md) — no POOL protocol declares it now.
         """
         rows = self._run("POOL")
         data_types_emitted = {r.data_type for r in rows}
@@ -1537,7 +2910,20 @@ class TestG1EnumDefiFilter:
 
 
 class TestG1EnumTradfiFilter:
-    """tradfi enumerator must respect the validity matrix."""
+    """tradfi enumerator must respect the validity matrix.
+
+    Probes ``_row_data_types`` DIRECTLY (not the full ``_enumerate_v2_tradfi``
+    pipeline) with ``mvp=False`` fixtures — this decouples the assertions from
+    BOTH tradfi MVP gates: the per-instrument EXISTENCE gate
+    (``_enumerate_v2_tradfi``'s own ``if not _tradfi_entry_in_mvp_universe(instr):
+    continue``, which would exclude a ``mvp=False`` instrument entirely before
+    ``_row_data_types`` even runs) and the data_type-NARROWING gate added
+    2026-07-14 (tradfi_eu_not_draining_source_axis_drift_2026_06_24.md #2),
+    which — for an MVP-scoped instrument — would narrow every instrument_type
+    here down to ``{ohlcv_1m}`` (or ``{ohlcv_24h}`` for KRX), making
+    ``"trades" in data_types_emitted`` false for reasons unrelated to what this
+    class actually tests (the RAW validity matrix, an orthogonal axis).
+    """
 
     _ALL_TRADFI_DTS: ClassVar[list[str]] = [
         "trades",
@@ -1551,35 +2937,98 @@ class TestG1EnumTradfiFilter:
         "macro_result",
     ]
 
-    def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list:
-        catalog = [_make_tradfi_entry(instrument_type=instrument_type)]
-        return list(
-            enumerator_module._enumerate_v2_tradfi(
-                catalog,
-                _date_axis("2024-01-15"),
-                data_types or self._ALL_TRADFI_DTS,
-                present_set=set(),
-            )
-        )
+    def _run(self, instrument_type: str, data_types: list[str] | None = None) -> list[str]:
+        entry = _make_tradfi_entry(instrument_type=instrument_type, mvp=False)
+        return enumerator_module._row_data_types("tradfi", entry, data_types or self._ALL_TRADFI_DTS)
 
     def test_etf_has_no_earnings_result(self) -> None:
-        rows = self._run("ETF")
-        data_types_emitted = {r.data_type for r in rows}
+        data_types_emitted = set(self._run("ETF"))
         assert "trades" in data_types_emitted
         assert "earnings_result" not in data_types_emitted
 
     def test_equity_has_earnings_result(self) -> None:
-        rows = self._run("EQUITY")
-        data_types_emitted = {r.data_type for r in rows}
+        data_types_emitted = set(self._run("EQUITY"))
         assert "earnings_result" in data_types_emitted
         assert "corporate_action_confirmed" in data_types_emitted
 
     def test_index_only_ohlcv(self) -> None:
-        rows = self._run("INDEX")
-        data_types_emitted = {r.data_type for r in rows}
+        data_types_emitted = set(self._run("INDEX"))
         assert "trades" not in data_types_emitted
         # at least one ohlcv must be present
         assert any("ohlcv" in dt for dt in data_types_emitted)
+
+
+# ---------------------------------------------------------------------------
+# TRADFI MTDS-tick-manifest exclusion of corporate_action_confirmed /
+# earnings_result (2026-07-15) — real capture for both lives entirely in
+# features-service's calendar module (a structurally separate service/bucket),
+# never in market-tick-data-service. Seeding them as MTDS-tick-manifest
+# expected cells made a permanently-unsatisfiable 100% attempted_failed rate.
+# See unified-trading-pm/plans/active/issues/
+# tradfi_unreachable_databento_data_types_mbp10_ohlcv_coarse_calendar_2026_07_15.md
+# finding (3).
+# ---------------------------------------------------------------------------
+
+
+class TestTradfiMtdsTickManifestDataTypeExclusion:
+    _EXCLUDED: ClassVar[frozenset[str]] = frozenset({"corporate_action_confirmed", "earnings_result"})
+
+    def test_excluded_types_are_declared_in_uac_but_not_seeded(self) -> None:
+        """Sanity-check the fixture: both excluded types must actually be present in
+        UAC's DATA_TYPES_BY_ASSET_GROUP["tradfi"] — else this test would trivially
+        pass for the wrong reason (nothing to exclude)."""
+        uac_tradfi_dts = {str(dt) for dt in enumerator_module.DATA_TYPES_BY_ASSET_GROUP.get("tradfi", [])}
+        assert uac_tradfi_dts >= self._EXCLUDED
+
+    def test_tradfi_mtds_tick_manifest_data_types_excludes_both(self) -> None:
+        resolved = set(enumerator_module._tradfi_mtds_tick_manifest_data_types())
+        assert not (self._EXCLUDED & resolved)
+        # Every other UAC-declared tradfi data_type must still pass through unchanged
+        # (this is a narrow two-item exclusion, not a wholesale re-scoping).
+        uac_tradfi_dts = {str(dt) for dt in enumerator_module.DATA_TYPES_BY_ASSET_GROUP.get("tradfi", [])}
+        assert resolved == (uac_tradfi_dts - self._EXCLUDED)
+
+    def test_enumerate_v2_tradfi_default_resolution_never_seeds_excluded_types(self) -> None:
+        """enumerate_v2(asset_group="tradfi") with NO explicit data_types override
+        (the production default-resolution branch, mirroring main()'s CLI default)
+        must never emit a row for either excluded data_type, across both the
+        venue-grain non-trading-day pass and the per-instrument lifecycle pass.
+
+        EQUITY@NASDAQ is deliberately chosen — per TestG1EnumTradfiFilter above,
+        the G1-ENUM validity matrix considers corporate_action_confirmed/
+        earnings_result VALID for this instrument shape, so this test actually
+        exercises the exclusion (an instrument shape the validity matrix already
+        rejects them for would pass trivially).
+        """
+        # Window includes an alive date (2020-06-01) so the overlap filter does not
+        # skip the instrument entirely; 2019-01-01 is pre-listing → NOT_LISTED rows.
+        catalog = [
+            _make_tradfi_entry(
+                instrument_id="AAPL", instrument_type="EQUITY", venue="NASDAQ", available_from="2020-01-01"
+            )
+        ]
+        rows = list(
+            enumerator_module.enumerate_v2(
+                asset_group="tradfi",
+                catalog=catalog,
+                date_axis=_date_axis("2019-01-01", "2020-06-01"),
+            )
+        )
+        rows = _drop_v2_venue_grain(rows)
+        assert rows  # sanity: the default resolution path actually yields per-instrument rows
+        emitted_data_types = {r.data_type for r in rows}
+        assert not (self._EXCLUDED & emitted_data_types)
+        # Sanity: some other EQUITY-valid data_type (not excluded) IS still seeded.
+        assert emitted_data_types - self._EXCLUDED
+
+    def test_uac_data_types_by_asset_group_registry_itself_is_untouched(self) -> None:
+        """The fix must be scoped to THIS enumerator's MTDS-tick-manifest seeding
+        path only — UAC's own DATA_TYPES_BY_ASSET_GROUP["tradfi"] (a cross-cutting
+        registry consumed by other UAC modules: validity matrices, UI
+        reference-data generation, mvp_scope, …) must still declare both types as
+        legitimate tradfi data_types."""
+        uac_tradfi_dts = {str(dt) for dt in enumerator_module.DATA_TYPES_BY_ASSET_GROUP.get("tradfi", [])}
+        assert uac_tradfi_dts >= self._EXCLUDED
 
 
 # ---------------------------------------------------------------------------
@@ -1608,7 +3057,7 @@ def test_cefi_v2_option_leaf_yields_no_per_contract_candidate() -> None:
         )
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")  # 2024-06-01 pre-listing, 2025-06-01 alive
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES)))
     assert rows == [], "leaf OPTION must not fan per-contract candidates"
 
 
@@ -1622,7 +3071,7 @@ def test_cefi_v2_combo_leaf_yields_no_per_contract_candidate() -> None:
         )
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES)))
     assert rows == [], "leaf COMBO must not fan per-contract candidates"
 
 
@@ -1641,10 +3090,16 @@ def test_cefi_v2_options_chain_bundle_yields_exactly_one_per_underlying() -> Non
     # Two-date window (alive date keeps the lifecycle-overlap filter from
     # skipping the instrument); only the pre-listing date yields a candidate.
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_cefi(catalog, dates, _CEFI_DATA_TYPES)))
     assert len(rows) == 1, "bundle entry must yield exactly one candidate per underlying/date"
     assert rows[0].data_type == "trades"  # ERA-B: chain bundle's market data_type is trades
-    assert rows[0].instrument_id == "BTC"
+    # Bundle shard atom mirrors the MTDS writer's bundle-capture convention
+    # (instrument_id="" + underlying=<U>, _UNDERLYING_PARTITIONED_TYPES) — NOT the raw
+    # synthetic-entry shape (instrument_id=<U>, underlying="") the pre-fix enumerator
+    # emitted, which no real capture could ever match
+    # (cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_2026_07_15.md).
+    assert rows[0].instrument_id == ""
+    assert rows[0].underlying == "BTC"
 
 
 def test_cefi_v2_bundle_grain_matches_uac_grain_axis() -> None:
@@ -1655,8 +3110,10 @@ def test_cefi_v2_bundle_grain_matches_uac_grain_axis() -> None:
     # SPOT is leaf → it DOES fan (one row per kept data_type) so the two agree
     # only for the bundle-grain types.
     spot_catalog = [_make_cefi_entry(instrument_type="SPOT", venue="BINANCE", available_from="2025-01-01")]
-    spot_rows = list(
-        enumerator_module._enumerate_v2_cefi(spot_catalog, _date_axis("2024-06-01", "2025-06-01"), _CEFI_DATA_TYPES)
+    spot_rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_cefi(spot_catalog, _date_axis("2024-06-01", "2025-06-01"), _CEFI_DATA_TYPES)
+        )
     )
     assert len(spot_rows) > 0, "leaf SPOT must still fan per-data_type"
 
@@ -1697,10 +3154,16 @@ def test_enumerate_v2_option_leaves_collapse_to_one_per_underlying() -> None:
         _opt_entry("ETH-29MAR24-3000-C", "ETH"),
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")  # pre-listing date + alive date
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     # Era-B: exactly one candidate per underlying, data_type=trades — NOT one per
-    # contract, NOT data_type=options_chain.
-    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "trades"), ("ETH", "trades")}
+    # contract, NOT data_type=options_chain. Bundle shard atom is instrument_id=""
+    # + underlying=<U> (matches the MTDS writer's bundle-capture convention).
+    assert {(r.instrument_id, r.underlying, r.data_type) for r in rows} == {
+        ("", "BTC", "trades"),
+        ("", "ETH", "trades"),
+    }
     assert all(r.instrument_type == "options_chain" for r in rows)
     # No per-contract OPTION candidates and no data_type=options_chain leaked through.
     assert not any(r.instrument_type == "OPTION" for r in rows)
@@ -1713,26 +3176,38 @@ def test_enumerate_v2_combo_leaves_roll_up_to_options_chain() -> None:
         _opt_entry("BTC-COMBO-2", "BTC", instrument_type="COMBO"),
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
-    # Era-B: instrument_type=options_chain bundle, data_type=trades.
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "options_chain", "trades")}
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
+    # Era-B: instrument_type=options_chain bundle, data_type=trades. Bundle shard
+    # atom is instrument_id="" + underlying=<U> (MTDS writer bundle convention).
+    assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
+        ("", "BTC", "options_chain", "trades")
+    }
 
 
 def test_enumerate_v2_underlying_derived_when_field_blank() -> None:
     catalog = [_opt_entry("BTC-29MAR24-50000-C")]  # underlying="" → derive "BTC"
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
-    assert {(r.instrument_id, r.data_type) for r in rows} == {("BTC", "trades")}
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
+    assert {(r.instrument_id, r.underlying, r.data_type) for r in rows} == {("", "BTC", "trades")}
 
 
 def test_enumerate_v2_futures_chain_bundle_entry_yields_one_per_underlying() -> None:
     """A futures_chain bundle entry (per-underlying) passes through the rollup and
     yields exactly one candidate — instrument_type=futures_chain, data_type=trades
-    (Era-B; the chain name is the instrument_type, the market data_type is trades)."""
+    (Era-B; the chain name is the instrument_type, the market data_type is trades).
+    Bundle shard atom is instrument_id="" + underlying=<U> (MTDS writer convention)."""
     catalog = [_opt_entry("BTC", "BTC", instrument_type="futures_chain")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
+    assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
+        ("", "BTC", "futures_chain", "trades")
+    }
 
 
 def test_enumerate_v2_perpetual_does_not_produce_options_chain() -> None:
@@ -1740,43 +3215,50 @@ def test_enumerate_v2_perpetual_does_not_produce_options_chain() -> None:
     is per-contract and never rolls up to a chain bundle)."""
     catalog = [_opt_entry("BTC-USDT-PERP", "BTC", instrument_type="PERP", venue="BINANCE")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     assert not any(r.data_type == "options_chain" for r in rows)
     # PERP stays per-contract (its own valid data_types), instrument_id unchanged.
     assert all(r.instrument_id == "BTC-USDT-PERP" for r in rows)
 
 
 def test_enumerate_v2_tradfi_option_leaves_roll_up() -> None:
-    """tradfi option leaves roll up to the per-underlying options_chain bundle, which
-    admits the chain's OWN captured market-data data_types — NOT cefi-parity
-    trades-only.
+    """tradfi option leaves roll up to the per-underlying options_chain bundle.
 
     The grain mechanism is identical to cefi (option/combo leaves → one synthetic
-    per-underlying options_chain entry), but the bundle's emitted data_types come
-    from the operator-ratified tradfi validity matrix (T-OLD-2b, slot-6 verified vs
-    the market-data-tick-tradfi present-set): ``("tradfi","options_chain")`` admits
-    ``{trades, ohlcv_1m}`` of the canonical tradfi data_types (the databento chain
-    captures). The matrix also carries the non-canonical ``options_chain`` snapshot
-    data_type (mark_iv/greeks), but the enumerator cross-joins only the canonical
-    ``DATA_TYPES_BY_ASSET_GROUP["tradfi"]`` (where ``options_chain`` is an
-    instrument_type, not a data_type) so it is correctly NOT emitted here — that
-    snapshot cell is materialised by the per-AG v8→v9 migrator relabel, not the
-    could-exist enumerator. cefi's clean ``{trades}`` is the cefi slice; tradfi's
-    broader admit-set is deliberate (a trades-only tradfi slice marked ~12K real
-    captured chain cells "impossible").
+    per-underlying options_chain entry). The RAW operator-ratified tradfi validity
+    matrix (T-OLD-2b, slot-6 verified vs the market-data-tick-tradfi present-set)
+    admits ``("tradfi","options_chain") -> {trades, ohlcv_1m}`` of the canonical
+    tradfi data_types (the databento chain captures) — cefi's clean ``{trades}``
+    is the cefi slice; tradfi's broader raw admit-set is deliberate (a trades-only
+    tradfi slice marked ~12K real captured chain cells "impossible").
+
+    ES is a real ``TradFiMvpRule`` underlier, so this bundle is ALSO MVP-scoped —
+    the tradfi MVP data_type-narrowing gate (2026-07-14 fix,
+    tradfi_eu_not_draining_source_axis_drift_2026_06_24.md #2) narrows the raw
+    admit-set FURTHER, down to ``{ohlcv_1m}`` only (operator 2026-06-27 decision
+    #7 — no ``trades`` in tradfi MVP; see
+    ``test_row_data_types_cme_options_chain_mvp_narrows_to_ohlcv_1m`` for the
+    ``_row_data_types``-level unit test of this gate in isolation). ``trades`` is
+    therefore correctly ABSENT here despite being in the raw validity matrix.
     """
     catalog = [
         _opt_entry("ES-OPT-1", "ES", instrument_type="OPTION", venue="CME"),
         _opt_entry("ES-OPT-2", "ES", instrument_type="OPTION", venue="CME"),
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="tradfi", catalog=catalog, date_axis=dates))
-    # Era-B: instrument_type=options_chain bundle; tradfi admits trades + ohlcv_1m
-    # (the captured chain market-data data_types — UAC validity matrix T-OLD-2b).
+    # Filter the venue-grain non-trading-day pass so the assertion stays focused
+    # on the per-underlying bundle rows (the roll-up under test); venue-grain
+    # rows carry blank instrument_type and would otherwise leak into the set.
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="tradfi", catalog=catalog, date_axis=dates))
+    )
+    # Era-B: instrument_type=options_chain bundle. MVP-narrowed to ohlcv_1m only
+    # (ES is a real TradFiMvpRule underlier — see docstring).
     # axis-3 (2026-06-22): a tradfi BUNDLE cell carries instrument_id="" + underlying=<U>
     # (the MTDS writer grain), NOT instrument_id=<underlying>.
     assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
-        ("", "ES", "options_chain", "trades"),
         ("", "ES", "options_chain", "ohlcv_1m"),
     }
 
@@ -1785,7 +3267,9 @@ def test_enumerate_v2_non_bundle_instruments_unchanged() -> None:
     """SPOT (leaf) is untouched by the rollup — still per-instrument."""
     catalog = [_opt_entry("BTC-USDT", instrument_type="SPOT", venue="BINANCE", underlying="BTC")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     assert all(r.instrument_id == "BTC-USDT" for r in rows)
     assert not any(r.data_type == "options_chain" for r in rows)
 
@@ -1809,8 +3293,12 @@ def test_enumerate_v2_future_leaf_bundles_at_deribit() -> None:
         _opt_entry("BTC-26SEP25", "BTC", instrument_type="FUTURE", venue="DERIBIT"),
     ]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
+    assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
+        ("", "BTC", "futures_chain", "trades")
+    }
     assert not any(r.instrument_type == "FUTURE" for r in rows)
 
 
@@ -1818,8 +3306,12 @@ def test_enumerate_v2_future_leaf_bundles_at_okx() -> None:
     """OKX (and OKX-FUTURES via the base-venue token) also bundles FUTURE."""
     catalog = [_opt_entry("BTC-27JUN25", "BTC", instrument_type="FUTURE", venue="OKX-FUTURES")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
-    assert {(r.instrument_id, r.instrument_type, r.data_type) for r in rows} == {("BTC", "futures_chain", "trades")}
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
+    assert {(r.instrument_id, r.underlying, r.instrument_type, r.data_type) for r in rows} == {
+        ("", "BTC", "futures_chain", "trades")
+    }
 
 
 def test_enumerate_v2_future_leaf_stays_per_contract_at_bybit() -> None:
@@ -1827,7 +3319,9 @@ def test_enumerate_v2_future_leaf_stays_per_contract_at_bybit() -> None:
     futures_chain bundle (BYBIT is a per-contract futures venue)."""
     catalog = [_opt_entry("BTC-27JUN25", "BTC", instrument_type="FUTURE", venue="BYBIT")]
     dates = _date_axis("2024-06-01", "2025-06-01")
-    rows = list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module.enumerate_v2(asset_group="cefi", catalog=catalog, date_axis=dates))
+    )
     # Stays per-contract: instrument_id unchanged, no futures_chain rollup.
     assert all(r.instrument_id == "BTC-27JUN25" for r in rows)
     assert not any(r.instrument_type == "futures_chain" for r in rows)
@@ -2042,6 +3536,203 @@ def test_make_tradfi_entry_underlying_kw_supported() -> None:
 
 
 # ---------------------------------------------------------------------------
+# ICE COMBO underlying-extraction gap (tradfi_manifest_cf4_source_and_cf7_
+# phantom_gaps_2026_07_07.md) — ICE COMBO symbols carry extra whitespace +
+# numeric spread ids instead of the standard letter+month-code shape, so the
+# generic "-"-split fallback in _derive_underlying can't key them and they were
+# dropped from the roll-up with a WARNING.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("instrument_id", "expected_root"),
+    [
+        ("BRN   3  30615524", "BRN"),
+        ("G   FSF0032.M0032", "G"),
+    ],
+)
+def test_derive_underlying_ice_combo_whitespace_symbol(instrument_id: str, expected_root: str) -> None:
+    """A whitespace-delimited ICE COMBO leading token resolves via TRADFI_ROOTS."""
+    assert enumerator_module._derive_underlying(instrument_id, "tradfi") == expected_root
+
+
+def test_derive_underlying_ice_combo_unknown_root_returns_blank() -> None:
+    """A leading token that isn't a registered TradFi root still returns "" (no mis-key)."""
+    assert enumerator_module._derive_underlying("ZZZNOTAROOT 123 456", "tradfi") == ""
+
+
+def test_derive_underlying_whitespace_fallback_is_tradfi_only() -> None:
+    """The whitespace-token fallback is scoped to tradfi — a non-tradfi asset_group with no
+    ``-`` separator still returns "" rather than risk mis-keying a cefi/defi bundle."""
+    assert enumerator_module._derive_underlying("BRN   3  30615524", "cefi") == ""
+    assert enumerator_module._derive_underlying("BRN   3  30615524") == ""
+
+
+def test_rollup_bundle_grain_tradfi_ice_combo_no_underlying_column_recovers_via_symbol() -> None:
+    """CF-minor finding: ICE COMBO leaves with a blank ``underlying`` catalogue column
+    (the real-world shape — the store never populated it for these rows) now collapse
+    into ONE synthetic combo entry instead of being dropped from the roll-up."""
+    catalog = [
+        _make_tradfi_entry(instrument_id="BRN   3  30615524", instrument_type="COMBO", venue="ICE"),
+        _make_tradfi_entry(instrument_id="BRN   4  30615525", instrument_type="COMBO", venue="ICE"),
+    ]
+    rolled = enumerator_module._rollup_bundle_grain(catalog, "tradfi")
+    synth = [e for e in rolled if e.instrument_type == "combo"]
+    assert len(synth) == 1
+    assert synth[0].instrument_id == "BRN"
+
+
+# ---------------------------------------------------------------------------
+# TradFi COMBO wire-format composite-id mis-parse (G1-ENUM MVP-gate false
+# exclusion) — tradfi_combo_composite_id_misparse_mvp_gate_false_exclusion_
+# 2026_07_28.md. The catalog's blank-underlying COMBO leaves carry a composite
+# "<VENUE>:COMBO:<LEG1>-<LEG2>" instrument_id; the plain "-"-split fallback
+# mis-parses these into a garbage "<VENUE>:COMBO:<LEG1-partial>" key that never
+# passes the MVP gate — silently dropping every combo bundle candidate,
+# including the ES/S&P-500 complex (the sole MVP-scoped tradfi combo/option
+# underlier per the 2026-07-14 operator ruling). All id shapes below are real,
+# distinct instrument_id values sampled live from the prod tradfi instruments
+# catalog (see the issue doc's provenance for the exact source, 2026-07-29) —
+# not synthesised guesses.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("instrument_id", "expected_root"),
+    [
+        # The case this fix exists for: ES calendar spreads must resolve to "ES"
+        # so they pass is_mvp() and stop being dropped before enumeration.
+        ("CME:COMBO:ESU4-ESZ4", "ES"),
+        ("CME:COMBO:ESH4-ESM4", "ES"),
+        # Ordinary CME single-letter-root calendar spreads.
+        ("CME:COMBO:CLH4-CLQ4", "CL"),
+        ("CME:COMBO:GCG7-GCZ1", "GC"),
+        # Multi-letter root (metals).
+        ("CME:COMBO:METQ3-METZ4", "MET"),
+        # Digit-leading root (currency futures).
+        ("CME:COMBO:6LG6-6LX5", "6L"),
+        # Crypto futures root sharing the venue namespace.
+        ("CME:COMBO:BTCG2-MBTH2", "BTC"),
+        # CBOE calendar spread — VX/<expiry>:<n>:<side> leg shape, root before "/".
+        ("CBOE:COMBO:VX/N6:1:S-VX/Z6:1:B", "VX"),
+        # ICE spread legs keep the whitespace-token shape even once the
+        # "VENUE:COMBO:" prefix is stripped — falls through to the pre-existing
+        # whitespace-fallback (role 1c), same as the non-composite ICE shape
+        # already covered above.
+        ("ICE:COMBO:BRN FMX0025-BRN FMQ0026", "BRN"),
+        ("ICE:COMBO:G   FMQ0029-G   FMU0029", "G"),
+    ],
+)
+def test_derive_underlying_tradfi_combo_composite_id(instrument_id: str, expected_root: str) -> None:
+    assert enumerator_module._derive_underlying(instrument_id, "tradfi") == expected_root
+
+
+def test_derive_underlying_tradfi_combo_composite_id_unresolvable_root_falls_through() -> None:
+    """A COMBO leg whose extracted root isn't a registered TRADFI_ROOTS member
+    falls through to the pre-existing "-"-split fallback on the ORIGINAL
+    (unstripped) id rather than mis-keying — under-matching beats mis-keying,
+    unchanged from pre-fix behavior for shapes this helper can't resolve."""
+    result = enumerator_module._derive_underlying("CME:COMBO:ZZZNOTAROOT1-ZZZNOTAROOT2", "tradfi")
+    assert result == "CME:COMBO:ZZZNOTAROOT1"  # byte-identical to the old naive "-"-split
+
+
+def test_derive_underlying_tradfi_combo_composite_id_non_tradfi_unaffected() -> None:
+    """The composite-id parse is tradfi-only — a cefi/defi id with the same
+    shape (unlikely in practice, but the guard must be real) still falls
+    through to the generic "-"-split, never the tradfi-specific helper."""
+    assert enumerator_module._derive_underlying("CME:COMBO:ESU4-ESZ4", "cefi") == "CME:COMBO:ESU4"
+    assert enumerator_module._derive_underlying("CME:COMBO:ESU4-ESZ4", "") == "CME:COMBO:ESU4"
+
+
+def test_derive_underlying_tradfi_combo_composite_id_no_prefix_match_unaffected() -> None:
+    """An id that doesn't match the VENUE:COMBO: prefix shape (e.g. the existing
+    non-combo cefi-style leaf id already covered elsewhere) is untouched by
+    the new helper — regression guard for the pre-existing "-"-split path."""
+    assert enumerator_module._derive_underlying("BTC-29MAR24-50000-C", "") == "BTC"
+    assert enumerator_module._derive_underlying("ES-CAL-1", "tradfi") == "ES"
+
+
+def test_rollup_bundle_grain_tradfi_combo_composite_id_reaches_es_root() -> None:
+    """End-to-end: a blank-underlying ES calendar-spread COMBO leaf now rolls
+    up into a synthetic combo entry keyed on "ES" — the real, MVP-scoped
+    underlier — instead of being silently dropped from the roll-up. Uses the
+    REAL production shape (mvp=False, not this fixture's default mvp=True —
+    see the mvp-pretag test below for why that default would have masked the
+    actual bug) so this test exercises the true end-to-end path."""
+    catalog = [
+        _make_tradfi_entry(instrument_id="CME:COMBO:ESU4-ESZ4", instrument_type="COMBO", venue="CME", mvp=False),
+        _make_tradfi_entry(instrument_id="CME:COMBO:ESH4-ESM4", instrument_type="COMBO", venue="CME", mvp=False),
+    ]
+    rolled = enumerator_module._rollup_bundle_grain(catalog, "tradfi")
+    synth = [e for e in rolled if e.instrument_type == "combo"]
+    assert len(synth) == 1
+    assert synth[0].instrument_id == "ES"
+
+
+# ---------------------------------------------------------------------------
+# TradFi COMBO catalogue mvp=False pre-tag masking the bundle-level MVP gate
+# — the SECOND half of tradfi_combo_composite_id_misparse_mvp_gate_false_
+# exclusion_2026_07_28.md, found via real end-to-end production verification
+# (a synthetic-fixture-only test could not have caught this: _make_tradfi_
+# entry's own default is mvp=True, which never exercises the real catalogue
+# shape). Confirmed live: ALL 59,228 catalog COMBO rows carry mvp=False
+# unconditionally (never None) — a catalog-writer-level default, not a
+# per-instrument judgement — which short-circuits _tradfi_entry_in_mvp_
+# universe's leaf-mvp-column preference BEFORE the live predicate ever sees
+# the roll-up's correctly-resolved underlying.
+# ---------------------------------------------------------------------------
+
+
+def test_tradfi_entry_in_mvp_universe_pretagged_mvp_false_short_circuits_without_override() -> None:
+    """Regression guard for the ORIGINAL (correct, unchanged) behavior: a
+    catalogue entry with a real pre-tagged mvp=False is trusted as-is when NO
+    base_override is passed — this is the exact shape that, prior to the
+    fix, made every COMBO leaf (and therefore every combo bundle) permanently
+    non-MVP regardless of its underlying."""
+    entry = _make_tradfi_entry(instrument_id="CME:COMBO:ESU4-ESZ4", instrument_type="COMBO", venue="CME", mvp=False)
+    assert enumerator_module._tradfi_entry_in_mvp_universe(entry) is False
+
+
+def test_tradfi_entry_in_mvp_universe_base_override_bypasses_stale_pretag() -> None:
+    """The fix: base_override deliberately bypasses a pre-tagged mvp=False and
+    runs the live predicate against the RESOLVED underlying instead — this is
+    what lets the roll-up's bundle_mvp computation see the true answer."""
+    entry = _make_tradfi_entry(instrument_id="CME:COMBO:ESU4-ESZ4", instrument_type="COMBO", venue="CME", mvp=False)
+    assert enumerator_module._tradfi_entry_in_mvp_universe(entry, base_override="ES") is True
+    # A non-MVP root still correctly resolves False even with an override —
+    # this isn't a "always True" backdoor, it's a real live-predicate call.
+    assert enumerator_module._tradfi_entry_in_mvp_universe(entry, base_override="ZZZNOTMVP") is False
+
+
+def test_tradfi_entry_in_mvp_universe_no_pretag_ignores_override_irrelevance() -> None:
+    """When the catalogue's own mvp column is genuinely None (no pre-tag at
+    all — the non-combo/non-bundle common case), base_override and the
+    ordinary base_asset/underlying fallback reach the same live-predicate
+    call for the same value, so behavior is unaffected by the new parameter
+    for entries that never had a stale pre-tag to bypass."""
+    entry = _make_tradfi_entry(instrument_id="ESM6", instrument_type="FUTURE", venue="CME", underlying="ES", mvp=None)
+    assert enumerator_module._tradfi_entry_in_mvp_universe(entry) == enumerator_module._tradfi_entry_in_mvp_universe(
+        entry, base_override="ES"
+    )
+
+
+def test_rollup_bundle_grain_tradfi_combo_mvp_tag_survives_catalog_pretag_false() -> None:
+    """The synthetic ES combo bundle entry itself must carry mvp=True after
+    the roll-up (not just resolve correctly if re-queried) — this is what the
+    downstream _enumerate_v2_tradfi gate (line ~1815) actually reads, so a
+    correct underlying with a wrong mvp tag would still silently drop the
+    candidate one gate later."""
+    catalog = [
+        _make_tradfi_entry(instrument_id="CME:COMBO:ESU4-ESZ4", instrument_type="COMBO", venue="CME", mvp=False),
+    ]
+    rolled = enumerator_module._rollup_bundle_grain(catalog, "tradfi")
+    synth = [e for e in rolled if e.instrument_type == "combo"]
+    assert len(synth) == 1
+    assert synth[0].instrument_id == "ES"
+    assert synth[0].mvp is True
+
+
+# ---------------------------------------------------------------------------
 # DeFi canonical venue/chain split — gotcha #3 (defi-canonical-naming-ssot.md)
 #
 # The instruments-service catalog stores legacy combined venue='AAVEV3-ARBITRUM'
@@ -2082,7 +3773,9 @@ def test_defi_v2_legacy_combined_venue_yields_canonical_venue_and_chain() -> Non
     """
     catalog = [_make_defi_legacy_entry(legacy_venue="AAVEV3-ARBITRUM")]
     dates = _date_axis("2024-06-01")
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"], present_set=set()))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"], present_set=set()))
+    )
     assert len(rows) >= 1, "expected ≥1 expected_unattempted row for alive AAVE_V3/ARBITRUM"
     r = rows[0]
     assert r.venue == "AAVE_V3", (
@@ -2110,8 +3803,12 @@ def test_defi_v2_legacy_uniswapv3_ethereum_splits_canonical() -> None:
         )
     ]
     dates = _date_axis("2024-06-01")
-    rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, dates, ["dex_pool_state", "dex_pool_swaps"], present_set=set())
+    rows = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_defi(
+                catalog, dates, ["dex_pool_state", "dex_pool_swaps"], present_set=set()
+            )
+        )
     )
     assert rows, "expected ≥1 row for alive UNISWAP_V3/ETHEREUM"
     assert all(r.venue == "UNISWAP_V3" for r in rows), f"expected 'UNISWAP_V3', got {[r.venue for r in rows]}"
@@ -2139,7 +3836,9 @@ def test_defi_v2_canonical_venue_present_set_suppresses_seed() -> None:
             "date": "2024-06-01",
         }
     )
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set={key}))
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set={key}))
+    )
     assert rows == [], (
         "canonical present_set key must suppress the legacy-catalog entry — row_key mismatch after the fix"
     )
@@ -2156,7 +3855,7 @@ def test_defi_v2_legacy_venue_pre_genesis_uses_split_chain() -> None:
     catalog = [_make_defi_legacy_entry(legacy_venue="AAVEV3-ARBITRUM", available_from="2022-01-01")]
     # Window includes an alive date (2022-06-01) so the overlap filter passes.
     dates = _date_axis("2020-01-01", "2022-06-01")
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"]))
+    rows = _drop_v2_venue_grain(list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"])))
     assert len(rows) == 1, "expected exactly 1 pre-genesis row"
     assert rows[0].reason == "EXPECTED_PRE_GENESIS_CHAIN", (
         f"pre-genesis branch did not fire; got reason='{rows[0].reason}' — "
@@ -2175,8 +3874,8 @@ def test_defi_v2_legacy_venue_pre_genesis_uses_split_chain() -> None:
 def test_cefi_v2_mvp_gate_excludes_non_mvp_via_column() -> None:
     """A catalogue row tagged mvp=False is NOT seeded (excluded from denominator)."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE-FUTURES", mvp=False)]
-    rows = list(
-        enumerator_module._enumerate_v2_cefi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set()))
     )
     assert rows == []
 
@@ -2184,8 +3883,8 @@ def test_cefi_v2_mvp_gate_excludes_non_mvp_via_column() -> None:
 def test_cefi_v2_mvp_gate_includes_mvp_via_column() -> None:
     """An mvp=True row with no manifest entry IS seeded expected_unattempted."""
     catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE-FUTURES", mvp=True)]
-    rows = list(
-        enumerator_module._enumerate_v2_cefi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    rows = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(catalog, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set()))
     )
     assert rows
     assert all(r.capture_status == "expected_unattempted" for r in rows)
@@ -2205,8 +3904,8 @@ def test_cefi_v2_mvp_gate_computes_predicate_when_column_absent() -> None:
             available_from="2019-01-01",
         )
     ]
-    rows_drop = list(
-        enumerator_module._enumerate_v2_cefi(spot_only, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    rows_drop = _drop_v2_venue_grain(
+        list(enumerator_module._enumerate_v2_cefi(spot_only, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set()))
     )
     assert rows_drop == []
 
@@ -2229,8 +3928,12 @@ def test_cefi_v2_mvp_gate_computes_predicate_when_column_absent() -> None:
             available_from="2019-01-01",
         ),
     ]
-    rows_keep = list(
-        enumerator_module._enumerate_v2_cefi(spot_plus_perp, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set())
+    rows_keep = _drop_v2_venue_grain(
+        list(
+            enumerator_module._enumerate_v2_cefi(
+                spot_plus_perp, _date_axis("2023-06-01"), ["ohlcv_1d"], present_set=set()
+            )
+        )
     )
     spot_rows = [r for r in rows_keep if r.instrument_id == "BTC-USDT"]
     assert spot_rows  # spot now rides the perp-gate
@@ -2249,7 +3952,9 @@ def test_tradfi_v2_nyse_etf_alive_yields_empty_confirmed_delivery_lag() -> None:
     denominator is not inflated by cells that can never be captured from
     XNYS.PILLAR. Mirrors the writer-side fix in MTDS (307ffa05).
     """
-    catalog = [_make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2020-01-01")]
+    catalog = [
+        _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2020-01-01")
+    ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
             catalog,
@@ -2266,7 +3971,9 @@ def test_tradfi_v2_nyse_etf_alive_yields_empty_confirmed_delivery_lag() -> None:
 
 def test_tradfi_v2_nasdaq_etf_alive_yields_expected_unattempted() -> None:
     """NASDAQ ETFs in-window seed expected_unattempted (no ARCX filter applies)."""
-    catalog = [_make_tradfi_entry(instrument_id="QQQ", instrument_type="ETF", venue="NASDAQ", available_from="2020-01-01")]
+    catalog = [
+        _make_tradfi_entry(instrument_id="QQQ", instrument_type="ETF", venue="NASDAQ", available_from="2020-01-01")
+    ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
             catalog,
@@ -2282,7 +3989,9 @@ def test_tradfi_v2_nasdaq_etf_alive_yields_expected_unattempted() -> None:
 
 def test_tradfi_v2_nyse_equity_alive_yields_expected_unattempted() -> None:
     """NYSE equities (non-ETF) in-window still seed expected_unattempted."""
-    catalog = [_make_tradfi_entry(instrument_id="JPM", instrument_type="EQUITY", venue="NYSE", available_from="2020-01-01")]
+    catalog = [
+        _make_tradfi_entry(instrument_id="JPM", instrument_type="EQUITY", venue="NYSE", available_from="2020-01-01")
+    ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
             catalog,
@@ -2298,7 +4007,9 @@ def test_tradfi_v2_nyse_equity_alive_yields_expected_unattempted() -> None:
 
 def test_tradfi_v2_nyse_etf_pre_listing_still_yields_not_listed() -> None:
     """NYSE ETF pre-listing dates keep EXPECTED_INSTRUMENT_NOT_LISTED (beats ARCX check)."""
-    catalog = [_make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2026-06-01")]
+    catalog = [
+        _make_tradfi_entry(instrument_id="SPY", instrument_type="ETF", venue="NYSE", available_from="2026-06-01")
+    ]
     rows = list(
         enumerator_module._enumerate_v2_tradfi(
             catalog,
@@ -2310,3 +4021,569 @@ def test_tradfi_v2_nyse_etf_pre_listing_still_yields_not_listed() -> None:
     in_window = [r for r in rows if r.date >= "2026-06-01"]
     assert all(r.reason == "EXPECTED_INSTRUMENT_NOT_LISTED" for r in pre_listing)
     assert all(r.reason == "EXPECTED_SOURCE_DELIVERY_LAG" for r in in_window)
+
+
+# ---------------------------------------------------------------------------
+# Oscillation guard (2026-07-13): a seeder never emits empty_confirmed over a
+# captured atom. Regression for the captured->empty_confirmed oscillation where
+# the nightly expected-universe-v2-sports run re-stamped EXPECTED_PRE_SEASON /
+# EXPECTED_POST_SEASON empty_confirmed rows over atoms whose data was captured
+# and verified on disk (SEGUNDA_DIVISION/BRASILEIRAO footystats
+# MATCHES/ODDS/PREDICTIONS, 21 atoms flipped on 2026-07-13).
+# ---------------------------------------------------------------------------
+
+_SPORTS_KEY_COLS: list[str] = ["data_type", "league_id", "date"]
+
+
+def test_build_captured_set_restricts_to_captured_rows() -> None:
+    """_build_captured_set keys ONLY capture_status=='captured' rows at present-cols grain."""
+    df = pd.DataFrame(
+        {
+            "data_type": ["MATCHES", "MATCHES", "ODDS"],
+            "league_id": ["SEGUNDA_DIVISION", "SEGUNDA_DIVISION", "BRASILEIRAO"],
+            "date": ["2026-06-06", "2026-06-07", "2026-03-18"],
+            "capture_status": ["captured", "empty_confirmed", "captured"],
+        }
+    )
+    got = enumerator_module._build_captured_set(df, "sports")
+    assert got == {
+        ("MATCHES", "SEGUNDA_DIVISION", "2026-06-06"),
+        ("ODDS", "BRASILEIRAO", "2026-03-18"),
+    }
+
+
+def test_build_captured_set_missing_capture_status_column_is_empty() -> None:
+    df = pd.DataFrame({"data_type": ["MATCHES"], "league_id": ["EPL"], "date": ["2026-06-06"]})
+    assert enumerator_module._build_captured_set(df, "sports") == set()
+
+
+def test_oscillation_guard_drops_lifecycle_empty_over_captured_atom() -> None:
+    """A pre-listing EXPECTED_INSTRUMENT_NOT_LISTED cell is suppressed when the
+    SAME (data_type, league_id, date) atom already has a captured manifest row."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to="2024-01-15")]
+    kwargs = {
+        "asset_group": "sports",
+        "catalog": catalog,
+        "date_axis": _date_axis("2024-01-05", "2024-01-12"),
+        "data_types": ["lineups"],
+        "present_set": {("lineups", "EPL", "2024-01-12")},
+        "present_cols": list(_SPORTS_KEY_COLS),
+    }
+    without_guard = list(enumerator_module.enumerate_v2(**kwargs))
+    assert [r.reason for r in without_guard] == ["EXPECTED_INSTRUMENT_NOT_LISTED"]
+
+    with_guard = list(enumerator_module.enumerate_v2(**kwargs, captured_set={("lineups", "EPL", "2024-01-05")}))
+    assert with_guard == []
+
+
+def test_oscillation_guard_drops_season_gate_empty_over_captured_atom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-day source-rule gate (EXPECTED_POST_SEASON et al) must not emit
+    empty_confirmed for an atom with capture evidence — the exact 2026-07-13
+    prod flip (SEGUNDA_DIVISION footystats MATCHES 2026-06-06)."""
+    import unified_api_contracts.registry.sports_per_source_rules as rules_mod
+
+    def _fake_is_expected_for_source(
+        source: str, league_id: str, day: object, *, data_type: str = ""
+    ) -> tuple[bool, str | None]:
+        return (False, "EXPECTED_POST_SEASON")
+
+    monkeypatch.setattr(rules_mod, "is_expected_for_source", _fake_is_expected_for_source)
+    catalog = [_make_sports_entry(league_id="SEGUNDA_DIVISION", available_from="2018-01-01", available_to=None)]
+    kwargs = {
+        "asset_group": "sports",
+        "catalog": catalog,
+        "date_axis": _date_axis("2026-06-06"),
+        "data_types": ["MATCHES"],
+        "present_set": {("MATCHES", "SEGUNDA_DIVISION", "2026-06-06")},
+        "present_cols": list(_SPORTS_KEY_COLS),
+    }
+    without_guard = [r for r in enumerator_module.enumerate_v2(**kwargs) if r.league_id == "SEGUNDA_DIVISION"]
+    assert len(without_guard) == 1
+    assert without_guard[0].capture_status == "empty_confirmed"
+    assert without_guard[0].reason == "EXPECTED_POST_SEASON"
+
+    with_guard = [
+        r
+        for r in enumerator_module.enumerate_v2(**kwargs, captured_set={("MATCHES", "SEGUNDA_DIVISION", "2026-06-06")})
+        if r.league_id == "SEGUNDA_DIVISION"
+    ]
+    assert with_guard == []
+
+
+def test_oscillation_guard_leaves_non_captured_atoms_untouched() -> None:
+    """The guard only drops empty_confirmed rows whose OWN atom is captured —
+    sibling dates/atoms keep their rows, and expected_unattempted seeding is
+    never affected (that stays present_set-gated as before)."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to="2024-01-15")]
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=_date_axis("2024-01-05", "2024-01-06", "2024-01-12"),
+            data_types=["lineups"],
+            present_set=set(),
+            present_cols=list(_SPORTS_KEY_COLS),
+            captured_set={("lineups", "EPL", "2024-01-05")},
+        )
+    )
+    by_date = {r.date: r for r in rows}
+    assert "2024-01-05" not in by_date  # captured atom: empty_confirmed suppressed
+    assert by_date["2024-01-06"].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"  # sibling kept
+    assert by_date["2024-01-12"].capture_status == "expected_unattempted"  # seeding kept
+
+
+def test_oscillation_guard_inert_without_present_cols() -> None:
+    """captured_set without present_cols cannot key rows — guard must be inert."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to="2024-01-15")]
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=_date_axis("2024-01-05", "2024-01-12"),
+            data_types=["lineups"],
+            captured_set={("lineups", "EPL", "2024-01-05")},
+        )
+    )
+    assert [r.reason for r in rows] == ["EXPECTED_INSTRUMENT_NOT_LISTED"]
+
+
+# ---------------------------------------------------------------------------
+# Sports footystats-subscription-excluded leagues — entity-coverage gate
+# (2026-08-03, footystats_matches_predictions_odds_pending_fetch_universe_
+# expansion_2026_07_27.md, the [CODE] P2 follow-up todo). Before this fix,
+# SPORTS_ENTITY_LEAGUE_COVERAGE mapped MATCHES/PREDICTIONS to ``None`` ("all
+# leagues") and ODDS wasn't even a key — so the enumerator had NO footystats
+# subscription gate at all and kept seeding fresh expected_unattempted rows
+# for PRED_NO_FOOTYSTATS leagues (CHILE_PRIMERA/K_LEAGUE_1/LIGA_MX/
+# ARGENTINA_PRIMERA + related cup/lower-division leagues) forever, regardless
+# of the fetch-loop write-gate (instruments-service@1af6c92, which only stops
+# NEW incidental captured writes) or how many times the non-covered-league
+# typing scripts were re-applied (their covered-league check is purely
+# historical-capture-based and can never un-cover a league contaminated by
+# even one pre-write-gate incidental captured row). _FOOTYSTATS_LEAGUE_COVERAGE
+# mirrors the existing Understat XG/XG_SHOTS pattern, using the SAME
+# subscription-scoped denominator (get_expected_leagues_for_source("footystats",
+# classifications=["Prediction", "Features"])) the fetch-loop write-gate
+# already uses.
+# ---------------------------------------------------------------------------
+
+
+def test_sports_v2_footystats_excluded_league_yields_no_provider_coverage() -> None:
+    """A PRED_NO_FOOTYSTATS league (CHILE_PRIMERA) must never seed a fresh
+    expected_unattempted row for MATCHES/PREDICTIONS/ODDS -- the entity-coverage
+    gate must emit EXPECTED_NO_PROVIDER_COVERAGE (empty_confirmed) instead,
+    for every one of the 3 footystats-backed data_types."""
+    for dt in ("MATCHES", "PREDICTIONS", "ODDS"):
+        catalog = [_make_sports_entry(league_id="CHILE_PRIMERA", available_from="2024-01-01", available_to=None)]
+        rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), [dt], present_set=set()))
+        assert len(rows) == 1, f"{dt}: expected exactly one row"
+        assert rows[0].reason == "EXPECTED_NO_PROVIDER_COVERAGE", f"{dt}: {rows[0].reason!r}"
+        assert rows[0].capture_status == "empty_confirmed"
+        assert rows[0].league_id == "CHILE_PRIMERA"
+
+
+def test_sports_v2_footystats_covered_league_still_seeds_normally() -> None:
+    """Control: a genuinely footystats-covered league (EPL, in-season date) must
+    NOT be caught by the new gate -- still seeds a normal blank-reason
+    expected_unattempted row, for all 3 footystats-backed data_types."""
+    for dt in ("MATCHES", "PREDICTIONS", "ODDS"):
+        catalog = [_make_sports_entry(league_id="EPL", available_from="2024-01-01", available_to=None)]
+        rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-03-05"), [dt], present_set=set()))
+        assert len(rows) == 1, f"{dt}: expected exactly one row"
+        assert rows[0].reason != "EXPECTED_NO_PROVIDER_COVERAGE", f"{dt}: wrongly excluded"
+        assert rows[0].capture_status == "expected_unattempted"
+        assert rows[0].league_id == "EPL"
+
+
+# ---------------------------------------------------------------------------
+# Sports ODDS seed provenance — regression guard
+#
+# The expected-universe seed for a sports data_type MUST derive its source from
+# the CANONICAL source registry (footystats for ODDS), never from the sports
+# asset_group fallback. api_football has no odds path in instruments-service
+# (the adapter's get_odds() is a deprecated stub) — codex/02-data/
+# sports-data-source-coverage-matrix.md §4 — so an api_football x ODDS seed is
+# impossible by construction and pure denominator pollution.
+#
+# This regressed for real, 2026-06-25 -> 2026-07-15: UAC 8fb1f54f stripped
+# ("sports","ODDS") from SOURCE_PRIORITY as decision #6's "coherent unit"; the
+# operator reversed #6 on 2026-06-27 but the revert only restored
+# SPORTS_DATA_TYPE_TO_SOURCE. With the SOURCE_PRIORITY key missing,
+# _derive_pm_source_transport's has_source_priority() probe missed and the CF-3
+# fallback (derive_pipeline_mode_for_row) resolved the sports asset_group
+# DEFAULT -> batch_api_football, stamping source=api_football on every seeded
+# ODDS row. Measured live 2026-07-15: 127,018 impossible api_football x ODDS
+# rows across 94 leagues (footystats ODDS covers 46), re-stamped by the 01:30
+# UTC cron, depressing every ODDS coverage ratio ~4.6x on the denominator.
+# Fixed at the registry (unified-api-contracts@57bcc7c5); pinned here because
+# the enumerator is where the wrong source actually reached the manifest.
+# Tracked: plans/active/issues/
+# sports_odds_ownership_registry_split_brain_and_bogus_api_football_denominator_2026_07_15.md §B
+# ---------------------------------------------------------------------------
+
+
+def test_sports_odds_seed_provenance_is_footystats_never_api_football() -> None:
+    """A seeded sports ODDS row carries source=footystats / pipeline_mode=batch_footystats."""
+    pipeline_mode, source, _transport = enumerator_module._derive_pm_source_transport(
+        "sports",
+        enumerator_module._sports_manifest_data_type("ODDS"),
+        venue=enumerator_module._sports_manifest_venue("ODDS"),
+    )
+    assert source == "footystats", f"sports ODDS seeded with source={source!r} — api_football has no IS odds path"
+    assert source != "api_football"
+    assert pipeline_mode == "batch_footystats"
+
+
+def test_sports_odds_seed_provenance_matches_canonical_registry() -> None:
+    """The seed's source must equal SPORTS_DATA_TYPE_TO_SOURCE's owner for the data_type.
+
+    Guards the split-brain directly: if the two registries disagree again, the seed
+    provenance silently diverges from the domain map and the manifest fills with rows
+    whose `source` column no source can ever satisfy.
+    """
+    from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE
+
+    _pm, source, _t = enumerator_module._derive_pm_source_transport("sports", "ODDS", venue="")
+    assert source == SPORTS_DATA_TYPE_TO_SOURCE["ODDS"]
+
+
+def test_every_sports_data_type_seed_provenance_matches_canonical_registry() -> None:
+    """Generalised: no sports data_type may seed a source other than its canonical owner.
+
+    ODDS is the one that bit us, but the failure mode is generic — any sports
+    data_type missing from SOURCE_PRIORITY silently falls back to the asset_group
+    default (api_football) and pollutes the denominator under a source that never
+    serves it.
+    """
+    from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE
+
+    mismatches: list[str] = []
+    for dt, canonical_source in SPORTS_DATA_TYPE_TO_SOURCE.items():
+        _pm, source, _t = enumerator_module._derive_pm_source_transport(
+            "sports",
+            enumerator_module._sports_manifest_data_type(dt),
+            venue=enumerator_module._sports_manifest_venue(dt),
+        )
+        if source != canonical_source:
+            mismatches.append(f"{dt}: seeds source={source!r}, canonical owner is {canonical_source!r}")
+    assert not mismatches, "sports seed provenance diverges from the canonical registry:\n  " + "\n  ".join(mismatches)
+
+
+# ---------------------------------------------------------------------------
+# G1-ENUM present-set symmetric rollup fix (2026-07-27, option (a) — June-2026-
+# vintage-audit finding, item 14). ``_rollup_bundle_grain`` normalises the
+# CATALOG-SEED side (leaf option/combo/future instruments collapse to ONE
+# per-underlying bundle candidate); the present-set builders previously loaded
+# the manifest VERBATIM, so a LEAF-shaped captured bundle cell (real
+# instrument_id, blank underlying) could never satisfy the rolled-up seed key
+# (blank instrument_id, populated underlying) — manufacturing a phantom
+# ``expected_unattempted`` cell for an underlying that IS captured. These tests
+# cover ``_rollup_present_bundle_grain`` via its two call sites
+# (``_build_present_set`` / ``_build_captured_set``) plus an end-to-end proof.
+# ---------------------------------------------------------------------------
+
+
+def _underlying_aware_present_df(rows: list[dict[str, str]]) -> pd.DataFrame:
+    """Build a raw-shaped tradfi/cefi present-set manifest DataFrame with every
+    ``_UNDERLYING_AWARE_PRESENT_COLS`` column populated (defaults to "" when a
+    row dict omits a key) — mirrors a real per-asset_group manifest read."""
+    cols = enumerator_module._UNDERLYING_AWARE_PRESENT_COLS
+    return pd.DataFrame([{c: r.get(c, "") for c in cols} for r in rows])
+
+
+def test_build_present_set_rolls_up_leaf_combo_capture_to_bundle_grain() -> None:
+    """A LEAF-shaped tradfi COMBO capture (real per-contract instrument_id, blank
+    underlying) rolls up to the writer's bundle key — blank instrument_id +
+    derived underlying — the SAME grain ``_rollup_bundle_grain`` produces on the
+    seed side."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ES-CAL-1",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "", "ES", "", "2024-06-03")}
+
+
+def test_build_present_set_rolls_up_leaf_option_capture_to_options_chain_bundle_grain() -> None:
+    """A LEAF-shaped tradfi OPTION capture rolls up to the ``options_chain`` bundle key."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME-OPTIONS",
+                "data_type": "trades",
+                "instrument_type": "option",
+                "instrument_id": "CL-C-70",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME-OPTIONS", "", "trades", "options_chain", "", "CL", "", "2024-06-03")}
+
+
+def test_build_present_set_rolls_up_leaf_combo_capture_to_options_chain_bundle_grain_cefi() -> None:
+    """CeFi COMBO leaves roll up to the ``options_chain`` bundle (unlike tradfi,
+    whose combo rolls up to its OWN ``combo`` bundle type) — proves the rollup is
+    asset_group-aware via the SAME UAC registry (``bundle_instrument_type_for_leaf``)
+    the seed side uses, not a re-implemented/hardcoded rule."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "DERIBIT",
+                "data_type": "trades",
+                "instrument_type": "combo",
+                "instrument_id": "BTC-29MAR24-50000-C",
+                "date": "2024-03-01",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "cefi")
+    assert got == {("DERIBIT", "", "trades", "options_chain", "", "BTC", "", "2024-03-01")}
+
+
+def test_build_present_set_leaf_non_bundle_type_passthrough() -> None:
+    """A genuine per-contract LEAF (equity) is left unchanged — no rollup for
+    instrument_types without a bundle-grain declaration (no regression for the
+    non-bundle majority of the manifest)."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "NASDAQ",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "equity",
+                "instrument_id": "AAPL",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("NASDAQ", "", "ohlcv_1m", "equity", "AAPL", "", "", "2024-06-03")}
+
+
+def test_build_present_set_already_bundle_shaped_row_passthrough() -> None:
+    """A row already captured at the writer's bundle grain (blank instrument_id +
+    underlying populated) is left unchanged — no double-rollup / no regression
+    for the pre-existing correct capture shape (the case the pre-fix test suite
+    already covered end-to-end)."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "futures_chain",
+                "instrument_id": "",
+                "underlying": "ES",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "futures_chain", "", "ES", "", "2024-06-03")}
+
+
+def test_build_present_set_underlying_undecidable_leaves_row_unrolled() -> None:
+    """A bundle-leaf row whose underlying cannot be derived (no ``-`` separator,
+    not a registered TradFi root, blank ``underlying`` column) is left with its
+    RAW key — under-matching (falls back to pre-fix behaviour for that one row)
+    beats silently mis-keying / discarding real capture evidence."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ZZZNOTAROOT",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "ZZZNOTAROOT", "", "", "2024-06-03")}
+
+
+def test_build_present_set_missing_underlying_column_is_noop() -> None:
+    """A manifest without an ``underlying`` column (old shape / backward-safe) skips
+    the rollup entirely rather than collapsing every underlying of a bundle type
+    into one blank-instrument_id tuple (see ``_UNDERLYING_AWARE_PRESENT_COLS``'s
+    docstring: keying on the blank instrument_id alone would falsely mark every
+    OTHER underlying's cell "present")."""
+    df = pd.DataFrame(
+        [
+            {
+                "venue": "CME",
+                "chain": "",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ES-CAL-1",
+                "league_id": "",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "ES-CAL-1", "", "2024-06-03")}
+
+
+def test_build_captured_set_rolls_up_leaf_bundle_capture() -> None:
+    """The oscillation-guard ``captured_set`` is rolled bundle-grain-symmetric too
+    — a LEAF-shaped captured combo cell must suppress a lifecycle
+    ``empty_confirmed`` re-stamp the same way a bundle-shaped one does."""
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ES-CAL-1",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    df["capture_status"] = "captured"
+    got = enumerator_module._build_captured_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "", "ES", "", "2024-06-03")}
+
+
+def test_enumerate_v2_tradfi_leaf_shaped_combo_capture_suppresses_phantom_seed() -> None:
+    """End-to-end G1-ENUM regression: a manifest that captured a tradfi COMBO
+    bundle at LEAF grain (real per-contract instrument_id, blank underlying — the
+    shape a pre-rollup writer/backfill snapshot can carry) must suppress the
+    rolled-up combo seed for that underlying via ``_build_present_set``'s rollup,
+    not leave it phantom-``expected_unattempted`` (june_2026_vintage_audit_
+    findings_2026_07_27.md §5 item 14, G1-ENUM).
+
+    Pre-fix: the present-set would have kept the RAW leaf key
+    ``(CME, "", ohlcv_1m, combo, ES-CAL-2, "", "", 2024-06-03)``, which can never
+    equal the seed's rolled-up key ``(CME, "", ohlcv_1m, combo, "", ES, "", ...)``
+    — the seed fires as a phantom ``expected_unattempted`` cell even though the
+    underlying's combo data IS captured (just under a different leaf contract).
+    Post-fix: the present-set carries the ROLLED-UP key and suppresses the seed.
+    """
+    catalog = [
+        _make_tradfi_entry(
+            instrument_id="ES-CAL-1", instrument_type="COMBO", venue="CME", underlying="ES", available_from="2020-01-01"
+        ),
+    ]
+    manifest_df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "combo",
+                "instrument_id": "ES-CAL-2",  # a DIFFERENT leaf contract, same underlying
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    present_set = enumerator_module._build_present_set(manifest_df, "tradfi")
+    present_cols = enumerator_module._present_cols_for("tradfi", list(manifest_df.columns))
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="tradfi",
+            catalog=catalog,
+            date_axis=_date_axis("2024-06-03"),
+            data_types=["ohlcv_1m"],
+            present_set=present_set,
+            present_cols=present_cols,
+        )
+    )
+    seeded = {(r.instrument_type, r.instrument_id, r.underlying) for r in rows}
+    assert ("combo", "", "ES") not in seeded, (
+        "LEAF-shaped combo capture for underlying ES must suppress the rolled-up combo seed "
+        "(present-set symmetry fix) — phantom expected_unattempted regression"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TradFi combo underlying-naming mismatch (2026-07-28) —
+# tradfi_combo_underlying_naming_mismatch_blocks_g1_enum_present_rollup_2026_07_28.md
+#
+# Even after the G1-ENUM present-set grain-symmetry fix above, real captured
+# tradfi COMBO/futures_chain/options_chain manifest rows can carry an
+# ALREADY-POPULATED ``underlying`` column in a spelled-out commodity-name
+# convention ("HEATING-OIL", "PLATINUM", "CRUDE", "NAT-GAS-HH") instead of the
+# catalog's short-root convention ("HO", "PL", "CL", "NG") — a naming
+# mismatch, not a grain mismatch. _derive_underlying now takes the raw
+# catalog/manifest ``underlying`` value and reconciles it via the UAC
+# reverse-lookup (``resolve_tradfi_underlying_to_root``) before falling back
+# to the raw value unchanged.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw_underlying", "expected_root"),
+    [
+        ("HEATING-OIL", "HO"),
+        ("PLATINUM", "PL"),
+        ("CRUDE", "CL"),
+        ("NAT-GAS-HH", "NG"),
+        ("COPPER", "HG"),
+        ("GOLD", "GC"),
+        ("SILVER", "SI"),
+    ],
+)
+def test_derive_underlying_reconciles_spelled_out_raw_underlying(raw_underlying: str, expected_root: str) -> None:
+    """A non-blank, spelled-out ``raw_underlying`` reconciles to the catalog's short
+    root code via the UAC reverse-lookup instead of being returned verbatim."""
+    assert enumerator_module._derive_underlying("", "tradfi", raw_underlying=raw_underlying) == expected_root
+
+
+def test_derive_underlying_raw_underlying_already_a_root_passes_through_unchanged() -> None:
+    """A raw_underlying that's ALREADY the catalog's short root code (the correct,
+    writer-shaped convention) is returned as-is — no unnecessary reverse-lookup call,
+    no regression for the already-correct majority (futures_chain/options_chain)."""
+    assert enumerator_module._derive_underlying("", "tradfi", raw_underlying="HO") == "HO"
+    assert enumerator_module._derive_underlying("", "tradfi", raw_underlying="ES") == "ES"
+
+
+def test_derive_underlying_raw_underlying_non_tradfi_passes_through_unchanged() -> None:
+    """The reverse-lookup reconciliation is scoped to tradfi only — a cefi/defi row's
+    already-populated underlying is never rerouted through the TradFi registry."""
+    assert enumerator_module._derive_underlying("", "cefi", raw_underlying="HEATING-OIL") == "HEATING-OIL"
+
+
+def test_derive_underlying_raw_underlying_unresolvable_falls_back_unchanged() -> None:
+    """A genuine multi-root spread (``WTI-BZ``) or opaque residual the reverse-lookup
+    can't resolve is returned UNCHANGED, never blanked — under-matching beats
+    mis-keying / discarding real capture evidence."""
+    assert enumerator_module._derive_underlying("", "tradfi", raw_underlying="WTI-BZ") == "WTI-BZ"
+
+
+def test_derive_underlying_blank_raw_underlying_still_derives_from_instrument_id() -> None:
+    """Blank raw_underlying (the pre-fix call shape) still falls through to the
+    instrument_id-split derivation — no regression for the grain-symmetry fix."""
+    assert enumerator_module._derive_underlying("ES-CAL-1", "tradfi", raw_underlying="") == "ES"
+    assert enumerator_module._derive_underlying("ES-CAL-1", "tradfi") == "ES"
+
+
+def test_build_present_set_reconciles_already_populated_spelled_out_underlying() -> None:
+    """End-to-end proof for the naming-mismatch fix: a real captured tradfi COMBO
+    row (legacy-cased ``COMBO``, blank instrument_id, ALREADY-POPULATED but
+    spelled-out ``underlying="HEATING-OIL"``) now rolls up to the catalog's short
+    root ``HO`` — the present-set key can match a ``HO``-seeded combo bundle
+    instead of permanently phantom-``expected_unattempted``ing every HO combo
+    date because the raw manifest spelling never matched the catalog convention.
+    """
+    df = _underlying_aware_present_df(
+        [
+            {
+                "venue": "CME",
+                "data_type": "ohlcv_1m",
+                "instrument_type": "COMBO",
+                "instrument_id": "",
+                "underlying": "HEATING-OIL",
+                "date": "2024-06-03",
+            }
+        ]
+    )
+    got = enumerator_module._build_present_set(df, "tradfi")
+    assert got == {("CME", "", "ohlcv_1m", "combo", "", "HO", "", "2024-06-03")}

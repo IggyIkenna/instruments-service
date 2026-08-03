@@ -8,6 +8,7 @@ Returns all active perpetual markets as InstrumentRecord objects.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
@@ -15,6 +16,7 @@ from typing import cast
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -27,9 +29,28 @@ from ...schemas import (
 
 logger = logging.getLogger(__name__)
 
+# Lighter's /orderBookDetails carries a numeric ``market_id`` per market
+# ("wire ordinal") alongside its ``symbol``. GCS objects captured before
+# market_id -> symbol resolution existed carry the bare market_id as their
+# filename stem (e.g. "0", "133") instead of a wire symbol. This regex
+# recognises that bare-numeric-stem shape so get_instrument() can route it
+# through resolve_market_index() before falling back to the ordinary
+# raw_symbol lookup (2026-07-23 investigation: market_id -> symbol map).
+_MARKET_INDEX_RE = re.compile(r"^\d+$")
+
 _LIGHTER_API_BASE = "https://mainnet.zklighter.elliot.ai/api/v1"
 # Lighter zkSync mainnet launch (first perpetual markets live 2024-08-01).
 _LIGHTER_DEPLOY_DATE = datetime(2024, 8, 1, tzinfo=UTC)
+
+# Real margin type (2026-07-09, instrument_id_format_canonicalization_2026_07_08.md
+# finding 1's PERPETUAL scope-expansion) — confirmed live via
+# docs.lighter.xyz/trading/multi-asset-margin: "Portfolio Balance is the USDC value
+# of the account including unrealized PnL on perpetual positions" — margin/PnL is
+# USDC-denominated venue-wide, explicitly "linear perpetuals (USDC-margined), not
+# inverse contracts". Derives the @LIN/@INV instrument_id marker FROM this field so
+# the two can never drift.
+_MARGIN_TYPE = MarginType.LINEAR
+_MARGIN_MARKER = _MARGIN_TYPE.value[:3].upper()
 
 
 def _classify_lighter_error(exc: Exception, status: int | None = None) -> str:
@@ -48,6 +69,16 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
     Each market with market_type=perp becomes one InstrumentRecord with
     instrument_type=PERPETUAL, settle_asset=USDC.
     """
+
+    def __init__(self, project_id: str | None = None, api_key: str | None = None) -> None:
+        """Initialize adapter with an empty market_id -> symbol resolution map.
+
+        The map is populated as a side effect of get_instruments() (the same
+        single /orderBookDetails call already fetched there — no extra
+        network round trip) and consumed by resolve_market_index().
+        """
+        super().__init__(project_id=project_id, api_key=api_key)
+        self._market_index_map: dict[str, str] = {}
 
     @property
     def venue(self) -> str:
@@ -105,17 +136,51 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
             sym = str(m.get("symbol", "")).upper()
             if not sym:
                 continue
+            # Capture market_id -> symbol for resolve_market_index(), from the
+            # SAME single-pass loop over the already-fetched /orderBookDetails
+            # response (no extra API call). Every listed market is captured —
+            # including inactive ones (e.g. market_id=133 BIRB stays listed
+            # rather than disappearing) — so a numeric-stem object captured
+            # while a market was still active resolves honestly even after
+            # delisting.
+            market_id_raw = m.get("market_id")
+            if market_id_raw is not None:
+                self._market_index_map[str(market_id_raw)] = sym
             base_asset = sym.split("-")[0] if "-" in sym else sym
+            lighter_instrument_key = build_instrument_id(
+                "LIGHTER-ZKSYNC", InstrumentType.PERPETUAL, f"{base_asset}-USDC@{_MARGIN_MARKER}"
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"LIGHTER-ZKSYNC:PERP:{sym}",
+                    # Canonical instrument_id: VENUE:PERPETUAL:BASE-QUOTE@LIN|@INV
+                    # (2026-07-08 canonicalization — dropped the PERP shorthand + the
+                    # bare no-quote symbol in favour of the real settlement currency.
+                    # Confirmed live via docs.lighter.xyz/trading/multi-asset-margin
+                    # 2026-07-08: "Portfolio Balance is the USDC value of the account
+                    # including unrealized PnL on perpetual positions" — perp
+                    # PnL/margin is USDC-denominated for all markets. 2026-07-09
+                    # scope-expansion — added the real @LIN margin marker, see
+                    # _MARGIN_TYPE above for the verification method). SSOT:
+                    # plans/active/issues/instrument_id_format_canonicalization_2026_07_08.md
+                    # finding 1 (2026-07-09 PERPETUAL scope-expansion) + finding 3+4;
+                    # plans/active/canonical_id_p1_onchain_perp_perp_shorthand_2026_07_08.md.
+                    # Routed through the shared UAC builder (2026-07-09 retrofit,
+                    # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 4) — the
+                    # marker is embedded in the symbol passed to the builder (PERPETUAL's
+                    # ``_build_cefi_simple`` upper-cases the symbol verbatim, same
+                    # convention DeFi POOL fee-tiers already use).
+                    instrument_key=lighter_instrument_key,
+                    # No CeFi raw-code-to-human-name translation gap (see other CeFi
+                    # adapters' identical comment) — canonical_instrument_id mirrors
+                    # instrument_key.
+                    canonical_instrument_id=lighter_instrument_key,
                     venue=self.venue,
                     raw_symbol=sym,
                     instrument_type=InstrumentType.PERPETUAL,
                     base_asset=base_asset,
                     quote_asset="USDC",
                     settle_asset="USDC",
-                    margin_type=MarginType.LINEAR,
+                    margin_type=_MARGIN_TYPE,
                     tick_size=Decimal("0.0001"),
                     min_size=Decimal("0.001"),
                     contract_size=Decimal("1"),
@@ -131,10 +196,43 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
         logger.info("Lighter: fetched %d perp instruments", len(results))
         return results
 
+    async def resolve_market_index(self, market_index: str) -> str | None:
+        """Resolve a bare-numeric Lighter market_id wire-ordinal to its symbol.
+
+        ``market_index`` must be a bare-digit string (e.g. "0", "133") — any
+        other shape returns None immediately (it isn't a market_id). On a
+        digit string, ensures the market_id -> symbol map is fresh (via the
+        shared TTL-cached get_instruments_cached() — no live API call unless
+        the cache is stale) and looks it up.
+
+        Honest-absence contract: a market_id not present in the live
+        /orderBookDetails universe (never listed, or a typo) returns None.
+        This NEVER fabricates a symbol guess for an unrecognised index.
+        """
+        if not _MARKET_INDEX_RE.match(market_index):
+            return None
+        await self.get_instruments_cached()
+        return self._market_index_map.get(market_index)
+
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
-        """Fetch a single instrument by identifier."""
+        """Fetch a single instrument by identifier.
+
+        Accepts either the venue's raw wire symbol (e.g. "BTC") or a bare
+        numeric Lighter market_id wire-ordinal (e.g. "0") — objects captured
+        before market_id -> symbol resolution existed carry the bare
+        market_id as their filename stem instead of the symbol. The numeric
+        form is resolved via resolve_market_index() first; an unrecognised
+        market_id returns None (honest absence) rather than falling through
+        to a symbol-shaped comparison that could never legitimately match.
+        """
+        lookup_symbol = symbol
+        if _MARKET_INDEX_RE.match(symbol):
+            resolved = await self.resolve_market_index(symbol)
+            if resolved is None:
+                return None
+            lookup_symbol = resolved
         for inst in await self.get_instruments():
-            if inst.raw_symbol == symbol or inst.raw_symbol == symbol.upper():
+            if inst.raw_symbol == lookup_symbol or inst.raw_symbol == lookup_symbol.upper():
                 return inst
         return None
 

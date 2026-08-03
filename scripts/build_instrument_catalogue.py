@@ -58,13 +58,44 @@ from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
 
 import pandas as pd
-from unified_api_contracts import TRADFI_ROOTS, build_pool_identity, is_in_mvp_capture_universe, is_mvp
+from unified_api_contracts import (
+    CEFI_BASE_ASSET_UNIVERSE,
+    CEFI_EQUITY_PERP_BASE_UNIVERSE,
+    TRADFI_ROOTS,
+    VENUE_TO_ASSET_GROUP,
+    TardisInstrumentDetail,
+    build_pool_identity,
+    is_defi_force_include,
+    is_defi_force_include_pool,
+    is_in_mvp_capture_universe,
+    is_mvp,
+    tracks_equity,
+)
+from unified_api_contracts.internal import InstrumentRecord, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
+from unified_api_contracts.predictions import build_cross_venue_mapping
 from unified_trading_library import (
+    GcsEventSink,
     StorageClient,
     get_config,
     get_storage_client,
+    log_event,
     resolve_bucket_name,
+    setup_events,
+    with_retry,
 )
+
+# Reused (not reimplemented) for the numeric-YYMMDD wire-date fallback in
+# _wire_symbol_expiry_date_numeric_yymmdd — same established intra-repo pattern as
+# scripts/canonicalize_bybit_kraken_futures_catalog_2026_07_09.py.
+from instruments_service.reference_data.adapters.cefi.tardis import parsing as tardis_parsing
+
+#: Real event-log wiring for CATALOGUE_SHRINK_BLOCKED (cefi_monotonicity_guard_alerting_
+#: and_dark_venues_2026_07_07.md) — mirrors scripts/cross_asset_rescan.py's batch-mode
+#: GcsEventSink pattern. setup_events() is called once in main() (the sole real CLI entry
+#: point; tests call run_rollup()/promote_catalogue() directly and never reach this).
+_EVENTS_PROJECT_ID = "central-element-323112"
+_EVENTS_SERVICE = "instruments-service"
 
 
 def _instruments_store_bucket_for(asset_group: str) -> str:
@@ -130,6 +161,89 @@ SPORTS_LEAGUE_ENTITY = "leagues"
 #: The ``instrument_type`` stamped on every sports league catalogue row.
 SPORTS_LEAGUE_INSTRUMENT_TYPE = "league"
 
+#: Sentinel ``league_id`` values that must NEVER be rolled up into a catalogue
+#: row (2026-07-08/09 phantom-league fix, `A1` in
+#: `instruments_docs_audit_outstanding_items_2026_07_08.md`).
+#: ``api_football_reference.py:165`` is the only known writer of the literal
+#: ``"UNKNOWN"`` value (frozen since the 2026-06-24 write-universe gate — no new
+#: captures land under it), but the uppercase compare below also catches any
+#: case-variant that might otherwise re-enter this roll-up.
+#:
+#: HISTORY NOTE (2026-07-13): until the 24-league de-registration ruling this
+#: deliberately stayed a NARROW sentinel check because 22 raw numeric long-tail
+#: league_ids plus ``LA_LIGA_2``/``RFPL``/``SCOTTISH_LEAGUE_CUP_185`` were
+#: legitimate manifest leagues outside UAC ``LEAGUE_REGISTRY``. The operator
+#: ruling de-registered all 24 (captured rows re-keyed or parked to
+#: ``_audits/parked_league_rows_20260713.parquet``, index purged), so the
+#: roll-ups now ALSO require :func:`_sports_league_registered` — sentinels stay
+#: as a distinct, case-insensitive first-line guard.
+SPORTS_LEAGUE_ID_SENTINELS = frozenset({"UNKNOWN"})
+
+
+def _sports_league_registered(league_id: str) -> bool:
+    """True when ``league_id`` is a UAC ``LEAGUE_REGISTRY`` member.
+
+    2026-07-13 operator ruling (24-league de-registration): the sports universe
+    is EXACTLY the registered-league set — the 94-league api_football trading
+    universe plus the 7 non-football registry leagues (ATP/WTA/NBA/NFL/NHL/MLB/
+    EUROLEAGUE). League_ids outside ``LEAGUE_REGISTRY`` (raw numeric
+    api-football long-tail ids, alias strings like ``LA_LIGA_2``/``RFPL``/
+    ``SCOTTISH_LEAGUE_CUP_185``) are de-registered: their index rows were
+    re-keyed/parked+purged, but their GCS data objects remain in place by
+    design — so BOTH sports roll-ups (league-grain manifest roll-up AND the
+    fixture/team/player by_date walk) must gate on this or the catalogue would
+    re-mint rows for de-registered leagues from the surviving objects, and the
+    v2 enumerator would re-amplify them into manifest expected/empty rows.
+    New captured writes are separately blocked by
+    ``orchestrator/sports.py::_is_in_canonical_write_universe``.
+    """
+    from unified_api_contracts.sports import LEAGUE_REGISTRY
+
+    return league_id in LEAGUE_REGISTRY
+
+
+#: instrument_type stamped on sports FIXTURE/TEAM/PLAYER-grain catalogue rows
+#: (2026-07-09 operator decision — extends the catalogue past the
+#: league-grain-only scope `sports_catalog_league_grain_only_scope_2026_07_08.md`
+#: documented). See :func:`build_sports_fixture_team_player_catalogue`.
+SPORTS_FIXTURE_INSTRUMENT_TYPE = "fixture"
+SPORTS_TEAM_INSTRUMENT_TYPE = "team"
+SPORTS_PLAYER_INSTRUMENT_TYPE = "player"
+
+#: ``sports_reference/by_date`` ``entity=`` names the fixture/team/player-grain
+#: roll-up reads — ONE combined by_date walk covers all three (single-walk
+#: discipline, codex/02-data/availability-manifest-and-data-status.md: a
+#: separate whole-corpus walk per entity is review-blocking).
+# The LIVE fixtures entity. The 2026-05-23 split moved the writer to
+# `entity=fixtures_schedule` (+ `entity=fixtures_outcomes` for scores/results) but left
+# consumers pinned to the old `entity=fixtures`, which STOPPED being written on that date.
+# The catalogue was therefore rolling up a ~2-month-frozen corpus: measured 2026-07-19,
+# `entity=fixtures` newest write 2026-05-23 vs `fixtures_schedule` 2026-07-18. That is why
+# `round` read 0.7% in the catalogue while raw sat at 90-99% — a CONSUMER-migration bug, not
+# a capture gap. This rollup reads only SCHEDULE fields (af_home_name / af_away_name / date /
+# timestamp / round), all 100% populated on the schedule leg, so no outcomes join is needed.
+# SSOT: sports_features_layer_findings_sweep_2026_07_18 section R.
+SPORTS_FIXTURE_ENTITY = "fixtures_schedule"
+SPORTS_TEAM_ENTITY = "teams"
+#: Real captured per-player source. API-Football ``entity=injuries`` rows carry
+#: a real ``player_id``/``player_name``/``team_id`` (verified against real prod
+#: GCS 2026-07-09). ``entity=fixture_lineups`` was considered first — it is the
+#: full-roster source the SPORTS_INSTRUMENTS.md 11-step pipeline table implies —
+#: but its real per-league parquet on GCS carries ONLY
+#: ``formation``/``fixture_id``/``available_at``: the per-fixture-entity writer's
+#: nested-column-drop guard (``sports_reference_fixtures.py::_write_per_fixture_entities``,
+#: "Dropping N nested columns") strips the ``player_id``/``player_name`` fields
+#: (nested under raw ``startXI``/``substitutes`` blocks) before they ever reach
+#: GCS, so no player identity survives there today — a real, separate
+#: data-completeness gap in the LINEUPS writer, not something this roll-up can
+#: paper over. INJURIES is therefore the honest source: real, but a NARROWER
+#: slice than a full roster (currently-injured players only). See
+#: SPORTS_INSTRUMENTS.md's "Known gaps" section.
+SPORTS_PLAYER_SOURCE_ENTITY = "injuries"
+
+#: The three entities :func:`_iter_sports_ftp_snapshots` walks in one pass.
+_SPORTS_FTP_ENTITIES = frozenset({SPORTS_FIXTURE_ENTITY, SPORTS_TEAM_ENTITY, SPORTS_PLAYER_SOURCE_ENTITY})
+
 #: The canonical catalogue filename the launcher + v2 enumerator read.
 CATALOG_FILENAME = "catalog.parquet"
 
@@ -147,6 +261,21 @@ WINDOW_DAYS_MIN = 21
 #: available_to for everything that listed/delisted during the gap).
 WINDOW_MARGIN_DAYS = 7
 
+#: Trailing-window size (days) for the sports FIXTURE/TEAM/PLAYER-grain roll-up's
+#: by_date walk (:func:`build_sports_fixture_team_player_catalogue`). UNLIKE
+#: league-grain (a cheap single manifest-index read, no by_date walk at all),
+#: fixtures/teams/injuries are per-fixture/per-day objects with no GCS-side way
+#: to prefix-scope a LISTING to just these three entities (the ``entity=``
+#: segment sits after ``day=``/``pipeline_mode=`` in the path) — an unwindowed
+#: full-history listing measured >180s against real prod GCS 2026-07-09,
+#: BEFORE any downloads even start. A full historical fixture/team/player
+#: backfill is therefore a genuine, separate, larger decision (mirrors the
+#: "needs a decision, not a rushed fix" framing
+#: `sports_catalog_league_grain_only_scope_2026_07_08.md` used) — this roll-up
+#: defaults to a real, current, always-fresh trailing window (~13 months)
+#: instead of silently doing nothing or hanging indefinitely.
+SPORTS_FTP_WINDOW_DAYS = 400
+
 #: Columns the enumerator's ``_catalog_from_dataframe`` consumes. ``instrument_id``
 #: is written as the canonical column (the helper also accepts ``instrument_key``).
 #: ``data_type`` is the OPTIONAL grain-binding (prediction multi-grain catalogue) —
@@ -159,6 +288,16 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     "league_id",
     "available_from",
     "available_to",
+    # Distinct venue-declared EXPIRY (dated FUTURE/OPTION/COMBO), stored separately
+    # from the overloaded ``available_to`` (which for a non-expiring type is a
+    # delisting / last-observed date, NOT an expiry). This is the already-parsed
+    # ``_InstrumentAggregate.expiry`` (venue truth), emitted verbatim — NOT derived
+    # from ``available_to``: for the ~74% of cefi dated rows where the venue declared
+    # no expiry, ``available_to`` is a last-observed date, so deriving from it would
+    # fabricate an expiry. Honest-NULL means "no venue-declared expiry captured"; the
+    # ``available_to`` + type-filter path in ``catalogue_lifecycle.list_upcoming_expiries``
+    # stays correct as the floor. Plan: data_status_page_ux_and_canonicalisation_2026_07_16 A2.
+    "expiry",
     "market_created_at",
     "settlement_time",
     "data_type",
@@ -175,11 +314,69 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # match. Blank for prediction/sports (no exchange-native symbol there).
     "raw_symbol",
     "base_asset",
+    # Human-readable security / issuer name for an instrument whose canonical
+    # ``instrument_id`` is an opaque coded symbol (uac InstrumentRecord.name). TODAY
+    # populated for the KRX (Korea Exchange) single-stock equities, whose id is the
+    # bare 6-digit KRX code (``KRX:EQUITY:005930`` = Samsung Electronics). Stamped
+    # on-the-fly by ``_add_instrument_name`` from the UAC ``KRX_EQUITY_NAMES`` registry
+    # (keyed on ``base_asset`` = the bare code) — the SAME self-healing pattern as
+    # ``mvp`` / ``tracks_equity`` / ``force_include`` (never baked, re-derived every
+    # rebuild), so the name populates on the next roll-up with no re-capture needed.
+    # Also carries through any adapter-populated ``InstrumentRecord.name`` present on a
+    # per-date row (forward-only). Blank for rows with no display name (the vast
+    # majority — their instrument_id is already human-readable). Plan: krx_name +
+    # tradfi_catalogue deliverables 2026-07-20.
+    "name",
+    # Human-readable market question/title (uac InstrumentRecord.question). TODAY
+    # populated only by the PREDICTION adapters (Polymarket ``question`` / Kalshi
+    # ``title — yes_sub_title``) and emitted onto the per-market prediction roll-up
+    # rows below. FORWARD-ONLY: the per-date parquet only carries ``question`` for
+    # captures written after uac@c1de078a, so on pre-migration data it is honest-None
+    # (never fabricated). Non-prediction rows (cefi/tradfi/defi/sports) get None via
+    # the ``pd.DataFrame(rows, columns=CATALOG_COLUMNS)`` reindex — the main emission
+    # is not wired for question (those instruments have no market-question axis).
+    "question",
+    # Per-instance cross-venue identity (prediction_canonical_identity_migration_
+    # 2026_07_08.md todos 2 + 5): the Kalshi<->Polymarket SAME-MARKET join key
+    # (unified_api_contracts.predictions.build_cross_venue_mapping()) for a
+    # matched crypto/macro/index pair, OR the Sports-asset-group-aligned
+    # fixture_id for a Polymarket sports market (build_fixture_id() — see
+    # polymarket/parsing.py::_build_sports_id) for Prediction rows. For CeFi/DeFi
+    # rows (canonical_instrument_id_cefi_defi_backfill_2026_07_14.md): mirrors
+    # instrument_key, carried through from the adapter-populated per-date row's
+    # own canonical_instrument_id field (no raw-code-to-human-name translation gap
+    # to solve there, unlike TradFi/Databento's separate product-root use of this
+    # same InstrumentRecord field, which is NOT surfaced through this column).
+    "canonical_instrument_id",
     # MVP-scope tag (mvp_scope_catalogue_tagging_2026_06_08): per-entry boolean
     # computed via the UAC ``is_mvp(...)`` predicate over the rolled-up catalogue.
     # Read by deployment-api's ``scope=mvp`` coverage denominator + the data-status
     # MVP toggle. On-the-fly at roll-up time — never a baked rule (UAC owns the rule).
     "mvp",
+    # Crypto-venue equity-identity tags (operator 2026-07-16): instrument_type stays
+    # the BROAD mechanics type (a single-stock perp is PERPETUAL, a tokenized stock is
+    # SPOT_PAIR) — the equity identity + real-equity linkage ride these two tags so
+    # downstream can find the tradfi spot leg (basis arb) without inferring from the
+    # type or symbol string. Stamped on-the-fly by ``_add_equity_tags`` (UAC owns the
+    # universe + link map), same pattern as ``mvp``.
+    #   tracks_equity  — the Databento DBEQ.BASIC real-equity ticker the instrument
+    #                    tracks (METAUSDT→META, AAPLX→AAPL), or "" for a standalone/
+    #                    pre-IPO symbol (SPCX) and every non-equity row.
+    #   is_equity_perp — bool: the row is a crypto-venue EQUITY instrument (a
+    #                    single-stock perp OR a tokenized-share spot), i.e. its base
+    #                    resolves to a CEFI_EQUITY_PERP_BASE_UNIVERSE member.
+    "tracks_equity",
+    "is_equity_perp",
+    # TVL-exempt FORCE-INCLUDE marker (IS R2c — availability-denominator honesty).
+    # bool: True for a DeFi governance / forced token that is in the catalogue because
+    # a dedicated governance-token adapter issues it (EIGENLAYER→EIGEN, ETHERFI→ETHFI),
+    # NOT because it crossed a DEX TVL/liquidity threshold — so downstream can tell a
+    # FORCED inclusion (tracked regardless of TVL) from COINCIDENTAL liquidity (a
+    # Uniswap EIGEN/WETH pool). Stamped on-the-fly by ``_add_force_include`` via the
+    # UAC SSOT ``is_defi_force_include`` (keyed on venue-protocol + base_asset), same
+    # self-healing pattern as ``mvp`` / ``is_equity_perp``. False for every non-DeFi
+    # row and every coincidental-liquidity DeFi row.
+    "force_include",
     # Margin type: "linear" (USDT/USDC-margined) or "inverse" (coin-margined/delivery).
     # Propagated from the per-date instruments parquet ``margin_type`` column
     # (populated by the IS cefi Tardis adapter). Empty for non-derivative instruments
@@ -189,14 +386,87 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     # operator Refinement 1 — keep BOTH forms per pool): the manifest-canonical
     # ``instrument_id`` above is ``pool_address.lower()`` (for DeFi POOL rows), while
     # ``glued_pair_id`` carries the HUMAN-READABLE UI id
-    # ``UNISWAPV3-ARBITRUM:POOL:AAVE-USDC:100`` (venue-chain glued + POOL + token0-token1
-    # PAIR + FEE). Built via the UAC SSOT converter ``build_pool_identity`` so the two
+    # ``UNISWAP_V3-ARBITRUM:POOL:AAVE-USDC:100`` (venue-chain glued + POOL + token0-token1
+    # PAIR + FEE — with-underscore protocol spelling is canonical, operator decision
+    # 2026-07-08/14, ``instrument_id_format_canonicalization_2026_07_08.md`` finding 2).
+    # Built via the UAC SSOT converter ``build_pool_identity`` so the two
     # forms are reversible. Blank for non-DeFi-pool rows (cefi/tradfi/sports/prediction).
     "glued_pair_id",
     # On-chain pool contract address (DeFi POOL rows) — the canonical-id source +
     # the address the bidirectional converter needs to re-resolve from a glued-pair.
     # Blank for non-pool rows.
     "pool_address",
+    # On-chain token contract addresses (DeFi rows) — projected from the per-date
+    # InstrumentRecord (UAC internal.reference.instrument: base_asset_contract_address,
+    # quote_asset_contract_address, atoken_address, debt_token_address). Surfaced so the
+    # data-status UI can show + copy the contract address per token leg, and so the
+    # SPOT_ASSET population (plan data_status_page_ux_and_canonicalisation_2026_07_16 P4-B)
+    # can derive one SPOT_ASSET per unique (chain, token → contract_address) without a
+    # re-fetch (the addresses already exist in the source rows). Blank for CeFi/tradfi/
+    # sports/prediction rows + DeFi rows the adapter left unset.
+    "base_asset_contract_address",
+    "quote_asset_contract_address",
+    "atoken_address",
+    "debt_token_address",
+    # Sports FIXTURE scheduling/display fields (operator round-3, 2026-07-17 —
+    # "all the fixtures broken down by searching by date, league and/or team").
+    # The ``entity=fixtures`` by_date snapshots that
+    # :func:`build_sports_fixture_team_player_catalogue` ALREADY walks carry every
+    # one of these (``timestamp`` / ``status_short`` / ``af_home_name`` /
+    # ``af_away_name`` / ``venue_name`` / ``round``) — they were previously
+    # DISCARDED, the roll-up keeping only the first/last-day lifecycle. That gap is
+    # exactly why deployment-api's fixtures browser had to re-walk the per-day
+    # parquets over a <=120-day window just to render a kickoff time. Carrying them
+    # here makes the ONE rolled-up catalogue object a COMPLETE fixtures source over
+    # the whole :data:`SPORTS_FTP_WINDOW_DAYS` window — no extra walk, no extra
+    # read, the data was already in hand. Blank/None on every non-sports-fixture row.
+    #
+    # NOTE ``venue_name`` is the physical STADIUM (from the fixture snapshot), which
+    # is a different axis from the ``venue`` column above (the bookmaker/exchange
+    # association — honestly blank for sports reference rows, see SPORTS_INSTRUMENTS.md's
+    # "``venue`` vs ``source``" note). The two never carry the same thing.
+    #
+    # Sourced from the LATEST-observed snapshot per fixture, because ``status``
+    # legitimately evolves across days (NS -> 1H -> FT) — the newest observation is
+    # the honest one (see ``_fixture_attr_day`` in the roll-up).
+    #
+    # MEASURED FILL (real GCS, 2026-07-17): kickoff_utc/status/home_team_name/
+    # away_team_name = 76/76 of a sampled window; venue_name = 65/76 (the source
+    # leaves it None for some fixtures — honest blank); ``round`` = **0/62 across
+    # every sampled day AND every major league** (LA_LIGA / BUNDESLIGA /
+    # ENG_CHAMPIONSHIP / DANISH_SUPERLIGA ...). The column is retained because it
+    # IS a legitimate fixture field the upstream API supplies — the blank is an
+    # instruments-service WRITER gap (it never stamps ``round`` into the
+    # ``entity=fixtures`` snapshot), NOT a roll-up bug, and it is exactly why the
+    # fixtures browser's ``round`` has always rendered blank (same source). Tracked
+    # as a todo on data_status_page_ux_and_canonicalisation_2026_07_16 (P10). If
+    # that writer is fixed, this column populates with no schema change.
+    "kickoff_utc",
+    "status",
+    "home_team_name",
+    "away_team_name",
+    "venue_name",
+    "round",
+    # PREDICTION soccer-fixture linkage fields (uac InstrumentRecord af_league_id /
+    # home_team_canonical_id / away_team_canonical_id / fixture_date / af_fixture_id /
+    # af_fixture_match_status — internal/reference/instrument.py). Populated only by
+    # the PREDICTION rollup (build_prediction_catalogue_dataframe) for a Polymarket/
+    # Kalshi soccer market the adapter matched to an API-Football fixture; carried
+    # straight through from the per-conditionId InstrumentRecord and emitted onto the
+    # per-market prediction rows. FORWARD-ONLY / honest-None: the IS
+    # ``_records_to_dataframe`` parquet JOIN that materialises these is downstream +
+    # deferred (uac note, plan prediction_consolidated_closeout_2026_07_18 A4), so on
+    # a by_date snapshot that lacks the columns these stay None (never fabricated) and
+    # the ``pd.DataFrame(rows, columns=CATALOG_COLUMNS)`` reindex leaves them None on
+    # every non-prediction / non-soccer row (cefi/tradfi/defi/sports). Distinct axis
+    # from the sports-CATALOGUE block above: those are the sports asset_group's own
+    # ``entity=fixtures`` roll-up columns; these ride the prediction rows only.
+    "af_league_id",
+    "home_team_canonical_id",
+    "away_team_canonical_id",
+    "fixture_date",
+    "af_fixture_id",
+    "af_fixture_match_status",
 )
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
@@ -210,6 +480,11 @@ _DAY_RE = re.compile(r"(?:^|/)day=(\d{4}-\d{2}-\d{2})(?:/|$)")
 
 #: Extract the ``entity=`` partition from a sports ``by_date`` blob path.
 _ENTITY_RE = re.compile(r"(?:^|/)entity=([^/]+)(?:/|$)")
+
+#: Extract the ``league=`` partition from a sports ``by_date`` blob path.
+#: fixtures/teams/injuries are written per-league; absent on the rare legacy
+#: unmapped-fallback blobs (callers treat a missing match as ``""``).
+_LEAGUE_RE = re.compile(r"(?:^|/)league=([^/]+)(?:/|$)")
 
 #: Extract the ``venue=`` / ``canonical_question_group=`` partitions (prediction).
 #: The prediction writer (instruments-service ``orchestrator.py``) partitions
@@ -333,6 +608,26 @@ def _parse_truth_date(raw: str | None) -> date | None:
         return None
 
 
+def _parse_truth_datetime(raw: str | None) -> datetime | None:
+    """Parse a venue-truth lifecycle timestamp (``_PredLifecycle.settled``) → a
+    UTC :class:`datetime`, or ``None`` for blank/unparseable values.
+
+    Used to build the synthetic :class:`InstrumentRecord` views the cross-venue
+    matcher (:func:`build_cross_venue_mapping`) needs for its
+    ``expiry``-keyed settlement-bucket join (see ``build_prediction_catalogue_dataframe``).
+    """
+    if not raw:
+        return None
+    try:
+        ts = pd.Timestamp(raw)
+    except (ValueError, TypeError):
+        return None
+    if pd.isna(ts):
+        return None
+    py_dt = ts.to_pydatetime()
+    return py_dt.replace(tzinfo=UTC) if py_dt.tzinfo is None else py_dt.astimezone(UTC)
+
+
 #: A venue's latest day counts as a FULL trading day (rather than a thin/partial
 #: capture) when its instrument count is at least this fraction of the venue's
 #: recent median. A genuinely down day (e.g. mass expiry roll) still exceeds this;
@@ -373,25 +668,313 @@ def _venue_last_full_day(day_counts: dict[date, int]) -> date | None:
     return days[-1]
 
 
+#: Legacy lowercase → canonical UAC ``InstrumentType`` alias map applied by
+#: :func:`_canonicalize_instrument_type` when a catalogue row's ``instrument_type``
+#: is stamped from the raw per-date source value. Mirrors the documented legacy
+#: mapping in ``InstrumentType``'s own docstring (UAC
+#: ``unified_api_contracts._instrument_enums``) plus the additional lowercase
+#: spellings measured live in production (2026-07-18: COINBASE-SPOT/BYBIT by_date
+#: rows carry ``spot``/``spot_pair``/``perpetual``/``futures_chain`` alongside the
+#: canonical uppercase form — the manifest-writer alias guard at
+#: ``instruments_service.engine.orchestrator.writers._LEGACY_INSTRUMENT_TYPE_ALIASES``
+#: only intercepts ``perpetual``/``spot`` going forward, so historical + still-live
+#: variants outside that pair reach the roll-up unmapped). Keys are lowercased
+#: before lookup.
+_INSTRUMENT_TYPE_LEGACY_ALIASES: dict[str, str] = {
+    "spot": InstrumentType.SPOT_PAIR.value,
+    "spot_pair": InstrumentType.SPOT_PAIR.value,
+    "perp": InstrumentType.PERPETUAL.value,
+    "perpetual": InstrumentType.PERPETUAL.value,
+    "futures": InstrumentType.FUTURE.value,
+    "futures_chain": InstrumentType.FUTURE.value,
+    "future": InstrumentType.FUTURE.value,
+    "option": InstrumentType.OPTION.value,
+    "pool": InstrumentType.POOL.value,
+    "lending_market": InstrumentType.LENDING.value,
+    "lending": InstrumentType.LENDING.value,
+    "lst": InstrumentType.LST.value,
+    "yield": InstrumentType.YIELD_BEARING.value,
+    "etf": InstrumentType.ETF.value,
+}
+
+#: Honest-absence sentinel for a catalogue row whose source ``instrument_type`` is
+#: blank, missing, or the literal string ``"None"`` (a stray ``str(None)`` stamp
+#: from an upstream writer bug — measured live in production 2026-07-18).
+#: Deliberately NOT a member of :class:`InstrumentType` (the closed contract-
+#: mechanics vocabulary this roll-up otherwise canonicalises onto) — it is a
+#: roll-up-only marker meaning "no real type was ever fabricated here", mirroring
+#: the existing :data:`SPORTS_LEAGUE_ID_SENTINELS` "UNKNOWN" convention above.
+INSTRUMENT_TYPE_UNKNOWN = "UNKNOWN"
+
+#: DeFi lending-reserve split instrument types whose canonical ``VENUE:TYPE:SYMBOL``
+#: id ALREADY encodes the authoritative type in its middle segment. When a legacy
+#: per-date row carries a stale ``LENDING`` (or ``lending`` / ``lending_market``)
+#: ``instrument_type`` COLUMN but its id is already split (e.g.
+#: ``VENUS-BSC:A_TOKEN:ABNB-USDC``, ``SOLEND-SOLANA:DEBT_TOKEN:DEBTmSOL``), the ID
+#: WINS — so a ``--mode full`` rebuild re-derives A_TOKEN/DEBT_TOKEN/SPOT_ASSET
+#: INTRINSICALLY from the id and can never revert the split back to ``LENDING`` (the
+#: 2026-07-14 durability landmine a post-hoc data migration alone would leave
+#: re-openable on the next rebuild — the ~16.7M-row DATA migration is a separate
+#: task). The IS lending adapters (aave_v3/morpho/venus/euler_v2/benqi/radiant/fluid/
+#: marginfi/solend/…) mint EXACTLY these types; solend adds the SPOT_ASSET sibling.
+#: SSOT: defi_lending_atoken_debttoken_instrument_split_2026_07_07.md.
+_DEFI_LENDING_SPLIT_ITYPES: frozenset[str] = frozenset(
+    {InstrumentType.A_TOKEN.value, InstrumentType.DEBT_TOKEN.value, InstrumentType.SPOT_ASSET.value}
+)
+
+
+def _instrument_type_from_id(instrument_id: str | None, asset_group: str | None = None) -> str | None:
+    """Return the ``VENUE:TYPE:SYMBOL`` middle TYPE segment (uppercased), or None.
+
+    The canonical DeFi/CeFi instrument id reserves ``:`` as the top-level
+    ``VENUE:TYPE:SYMBOL`` delimiter — any internal disambiguator inside the symbol
+    segment is dash-separated (see ``morpho.py``'s ``pair_key``), so the SECOND
+    colon-segment is unambiguously the type. Returns None when the id is blank or
+    not in that 3+-segment shape (e.g. a DeFi POOL row re-keyed to a bare
+    ``pool_address``, or an id-less row). Pure + idempotent.
+
+    Sports ids are the odd shape out: ``SPORT:BOOKMAKER:MARKET:LEAGUE:SEASON:
+    HOME-AWAY::SELECTION`` — the second colon-segment there is the BOOKMAKER, not
+    a type (the market/type-equivalent is the THIRD segment). Pass
+    ``asset_group="sports"`` to resolve that segment instead
+    (sports_closeout_batch1_ao_ready_2026_07_24.md todo 2). As of 2026-07-24
+    ``build_catalogue_dataframe`` (this function's only caller, via
+    :func:`_canonicalize_instrument_type`) never routes sports rows through here
+    — sports catalogue rows are stamped explicitly by the dedicated
+    ``build_sports_*`` roll-ups — so this parameter is currently defensive/inert
+    for the live pipeline, not yet reachable.
+    """
+    if not instrument_id:
+        return None
+    parts = instrument_id.split(":")
+    if asset_group == "sports":
+        if len(parts) < 3 or not parts[2]:
+            return None
+        return parts[2].strip().upper()
+    if len(parts) < 3:
+        return None
+    seg = parts[1].strip().upper()
+    return seg or None
+
+
+def _canonicalize_instrument_type(raw: str | None, instrument_id: str | None = None) -> str:
+    """Canonicalise a raw per-date ``instrument_type`` value to the UAC vocabulary.
+
+    Deterministic + pure — applied at catalogue-row EMISSION time only (never
+    mutates ``agg.meta``, so every internal consumer that reads the raw meta value
+    — :func:`_canonicalize_cefi_future_id`, :func:`_canonicalize_cefi_perp_id`,
+    the perp-family checks — is unaffected; they already defensively
+    ``.strip().upper()`` at their own read sites):
+
+      0. DeFi lending-reserve split — when the emitted ``instrument_id`` already
+         encodes an A_TOKEN/DEBT_TOKEN/SPOT_ASSET type in its ``VENUE:TYPE:SYMBOL``
+         middle segment (:data:`_DEFI_LENDING_SPLIT_ITYPES`), that ID is
+         AUTHORITATIVE over the raw column — so a stale ``LENDING`` column can never
+         revert an already-split row on a ``--mode full`` rebuild (durability
+         landmine 2026-07-14). Scoped to the split types only; every other id's TYPE
+         segment (PERPETUAL/SPOT_PAIR/POOL/…) falls through to the raw-column logic
+         below UNCHANGED, so existing CeFi/pool behaviour is byte-for-byte preserved;
+      1. blank / ``None`` / the literal string ``"None"`` → the single honest
+         :data:`INSTRUMENT_TYPE_UNKNOWN` sentinel (never fabricated, never the
+         literal ``"None"``);
+      2. a known legacy lowercase spelling (:data:`_INSTRUMENT_TYPE_LEGACY_ALIASES`,
+         case-insensitive) → its canonical UAC ``InstrumentType`` value;
+      3. anything else → uppercased unchanged (round-trips an already-canonical
+         value; preserves a genuinely new/unrecognised venue-side type for triage
+         instead of silently swallowing it into UNKNOWN).
+
+    SSOT: ``unified_api_contracts._instrument_enums.InstrumentType`` docstring
+    (legacy-value mapping) + measured live COINBASE-SPOT/BYBIT by_date rows
+    (2026-07-18): COINBASE-SPOT carried ``['', 'SPOT_PAIR', 'spot', 'spot_pair']``,
+    BYBIT carried ``['', 'FUTURE', 'PERPETUAL', 'SPOT_PAIR', 'futures_chain',
+    'perpetual']``, and the literal string ``'None'`` also appears.
+    """
+    id_type = _instrument_type_from_id(instrument_id)
+    if id_type in _DEFI_LENDING_SPLIT_ITYPES:
+        return id_type
+    text = (raw or "").strip()
+    if not text or text == "None":
+        return INSTRUMENT_TYPE_UNKNOWN
+    lowered = text.lower()
+    aliased = _INSTRUMENT_TYPE_LEGACY_ALIASES.get(lowered)
+    if aliased is not None:
+        return aliased
+    return text.upper()
+
+
 #: DeFi pool instrument_type values (lowercased) the dual-form id applies to.
 #: A pool's canonical manifest atom is ``pool_address.lower()``; the glued-pair
 #: id is the human-readable UI form. Other DeFi instrument_types (lending / lst /
 #: spot_asset / perpetual) key on a contract address too but are not pools.
 _DEFI_POOL_ITYPES: frozenset[str] = frozenset({"pool"})
 
+#: CeFi perpetual-family instrument_type values (UPPERCASE) that share ONE
+#: canonical (venue, raw_symbol, margin) lifecycle across the 2026-07 id-convention
+#: churn. A single live perp appeared under up to THREE id strings as the format
+#: canonicalised (``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD`` →
+#: ``VENUE:PERPETUAL:BTC-USD@LIN``; instrument_id_format_canonicalization_2026_07_08),
+#: but the ``instrument_type`` COLUMN (PERPETUAL), ``raw_symbol`` (venue-native, e.g.
+#: BTC / BTCUSDT), ``venue`` and ``margin_type`` are STABLE across all three forms —
+#: so the lineage key below collapses them to ONE row keyed on the underlying, not
+#: the churning id string (the HYPERLIQUID/ASTER ~176-of-534 stale-dup class).
+#: Crypto-venue equity perps are typed PERPETUAL (operator 2026-07-16 — no distinct
+#: EQUITY_PERP/TOKENIZED_EQUITY type), so they already ride this family via PERPETUAL;
+#: tokenized-share spots stay SPOT_PAIR and key on the id string like any spot pair.
+#: SSOT: codex/04-architecture/
+#: instrument-universe-registry-consolidation.md + the plan cited in run_rollup.
+_PERP_FAMILY_ITYPES: frozenset[str] = frozenset({"PERPETUAL"})
+
+
+def _cefi_perp_lineage_key(instrument_id: str, instrument_type: str, raw_symbol: str, margin_type: str) -> str | None:
+    """Semantic collapse key for a CeFi perp-family row, or ``None`` when N/A.
+
+    Collapses the ``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD`` →
+    ``VENUE:PERPETUAL:BTC-USD@LIN`` convention chain onto ONE lineage keyed on the
+    UNDERLYING ``(venue, raw_symbol, margin)`` — matching the operator spec
+    "(venue, base, instrument_type, quote, margin)" where ``raw_symbol`` is the
+    venue-native encoding of base+quote (BTCUSDT vs BTCUSDC keep distinct keys, so
+    genuinely-different perps never over-collapse; verified 0 live-instrument
+    collisions across the full prod cefi catalogue). The venue prefix is read from
+    the STABLE first segment of ``instrument_id`` (not the ``venue`` FIELD, which
+    can carry era-specific spelling drift — the DERIBIT-COMBO ghost lesson).
+
+    Returns ``None`` (caller falls back to the id-string key = current behaviour)
+    when the row is not a perp-family type, or ``raw_symbol`` is blank (no
+    venue-native symbol to key on → cannot safely collapse). Pure + idempotent.
+    """
+    if (instrument_type or "").strip().upper() not in _PERP_FAMILY_ITYPES:
+        return None
+    rs = (raw_symbol or "").strip().upper()
+    if not rs:
+        return None
+    venue_prefix = str(instrument_id).split(":", 1)[0].strip().upper()
+    if not venue_prefix:
+        return None
+    marker = (margin_type or "").strip().upper()
+    return f"cefiperp::{venue_prefix}::{rs}::{marker}"
+
+
+def _cefi_equity_tags(instrument_type: str, base_asset: str) -> tuple[bool, str]:
+    """Return the ``(is_equity_perp, tracks_equity)`` catalogue tags for a CeFi row.
+
+    Operator decision 2026-07-16 (broad instrument_type + equity tags, superseding
+    the cefi_completion_program_2026_07_15 EQUITY_PERP/TOKENIZED_EQUITY *type*
+    refinement): ``instrument_type`` stays the BROAD contract-mechanics type — a
+    crypto-venue single-stock perp is ``PERPETUAL`` and a tokenized stock is
+    ``SPOT_PAIR``. The equity identity + real-equity linkage instead ride two
+    dedicated catalogue tags so the system can still find the tradfi spot leg
+    (basis arb) / cross-venue dispersion without inferring it from the type or the
+    symbol string:
+
+      * ``is_equity_perp`` — ``True`` iff the row is a crypto-venue EQUITY
+        instrument (a single-stock perp OR a tokenized-share spot), i.e. its base
+        resolves to a ``CEFI_EQUITY_PERP_BASE_UNIVERSE`` member. This is the durable
+        "it's an equity instrument" flag (the operator's label; it deliberately
+        covers BOTH the perp form and the tokenized-spot form).
+      * ``tracks_equity`` — the Databento ``DBEQ.BASIC`` real-equity ticker the
+        instrument tracks (``crypto_equity_link.tracks_equity`` — METAUSDT→META,
+        AAPLX→AAPL), or ``""`` for a standalone/pre-IPO symbol with no real-equity
+        twin (e.g. SPCX) and for every non-equity row.
+
+    Discrimination MIRRORS the pre-2026-07-16 ``_refine_cefi_instrument_type`` so the
+    exact same rows are flagged (the ~715 crypto-venue equity instruments):
+
+      * ``PERPETUAL`` whose base ∈ ``CEFI_EQUITY_PERP_BASE_UNIVERSE`` → equity perp
+        (equities + commodity RAW forms XAU/XAG/… + index/ETF SPX/SPY/…). tracks
+        ``tracks_equity(base)`` (``""`` for standalone SPCX/OPENAI/ANTHROPIC etc.).
+      * ``SPOT_PAIR`` tokenized-share form (base ``<TICKER>X`` where ``TICKER`` ∈
+        the equity universe and the base is NOT itself a crypto base) → equity
+        (Bybit ``AAPLX`` → strip ``X`` → ``AAPL`` ∈ universe). tracks
+        ``tracks_equity(TICKER)``.
+
+    Any other row → ``(False, "")``. Pure + idempotent. instrument_type is NEVER
+    changed (the row keeps its broad mechanics type + stable id / lineage key).
+    """
+    itype = (instrument_type or "").strip().upper()
+    base = (base_asset or "").strip().upper()
+    if not base:
+        return (False, "")
+    if itype == "PERPETUAL" and base in CEFI_EQUITY_PERP_BASE_UNIVERSE:
+        return (True, tracks_equity(base) or "")
+    if (
+        itype == "SPOT_PAIR"
+        and len(base) > 1
+        and base.endswith("X")
+        and base not in CEFI_BASE_ASSET_UNIVERSE
+        and base[:-1] in CEFI_EQUITY_PERP_BASE_UNIVERSE
+    ):
+        return (True, tracks_equity(base[:-1]) or "")
+    return (False, "")
+
+
+def _bps_fee_str(raw: object) -> str:
+    """Format the structured ``pool_fee_tier`` bps column as a clean integer string.
+
+    The by_date ``pool_fee_tier`` value round-trips through a pandas frame as a
+    ``float64`` (e.g. ``5.0``) even though the real fee is always a whole
+    basis-point count — a bare ``str(raw)`` bakes the float artifact straight into
+    ``glued_pair_id`` (``…-5.0`` instead of ``…-5``, confirmed live in
+    ``prod/catalog.parquet`` 2026-08-03). Returns "" for missing/blank/non-numeric.
+    """
+    if raw is None:
+        return ""
+    text = str(raw).strip()
+    if not text:
+        return ""
+    try:
+        return str(int(float(text)))
+    except (TypeError, ValueError):
+        return text
+
 
 def _fee_from_instrument_key(instrument_key: str) -> str:
     """Extract the fee token from a legacy glued ``…:POOL:PAIR:FEE`` instrument_key.
 
-    The by_date ``pool_fee_tier`` column is in BPS (Uniswap feeTier / 100, e.g.
-    ``5.0``) but the human-readable glued id the operator specified uses the RAW
-    fee amount (``:500`` / ``:3000`` / ``:100``) the adapter stamped into
-    ``instrument_key``. So prefer the instrument_key's trailing fee segment for a
-    faithful UI id; return "" when the key is not a 4-part POOL key.
+    LEGACY-COMPAT FALLBACK ONLY (instrument_id_format_canonicalization_2026_07_08.md
+    finding 2, bug 3 — corrected 2026-08-03): earlier framing had this fire FIRST,
+    preferring the instrument_key's raw on-wire fee token (``:500``/``:3000``) over
+    the already-correct bps ``pool_fee_tier`` column — that is backwards from the
+    operator's decided target grammar (a real basis-point value, dash-glued), and
+    reintroduced the retired colon-before-fee shape on every regen for any row whose
+    per-day ``instrument_key`` still carries an old-format 4-segment legacy value.
+    The caller (:func:`_defi_pool_dual_form`) now consults :func:`_bps_fee_str` on
+    ``pool_fee_tier`` FIRST; this is only reached when that structured column is
+    blank, as a best-effort recovery for pre-bps-column historical rows. Returns ""
+    when the key is not a 4-part POOL key.
     """
     parts = instrument_key.split(":")
     if len(parts) >= 4 and parts[1] == "POOL":
         return parts[-1]
+    return ""
+
+
+def _pool_symbol_discriminator(instrument_key: str, base: str, quote: str) -> str:
+    """Extract the discriminator hyphen-glued into a 3-segment POOL key's symbol.
+
+    ``ORCA-SOLANA:POOL:SOL-USDC-WP64`` (base=SOL, quote=USDC) → ``WP64`` (Whirlpool
+    tick-spacing); ``RAYDIUM-SOLANA:POOL:SOL-USDC-Standard`` → ``Standard`` (pool
+    type). Peels the leading ``{base}-{quote}-`` off the symbol segment; returns ""
+    when the key is not a 3-segment POOL key, when base/quote are blank, or when the
+    symbol is a plain ``{base}-{quote}`` (no trailing discriminator).
+
+    Complements :func:`_fee_from_instrument_key` (legacy 4th-colon form) for the
+    Solana-AMM adapters that converged the discriminator into the symbol
+    hyphen-glued (Wave B, orca/raydium — ``defi_consolidated_closeout_2026_07_18``):
+    it lets that discriminator survive into the re-derived ``glued_pair_id`` so the
+    two symbolic columns (passthrough ``canonical_instrument_id`` +
+    re-derived ``glued_pair_id``) stay byte-identical. Only consulted AFTER the
+    structured ``pool_fee_tier`` column (uniswap/balancer are unaffected — they carry
+    a real bps fee there). Pure + idempotent.
+    """
+    if not base or not quote:
+        return ""
+    parts = instrument_key.split(":")
+    if len(parts) != 3 or parts[1] != "POOL":
+        return ""
+    prefix = f"{base}-{quote}-"
+    symbol = parts[2]
+    if symbol.startswith(prefix):
+        return symbol[len(prefix) :]
     return ""
 
 
@@ -440,6 +1023,180 @@ def _canonical_instrument_id(instrument_id: str) -> str:
     return canonical_prefix + instrument_id[colon_idx:]
 
 
+#: Margin-type word (as carried in the by_date snapshot's ``margin_type`` column) →
+#: the operator-decided ``@LIN``/``@INV`` marker token
+#: (instrument_id_format_canonicalization_2026_07_08.md finding 1). Shared by BOTH
+#: roll-up id rebuilds (:func:`_canonicalize_cefi_future_id` dated-FUTURE +
+#: :func:`_canonicalize_cefi_perp_id` legacy-PERP) — one mapping, one spelling.
+_CEFI_MARGIN_MARKER: dict[str, str] = {"linear": "LIN", "inverse": "INV"}
+
+
+def _canonicalize_cefi_future_id(instrument_id: str, meta: dict[str, str | None]) -> str:
+    """Rebuild a legacy raw-wire-form CeFi dated-FUTURE ``instrument_id`` to canonical shape.
+
+    Some ``by_date`` snapshot rows (captured before the Tardis reference-data adapter's
+    2026-07-09 canonicalization fix) still carry the raw wire-form id the adapter used to
+    stamp, e.g. ``BINANCE-FUTURES:FUTURE:ETHUSDT_260626`` (a ``VENUE:TYPE:`` prefix glued onto
+    the venue's raw concatenated-symbol+YYMMDD body), instead of the dash-canonical
+    ``VENUE:FUTURE:BASE-QUOTE@MARKER-YYYYMMDD`` every other dated-futures venue in the SAME
+    roll-up produces (KRAKEN-FUTURES/BYBIT). The parquet FILE content and the current adapter
+    are already correct for a fresh capture — this roll-up was the one place still passing a
+    legacy row's raw id straight through
+    (cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_2026_07_15.md). Rebuilds via
+    the SAME shared UAC builder (:func:`build_instrument_id`) the adapter itself uses, so a
+    fresh capture and a legacy-snapshot roll-up always agree on the identical canonical shape —
+    mirrors the ``_cefi_perp_lineage_key``/``_canonical_instrument_id`` precedent above for
+    other id-convention chains.
+
+    Returns ``instrument_id`` unchanged when it is not a CeFi FUTURE row, already carries the
+    ``@`` marker (idempotent no-op — covers Kraken/Bybit/Deribit already-canonical rows), or a
+    field the rebuild needs (base_asset/quote_asset/margin_type/expiry) is missing — degrade,
+    never guess. Pure + idempotent.
+    """
+    if (meta.get("instrument_type") or "").strip().upper() != "FUTURE":
+        return instrument_id
+    if "@" in instrument_id:
+        return instrument_id
+    venue = (meta.get("venue") or "").strip()
+    base = (meta.get("base_asset") or "").strip()
+    quote = (meta.get("quote_asset") or "").strip()
+    marker = _CEFI_MARGIN_MARKER.get((meta.get("margin_type") or "").strip().lower())
+    expiry = _parse_truth_date(meta.get("expiry"))
+    if not venue or not base or not quote or marker is None or expiry is None:
+        return instrument_id
+    return build_instrument_id(
+        venue, InstrumentType.FUTURE, f"{base}-{quote}", expiry_date=expiry, margin_marker=marker
+    )
+
+
+#: The LEGACY CeFi perp-family type token: the pre-2026-07 on-chain adapters stamped
+#: ``VENUE:PERP:<raw_symbol>`` where the canonical form is
+#: ``VENUE:PERPETUAL:BASE-QUOTE@MARKER``. Used ONLY as the rebuild TRIGGER — a row whose
+#: id already carries the canonical ``PERPETUAL`` token is left alone (including the 586
+#: marker-less ``VENUE:PERPETUAL:BASE-QUOTE`` rows, which are a SEPARATE catalogue-
+#: completeness concern tracked as blueprint open-q #19 — deliberately NOT in scope here).
+_LEGACY_CEFI_PERP_TYPE_TOKEN = "PERP"
+
+
+def _canonicalize_cefi_perp_id(instrument_id: str, meta: dict[str, str | None]) -> str:
+    """Rebuild a legacy ``VENUE:PERP:<raw>``-form CeFi perp ``instrument_id`` to canonical shape.
+
+    The on-chain perp venues (HYPERLIQUID / ASTER / EXTENDED-STARKNET / LIGHTER-ZKSYNC)
+    stamped ``VENUE:PERP:<raw_symbol>`` until the adapter's id-format canonicalization
+    (``instrument_id_format_canonicalization_2026_07_08``) switched them to the canonical
+    ``VENUE:PERPETUAL:BASE-QUOTE@MARKER``. A perp that was still LIVE after the switch
+    collapses onto its canonical form via :func:`_cefi_perp_lineage_key` (the lineage key
+    is stable across the churn), so the roll-up emits the canonical id. But a perp
+    DELISTED *before* the switch has no post-fix snapshot at all — its most-recent
+    ``by_date`` row carries the legacy id, and the roll-up passed that raw id straight
+    through, so the catalogue kept 9 stale ``:PERP:`` ids (HYPERLIQUID ARK/DOOD/FTT/MATIC/IP,
+    ASTER IPUSDT, EXTENDED-STARKNET IP-USD/TON-USD, LIGHTER-ZKSYNC IP — all with
+    ``available_to`` set, i.e. delisted). This is the SAME legacy-snapshot class the dated-
+    FUTURE fix (:func:`_canonicalize_cefi_future_id`, instruments-service@79d4dbcb) closed,
+    so it is fixed the SAME way and in the same place: at roll-up time, via the SAME shared
+    UAC builder (:func:`build_instrument_id`) the adapter itself uses — a fresh capture and a
+    legacy-snapshot roll-up therefore always agree on the identical canonical shape.
+
+    The legacy rows carry every field the rebuild needs (verified against the live
+    ``by_date`` corpus 2026-07-17: ``base_asset`` + ``quote_asset`` USD/USDT/USDC +
+    ``margin_type=linear`` are all populated), and the rebuilt ids byte-match their live
+    canonical siblings (``HYPERLIQUID:PERPETUAL:ARK-USD@LIN``, ``ASTER:PERPETUAL:IP-USDT@LIN``,
+    ``EXTENDED-STARKNET:PERPETUAL:IP-USD@LIN``, ``LIGHTER-ZKSYNC:PERPETUAL:IP-USDC@LIN``).
+
+    Returns ``instrument_id`` unchanged when the row is not a perp-family type, the id does
+    NOT carry the legacy ``PERP`` token (idempotent no-op — every already-canonical
+    ``PERPETUAL`` row, marker or not), or a field the rebuild needs
+    (venue/base_asset/quote_asset/margin_type) is missing — degrade, never guess. Pure +
+    idempotent.
+    """
+    if (meta.get("instrument_type") or "").strip().upper() not in _PERP_FAMILY_ITYPES:
+        return instrument_id
+    parts = instrument_id.split(":")
+    if len(parts) < 3 or parts[1].strip().upper() != _LEGACY_CEFI_PERP_TYPE_TOKEN:
+        return instrument_id
+    venue = (meta.get("venue") or "").strip()
+    base = (meta.get("base_asset") or "").strip()
+    quote = (meta.get("quote_asset") or "").strip()
+    marker = _CEFI_MARGIN_MARKER.get((meta.get("margin_type") or "").strip().lower())
+    if not venue or not base or not quote or marker is None:
+        return instrument_id
+    return build_instrument_id(venue, InstrumentType.PERPETUAL, f"{base}-{quote}", margin_marker=marker)
+
+
+#: Operator-decided DERIBIT quote fallback when a legacy snapshot row carries no
+#: ``quote_asset`` (operator ruling 2026-07-18): linear → USDC (USDC-settled),
+#: inverse → USD (coin-settled). NOT a guess — the operator's explicit derivation
+#: rule for the two DERIBIT margin families.
+_DERIBIT_MARGIN_QUOTE: dict[str, str] = {"linear": "USDC", "inverse": "USD"}
+
+
+def _canonicalize_cefi_deribit_dated_quote(instrument_id: str, meta: dict[str, str | None]) -> str:
+    """Insert the missing BASE-QUOTE quote into a legacy DERIBIT dated-derivative id.
+
+    Pre-2026-07-18, DERIBIT dated FUTURE/OPTION ids dropped the quote segment
+    (``DERIBIT:FUTURE:AVAX@LIN-20260401`` / ``DERIBIT:OPTION:BTC@INV-20190405-3250-C``)
+    — every OTHER venue already keeps it (BYBIT ``BTC-USDT``, KRAKEN ``XBT-USD``).
+    The operator's 2026-07-18 ruling makes the quote ALWAYS present regardless of
+    venue/asset class (``DERIBIT:FUTURE:AVAX-USDC@LIN-20260401`` /
+    ``DERIBIT:OPTION:BTC-USD@INV-20190405-3250-C``). The reference-data adapters
+    (``tardis/adapter.py``, ``deribit_options_adapter.py``) now stamp the quote at
+    capture time; this roll-up self-heals any LEGACY ``by_date`` snapshot row still
+    carrying the quote-less ``@`` form so a rebuild-from-snapshot (no re-fetch of
+    Deribit's ~264k historical rows) also emits the canonical shape — the same
+    legacy-snapshot healing pattern as :func:`_canonicalize_cefi_future_id` /
+    :func:`_canonicalize_cefi_perp_id`.
+
+    A pure string insert (``-QUOTE`` before ``@``), NOT a rebuild: the expiry /
+    strike / option-right suffix after ``@`` is already canonical and preserved
+    byte-for-byte; only the base segment needs the quote. DERIBIT-scoped +
+    idempotent — a no-op for any other venue, a non-FUTURE/OPTION row, a
+    quote-less non-``@`` legacy shape (left to the sibling rebuilders), or an id
+    whose base segment already carries the quote (already-canonical). Degrades
+    (returns unchanged) when no quote can be resolved. Pure.
+    """
+    if (meta.get("instrument_type") or "").strip().upper() not in ("FUTURE", "OPTION"):
+        return instrument_id
+    parts = instrument_id.split(":", 2)
+    if len(parts) != 3 or parts[0].strip().upper() != "DERIBIT":
+        return instrument_id
+    body = parts[2]
+    if "@" not in body:
+        # Quote-less non-marker legacy shape (e.g. raw ``BTC-2JAN24``) — not this
+        # helper's job; the sibling @LIN/@INV rebuilders own the marker form.
+        return instrument_id
+    base_seg, marker_seg = body.split("@", 1)
+    if "-" in base_seg:
+        return instrument_id  # base segment already carries the quote — idempotent no-op
+    quote = (meta.get("quote_asset") or "").strip()
+    if not quote:
+        quote = _DERIBIT_MARGIN_QUOTE.get((meta.get("margin_type") or "").strip().lower(), "")
+    if not quote:
+        return instrument_id  # degrade, never guess
+    return f"{parts[0]}:{parts[1]}:{base_seg}-{quote.upper()}@{marker_seg}"
+
+
+def _canonicalize_cefi_rollup_id(instrument_id: str, meta: dict[str, str | None]) -> str:
+    """Apply EVERY roll-up CeFi id-canonicalization step to ``instrument_id``, in order.
+
+    The SINGLE source of the roll-up's id-rebuild chain, so the emitted ``instrument_id``
+    and its ``canonical_instrument_id`` mirror can never drift apart (the 511-row
+    ``instrument_id != canonical_instrument_id`` defect was exactly that drift: the
+    dated-FUTURE rebuild ran on the emitted id only, leaving the mirror on the stale
+    raw-glued form). Every no-op guard lives in the individual helpers, so this is a
+    no-op for non-CeFi / already-canonical rows. Pure + idempotent.
+
+    The DERIBIT dated-quote heal runs LAST: the sibling ``@LIN``/``@INV`` rebuilders
+    produce the marker form (from a raw-glued legacy id), then the heal ensures its
+    BASE-QUOTE segment carries the quote (operator ruling 2026-07-18) — and it is a
+    no-op on an already-canonical quote-carrying id.
+    """
+    if not instrument_id:
+        return instrument_id
+    return _canonicalize_cefi_deribit_dated_quote(
+        _canonicalize_cefi_perp_id(_canonicalize_cefi_future_id(instrument_id, meta), meta), meta
+    )
+
+
 def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
     """Lifecycle-aggregation key for one per-date row.
 
@@ -453,6 +1210,14 @@ def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
     ``_canonical_instrument_id`` so they collapse onto the canonical key
     (``AAVE_V3-ARBITRUM:…``, ``COMPOUND_V3-BASE:…``) — the dual-key-ghost collapse
     fix (+171 AAVE_V3 / +26 COMPOUND_V3 triad discrepancy 2026-06-27).
+
+    CeFi perp-family rows (PERPETUAL — incl. crypto-venue equity perps, operator
+    2026-07-16 no distinct EQUITY_PERP type) key on the
+    canonical ``(venue, raw_symbol, margin)`` lineage (:func:`_cefi_perp_lineage_key`)
+    so the ``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD`` → ``…@LIN`` id-convention
+    chain collapses to ONE continuous lifecycle instead of THREE stale-dup listings
+    (the HYPERLIQUID/ASTER ~176-of-534 churn duplicates). ``raw_symbol``-blank rows
+    have no venue-native key so they fall through to the id-string behaviour.
 
     All other rows key on the ``instrument_id`` (= instrument_key) as before, so
     non-DeFi behaviour is unchanged.
@@ -468,6 +1233,15 @@ def _aggregate_key(instrument_id: str, row: dict[str, object]) -> str:
                 if "-" in venue:
                     chain = venue.rsplit("-", 1)[1].upper()
             return f"pool::{chain}::{pool_address.lower()}"
+    # CeFi perp-family: collapse the id-convention rename chain onto the underlying.
+    perp_key = _cefi_perp_lineage_key(
+        instrument_id,
+        str(row.get("instrument_type") or ""),
+        str(row.get("raw_symbol") or ""),
+        str(row.get("margin_type") or ""),
+    )
+    if perp_key is not None:
+        return perp_key
     # Non-pool: normalise the venue-prefix portion of structured DeFi instrument_ids
     # so ghost-spelling variants (AAVEV3-ARBITRUM:…) collapse onto the canonical key
     # (AAVE_V3-ARBITRUM:…).  No-op for non-DeFi / already-canonical keys.
@@ -495,14 +1269,74 @@ _CATALOGUE_KNOWN_CHAINS = frozenset(
     }
 )
 
+#: Venues dropped from the URDI adapter registry (operator ruling) — a live capture
+#: for one of these can no longer happen, but stale historical ``by_date`` rows
+#: persist in GCS and must not re-mint a catalogue row on every regen. Both the bare
+#: and the ``-SOLANA``-suffixed spelling are excluded (whichever form a given row's
+#: raw ``venue`` column happens to carry — checked upper-cased, exact match).
+#: SSOT: ``unified_api_contracts.registry.venue_adapter_keys`` — DRIFT/PACIFICA
+#: removed 2026-07-16, MANGO-SOLANA/ZETA-SOLANA/FLASH-SOLANA removed 2026-07-15
+#: (all Solana perp DEXes except Jupiter, which is not integrated; operator ruling).
+#: DRIFT alone carried 3,556 stale rows in the IS defi availability index as of
+#: 2026-07-18 (0 in MTDS — never had live market-data capture).
+_REMOVED_VENUES: frozenset[str] = frozenset(
+    {
+        "DRIFT",
+        "DRIFT-SOLANA",
+        "PACIFICA",
+        "PACIFICA-SOLANA",
+        "MANGO-SOLANA",
+        "MANGO",
+        "ZETA-SOLANA",
+        "ZETA",
+        "FLASH-SOLANA",
+        "FLASH",
+    }
+)
+
+#: Bare-vs-chain duplicate venue spellings collapsed to ONE canonical combined form —
+#: same protocol, two venue-column spellings measured live in the IS defi
+#: availability index (2026-07-18): JITO / JITO-SOLANA, RAYDIUM / RAYDIUM-SOLANA,
+#: MARINADE / MARINADE-SOLANA. Deliberately narrow (exact match, these 3 known pairs
+#: only) — NOT a blanket bare-venue-implies-Solana rule. Canonical form = the
+#: ``-SOLANA``-suffixed combined spelling: the registered ``venue_prefix`` convention
+#: in ``unified_api_contracts.registry.venue_adapter_keys`` only carries the suffixed
+#: form (``JITO-SOLANA`` / ``RAYDIUM-SOLANA`` / ``MARINADE-SOLANA``) — the bare
+#: spellings are NOT registered adapter keys at all.
+_DUPLICATE_VENUE_ALIASES: dict[str, str] = {
+    "JITO": "JITO-SOLANA",
+    "RAYDIUM": "RAYDIUM-SOLANA",
+    "MARINADE": "MARINADE-SOLANA",
+}
+
+
+def _is_removed_venue(venue: str) -> bool:
+    """True when ``venue`` (any case) is a registry-removed venue (bare or suffixed).
+
+    See :data:`_REMOVED_VENUES`. Pure; blank input is never "removed" (the caller
+    already treats blank venue as its own no-op path).
+    """
+    return venue.strip().upper() in _REMOVED_VENUES
+
 
 def _canonical_bare_venue_chain(venue: str, chain: str) -> tuple[str, str]:
     """Map any DeFi venue drift form ``(venue, chain)`` → canonical ``(bare_protocol, chain)``.
 
-    1. ghost-normalise the full venue (``AAVEV3-ARBITRUM`` → ``AAVE_V3-ARBITRUM``) via the
+    1. On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / EXTENDED-STARKNET -- PACIFICA (Solana)
+       was a third example here until removed 2026-07-16, operator ruling: all Solana
+       perp DEXes dropped except Jupiter, not integrated) are GLUED ``VENUE-CHAIN``
+       strings whose suffix IS a KNOWN_CHAIN, but they are
+       CeFi venues (``VENUE_TO_ASSET_GROUP == "cefi"``, like HYPERLIQUID/ASTER) — NOT
+       DeFi pools. Applying the DeFi split desynchronises them from the by_date PATH
+       (``venue=LIGHTER-ZKSYNC``), the IS manifest writer (``writers._canonical_manifest_venue_chain``
+       @ instruments-service@24c0dd5 keeps them glued) and the ``instrument_key``
+       prefix (``LIGHTER-ZKSYNC:PERP:...``). Detect via UAC ``VENUE_TO_ASSET_GROUP``
+       and return the full cefi venue with the incoming chain preserved. Ref:
+       ``plans/active/instruments_foundation_completeness_2026_06_24.md`` §G1.3 follow-up.
+    2. ghost-normalise the full venue (``AAVEV3-ARBITRUM`` → ``AAVE_V3-ARBITRUM``) via the
        UAC authority ``canonicalize_defi_venue_combined`` (no-op for bare/non-DeFi venues).
-    2. if the result is glued (ends ``-<KNOWN_CHAIN>``), split → bare protocol + that chain.
-    3. else keep the venue; preserve the existing chain column (upper).
+    3. if the result is glued (ends ``-<KNOWN_CHAIN>``), split → bare protocol + that chain.
+    4. else keep the venue; preserve the existing chain column (upper).
     Pure + idempotent. A non-DeFi or already-bare canonical venue passes through unchanged.
     """
     from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
@@ -510,6 +1344,13 @@ def _canonical_bare_venue_chain(venue: str, chain: str) -> tuple[str, str]:
     v = str(venue).strip()
     c = str(chain).strip().upper()
     if not v:
+        return v, c
+    # Bare-vs-chain duplicate venue collapse (JITO/RAYDIUM/MARINADE — see
+    # _DUPLICATE_VENUE_ALIASES) BEFORE the cefi/ghost-normalisation checks below, so
+    # a bare-spelling row with no separate chain column still resolves to the SAME
+    # (bare_protocol, chain) pair as its ``-SOLANA``-suffixed sibling.
+    v = _DUPLICATE_VENUE_ALIASES.get(v.upper(), v)
+    if VENUE_TO_ASSET_GROUP.get(v) == "cefi":
         return v, c
     normed = canonicalize_defi_venue_combined(v)
     if "-" in normed:
@@ -555,15 +1396,34 @@ def _defi_pool_dual_form(
 
     venue_raw = meta.get("venue") or ""
     chain_raw = meta.get("chain") or ""
-    # The legacy glued ``instrument_key`` carries the faithful raw fee token; the
-    # by_date ``pool_fee_tier`` is bps. Prefer the key's fee for the UI id, else bps.
-    fee = _fee_from_instrument_key(meta.get("instrument_key") or "") or (meta.get("pool_fee_tier") or "")
+    base_raw = meta.get("base_asset") or ""
+    quote_raw = meta.get("quote_asset") or ""
+    key_raw = meta.get("instrument_key") or ""
+    # Fee/discriminator precedence for the re-derived UI ``glued_pair_id``
+    # (corrected 2026-08-03, instrument_id_format_canonicalization_2026_07_08.md
+    # finding 2 bug 3 — was legacy-key-first, backwards from the operator's decided
+    # target grammar; see ``_fee_from_instrument_key``'s docstring):
+    #   1. the structured ``pool_fee_tier`` bps column (uniswap/balancer) — the
+    #      already-correct, operator-decided basis-point value;
+    #   2. legacy 4th-colon fee token (``...:POOL:PAIR:FEE``) — best-effort recovery
+    #      for a historical row that predates the ``pool_fee_tier`` column entirely;
+    #   3. the discriminator hyphen-glued into a canonical 3-seg symbol
+    #      (``...:POOL:SOL-USDC-WP64`` / ``-Standard``) for the Solana-AMM adapters
+    #      that fold tick-spacing / pool-type into the symbol (Wave B, orca/raydium).
+    # (3) keeps the re-derived ``glued_pair_id`` byte-identical to the passthrough
+    # ``canonical_instrument_id`` for those pools without touching uniswap/balancer
+    # (which resolve at step 1).
+    fee = (
+        _bps_fee_str(meta.get("pool_fee_tier"))
+        or _fee_from_instrument_key(key_raw)
+        or _pool_symbol_discriminator(key_raw, base_raw, quote_raw)
+    )
     identity = build_pool_identity(
         venue=venue_raw,
         chain=chain_raw,
         pool_address=pool_address,
-        base_asset=meta.get("base_asset") or "",
-        quote_asset=meta.get("quote_asset") or "",
+        base_asset=base_raw,
+        quote_asset=quote_raw,
         fee=fee or None,
     )
     return (
@@ -575,8 +1435,60 @@ def _defi_pool_dual_form(
     )
 
 
-def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) -> pd.DataFrame:
+def _load_defi_removal_map() -> dict[str, str]:
+    """On-chain removal side-artifact (Option B truth-gate) → ``{key_lower: delisted_at_iso}``.
+
+    Empty on ANY failure (artifact absent / no GCS in tests / import error) → the roll-up
+    degrades to Option A (every DeFi drop-out stays live). Lazy import keeps the probe's
+    aiohttp stack off the cefi/tradfi path. The artifact is written by the daily
+    ``run_defi_removal_probe`` job, which records a removal ONLY on a positive on-chain
+    ``eth_getCode``-absent confirmation — so this can never re-introduce a false delisting."""
+    try:
+        from instruments_service.oracle import load_removal_delisted_at_map  # noqa: imports-inside-functions
+
+        return load_removal_delisted_at_map()
+    except Exception:  # pragma: no cover — pure degrade-to-Option-A guard
+        return {}
+
+
+def _apply_defi_removals(df: pd.DataFrame, removal_map: dict[str, str]) -> pd.DataFrame:
+    """Set ``available_to`` from the on-chain removal side-artifact (Option B) for any still-live
+    DeFi row the probe confirmed gone. Applied to the FINAL frame of BOTH the full rebuild and
+    the incremental merge, so the two never disagree (the seam-parity invariant). Idempotent —
+    only fills a BLANK ``available_to`` (never overrides a ``delisted_at``/``expiry`` truth or an
+    already-set removal). Keyed by ``instrument_id`` / ``raw_symbol`` / ``pool_address`` (lower)."""
+    id_cols = [c for c in ("instrument_id", "raw_symbol", "pool_address") if c in df.columns]
+    if not removal_map or df.empty or "available_to" not in df.columns or not id_cols:
+        return df
+    out = df.copy()
+    blank = out["available_to"].isna() | (out["available_to"].astype(str).str.strip() == "")
+    resolved = pd.Series(data=pd.NA, index=out.index, dtype="object")
+    for col in id_cols:
+        mapped = out[col].astype(str).str.strip().str.lower().map(removal_map)
+        resolved = resolved.where(resolved.notna(), mapped)
+    apply_mask = blank & resolved.notna()
+    if bool(apply_mask.any()):
+        out.loc[apply_mask, "available_to"] = resolved[apply_mask]
+    return out
+
+
+def build_catalogue_dataframe(
+    snapshots: Iterable[tuple[date, pd.DataFrame]],
+    *,
+    asset_group: str | None = None,
+) -> pd.DataFrame:
     """Roll the per-date instrument definitions up into one lifecycle catalogue.
+
+    ``asset_group`` gates the DeFi ``available_to`` carve-out (default ``None`` =
+    legacy last-seen delisting). When ``asset_group == "defi"`` a drop-out NEVER
+    stamps a last-seen ``available_to``: DeFi instruments are on-chain-perpetual,
+    so absence from capture is a TVL/top-N/source-set drop, not a delisting
+    (codex ``instruments-foundation-and-catalogue-completeness`` §1.3 —
+    below-threshold is ``EXPECTED_NOT_ENOUGH_TVL``, not a delisting). Genuine
+    removals still close via the ``delisted_at`` / ``expiry`` truth branches (the
+    truth-gate seam for a future on-chain factory/RPC probe, ``defi-completeness-
+    oracle`` §12). cefi/tradfi (``asset_group`` ``None``/``"cefi"``/``"tradfi"``)
+    keep the last-seen delisting fallback unchanged.
 
     Args:
         snapshots: iterable of ``(day, frame)`` pairs — one per
@@ -620,11 +1532,33 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
             return cached
         from unified_api_contracts.registry.capability_declarations._defi import canonicalize_defi_venue_combined
 
-        canonical = canonicalize_defi_venue_combined(raw)
+        # Collapse the bare-vs-chain duplicate spelling BEFORE ghost-normalisation
+        # (see _DUPLICATE_VENUE_ALIASES) so JITO/JITO-SOLANA etc. share ONE liveness
+        # window key — otherwise the two spellings' §7.3 last-full-day anchors track
+        # independently even though _canonical_bare_venue_chain later emits the same
+        # (bare_protocol, chain) pair for both.
+        _aliased = _DUPLICATE_VENUE_ALIASES.get(raw.upper(), raw)
+        canonical = canonicalize_defi_venue_combined(_aliased)
         _canon_venue_cache[raw] = canonical
         return canonical
 
+    # [BISECT-C-PROGRESS] heartbeat (2026-07-31, tradfi_catalogue_full_regen_job_failing_
+    # 2026_07_31.md): a --mode full walk over this loop is the entire multi-hour dark span
+    # between the [BISECT-C]/[BISECT-D] markers with zero output of its own — exactly the
+    # window every observed lifecycle-catalogue-full-* NonZeroExitCode failure died in,
+    # producing NO application log line at all (confirmed across cefi/defi/tradfi, not just
+    # the largest corpus). Print every 500 processed snapshots so a recurrence finally
+    # surfaces WHERE the walk got to before the container was killed, instead of another
+    # total log blackout.
+    _processed_snapshots = 0
     for day, frame in snapshots:
+        _processed_snapshots += 1
+        if _processed_snapshots % 500 == 0:
+            print(
+                f"[BISECT-C-PROGRESS] asset_group={asset_group} processed_snapshots={_processed_snapshots} "
+                f"distinct_instruments={len(aggregates)}",
+                flush=True,
+            )
         all_days.add(day)
         if frame.empty:
             continue
@@ -634,6 +1568,11 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
             if iid is None:
                 continue
             _venue = str(row.get("venue") or "").strip()
+            if _venue and _is_removed_venue(_venue):
+                # Registry-removed venue (operator ruling) — stale historical rows
+                # must not re-mint a catalogue row on every regen. See
+                # _REMOVED_VENUES.
+                continue
             if _venue:
                 _canonical_v = _canonical_venue_key(_venue)
                 vc = venue_day_counts.setdefault(_canonical_v, {})
@@ -670,8 +1609,14 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 existing.first_day = day
             if day > existing.last_day:
                 existing.last_day = day
-            # BUG #4 (B): keep the EARLIEST declared listing date seen across snapshots.
-            if declared is not None and (existing.declared_from is None or declared < existing.declared_from):
+            _is_perp_family = str(_meta.get("instrument_type") or "").strip().upper() in _PERP_FAMILY_ITYPES
+            if not _is_perp_family:
+                # BUG #4 (B): keep the EARLIEST declared listing date seen across snapshots.
+                if declared is not None and (existing.declared_from is None or declared < existing.declared_from):
+                    existing.declared_from = declared
+            elif existing.declared_from is None and declared is not None:
+                # Perp-family with no declared date yet — seed it until the winning
+                # (most-recent) form arrives and takes over below.
                 existing.declared_from = declared
             # Metadata follows the most-recent definition of the instrument.
             if day >= existing.meta_day:
@@ -681,6 +1626,16 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 # (the freshest exchange-declared expiry / delisting for this id).
                 existing.expiry = _expiry
                 existing.delisted_at = _delisted
+                if _is_perp_family and declared is not None:
+                    # CeFi perp-family lineage collapse (HYPERLIQUID/ASTER 2026-07 id
+                    # convention churn): declared_from follows the WINNING (most-recent)
+                    # form so a dead old-convention form's spurious genesis date (the
+                    # ASTER ``PERP:*USDT`` uniform venue-launch 2023-07-22, which
+                    # PREDATES the tokens it is stamped on) does NOT drag the collapsed
+                    # lifecycle's available_from below the live form's true per-instrument
+                    # listing date. None-guarded (the elif above seeds an earlier date)
+                    # so a fresh form lacking a declared date never wipes a known one.
+                    existing.declared_from = declared
 
     if not all_days:
         return pd.DataFrame(columns=list(CATALOG_COLUMNS))
@@ -704,6 +1659,8 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         #   2. dated FUTURE/OPTION/COMBO ``expiry`` (the contract expiry) — venue truth.
         #   3. else perp/spot: ACTIVE (None) iff present on its OWN venue's last FULL
         #      trading day; else last-seen (a genuine delisting, not a thin-day artefact).
+        #   3b. DeFi (asset_group=="defi"): NEVER last-seen delist — on-chain-perpetual,
+        #      a drop-out is a TVL/source-set gap (codex §1.3), so stay ACTIVE (None).
         _raw_venue = str(agg.meta.get("venue") or "").strip()
         # venue_last_full is keyed on CANONICAL venue names (ghost-normalised);
         # the aggregate's meta venue may still be the old ghost form if the
@@ -716,6 +1673,13 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         elif agg.expiry is not None:
             available_to = agg.expiry.isoformat()
         elif _venue_full_day is not None and agg.last_day >= _venue_full_day:
+            available_to = None
+        elif asset_group == "defi":
+            # DeFi instrument dropped below its venue's last full day. It did NOT
+            # delist — DeFi pools/markets/tokens are on-chain-perpetual; the drop
+            # is a below-TVL/top-N or subgraph/seed pool-set change. Stay active
+            # (None); the below-threshold days resolve to EXPECTED_NOT_ENOUGH_TVL
+            # on capture. A genuine removal still closes via branches 1-2 above.
             available_to = None
         else:
             available_to = agg.last_day.isoformat()
@@ -733,15 +1697,43 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
         # ``glued_pair_id`` alongside. Non-pool / non-DeFi rows pass through
         # unchanged (canonical_id == the original instrument_key, glued_pair_id "").
         canonical_id, glued_pair_id, bare_venue, chain, pool_address = _defi_pool_dual_form(agg.meta)
+        # Legacy raw-wire-form CeFi ids captured before the adapter's canonicalization
+        # fixes — rebuild to the canonical shape at roll-up time: dated-FUTURE
+        # (BINANCE-FUTURES et al, 2026-07-09 fix) + legacy ``:PERP:``-token on-chain perps
+        # (HYPERLIQUID/ASTER/EXTENDED-STARKNET/LIGHTER-ZKSYNC delisted before the
+        # 2026-07-08 fix). No-op for already-canonical / non-CeFi rows. See
+        # _canonicalize_cefi_rollup_id's docstring.
+        canonical_id = _canonicalize_cefi_rollup_id(canonical_id, agg.meta)
+        # instrument_type stays the BROAD contract-mechanics type (operator
+        # 2026-07-16, superseding the cefi_completion_program_2026_07_15
+        # EQUITY_PERP/TOKENIZED_EQUITY *type* refinement): a crypto-venue single-stock
+        # perp stays PERPETUAL, a tokenized stock stays SPOT_PAIR. The equity identity
+        # + real-equity linkage ride the ``is_equity_perp`` / ``tracks_equity`` tags,
+        # stamped by ``_add_equity_tags`` on the finalized frame (see CATALOG_COLUMNS).
         rows.append(
             {
                 "instrument_id": canonical_id,
-                "instrument_type": agg.meta["instrument_type"] or "",
+                # Canonicalised at EMISSION only (see _canonicalize_instrument_type's
+                # docstring) — agg.meta itself stays raw so _canonicalize_cefi_rollup_id
+                # above (called with agg.meta, not this row dict) keeps its existing
+                # behaviour byte-for-byte. The emitted ``canonical_id`` is passed so a
+                # DeFi lending row whose id already carries the A_TOKEN/DEBT_TOKEN/
+                # SPOT_ASSET split segment emits that split type INTRINSICALLY (id is
+                # authoritative over a stale ``LENDING`` column — durability landmine
+                # 2026-07-14; the split can never revert on a --mode full rebuild).
+                "instrument_type": _canonicalize_instrument_type(
+                    agg.meta["instrument_type"], instrument_id=canonical_id
+                ),
                 "venue": bare_venue,
                 "chain": chain,
                 "league_id": agg.meta["league_id"] or "",
                 "available_from": available_from.isoformat(),
                 "available_to": available_to,
+                # A2: the CLEAN venue-declared expiry, separate from the overloaded
+                # available_to above (which may be a delisting/last-observed here).
+                # Honest-NULL when the venue declared no expiry (perps, spot, or a
+                # dated contract whose expiry we never captured from source).
+                "expiry": agg.expiry.isoformat() if agg.expiry is not None else None,
                 "market_created_at": agg.meta["market_created_at"],
                 "settlement_time": agg.meta["settlement_time"],
                 # Single-grain AGs leave data_type empty → the enumerator iterates
@@ -753,12 +1745,52 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 # Margin type: propagated from the per-date instruments parquet.
                 # "" for non-derivative instruments (spot pairs, DeFi pools).
                 "margin_type": agg.meta.get("margin_type") or "",
+                # CeFi/DeFi canonical_instrument_id — the adapter-populated per-date
+                # value when present, else instrument_key itself (already carried
+                # through in agg.meta for every row). Both are the IDENTICAL value
+                # by design (canonical_instrument_id_cefi_defi_backfill_2026_07_14.md
+                # — CeFi/DeFi have no raw-code-to-human-name translation gap, so
+                # canonical_instrument_id always mirrors instrument_key), so this
+                # fallback backfills every historical row captured BEFORE the
+                # adapter fix shipped with the exact value a fresh capture would
+                # have produced — no separate migration script needed.
+                #
+                # The mirror is run through the SAME ``_canonicalize_cefi_rollup_id``
+                # chain as the emitted ``instrument_id`` above. Without this the two
+                # DRIFT on exactly the rows the chain rebuilds: the 2026-07-17 live
+                # catalogue carried 511 cefi rows (BINANCE-DELIVERY/OKX-FUTURES/
+                # COINBASE-CDE/BINANCE-FUTURES/DERIBIT dated FUTUREs) whose
+                # ``instrument_id`` was the CORRECT canonical form while this mirror
+                # still held the stale raw-glued one
+                # (``…:FUTURE:ADA-USD@INV-20200926`` vs ``…:FUTURE:ADAUSD_200925``) —
+                # the roll-up rebuilt the id but never re-applied the mirror.
+                # Canonicalising the SOURCE (rather than blanket-copying the emitted
+                # ``canonical_id``) is deliberate: it keeps the DeFi POOL contract
+                # intact, where ``instrument_id`` is re-keyed to ``pool_address`` but
+                # ``canonical_instrument_id`` mirrors the glued ``instrument_key``
+                # (test_rollup_defi_pool_row_backfills_canonical_instrument_id_from_
+                # instrument_key), and preserves honest-blank for an id-less row.
+                "canonical_instrument_id": _canonicalize_cefi_rollup_id(
+                    agg.meta.get("canonical_instrument_id") or agg.meta.get("instrument_key") or "", agg.meta
+                ),
                 "glued_pair_id": glued_pair_id,
                 "pool_address": pool_address,
+                # On-chain token contract addresses (DeFi) — projected from the source
+                # row without a re-fetch (P4-B). Blank for non-DeFi + unset DeFi rows.
+                "base_asset_contract_address": agg.meta.get("base_asset_contract_address") or "",
+                "quote_asset_contract_address": agg.meta.get("quote_asset_contract_address") or "",
+                "atoken_address": agg.meta.get("atoken_address") or "",
+                "debt_token_address": agg.meta.get("debt_token_address") or "",
             }
         )
 
-    return pd.DataFrame(rows, columns=list(CATALOG_COLUMNS))
+    frame = pd.DataFrame(rows, columns=list(CATALOG_COLUMNS))
+    if asset_group == "defi":
+        # Option B: an on-chain-probe-confirmed removal closes a genuinely-gone contract
+        # even though Option A keeps every capture/TVL drop-out live. No-op when the
+        # removal artifact is absent (→ pure Option A).
+        frame = _apply_defi_removals(frame, _load_defi_removal_map())
+    return frame
 
 
 def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
@@ -789,6 +1821,13 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         # glued_pair_id. Blank for non-DeFi rows.
         "quote_asset": _str_field(row, "quote_asset"),
         "pool_address": _str_field(row, "pool_address"),
+        # On-chain token contract addresses (DeFi) — carried through so the catalogue
+        # row can surface them without a re-fetch (P4-B). Blank when the adapter/source
+        # row didn't populate them (non-DeFi rows, or DeFi rows pre the address backfill).
+        "base_asset_contract_address": _str_field(row, "base_asset_contract_address"),
+        "quote_asset_contract_address": _str_field(row, "quote_asset_contract_address"),
+        "atoken_address": _str_field(row, "atoken_address"),
+        "debt_token_address": _str_field(row, "debt_token_address"),
         "pool_fee_tier": _opt_field(row, "pool_fee_tier"),
         # The original glued ``instrument_key`` — carried so ``_defi_pool_dual_form``
         # can recover the faithful raw fee token for the human-readable glued_pair_id
@@ -797,6 +1836,12 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         # The row's RESOLVED id (instrument_key OR instrument_id) — the non-pool
         # pass-through canonical id (a catalogue keyed only on instrument_id keeps it).
         "_resolved_id": _row_id(row) or "",
+        # Adapter-populated canonical_instrument_id (CeFi/DeFi: mirrors instrument_key
+        # — no raw-code-to-human-name translation gap to solve, unlike TradFi/Databento's
+        # product-root use of this field). Carried through so the catalogue row below
+        # doesn't have to re-derive it. SSOT: unified-trading-pm/plans/active/
+        # canonical_instrument_id_cefi_defi_backfill_2026_07_14.md.
+        "canonical_instrument_id": _str_field(row, "canonical_instrument_id"),
     }
 
 
@@ -822,6 +1867,56 @@ class _PredLifecycle:
     #: convention — prediction settlement / availability semantics SSOT:
     #: ``codex/02-data/prediction-settlement-availability-convention.md``).
     settled: str | None = None
+    #: Venue-native fields carried straight through from the per-date InstrumentRecord
+    #: (Kalshi ``event_ticker`` / Polymarket ``slug`` for ``raw_symbol``; Kalshi
+    #: ``series_ticker`` / Polymarket's synthesized category label for ``base_asset`` —
+    #: see ``instruments_service.reference_data.adapters.prediction.*``). BUG FIX
+    #: 2026-07-08: these were captured on every per-date row but never threaded through
+    #: this conditionId-grain accumulator, so ``_emit`` always wrote them blank and the
+    #: real, adapter-populated values never survived into ``prod/catalog.parquet`` (100%
+    #: NULL across 2.49M rows). Only meaningful at the per-conditionId (CID) grain — a
+    #: cqg spans many conditionIds with different raw_symbol/base_asset, so the cqg-grain
+    #: accumulator intentionally leaves these at their "" default (honest absence, not a
+    #: per-market value). See ``docs/PREDICTION_INSTRUMENTS.md`` § "Canonical identity model".
+    raw_symbol: str = ""
+    base_asset: str = ""
+    #: ``InstrumentRecord.underlying`` carried straight through from the per-date
+    #: row (populated by the adapters as of
+    #: ``prediction_canonical_identity_migration_2026_07_08.md`` todo 1 —
+    #: BTC/CPI/TRUMP/… for a classified subject, "" for sports (no scalar
+    #: underlying) or a genuinely-unclassified market). Per-conditionId grain
+    #: only, same reasoning as raw_symbol/base_asset above.
+    underlying: str = ""
+    #: ``InstrumentRecord.canonical_instrument_id`` carried straight through from
+    #: the per-date row when the ADAPTER already populated one (Polymarket sports
+    #: fixture_id — todo 5). The cross-venue join below (todo 2) can also assign
+    #: one post-hoc for a matched crypto/macro pair; ``_emit`` prefers the
+    #: cross-venue match, falling back to this adapter-populated value.
+    canonical_instrument_id: str = ""
+    #: ``InstrumentRecord.question`` — the human-readable market question/title
+    #: carried straight through from the per-date row (Polymarket ``question`` /
+    #: Kalshi ``title — yes_sub_title``, populated as of uac@c1de078a). FORWARD-ONLY:
+    #: honest ``None`` for any per-date row captured before that field landed (the
+    #: field is genuinely absent, not blank), so this stays ``None`` rather than "".
+    #: Per-conditionId grain only — a cqg spans many markets with distinct questions.
+    question: str | None = None
+    #: Soccer-fixture linkage carried straight through from the per-date
+    #: InstrumentRecord (uac af_league_id / home_team_canonical_id /
+    #: away_team_canonical_id / fixture_date / af_fixture_id /
+    #: af_fixture_match_status). Populated only for a Polymarket/Kalshi soccer
+    #: market the adapter matched to an API-Football fixture; honest ``None`` for
+    #: every non-soccer market AND for any per-date row captured before the IS
+    #: ``_records_to_dataframe`` parquet JOIN materialises these columns (deferred —
+    #: uac internal/reference/instrument.py note; plan
+    #: prediction_consolidated_closeout_2026_07_18 A4). ``af_fixture_id`` is a
+    #: nullable int upstream, stringified here by ``_opt_field`` (same as the numeric
+    #: ``league_id``). Per-conditionId grain only, same reasoning as ``question``.
+    af_league_id: str | None = None
+    home_team_canonical_id: str | None = None
+    away_team_canonical_id: str | None = None
+    fixture_date: str | None = None
+    af_fixture_id: str | None = None
+    af_fixture_match_status: str | None = None
 
 
 def _merge_lifecycle(
@@ -832,6 +1927,17 @@ def _merge_lifecycle(
     instrument_type: str,
     created: str | None,
     settled: str | None,
+    raw_symbol: str = "",
+    base_asset: str = "",
+    underlying: str = "",
+    canonical_instrument_id: str = "",
+    question: str | None = None,
+    af_league_id: str | None = None,
+    home_team_canonical_id: str | None = None,
+    away_team_canonical_id: str | None = None,
+    fixture_date: str | None = None,
+    af_fixture_id: str | None = None,
+    af_fixture_match_status: str | None = None,
 ) -> None:
     """Fold one (entity, day) observation into the lifecycle accumulator."""
     cur = acc.get(key)
@@ -843,15 +1949,76 @@ def _merge_lifecycle(
             instrument_type=instrument_type,
             created=created,
             settled=settled,
+            raw_symbol=raw_symbol,
+            base_asset=base_asset,
+            underlying=underlying,
+            canonical_instrument_id=canonical_instrument_id,
+            question=question,
+            af_league_id=af_league_id,
+            home_team_canonical_id=home_team_canonical_id,
+            away_team_canonical_id=away_team_canonical_id,
+            fixture_date=fixture_date,
+            af_fixture_id=af_fixture_id,
+            af_fixture_match_status=af_fixture_match_status,
         )
         return
     if day < cur.first_day:
         cur.first_day = day
     if day > cur.last_day:
         cur.last_day = day
-        # Metadata (instrument_type) follows the most-recent observation.
+        # Metadata (instrument_type / raw_symbol / base_asset / underlying /
+        # canonical_instrument_id) follows the most-recent observation, same
+        # convention as instrument_type below.
         if instrument_type:
             cur.instrument_type = instrument_type
+        if raw_symbol:
+            cur.raw_symbol = raw_symbol
+        if base_asset:
+            cur.base_asset = base_asset
+        if underlying:
+            cur.underlying = underlying
+        if canonical_instrument_id:
+            cur.canonical_instrument_id = canonical_instrument_id
+        if question:
+            cur.question = question
+        if af_league_id:
+            cur.af_league_id = af_league_id
+        if home_team_canonical_id:
+            cur.home_team_canonical_id = home_team_canonical_id
+        if away_team_canonical_id:
+            cur.away_team_canonical_id = away_team_canonical_id
+        if fixture_date:
+            cur.fixture_date = fixture_date
+        if af_fixture_id:
+            cur.af_fixture_id = af_fixture_id
+        if af_fixture_match_status:
+            cur.af_fixture_match_status = af_fixture_match_status
+    else:
+        # An earlier day's row may be the only one carrying a value (e.g. a market's
+        # last snapshot before delisting had a transiently-blank field) — backfill
+        # rather than leaving an available value unused.
+        if not cur.raw_symbol and raw_symbol:
+            cur.raw_symbol = raw_symbol
+        if not cur.base_asset and base_asset:
+            cur.base_asset = base_asset
+        if not cur.underlying and underlying:
+            cur.underlying = underlying
+        if not cur.canonical_instrument_id and canonical_instrument_id:
+            cur.canonical_instrument_id = canonical_instrument_id
+        if not cur.question and question:
+            cur.question = question
+        if not cur.af_league_id and af_league_id:
+            cur.af_league_id = af_league_id
+        if not cur.home_team_canonical_id and home_team_canonical_id:
+            cur.home_team_canonical_id = home_team_canonical_id
+        if not cur.away_team_canonical_id and away_team_canonical_id:
+            cur.away_team_canonical_id = away_team_canonical_id
+        if not cur.fixture_date and fixture_date:
+            cur.fixture_date = fixture_date
+        if not cur.af_fixture_id and af_fixture_id:
+            cur.af_fixture_id = af_fixture_id
+        if not cur.af_fixture_match_status and af_fixture_match_status:
+            cur.af_fixture_match_status = af_fixture_match_status
     if created and (cur.created is None or created < cur.created):
         cur.created = created
     if settled and (cur.settled is None or settled > cur.settled):
@@ -875,10 +2042,15 @@ def build_prediction_catalogue_dataframe(
 
     Args:
         snapshots: iterable of ``(day, venue, cqg, frame)`` — one per
-            ``instrument_availability/by_date/day=/venue=/canonical_question_group=/instruments.parquet``
-            blob. ``venue`` + ``cqg`` come from the PATH (the writer drops the
-            ``_canonical_group`` column); ``frame`` holds that day's per-market
-            InstrumentRecords (``instrument_key`` = conditionId).
+            ``instrument_availability/by_date/day=/venue=[/market=]/instruments.parquet``
+            blob. ``venue`` comes from the PATH; ``cqg`` is a legacy path-derived
+            fallback (always ``""`` in practice — the writer never emits a
+            ``canonical_question_group=`` path segment, see
+            :func:`_iter_prediction_by_date_snapshots`). ``frame`` holds that day's
+            per-market InstrumentRecords (``instrument_key`` = conditionId); as of
+            249-b (decision 338), each ROW in ``frame`` also carries its own
+            ``canonical_question_group`` column — THIS is what the cqg grain below
+            actually keys on, not the per-blob ``cqg`` argument.
 
     Returns:
         A DataFrame with :data:`CATALOG_COLUMNS`:
@@ -904,24 +2076,18 @@ def build_prediction_catalogue_dataframe(
         cqg_str = cqg.strip()
         # 249-a: the conditionId grain (instrument_key) accumulates from EVERY
         # non-empty frame — it does NOT require a canonical_question_group. The
-        # cqg grain (gated below on cqg_str) is materialised only when the writer
-        # emits a cqg, which it does not in the current venue=/market= layout
-        # (that's 249-b, gated on operator decision 338). Skipping a frame on
-        # `not cqg_str` (the pre-fix behaviour) dropped BOTH grains → 0-row
-        # catalogue. Skip only genuinely-empty frames.
+        # cqg grain is materialised per-ROW below from each row's own
+        # canonical_question_group column (249-b, decision 338 — RESOLVED; see the
+        # per-row merge inside the loop). Skipping a frame on `not cqg_str` (the
+        # pre-249-b behaviour) dropped BOTH grains → 0-row catalogue. Skip only
+        # genuinely-empty frames.
         if frame.empty:
             continue
         records: list[dict[str, object]] = frame.to_dict("records")  # pyright: ignore[reportAssignmentType]
-        # cqg-grain lifecycle: the cqg is present on this day if ANY member is.
-        cqg_itype = ""
-        cqg_created: str | None = None
-        cqg_settled: str | None = None
-        saw_member = False
         for row in records:
             cid = _row_id(row)
             if cid is None:
                 continue
-            saw_member = True
             itype = _str_field(row, "instrument_type")
             created = (
                 _opt_field(row, "start_date")
@@ -938,20 +2104,142 @@ def build_prediction_catalogue_dataframe(
                 or _opt_field(row, "settlement_time")
                 or _opt_field(row, "available_to_datetime")
             )
-            cqg_itype = cqg_itype or itype
-            if created and (cqg_created is None or created < cqg_created):
-                cqg_created = created
-            if settled and (cqg_settled is None or settled > cqg_settled):
-                cqg_settled = settled
-            _merge_lifecycle(cid_acc, (venue_str, cid), day, venue_str, itype, created, settled)
-        # cqg grain only when the writer emits a cqg (249-b, gated on decision
-        # 338). Currently always empty → no cqg rows, conditionId grain only.
-        if saw_member and cqg_str:
-            _merge_lifecycle(cqg_acc, (venue_str, cqg_str), day, venue_str, cqg_itype, cqg_created, cqg_settled)
+            # Venue-native fields the adapters DO populate at InstrumentRecord
+            # construction (Kalshi event_ticker / Polymarket slug for raw_symbol;
+            # Kalshi series_ticker / Polymarket's synthesized category label for
+            # base_asset) — present on every per-date row via _records_to_dataframe's
+            # model_dump(), just never read here before this fix. Per-conditionId
+            # grain only (see _PredLifecycle docstring for why the cqg grain skips them).
+            raw_symbol = _str_field(row, "raw_symbol")
+            # Strip leading/trailing whitespace on ``base_asset`` at the writer.
+            # Prediction ``base_asset`` can carry a fixed-length-truncated market
+            # TITLE with a trailing pad space (e.g.
+            # ``"Will the highest temperature in Jeddah be 23 degrees C or "``),
+            # producing whitespace-only-distinct variants in prod (measured 2026-07-18:
+            # 125,914 rows / 209 distinct values that collapse on ``.strip()``).
+            # ``base_asset`` is a DISPLAY/reference field (NOT the shard-atom identity,
+            # which is ``(venue, conditionId, data_type)``), so this is pure hygiene —
+            # strip HERE, BEFORE the ``_merge_lifecycle`` (venue, conditionId) dedup
+            # below, so the lifecycle accumulator stores ONE clean value per market and
+            # whitespace-only variants of the same market collapse instead of racing on
+            # "most-recent observation". PREDICTION path only (cefi/tradfi/defi/sports
+            # roll up through ``build_catalogue_dataframe`` / their own producers).
+            base_asset = _str_field(row, "base_asset").strip()
+            # underlying / canonical_instrument_id (prediction_canonical_identity_
+            # migration_2026_07_08.md todos 1 + 5): real, adapter-populated fields as
+            # of the 2026-07-09 underlying/fixture_id fix — "" (honest absence) for
+            # any per-date row captured before that fix, or for a market with no
+            # scalar underlying / no resolvable sports fixture_id. Per-conditionId
+            # grain only, same reasoning as raw_symbol/base_asset above.
+            underlying = _str_field(row, "underlying")
+            canonical_instrument_id = _str_field(row, "canonical_instrument_id")
+            # question (uac InstrumentRecord.question): human-readable market
+            # question/title, honest-None (via _opt_field) when the per-date row
+            # predates the field or the adapter resolved none — FORWARD-ONLY, never
+            # fabricated. Per-conditionId grain only (a cqg has no single question).
+            question = _opt_field(row, "question")
+            # Soccer-fixture linkage (uac InstrumentRecord af_league_id /
+            # home_team_canonical_id / away_team_canonical_id / fixture_date /
+            # af_fixture_id / af_fixture_match_status): carried through honest-None via
+            # _opt_field — None on any snapshot that predates the IS
+            # ``_records_to_dataframe`` parquet JOIN (deferred), on a non-soccer
+            # market, or on an unmatched fixture. Never fabricated. ``af_fixture_id``
+            # is a nullable int upstream, stringified by _opt_field (as league_id is).
+            # Per-conditionId grain only, same reasoning as question above.
+            af_league_id = _opt_field(row, "af_league_id")
+            home_team_canonical_id = _opt_field(row, "home_team_canonical_id")
+            away_team_canonical_id = _opt_field(row, "away_team_canonical_id")
+            fixture_date = _opt_field(row, "fixture_date")
+            af_fixture_id = _opt_field(row, "af_fixture_id")
+            af_fixture_match_status = _opt_field(row, "af_fixture_match_status")
+            _merge_lifecycle(
+                cid_acc,
+                (venue_str, cid),
+                day,
+                venue_str,
+                itype,
+                created,
+                settled,
+                raw_symbol,
+                base_asset,
+                underlying,
+                canonical_instrument_id,
+                question,
+                af_league_id,
+                home_team_canonical_id,
+                away_team_canonical_id,
+                fixture_date,
+                af_fixture_id,
+                af_fixture_match_status,
+            )
+            # cqg grain (249-b, decision 338 — RESOLVED, see
+            # prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2): PER-ROW,
+            # not per-frame — one instruments.parquet blob spans MANY markets across
+            # MANY different canonical_question_groups (the writer does not partition
+            # by cqg), so a single blob-level cqg cannot represent it. Each row now
+            # carries its OWN canonical_question_group (write-back from the adapter's
+            # classify_{polymarket,kalshi}_to_canonical_group() call — UAC
+            # InstrumentRecord.canonical_question_group). Falls back to the
+            # PATH-derived ``cqg_str`` (the pre-fix, always-empty-in-practice source)
+            # only for historical snapshots captured before this field existed, so an
+            # old snapshot degrades to "no cqg row" rather than a KeyError.
+            row_cqg = _str_field(row, "canonical_question_group").strip() or cqg_str
+            if row_cqg:
+                _merge_lifecycle(cqg_acc, (venue_str, row_cqg), day, venue_str, itype, created, settled)
 
     if not all_days:
         return pd.DataFrame(columns=list(CATALOG_COLUMNS))
     latest_day = max(all_days)
+
+    # Cross-venue Kalshi<->Polymarket same-market join
+    # (prediction_canonical_identity_migration_2026_07_08.md todo 2 /
+    # docs/PREDICTION_INSTRUMENTS.md § "Canonical identity model" §3 item 3): the
+    # existing cross_venue_mapping.build_cross_venue_mapping() matcher wired into
+    # this real, scheduled roll-up step (runs every catalogue regen) rather than
+    # left a pure function with no caller. Builds minimal InstrumentRecord views
+    # from the accumulated per-conditionId lifecycle (instrument_key / venue /
+    # raw_symbol / expiry are all it needs — see cross_venue_mapping.py's own
+    # module docstring on what an InstrumentRecord carries for a prediction
+    # market), runs the matcher, and indexes the result by BOTH venues'
+    # instrument_key so ``_emit`` can look a matched conditionId's
+    # canonical_event_id up below. No ``titles`` map is passed — todo 4's real,
+    # documented decision: no per-instrument title is persisted anywhere the
+    # offline roll-up can reach (InstrumentRecord dropped the ``symbol`` field —
+    # see cross_venue_mapping.py's docstring), so sports pairs are honestly
+    # absent here (matches the matcher's own no-titles-supplied default; the
+    # Polymarket sports canonical_instrument_id set at adapter time (todo 5,
+    # ``polymarket/parsing.py::_build_sports_id``) is preserved below via the
+    # ``lc.canonical_instrument_id`` fallback since this dict has no entry for it).
+    kalshi_recs: list[InstrumentRecord] = []
+    poly_recs: list[InstrumentRecord] = []
+    for (venue_str, cid), lc in cid_acc.items():
+        rec = InstrumentRecord(
+            instrument_key=cid,
+            venue=venue_str,
+            instrument_type=InstrumentType.PREDICTION_MARKET,
+            raw_symbol=lc.raw_symbol,
+            base_asset=lc.base_asset,
+            expiry=_parse_truth_datetime(lc.settled),
+        )
+        if venue_str.upper() == "KALSHI":
+            kalshi_recs.append(rec)
+        elif venue_str.upper() == "POLYMARKET":
+            poly_recs.append(rec)
+
+    canonical_event_id_by_key: dict[str, str] = {}
+    if kalshi_recs and poly_recs:
+        matched_pairs = build_cross_venue_mapping(kalshi_recs, poly_recs)
+        for mapping in matched_pairs:
+            if mapping.kalshi_market_ticker:
+                canonical_event_id_by_key[mapping.kalshi_market_ticker] = mapping.canonical_event_id
+            if mapping.polymarket_condition_id:
+                canonical_event_id_by_key[mapping.polymarket_condition_id] = mapping.canonical_event_id
+        _emit_event(
+            "PREDICTION_CROSS_VENUE_MAPPING_BUILT",
+            kalshi_count=len(kalshi_recs),
+            polymarket_count=len(poly_recs),
+            matched_pairs=len(matched_pairs),
+        )
 
     rows: list[dict[str, str | None]] = []
 
@@ -984,9 +2272,66 @@ def build_prediction_catalogue_dataframe(
                 "market_created_at": lc.created,
                 "settlement_time": lc.settled,
                 "data_type": data_type,
-                # Non-DeFi grain → no dual-form pool ids.
+                # BUG FIX 2026-07-08 (see _PredLifecycle docstring): raw_symbol / base_asset
+                # are real, adapter-populated venue-native fields (Kalshi event_ticker/
+                # series_ticker, Polymarket slug/category label) — now threaded through
+                # from the per-date rows instead of always emitting blank. "" (not the prior
+                # implicit NaN) at the cqg grain — a canonical_question_group has no single
+                # per-market raw_symbol/base_asset (honest absence, not unpopulated).
+                "raw_symbol": lc.raw_symbol,
+                "base_asset": lc.base_asset,
+                # `question` (uac InstrumentRecord.question): the human-readable
+                # market question/title threaded straight through from the per-date
+                # row (Polymarket ``question`` / Kalshi ``title — yes_sub_title``).
+                # FORWARD-ONLY: honest ``None`` for rows captured before uac@c1de078a
+                # or for a market the adapter resolved no question for — never
+                # fabricated. cqg-grain rows carry ``None`` (lc.question default) — a
+                # family has no single per-market question.
+                "question": lc.question,
+                # `underlying` (prediction_canonical_identity_migration_2026_07_08.md
+                # todo 1): real, adapter-populated value threaded straight through
+                # from the per-date row (see _PredLifecycle.underlying) as of the
+                # 2026-07-09 fix — "" (honest absence) for rows captured before that
+                # fix, sports markets (no scalar underlying), or a
+                # genuinely-unclassified market. See docs/PREDICTION_INSTRUMENTS.md
+                # "Canonical identity model" for the full decision.
+                "underlying": lc.underlying,
+                # `canonical_instrument_id` (todo 2 + todo 5): prefer the cross-venue
+                # Kalshi<->Polymarket match computed above (crypto/macro/index same-
+                # market pairs — keyed by this row's own instrument_key, i.e. the
+                # wrapped conditionId/ticker); fall back to the adapter-populated
+                # value (Polymarket sports fixture_id) when no cross-venue match
+                # exists for this instrument. "" (honest absence, never a guessed or
+                # false pair) when neither mechanism resolves one. cqg-grain rows
+                # never get one (a family has no single per-instance identity).
+                "canonical_instrument_id": (
+                    canonical_event_id_by_key.get(entity_id) or lc.canonical_instrument_id
+                    if data_type != _PREDICTION_CQG_DATA_TYPE
+                    else ""
+                ),
+                # Non-DeFi grain → no dual-form pool ids + no on-chain addresses.
                 "glued_pair_id": "",
                 "pool_address": "",
+                "base_asset_contract_address": "",
+                "quote_asset_contract_address": "",
+                "atoken_address": "",
+                "debt_token_address": "",
+                # Soccer-fixture linkage (uac InstrumentRecord af_league_id / team
+                # canonical ids / fixture_date / af_fixture_id / af_fixture_match_status)
+                # threaded straight through from the per-conditionId row. honest-None
+                # for a non-soccer market or a snapshot predating the parquet JOIN —
+                # never fabricated. NOTE the separate ``league_id`` column above stays
+                # hardcoded "" (the prediction rollup has no bookmaker/exchange league
+                # axis); ``af_league_id`` is the API-Football soccer league id, a
+                # distinct axis emitted honest-None here for every non-soccer row.
+                # cqg-grain rows never carry these (a family has no single fixture) —
+                # the cqg accumulator is never fed them (per-conditionId grain only).
+                "af_league_id": lc.af_league_id,
+                "home_team_canonical_id": lc.home_team_canonical_id,
+                "away_team_canonical_id": lc.away_team_canonical_id,
+                "fixture_date": lc.fixture_date,
+                "af_fixture_id": lc.af_fixture_id,
+                "af_fixture_match_status": lc.af_fixture_match_status,
             }
         )
 
@@ -1144,6 +2489,15 @@ def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFr
     ``api_football_id`` map (``canonicalize_league_id`` does not provide it) and is
     gated on the IS instrument backfill regardless.
 
+    Excludes :data:`SPORTS_LEAGUE_ID_SENTINELS` (e.g. the ``"UNKNOWN"`` phantom
+    pseudo-league) BEFORE the roll-up — this was previously unguarded and minted
+    a real, persisted ``instrument_id="UNKNOWN"/league_id="UNKNOWN"`` catalogue
+    row that a downstream v2-enumerator bug then amplified into thousands of
+    manifest rows (root-caused + fixed 2026-07-09). Since the 2026-07-13
+    24-league de-registration ruling it ALSO excludes any league_id outside UAC
+    ``LEAGUE_REGISTRY`` (see :func:`_sports_league_registered`) — the registered
+    universe is now exactly the could-exist universe.
+
     Args:
         manifest_df: the canonical sports ``_index`` (needs ``league_id`` /
             ``data_type`` / ``date`` columns). Read via
@@ -1151,7 +2505,8 @@ def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFr
 
     Returns:
         A DataFrame with :data:`CATALOG_COLUMNS`, one row per distinct current
-        canonical league, sorted by ``league_id`` for deterministic output.
+        canonical league (sentinel league_ids excluded), sorted by ``league_id``
+        for deterministic output.
     """
     cols = list(CATALOG_COLUMNS)
     needed = {"league_id", "data_type", "date"}
@@ -1164,7 +2519,12 @@ def build_sports_catalogue_from_manifest(manifest_df: pd.DataFrame) -> pd.DataFr
     df = manifest_df.loc[:, ["league_id", "data_type", "date"]].copy()
     df["league_id"] = df["league_id"].fillna("").astype(str)
     df["data_type"] = df["data_type"].fillna("").astype(str)
-    df = df[(df["league_id"] != "") & (df["data_type"].isin(current))]
+    df = df[
+        (df["league_id"] != "")
+        & (~df["league_id"].str.upper().isin(SPORTS_LEAGUE_ID_SENTINELS))
+        & (df["league_id"].map(_sports_league_registered))
+        & (df["data_type"].isin(current))
+    ]
     if df.empty:
         return pd.DataFrame(columns=cols)
     df["date"] = df["date"].astype(str)
@@ -1204,6 +2564,113 @@ def _read_sports_manifest_index(storage: StorageClient, bucket: str) -> pd.DataF
         return pd.DataFrame()
     payload = storage.download_bytes(bucket, blob_path)
     return pd.read_parquet(io.BytesIO(payload), columns=["league_id", "data_type", "date"])
+
+
+# ---------------------------------------------------------------------------
+# Sports FIXTURE/TEAM/PLAYER-GRAIN roll-up — FROM REAL CAPTURED REFERENCE DATA
+#
+# Distinct from the league-grain could-exist system above (which is seeded
+# from the MANIFEST — a theoretical "should exist" universe used to compute
+# expected_unattempted gaps). These three grains are seeded from real OBSERVED
+# captures only (the entity=fixtures / entity=teams / entity=injuries parquets
+# the 11-step pipeline in SPORTS_INSTRUMENTS.md already writes) — a roll-up of
+# what actually got captured, mirroring build_catalogue_dataframe's cefi/defi/
+# tradfi by_date-snapshot pattern, NOT a could-exist projection. They therefore
+# never feed expected_unattempted seeding for fixture/team/player grain — the
+# sports manifest itself is still league-grain-only (2026-07-08 finding), so a
+# could-exist projection at these finer grains would inflate the coverage
+# denominator exactly as `sports_catalog_league_grain_only_scope_2026_07_08.md`
+# warned. `enumerate_expected_universe.py::_enumerate_v2_sports` was updated
+# alongside this change to only process instrument_type="league" catalogue rows
+# for that reason — a fixture/team/player row's ``league_id`` must never be
+# treated as a per-league lifecycle window by that enumerator.
+# ---------------------------------------------------------------------------
+
+
+def _split_full_name(display_name: str) -> tuple[str, str]:
+    """Split a "First Last" display name into ``(last_name, first_name)``.
+
+    Feeds UAC's ``build_player_id(last_name, first_name)``. Whitespace-delimited:
+    the LAST token is the surname, everything before it is the given name(s)
+    (``"Bukayo Saka"`` -> ``("Saka", "Bukayo")``). A single-token name (e.g.
+    ``"Neymar"``) returns ``(name, "")`` so ``build_player_id`` falls back to the
+    bare name, matching its own documented single-name-player convention.
+    """
+    parts = display_name.split()
+    if len(parts) < 2:
+        return display_name.strip(), ""
+    return parts[-1], " ".join(parts[:-1])
+
+
+def _sports_attr_str(raw: object) -> str:
+    """Normalise a sports fixture-snapshot cell to a clean string ("" when absent).
+
+    Same missing-value idiom as :func:`_opt_field` / :func:`_row_id` (guard
+    ``pd.isna`` in a try/except — the snapshots carry None/NaN/NaT freely, e.g.
+    ``venue_id``/``venue_city`` are frequently None), but collapses to the honest
+    empty string rather than None, and refuses to emit the STRINGIFIED sentinels
+    ``"None"``/``"nan"``/``"NaT"`` — writing those into the catalogue would be a
+    fabricated value, not an absent one (never silent placeholders).
+    """
+    if raw is None:
+        return ""
+    try:
+        if pd.isna(raw):  # pyright: ignore[reportArgumentType]
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(raw).strip()
+    return "" if text.lower() in {"none", "nan", "nat"} else text
+
+
+def _sports_grain_rollup_to_df(
+    first_day: dict[str, date],
+    last_day: dict[str, date],
+    row_league: dict[str, str],
+    all_days: set[date],
+    instrument_type: str,
+    extra_attrs: dict[str, dict[str, str]] | None = None,
+) -> pd.DataFrame:
+    """Shared first/last-day lifecycle -> :data:`CATALOG_COLUMNS` row assembly.
+
+    Mirrors :func:`build_sports_catalogue_dataframe`'s lifecycle convention:
+    ``available_to=None`` means "present on the latest scanned day" (still
+    active); otherwise the last day it was observed. Shared by the fixture/
+    team/player-grain folding loop in
+    :func:`build_sports_fixture_team_player_catalogue`.
+
+    ``extra_attrs`` (id -> {column: value}) merges per-instrument columns onto
+    the assembled row — used by the FIXTURE grain to carry the scheduling/display
+    fields (``kickoff_utc``/``status``/team names/``venue_name``/``round``) that
+    the by_date snapshot already had. Only keys in :data:`CATALOG_COLUMNS`
+    survive (``pd.DataFrame(..., columns=cols)`` drops the rest); ids absent from
+    the mapping simply keep the honest blank the other grains get.
+    """
+    cols = list(CATALOG_COLUMNS)
+    if not all_days:
+        return pd.DataFrame(columns=cols)
+    latest_day = max(all_days)
+    rows: list[dict[str, str | None]] = []
+    for iid in sorted(first_day):
+        available_to = None if last_day[iid] >= latest_day else last_day[iid].isoformat()
+        row: dict[str, str | None] = {
+            "instrument_id": iid,
+            "instrument_type": instrument_type,
+            "venue": "",
+            "chain": "",
+            "league_id": row_league[iid],
+            "available_from": first_day[iid].isoformat(),
+            "available_to": available_to,
+            "market_created_at": None,
+            "settlement_time": None,
+            "data_type": None,
+            "glued_pair_id": "",
+            "pool_address": "",
+        }
+        if extra_attrs:
+            row.update(extra_attrs.get(iid, {}))
+        rows.append(row)
+    return pd.DataFrame(rows, columns=cols)
 
 
 # ---------------------------------------------------------------------------
@@ -1280,6 +2747,31 @@ def _tune_download_pool(storage: StorageClient, size: int) -> None:
     http.mount("https://", adapter)
     http.mount("http://", adapter)
     logger.info("Tuned GCS HTTP connection pool to %d (matches download workers)", size)
+
+
+def _download_by_date_blob(storage: StorageClient, bucket: str, name: str) -> bytes:
+    """Download one ``by_date`` snapshot blob, retrying transient network failures.
+
+    **Root cause (2026-07-31, tradfi_catalogue_full_regen_job_failing_2026_07_31.md).**
+    A ``--mode full`` walk downloads tens of thousands of blobs (27,175 for tradfi)
+    over several hours via :func:`_bounded_parallel_load`, whose per-item ``load``
+    exception propagates and kills the WHOLE run (by design — see its docstring). A
+    single transient ``requests.exceptions.ConnectionError: Connection reset by peer``
+    on any ONE blob (GCS's own client-level retry already exhausted) was silently
+    aborting hours of otherwise-complete work with zero application log output (the
+    abrupt-kill investigation this fix closes). At this blob count, hitting at least
+    one transient network blip over a multi-hour run is the expected case, not the
+    exception — so the retry belongs at the per-blob boundary, not the per-run one.
+    ``with_retry``'s default retryable set (``ConnectionError``/``TimeoutError``/
+    ``OSError``) already covers ``requests.exceptions.ConnectionError`` (a subclass
+    of ``OSError``) with no extra configuration.
+    """
+    return with_retry(
+        lambda: storage.download_bytes(bucket, name),
+        max_attempts=5,
+        base_delay=1.0,
+        max_delay=30.0,
+    )
 
 
 def _bounded_parallel_load(
@@ -1373,7 +2865,29 @@ def _iter_by_date_snapshots(
     targets: list[tuple[date, str]] = []
     for blob in blob_iter:
         name = str(getattr(blob, "name", ""))
-        if not name.endswith(".parquet"):
+        # Read ONLY the canonical per-(day, venue) ``instruments.parquet`` snapshot —
+        # the exact leaf the IS writer emits (engine/orchestrator/writers.py:205,
+        # process_write.py:277/420) and the sole grain this roll-up aggregates.
+        # A bare ``endswith(".parquet")`` also swept in TWO classes of co-located
+        # NON-snapshot parquets that a --mode full walk then aggregated:
+        #   1. Migration BACKUP litter — the id-canonicalization sweeps write a
+        #      pre-sweep backup NEXT TO the file they rewrite
+        #      (``instruments.usdlin.<ts>.bak.parquet`` from the 2026-07-18 tradfi
+        #      USD@LIN sweep; ``instruments.okxmarginfix.*``/``…binancefix.*`` on
+        #      cefi). Those carry the OLD RAW ids, so a full walk re-derived
+        #      raw+canonical TWINS from the swept snapshot AND its raw backup —
+        #      measured 82.90%→~50% F/O-canonical regression on tradfi with the
+        #      backups present vs 100% reading instruments.parquet alone (issue
+        #      plans/active/issues/tradfi_catalogue_rollup_ingests_sweep_bak_backups_2026_07_20.md).
+        #   2. The sibling ``futures_contracts.parquet`` (CanonicalFuturesContract
+        #      lifecycle-dates, writers.py:381) which carries NO instrument_key /
+        #      instrument_id column, so build_catalogue_dataframe already dropped
+        #      every one of its rows (_row_id → None) — excluding it here is a
+        #      strict no-op for catalogue content and makes the walk deterministic.
+        # Prediction (own iterator) already filters ``instruments.parquet``; sports
+        # uses its own iterators. Blast-radius verified for cefi/defi/tradfi
+        # 2026-07-20: instruments.parquet is the only instrument-bearing snapshot.
+        if not name.endswith("/instruments.parquet"):
             continue
         match = _DAY_RE.search(name)
         if match is None:
@@ -1388,7 +2902,7 @@ def _iter_by_date_snapshots(
 
     def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame]:
         day, name = item
-        payload = storage.download_bytes(bucket, name)
+        payload = _download_by_date_blob(storage, bucket, name)
         return day, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
@@ -1418,9 +2932,18 @@ def _iter_prediction_by_date_snapshots(
     instruments.parquet`` — it does NOT emit a ``canonical_question_group=`` path
     segment (the prior code required one and so skipped EVERY blob → 0-row
     catalogue). The conditionId (``instrument_key``) is read from the FRAME, so
-    the cqg is no longer needed for the conditionId grain; ``cqg`` is yielded as
-    ``""`` (the cqg grain is 249-b, gated on operator decision 338, and the
-    rollup only materialises it when cqg is non-empty). Both the venue-level
+    the cqg is no longer needed for the conditionId grain; ``cqg`` (this
+    function's PATH-derived value) is yielded as ``""`` in practice, always, since
+    the writer never emits the path segment. **249-b (decision 338 — RESOLVED,
+    prediction_satellite_ao_dispatch_batch5_2026_07_26.md todo 2):** the cqg GRAIN
+    itself no longer depends on this path-derived value — each row in the FRAME now
+    carries its own ``canonical_question_group`` column (a write-back of the
+    classification the adapter already computed via
+    ``classify_{polymarket,kalshi}_to_canonical_group()``, UAC
+    ``InstrumentRecord.canonical_question_group``), which
+    :func:`build_prediction_catalogue_dataframe` reads per-row. This function's
+    ``cqg`` return value is kept only as a legacy fallback for historical
+    snapshots captured before that field existed. Both the venue-level
     ``instruments.parquet`` (full conditionId universe) and the per-market
     ``market=<M>/instruments.parquet`` blobs are read; the rollup dedups by
     ``(venue, conditionId)`` via ``_merge_lifecycle``. The metadata sibling
@@ -1467,7 +2990,7 @@ def _iter_prediction_by_date_snapshots(
 
     def _load(item: tuple[date, str, str, str]) -> tuple[date, str, str, pd.DataFrame]:
         day, venue, cqg, name = item
-        payload = storage.download_bytes(bucket, name)
+        payload = _download_by_date_blob(storage, bucket, name)
         return day, venue, cqg, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
@@ -1518,7 +3041,7 @@ def _iter_sports_by_date_snapshots(
 
     def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame]:
         day, name = item
-        payload = storage.download_bytes(bucket, name)
+        payload = _download_by_date_blob(storage, bucket, name)
         return day, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
@@ -1528,12 +3051,314 @@ def _iter_sports_by_date_snapshots(
     yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
 
 
-def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str) -> int | None:
-    """Return the row count of the current canonical catalogue, or None when absent."""
+def _iter_sports_ftp_snapshots(
+    storage: StorageClient,
+    bucket: str,
+    prefix: str,
+    *,
+    since: date | None = None,
+    max_blobs: int | None = None,
+    max_workers: int = MAX_DOWNLOAD_WORKERS,
+) -> Iterator[tuple[str, date, str, pd.DataFrame]]:
+    """Yield ``(entity, day, league_id, frame)`` for fixture/team/injuries by_date parquets.
+
+    ONE combined prefix walk covers all three :data:`_SPORTS_FTP_ENTITIES`
+    (single-walk discipline — a separate whole-corpus walk per entity is
+    review-blocking per codex/02-data/availability-manifest-and-data-status.md)
+    — mirrors :func:`_iter_sports_by_date_snapshots` (the existing
+    ``entity=leagues`` walk) but additionally parses the ``league={L}``
+    partition segment, which fixtures/teams/injuries all carry (``leagues``
+    does not — that entity is a bare per-day file with ``league_id`` on the
+    FRAME instead, which is why it keeps its own dedicated walk function).
+
+    ``since`` restricts the walk to a DATE-FLOORED PREFIX LIST — one
+    ``day=<D>/`` listing per day from ``since`` through today (UTC), mirroring
+    :func:`_iter_by_date_snapshots`'s ``since`` window read. This is NOT just a
+    download-time optimisation: an UNWINDOWED ``since=None`` walk lists the
+    ENTIRE ``sports_reference/by_date/`` tree (every entity — footystats/
+    understat/transfermarkt/standings/etc., not just fixtures/teams/injuries),
+    because the ``entity=`` segment sits AFTER ``day=``/``pipeline_mode=`` in
+    the path, so GCS cannot prefix-scope the LISTING itself to just these three
+    entities — only client-side filtering AFTER listing. Measured against real
+    prod GCS 2026-07-09: an unwindowed listing of the full multi-year history
+    did not complete in 180s (before any downloads even start). ``since=None``
+    is kept for callers that genuinely want the full history (accepting that
+    cost) — the default caller, :func:`build_sports_fixture_team_player_catalogue`,
+    always passes a bounded ``since``.
+
+    ``league_id`` here is always the PATH value: fixtures carries no canonical
+    ``league_id`` column at all, and injuries' own ``league_id`` column is the
+    RAW numeric api-football id (never overwritten with the canonical value the
+    partition path already carries) — reading the path uniformly for all three
+    entities avoids a silent canonical/raw mismatch between them. A raw numeric
+    path value (no canonical name mapping) is a DE-REGISTERED league since the
+    2026-07-13 ruling — the caller drops it via
+    :func:`_sports_league_registered` alongside the
+    :data:`SPORTS_LEAGUE_ID_SENTINELS` check (the pre-ruling convention of
+    keeping unmapped leagues no longer applies; their data objects stay on GCS
+    but must not re-mint catalogue rows). Blobs with no ``league=`` segment
+    (the rare legacy unmapped-fallback files) yield ``league_id=""`` — callers
+    skip those (a catalogue row needs a real league to be honest).
+    """
+    walk_prefix = prefix.rstrip("/") + "/"
+
+    def _list_window_blobs() -> Iterator[object]:
+        """Per-day prefix listings for ``day=>=since`` (bounded, not a corpus walk)."""
+        assert since is not None
+        day = since
+        today = datetime.now(UTC).date()
+        while day <= today:
+            yield from storage.list_blobs(bucket, prefix=f"{walk_prefix}day={day.isoformat()}/")
+            day += timedelta(days=1)
+
+    blob_iter = storage.list_blobs(bucket, prefix=walk_prefix) if since is None else _list_window_blobs()
+    targets: list[tuple[str, date, str, str]] = []
+    for blob in blob_iter:
+        name = str(getattr(blob, "name", ""))
+        if not name.endswith(".parquet"):
+            continue
+        entity_m = _ENTITY_RE.search(name)
+        if entity_m is None or entity_m.group(1) not in _SPORTS_FTP_ENTITIES:
+            continue
+        day_m = _DAY_RE.search(name)
+        if day_m is None:
+            logger.warning("Skipping sports %s blob with no day= partition: %s", entity_m.group(1), name)
+            continue
+        league_m = _LEAGUE_RE.search(name)
+        targets.append(
+            (entity_m.group(1), date.fromisoformat(day_m.group(1)), league_m.group(1) if league_m else "", name)
+        )
+
+    targets.sort(key=lambda item: item[3])
+    if max_blobs is not None:
+        targets = targets[:max_blobs]
+    logger.info(
+        "Found %d sports fixture/team/player-source by_date parquet(s) to roll up (workers=%d)",
+        len(targets),
+        max_workers,
+    )
+
+    def _load(item: tuple[str, date, str, str]) -> tuple[str, date, str, pd.DataFrame]:
+        entity, day, league_id, name = item
+        payload = _download_by_date_blob(storage, bucket, name)
+        return entity, day, league_id, pd.read_parquet(io.BytesIO(payload))
+
+    # Memory-bounded sliding window — see _bounded_parallel_load. Streamed
+    # straight into build_sports_fixture_team_player_catalogue's accumulator
+    # dicts (never buffered into a list here), so peak memory stays
+    # O(max_workers) frames + O(distinct fixture/team/player count), NOT
+    # O(len(targets)) — the fixture/team/injuries by_date corpus can span
+    # hundreds of thousands of small blobs over the full history.
+    yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
+
+
+def build_sports_fixture_team_player_catalogue(
+    storage: StorageClient,
+    bucket: str,
+    *,
+    by_date_prefix: str = SPORTS_BY_DATE_PREFIX,
+    since: date | None = None,
+    max_blobs: int | None = None,
+) -> pd.DataFrame:
+    """Roll real captured fixture/team/player reference data into catalogue rows.
+
+    Extends the sports could-exist catalogue past league-grain-only (2026-07-09
+    operator decision — supersedes the scoping question left open in
+    `sports_catalog_league_grain_only_scope_2026_07_08.md`). Reads REAL captured
+    fixture/team/injuries reference data already written to
+    ``sports_reference/by_date/`` (the same GCS objects the 11-step pipeline in
+    SPORTS_INSTRUMENTS.md documents) and rolls each up into its own grain —
+    the by_date-snapshot OBSERVED-capture pattern :func:`build_catalogue_dataframe`
+    already uses for cefi/defi/tradfi, deliberately NOT the manifest-derived
+    could-exist pattern :func:`build_sports_catalogue_from_manifest` uses for
+    league-grain (see the module comment above this function for why: the
+    sports manifest is still league-grain-only, so a could-exist projection at
+    finer grain would inflate the coverage denominator).
+
+    Instrument ids: fixtures use UAC's canonical ``LEAGUE:HOME_v_AWAY:DATE``
+    shape (``build_fixture_id``); teams reuse the canonical ``team_id`` the
+    ``entity=teams`` writer already stamps (``build_team_id``); players use
+    ``build_player_id`` over a display-name split (:func:`_split_full_name`).
+    ``venue`` is left blank for all three, same as league-grain — these are
+    reference-data rows with no bookmaker association, the honest empty value
+    (see SPORTS_INSTRUMENTS.md's "``venue`` vs ``source``" note).
+
+    Streams the ONE combined walk (:func:`_iter_sports_ftp_snapshots`) directly
+    into three grains' first/last-day accumulator dicts rather than buffering
+    per-entity snapshot lists first — see that function's docstring on why
+    (avoids reintroducing the O(len(items))-frames-in-memory failure mode
+    :func:`_bounded_parallel_load` exists to prevent).
+
+    ``since`` bounds the walk to a trailing window (default
+    :data:`SPORTS_FTP_WINDOW_DAYS` days back from today when not given) — see
+    that constant's docstring for why an unwindowed full-history walk is
+    impractical here. Pass ``since=`` a fixed early date (or monkeypatch the
+    default) for a deliberate one-off full-history backfill run.
+    """
+    from unified_api_contracts.sports import build_fixture_id, build_player_id, build_team_id
+
+    if since is None:
+        since = datetime.now(UTC).date() - timedelta(days=SPORTS_FTP_WINDOW_DAYS)
+
+    fixture_first: dict[str, date] = {}
+    fixture_last: dict[str, date] = {}
+    fixture_league: dict[str, str] = {}
+    # Scheduling/display fields carried onto the FIXTURE rows (see CATALOG_COLUMNS'
+    # sports-fixture block). ``_fixture_attr_day`` tracks which snapshot day each
+    # id's attrs came from so the LATEST observation wins — ``status`` evolves
+    # (NS -> 1H -> FT) and a stale "NS" on a played fixture would be a lie.
+    fixture_attrs: dict[str, dict[str, str]] = {}
+    fixture_attr_day: dict[str, date] = {}
+    team_first: dict[str, date] = {}
+    team_last: dict[str, date] = {}
+    team_league: dict[str, str] = {}
+    player_first: dict[str, date] = {}
+    player_last: dict[str, date] = {}
+    player_league: dict[str, str] = {}
+    all_days: set[date] = set()
+
+    for entity, day, league_id, frame in _iter_sports_ftp_snapshots(
+        storage, bucket, by_date_prefix, since=since, max_blobs=max_blobs
+    ):
+        all_days.add(day)
+        league_id = league_id.strip()
+        if (
+            frame.empty
+            or not league_id
+            or league_id.upper() in SPORTS_LEAGUE_ID_SENTINELS
+            or not _sports_league_registered(league_id)
+        ):
+            continue
+        records: list[dict[str, object]] = frame.to_dict("records")  # pyright: ignore[reportAssignmentType]
+
+        if entity == SPORTS_FIXTURE_ENTITY:
+            for row in records:
+                home = str(row.get("af_home_name") or "").strip()
+                away = str(row.get("af_away_name") or "").strip()
+                date_str = str(row.get("date") or "").strip()
+                if not home or not away or not date_str:
+                    continue
+                home_id = build_team_id(home)
+                away_id = build_team_id(away)
+                if not home_id or not away_id:
+                    continue
+                fid = build_fixture_id(league_id, home_id, away_id, date_str)
+                if fid not in fixture_first or day < fixture_first[fid]:
+                    fixture_first[fid] = day
+                if fid not in fixture_last or day > fixture_last[fid]:
+                    fixture_last[fid] = day
+                fixture_league[fid] = league_id
+                # Latest-snapshot-wins (see _fixture_attr_day above).
+                if fid not in fixture_attr_day or day >= fixture_attr_day[fid]:
+                    fixture_attr_day[fid] = day
+                    fixture_attrs[fid] = {
+                        "kickoff_utc": _sports_attr_str(row.get("timestamp")),
+                        "status": _sports_attr_str(row.get("status_short")),
+                        "home_team_name": home,
+                        "away_team_name": away,
+                        "venue_name": _sports_attr_str(row.get("venue_name")),
+                        "round": _sports_attr_str(row.get("round")),
+                    }
+        elif entity == SPORTS_TEAM_ENTITY:
+            for row in records:
+                tid = str(row.get("team_id") or "").strip()
+                if not tid:
+                    continue
+                if tid not in team_first or day < team_first[tid]:
+                    team_first[tid] = day
+                if tid not in team_last or day > team_last[tid]:
+                    team_last[tid] = day
+                team_league[tid] = league_id
+        else:  # SPORTS_PLAYER_SOURCE_ENTITY ("injuries")
+            for row in records:
+                raw_name = str(row.get("player_name") or "").strip()
+                if not raw_name:
+                    continue
+                last_name, first_name = _split_full_name(raw_name)
+                pid = build_player_id(last_name, first_name)
+                if not pid:
+                    continue
+                if pid not in player_first or day < player_first[pid]:
+                    player_first[pid] = day
+                if pid not in player_last or day > player_last[pid]:
+                    player_last[pid] = day
+                player_league[pid] = league_id
+
+    fixture_df = _sports_grain_rollup_to_df(
+        fixture_first,
+        fixture_last,
+        fixture_league,
+        all_days,
+        SPORTS_FIXTURE_INSTRUMENT_TYPE,
+        extra_attrs=fixture_attrs,
+    )
+    team_df = _sports_grain_rollup_to_df(team_first, team_last, team_league, all_days, SPORTS_TEAM_INSTRUMENT_TYPE)
+    player_df = _sports_grain_rollup_to_df(
+        player_first, player_last, player_league, all_days, SPORTS_PLAYER_INSTRUMENT_TYPE
+    )
+    return pd.concat([fixture_df, team_df, player_df], ignore_index=True)
+
+
+def _dedupe_by_incremental_merge_key(df: pd.DataFrame, *, asset_group: str) -> pd.DataFrame:
+    """Collapse rows sharing the SAME :func:`_incremental_merge_keys` identity to one.
+
+    **Merge-key dedup-aware guard** (DP-CATALOG-001 defi follow-up, 2026-08-02 —
+    generalises the cefi-only fix from ``dp_catalog_not_running_sports_prediction_
+    2026_07_15.md`` to EVERY asset group). Root cause this fixes: the CURRENT
+    stored catalogue can carry a handful of legacy rows that share the exact same
+    merge identity (e.g. two ``pool::<CHAIN>::<addr>`` rows for one on-chain pool,
+    left over from a pre-canonicalisation spelling drift). :func:`_merge_incremental`
+    is correct to collapse such a pair to ONE row the moment a fresh by_date window
+    re-observes that pool (branch 1 takes the single window row; both stale
+    duplicates leave the frozen tail) — but that legitimate collapse shrinks
+    ``len(df)`` by 1 per pair, and the monotonic guard was comparing that
+    ALREADY-COLLAPSED new count against a NOT-equally-collapsed current-catalogue
+    count, tripping ``CATALOGUE_SHRINK_BLOCKED`` even though zero real instruments
+    were lost. Confirmed live 2026-08-02: defi's ``lifecycle-catalogue-regen-defi``
+    daily job blocked 2 consecutive days (46h stale, DP-CATALOG-001 CRITICAL) on
+    exactly this shape — 14 duplicate ``pool::CHAIN::addr`` keys sitting in the
+    stored catalogue, 8 of them re-observed by the day's window, net -8 rows,
+    ``dropped_active: 0`` / ``dropped_delisted: 2884`` (all already-closed pool
+    rows) confirming no active instrument was actually lost. Deduping the CURRENT
+    side by its own merge key before counting makes the comparison MORE precise,
+    not looser — two rows that genuinely have DIFFERENT merge keys (a real active
+    row) are untouched and still trip the guard exactly as before.
+    """
+    if df.empty:
+        return df
+    keys = _incremental_merge_keys(df, asset_group=asset_group)
+    return df[~keys.duplicated(keep="first")]
+
+
+def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str, *, asset_group: str) -> int | None:
+    """Return the row count of the current canonical catalogue, or None when absent.
+
+    **Dedup-aware guard** (RULED 2026-07-28,
+    ``dp_catalog_not_running_sports_prediction_2026_07_15.md``; generalised
+    2026-08-02, see :func:`_dedupe_by_incremental_merge_key`): for
+    ``asset_group == "cefi"``, first re-runs the SAME cefi-only Phase D dedup
+    passes (:func:`_apply_cefi_phase_d_dedups`, mirroring :func:`run_rollup`'s own
+    Phase D) over the current catalogue before counting — that fix's own root
+    cause (cefi's daily incremental job already runs these dedup passes on the
+    freshly-rolled side, so the guard was comparing an ALREADY-DEDUPED new count
+    against a NOT-equally-deduped current-catalogue count) is unchanged. THEN,
+    for every asset group (incl. cefi), collapses the current catalogue by its
+    own :func:`_incremental_merge_keys` identity — the generic form of the same
+    apples-to-apples principle, covering the merge's OWN dedup-on-re-observation
+    behaviour rather than only cefi's Phase D passes (see
+    :func:`_dedupe_by_incremental_merge_key` for the confirmed defi incident this
+    closes). Deduping BOTH sides identically before comparing makes the
+    comparison MORE precise, not looser — a genuine active-row drop still trips
+    the guard exactly as before (see
+    tests/unit/scripts/test_promote_catalogue_dedup_aware_guard.py).
+    """
     if not storage.blob_exists(bucket, blob_path):
         return None
     payload = storage.download_bytes(bucket, blob_path)
     current = pd.read_parquet(io.BytesIO(payload))
+    if asset_group == "cefi":
+        current = _apply_cefi_phase_d_dedups(current)
+    current = _dedupe_by_incremental_merge_key(current, asset_group=asset_group)
     return len(current)
 
 
@@ -1551,20 +3376,130 @@ def _to_parquet_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+def _shrink_drop_diagnostics(new_df: pd.DataFrame, prev_df: pd.DataFrame) -> dict[str, object]:
+    """Describe WHICH instruments a rejected new catalogue drops vs the current one.
+
+    Turns an opaque ``CATALOGUE_SHRINK_BLOCKED`` into a reviewable report: an operator
+    can see exactly what a ``--allow-catalogue-shrink`` would delete BEFORE deciding.
+    Returns counts by venue / instrument_type, an active-vs-delisted split, and a small
+    id sample.
+
+    Root cause of the recurring shrink class (F8, measured 2026-07-18): a ``--mode full``
+    rebuild UNDER-produces the CUMULATIVE all-instruments-ever set the incremental frozen
+    tail preserves — the dropped rows are dominated by DELISTED instruments (``available_to``
+    set) that a fresh full aggregation no longer surfaces (e.g. a full defi rebuild dropped
+    2,378 rows, 2,346 of them delisted DeFi pools/tokens). This is the SAME class as the
+    2026-07-15 sports incident; the durable fix is to reuse the frozen-tail merge
+    (:func:`_merge_incremental`) for full-mode too so a rebuild never silently loses the
+    cumulative set. Until then the guard + this diagnostic keep full-mode SAFE (blocks +
+    reports rather than silently shrinking).
+    """
+    if "instrument_id" not in new_df.columns or "instrument_id" not in prev_df.columns:
+        return {"error": "no instrument_id column on one side"}
+    new_ids = set(new_df["instrument_id"].astype(str))
+    prev_ids = set(prev_df["instrument_id"].astype(str))
+    dropped_ids = prev_ids - new_ids
+    dropped = prev_df[prev_df["instrument_id"].astype(str).isin(dropped_ids)]
+
+    def _top(col: str, n: int = 15) -> dict[str, int]:
+        if col not in dropped.columns:
+            return {}
+        return {str(k): int(v) for k, v in dropped[col].astype(str).value_counts().head(n).items()}
+
+    active = delisted = 0
+    if "available_to" in dropped.columns:
+        available_to = pd.to_datetime(dropped["available_to"], errors="coerce")
+        delisted = int(available_to.notna().sum())
+        active = int(available_to.isna().sum())
+    return {
+        "dropped": len(dropped_ids),
+        "added": len(new_ids - prev_ids),
+        "dropped_active": active,
+        "dropped_delisted": delisted,
+        "dropped_by_venue": _top("venue"),
+        "dropped_by_instrument_type": _top("instrument_type"),
+        "dropped_sample_ids": sorted(dropped_ids)[:10],
+    }
+
+
 def promote_catalogue(
     storage: StorageClient,
     bucket: str,
     env: str,
     df: pd.DataFrame,
     *,
+    asset_group: str,
     allow_shrink: bool,
     dry_run: bool,
 ) -> int:
-    """Apply the monotonic-guard promotion. Returns a process exit code (0 = ok)."""
+    """Apply the monotonic-guard promotion. Returns a process exit code (0 = ok).
+
+    ``asset_group`` feeds the dedup-aware guard (see
+    :func:`_read_current_row_count`'s docstring) — for cefi, the current
+    catalogue's row count is computed AFTER re-running the same Phase D dedup
+    passes the freshly-rolled ``df`` already went through, so the comparison is
+    apples-to-apples.
+
+    **Benign-shrink auto-accept** (DP-CATALOG-001 cefi, 2026-08-03 — a THIRD
+    recurrence of the dedup-asymmetry class the 07-28/08-02 fixes narrowed, this
+    time structurally undiscoverable by re-dedup-ing ``current`` alone): the
+    self-widening incremental window (``WINDOW_DAYS_MIN=21``) re-derives raw
+    by_date data for any instrument whose expiry sits near the window's start
+    boundary. For a dated CeFi contract that expired the day BEFORE
+    ``window_start``, that re-derivation can mint a fresh, transient off-by-one
+    duplicate (see :func:`_dedup_cefi_expiry_off_by_one`) whose OTHER half is an
+    already-existing frozen-tail row — Phase D correctly collapses the pair back
+    to 1 row, but the pair never existed as 2 rows in the STORED ``current``
+    catalogue, so re-running Phase D on ``current`` alone (the existing
+    dedup-aware guard) can never discover a partner to collapse there. Row COUNT
+    is therefore an inherently unreliable proxy for THIS class — live-confirmed
+    2026-08-03: ``new=431120 < current=431238``, 265 dropped ids, 100% already
+    `available_to`-stamped DERIBIT OPTION/FUTURE rows expired 2026-07-12 (one day
+    before ``window_start=2026-07-13``), ``dropped_active=0``. Rather than add a
+    4th narrow dedup-symmetry patch that will recur for tomorrow's boundary
+    batch, this enforces the guard's ACTUAL safety contract directly: reuse the
+    already-reviewed :func:`_shrink_drop_diagnostics` (same code the rejection
+    path already used to report a block) to check the DROPPED rows' identity —
+    if every dropped id was already delisted (``dropped_active == 0``, i.e. no
+    ACTIVE instrument's presence flips to absent), the shrink is provably benign
+    and is auto-accepted with a distinct ``shrink_benign_no_active_loss`` reason
+    (never silently conflated with an operator-passed ``--allow-catalogue-shrink``
+    override). A shrink touching even ONE active instrument (``dropped_active >
+    0``) still hard-blocks exactly as before — this narrows the guard's blast
+    radius, it does not weaken the real protection.
+    """
     canonical_blob, temp_blob = _catalogue_object_paths(env)
     new_count = len(df)
-    current_count = _read_current_row_count(storage, bucket, canonical_blob)
-    decision = evaluate_monotonic_guard(new_count, current_count, allow_shrink=allow_shrink)
+    current_count = _read_current_row_count(storage, bucket, canonical_blob, asset_group=asset_group)
+
+    # Diagnose WHICH instruments a candidate shrink would drop BEFORE deciding, so a
+    # provably-benign shrink (dropped_active == 0) can auto-accept instead of blocking.
+    # Best-effort + only on a (rare) shrink candidate: never masks the guard decision.
+    drop_diagnostics: dict[str, object] = {}
+    if current_count is not None and new_count < current_count:
+        previous = _load_previous_catalogue(storage, bucket, canonical_blob)
+        if previous is not None:
+            try:
+                drop_diagnostics = _shrink_drop_diagnostics(df, previous[0])
+            except (KeyError, ValueError, TypeError) as exc:
+                logger.warning("shrink drop-diagnostics failed (guard falls back to the strict count check): %s", exc)
+
+    benign_shrink = bool(drop_diagnostics) and drop_diagnostics.get("dropped_active") == 0
+    decision = evaluate_monotonic_guard(new_count, current_count, allow_shrink=allow_shrink or benign_shrink)
+    if benign_shrink and decision.accept and not allow_shrink:
+        decision = GuardDecision(accept=True, reason="shrink_benign_no_active_loss")
+        logger.info("CATALOGUE_SHRINK auto-accepted (no active instrument lost): %s", drop_diagnostics)
+        log_event(
+            "CATALOGUE_SHRINK_BENIGN_AUTO_ACCEPTED",
+            severity="INFO",
+            details={
+                "bucket": bucket,
+                "env": env,
+                "new_count": new_count,
+                "current_count": current_count,
+                "drop_diagnostics": drop_diagnostics,
+            },
+        )
 
     logger.info(
         "Monotonic guard: new=%d current=%s decision=%s (%s)",
@@ -1575,13 +3510,23 @@ def promote_catalogue(
     )
 
     if not decision.accept:
-        _emit_event(
+        if drop_diagnostics:
+            logger.error("CATALOGUE_SHRINK_BLOCKED drop-list: %s", drop_diagnostics)
+        # Real event-log emission (was best-effort logger.info-only via _emit_event —
+        # cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md). CRITICAL
+        # severity + this event name route through UAC's DP-CATALOG-002 rule to
+        # alerting-service's Slack/PagerDuty/Telegram paging path.
+        log_event(
             "CATALOGUE_SHRINK_BLOCKED",
-            bucket=bucket,
-            env=env,
-            new_count=new_count,
-            current_count=current_count,
-            hint="re-run a complete regeneration, or pass --allow-catalogue-shrink for a corrective shrink",
+            severity="CRITICAL",
+            details={
+                "bucket": bucket,
+                "env": env,
+                "new_count": new_count,
+                "current_count": current_count,
+                "drop_diagnostics": drop_diagnostics,
+                "hint": "re-run a complete regeneration, or pass --allow-catalogue-shrink for a corrective shrink",
+            },
         )
         logger.error(
             "CATALOGUE_SHRINK_BLOCKED: new=%d < current=%d — keeping previous good catalogue at gs://%s/%s "
@@ -1715,7 +3660,9 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
     if asset_group == "cefi" and not df.empty and "instrument_type" in df.columns:
         for _, _prow in df.iterrows():
             _itype = _cell(_prow, "instrument_type").strip().upper()
-            if _itype in ("PERPETUAL", "EQUITY_PERP"):
+            # PERPETUAL is the sole perp itype (operator 2026-07-16: crypto-venue
+            # equity perps are typed PERPETUAL too, no distinct EQUITY_PERP type).
+            if _itype == "PERPETUAL":
                 _v = _cell(_prow, "venue")
                 _b = _cell(_prow, "base_asset") or _cell(_prow, "underlying")
                 if _v and _b:
@@ -1766,6 +3713,162 @@ def _add_mvp_column(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
 
     out = df.copy()
     out["mvp"] = out.apply(_row_is_mvp, axis=1).astype("bool")
+    return out
+
+
+def _add_equity_tags(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
+    """Stamp the crypto-venue equity-identity tags ``tracks_equity`` + ``is_equity_perp``.
+
+    Operator decision 2026-07-16 (broad instrument_type + equity tags): the catalogue
+    ``instrument_type`` stays the BROAD contract-mechanics type (a single-stock perp is
+    ``PERPETUAL``, a tokenized stock is ``SPOT_PAIR``); the equity identity + real-equity
+    linkage ride these two tags so downstream can find the tradfi spot leg (basis arb)
+    without inferring it from the type or the symbol string. Derived on-the-fly from
+    (``instrument_type``, ``base_asset``) via :func:`_cefi_equity_tags` over the
+    rolled-up frame — never baked (UAC owns ``CEFI_EQUITY_PERP_BASE_UNIVERSE`` + the
+    ``tracks_equity`` link map), mirroring the :func:`_add_mvp_column` pattern (so the
+    tags self-heal on every rebuild + incremental run rather than persisting stale).
+
+    Only ``cefi`` rows can be equity instruments; every other asset group carries
+    ``(is_equity_perp=False, tracks_equity="")``.
+    """
+    out = df.copy()
+    if df.empty:
+        out["tracks_equity"] = pd.Series([], dtype="object")
+        out["is_equity_perp"] = pd.Series([], dtype="bool")
+        return out
+    if asset_group != "cefi":
+        out["tracks_equity"] = ""
+        out["is_equity_perp"] = False
+        return out
+
+    def _cell(row: pd.Series[object], col: str) -> str:
+        """NaN/None/empty-safe string cell (``str(np.nan)`` is ``"nan"`` — guard it)."""
+        raw = row.get(col)
+        if raw is None:
+            return ""
+        try:
+            if pd.isna(raw):  # pyright: ignore[reportArgumentType]
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(raw)
+
+    is_equity_perp_vals: list[bool] = []
+    tracks_equity_vals: list[str] = []
+    for _, row in out.iterrows():
+        is_equity, ticker = _cefi_equity_tags(_cell(row, "instrument_type"), _cell(row, "base_asset"))
+        is_equity_perp_vals.append(is_equity)
+        tracks_equity_vals.append(ticker)
+    out["tracks_equity"] = tracks_equity_vals
+    out["is_equity_perp"] = is_equity_perp_vals
+    return out
+
+
+def _add_instrument_name(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
+    """Stamp the human-readable ``name`` display column for opaque-coded instruments.
+
+    TODAY the KRX (Korea Exchange) single-stock equities (``venue == "KRX"``), whose
+    canonical ``instrument_id`` is the bare 6-digit KRX code (``KRX:EQUITY:005930``):
+    the code is the stable/unique official ticker and stays the SSOT id, but it is
+    unreadable, so the issuer name ("Samsung Electronics") rides alongside in its own
+    column. Derived on-the-fly from the UAC SSOT ``KRX_EQUITY_NAMES`` (keyed on
+    ``base_asset`` = the bare code), mirroring the :func:`_add_mvp_column` /
+    :func:`_add_equity_tags` / :func:`_add_force_include` self-healing pattern so the
+    name re-derives on every rebuild rather than depending on a re-capture (a rebuild
+    from the existing by_date corpus, which predates ``InstrumentRecord.name``, would
+    otherwise leave it blank forever).
+
+    Any adapter-populated ``name`` already on the frame (a forward-only round-trip from
+    ``InstrumentRecord.name`` once by_date rows carry it) is the FLOOR — the registry
+    only fills blanks. The blank-safe coercion is vectorised and the registry fill loops
+    only over the (tiny) KRX row set, never the whole 1M+-row frame, so this stays cheap
+    regardless of asset_group size. Blank for every row with no display name (the vast
+    majority — their instrument_id is already human-readable).
+    """
+    out = df.copy()
+    if df.empty:
+        out["name"] = pd.Series([], dtype="object")
+        return out
+
+    def _blank_safe(col_name: str) -> pd.Series[object]:
+        """The column as blank-safe strings ("" for NaN/None), or all-"" if absent."""
+        if col_name not in out.columns:
+            return pd.Series("", index=out.index, dtype="object")
+        col = out[col_name]
+        return col.where(col.notna(), other="").astype(str)
+
+    names = _blank_safe("name")
+
+    # KRX display names live only in the tradfi catalogue — skip the registry work for
+    # every other asset group (their ``name`` floor is whatever the adapter populated,
+    # today none). Loop only over the handful of KRX rows, filling a blank name from the
+    # bare-code -> issuer-name SSOT.
+    if asset_group == "tradfi":
+        venue = _blank_safe("venue")
+        base = _blank_safe("base_asset")
+        krx_index = names.index[venue == "KRX"]
+        if len(krx_index):
+            from unified_api_contracts.registry import KRX_EQUITY_NAMES  # noqa: imports-inside-functions
+
+            for idx in krx_index:
+                if names.at[idx] == "":
+                    names.at[idx] = KRX_EQUITY_NAMES.get(base.at[idx], "")
+
+    out["name"] = names
+    return out
+
+
+def _add_force_include(df: pd.DataFrame, asset_group: str) -> pd.DataFrame:
+    """Stamp the TVL-exempt ``force_include`` marker (IS R2c availability-denominator honesty).
+
+    bool: True iff the row is a DeFi governance / forced token the catalogue carries
+    because a dedicated governance-token adapter issues it (EIGENLAYER→EIGEN,
+    ETHERFI→ETHFI), rather than because it crossed a DEX TVL threshold — so a coverage
+    denominator can distinguish a FORCED inclusion (tracked regardless of TVL) from
+    COINCIDENTAL liquidity (a Uniswap pool that merely contains the token). Derived
+    on-the-fly from (``venue``, ``base_asset``) via the UAC SSOT
+    :func:`~unified_api_contracts.is_defi_force_include` — never baked (UAC owns the
+    ``DEFI_FORCE_INCLUDE_TOKENS`` registry), mirroring the :func:`_add_mvp_column` /
+    :func:`_add_equity_tags` pattern so the flag self-heals on every rebuild + incremental
+    run rather than persisting stale.
+
+    Only ``defi`` rows can be force-included; every other asset group carries ``False``.
+    The keyed-on-protocol predicate leaves a DEX pool that merely contains a force-include
+    token at ``False`` (its venue protocol is not a governance-token venue), so
+    coincidental liquidity stays distinguishable from a forced inclusion.
+
+    A row is ALSO force-included when its ``pool_address`` is in the operator-curated
+    high-TVL pool allowlist (UAC SSOT :func:`~unified_api_contracts.is_defi_force_include_pool`),
+    so structurally-relevant pools whose legs fall outside the major-assets set (e.g.
+    high-liquidity Raydium pools) are honestly flagged in the catalogue.
+    """
+    out = df.copy()
+    if df.empty:
+        out["force_include"] = pd.Series([], dtype="bool")
+        return out
+    if asset_group != "defi":
+        out["force_include"] = False
+        return out
+
+    def _cell(row: pd.Series[object], col: str) -> str:
+        """NaN/None/empty-safe string cell (``str(np.nan)`` is ``"nan"`` — guard it)."""
+        raw = row.get(col)
+        if raw is None:
+            return ""
+        try:
+            if pd.isna(raw):  # pyright: ignore[reportArgumentType]
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(raw)
+
+    force_vals: list[bool] = [
+        is_defi_force_include(_cell(row, "venue"), _cell(row, "base_asset"))
+        or is_defi_force_include_pool(_cell(row, "pool_address").lower())
+        for _, row in out.iterrows()
+    ]
+    out["force_include"] = force_vals
     return out
 
 
@@ -1843,13 +3946,20 @@ def _incremental_merge_keys(df: pd.DataFrame, *, asset_group: str) -> pd.Series[
       exist on MULTIPLE venues under the SAME id (``BNB_PRICE_RANGE_DAILY`` on
       both KALSHI and POLYMARKET — 31 real cross-venue pairs in prod), so venue
       IS identity here.
-    * cefi / tradfi / defi non-pool → ``instrument_id`` alone, which IS
-      ``_aggregate_key`` for these rows (the id embeds the canonical venue
-      prefix). The ``venue`` FIELD must NOT be part of the key: it carries the
-      era-specific raw spelling (``DERIBIT-COMBO`` in old rows vs ``DERIBIT``
-      in the window for the SAME ``instrument_id``), so keying on it splits one
-      lifecycle into ghost duplicates the full rebuild unifies — the 122-dupe
-      cefi ``CATALOGUE_SHRINK_BLOCKED`` on the first weekly self-heal
+    * cefi perp-family (PERPETUAL — incl. crypto-venue equity perps, raw_symbol
+      present) → the ``(venue, raw_symbol, margin)`` lineage key
+      (:func:`_cefi_perp_lineage_key`), mirroring ``_aggregate_key`` — so the
+      2026-07 id-convention churn (``VENUE:PERP:BTC`` → ``VENUE:PERPETUAL:BTC-USD``
+      → ``…@LIN``) collapses to ONE lifecycle instead of 3 stale-dup listings.
+      Here the venue prefix is read from the STABLE ``instrument_id`` first
+      segment (NOT the drifting ``venue`` field), for the same reason as below.
+    * cefi / tradfi / defi non-pool (not perp-family, or raw_symbol blank) →
+      ``instrument_id`` alone, which IS ``_aggregate_key`` for these rows (the id
+      embeds the canonical venue prefix). The ``venue`` FIELD must NOT be part of
+      the key: it carries the era-specific raw spelling (``DERIBIT-COMBO`` in old
+      rows vs ``DERIBIT`` in the window for the SAME ``instrument_id``), so keying
+      on it splits one lifecycle into ghost duplicates the full rebuild unifies —
+      the 122-dupe cefi ``CATALOGUE_SHRINK_BLOCKED`` on the first weekly self-heal
       (2026-07-04).
     """
 
@@ -1860,19 +3970,30 @@ def _incremental_merge_keys(df: pd.DataFrame, *, asset_group: str) -> pd.Series[
 
     if asset_group == "prediction":
         return _col("venue") + "::" + _col("instrument_id") + "::" + _col("data_type")
+    instrument_id = _col("instrument_id")
     pool_address = _col("pool_address").str.lower()
     chain = _col("chain").str.upper()
     is_pool = (pool_address != "") & (chain != "")
     pool_key = "pool::" + chain + "::" + pool_address
-    return pool_key.where(is_pool, _col("instrument_id"))
+    # CeFi perp-family lineage collapse — mirrors _aggregate_key. Venue prefix from
+    # the stable instrument_id first segment; raw_symbol-blank rows fall through.
+    itype = _col("instrument_type").str.strip().str.upper()
+    raw_symbol = _col("raw_symbol").str.strip().str.upper()
+    venue_prefix = instrument_id.str.split(":", n=1).str[0].str.strip().str.upper()
+    margin = _col("margin_type").str.strip().str.upper()
+    is_perp = itype.isin(_PERP_FAMILY_ITYPES) & (raw_symbol != "") & (venue_prefix != "")
+    perp_key = "cefiperp::" + venue_prefix + "::" + raw_symbol + "::" + margin
+    key = perp_key.where(is_perp, instrument_id)
+    return pool_key.where(is_pool, key)
 
 
 def _merge_incremental(
     prev_df: pd.DataFrame,
     window_df: pd.DataFrame,
     *,
-    window_start: date,
+    window_start: date | None,
     asset_group: str,
+    close_absent: bool = True,
 ) -> pd.DataFrame:
     """Upsert the window recompute onto the previous catalogue (frozen tail kept).
 
@@ -1886,19 +4007,34 @@ def _merge_incremental(
          the window → newly delisted; close ``available_to`` at
          ``window_start - 1`` (tightest provable bound — near-dead code under the
          self-widening window; healed exactly by the weekly full rebuild).
+         SKIPPED when ``close_absent=False`` (the full-rebuild frozen-tail merge —
+         see below), where there is no meaningful window boundary to close against.
       4. every other prev row (frozen tail — incl. every row of a venue with NO
          window presence: a venue-level capture outage is NOT a delisting, §7.3
          keeps a stopped venue's instruments active exactly like the full
          rebuild) → copied through unchanged.
 
-    The output row set is prev ∪ window-new, so ``len(merged) >= len(prev)`` and
+    ``close_absent`` (default True — the trailing-window incremental): when False,
+    the merge is the FULL-REBUILD frozen-tail merge (F8, 2026-07-15 incident class).
+    A ``--mode full`` walk is authoritative for the ``available_to`` of every
+    instrument that STILL has by_date data (branch 1 recomputes it, so a genuine
+    delisting is already carried by the fresh window row) — so the ONLY prev rows
+    absent from a full walk are those whose by_date has been PRUNED. Those must be
+    preserved verbatim, not closed at a garbage ``window_start - 1`` boundary; hence
+    branch 3 is disabled and ``window_start`` is unused (may be None).
+
+    The output row set is prev UNION window-new, so ``len(merged) >= len(prev)`` and
     the monotonic guard passes by construction.
     """
-    out_columns = [c for c in CATALOG_COLUMNS if c != "mvp"]
+    # Derived/finalization columns (mvp + the equity-identity tags + force_include) are
+    # re-stamped on the MERGED frame by _add_mvp_column / _add_equity_tags /
+    # _add_force_include — drop them from both inputs so the merge carries only the stable
+    # rollup columns (full-rebuild parity: mvp's cefi perp-gate is computed over the whole
+    # catalogue; the equity tags self-heal from instrument_type + base_asset every run; and
+    # force_include self-heals from venue + base_asset via the UAC SSOT every run).
+    out_columns = [c for c in CATALOG_COLUMNS if c not in ("mvp", "tracks_equity", "is_equity_perp", "force_include")]
     prev = prev_df.copy()
-    # The prev catalogue carries the mvp tag; drop it — _add_mvp_column re-tags
-    # the MERGED frame (full-rebuild parity: the cefi perp-gate is computed over
-    # the whole catalogue, not the window slice).
+    # The prev catalogue carries the derived tags; drop them (see above).
     prev = prev.drop(columns=[c for c in prev.columns if c not in out_columns])
     for col in out_columns:
         if col not in prev.columns:
@@ -1922,12 +4058,16 @@ def _merge_incremental(
         carried = prev_af.reindex(_incremental_merge_keys(updated, asset_group=asset_group).to_numpy()).to_numpy()
         own = updated["available_from"].astype(str).to_numpy()
         # ISO dates compare lexicographically == chronologically; keep the earlier.
-        updated["available_from"] = [min(c, o) if isinstance(c, str) and c else o for c, o in zip(carried, own)]
+        updated["available_from"] = [
+            min(c, o) if isinstance(c, str) and c else o for c, o in zip(carried, own, strict=True)
+        ]
     fresh = window[~known_mask]
 
     # Branch 3+4 — prev rows absent from the window.
     tail = prev[~prev_keys.isin(window_key_set).to_numpy()].copy()
-    if not tail.empty:
+    if close_absent and not tail.empty:
+        if window_start is None:
+            raise ValueError("close_absent=True requires window_start (the delist-close boundary)")
         # §7.3 venue-truth: only close an instrument when its venue DID capture
         # in the window (instrument-level absence). Venue-level absence = capture
         # outage / stopped venue → preserve prev state (full-rebuild parity).
@@ -1935,6 +4075,11 @@ def _merge_incremental(
         tail_venues = tail["venue"].fillna("").astype(str).map(_merge_canonical_venue)
         active = tail["available_to"].isna() | (tail["available_to"].astype(str).str.strip() == "")
         newly_delisted = active & tail_venues.isin(window_venues)
+        if asset_group == "defi":
+            # DeFi drop-outs NEVER delist (on-chain-perpetual; codex §1.3) — keep the
+            # incremental close in lockstep with build_catalogue_dataframe's carve-out,
+            # or full-rebuild vs incremental diverge (test_incremental_matches_full_rebuild_defi).
+            newly_delisted = pd.Series(data=False, index=newly_delisted.index)
         n_delisted = int(newly_delisted.sum())
         if n_delisted:
             close_day = (window_start - timedelta(days=1)).isoformat()
@@ -1955,6 +4100,11 @@ def _merge_incremental(
         len(fresh),
         len(tail),
     )
+    if asset_group == "defi":
+        # Same Option B removal application as the full rebuild, over the MERGED frame
+        # (incl. the frozen tail), so full-rebuild and incremental never disagree on a
+        # confirmed on-chain removal. Idempotent + no-op when the artifact is absent.
+        merged = _apply_defi_removals(merged, _load_defi_removal_map())
     return merged
 
 
@@ -2067,6 +4217,673 @@ def _merge_canonical_venue(raw: str) -> str:
     return canonical
 
 
+def _merge_sports_ftp_with_frozen_tail(
+    storage: StorageClient,
+    bucket: str,
+    *,
+    by_date_prefix: str,
+    since: date,
+    max_blobs: int | None,
+    prev_catalogue: tuple[pd.DataFrame, datetime | None] | None,
+) -> pd.DataFrame:
+    """Sports fixture/team/player-grain roll-up with a FROZEN TAIL (2026-07-15 fix).
+
+    :func:`build_sports_fixture_team_player_catalogue`'s trailing
+    :data:`SPORTS_FTP_WINDOW_DAYS` window is unconditionally full-rebuilt on
+    every run (sports is exempt from the generic ``--mode incremental`` engine
+    — see :func:`run_rollup`'s mode-resolution comment). The by_date WALK is
+    windowed, but with no memory of what a PRIOR run already rolled up: an
+    instrument whose last-observed day ages past the window's leading edge
+    (``since``) simply has NO blob in the fresh walk at all, so its row
+    vanishes from the recompute ENTIRELY — not just its ``available_to``
+    closing, the whole row disappears — silently shrinking the catalogue's row
+    count run over run. That contradicts this module's own documented
+    contract ("a cumulative, all-instruments-ever lifecycle catalogue, NOT a
+    current snapshot" — module docstring) and can permanently jam the
+    monotonic guard.
+
+    Confirmed root cause of the 2026-07-15 ``CATALOGUE_SHRINK_BLOCKED`` sports
+    incident (27216 → 27210): 9 single-day-only fixture/player rows (their
+    ONLY captured occurrence across the whole history was 2025-06-09) aged off
+    the window's bottom edge the moment ``since`` advanced past that day,
+    while only 3 new same-day USL_CHAMPIONSHIP fixtures were gained at the top
+    — net -6. Not a legitimate league de-registration (unrelated to
+    :func:`_sports_league_registered`) and not upstream flakiness (identical
+    49,916-blob / 27,210-row result on both same-day retries) — a real gap in
+    this roll-up's windowing.
+
+    Fix: reuse the generic frozen-tail merge (:func:`_merge_incremental`) —
+    its default (non-prediction, non-DeFi-pool) merge key is the bare
+    ``instrument_id``, which IS the fixture_id/team_id/player_id identity
+    these rows already carry, so no sports-specific key branch is needed. Its
+    venue-presence-gated close (branch 3) is a natural no-op here (sports FTP
+    rows carry ``venue=""`` always, by design — see
+    :func:`build_sports_fixture_team_player_catalogue`'s docstring), so an
+    aged-off row is carried through FROZEN — unchanged ``available_from`` /
+    ``available_to`` — rather than closed again. league-grain rows (the
+    manifest-derived could-exist universe) are untouched by this helper; the
+    caller filters them out of ``prev_catalogue`` before calling in.
+    """
+    window_df = build_sports_fixture_team_player_catalogue(
+        storage, bucket, by_date_prefix=by_date_prefix, since=since, max_blobs=max_blobs
+    )
+    if prev_catalogue is None:
+        return window_df
+    prev_df, _prev_mtime = prev_catalogue
+    if prev_df.empty:
+        return window_df
+    prev_ftp_df = prev_df[
+        prev_df["instrument_type"].isin(
+            (SPORTS_FIXTURE_INSTRUMENT_TYPE, SPORTS_TEAM_INSTRUMENT_TYPE, SPORTS_PLAYER_INSTRUMENT_TYPE)
+        )
+    ].copy()
+    if prev_ftp_df.empty:
+        return window_df
+    logger.info(
+        "Sports FTP frozen-tail merge: %d prev FTP rows + %d fresh window rows",
+        len(prev_ftp_df),
+        len(window_df),
+    )
+    return _merge_incremental(prev_ftp_df, window_df, window_start=since, asset_group="sports")
+
+
+#: Exchange-native dated-derivative expiry token embedded in a CeFi wire symbol —
+#: ``<D><Mon><YY>`` (e.g. ``17JUL26`` in ``BTC-17JUL26-61000-C`` / ``MNTUSDT-17JUL26``
+#: / ``XRP_USDC-16JUL26``). Bounded on both sides by a non-alnum char (or a string
+#: edge) so it never partial-matches inside a longer token. Universal across every
+#: CeFi dated-derivative venue's raw wire symbol — verified live against the prod
+#: cefi catalogue 2026-07-22 (DERIBIT/BYBIT/OKX-FUTURES/BINANCE-FUTURES/
+#: BINANCE-DELIVERY/KRAKEN-FUTURES all embed this exact shape).
+_WIRE_EXPIRY_TOKEN_RE = re.compile(r"(?<![A-Z0-9])(\d{1,2})([A-Z]{3})(\d{2})(?![A-Z0-9])")
+
+#: 3-letter month abbreviation -> month number, for :func:`_wire_symbol_expiry_date`.
+_WIRE_EXPIRY_MONTHS: dict[str, int] = {
+    "JAN": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "APR": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AUG": 8,
+    "SEP": 9,
+    "OCT": 10,
+    "NOV": 11,
+    "DEC": 12,
+}
+
+
+def _wire_symbol_expiry_date(raw_symbol: str) -> date | None:
+    """Parse the expiry DATE embedded in a CeFi dated-derivative wire symbol.
+
+    E.g. ``BTC-25SEP20-10000-C`` -> ``date(2020, 9, 25)``; ``MNTUSDT-17JUL26`` ->
+    ``date(2026, 7, 17)``. This is the single most-authoritative expiry signal
+    available for a dated contract: it is LITERALLY what the venue puts on the
+    tape, independent of any downstream date-arithmetic the capture adapter
+    performs to also populate the structured ``expiry`` column (see
+    :func:`_dedup_cefi_expiry_off_by_one`, whose tie-break relies on this).
+
+    Returns ``None`` when no ``<D><Mon><YY>`` token is found (non-dated types —
+    SPOT_PAIR / marker-less PERPETUAL — or an unrecognised symbol shape) or the
+    token doesn't parse to a real calendar date. Pure, degrade-never-guess.
+    """
+    match = _WIRE_EXPIRY_TOKEN_RE.search(raw_symbol.strip().upper())
+    if not match:
+        return None
+    day_s, mon_s, yr_s = match.groups()
+    month = _WIRE_EXPIRY_MONTHS.get(mon_s)
+    if month is None:
+        return None
+    try:
+        return date(2000 + int(yr_s), month, int(day_s))
+    except ValueError:
+        return None
+
+
+def _wire_symbol_expiry_date_numeric_yymmdd(raw_symbol: str) -> date | None:
+    """Parse the numeric-YYMMDD expiry embedded in a CeFi wire symbol.
+
+    A second, DISTINCT wire-date encoding from :func:`_wire_symbol_expiry_date`'s
+    alphabetic ``DDMonYY`` token: OKX-FUTURES dated futures embed a dash-separated
+    trailing 6-digit date (``BTC-USDT-200103``), while BINANCE-DELIVERY /
+    BINANCE-FUTURES / KRAKEN-FUTURES embed an underscore-separated one
+    (``BTCUSD_260626`` / ``FF_XBTUSD_260717``) — live-verified 2026-07-22 against
+    the prod cefi catalogue. Deliberately kept SEPARATE from
+    :func:`_wire_symbol_expiry_date` rather than folded into it: that function's
+    own test suite (``test_none_for_yymmdd_numeric_wire_symbol``) asserts ``None``
+    for this exact shape, so extending it in place would be a silent behaviour
+    change for any other caller — this is instead consumed ONLY as an explicit
+    check #4 fallback in :func:`_dedup_cefi_expiry_off_by_one`.
+
+    Reuses (does not reimplement) the CeFi Tardis adapter's own
+    ``_parse_yymmdd_symbol_expiry`` / ``_parse_underscore_yymmdd_symbol_expiry``
+    (``reference_data/adapters/cefi/tardis/parsing.py``) — the same
+    proven-and-tested BASE-QUOTE-YYMMDD / ``..._YYMMDD`` segment splitters the
+    live adapter already ships, not a new guess. Returns ``None`` when neither
+    parser resolves a date (perpetuals / unrecognised shapes). Pure,
+    degrade-never-guess.
+    """
+    upper = raw_symbol.strip().upper()
+    parsed = tardis_parsing._parse_yymmdd_symbol_expiry(upper)
+    if parsed is None:
+        parsed = tardis_parsing._parse_underscore_yymmdd_symbol_expiry(upper)
+    return parsed.date() if parsed is not None else None
+
+
+def _dedup_bybit_future_base_asset_parsing(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse BYBIT FUTURE rows split by a base-asset PARSING REGRESSION.
+
+    ROOT CAUSE (confirmed against the live prod cefi catalogue, 2026-07-22 — a
+    live measurement found 39 ambiguous BYBIT ``CeFiWireCanonicalMap`` wire
+    keys: 36 FUTURE, 3 PERPETUAL): an OLDER catalogue-build generation's generic
+    dash-split fallback did not recognise a quote glued into a Bybit dated
+    FUTURE's left segment (``BTCUSDT-25DEC26``) and fell through to
+    ``base=parts[0]`` verbatim — ``base_asset="BTCUSDT"`` instead of the
+    correct ``"BTC"``. The CURRENT parser,
+    :func:`instruments_service.reference_data.adapters.cefi.tardis.parsing.
+    _split_bybit_symbol`, already strips the quote suffix correctly (its own
+    docstring's worked example: ``BTCUSDT-25DEC26 -> (BTC, USDT)``). Both
+    generations' rows persist forever in the all-lifecycle catalogue rollup,
+    producing two permanent rows per real contract that are byte-identical on
+    every other :data:`CATALOG_COLUMNS` entry and differ ONLY in
+    ``base_asset``/``underlying`` (and the ids that embed them).
+
+    Scoped STRICTLY to ``venue == "BYBIT"`` and ``instrument_type ==
+    "FUTURE"`` — BYBIT's 3 genuinely ambiguous PERPETUAL wire keys
+    (``BTCUSD``/``ETHUSD``/``XRPUSD``: a closed 2019-2020 linear market and a
+    separate still-active inverse market sharing one un-marked wire spelling)
+    are two real, DIFFERENT products and must never be touched by this
+    function — verified by a dedicated test.
+
+    For each ``(venue, instrument_type, raw_symbol)`` group in scope, re-parse
+    ``raw_symbol`` with the SAME shipped ``_split_bybit_symbol`` the live
+    adapter uses (reused, not reimplemented) to get the one authoritative
+    ``base_asset``. A row whose ``base_asset`` does NOT match this fresh parse
+    is the stale parsing-regression artifact and is dropped; a row whose
+    ``base_asset`` DOES match is kept.
+
+    STOP-ON-SURPRISE (never silently guess): if ``_split_bybit_symbol`` fails
+    to resolve a base for an in-scope ``raw_symbol``, or resolves one that
+    matches NEITHER row in the group, this is not the known bug shape —
+    blindly applying the drop rule would silently delete every row in the
+    group. Raises ``ValueError`` instead so the surprise gets diagnosed rather
+    than a group quietly disappearing.
+
+    Deliberately run BEFORE :func:`_dedup_cefi_expiry_off_by_one` in
+    ``run_rollup``'s Phase D: 7 of the 36 FUTURE keys are 3-row COMPOUND
+    groups (the correct-base 2-row off-by-one-day pair PLUS one stale-base 3rd
+    row) — stripping the stale-base row here first leaves exactly the 2-row
+    off-by-one pair, which the expiry dedup's own next pass then collapses to
+    1 on its own.
+
+    Pure + idempotent (a frame with none of this pattern round-trips
+    unchanged; a frame missing the required columns is returned unchanged).
+    """
+    required = {"venue", "instrument_type", "raw_symbol", "base_asset"}
+    if df.empty or not required.issubset(df.columns):
+        return df
+
+    venue = df["venue"].fillna("").astype(str).str.strip().str.upper()
+    itype = df["instrument_type"].fillna("").astype(str).str.strip().str.upper()
+    raw = df["raw_symbol"].fillna("").astype(str).str.strip().str.upper()
+    in_scope = (venue == "BYBIT") & (itype == "FUTURE") & (raw != "")
+    if not in_scope.any():
+        return df
+
+    scoped_raw = raw[in_scope]
+    groups = scoped_raw.groupby(scoped_raw).groups
+
+    drop_idx: list[object] = []
+    for raw_symbol, idx in groups.items():
+        if len(idx) < 2:
+            continue
+        authoritative_base, _authoritative_quote = tardis_parsing._split_bybit_symbol(raw_symbol)
+        group_base = df.loc[idx, "base_asset"].fillna("").astype(str).str.strip().str.upper()
+        matches = group_base == authoritative_base
+        if not authoritative_base or not matches.any():
+            raise ValueError(
+                f"STOP-ON-SURPRISE: BYBIT FUTURE raw_symbol={raw_symbol!r} re-parsed via "
+                f"_split_bybit_symbol to base_asset={authoritative_base!r}, which matches NONE "
+                f"of the group's {len(idx)} row(s) (base_asset values: {sorted(set(group_base))}) "
+                "— this is not the known parsing-regression shape; diagnose before dropping."
+            )
+        drop_idx.extend(i for i, keep in zip(idx, matches, strict=True) if not keep)
+
+    if not drop_idx:
+        return df
+
+    out = df.drop(index=drop_idx)
+    logger.info(
+        "BYBIT FUTURE base-asset parsing-regression dedup: dropped %d stale row(s) "
+        "(see _dedup_bybit_future_base_asset_parsing docstring)",
+        len(drop_idx),
+    )
+    return out.reset_index(drop=True)
+
+
+#: Catalogue columns the off-by-one artifact itself legitimately touches — NOT
+#: required to match across a candidate group (see :func:`_dedup_cefi_expiry_off_by_one`).
+#: Every other :data:`CATALOG_COLUMNS` entry must be byte-identical for the collapse
+#: to apply; a real difference anywhere else means a genuine ambiguity, not this artifact.
+_EXPIRY_DEDUP_IGNORE_COLUMNS = frozenset(
+    {"instrument_id", "expiry", "available_to", "available_from", "canonical_instrument_id"}
+)
+
+
+def _dedup_cefi_expiry_off_by_one(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse CeFi dated-derivative rows split by an off-by-one-DAY expiry artifact.
+
+    ROOT CAUSE (confirmed against the live prod cefi catalogue, 2026-07-22 — a live
+    measurement found 1,018 ambiguous ``CeFiWireCanonicalMap`` wire keys, 802 (79%)
+    DERIBIT): a dated FUTURE/OPTION's raw wire symbol embeds its OWN expiry date
+    (e.g. ``BTC-17JUL26-61000-C``), but the capture adapter's SEPARATE structured
+    ``expiry`` column is derived from the venue's settlement timestamp by
+    date-arithmetic that occasionally lands one calendar day off. Because the
+    roll-up's aggregate identity for a non-perp-family CeFi row is the per-date
+    ``instrument_id`` (which EMBEDS the parsed ``expiry`` date —
+    :func:`_canonicalize_cefi_rollup_id`), two snapshot days whose adapter run
+    resolved a different calendar day for the SAME wire contract mint TWO SEPARATE
+    catalogue rows for what is one instrument — exactly the class
+    ``CeFiWireCanonicalMap.from_rows`` excludes as an "ambiguous wire key" (honest-
+    unresolved), making the instrument silently unresolvable at read time.
+
+    Live-verified fit for this EXACT shape (2026-07-22): 802/802 DERIBIT. The
+    remaining venues encode their wire expiry NUMERICALLY (``YYMMDD``) rather than
+    DERIBIT/BYBIT's alphabetic ``DDMonYY`` — check #4 originally only recognised the
+    alphabetic form (:func:`_wire_symbol_expiry_date`), so they fit checks #1-3 but
+    fell through untouched. A follow-up investigation (2026-07-22, re-run live
+    against the same prod snapshot) added :func:`_wire_symbol_expiry_date_numeric_yymmdd`
+    as an OR'd fallback for check #4 — a strict, safe superset extension (it only
+    ever runs on a group ALREADY confirmed ambiguous by checks #1-3, so it can only
+    additionally COLLAPSE an already-flagged duplicate, never newly flag one). This
+    resolves 4/4 BINANCE-DELIVERY, 2/2 BINANCE-FUTURES, 2/2 KRAKEN-FUTURES, and
+    76/146 OKX-FUTURES ambiguous ``(venue, instrument_type, raw_symbol)`` wire keys
+    (the OKX-FUTURES pure numeric-off-by-one sub-pattern only — see below).
+
+    The other 70/146 OKX-FUTURES rows and every BITGET-FUTURES (18) / OKX-SWAP (5)
+    ambiguous key have a genuinely different ``margin_type`` under the same wire
+    symbol (the linear-vs-inverse OKX-FUTURES/OKX-SWAP/BITGET-FUTURES perp-family
+    margin-mislabeling clash) and so correctly fail check #3 here (``margin_type``
+    IS a compared column, never on the ignore-list) — this function stays
+    unopinionated about that shape regardless of whether check #4 would otherwise
+    resolve a wire date for them. **CORRECTED 2026-07-23** (operator ruling,
+    ``cefi_okx_margin_type_wire_key_ambiguity_reclassification_2026_07_22.md``):
+    an earlier version of this docstring classified that margin_type clash as "a
+    REAL, different ambiguity ... stay excluded" and left it as a deliberately
+    NOT-YET-IMPLEMENTED follow-up pending review. A follow-up investigation found
+    zero-exception evidence (all 93 pairs) that it is instead a STALE MISLABEL
+    ARTIFACT of two now-fixed historical bugs (OKX bare-symbol margin inversion,
+    fixed 2026-07-09; Bitget coin-margined fallthrough, fixed 2026-07-14
+    commit ``75bdf02d``) — not a real ambiguity. The operator ruled to build the
+    fix: see :func:`_dedup_cefi_margin_type_mislabel`, a dedicated Phase-D dedup
+    (disjoint from this function by construction — see that function's docstring
+    for the verified non-overlap) that collapses those 93 rows.
+
+    BYBIT's 39 ambiguous keys are a THIRD, DISTINCT shape handled by a dedicated
+    upstream dedup instead of this one: 36 FUTURE keys are a base-asset PARSING
+    REGRESSION (an older catalogue-build generation's dash-split fallback failed
+    to strip the quote from the left segment — see
+    :func:`_dedup_bybit_future_base_asset_parsing`, run BEFORE this function in
+    ``run_rollup``'s Phase D so the 7 compound 3-row groups reduce to a pure
+    2-row off-by-one pair this function then collapses); the remaining 3
+    PERPETUAL keys (``BTCUSD``/``ETHUSD``/``XRPUSD``) are two genuinely
+    different real products sharing one un-marked wire spelling and are
+    correctly EXCLUDED, untouched by either dedup.
+
+    This is a NARROW, VERIFIED collapse — never a general "drop duplicates" rule.
+    A group of rows sharing one normalised ``(venue, instrument_type, raw_symbol)``
+    3-tuple (the same key ``CeFiWireCanonicalMap`` builds on) collapses to ONE row
+    ONLY when ALL of the following hold:
+
+      1. exactly 2 distinct non-blank ``expiry`` values across the group;
+      2. those 2 dates are exactly ONE calendar day apart;
+      3. every OTHER catalogue column (:data:`CATALOG_COLUMNS` minus
+         :data:`_EXPIRY_DEDUP_IGNORE_COLUMNS`) is byte-identical across every row
+         in the group;
+      4. the wire symbol's OWN embedded expiry date — alphabetic
+         (:func:`_wire_symbol_expiry_date`) OR numeric-YYMMDD
+         (:func:`_wire_symbol_expiry_date_numeric_yymmdd`) — matches EXACTLY ONE of
+         the 2 candidate dates.
+
+    Any group failing ANY check is LEFT UNTOUCHED — a real ambiguity, not this
+    artifact, stays excluded from the wire-canonical map exactly as today.
+
+    Tie-break (kept row): the row whose ``expiry`` matches the wire-embedded date —
+    the exchange's own declared settlement day is definitionally correct, never a
+    coin-flip. The kept row's ``available_from`` is set to the MIN across the whole
+    group (the two erroneous aggregates are one continuous lifecycle that was
+    wrongly split — the same "keep the earliest observed" semantics
+    :func:`build_catalogue_dataframe`'s BUG#4 rule already uses elsewhere).
+
+    Pure + idempotent (a frame with none of this pattern round-trips unchanged; a
+    frame missing the required columns — prediction/sports carry no
+    ``raw_symbol``/``expiry`` in this shape — is returned unchanged).
+    """
+    required = {"venue", "instrument_type", "raw_symbol", "expiry", "available_to", "available_from", "instrument_id"}
+    if df.empty or not required.issubset(df.columns):
+        return df
+
+    venue = df["venue"].fillna("").astype(str).str.strip().str.upper()
+    itype = df["instrument_type"].fillna("").astype(str).str.strip().str.upper()
+    raw = df["raw_symbol"].fillna("").astype(str).str.strip().str.upper()
+    has_symbol = raw != ""
+    if not has_symbol.any():
+        return df
+    key = venue + "\x1f" + itype + "\x1f" + raw
+    sub_key = key[has_symbol]
+    groups = sub_key.groupby(sub_key).groups
+
+    compare_cols = [c for c in CATALOG_COLUMNS if c in df.columns and c not in _EXPIRY_DEDUP_IGNORE_COLUMNS]
+
+    drop_idx: list[object] = []
+    kept_available_from: dict[object, str] = {}
+    for _group_key, idx in groups.items():
+        if len(idx) < 2:
+            continue
+        group_df = df.loc[idx]
+        expiries = group_df["expiry"].fillna("").astype(str)
+        distinct = sorted({e for e in expiries if e})
+        if len(distinct) != 2:
+            continue
+        try:
+            d0, d1 = date.fromisoformat(distinct[0]), date.fromisoformat(distinct[1])
+        except ValueError:
+            continue
+        if abs((d1 - d0).days) != 1:
+            continue
+        if group_df[compare_cols].nunique(dropna=False).gt(1).any():
+            continue
+        raw_symbol0 = group_df["raw_symbol"].iloc[0]
+        wire_date = _wire_symbol_expiry_date(raw_symbol0) or _wire_symbol_expiry_date_numeric_yymmdd(raw_symbol0)
+        if wire_date is None or wire_date.isoformat() not in distinct:
+            continue
+        keep_expiry = wire_date.isoformat()
+        keep_candidates = [i for i in idx if expiries.loc[i] == keep_expiry]
+        if not keep_candidates:
+            continue  # defensive — should be unreachable given the membership check above
+        keep_idx = keep_candidates[0]
+        drop_idx.extend(i for i in idx if i != keep_idx)
+        kept_available_from[keep_idx] = group_df["available_from"].astype(str).min()
+
+    if not drop_idx:
+        return df
+
+    out = df.drop(index=drop_idx)
+    for idx, min_from in kept_available_from.items():
+        if idx in out.index:
+            out.at[idx, "available_from"] = min_from
+    logger.info(
+        "CeFi expiry off-by-one dedup: collapsed %d row(s) across %d confirmed group(s) "
+        "(off-by-one-day artifact — see _dedup_cefi_expiry_off_by_one docstring)",
+        len(drop_idx),
+        len(kept_available_from),
+    )
+    return out.reset_index(drop=True)
+
+
+def _backfill_cefi_missing_expiry_from_wire_symbol(df: pd.DataFrame) -> pd.DataFrame:
+    """Backfill a dated CeFi derivative's blank ``expiry``/``available_to`` from its own wire symbol.
+
+    ROOT CAUSE (``cefi_hl_aster_batch_data_gaps_2026_06_22.md``, operator-confirmed
+    "``Tardis HTTP 400`` (20k) is LARGELY SYSTEMATIC" finding): the per-date row's
+    structured ``expiry`` column is the ONLY closing signal :func:`build_catalogue_dataframe`
+    reads (``_extract_meta`` never reads the also-reliable ``available_to_datetime``
+    Tardis metadata, and CeFi never populates ``delisted_at`` — that is a DeFi-only
+    concept). When a dated FUTURE/OPTION's per-date ``expiry`` never resolved on capture
+    (an adapter-side parse miss / absent venue metadata for that snapshot day) but Tardis's
+    ``/v1/instruments`` reference listing keeps re-surfacing the same wire symbol on later
+    daily snapshots (a documented Tardis quirk: long-dead symbols keep appearing, just
+    flagged via ``availableTo``), the aggregate's ``last_day`` keeps advancing with every
+    new snapshot and never falls behind the venue's own walk horizon — so the row reads
+    ACTIVE FOREVER (``available_to=None``). MTDS's active-window gate
+    (``cefi_catalog_reader._cefi_is_active_on_date``) skips its clip whenever the field is
+    blank, so the backfill keeps fetching Tardis long after the real expiry -> HTTP 400
+    (delisted symbol). Confirmed instances: ``CRYPTOFACILITIES:FF_ETHUSD_250228`` fetched
+    2025-03-01 (one day past its real 2025-02-28 expiry); ``BYBIT:BTC-21APR23`` fetched
+    2023-04-22 (one day past its real 2023-04-21 expiry).
+
+    This is the MIRROR of :func:`_dedup_cefi_expiry_off_by_one`'s artifact: that function
+    fixes a two-row duplicate where BOTH rows already carry an expiry (just one day
+    apart); this one fixes a SINGLE row whose expiry never got set in the first place.
+    Reuses the SAME wire-symbol parsers (:func:`_wire_symbol_expiry_date` /
+    :func:`_wire_symbol_expiry_date_numeric_yymmdd`) for the same reason that function
+    does: the exchange's own ticker is the most authoritative expiry signal available,
+    so a row lacking a structured expiry the wire symbol can resolve is filled FROM it,
+    never guessed independently.
+
+    Scoped conservatively — a row is touched ONLY when ALL of:
+
+      1. ``expiry`` is blank AND ``available_to`` is blank (an already-populated value,
+         whether a real expiry or a legitimate "last observed" date for a non-expiring
+         type, is never overwritten — see :data:`CATALOG_COLUMNS`'s ``available_to``
+         comment on that overload);
+      2. ``raw_symbol`` is non-blank and resolves via :func:`_wire_symbol_expiry_date` or
+         :func:`_wire_symbol_expiry_date_numeric_yymmdd` to a real calendar date;
+      3. that resolved date is STRICTLY BEFORE today (UTC) — a future-dated wire expiry
+         is not yet a delisting and must not be pre-emptively clipped; only a date that
+         has already passed proves the row is stale-active, not merely dated-but-current.
+
+    Non-dated types (PERPETUAL / SPOT_PAIR — no wire date token) and rows that already
+    carry an expiry or available_to are untouched by construction (checks 1-2 above).
+
+    Pure + idempotent: a frame with none of this pattern (no cefi rows, columns absent,
+    every row already resolved, or blank rows whose wire symbol carries no dated token
+    or resolves to a future date) round-trips unchanged.
+    """
+    required = {"raw_symbol", "expiry", "available_to"}
+    if df.empty or not required.issubset(df.columns):
+        return df
+
+    raw = df["raw_symbol"].fillna("").astype(str).str.strip()
+    expiry_blank = df["expiry"].isna() | (df["expiry"].astype(str).str.strip().isin(["", "None"]))
+    available_to_blank = df["available_to"].isna() | (df["available_to"].astype(str).str.strip().isin(["", "None"]))
+    candidates = expiry_blank & available_to_blank & (raw != "")
+    if not candidates.any():
+        return df
+
+    today = datetime.now(UTC).date()
+    out = df.copy()
+    filled = 0
+    for idx in df.index[candidates]:
+        raw_symbol = raw.loc[idx]
+        wire_date = _wire_symbol_expiry_date(raw_symbol) or _wire_symbol_expiry_date_numeric_yymmdd(raw_symbol)
+        if wire_date is None or wire_date >= today:
+            continue
+        iso = wire_date.isoformat()
+        out.at[idx, "expiry"] = iso
+        out.at[idx, "available_to"] = iso
+        filled += 1
+
+    if filled == 0:
+        return df
+    logger.info(
+        "CeFi missing-expiry backfill: filled %d row(s) from their own wire symbol "
+        "(see _backfill_cefi_missing_expiry_from_wire_symbol docstring)",
+        filled,
+    )
+    return out
+
+
+#: Catalogue ``venue`` -> Tardis ``exchange`` string, scoped STRICTLY to the 3 venues
+#: :func:`_dedup_cefi_margin_type_mislabel` covers (mirrors
+#: ``unified_api_contracts.VenueMapping().get_tardis_exchange_for_venue`` for exactly
+#: these 3 keys — verified 2026-07-23: ``get_tardis_exchange_for_venue("OKX-FUTURES")``
+#: -> ``"okex-futures"``, ``("OKX-SWAP")`` -> ``"okex-swap"``,
+#: ``("BITGET-FUTURES")`` -> ``"bitget-futures"``). A local, narrow mapping (not the
+#: full VenueMapping registry) matches this file's existing scoping convention (see
+#: :func:`_dedup_bybit_future_base_asset_parsing`'s hardcoded ``venue == "BYBIT"``).
+_MARGIN_MISLABEL_VENUE_TO_EXCHANGE: dict[str, str] = {
+    "OKX-FUTURES": "okex-futures",
+    "OKX-SWAP": "okex-swap",
+    "BITGET-FUTURES": "bitget-futures",
+}
+
+
+def _dedup_cefi_margin_type_mislabel(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse OKX-FUTURES/OKX-SWAP/BITGET-FUTURES rows split by a stale margin_type mislabel.
+
+    OPERATOR RULING (2026-07-23,
+    ``unified-trading-pm/plans/active/issues/cefi_okx_margin_type_wire_key_ambiguity_
+    reclassification_2026_07_22.md``): "build the fix delete the bad data formats,
+    migrate to canonical formats where possible" — this reclassifies the 93 ambiguous
+    ``(venue, instrument_type, raw_symbol)`` wire keys across these 3 venues as a STALE
+    MISLABEL ARTIFACT of two now-fixed historical bugs, OVERTURNING
+    :func:`_dedup_cefi_expiry_off_by_one`'s prior "REAL, different ambiguity ... stay
+    excluded" classification for this exact shape (see that function's docstring,
+    corrected alongside this one).
+
+    ROOT CAUSE (confirmed live 2026-07-22/23, zero-exception across all 93 real pairs
+    — the row matching TODAY's classifier is ALSO the row whose expiry, where
+    applicable, matches the wire-embedded date, an independent double-correlation):
+
+      * OKX-FUTURES (70 keys) + OKX-SWAP (5 keys): before a 2026-07-09 fix (see
+        :func:`instruments_service.reference_data.adapters.cefi.tardis.parsing.
+        _infer_margin_type`'s own docstring), a BARE (no ``_UM``/``_CM`` infix) OKX
+        wire symbol was unconditionally mislabeled the OPPOSITE of its true margin
+        type — every real OKX-SWAP/OKX-FUTURES derivative's ``margin_type`` was
+        backwards.
+      * BITGET-FUTURES (18 keys): before a 2026-07-14 fix (commit ``75bdf02d``), a
+        coin-margined (``_CM``-suffixed, USD-quote) Bitget Futures symbol fell
+        through to the generic LINEAR default instead of resolving INVERSE.
+
+    In every case the pre-fix (stale) row and the post-fix (correct) row for the SAME
+    ``raw_symbol`` persist forever side by side in the all-lifecycle catalogue rollup,
+    producing an "ambiguous wire key" ``CeFiWireCanonicalMap`` can never resolve at
+    read time.
+
+    Scoped STRICTLY to ``venue in`` :data:`_MARGIN_MISLABEL_VENUE_TO_EXCHANGE` (OKX-
+    FUTURES / OKX-SWAP / BITGET-FUTURES) — BYBIT's 3 genuinely-ambiguous PERPETUAL
+    wire keys (``BTCUSD``/``ETHUSD``/``XRPUSD``: a closed 2019-2020 linear market and
+    a separate still-active inverse market, confirmed two REAL different products,
+    explicitly excluded from this ruling) must never be touched here.
+
+    For each in-scope group, re-derive the authoritative ``margin_type`` by re-running
+    the SAME classifier pipeline the live Tardis adapter uses for every capture —
+    ``_resolve_base_quote`` (base/quote) then ``_infer_margin_type`` (margin type),
+    both REUSED verbatim from
+    :mod:`instruments_service.reference_data.adapters.cefi.tardis.parsing` — never
+    reimplemented, no per-venue "keep inverse" special-casing, ONE classifier call
+    path for all 3 venues (consistency + correctness, per the operator instruction).
+    The catalogue carries no ``quote_asset`` column, so ``_resolve_base_quote`` is
+    called with a minimal ``TardisInstrumentDetail(id=raw_symbol)`` stub (no
+    ``baseCurrency``/``quoteCurrency`` metadata) — this deliberately forces the SAME
+    symbol-splitting fallback path the live adapter takes for these bare OKX/Bitget
+    wire forms (which never carry that metadata either; live-verified 2026-07-23 this
+    reproduces the exact expected 93/93 split — 70 OKX-FUTURES + 5 OKX-SWAP + 18
+    BITGET-FUTURES). The row whose STORED ``margin_type`` matches this fresh call is
+    kept; the row whose ``margin_type`` does NOT match is the stale pre-fix artifact
+    and is dropped.
+
+    STOP-ON-SURPRISE (never silently guess): a group is left COMPLETELY UNTOUCHED —
+    not collapsed — when it doesn't fit this exact narrow shape: not exactly 2 rows,
+    ``instrument_type`` doesn't parse, the classifier resolves no opinion (non-
+    derivative type), or NEITHER/BOTH rows match the fresh classifier output. The
+    "both match" case is real and expected: an already-correct off-by-one-day pair
+    has IDENTICAL ``margin_type`` on both rows — that shape belongs to
+    :func:`_dedup_cefi_expiry_off_by_one`, not this function (live-measured 76 such
+    OKX-FUTURES groups round-trip here unchanged, confirming the two functions never
+    compete for the same group).
+
+    Order-independence vs the other two Phase-D CeFi dedups (VERIFIED, not assumed):
+    disjoint from :func:`_dedup_bybit_future_base_asset_parsing` by VENUE (BYBIT vs
+    these 3, no overlap possible); disjoint from :func:`_dedup_cefi_expiry_off_by_one`
+    by CONSTRUCTION — that function's check #3 requires ``margin_type`` identical
+    across the group (so any group THIS function would collapse, having a differing
+    ``margin_type``, already fails that function's check #3 and is left for this
+    function), and this function only ever collapses a group whose ``margin_type``
+    actually differs (so a group with identical ``margin_type`` — the shape the
+    expiry dedup targets — can never satisfy this function's match-count-of-exactly-1
+    requirement either: it is either 0 or 2, never 1). Live-verified 2026-07-23: of
+    169 real ambiguous ``(venue, instrument_type, raw_symbol)`` keys across these 3
+    venues, exactly 93 have differing ``margin_type`` (this function's target) and
+    the other 76 have identical ``margin_type`` with a 1-day expiry gap (the OTHER
+    function's target) — zero overlap, so Phase-D call order among all three CeFi
+    dedups genuinely does not matter.
+
+    Pure + idempotent (a frame with none of this pattern round-trips unchanged; a
+    frame missing the required columns is returned unchanged).
+    """
+    required = {"venue", "instrument_type", "raw_symbol", "margin_type"}
+    if df.empty or not required.issubset(df.columns):
+        return df
+
+    venue = df["venue"].fillna("").astype(str).str.strip().str.upper()
+    itype = df["instrument_type"].fillna("").astype(str).str.strip().str.upper()
+    raw = df["raw_symbol"].fillna("").astype(str).str.strip()
+    in_scope = venue.isin(_MARGIN_MISLABEL_VENUE_TO_EXCHANGE) & (raw != "")
+    if not in_scope.any():
+        return df
+
+    key = venue + "\x1f" + itype + "\x1f" + raw.str.upper()
+    scoped_key = key[in_scope]
+    groups = scoped_key.groupby(scoped_key).groups
+
+    drop_idx: list[object] = []
+    collapsed_groups = 0
+    for _group_key, idx in groups.items():
+        if len(idx) != 2:
+            continue  # compound / singleton shape — not this narrow pattern, leave untouched
+
+        group_df = df.loc[idx]
+        row_venue = str(group_df["venue"].iloc[0]).strip().upper()
+        exchange = _MARGIN_MISLABEL_VENUE_TO_EXCHANGE[row_venue]
+        raw_symbol = str(group_df["raw_symbol"].iloc[0]).strip()
+        itype_raw = str(group_df["instrument_type"].iloc[0]).strip().upper()
+        try:
+            instrument_type_enum = InstrumentType(itype_raw)
+        except ValueError:
+            continue  # unrecognised instrument_type string — surprise, not this shape
+
+        item = TardisInstrumentDetail(id=raw_symbol)
+        _base, quote = tardis_parsing._resolve_base_quote(item, raw_symbol, exchange)
+        authoritative = tardis_parsing._infer_margin_type(instrument_type_enum, quote, raw_symbol, exchange)
+        if authoritative is None:
+            continue  # non-derivative type — classifier has no opinion, leave untouched
+
+        group_margin = group_df["margin_type"].fillna("").astype(str).str.strip().str.lower()
+        matches = group_margin == authoritative.value
+        if matches.sum() != 1:
+            continue  # neither or both match — not the known mislabel shape, leave untouched
+
+        drop_idx.extend(i for i, keep in zip(idx, matches, strict=True) if not keep)
+        collapsed_groups += 1
+
+    if not drop_idx:
+        return df
+
+    out = df.drop(index=drop_idx)
+    logger.info(
+        "CeFi margin_type mislabel dedup: collapsed %d row(s) across %d confirmed group(s) "
+        "(stale pre-fix margin_type artifact — see _dedup_cefi_margin_type_mislabel docstring)",
+        len(drop_idx),
+        collapsed_groups,
+    )
+    return out.reset_index(drop=True)
+
+
+def _apply_cefi_phase_d_dedups(df: pd.DataFrame) -> pd.DataFrame:
+    """Run the cefi-only Phase D DEDUP passes (excludes the missing-expiry backfill).
+
+    Extracted so :func:`promote_catalogue`'s monotonic guard can run the SAME 3
+    passes over the CURRENT prod catalogue before comparing row counts (the
+    "dedup-aware guard" fix, ``dp_catalog_not_running_sports_prediction_2026_07_15.md``
+    RULED 2026-07-28) without duplicating the pass list/order in two places —
+    :func:`run_rollup`'s own Phase D calls this same helper for the freshly-rolled
+    side. Order matters (see each function's docstring): bybit base-asset dedup
+    MUST run before the expiry off-by-one collapse (some groups are 3-row
+    compounds only the bybit pass first reduces to a clean 2-row pair); the
+    margin-type mislabel dedup is verified order-independent against both.
+    Deliberately excludes :func:`_backfill_cefi_missing_expiry_from_wire_symbol` —
+    that pass FILLS previously-blank fields rather than dropping rows, so it
+    cannot itself cause a dedup-only shrink and re-running it against the
+    current prod catalogue would be pure wasted work for the guard's purposes.
+    """
+    df = _dedup_bybit_future_base_asset_parsing(df)
+    df = _dedup_cefi_expiry_off_by_one(df)
+    df = _dedup_cefi_margin_type_mislabel(df)
+    return df
+
+
 def run_rollup(
     asset_group: str,
     *,
@@ -2075,9 +4892,21 @@ def run_rollup(
     mode: str = "incremental",
     by_date_prefix: str = DEFAULT_BY_DATE_PREFIX,
     max_blobs: int | None = None,
+    since: date | None = None,
     storage: StorageClient | None = None,
 ) -> int:
-    """Roll up the per-date definitions for ``asset_group`` and promote the catalogue."""
+    """Roll up the per-date definitions for ``asset_group`` and promote the catalogue.
+
+    ``since`` overrides the sports FTP roll-up's window start (default
+    ``today - SPORTS_FTP_WINDOW_DAYS``). It exists for the deliberate ONE-OFF
+    full-history backfill the module docstring describes but previously offered
+    no supported path to run: because the window start was hardcoded here, the
+    sports catalogue could only ever hold ~13 months, and the frozen-tail merge
+    can only PRESERVE rows already present — it cannot recover history that was
+    never rolled up. Pass an early date once (e.g. 2019-01-01) to populate the
+    full corpus; every subsequent windowed cron run then carries those rows
+    forward via the frozen tail, so the cost is paid once, not per run.
+    """
     run_id = f"catalogue-rollup-{asset_group}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
     # Phase A: storage-client init
@@ -2115,7 +4944,9 @@ def run_rollup(
         prev_catalogue = _load_previous_catalogue(storage, bucket, canonical_blob)
         if prev_catalogue is None:
             # Cold start: no previous catalogue to merge onto → full rebuild.
-            logger.info("No previous catalogue at gs://%s/%s — cold start, falling back to --mode full", bucket, canonical_blob)
+            logger.info(
+                "No previous catalogue at gs://%s/%s — cold start, falling back to --mode full", bucket, canonical_blob
+            )
             mode = "full"
 
     _emit_event(
@@ -2137,14 +4968,48 @@ def run_rollup(
     )
 
     # Phase C: by_date listing + download-pool
-    print(f"[BISECT-C] by_date listing / download-pool asset_group={asset_group} bucket={bucket} mode={mode}", flush=True)
+    print(
+        f"[BISECT-C] by_date listing / download-pool asset_group={asset_group} bucket={bucket} mode={mode}", flush=True
+    )
     if asset_group == "sports":
         # League-grain could-exist universe — derived from the canonical MANIFEST
         # (the namespace-correct superset), NOT the entity=leagues slice (whose RAW
         # NUMERIC api-football league_ids do not match the manifest's canonical
         # namespace → 131/606 coverage + numeric over-seed; slot-4 2026-06-07).
         # The captured manifest atom is per-(league_id, data_type, date).
-        df = build_sports_catalogue_from_manifest(_read_sports_manifest_index(storage, bucket))
+        league_df = build_sports_catalogue_from_manifest(_read_sports_manifest_index(storage, bucket))
+        # Fixture/team/player-grain — real OBSERVED captures rolled up from
+        # sports_reference/by_date (2026-07-09, extends past league-grain-only;
+        # see build_sports_fixture_team_player_catalogue's docstring for why this
+        # is architecturally distinct from the manifest-derived league-grain path
+        # above and safe to concat onto the same catalogue). FROZEN-TAIL merge
+        # (2026-07-15 fix, _merge_sports_ftp_with_frozen_tail) onto the previous
+        # catalogue's FTP rows — the trailing SPORTS_FTP_WINDOW_DAYS window is
+        # unconditionally recomputed every run with no memory of a prior run, so
+        # without the frozen tail an instrument that ages off the window's bottom
+        # edge silently vanishes from the catalogue entirely (not just closes),
+        # shrinking the row count and jamming the monotonic guard — see that
+        # helper's docstring for the confirmed 2026-07-15 incident (27216→27210).
+        # ``--since`` (one-off full-history backfill) overrides the trailing
+        # window; absent it, the affordable cron default. See run_rollup's docstring.
+        sports_since = since if since is not None else datetime.now(UTC).date() - timedelta(days=SPORTS_FTP_WINDOW_DAYS)
+        logger.info(
+            "Sports FTP window start: %s (%s)",
+            sports_since.isoformat(),
+            "explicit --since (full-history backfill)"
+            if since is not None
+            else f"default {SPORTS_FTP_WINDOW_DAYS}d trailing",
+        )
+        sports_prev_catalogue = _load_previous_catalogue(storage, bucket, canonical_blob)
+        ftp_df = _merge_sports_ftp_with_frozen_tail(
+            storage,
+            bucket,
+            by_date_prefix=by_date_prefix,
+            since=sports_since,
+            max_blobs=max_blobs,
+            prev_catalogue=sports_prev_catalogue,
+        )
+        df = pd.concat([league_df, ftp_df], ignore_index=True) if not ftp_df.empty else league_df
     elif mode == "incremental" and prev_catalogue is not None:
         # Trailing-window read (self-widening) + frozen-tail merge — the O(window)
         # replacement for the O(all-history) walk. §7.3 liveness (generic) / the
@@ -2173,7 +5038,8 @@ def run_rollup(
                 _tee_day_counts(
                     _iter_by_date_snapshots(storage, bucket, by_date_prefix, since=window_start, max_blobs=max_blobs),
                     window_day_counts,
-                )
+                ),
+                asset_group=asset_group,
             )
         if window_df.empty:
             logger.warning(
@@ -2191,9 +5057,52 @@ def run_rollup(
             _iter_prediction_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs)
         )
     else:
-        df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
+        df = build_catalogue_dataframe(
+            _iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs), asset_group=asset_group
+        )
+
+    # F8 (2026-07-18): a --mode full rebuild is CUMULATIVE-preserving — merge the
+    # fresh full walk onto the previous catalogue's frozen tail so a previously
+    # catalogued instrument whose by_date data has since been PRUNED is never
+    # silently dropped (the 2026-07-15 sports incident class, generalised to
+    # defi/cefi/tradfi/prediction: a full defi rebuild dropped 2,378 rows — 2,346
+    # delisted DeFi pools/tokens whose by_date aged off — under-producing the
+    # all-instruments-ever contract and jamming the monotonic guard). The full
+    # walk stays authoritative for the available_to of everything with data
+    # (branch 1 recomputes it → a genuine delisting is carried by the fresh row),
+    # so close_absent=False preserves the DATALESS tail verbatim. Sports already
+    # runs its own frozen-tail merge above; --allow-catalogue-shrink is the escape
+    # hatch for a deliberate re-aggregate that INTENDS to drop (skips the merge).
+    if mode == "full" and asset_group != "sports" and not allow_shrink:
+        full_prev = _load_previous_catalogue(storage, bucket, canonical_blob)
+        if full_prev is not None:
+            full_prev_df, _ = full_prev
+            before = len(df)
+            df = _merge_incremental(full_prev_df, df, window_start=None, asset_group=asset_group, close_absent=False)
+            logger.info(
+                "Full-rebuild frozen-tail merge (%s): %d walked rows + %d prev → %d preserved",
+                asset_group,
+                before,
+                len(full_prev_df),
+                len(df),
+            )
 
     # Phase D: dedup / row-count
+    if asset_group == "cefi":
+        # BYBIT base-asset parsing-regression + ambiguous-wire-key expiry
+        # off-by-one + OKX/BITGET margin_type mislabel collapses — see
+        # _apply_cefi_phase_d_dedups's docstring for pass order/rationale. Shared
+        # with promote_catalogue's dedup-aware monotonic guard, which re-runs the
+        # SAME helper over the CURRENT prod catalogue before comparing row counts.
+        df = _apply_cefi_phase_d_dedups(df)
+        # Missing-expiry backfill from wire symbol (see
+        # _backfill_cefi_missing_expiry_from_wire_symbol's docstring — Tardis HTTP 400
+        # systematic-cause fix, cefi_hl_aster_batch_data_gaps_2026_06_22.md). Placed
+        # LAST: it only touches rows with BLANK expiry/available_to, which the three
+        # dedups above never produce or consume (each requires an already-populated,
+        # non-blank expiry to group on), so ordering has no correctness interaction —
+        # last is simply the safest place to add a new pass.
+        df = _backfill_cefi_missing_expiry_from_wire_symbol(df)
     print(f"[BISECT-D] dedup complete rows={len(df)} asset_group={asset_group}", flush=True)
     logger.info("Rolled up %d catalogue rows", len(df))
 
@@ -2203,6 +5112,27 @@ def run_rollup(
     _mvp_count = int(df["mvp"].sum()) if not df.empty else 0
     logger.info("MVP-tagged catalogue: %d / %d rows in MVP scope", _mvp_count, len(df))
 
+    # Crypto-venue equity-identity tags (operator 2026-07-16): instrument_type stays
+    # the broad mechanics type; the equity identity + real-equity linkage ride the
+    # tracks_equity / is_equity_perp tags (see _add_equity_tags / CATALOG_COLUMNS).
+    df = _add_equity_tags(df, asset_group)
+    _eq_count = int(df["is_equity_perp"].sum()) if not df.empty else 0
+    logger.info("Equity-tagged catalogue: %d / %d rows flagged is_equity_perp", _eq_count, len(df))
+
+    # Human-readable display name for opaque-coded instruments (KRX single-stock
+    # equities: bare 6-digit code -> issuer name). Derived on-the-fly from the UAC
+    # KRX_EQUITY_NAMES registry (see _add_instrument_name / CATALOG_COLUMNS "name").
+    df = _add_instrument_name(df, asset_group)
+    _named_count = int((df["name"].astype(str).str.strip() != "").sum()) if not df.empty else 0
+    logger.info("Display-name-tagged catalogue: %d / %d rows carry a name", _named_count, len(df))
+
+    # TVL-exempt force-include marker (IS R2c): distinguish a FORCED governance-token
+    # inclusion (EIGEN/ETHFI, tracked regardless of TVL) from coincidental DEX liquidity,
+    # so the availability denominator is honest. Derived on-the-fly from the UAC SSOT.
+    df = _add_force_include(df, asset_group)
+    _fi_count = int(df["force_include"].sum()) if not df.empty else 0
+    logger.info("Force-include-tagged catalogue: %d / %d rows flagged force_include", _fi_count, len(df))
+
     # Phase E: monotonic-guard + promote-write
     print(f"[BISECT-E] monotonic-guard + promote-write asset_group={asset_group} rows={len(df)}", flush=True)
     code = promote_catalogue(
@@ -2210,6 +5140,7 @@ def run_rollup(
         bucket,
         env,
         df,
+        asset_group=asset_group,
         allow_shrink=allow_shrink,
         dry_run=dry_run,
     )
@@ -2263,6 +5194,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Roll up + evaluate the guard, but do NOT write the catalogue.",
     )
     parser.add_argument(
+        "--since",
+        default=None,
+        help=(
+            "SPORTS ONLY — override the FTP roll-up's window start (YYYY-MM-DD). Default is a "
+            f"{SPORTS_FTP_WINDOW_DAYS}d trailing window, which is why the sports catalogue holds only "
+            "~13 months. Pass an early date (e.g. 2019-01-01) for the deliberate ONE-OFF full-history "
+            "backfill; the frozen-tail merge then carries those rows forward on every subsequent "
+            "windowed run, so the (multi-hour) full walk is paid once, not per run."
+        ),
+    )
+    parser.add_argument(
         "--max-blobs",
         type=int,
         default=None,
@@ -2284,6 +5226,35 @@ def main(argv: list[str] | None = None) -> int:
     mode: str = args.mode
     by_date_prefix: str = args.by_date_prefix
     max_blobs: int | None = args.max_blobs
+
+    # --since is sports-only (the other asset groups' window is driven by --mode +
+    # the incremental engine). Fail LOUD on a bad date rather than silently
+    # falling back to the 400d default — a typo on a multi-hour backfill that
+    # quietly rolled up 13 months instead of 8 years would look like success.
+    since: date | None = None
+    if args.since is not None:
+        try:
+            since = date.fromisoformat(str(args.since).strip())
+        except ValueError:
+            logger.error("--since must be YYYY-MM-DD (got %r)", args.since)
+            return 2
+        if asset_group != "sports":
+            logger.error("--since is sports-only (got --asset-group %s)", asset_group)
+            return 2
+
+    # Real event-log wiring so CATALOGUE_SHRINK_BLOCKED actually leaves the process
+    # (was best-effort logger.info-only — cefi_monotonicity_guard_alerting_and_dark_
+    # venues_2026_07_07.md). setup_events() must run before promote_catalogue()'s
+    # log_event() call or it raises (batch mode requires an explicit sink).
+    setup_events(
+        service_name=_EVENTS_SERVICE,
+        mode="batch",
+        sink=GcsEventSink(
+            project_id=_EVENTS_PROJECT_ID,
+            bucket=f"{_EVENTS_PROJECT_ID}-events",
+            service_name=_EVENTS_SERVICE,
+        ),
+    )
     return run_rollup(
         asset_group,
         allow_shrink=allow_shrink,
@@ -2291,6 +5262,7 @@ def main(argv: list[str] | None = None) -> int:
         mode=mode,
         by_date_prefix=by_date_prefix,
         max_blobs=max_blobs,
+        since=since,
     )
 
 

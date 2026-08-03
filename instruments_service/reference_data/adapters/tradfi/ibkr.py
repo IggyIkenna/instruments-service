@@ -5,6 +5,22 @@ Uses the inject-IB pattern: the caller creates one connected ib_insync.IB instan
 pointing at ibkr-gateway-infra and injects it into this adapter. The adapter never
 calls IB().connect() internally — connection lifecycle belongs to the caller.
 
+STATUS (confirmed 2026-07-31, plans/active/issues/tradfi_adapter_dead_code_fallback_audit_2026_07_25.md
+Finding I-3): registered but UNREACHED in production — kept intentionally, not deleted, per the
+same "document why it's kept" precedent this audit applied to databento_equity.py. Two
+registration points exist, neither is reachable by any real (non-test) call today:
+  - factory.py's VENUE_REGISTRY["ibkr"] is only ever instantiated via
+    create_reference_data_adapter(), whose sole real caller (get_adapter_for_canonical_venue())
+    resolves the adapter key through UAC's VENUE_TO_ADAPTER_KEY — which has zero entries mapping
+    any canonical venue to "ibkr" ("ibkr" is a broker, not a venue, per UAC
+    _endpoint_registry_data.py:674; real venues route to CME/ICE/CBOE instead).
+  - router.py's ("apple"|"cme_futures"|"ibkr", "ibkr") routing entries are only reachable via
+    create_reference_data_adapter_for_source(), which has no caller anywhere in the workspace
+    outside its own unit/integration tests.
+To activate: either add a real UAC VENUE_TO_ADAPTER_KEY entry pointing at "ibkr", or wire a real
+caller to create_reference_data_adapter_for_source() with data_source="ibkr". Until one of those
+lands, this class is exercised only by tests/unit/test_*.py and tests/integration/*.
+
 Auth pattern:
   TWS / IB Gateway socket connection. No API key — auth is the socket handshake.
   Credentials stored in Secret Manager as "ibkr-account-credentials" are used by
@@ -63,21 +79,27 @@ def _parse_ibkr_expiry(s: str | None) -> datetime | None:
         return None
 
 
-# Map IBKR secType → canonical InstrumentType
+# Map IBKR secType → canonical InstrumentType.
+# 2026-07-08 fix: STK/CASH/BOND previously all collapsed to the generic SPOT_PAIR
+# (crypto-style) type even though canonical_id_builder.py's _TRADFI_CASH_TYPES
+# already defines distinct EQUITY/CURRENCY/BOND types for exactly this — real
+# stocks, FX cash, and bonds are 3 different real instrument categories, not one.
+# _resolve_sec_type_and_symbols already accepted "EQUITY" as an alias filter for
+# STK before this fix (it anticipated this exact mapping).
 _SEC_TYPE_MAP: dict[str, InstrumentType] = {
-    "STK": InstrumentType.SPOT_PAIR,
+    "STK": InstrumentType.EQUITY,
     "FUT": InstrumentType.FUTURE,
     "OPT": InstrumentType.OPTION,
-    "CASH": InstrumentType.SPOT_PAIR,
+    "CASH": InstrumentType.CURRENCY,
     "CFD": InstrumentType.PERPETUAL,
-    "BOND": InstrumentType.SPOT_PAIR,
+    "BOND": InstrumentType.BOND,
     "FOP": InstrumentType.OPTION,
     "WAR": InstrumentType.OPTION,
     "IOPT": InstrumentType.OPTION,
 }
 
 # Map IBKR secType → canonical AssetClass
-_SEC_TYPE_asset_group_MAP: dict[str, AssetClass] = {
+_SEC_TYPE_ASSET_CLASS_MAP: dict[str, AssetClass] = {
     "STK": AssetClass.EQUITY,
     "FUT": AssetClass.COMMODITY,
     "OPT": AssetClass.EQUITY,
@@ -263,6 +285,20 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             "underConid": getattr(details, "underConId", None),
         }
 
+    def _build_key_payload(self, symbol: str, sec_type: str, currency: str) -> str:
+        """Payload segment for the canonical instrument_key.
+
+        A bare ``symbol`` is already unambiguous for equities/futures/options — but
+        IBKR's ``CASH`` contracts (FX pairs) carry only the base currency as
+        ``symbol`` (e.g. ``ib_insync.Forex("EURUSD")`` → ``symbol="EUR"``,
+        ``currency="USD"``), so the quote currency is folded in as ``BASE-QUOTE``
+        (matching this workspace's existing FX convention, e.g.
+        ``FX:SPOT_PAIR:EUR-USD``) to avoid losing real pair identity.
+        """
+        if sec_type == "CASH":
+            return f"{symbol}-{currency}"
+        return symbol
+
     def _build_instrument_from_uac(self, uac: IBKRContractDetails) -> InstrumentRecord | None:
         """Build InstrumentRecord from validated IBKRContractDetails schema."""
         symbol = uac.symbol
@@ -270,17 +306,21 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
         sec_type = uac.secType or "STK"
         instrument_type = _SEC_TYPE_MAP.get(sec_type, InstrumentType.SPOT_PAIR)
-        asset_group = _SEC_TYPE_asset_group_MAP.get(sec_type, AssetClass.EQUITY)
+        asset_class = _SEC_TYPE_ASSET_CLASS_MAP.get(sec_type, AssetClass.EQUITY)
         currency = uac.currency or "USD"
         tick_size = Decimal(str(uac.minTick)) if uac.minTick else Decimal("0.01")
         expiry = _parse_ibkr_expiry(uac.lastTradeDateOrContractMonth) if sec_type in ("FUT", "OPT", "FOP") else None
         if instrument_type in (InstrumentType.FUTURE, InstrumentType.OPTION) and expiry is None:
             return None
+        # Canonical VENUE:TYPE:SYMBOL order (2026-07-08 fix) — was SYMBOL:RAW_CODE:CCY
+        # (IBKR's raw secType code, no venue token at all), the wrong segment order and
+        # missing the venue this workspace's convention requires everywhere else.
+        payload = self._build_key_payload(symbol, sec_type, currency)
         return InstrumentRecord(
-            instrument_key=f"{symbol}:{sec_type}:{currency}",
-            symbol=symbol,
+            instrument_key=f"{self.venue.upper()}:{instrument_type.upper()}:{payload}",
+            raw_symbol=symbol,
             venue=self.venue,
-            asset_group=asset_group,
+            asset_class=asset_class,
             instrument_type=instrument_type,
             base_asset=symbol,
             quote_asset=currency,
@@ -583,7 +623,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_key=symbol,
             raw_symbol=symbol,
             venue=self.venue,
-            asset_group=AssetClass.EQUITY,
+            asset_class=AssetClass.EQUITY,
             instrument_type=InstrumentType.SPOT_PAIR,
             base_asset=symbol,
             quote_asset="USD",

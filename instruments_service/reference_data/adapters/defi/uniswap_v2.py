@@ -14,6 +14,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import SUBGRAPH_IDS
 from unified_trading_library import log_event
 
@@ -27,6 +28,7 @@ from ...schemas import (
 from ...utils import date_to_block
 from ...utils.defi_utils import (
     assert_subgraph_payload,
+    build_spot_asset_siblings_for_pool,
     classify_graph_error,
     order_base_quote,
     parse_created_timestamp,
@@ -136,6 +138,9 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
             record = self._build_pair_record(pair)
             if record:
                 results.append(record)
+                # SPOT_ASSET siblings (P4-B): one per resolvable token leg, reusing the
+                # SAME addresses/decimals already resolved on the pool record above.
+                results.extend(build_spot_asset_siblings_for_pool(record))
 
         logger.info("UniswapV2: fetched %d pair instruments on %s", len(results), self._chain)
         return results
@@ -215,7 +220,8 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         symbol = f"{base}-{quote}"
         venue_tag = f"UNISWAP_V2-{self._chain}"
-        instrument_key = f"{venue_tag}:POOL:{symbol}"
+        # KNOWN NON-UNIQUENESS -- see the identical note in uniswap_v3.py::_build_pool_record.
+        instrument_key = build_instrument_id(venue_tag, InstrumentType.POOL, symbol, passthrough=True)
 
         available_since = parse_created_timestamp(pair.get("createdAtTimestamp"))
 
@@ -223,6 +229,9 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
         # Surface it explicitly so downstream consumers don't special-case V2.
         return InstrumentRecord(
             instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=str(pair_id),
             instrument_type=InstrumentType.POOL,
