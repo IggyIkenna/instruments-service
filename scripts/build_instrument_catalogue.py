@@ -907,14 +907,40 @@ def _cefi_equity_tags(instrument_type: str, base_asset: str) -> tuple[bool, str]
     return (False, "")
 
 
+def _bps_fee_str(raw: object) -> str:
+    """Format the structured ``pool_fee_tier`` bps column as a clean integer string.
+
+    The by_date ``pool_fee_tier`` value round-trips through a pandas frame as a
+    ``float64`` (e.g. ``5.0``) even though the real fee is always a whole
+    basis-point count — a bare ``str(raw)`` bakes the float artifact straight into
+    ``glued_pair_id`` (``…-5.0`` instead of ``…-5``, confirmed live in
+    ``prod/catalog.parquet`` 2026-08-03). Returns "" for missing/blank/non-numeric.
+    """
+    if raw is None:
+        return ""
+    text = str(raw).strip()
+    if not text:
+        return ""
+    try:
+        return str(int(float(text)))
+    except (TypeError, ValueError):
+        return text
+
+
 def _fee_from_instrument_key(instrument_key: str) -> str:
     """Extract the fee token from a legacy glued ``…:POOL:PAIR:FEE`` instrument_key.
 
-    The by_date ``pool_fee_tier`` column is in BPS (Uniswap feeTier / 100, e.g.
-    ``5.0``) but the human-readable glued id the operator specified uses the RAW
-    fee amount (``:500`` / ``:3000`` / ``:100``) the adapter stamped into
-    ``instrument_key``. So prefer the instrument_key's trailing fee segment for a
-    faithful UI id; return "" when the key is not a 4-part POOL key.
+    LEGACY-COMPAT FALLBACK ONLY (instrument_id_format_canonicalization_2026_07_08.md
+    finding 2, bug 3 — corrected 2026-08-03): earlier framing had this fire FIRST,
+    preferring the instrument_key's raw on-wire fee token (``:500``/``:3000``) over
+    the already-correct bps ``pool_fee_tier`` column — that is backwards from the
+    operator's decided target grammar (a real basis-point value, dash-glued), and
+    reintroduced the retired colon-before-fee shape on every regen for any row whose
+    per-day ``instrument_key`` still carries an old-format 4-segment legacy value.
+    The caller (:func:`_defi_pool_dual_form`) now consults :func:`_bps_fee_str` on
+    ``pool_fee_tier`` FIRST; this is only reached when that structured column is
+    blank, as a best-effort recovery for pre-bps-column historical rows. Returns ""
+    when the key is not a 4-part POOL key.
     """
     parts = instrument_key.split(":")
     if len(parts) >= 4 and parts[1] == "POOL":
@@ -1373,18 +1399,23 @@ def _defi_pool_dual_form(
     base_raw = meta.get("base_asset") or ""
     quote_raw = meta.get("quote_asset") or ""
     key_raw = meta.get("instrument_key") or ""
-    # Fee/discriminator precedence for the re-derived UI ``glued_pair_id``:
-    #   1. legacy 4th-colon fee token (``...:POOL:PAIR:FEE``) — the faithful raw fee;
-    #   2. the structured ``pool_fee_tier`` bps column (uniswap/balancer);
+    # Fee/discriminator precedence for the re-derived UI ``glued_pair_id``
+    # (corrected 2026-08-03, instrument_id_format_canonicalization_2026_07_08.md
+    # finding 2 bug 3 — was legacy-key-first, backwards from the operator's decided
+    # target grammar; see ``_fee_from_instrument_key``'s docstring):
+    #   1. the structured ``pool_fee_tier`` bps column (uniswap/balancer) — the
+    #      already-correct, operator-decided basis-point value;
+    #   2. legacy 4th-colon fee token (``...:POOL:PAIR:FEE``) — best-effort recovery
+    #      for a historical row that predates the ``pool_fee_tier`` column entirely;
     #   3. the discriminator hyphen-glued into a canonical 3-seg symbol
     #      (``...:POOL:SOL-USDC-WP64`` / ``-Standard``) for the Solana-AMM adapters
     #      that fold tick-spacing / pool-type into the symbol (Wave B, orca/raydium).
     # (3) keeps the re-derived ``glued_pair_id`` byte-identical to the passthrough
     # ``canonical_instrument_id`` for those pools without touching uniswap/balancer
-    # (which resolve at step 2).
+    # (which resolve at step 1).
     fee = (
-        _fee_from_instrument_key(key_raw)
-        or (meta.get("pool_fee_tier") or "")
+        _bps_fee_str(meta.get("pool_fee_tier"))
+        or _fee_from_instrument_key(key_raw)
         or _pool_symbol_discriminator(key_raw, base_raw, quote_raw)
     )
     identity = build_pool_identity(
