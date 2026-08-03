@@ -20,6 +20,23 @@ UNTOUCHED by default — dropping them is a coverage-model decision gated on the
 operator (see ``plans/active/issues/sports_league_id_out_of_universe_overcapture_2026_06_24.md``).
 Pass ``--drop-out-of-universe`` to also remove them (requires operator sign-off).
 
+``--drop-out-of-universe`` is SCOPED to this script's own rekey candidates only
+(numeric / provider-suffixed api_football ids whose canonical form still doesn't
+resolve into the registry) — it NEVER drops an already-canonical-STRING-form
+league_id, even one this script's registry doesn't recognize. Those rows can
+belong to an entirely different service's namespace this script has no
+visibility into (measured 2026-08-03: raw MTDS ``OddsApiAdapter`` display names
+like ``PREMIER_LEAGUE``/``PRIMERA_DIVISION`` carry real captured
+``odds_horizon_bucket``/``trades`` rows for major leagues pending a SEPARATE,
+already-tracked P0 migration —
+``plans/active/issues/sports_league_id_namespace_migration_2026_07_20.md`` — not
+junk; several of those raw names are even genuinely ambiguous between two real
+leagues, per that doc's own analysis, so a name-keyed heuristic here could not
+safely disambiguate them either). A prior version of this script's
+``--drop-out-of-universe`` mask covered every non-registry STRING key, not just
+this script's own rekey candidates — caught before any ``--apply`` run, see the
+domestic-selection issue doc's 2026-08-03 correction for the full incident.
+
 This is a WHOLE-``_index`` rewrite (NOT a per-VM-shard append): re-keying changes
 the consolidator dedup key, so a numeric-keyed row cannot be overwritten by a
 canonical-keyed append — the stale numeric row must be physically dropped from the
@@ -84,6 +101,25 @@ def _canonicalize(raw: str) -> str:
     return canonicalize_league_id(s)
 
 
+def compute_drop_out_of_universe_mask(
+    is_rekey_candidate: pd.Series[bool],
+    canon_in_reg: pd.Series[bool],
+) -> pd.Series[bool]:
+    """The exact set of rows ``--drop-out-of-universe`` may remove.
+
+    SCOPED to this script's own rekey candidates (numeric / provider-suffixed
+    api_football ids) whose canonical form still doesn't resolve into the
+    registry — never an already-canonical-STRING-form league_id, regardless of
+    whether it's in the registry. A string key outside this script's registry
+    may belong to a different service's namespace this script has no authority
+    or context to judge (2026-08-03 near-miss: this previously matched every
+    non-registry string key, including real captured MTDS odds/trades rows for
+    major leagues pending a separate, already-tracked migration — see the
+    module docstring).
+    """
+    return is_rekey_candidate & (~canon_in_reg)
+
+
 def _resolve_bucket() -> str:
     os.environ.setdefault("DEPLOYMENT_ENV", "prod")
     # resolve_bucket_name needs the project env for the {GCP_PROJECT_ID} template fragment.
@@ -146,10 +182,16 @@ def main() -> int:
     df.loc[rekey_in_universe, "league_id"] = df.loc[rekey_in_universe, "_canon_lid"]
 
     if args.drop_out_of_universe:
-        out_mask = (~df["_canon_in_reg"]) & (df["_orig_lid"] != "")
-        # blank league_id rows are not league-axis dedupable here; leave them.
+        out_mask = compute_drop_out_of_universe_mask(is_rekey_candidate, df["_canon_in_reg"])
         n_drop = int(out_mask.sum())
-        logger.info("--drop-out-of-universe: removing %d out-of-universe rows", n_drop)
+        n_string_form_skipped = int((~df["_canon_in_reg"]).sum()) - n_drop
+        logger.info(
+            "--drop-out-of-universe: removing %d out-of-universe rekey-candidate rows "
+            "(skipping %d already-canonical-string-form rows outside this script's scope — "
+            "see the module docstring's 2026-08-03 near-miss note)",
+            n_drop,
+            n_string_form_skipped,
+        )
         df = df[~out_mask].copy()
 
     # DEDUP: collapse rows that now share the canonical dedup key. The consolidator
