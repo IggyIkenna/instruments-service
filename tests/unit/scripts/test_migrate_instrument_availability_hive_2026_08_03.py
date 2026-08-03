@@ -74,6 +74,34 @@ _SPORTS_LEAGUE_HIVE = (
     "instrument_availability/by_date/day=2026-08-02/pipeline_mode=batch_api_football/"
     "asset_group=sports/venue=API_FOOTBALL/league=ARGENTINA_PRIMERA_NACIONAL/instruments.parquet"
 )
+# Prediction canonical_question_group-BEFORE-day FLAT shape (todo 3 of
+# instrument_availability_hive_migration_unrecognized_shapes_and_content_mismatch_2026_08_03.md) --
+# group= BEFORE day=, confirmed live (last write 2026-07-22T00:37:29Z, not written since).
+_PRED_GROUP_FIRST_FLAT = (
+    "instrument_availability/by_date/canonical_question_group=BTC_UP_DOWN_HOURLY/"
+    "day=2026-07-13/venue=POLYMARKET/instruments.parquet"
+)
+_PRED_GROUP_FIRST_HIVE = (
+    "instrument_availability/by_date/day=2026-07-13/pipeline_mode=batch_polymarket_clob/"
+    "asset_group=prediction/venue=POLYMARKET/canonical_question_group=BTC_UP_DOWN_HOURLY/instruments.parquet"
+)
+_PRED_GROUP_FIRST_FLAT_KALSHI = (
+    "instrument_availability/by_date/canonical_question_group=OTHER/day=2026-07-13/venue=KALSHI/instruments.parquet"
+)
+# Prediction market_lifecycle legacy FLAT shape (same todo, adjacent finding) -- day=/group=/venue=
+# (venue third, not immediately after day=, so it never matched _FLAT_RE). Confirmed live, same
+# cutover timing as the shape above.
+_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT = (
+    "market_lifecycle/by_canonical_group/day=2026-07-22/group=BTC_UP_DOWN_DAILY/"
+    "venue=POLYMARKET/market_lifecycle.parquet"
+)
+_PRED_LIFECYCLE_DAY_GROUP_VENUE_HIVE = (
+    "market_lifecycle/by_canonical_group/day=2026-07-22/pipeline_mode=batch_polymarket_gamma_api/"
+    "asset_group=prediction/venue=POLYMARKET/group=BTC_UP_DOWN_DAILY/market_lifecycle.parquet"
+)
+_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT_KALSHI = (
+    "market_lifecycle/by_canonical_group/day=2026-07-22/group=OTHER/venue=KALSHI/market_lifecycle.parquet"
+)
 
 
 class TestHiveTargetFor:
@@ -143,6 +171,32 @@ class TestHiveTargetFor:
         # so hive_target_for must not (mis)recognize it under a different asset_group.
         assert _mod.hive_target_for(_SPORTS_LEAGUE_FLAT, "cefi") is None
 
+    def test_prediction_group_first_flat_maps_to_hive_with_trailing_group(self) -> None:
+        assert _mod.hive_target_for(_PRED_GROUP_FIRST_FLAT, "prediction") == _PRED_GROUP_FIRST_HIVE
+
+    def test_prediction_group_first_flat_kalshi_uses_kalshi_pipeline_mode(self) -> None:
+        result = _mod.hive_target_for(_PRED_GROUP_FIRST_FLAT_KALSHI, "prediction")
+        assert result is not None
+        assert "pipeline_mode=batch_kalshi/asset_group=prediction/venue=KALSHI" in result
+        assert result.endswith("canonical_question_group=OTHER/instruments.parquet")
+
+    def test_prediction_group_first_flat_not_recognized_for_other_asset_groups(self) -> None:
+        # canonical_question_group= is a prediction-only concept -- guard against misrecognition.
+        assert _mod.hive_target_for(_PRED_GROUP_FIRST_FLAT, "cefi") is None
+
+    def test_prediction_lifecycle_day_group_venue_flat_maps_to_hive_with_trailing_group(self) -> None:
+        result = _mod.hive_target_for(_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT, "prediction")
+        assert result == _PRED_LIFECYCLE_DAY_GROUP_VENUE_HIVE
+
+    def test_prediction_lifecycle_day_group_venue_flat_kalshi_uses_batch_instruments_service(self) -> None:
+        result = _mod.hive_target_for(_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT_KALSHI, "prediction")
+        assert result is not None
+        assert "pipeline_mode=batch_instruments_service/asset_group=prediction/venue=KALSHI" in result
+        assert result.endswith("group=OTHER/market_lifecycle.parquet")
+
+    def test_prediction_lifecycle_day_group_venue_flat_not_recognized_for_other_asset_groups(self) -> None:
+        assert _mod.hive_target_for(_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT, "cefi") is None
+
 
 class TestScan:
     def _mock_client(self, names: list[str]) -> MagicMock:
@@ -180,6 +234,23 @@ class TestScan:
         result = _mod.scan(client, "instruments-store-sports-prd", "sports")
         assert result.candidate_count == 1
         assert result.candidates[0] == (_SPORTS_LEAGUE_FLAT, _SPORTS_LEAGUE_HIVE)
+
+    def test_prediction_scan_recognizes_group_first_and_lifecycle_day_group_venue_candidates(self) -> None:
+        client = self._mock_client(
+            [
+                _PRED_GROUP_FIRST_FLAT,
+                _PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT,
+                _ALREADY_HIVE,
+                _UNRECOGNIZED,
+            ]
+        )
+        result = _mod.scan(client, "instruments-store-prediction-prd", "prediction")
+        assert result.candidate_count == 2
+        assert (_PRED_GROUP_FIRST_FLAT, _PRED_GROUP_FIRST_HIVE) in result.candidates
+        assert (
+            _PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT,
+            _PRED_LIFECYCLE_DAY_GROUP_VENUE_HIVE,
+        ) in result.candidates
 
 
 class TestProcessOneObject:
