@@ -16,12 +16,17 @@ Validates:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import contextlib
+import io
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from instruments_service.engine.orchestrator import (
     _ENTITY_NAME_TO_PIPELINE_MODE,
+    _read_per_league_entity_df,
     _resolve_sports_ref_blob,
     _sports_ref_canonical_blob_path,
     _sports_ref_legacy_blob_path,
@@ -315,3 +320,596 @@ class TestSourceDerivation:
     def test_open_meteo_source(self) -> None:
         """weather produces source='open_meteo'."""
         assert _sports_ref_source("weather") == "open_meteo"
+
+
+# ---------------------------------------------------------------------------
+# _read_per_league_entity_df
+# ---------------------------------------------------------------------------
+
+
+def _parquet_bytes(df: pd.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    df.to_parquet(buf)
+    return buf.getvalue()
+
+
+class TestReadPerLeagueEntityDf:
+    """Tests for the shared canonical-then-legacy per-league parquet reader.
+
+    Regression coverage for the 2026-07-08 stale-path fix: FIXTURES (and other
+    sports_reference entities) are written per-league under a canonical
+    ``pipeline_mode=`` hive segment
+    (``entity={entity}/league={L}/{entity}.parquet``) — a single bare-blob
+    probe at ``entity={entity}/{entity}.parquet`` (with or without
+    ``pipeline_mode=``) never finds this data. These tests assert the reader
+    lists the canonical PREFIX first (so it finds per-league objects), only
+    falls back to the legacy prefix when the canonical prefix is empty, and
+    does not silently swallow read/transport errors (callers that need to
+    distinguish "no data" from "read failed" rely on the exception
+    propagating).
+    """
+
+    def test_canonical_prefix_hit_skips_legacy_listing(self) -> None:
+        """Canonical (pipeline_mode=) prefix returning blobs must short-circuit — no legacy call."""
+        df = pd.DataFrame({"af_fixture_id": [1, 2], "venue_name": ["Anfield", "Anfield"]})
+        mock_blob = MagicMock()
+        mock_blob.name = "sports_reference/by_date/day=2026-07-04/pipeline_mode=batch_api_football/entity=fixtures/league=EPL/fixtures.parquet"
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = [mock_blob]
+        mock_storage.download_bytes.return_value = _parquet_bytes(df)
+
+        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+            result = _read_per_league_entity_df("bucket", "2026-07-04", "fixtures")
+
+        assert result is not None
+        assert len(result) == 2
+        # Only ONE list_blobs call — the canonical prefix already had data.
+        assert mock_storage.list_blobs.call_count == 1
+        called_prefix = mock_storage.list_blobs.call_args.kwargs["prefix"]
+        assert "pipeline_mode=batch_api_football" in called_prefix
+        assert (
+            called_prefix == "sports_reference/by_date/day=2026-07-04/pipeline_mode=batch_api_football/entity=fixtures/"
+        )
+
+    def test_legacy_fallback_when_canonical_prefix_empty(self) -> None:
+        """Canonical prefix returns nothing → falls back to the legacy (no pipeline_mode=) prefix."""
+        df = pd.DataFrame({"af_fixture_id": [1], "venue_name": ["Anfield"]})
+        mock_blob = MagicMock()
+        mock_blob.name = "sports_reference/by_date/day=2026-07-04/entity=fixtures/league=EPL/fixtures.parquet"
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = [[], [mock_blob]]
+        mock_storage.download_bytes.return_value = _parquet_bytes(df)
+
+        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+            result = _read_per_league_entity_df("bucket", "2026-07-04", "fixtures")
+
+        assert result is not None
+        assert len(result) == 1
+        assert mock_storage.list_blobs.call_count == 2
+        first_prefix = mock_storage.list_blobs.call_args_list[0].kwargs["prefix"]
+        second_prefix = mock_storage.list_blobs.call_args_list[1].kwargs["prefix"]
+        assert "pipeline_mode=" in first_prefix
+        assert "pipeline_mode=" not in second_prefix
+        assert second_prefix == "sports_reference/by_date/day=2026-07-04/entity=fixtures/"
+
+    def test_returns_none_when_no_blobs_under_either_prefix(self) -> None:
+        """Both prefixes empty → None (the legacy-bare-path stale-bug's original symptom)."""
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = []
+
+        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+            result = _read_per_league_entity_df("bucket", "2026-07-04", "fixtures")
+
+        assert result is None
+
+    def test_non_parquet_blobs_ignored(self) -> None:
+        """Blobs under the prefix that aren't .parquet are filtered out."""
+        mock_marker_blob = MagicMock()
+        mock_marker_blob.name = "sports_reference/by_date/day=2026-07-04/pipeline_mode=batch_api_football/entity=fixtures/league=EPL/_SUCCESS"
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = [mock_marker_blob]
+
+        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+            result = _read_per_league_entity_df("bucket", "2026-07-04", "fixtures")
+
+        assert result is None
+        mock_storage.download_bytes.assert_not_called()
+
+    def test_concatenates_multiple_per_league_blobs(self) -> None:
+        """Multiple per-league blobs under the same prefix are concatenated into one frame."""
+        df_epl = pd.DataFrame({"af_fixture_id": [1], "league_id": ["EPL"]})
+        df_bun = pd.DataFrame({"af_fixture_id": [2], "league_id": ["BUNDESLIGA"]})
+        blob_epl = MagicMock()
+        blob_epl.name = "sports_reference/by_date/day=2026-07-04/pipeline_mode=batch_api_football/entity=fixtures/league=EPL/fixtures.parquet"
+        blob_bun = MagicMock()
+        blob_bun.name = "sports_reference/by_date/day=2026-07-04/pipeline_mode=batch_api_football/entity=fixtures/league=BUNDESLIGA/fixtures.parquet"
+
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = [blob_epl, blob_bun]
+        mock_storage.download_bytes.side_effect = [_parquet_bytes(df_epl), _parquet_bytes(df_bun)]
+
+        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+            result = _read_per_league_entity_df("bucket", "2026-07-04", "fixtures")
+
+        assert result is not None
+        assert len(result) == 2
+        assert set(result["league_id"]) == {"EPL", "BUNDESLIGA"}
+
+    def test_league_id_injected_from_path_when_requested(self) -> None:
+        """inject_league_id=True populates a missing league_id column from the blob's league= segment."""
+        df = pd.DataFrame({"af_fixture_id": [1], "venue_name": ["Anfield"]})
+        mock_blob = MagicMock()
+        mock_blob.name = "sports_reference/by_date/day=2026-07-04/pipeline_mode=batch_api_football/entity=fixtures/league=EPL/fixtures.parquet"
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = [mock_blob]
+        mock_storage.download_bytes.return_value = _parquet_bytes(df)
+
+        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+            result = _read_per_league_entity_df("bucket", "2026-07-04", "fixtures", inject_league_id=True)
+
+        assert result is not None
+        assert "league_id" in result.columns
+        assert result["league_id"].iloc[0] == "EPL"
+
+    def test_league_id_not_injected_by_default(self) -> None:
+        """inject_league_id defaults to False — no league_id column added unless requested."""
+        df = pd.DataFrame({"af_fixture_id": [1], "venue_name": ["Anfield"]})
+        mock_blob = MagicMock()
+        mock_blob.name = "sports_reference/by_date/day=2026-07-04/pipeline_mode=batch_api_football/entity=fixtures/league=EPL/fixtures.parquet"
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.return_value = [mock_blob]
+        mock_storage.download_bytes.return_value = _parquet_bytes(df)
+
+        with patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage):
+            result = _read_per_league_entity_df("bucket", "2026-07-04", "fixtures")
+
+        assert result is not None
+        assert "league_id" not in result.columns
+
+    def test_transport_error_propagates_not_swallowed(self) -> None:
+        """Unlike most read-helpers in this module, errors are NOT swallowed here.
+
+        Callers that must distinguish "no data" (record_empty) from "read
+        failed" (record_failed) — e.g. ``_fetch_weather_data`` — rely on this
+        so a real GCS outage isn't silently mis-recorded as honest absence.
+        """
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = RuntimeError("GCS unreachable")
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            pytest.raises(RuntimeError, match="GCS unreachable"),
+        ):
+            _read_per_league_entity_df("bucket", "2026-07-04", "fixtures")
+
+
+# ---------------------------------------------------------------------------
+# _ensure_canonical_fixtures_for_override
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureCanonicalFixturesForOverride:
+    """Regression for the 2026-07-08 stale-bare-path cost bug.
+
+    ``_ensure_canonical_fixtures_for_override`` decides whether canonical
+    fixtures still need writing by checking for existing data. Before the
+    fix, that check probed a single bare
+    ``entity=fixtures/fixtures.parquet`` blob that no writer has populated
+    since the per-league migration — so the check always found nothing and
+    this function ALWAYS fell through to the old-path/API-fetch branch
+    (wasting 33 api-football calls per date) even when real per-league
+    fixtures were already captured. It now uses
+    ``_read_per_league_entity_df`` (canonical-then-legacy per-league prefix
+    listing) instead of a single bare-blob ``.exists()`` probe.
+    """
+
+    @pytest.mark.asyncio
+    async def test_skips_refetch_when_per_league_fixtures_already_exist(self) -> None:
+        """Real per-league data present → no old-path read, no API adapter call."""
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _ensure_canonical_fixtures_for_override,
+        )
+
+        existing_df = pd.DataFrame({"af_fixture_id": [1, 2], "timestamp": [1700000000, 1700003600]})
+        mock_storage = MagicMock()
+        mock_create_adapter = MagicMock()
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage)
+            )
+            stack.enter_context(
+                patch("instruments_service.engine.orchestrator._read_per_league_entity_df", return_value=existing_df)
+            )
+            stack.enter_context(
+                patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", mock_create_adapter)
+            )
+            stack.enter_context(patch("instruments_service.engine.orchestrator._write_fixtures_per_league"))
+            await _ensure_canonical_fixtures_for_override(date="2026-07-04", bucket="bucket", api_key="key")
+
+        # Real per-league data already exists — must NOT re-fetch from the API
+        # (the pre-fix bug re-fetched every time regardless).
+        mock_create_adapter.assert_not_called()
+        # And must not probe the old (pre-by_date-restructure) legacy path either.
+        mock_storage.bucket.return_value.blob.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetches_from_api_when_no_per_league_fixtures_exist(self) -> None:
+        """No real per-league data (genuine gap) → old-path fallback still runs, still fetches."""
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _ensure_canonical_fixtures_for_override,
+        )
+
+        mock_old_blob = MagicMock()
+        mock_old_blob.exists.return_value = False
+        mock_storage = MagicMock()
+        mock_storage.bucket.return_value.blob.return_value = mock_old_blob
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_fixtures_with_raw = AsyncMock(return_value=[])
+        mock_create_adapter = MagicMock(return_value=mock_adapter)
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage)
+            )
+            stack.enter_context(
+                patch("instruments_service.engine.orchestrator._read_per_league_entity_df", return_value=None)
+            )
+            stack.enter_context(
+                patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", mock_create_adapter)
+            )
+            await _ensure_canonical_fixtures_for_override(date="2026-07-04", bucket="bucket", api_key="key")
+
+        # Genuinely no per-league data → the old-path probe + API fallback still engage.
+        mock_storage.bucket.return_value.blob.assert_called_once()
+        mock_create_adapter.assert_called_once()
+        mock_adapter.get_fixtures_with_raw.assert_awaited_once_with("2026-07-04")
+
+    @pytest.mark.asyncio
+    async def test_old_path_hit_logs_greppable_legacy_marker(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Copying forward from the legacy flat path must log a distinct,
+        greppable LEGACY_FLAT_PATH_HIT marker — the instrumentation this
+        function's todo asked for (`sports_legacy_duplicate_triage_2026_07_22.md`
+        § Part 4 / `sports_satellite_ao_dispatch_batch2_2026_07_24.md`), since the
+        branch is a confirmed live reader (~478 of 28,100 post-floor rows have no
+        canonical twin at all), not a dead fallback that can be silently removed.
+        """
+        import logging
+
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _ensure_canonical_fixtures_for_override,
+        )
+
+        old_df = pd.DataFrame({"af_fixture_id": [1, 2], "timestamp": ["2026-07-04", "2026-07-04"]})
+        buf = io.BytesIO()
+        old_df.to_parquet(buf)
+
+        mock_old_blob = MagicMock()
+        mock_old_blob.exists.return_value = True  # old (legacy) path DOES exist
+        mock_storage = MagicMock()
+        mock_storage.bucket.return_value.blob.return_value = mock_old_blob
+        mock_storage.download_bytes.return_value = buf.getvalue()
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator._read_per_league_entity_df", return_value=None),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", MagicMock()),
+            patch("instruments_service.engine.orchestrator._write_fixtures_per_league", MagicMock()) as _write,
+        ):
+            await _ensure_canonical_fixtures_for_override(date="2026-07-04", bucket="bucket", api_key="key")
+
+        # Took the old-path-copy branch, not the API-fetch branch.
+        assert _write.call_args.kwargs.get("source_label") == "old-path-copy"
+        assert any("LEGACY_FLAT_PATH_HIT" in record.getMessage() for record in caplog.records), (
+            f"expected a LEGACY_FLAT_PATH_HIT warning, got: {[r.getMessage() for r in caplog.records]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# _write_per_fixture_entities — out-of-universe unmapped rows
+# ---------------------------------------------------------------------------
+
+
+class TestWritePerFixtureEntitiesOutOfUniverse:
+    """Regression: unmapped per-fixture enrichment rows are OUT-OF-UNIVERSE
+    fixtures, not a capture gap → must NOT be recorded as ``attempted_failed``
+    (``LEAGUE_MAP_INCOMPLETE``).
+
+    Determination (``sports_data_sources_canonical_completion`` 2026-07-16): the
+    enrichment TARGET (URDI ``get_fixtures(date=...)`` — no league filter) spans
+    the ENTIRE api_football league universe, while ``af_fid_to_league`` is built
+    only from the canonical-94 GCS fixtures map. So a completed fixture in one of
+    the 1,438 non-canonical leagues purged by
+    ``delete_noncanonical_sports_leagues_2026_06_25.py`` gets enriched but can
+    never map. The old ``record_failed(LEAGUE_MAP_INCOMPLETE)`` mis-classified
+    these deliberately-untracked leagues as a perpetual backfill target AND
+    minted a blank-league ``row_key={date,data_type}`` aggregate that no
+    per-league capture can ever supersede — so it sat ``attempted_failed``
+    forever. Correct behaviour: skip silently, mirroring the mapped-branch
+    ``_is_in_canonical_write_universe`` ``continue``.
+    """
+
+    def test_unmapped_rows_do_not_mint_league_map_incomplete_failure(self) -> None:
+        from datetime import UTC, datetime
+
+        from instruments_service.engine.orchestrator.sports_reference_core import (
+            _AfManifestHooks,
+        )
+        from instruments_service.engine.orchestrator.sports_reference_fixtures_write import (
+            _write_per_fixture_entities,
+        )
+
+        # Two enrichment rows: fixture 111 maps to an IN-universe league; fixture
+        # 999 is absent from the league map (out-of-universe by design).
+        entity_rows: dict[str, list[dict[str, object]]] = {
+            "fixture_events": [
+                {"af_fixture_id": 111, "minute": 12},
+                {"af_fixture_id": 999, "minute": 34},
+            ]
+        }
+        af_fid_to_league = {"111": "ENG_PREMIER_LEAGUE"}  # 999 intentionally absent
+
+        manifest = MagicMock()
+        hooks = _AfManifestHooks(
+            date="2026-07-04",
+            manifest=manifest,
+            attempt_ts=datetime(2026, 7, 4, tzinfo=UTC),
+            bucket="",
+        )
+        # Isolate the unit under test from the (separately-tested) empty-gap
+        # emission — it would otherwise iterate the real 94-league expected set.
+        hooks.emit_empty_gaps_for_entity = MagicMock()  # type: ignore[method-assign]
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "instruments_service.engine.orchestrator._is_in_canonical_write_universe",
+                    return_value=True,
+                )
+            )
+            stack.enter_context(patch("instruments_service.engine.orchestrator._gated_sink_write"))
+            stack.enter_context(patch("instruments_service.engine.orchestrator._sports_ref_sink_for"))
+            stack.enter_context(
+                patch(
+                    "instruments_service.engine.orchestrator._canonical_league_id",
+                    side_effect=lambda lid: str(lid),
+                )
+            )
+            _write_per_fixture_entities(
+                date="2026-07-04",
+                bucket="bucket",
+                hooks=hooks,
+                counts={},
+                entity_names=["fixture_events"],
+                entity_rows=entity_rows,
+                entity_failures={},
+                pre_captured_leagues={"fixture_events": set()},
+                af_fid_to_league=af_fid_to_league,
+                recovery_fixture_ids=None,
+            )
+
+        # The in-universe fixture (111) is still captured...
+        assert manifest.record_captured.called, "mapped in-universe row should be captured"
+        # ...and the unmapped fixture (999) must NOT mint a LEAGUE_MAP_INCOMPLETE
+        # failure (or any record_failed at all on this out-of-universe path).
+        for call in manifest.record_failed.call_args_list:
+            assert call.kwargs.get("error") != "LEAGUE_MAP_INCOMPLETE", (
+                "out-of-universe unmapped rows must not be recorded as attempted_failed"
+            )
+        manifest.record_failed.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _ensure_canonical_fixtures_for_override — redo_all (--force) MUST re-write
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureCanonicalFixturesRedoAll:
+    """The existence check must be overridable by ``--force`` (redo_all).
+
+    Regression pins for ``sports_features_layer_findings_sweep_2026_07_18`` § G:
+    the gate was existence-ONLY, so an already-captured date could never be
+    re-written and a WRITER fix could never reach historical data. Two full
+    backfill launches of ``--entity FIXTURES 2019-01-01..2026-07-17`` (the second
+    WITH ``--force``) wrote ZERO ``entity=fixtures`` objects — ``redo_all`` was
+    plumbed to the per-fixture enrichment entities but never to here.
+    """
+
+    @staticmethod
+    def _existing_canonical_df() -> pd.DataFrame:
+        # Presence of af_fixture_id is what trips the "already canonical" branch.
+        return pd.DataFrame({"af_fixture_id": [1, 2], "timestamp": ["2019-01-12", "2019-01-12"]})
+
+    @pytest.mark.asyncio
+    async def test_existing_canonical_skips_write_without_force(self) -> None:
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _ensure_canonical_fixtures_for_override,
+        )
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", MagicMock()),
+            patch(
+                "instruments_service.engine.orchestrator._read_per_league_entity_df",
+                MagicMock(return_value=self._existing_canonical_df()),
+            ),
+            patch("instruments_service.engine.orchestrator._write_fixtures_per_league", MagicMock()) as _write,
+        ):
+            await _ensure_canonical_fixtures_for_override(date="2019-01-12", bucket="b", api_key="k", redo_all=False)
+        assert _write.call_count == 0, "already-canonical date must not be rewritten without --force"
+
+    @pytest.mark.asyncio
+    async def test_force_rewrites_via_api_not_stale_old_path(self) -> None:
+        """--force must re-fetch through the CURRENT writer, never copy the old path.
+
+        The old-path parquet is pre-migration data from the OLD writer, so copying
+        it forward would re-materialise exactly the stale rows (e.g. blank ``round``)
+        that --force was passed to replace.
+        """
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _ensure_canonical_fixtures_for_override,
+        )
+
+        _storage = MagicMock()
+        _storage.bucket.return_value.blob.return_value.exists.return_value = True  # old path EXISTS
+        _adapter = MagicMock()
+        _adapter.get_fixtures_with_raw = AsyncMock(
+            return_value=[({"id": 1}, {"league": {"round": "Regular Season - 21"}})]
+        )
+
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", MagicMock(return_value=_storage)),
+            patch(
+                "instruments_service.engine.orchestrator._read_per_league_entity_df",
+                MagicMock(return_value=self._existing_canonical_df()),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.create_sports_reference_adapter",
+                MagicMock(return_value=_adapter),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._flatten_canonical_fixture_for_disk",
+                MagicMock(return_value={"af_fixture_id": 1, "timestamp": "2019-01-12", "round": "Regular Season - 21"}),
+            ),
+            patch("instruments_service.engine.orchestrator._sports_ref_sink_for", MagicMock()),
+            patch("instruments_service.engine.orchestrator._write_fixtures_per_league", MagicMock()) as _write,
+        ):
+            await _ensure_canonical_fixtures_for_override(date="2019-01-12", bucket="b", api_key="k", redo_all=True)
+
+        assert _write.call_count == 1, "--force must rewrite an already-canonical date"
+        # source_label proves it took the API branch, NOT the stale old-path copy.
+        assert _write.call_args.kwargs.get("source_label") == "api-fetch-override"
+
+
+class TestFixtureLeagueCanonicalisation:
+    """The AF-fixture -> league map must key on the CANONICAL registry slug.
+
+    ``fx.league.league_id`` comes from ``build_league_id(country, name)``, which falls
+    back to a bare ``_slug(name)`` when country is empty -- emitting raw display names
+    (``PREMIER_LEAGUE``) that no consumer joins on. Only the numeric ``api_football_id``
+    yields the canonical slug, and six raw names are ambiguous across two real leagues
+    each, so name-based resolution cannot be made correct.
+
+    Regression guard: the precedence used to be reversed (``league_id`` first), which made
+    the numeric branch dead code -- ``CanonicalLeague`` ALWAYS carries ``league_id``, so
+    the first branch always won. Measured 2026-07-20.
+    """
+
+    def test_numeric_api_football_id_wins_over_raw_league_id(self) -> None:
+        from unified_api_contracts.canonical.domain.sports.league_data import (
+            LEAGUE_REGISTRY,
+            get_league_by_api_football_id,
+        )
+
+        # Build the same map the orchestrator builds, then assert the numeric id resolves
+        # to the canonical slug even when the raw display name would disagree.
+        epl = get_league_by_api_football_id(39)
+        assert epl is not None, "api-football id 39 (Premier League) must be registered"
+        canonical = str(getattr(epl, "league_id", epl))
+        assert canonical in LEAGUE_REGISTRY, "resolution must land on a real registry key"
+        assert canonical == "EPL"
+        # The raw display-name form is what the OLD precedence produced -- it must NOT be
+        # what we key on, and it must not itself be a registry key.
+        assert "PREMIER_LEAGUE" not in LEAGUE_REGISTRY
+
+    def test_ambiguous_display_names_are_not_registry_keys(self) -> None:
+        """The six colliding raw names must never be usable as canonical keys."""
+        from unified_api_contracts.canonical.domain.sports.league_data import LEAGUE_REGISTRY
+
+        for raw in ("CHAMPIONSHIP", "PRIMERA_DIVISION", "SUPER_LEAGUE", "FIRST_DIVISION_A"):
+            assert raw not in LEAGUE_REGISTRY, f"{raw} is a raw display name, not a canonical slug"
+
+
+class TestResolveFixtureLeagueSlug:
+    """``_resolve_fixture_league_slug`` must resolve via the NUMERIC ``api_football_id``,
+    never the raw ``fx.league.league_id`` display-name form it originates from.
+    Companion to mtds@ad4f1872's ``TestOddsApiCanonicalLeagueId`` (same defect class,
+    same fixture-mapping precedence, different write path).
+
+    Regression guard (2026-07-25): the precedence flip shipped 2026-07-20
+    (``instruments-service@815ad06c3``) never actually activated -- ``CanonicalLeague``
+    did not carry an ``api_football_id`` attribute until unified-api-contracts added it
+    the same day as this test, so ``getattr(..., "api_football_id", None)`` was always
+    ``None`` and the numeric branch silently no-opped for every fixture. These tests
+    exercise the real orchestrator function (not just facts about the UAC registry, which
+    the two tests above already cover) so a future regression on the WIRING -- not just
+    the branch order -- would fail loudly.
+    """
+
+    def test_numeric_api_football_id_resolves_to_canonical_slug(self) -> None:
+        from unified_api_contracts.canonical.domain.sports.league_data import (
+            get_league_by_api_football_id,
+        )
+
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _resolve_fixture_league_slug,
+        )
+
+        epl = get_league_by_api_football_id(39)
+        assert epl is not None, "api-football id 39 (Premier League) must be registered"
+
+        fx = SimpleNamespace(league=SimpleNamespace(api_football_id=39, league_id="PREMIER_LEAGUE"))
+        resolved = _resolve_fixture_league_slug(fx, {39: epl.league_id})
+        assert resolved == "EPL"
+        # The raw display-name form is what a broken numeric branch falls back to --
+        # must NOT be what gets returned when the numeric id IS registered.
+        assert resolved != "PREMIER_LEAGUE"
+
+    def test_disambiguates_colliding_raw_names_by_numeric_id(self) -> None:
+        """The six known ambiguous raw provider names must resolve to DISTINCT
+        canonical slugs via the numeric id, never merge to one.
+
+        Measured 2026-07-20 (sports_league_id_namespace_migration_2026_07_20.md):
+        api-football emits the SAME bare display name for two real, unrelated
+        leagues in six cases. A name-keyed map cannot resolve these without
+        merging distinct leagues; only the numeric id -- in hand at fetch time
+        -- can. Uses each side's REGISTERED api_football_id (real registry data,
+        not synthesized), so this fails loudly if either side is ever
+        deregistered or its id changes without updating this test.
+        """
+        from unified_api_contracts.canonical.domain.sports.league_data import LEAGUE_REGISTRY
+
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _resolve_fixture_league_slug,
+        )
+
+        collisions: dict[str, tuple[str, str]] = {
+            "BUNDESLIGA": ("BUNDESLIGA", "AUSTRIAN_BUNDESLIGA"),
+            "SERIE_A": ("SERIE_A", "BRASILEIRAO"),
+            "SERIE_B": ("SERIE_B", "BRASILEIRAO_SERIE_B"),
+            "CHAMPIONSHIP": ("ENG_CHAMPIONSHIP", "SCOTTISH_CHAMPIONSHIP"),
+            "PRIMERA_DIVISION": ("ARGENTINA_PRIMERA", "CHILE_PRIMERA"),
+            "SUPER_LEAGUE": ("GREEK_SUPER_LEAGUE", "SWISS_SUPER_LEAGUE"),
+        }
+        for raw, (id_a, id_b) in collisions.items():
+            af_id_a = LEAGUE_REGISTRY[id_a].api_football_id
+            af_id_b = LEAGUE_REGISTRY[id_b].api_football_id
+            assert af_id_a is not None and af_id_b is not None, f"{id_a}/{id_b} must both carry an api_football_id"
+            af_map = {af_id_a: id_a, af_id_b: id_b}
+
+            fx_a = SimpleNamespace(league=SimpleNamespace(api_football_id=af_id_a, league_id=raw))
+            fx_b = SimpleNamespace(league=SimpleNamespace(api_football_id=af_id_b, league_id=raw))
+            resolved_a = _resolve_fixture_league_slug(fx_a, af_map)
+            resolved_b = _resolve_fixture_league_slug(fx_b, af_map)
+
+            assert resolved_a == id_a, f"raw {raw!r} af_id={af_id_a} must resolve to {id_a}, got {resolved_a}"
+            assert resolved_b == id_b, f"raw {raw!r} af_id={af_id_b} must resolve to {id_b}, got {resolved_b}"
+            assert resolved_a != resolved_b, f"raw {raw!r} MERGED {id_a} and {id_b} -- name-based resolution bug"
+
+    def test_unregistered_league_falls_back_to_raw_name(self) -> None:
+        """An unresolvable numeric id must not drop the fixture -- honest absence."""
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _resolve_fixture_league_slug,
+        )
+
+        fx = SimpleNamespace(league=SimpleNamespace(api_football_id=999_999_999, league_id="TOTALLY_MADE_UP_LEAGUE"))
+        assert _resolve_fixture_league_slug(fx, {}) == "TOTALLY_MADE_UP_LEAGUE"
+
+    def test_no_league_attribute_returns_none(self) -> None:
+        """A fixture with no ``league`` at all must not be mapped (dropped upstream)."""
+        from instruments_service.engine.orchestrator.sports_reference_fixtures import (
+            _resolve_fixture_league_slug,
+        )
+
+        assert _resolve_fixture_league_slug(SimpleNamespace(), {}) is None

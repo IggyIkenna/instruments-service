@@ -32,7 +32,6 @@ def _make_instrument(
         base_asset=base_asset,
         quote_asset=quote_asset,
         tick_size=Decimal("0.01"),
-        lot_size=Decimal("0.001"),
         contract_size=Decimal("1"),
         expiry=None,
         strike=None,
@@ -239,10 +238,13 @@ class TestUniswapV3Adapter:
             patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(pool_data)),
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 1
+        # 1 POOL + 2 SPOT_ASSET siblings (WETH + USDC, both address+decimals resolvable) — P4-B.
+        assert len(results) == 3
         assert results[0].instrument_type == InstrumentType.POOL
         assert results[0].base_asset == "WETH"
         assert results[0].quote_asset == "USDC"
+        spot_assets = [r for r in results if r.instrument_type == InstrumentType.SPOT_ASSET]
+        assert {r.base_asset for r in spot_assets} == {"WETH", "USDC"}
 
     @pytest.mark.asyncio
     async def test_get_instruments_empty_data_response(self) -> None:
@@ -338,7 +340,10 @@ class TestUniswapV3Adapter:
             }
         )
         assert result is not None
-        assert ":0" in result.instrument_key
+        # No real fee tier -> the fee segment is omitted entirely (target grammar's
+        # "[-FEE_TIER]" is optional), not a fabricated ":0"/"-0" placeholder.
+        assert result.instrument_key.endswith(":AAVE-ETH")
+        assert result.pool_fee_tier is None
 
     def test_log_fetch_error_classifies(self) -> None:
         from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
@@ -614,6 +619,9 @@ class TestUniswapV3Adapter:
             patch("aiohttp.ClientSession", return_value=mock_session_cm),
         ):
             results = await adapter.get_instruments()
+        # Algebra-fork fixture tokens carry no "id" (contract address) field — no
+        # resolvable on-chain address means no SPOT_ASSET sibling can construct
+        # (honest-absence, P4-B); count stays at the 1 POOL record.
         assert len(results) == 1
         assert results[0].base_asset == "UNI"
 
@@ -639,6 +647,124 @@ class TestUniswapV3Adapter:
             pytest.raises(ConnectionError),
         ):
             await adapter.get_instruments()
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_merges_major_asset_pools_below_cutoff(self) -> None:
+        """Bug fix 2026-07-08: a major-asset pool ranked below the TVL cutoff is still
+        captured via the supplementary token-address-direct query and merged into results
+        (not silently dropped by the TVL-rank-then-filter two-stage pipeline)."""
+        from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+
+        adapter = UniswapV3ReferenceDataAdapter(api_key="test-key", chain="ETHEREUM")
+        primary_pool = {
+            "id": "0xpool1",
+            "feeTier": "3000",
+            "token0": {"id": "0xt0", "symbol": "WETH", "name": "Wrapped Ether", "decimals": "18"},
+            "token1": {"id": "0xt1", "symbol": "USDC", "name": "USD Coin", "decimals": "6"},
+            "totalValueLockedUSD": "5000000",
+            "createdAtTimestamp": "1677000000",
+        }
+        # Below-cutoff major/major pool that only the supplementary query would find.
+        below_cutoff_pool = {
+            "id": "0xpool2",
+            "feeTier": "10000",
+            "token0": {"id": "0xt2", "symbol": "DAI", "name": "Dai Stablecoin", "decimals": "18"},
+            "token1": {"id": "0xt3", "symbol": "USDT", "name": "Tether", "decimals": "6"},
+            "totalValueLockedUSD": "0.0004",
+            "createdAtTimestamp": "1677000000",
+        }
+        call_count = 0
+
+        def mock_post_side_effect(*_args: object, **_kwargs: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            mock_r = AsyncMock()
+            mock_r.status = 200
+            mock_r.raise_for_status = MagicMock()
+            if call_count == 1:
+                mock_r.json = AsyncMock(return_value={"data": {"pools": [primary_pool]}})
+            else:
+                mock_r.json = AsyncMock(return_value={"data": {"pools": [below_cutoff_pool]}})
+            cm = MagicMock()
+            cm.__aenter__ = AsyncMock(return_value=mock_r)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            return cm
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(side_effect=mock_post_side_effect)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.defi.uniswap_v3.SUBGRAPH_IDS",
+                {"uniswap_v3": {"ETHEREUM": "test-subgraph-id"}},
+            ),
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+        ):
+            results = await adapter.get_instruments()
+
+        base_quote_pairs = {(r.base_asset, r.quote_asset) for r in results if r.instrument_type == InstrumentType.POOL}
+        assert ("WETH", "USDC") in base_quote_pairs
+        assert ("DAI", "USDT") in base_quote_pairs
+        # 2 POOLs + 4 SPOT_ASSET siblings (WETH/USDC/DAI/USDT, all address+decimals
+        # resolvable) — P4-B.
+        assert len(results) == 6
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_skips_major_asset_query_on_non_ethereum_chain(self) -> None:
+        """The major-asset address list is Ethereum-mainnet-derived — the supplementary
+        query must not fire for other chains (would silently query wrong-chain pools with
+        Ethereum addresses)."""
+        from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+
+        adapter = UniswapV3ReferenceDataAdapter(api_key="test-key", chain="ARBITRUM")
+        primary_pool = {
+            "id": "0xpool1",
+            "feeTier": "3000",
+            "token0": {"id": "0xt0", "symbol": "WETH", "name": "Wrapped Ether", "decimals": "18"},
+            "token1": {"id": "0xt1", "symbol": "USDC", "name": "USD Coin", "decimals": "6"},
+            "totalValueLockedUSD": "5000000",
+            "createdAtTimestamp": "1677000000",
+        }
+        mock_session_cm = _mock_aiohttp_session_post({"data": {"pools": [primary_pool]}})
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.defi.uniswap_v3.SUBGRAPH_IDS",
+                {"uniswap_v3": {"ARBITRUM": "test-subgraph-id"}},
+            ),
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+        ):
+            results = await adapter.get_instruments()
+
+        # 1 POOL + 2 SPOT_ASSET siblings (WETH + USDC) — P4-B. Sibling derivation is a
+        # pure in-memory step (reuses the pool record's already-resolved fields), so it
+        # does not add any network calls.
+        assert len(results) == 3
+        # Only the primary pagination call should have happened (single POST call captured
+        # by the shared mock session), not a second call for the major-asset query.
+        underlying_session = mock_session_cm.__aenter__.return_value
+        assert underlying_session.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_major_asset_pools_uses_lowercase_token_addresses(self) -> None:
+        """Regression guard: The Graph's `Bytes_in` filter is case-sensitive against the
+        lowercased addresses it stores internally — verified live against the production
+        gateway (checksummed input -> 0 pools; lowercased input -> hundreds of pools, same
+        subgraph, same call). The adapter must always lowercase before querying."""
+        from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+
+        adapter = UniswapV3ReferenceDataAdapter(api_key="test-key", chain="ETHEREUM")
+        mock_session_cm = _mock_aiohttp_session_post({"data": {"pools": []}})
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            await adapter._fetch_major_asset_pools("https://fake-url.com", None)
+
+        underlying_session = mock_session_cm.__aenter__.return_value
+        _call_args, call_kwargs = underlying_session.post.call_args
+        posted_tokens = call_kwargs["json"]["variables"]["tokens"]
+        assert posted_tokens, "expected a non-empty token address list"
+        assert all(t == t.lower() for t in posted_tokens)
 
 
 # ── RaydiumReferenceDataAdapter ───────────────────────────────────────────────
@@ -725,37 +851,102 @@ class TestRaydiumAdapter:
         ):
             await adapter.get_instruments()
 
-    def test_build_pool_record_missing_id(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_missing_id(self) -> None:
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        assert adapter._build_pool_record({}) is None
+        assert await adapter._build_pool_record({}) is None
 
-    def test_build_pool_record_missing_symbols(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_missing_symbols(self) -> None:
+        """Both mints blank AND unresolvable (no address at all) -> honest None."""
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        assert adapter._build_pool_record({"id": "x", "mintA": {}, "mintB": {}}) is None
+        assert await adapter._build_pool_record({"id": "x", "mintA": {}, "mintB": {}}) is None
 
-    def test_extract_token_symbol_dict(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_canonical_id_is_3seg_pool_type_folded(self) -> None:
+        """Wave B: canonical id is the 3-seg glued form (pool-type hyphen-glued, NOT a 4th colon).
+
+        Two-id model: canonical_instrument_id is symbolic (2 colons); the machine id
+        (raw_symbol / pool_address) is the case-preserved Solana pool address.
+        """
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        result = adapter._extract_token_symbol({"mintA": {"symbol": "sol"}}, "mintA")
+        address = "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2"
+        record = await adapter._build_pool_record(
+            {
+                "id": address,
+                "mintA": {"symbol": "SOL", "decimals": 9},
+                "mintB": {"symbol": "USDC", "decimals": 6},
+                "tvl": 50000,
+                "openTime": "1677000000",
+                "type": "Standard",
+            }
+        )
+        assert record is not None
+        assert record.canonical_instrument_id == "RAYDIUM-SOLANA:POOL:SOL-USDC-Standard"
+        assert record.instrument_key == record.canonical_instrument_id
+        assert record.canonical_instrument_id.count(":") == 2  # 3-seg, never a 4th colon
+        # machine id stays the case-preserved Solana address (NOT lowercased / colon-split)
+        assert record.raw_symbol == address
+        assert record.pool_address == address
+
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_dict(self) -> None:
+        from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
+
+        adapter = RaydiumReferenceDataAdapter()
+        result = await adapter._extract_token_symbol({"mintA": {"symbol": "sol"}}, "mintA")
         assert result == "SOL"
 
-    def test_extract_token_symbol_flat_field(self) -> None:
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_flat_field(self) -> None:
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        result = adapter._extract_token_symbol({"mintSymbolA": "USDC"}, "mintA")
+        result = await adapter._extract_token_symbol({"mintSymbolA": "USDC"}, "mintA")
         assert result == "USDC"
 
-    def test_extract_token_symbol_missing(self) -> None:
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_missing(self) -> None:
+        """No nested dict, no flat field -> no address to resolve either -> "" (honest)."""
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        result = adapter._extract_token_symbol({}, "mintA")
+        result = await adapter._extract_token_symbol({}, "mintA")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_blank_resolver_succeeds(self) -> None:
+        """Nested dict present, symbol blank, mint address resolves via UTL resolver (NEW behavior)."""
+        from instruments_service.reference_data.adapters.defi import raydium as raydium_module
+        from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
+
+        adapter = RaydiumReferenceDataAdapter()
+        with patch.object(
+            raydium_module,
+            "resolve_solana_token_symbol",
+            AsyncMock(return_value="jup"),
+        ) as mock_resolve:
+            result = await adapter._extract_token_symbol(
+                {"mintA": {"address": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"}}, "mintA"
+            )
+        assert result == "JUP"
+        mock_resolve.assert_awaited_once_with("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN")
+
+    @pytest.mark.asyncio
+    async def test_extract_token_symbol_blank_resolver_also_fails(self) -> None:
+        """Nested dict present, symbol blank, resolver ALSO returns None -> honest "" (no fabrication)."""
+        from instruments_service.reference_data.adapters.defi import raydium as raydium_module
+        from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
+
+        adapter = RaydiumReferenceDataAdapter()
+        with patch.object(raydium_module, "resolve_solana_token_symbol", AsyncMock(return_value=None)):
+            result = await adapter._extract_token_symbol({"mintA": {"address": "SomeRuggedMint111"}}, "mintA")
         assert result == ""
 
     def test_classify_raydium_error(self) -> None:
@@ -772,11 +963,19 @@ class TestRaydiumAdapter:
         from instruments_service.reference_data.adapters.defi.raydium import RaydiumReferenceDataAdapter
 
         adapter = RaydiumReferenceDataAdapter()
-        record = adapter._build_historical_pool_record("pool_123abc")
+        pool_id = "9Wm8Ugm2c1Cq4pFY8kAY8SjZ6d3ppM8ZpvVmwHkQ7Bx"
+        record = adapter._build_historical_pool_record(pool_id)
         assert record is not None
         assert record.status == InstrumentStatus.DELISTED
         assert record.base_asset == "UNKNOWN"
+        # Wave B: 3-seg glued form — the historical marker is hyphen-glued into the symbol,
+        # NEVER a 4th colon; the Solana pool_id is case-preserved as symbol + machine id.
+        assert record.instrument_key == f"RAYDIUM-SOLANA:POOL:{pool_id}-Historical"
+        assert record.instrument_key.count(":") == 2
         assert "Historical" in record.instrument_key
+        assert record.canonical_instrument_id == record.instrument_key
+        assert record.raw_symbol == pool_id
+        assert record.pool_address == pool_id
 
     @pytest.mark.asyncio
     async def test_get_instruments_with_historical(self) -> None:
@@ -1043,12 +1242,201 @@ class TestAaveV3Adapter:
 
         adapter = AaveV3ReferenceDataAdapter(chain="OPTIMISM")
         results = adapter._get_optimism_reserves_static()
-        assert all(r.instrument_type == InstrumentType.LENDING for r in results)
+        assert all(r.instrument_type in (InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN) for r in results)
         # base_asset (not raw_symbol which is the contract address) carries the token symbol
         assets = {r.base_asset for r in results}
         assert "USDC" in assets
         assert "WETH" in assets
         assert "RETH" in assets
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_plasma_routes_to_rpc_discovery(self) -> None:
+        """PLASMA chain must route to RPC discovery, never the subgraph (no subgraph exists)."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="PLASMA")
+        with (
+            patch.object(adapter, "_get_plasma_reserves_via_rpc", new=AsyncMock(return_value=[])) as mock_rpc,
+            patch.object(adapter, "_resolve_api_url") as mock_url,
+        ):
+            results = await adapter.get_instruments()
+        mock_rpc.assert_called_once()
+        mock_url.assert_not_called()
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_plasma_reserves_via_rpc_no_key_returns_empty(self) -> None:
+        """No Alchemy key available: honest empty (not attempted), matches the no-subgraph-API-key convention."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="PLASMA")
+        with patch(
+            "instruments_service.reference_data.adapters.defi.aave_v3.resolve_plasma_alchemy_key",
+            return_value=None,
+        ):
+            results = await adapter._get_plasma_reserves_via_rpc()
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_plasma_reserves_via_rpc_total_failure_raises(self) -> None:
+        """A total getAllReservesTokens fetch failure is a TRANSIENT FETCH FAILURE, not an empty universe."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="PLASMA")
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.resolve_plasma_alchemy_key",
+                return_value="test-key",
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.resolve_rpc_url",
+                return_value="https://plasma-mainnet.g.alchemy.com/v2/test-key",
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.discover_plasma_reserves_sync",
+                side_effect=ValueError("rpc boom"),
+            ),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter._get_plasma_reserves_via_rpc()
+
+    @pytest.mark.asyncio
+    async def test_get_plasma_reserves_via_rpc_success_builds_instruments(self) -> None:
+        """Happy path: RPC discovery -> InstrumentRecords, A_TOKEN always + DEBT_TOKEN when borrowingEnabled."""
+        from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+
+        adapter = AaveV3ReferenceDataAdapter(chain="PLASMA")
+        fake_reserves: list[dict[str, object]] = [
+            {
+                "id": "0xunderlying1",
+                "symbol": "USDT0",
+                "underlyingAsset": "0xUnderlying1",
+                "decimals": 6,
+                "borrowingEnabled": True,
+                "aToken": {"id": "0xAToken1"},
+            },
+            {
+                "id": "0xunderlying2",
+                "symbol": "WXPL",
+                "underlyingAsset": "0xUnderlying2",
+                "decimals": 18,
+                "borrowingEnabled": False,
+                "aToken": {"id": "0xAToken2"},
+            },
+        ]
+
+        async def _fake_resolver(*_args: object, **_kwargs: object) -> dict[str, object]:
+            return {}
+
+        with (
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.resolve_plasma_alchemy_key",
+                return_value="test-key",
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.resolve_rpc_url",
+                return_value="https://plasma-mainnet.g.alchemy.com/v2/test-key",
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.discover_plasma_reserves_sync",
+                return_value=fake_reserves,
+            ),
+            patch(
+                "instruments_service.reference_data.adapters.defi.aave_v3.batch_resolve_evm_creation_timestamps",
+                new=_fake_resolver,
+            ),
+        ):
+            results = await adapter._get_plasma_reserves_via_rpc()
+
+        # USDT0 borrowingEnabled=True -> A_TOKEN + DEBT_TOKEN; WXPL borrowingEnabled=False -> A_TOKEN only.
+        assert len(results) == 3
+        assert all(r.venue == "AAVE_V3-PLASMA" for r in results)
+        by_symbol: dict[str, set[str]] = {}
+        for r in results:
+            by_symbol.setdefault(r.base_asset, set()).add(r.instrument_type.value)
+        assert by_symbol["USDT0"] == {"A_TOKEN", "DEBT_TOKEN"}
+        assert by_symbol["WXPL"] == {"A_TOKEN"}
+
+    def test_discover_plasma_reserves_sync_builds_reserve_dicts(self) -> None:
+        """Direct unit test of the sync RPC-walk helper against a mocked web3.Web3."""
+        from instruments_service.reference_data.adapters.defi import aave_v3 as aave_v3_module
+
+        mock_provider = MagicMock()
+        mock_provider.functions.getAllReservesTokens.return_value.call.return_value = [
+            ("USDT0", "0xunderlying1"),
+        ]
+        mock_provider.functions.getReserveTokensAddresses.return_value.call.return_value = (
+            "0xAToken1",
+            "0xStableDebt1",
+            "0xVariableDebt1",
+        )
+        mock_provider.functions.getReserveConfigurationData.return_value.call.return_value = (
+            6,  # decimals
+            7500,  # ltv
+            8000,  # liquidationThreshold
+            10500,  # liquidationBonus
+            1000,  # reserveFactor
+            True,  # usageAsCollateralEnabled
+            True,  # borrowingEnabled
+            False,  # stableBorrowRateEnabled
+            True,  # isActive
+            False,  # isFrozen
+        )
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_provider
+
+        mock_web3_cls = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider.return_value = MagicMock()
+        mock_web3_cls.to_checksum_address.side_effect = lambda addr: addr
+
+        with patch("web3.Web3", mock_web3_cls):
+            results = aave_v3_module.discover_plasma_reserves_sync("https://fake-rpc")
+
+        assert len(results) == 1
+        reserve = results[0]
+        assert reserve["symbol"] == "USDT0"
+        assert reserve["decimals"] == 6
+        assert reserve["borrowingEnabled"] is True
+        assert reserve["aToken"] == {"id": "0xAToken1"}
+
+    def test_discover_plasma_reserves_sync_skips_inactive_reserve(self) -> None:
+        """An inactive/frozen reserve is excluded, not surfaced as a phantom instrument."""
+        from instruments_service.reference_data.adapters.defi import aave_v3 as aave_v3_module
+
+        mock_provider = MagicMock()
+        mock_provider.functions.getAllReservesTokens.return_value.call.return_value = [
+            ("DEADCOIN", "0xdead"),
+        ]
+        mock_provider.functions.getReserveTokensAddresses.return_value.call.return_value = (
+            "0xAToken1",
+            "0xStableDebt1",
+            "0xVariableDebt1",
+        )
+        mock_provider.functions.getReserveConfigurationData.return_value.call.return_value = (
+            18,
+            0,
+            0,
+            0,
+            0,
+            False,
+            False,
+            False,
+            False,  # isActive=False
+            False,
+        )
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_provider
+
+        mock_web3_cls = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider.return_value = MagicMock()
+        mock_web3_cls.to_checksum_address.side_effect = lambda addr: addr
+
+        with patch("web3.Web3", mock_web3_cls):
+            results = aave_v3_module.discover_plasma_reserves_sync("https://fake-rpc")
+
+        assert results == []
 
 
 # ── UniswapV4ReferenceDataAdapter ─────────────────────────────────────────────
@@ -1261,10 +1649,12 @@ class TestCompoundV3Adapter:
             ),
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 2  # SUPPLY + BORROW
+        assert len(results) == 2  # A_TOKEN (supply) + DEBT_TOKEN (borrow)
         keys = [r.instrument_key for r in results]
-        assert any("SUPPLY" in k for k in keys)
-        assert any("BORROW" in k for k in keys)
+        assert any(":A_TOKEN:" in k for k in keys)
+        assert any(":DEBT_TOKEN:" in k for k in keys)
+        types = {r.instrument_type for r in results}
+        assert types == {InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN}
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
@@ -1405,24 +1795,28 @@ class TestOrcaAdapter:
         ):
             await adapter.get_instruments()
 
-    def test_build_pool_record_no_address(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_no_address(self) -> None:
         from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
 
         adapter = OrcaReferenceDataAdapter()
-        assert adapter._build_pool_record({}) is None
+        assert await adapter._build_pool_record({}) is None
 
-    def test_build_pool_record_non_dict_tokens(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_non_dict_tokens(self) -> None:
         from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
 
         adapter = OrcaReferenceDataAdapter()
-        result = adapter._build_pool_record({"address": "addr", "tokenA": "bad", "tokenB": "bad"})
+        result = await adapter._build_pool_record({"address": "addr", "tokenA": "bad", "tokenB": "bad"})
         assert result is None
 
-    def test_build_pool_record_empty_symbols(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_pool_record_empty_symbols(self) -> None:
+        """Both tokens blank AND unresolvable (no mint field at all) -> honest None."""
         from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
 
         adapter = OrcaReferenceDataAdapter()
-        result = adapter._build_pool_record(
+        result = await adapter._build_pool_record(
             {
                 "address": "addr",
                 "tokenA": {"symbol": ""},
@@ -1430,6 +1824,72 @@ class TestOrcaAdapter:
             }
         )
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_build_pool_record_blank_symbol_resolver_succeeds(self) -> None:
+        """tokenA has a mint but no symbol; the UTL Solana resolver names it (NEW behavior)."""
+        from instruments_service.reference_data.adapters.defi import orca as orca_module
+        from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
+
+        adapter = OrcaReferenceDataAdapter()
+        with patch.object(orca_module, "resolve_solana_token_symbol", AsyncMock(return_value="jup")) as mock_resolve:
+            result = await adapter._build_pool_record(
+                {
+                    "address": "addr",
+                    "tokenA": {"mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", "decimals": 6},
+                    "tokenB": {"symbol": "USDC", "decimals": 6},
+                    "tvl": 50000,
+                }
+            )
+        assert result is not None
+        assert result.base_asset == "JUP" or result.quote_asset == "JUP"
+        mock_resolve.assert_awaited_once_with("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN")
+
+    @pytest.mark.asyncio
+    async def test_build_pool_record_blank_symbol_resolver_also_fails(self) -> None:
+        """tokenA has a mint but no symbol AND the resolver has no answer -> honest None."""
+        from instruments_service.reference_data.adapters.defi import orca as orca_module
+        from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
+
+        adapter = OrcaReferenceDataAdapter()
+        with patch.object(orca_module, "resolve_solana_token_symbol", AsyncMock(return_value=None)):
+            result = await adapter._build_pool_record(
+                {
+                    "address": "addr",
+                    "tokenA": {"mint": "SomeRuggedMint111", "decimals": 6},
+                    "tokenB": {"symbol": "USDC", "decimals": 6},
+                    "tvl": 50000,
+                }
+            )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_build_pool_record_canonical_id_is_3seg_tick_spacing_folded(self) -> None:
+        """Wave B: canonical id is the 3-seg glued form (tick-spacing hyphen-glued, NOT a 4th colon).
+
+        Two-id model: canonical_instrument_id is symbolic (2 colons); the machine id
+        (raw_symbol / pool_address) is the case-preserved Solana pool address.
+        """
+        from instruments_service.reference_data.adapters.defi.orca import OrcaReferenceDataAdapter
+
+        adapter = OrcaReferenceDataAdapter()
+        address = "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ"
+        record = await adapter._build_pool_record(
+            {
+                "address": address,
+                "tokenA": {"symbol": "SOL", "decimals": 9},
+                "tokenB": {"symbol": "USDC", "decimals": 6},
+                "tvl": 50000,
+                "tickSpacing": 64,
+            }
+        )
+        assert record is not None
+        assert record.canonical_instrument_id == "ORCA-SOLANA:POOL:SOL-USDC-WP64"
+        assert record.instrument_key == record.canonical_instrument_id
+        assert record.canonical_instrument_id.count(":") == 2  # 3-seg, never a 4th colon
+        # machine id stays the case-preserved Solana address (NOT lowercased / colon-split)
+        assert record.raw_symbol == address
+        assert record.pool_address == address
 
     def test_classify_orca_error(self) -> None:
         from instruments_service.reference_data.adapters.defi.orca import _classify_orca_error
@@ -1457,200 +1917,6 @@ class TestOrcaAdapter:
         with patch.object(adapter, "_get_with_retry", return_value={"whirlpools": ["not_a_dict"]}):
             results = await adapter.get_instruments()
         assert results == []
-
-
-# ── DriftReferenceDataAdapter ─────────────────────────────────────────────────
-
-
-_PERP_TS_SNIPPET = """\
-export const MainnetPerpMarkets: PerpMarketConfig[] = [
-  {
-    symbol: 'SOL-PERP',
-    baseAssetSymbol: 'SOL',
-    marketIndex: 0,
-  },
-  {
-    symbol: 'BTC-PERP',
-    baseAssetSymbol: 'BTC',
-    marketIndex: 1,
-    marketStatus: MarketStatus.DELISTED,
-  },
-  {
-    symbol: 'ETH-PERP',
-    baseAssetSymbol: 'ETH',
-    marketIndex: 2,
-  },
-];
-"""
-
-_SPOT_TS_SNIPPET = """\
-export const MainnetSpotMarkets: SpotMarketConfig[] = [
-  {
-    symbol: 'USDC',
-    marketIndex: 0,
-  },
-  {
-    symbol: 'SOL',
-    marketIndex: 1,
-  },
-];
-"""
-
-
-class TestDriftAdapter:
-    def test_venue_property(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        assert adapter.venue == "DRIFT-SOLANA"
-
-    @pytest.mark.asyncio
-    async def test_get_instruments_success(self) -> None:
-        from unittest.mock import AsyncMock
-
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        active_markets = [
-            {"symbol": "SOL-PERP", "baseAsset": "SOL", "marketType": "perp", "status": "active"},
-            {"symbol": "SOL", "baseAsset": "SOL", "marketType": "spot", "status": "active"},
-            {"symbol": "BTC-PERP", "baseAsset": "BTC", "marketType": "perp", "status": "delisted"},
-        ]
-        with patch.object(adapter, "_fetch_all_markets", new=AsyncMock(return_value=active_markets)):
-            results = await adapter.get_instruments()
-        assert len(results) == 2  # Only active markets
-
-    @pytest.mark.asyncio
-    async def test_get_instruments_filter_perp_only(self) -> None:
-        from unittest.mock import AsyncMock
-
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        active_markets = [
-            {"symbol": "SOL-PERP", "baseAsset": "SOL", "marketType": "perp", "status": "active"},
-            {"symbol": "SOL", "baseAsset": "SOL", "marketType": "spot", "status": "active"},
-        ]
-        with patch.object(adapter, "_fetch_all_markets", new=AsyncMock(return_value=active_markets)):
-            results = await adapter.get_instruments(instrument_type=InstrumentType.PERPETUAL)
-        assert len(results) == 1
-        assert results[0].instrument_type == InstrumentType.PERPETUAL
-
-    @pytest.mark.asyncio
-    async def test_get_instruments_http_error(self) -> None:
-        from unittest.mock import AsyncMock
-
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        # _fetch_ts_content converts aiohttp.ClientError → ConnectionError; mock
-        # _fetch_all_markets (the aggregate caller) to surface that as ConnectionError.
-        adapter = DriftReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_fetch_all_markets", new=AsyncMock(side_effect=ConnectionError("fail"))),
-            patch("instruments_service.reference_data.adapters.defi.drift.log_event"),
-            pytest.raises(ConnectionError),
-        ):
-            await adapter.get_instruments()
-
-    def test_parse_ts_perp_markets_active(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        markets = DriftReferenceDataAdapter._parse_ts_markets(_PERP_TS_SNIPPET, "perp")
-        active = [m for m in markets if m["status"] == "active"]
-        delisted = [m for m in markets if m["status"] == "delisted"]
-        assert len(active) == 2
-        assert len(delisted) == 1
-        sol = next(m for m in active if m["symbol"] == "SOL-PERP")
-        assert sol["baseAsset"] == "SOL"
-        assert sol["marketType"] == "perp"
-
-    def test_parse_ts_spot_markets(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        markets = DriftReferenceDataAdapter._parse_ts_markets(_SPOT_TS_SNIPPET, "spot")
-        assert len(markets) == 2
-        usdc = next(m for m in markets if m["symbol"] == "USDC")
-        assert usdc["baseAsset"] == "USDC"
-        assert usdc["marketType"] == "spot"
-
-    def test_parse_ts_missing_section_returns_empty(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        markets = DriftReferenceDataAdapter._parse_ts_markets("// empty file", "perp")
-        assert markets == []
-
-    @pytest.mark.asyncio
-    async def test_fetch_all_markets_uses_sdk_urls(self) -> None:
-        """_fetch_all_markets fetches perp + spot TS and combines the results."""
-        from unittest.mock import AsyncMock
-
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        with patch.object(
-            adapter, "_fetch_ts_content", new=AsyncMock(side_effect=[_PERP_TS_SNIPPET, _SPOT_TS_SNIPPET])
-        ):
-            markets = await adapter._fetch_all_markets()
-        assert len(markets) == 5  # 3 perp + 2 spot
-        types = {m["marketType"] for m in markets}
-        assert types == {"perp", "spot"}
-
-    def test_build_perp_record_empty_symbol(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        assert adapter._build_perp_record({"symbol": ""}) is None
-
-    def test_build_perp_record_valid(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        record = adapter._build_perp_record({"symbol": "SOL-PERP", "baseAsset": "SOL"})
-        assert record is not None
-        assert record.base_asset == "SOL"
-        assert record.quote_asset == "USDC"
-        assert record.instrument_type == InstrumentType.PERPETUAL
-
-    def test_build_perp_record_no_dash(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        record = adapter._build_perp_record({"symbol": "BTC"})
-        assert record is not None
-        assert record.base_asset == "BTC"
-
-    def test_build_spot_record_valid(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        record = adapter._build_spot_record({"symbol": "SOL", "baseAsset": "SOL"})
-        assert record is not None
-        assert record.instrument_type == InstrumentType.SPOT_PAIR
-
-    def test_build_spot_record_empty_base(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        record = adapter._build_spot_record({"symbol": "", "baseAsset": ""})
-        assert record is None
-
-    def test_classify_drift_error(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import _classify_drift_error
-
-        assert _classify_drift_error(Exception("msg"), status=429) == "RATE_LIMIT"
-        assert _classify_drift_error(Exception("msg"), status=503) == "503"
-        assert _classify_drift_error(Exception("msg"), status=500) == "500"
-        assert _classify_drift_error(Exception("unknown")) == "UNKNOWN"
-
-    def test_log_fetch_error(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        with patch("instruments_service.reference_data.adapters.defi.drift.log_event"):
-            adapter._log_fetch_error(aiohttp.ClientError("error"), "test_endpoint")
-
-
-# ── KaminoReferenceDataAdapter ────────────────────────────────────────────────
 
 
 class TestKaminoAdapter:
@@ -1798,8 +2064,11 @@ class TestUniswapV2Adapter:
             patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(pairs_data)),
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 1
+        # 1 POOL + 2 SPOT_ASSET siblings (WETH + USDC, both address+decimals resolvable) — P4-B.
+        assert len(results) == 3
         assert results[0].base_asset == "WETH"
+        spot_assets = [r for r in results if r.instrument_type == InstrumentType.SPOT_ASSET]
+        assert {r.base_asset for r in spot_assets} == {"WETH", "USDC"}
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
@@ -1932,9 +2201,16 @@ class TestMorphoAdapter:
         }
         with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(market_data)):
             results = await adapter.get_instruments()
-        assert len(results) == 1
+        # One market → one A_TOKEN (supply) + one DEBT_TOKEN (borrow) pair.
+        assert len(results) == 2
+        assert results[0].instrument_type == InstrumentType.A_TOKEN
         assert results[0].base_asset == "WETH"
         assert results[0].quote_asset == "USDC"
+        assert results[0].instrument_key == "MORPHO-ETHEREUM:A_TOKEN:AWETH-USDC-0xmarket"
+        assert results[1].instrument_type == InstrumentType.DEBT_TOKEN
+        assert results[1].base_asset == "WETH"
+        assert results[1].quote_asset == "USDC"
+        assert results[1].instrument_key == "MORPHO-ETHEREUM:DEBT_TOKEN:DEBTWETH-USDC-0xmarket"
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
@@ -1983,46 +2259,55 @@ class TestMorphoAdapter:
         ):
             await adapter.get_instruments()
 
-    def test_market_to_record_valid(self) -> None:
+    def test_market_to_records_valid(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
-        record = MorphoReferenceDataAdapter._market_to_record(
+        records = MorphoReferenceDataAdapter._market_to_records(
             {
                 "marketId": "0xkey123456",
                 "loanAsset": {"symbol": "USDC", "decimals": 6},
                 "collateralAsset": {"symbol": "WETH", "decimals": 18},
             },
             "MORPHO-ETHEREUM",
+            "ETHEREUM",
         )
-        assert record is not None
-        assert record.base_asset == "WETH"
+        # A_TOKEN (supply) + DEBT_TOKEN (borrow) pair for the one market.
+        assert len(records) == 2
+        a_token, debt_token = records
+        assert a_token.instrument_type == InstrumentType.A_TOKEN
+        assert a_token.base_asset == "WETH"
+        assert debt_token.instrument_type == InstrumentType.DEBT_TOKEN
+        assert debt_token.base_asset == "WETH"
 
-    def test_market_to_record_missing_loan_asset(self) -> None:
+    def test_market_to_records_missing_loan_asset(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
-        record = MorphoReferenceDataAdapter._market_to_record(
+        records = MorphoReferenceDataAdapter._market_to_records(
             {"marketId": "0xkey", "loanAsset": "not_dict", "collateralAsset": {"symbol": "WETH"}},
             "MORPHO-ETHEREUM",
+            "ETHEREUM",
         )
-        assert record is None
+        assert records == []
 
-    def test_market_to_record_missing_collateral_symbol(self) -> None:
+    def test_market_to_records_missing_collateral_symbol(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
-        record = MorphoReferenceDataAdapter._market_to_record(
+        records = MorphoReferenceDataAdapter._market_to_records(
             {"marketId": "0xkey", "loanAsset": {"symbol": "USDC"}, "collateralAsset": {"symbol": ""}},
             "MORPHO-ETHEREUM",
+            "ETHEREUM",
         )
-        assert record is None
+        assert records == []
 
-    def test_market_to_record_missing_key(self) -> None:
+    def test_market_to_records_missing_key(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
-        record = MorphoReferenceDataAdapter._market_to_record(
+        records = MorphoReferenceDataAdapter._market_to_records(
             {"marketId": "", "loanAsset": {"symbol": "USDC"}, "collateralAsset": {"symbol": "WETH"}},
             "MORPHO-ETHEREUM",
+            "ETHEREUM",
         )
-        assert record is None
+        assert records == []
 
 
 # ── BalancerReferenceDataAdapter ──────────────────────────────────────────────
@@ -2097,11 +2382,12 @@ class TestBalancerAdapter:
             results = await adapter.get_instruments()
         assert results == []
 
-    def test_pool_to_record_valid(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_valid(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        record = adapter._pool_to_record(
+        record = await adapter._pool_to_record(
             {
                 "address": "0xaddr",
                 "name": "Test Pool",
@@ -2115,29 +2401,33 @@ class TestBalancerAdapter:
         assert record is not None
         assert record.underlying == "Test Pool"
 
-    def test_pool_to_record_missing_address(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_missing_address(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        assert adapter._pool_to_record({"poolTokens": []}) is None
+        assert await adapter._pool_to_record({"poolTokens": []}) is None
 
-    def test_pool_to_record_too_few_tokens(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_too_few_tokens(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        assert adapter._pool_to_record({"address": "0x1", "poolTokens": [{"symbol": "WETH"}]}) is None
+        assert await adapter._pool_to_record({"address": "0x1", "poolTokens": [{"symbol": "WETH"}]}) is None
 
-    def test_pool_to_record_not_list_tokens(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_not_list_tokens(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        assert adapter._pool_to_record({"address": "0x1", "poolTokens": "bad"}) is None
+        assert await adapter._pool_to_record({"address": "0x1", "poolTokens": "bad"}) is None
 
-    def test_pool_to_record_no_name(self) -> None:
+    @pytest.mark.asyncio
+    async def test_pool_to_record_no_name(self) -> None:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        record = adapter._pool_to_record(
+        record = await adapter._pool_to_record(
             {
                 "address": "0xaddr",
                 "name": "",
@@ -2149,6 +2439,101 @@ class TestBalancerAdapter:
         )
         assert record is not None
         assert record.underlying is None
+
+    @pytest.mark.asyncio
+    async def test_pool_to_record_blank_symbol_resolver_succeeds(self) -> None:
+        """A pool token has an address but no symbol; the UTL EVM resolver names it (NEW behavior)."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+        from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
+
+        adapter = BalancerReferenceDataAdapter(chain="ethereum")
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value="weth")) as mock_resolve:
+            record = await adapter._pool_to_record(
+                {
+                    "address": "0xaddr",
+                    "name": "Test Pool",
+                    "poolTokens": [
+                        {"address": "0xt0000000000000000000000000000000000000", "decimals": "18"},
+                        {"address": "0xt1", "symbol": "USDC", "decimals": "6"},
+                    ],
+                    "createTime": 1677000000,
+                }
+            )
+        assert record is not None
+        assert record.base_asset == "WETH"
+        assert record.quote_asset == "USDC"
+        mock_resolve.assert_awaited_once_with("ETHEREUM", "0xt0000000000000000000000000000000000000")
+
+    @pytest.mark.asyncio
+    async def test_pool_to_record_blank_symbol_resolver_also_fails(self) -> None:
+        """A pool token has an address but no symbol AND the resolver has no answer -> honest UNKNOWN."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+        from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
+
+        adapter = BalancerReferenceDataAdapter(chain="ethereum")
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value=None)):
+            record = await adapter._pool_to_record(
+                {
+                    "address": "0xaddr",
+                    "name": "Test Pool",
+                    "poolTokens": [
+                        {"address": "0xrugged", "decimals": "18"},
+                        {"address": "0xt1", "symbol": "USDC", "decimals": "6"},
+                    ],
+                    "createTime": 1677000000,
+                }
+            )
+        assert record is not None
+        assert record.base_asset == "UNKNOWN"
+        assert record.quote_asset == "USDC"
+
+    @pytest.mark.asyncio
+    async def test_pool_to_record_colon_laden_symbol_resolved_on_chain(self) -> None:
+        """A malformed subgraph symbol carrying ':' (real live-data finding, 2026-07-21) is
+        NOT trusted verbatim -- it would crash UAC's build_instrument_id (its own id delimiter)
+        -- so it is treated like a blank symbol and resolved on-chain instead."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+        from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
+
+        adapter = BalancerReferenceDataAdapter(chain="ethereum")
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value="dai")) as mock_resolve:
+            record = await adapter._pool_to_record(
+                {
+                    "address": "0xaddr",
+                    "name": "Test Pool",
+                    "poolTokens": [
+                        {"address": "0xdai", "symbol": "DAI-UYYVDAI:1:2023-5-21", "decimals": "18"},
+                        {"address": "0xt1", "symbol": "USDC", "decimals": "6"},
+                    ],
+                    "createTime": 1677000000,
+                }
+            )
+        assert record is not None
+        assert record.base_asset == "DAI"
+        mock_resolve.assert_awaited_once_with("ETHEREUM", "0xdai")
+
+    @pytest.mark.asyncio
+    async def test_pool_to_record_colon_laden_symbol_resolver_also_fails(self) -> None:
+        """Colon-laden symbol AND the resolver has no answer -> honest UNKNOWN, never the raw
+        malformed string (which would crash the canonical-id builder downstream)."""
+        from instruments_service.reference_data.adapters.defi import balancer as balancer_module
+        from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
+
+        adapter = BalancerReferenceDataAdapter(chain="ethereum")
+        with patch.object(balancer_module, "resolve_evm_token_symbol", AsyncMock(return_value=None)):
+            record = await adapter._pool_to_record(
+                {
+                    "address": "0xaddr",
+                    "name": "Test Pool",
+                    "poolTokens": [
+                        {"address": "0xdai", "symbol": "DAI-UYYVDAI:1:2023-5-21", "decimals": "18"},
+                        {"address": "0xt1", "symbol": "USDC", "decimals": "6"},
+                    ],
+                    "createTime": 1677000000,
+                }
+            )
+        assert record is not None
+        assert record.base_asset == "UNKNOWN"
 
 
 # ── MarinadeReferenceDataAdapter ──────────────────────────────────────────────
@@ -2276,8 +2661,15 @@ class TestCurveAdapter:
         }
         with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(pool_data)):
             results = await adapter.get_instruments()
-        assert len(results) == 1
+        # 1 POOL + 2 SPOT_ASSET siblings (DAI + USDC, both address+decimals resolvable) — P4-B.
+        assert len(results) == 3
         assert results[0].underlying == "3pool"
+        spot_assets = [r for r in results if r.instrument_type == InstrumentType.SPOT_ASSET]
+        assert {r.base_asset for r in spot_assets} == {"DAI", "USDC"}
+        assert all(r.venue == results[0].venue for r in spot_assets)
+        dai_spot = next(r for r in spot_assets if r.base_asset == "DAI")
+        assert dai_spot.base_asset_contract_address == "0xdai"
+        assert dai_spot.base_asset_decimals == 18
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
@@ -2433,8 +2825,10 @@ class TestFluidAdapter:
             return_value={},
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 6  # 6 curated markets
-        assert all(r.instrument_type == InstrumentType.LENDING for r in results)
+        # 6 curated markets, each an A_TOKEN (supply) + DEBT_TOKEN (borrow) pair.
+        assert len(results) == 12
+        assert all(r.instrument_type in (InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN) for r in results)
+        assert {r.instrument_type for r in results} == {InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN}
 
     @pytest.mark.asyncio
     async def test_get_instruments_with_creation_timestamps(self) -> None:
@@ -2447,11 +2841,12 @@ class TestFluidAdapter:
             return_value=ts_map,
         ):
             results = await adapter.get_instruments()
-        assert len(results) == 6
-        # First market has vault address matching our mock
+        assert len(results) == 12
+        # First market has vault address matching our mock — its A_TOKEN + DEBT_TOKEN pair
+        # both inherit the resolved creation timestamp.
         eth_usdc = [r for r in results if r.base_asset == "ETH" and r.quote_asset == "USDC"]
-        assert len(eth_usdc) == 1
-        assert eth_usdc[0].available_from_datetime == datetime(2024, 10, 1, tzinfo=UTC)
+        assert len(eth_usdc) == 2
+        assert all(r.available_from_datetime == datetime(2024, 10, 1, tzinfo=UTC) for r in eth_usdc)
 
 
 # ── EigenLayerReferenceDataAdapter ────────────────────────────────────────────
@@ -2480,7 +2875,8 @@ class TestEigenLayerAdapter:
         results = await adapter.get_instruments()
         assert len(results) == 1
         assert results[0].base_asset == "EIGEN"
-        assert results[0].instrument_type == InstrumentType.SPOT_PAIR
+        # Single on-chain governance token → SPOT_ASSET (operator ruling 2026-07-18).
+        assert results[0].instrument_type == InstrumentType.SPOT_ASSET
 
     @pytest.mark.asyncio
     async def test_get_instruments_governance_token_type(self) -> None:
@@ -2544,14 +2940,16 @@ class TestLidoAdapter:
         symbols = {r.instrument_key.split(":")[-1] for r in results}
         assert "STETH" in symbols
         assert "WSTETH" in symbols
-        assert all(r.instrument_type == InstrumentType.YIELD_BEARING for r in results)
+        # 2026-07-08: field fixed to match the `:LST:` key segment (key/field consistency
+        # fix, same class as PERP-vs-PERPETUAL — see lido.py's module docstring).
+        assert all(r.instrument_type == InstrumentType.LST for r in results)
 
     @pytest.mark.asyncio
     async def test_get_instruments_yield_bearing_type(self) -> None:
         from instruments_service.reference_data.adapters.defi.lido import LidoReferenceDataAdapter
 
         adapter = LidoReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type="yield_bearing")
+        results = await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
         assert len(results) == 2
 
     @pytest.mark.asyncio
@@ -2600,18 +2998,37 @@ class TestEtherFiAdapter:
 
         adapter = EtherFiReferenceDataAdapter()
         results = await adapter.get_instruments()
-        assert len(results) == 1
-        assert results[0].instrument_type == InstrumentType.YIELD_BEARING
+        # 1 RESTAKING + 1 SPOT_ASSET sibling (weETH itself — P4-B) = 2.
+        assert len(results) == 2
+        # Operator decision 2026-07-20/22 (distinct_values_noncanonical_audit_2026_07_20.md):
+        # weETH is a liquid RESTAKING token, not a plain LST — see etherfi.py docstring.
+        assert results[0].instrument_type == InstrumentType.RESTAKING
         assert results[0].base_asset == "ETH"
         assert "WEETH" in results[0].instrument_key
+        spot_asset = next(r for r in results if r.instrument_type == InstrumentType.SPOT_ASSET)
+        # The SPOT_ASSET sibling names the actual on-chain receipt token (WEETH),
+        # not the "ETH" economic-peg label the primary LST record carries.
+        assert spot_asset.base_asset == "WEETH"
+        assert spot_asset.base_asset_contract_address == results[0].base_asset_contract_address
+        assert spot_asset.base_asset_decimals == 18
 
     @pytest.mark.asyncio
     async def test_get_instruments_yield_bearing_type(self) -> None:
         from instruments_service.reference_data.adapters.defi.etherfi import EtherFiReferenceDataAdapter
 
         adapter = EtherFiReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type="yield_bearing")
-        assert len(results) == 1
+        results = await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_restaking_type(self) -> None:
+        """RESTAKING is weETH's real canonical type (2026-07-20/22 reclassification) —
+        a caller filtering on it must not be rejected."""
+        from instruments_service.reference_data.adapters.defi.etherfi import EtherFiReferenceDataAdapter
+
+        adapter = EtherFiReferenceDataAdapter()
+        results = await adapter.get_instruments(instrument_type=InstrumentType.RESTAKING)
+        assert len(results) == 2
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
@@ -2661,7 +3078,8 @@ class TestEthFiGovernanceAdapter:
         results = await adapter.get_instruments()
         assert len(results) == 1
         assert results[0].base_asset == "ETHFI"
-        assert results[0].instrument_type == InstrumentType.SPOT_PAIR
+        # Single on-chain governance token → SPOT_ASSET (operator ruling 2026-07-18).
+        assert results[0].instrument_type == InstrumentType.SPOT_ASSET
 
     @pytest.mark.asyncio
     async def test_get_instruments_governance_token_type(self) -> None:
@@ -2730,7 +3148,7 @@ class TestEthenaAdapter:
         from instruments_service.reference_data.adapters.defi.ethena import EthenaReferenceDataAdapter
 
         adapter = EthenaReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type="yield_bearing")
+        results = await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
         assert len(results) == 1
 
     @pytest.mark.asyncio
@@ -2776,10 +3194,9 @@ class TestErrorClassifiers:
 
         assert _classify_orca_error(Exception("internal server error")) == "500"
 
-    def test_drift_server_500(self) -> None:
-        from instruments_service.reference_data.adapters.defi.drift import _classify_drift_error
-
-        assert _classify_drift_error(Exception("500 error"), status=500) == "500"
+    # test_drift_server_500 removed 2026-07-16 (operator ruling: all Solana
+    # perp DEXes dropped except Jupiter, not integrated — drift.py adapter
+    # deleted in the same landing).
 
     def test_kamino_rate_in_message(self) -> None:
         from instruments_service.reference_data.adapters.defi.kamino import _classify_kamino_error
@@ -2825,22 +3242,9 @@ class TestRuntimeErrorPaths:
         ):
             await adapter.get_instruments()
 
-    @pytest.mark.asyncio
-    async def test_drift_runtime_error(self) -> None:
-        from unittest.mock import AsyncMock
-
-        from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
-
-        adapter = DriftReferenceDataAdapter()
-        with (
-            patch.object(
-                adapter,
-                "_fetch_all_markets",
-                new=AsyncMock(side_effect=RuntimeError("all retries failed")),
-            ),
-            pytest.raises(RuntimeError, match="all retries failed"),
-        ):
-            await adapter.get_instruments()
+    # test_drift_runtime_error removed 2026-07-16 (operator ruling: all
+    # Solana perp DEXes dropped except Jupiter, not integrated — drift.py
+    # adapter deleted in the same landing).
 
     @pytest.mark.asyncio
     async def test_kamino_runtime_error(self) -> None:
@@ -2950,8 +3354,11 @@ class TestTimestampResolution:
 
         adapter = KaminoReferenceDataAdapter()
         strategies = [{"address": "vault_1", "status": "LIVE", "tokenAMint": "SOL", "tokenBMint": "USDC"}]
-        # Use a timestamp EARLIER than the Kamino deploy floor date so the RPC result replaces it
-        resolved_ts = datetime(2023, 1, 1, tzinfo=UTC)
+        # Use a timestamp EARLIER than the Kamino deploy floor date so the RPC result
+        # replaces it. The floor is now UAC venue_launch_dates["KAMINO-SOLANA"] =
+        # 2022-08-24 (real Kamino mainnet launch, threaded 2026-07-18) — previously
+        # the module-level floor was the stale local-fallback 2024-01-01.
+        resolved_ts = datetime(2022, 6, 1, tzinfo=UTC)
         with (
             patch.object(adapter, "_get_with_retry", return_value=strategies),
             patch.object(adapter, "_resolve_symbol", side_effect=lambda m: m),
@@ -2974,25 +3381,6 @@ class TestRestAdapterHonestAbsenceA8b:
     legitimately-empty response (bare [] OR {"<key>": []})."""
 
     @pytest.mark.asyncio
-    async def test_flash_trade_missing_key_raises(self) -> None:
-        from instruments_service.reference_data.adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
-
-        adapter = FlashTradeReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_get_with_retry", return_value={"error": "boom"}),
-            pytest.raises(ConnectionError),
-        ):
-            await adapter._fetch_perp_markets()
-
-    @pytest.mark.asyncio
-    async def test_flash_trade_empty_list_is_legit_empty(self) -> None:
-        from instruments_service.reference_data.adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
-
-        adapter = FlashTradeReferenceDataAdapter()
-        with patch.object(adapter, "_get_with_retry", return_value=[]):
-            assert await adapter._fetch_perp_markets() == []
-
-    @pytest.mark.asyncio
     async def test_lifinity_missing_key_raises(self) -> None:
         from instruments_service.reference_data.adapters.defi.lifinity import LifinityReferenceDataAdapter
 
@@ -3010,17 +3398,6 @@ class TestRestAdapterHonestAbsenceA8b:
         adapter = LifinityReferenceDataAdapter()
         with patch.object(adapter, "_get_with_retry", return_value={"pools": []}):
             assert await adapter._fetch_pools() == []
-
-    @pytest.mark.asyncio
-    async def test_mango_missing_key_raises(self) -> None:
-        from instruments_service.reference_data.adapters.defi.mango import MangoReferenceDataAdapter
-
-        adapter = MangoReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_get_with_retry", return_value={"other": "data"}),
-            pytest.raises(ConnectionError),
-        ):
-            await adapter._fetch_perp_markets()
 
     @pytest.mark.asyncio
     async def test_meteora_missing_key_raises(self) -> None:
@@ -3043,25 +3420,6 @@ class TestRestAdapterHonestAbsenceA8b:
             pytest.raises(ConnectionError),
         ):
             await adapter._fetch_markets()
-
-    @pytest.mark.asyncio
-    async def test_zeta_missing_key_raises(self) -> None:
-        from instruments_service.reference_data.adapters.defi.zeta import ZetaReferenceDataAdapter
-
-        adapter = ZetaReferenceDataAdapter()
-        with (
-            patch.object(adapter, "_get_with_retry", return_value={"other": "data"}),
-            pytest.raises(ConnectionError),
-        ):
-            await adapter._fetch_perp_markets()
-
-    @pytest.mark.asyncio
-    async def test_zeta_empty_markets_key_is_legit_empty(self) -> None:
-        from instruments_service.reference_data.adapters.defi.zeta import ZetaReferenceDataAdapter
-
-        adapter = ZetaReferenceDataAdapter()
-        with patch.object(adapter, "_get_with_retry", return_value={"markets": []}):
-            assert await adapter._fetch_perp_markets() == []
 
 
 # ── A8b: Uniswap V3 cascade-aware honest absence ──────────────────────────────

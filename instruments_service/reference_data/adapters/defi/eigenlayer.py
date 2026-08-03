@@ -4,6 +4,19 @@ Discovers the EIGEN token on Ethereum mainnet. EIGEN is the governance and resta
 token of the EigenLayer protocol. It is staked on EigenLayer and earns weekly rewards
 from AVS operators.
 
+Returned as InstrumentRecord with instrument_type=SPOT_ASSET — EIGEN is a SINGLE
+on-chain governance token (its data need is oracle-price / transfer / governance),
+NOT a two-token quoted market, so it is a `SPOT_ASSET`, not a `SPOT_PAIR`
+(operator ruling 2026-07-18, defi_consolidated_closeout_2026_07_18.md
+"SPOT_ASSET vs SPOT_PAIR vs POOL": for asset_group=defi a `SPOT_PAIR` REQUIRES a
+two-token `BASE-QUOTE` symbol; a single on-chain token is a `SPOT_ASSET`).
+Routed through `build_canonical_instrument_id` so the emitted `instrument_key`
+TYPE segment is correct AT MINT TIME (`EIGENLAYER-ETHEREUM:SPOT_ASSET:EIGEN`) —
+the UAC entry point now hard-rejects a single-token `SPOT_PAIR`. The
+`get_instruments` type-filter guard accepts the adapter's own
+`InstrumentType.SPOT_ASSET` value (plus the legacy
+`"GOVERNANCE_TOKEN"`/`"governance_token"` back-compat strings).
+
 Contract address: see ``_EIGEN_ADDRESS`` below (EIGEN on Ethereum mainnet; Etherscan-verified).
 Reference: https://docs.eigenlayer.xyz/eigenlayer/restaking-guides/restaking-user-guide
 """
@@ -12,6 +25,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry.endpoints import BASE_URLS
 
@@ -82,7 +96,7 @@ class EigenLayerReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return EIGEN governance token as an instrument record."""
-        if instrument_type not in (None, "GOVERNANCE_TOKEN", "governance_token"):
+        if instrument_type not in (None, InstrumentType.SPOT_ASSET, "GOVERNANCE_TOKEN", "governance_token"):
             return []
 
         results: list[InstrumentRecord] = []
@@ -93,12 +107,18 @@ class EigenLayerReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
+            instrument_key = build_canonical_instrument_id(
+                AssetGroup.DEFI, venue_tag, InstrumentType.SPOT_ASSET, symbol, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:GOVERNANCE_TOKEN:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
-                    instrument_type=InstrumentType.SPOT_PAIR,
+                    instrument_type=InstrumentType.SPOT_ASSET,
                     base_asset=symbol,
                     quote_asset=underlying,
                     tick_size=Decimal("0.000001"),

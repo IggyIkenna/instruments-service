@@ -4,7 +4,8 @@ Discovers Compound V3 lending markets across Ethereum, Arbitrum, Base, Polygon,
 Optimism, and Scroll. Each Comet market has a single base asset (e.g. USDC) that
 can be supplied and borrowed, with multiple collateral assets.
 
-Markets are returned as InstrumentRecord with instrument_type="LENDING".
+Markets are returned as two InstrumentRecords per market: instrument_type=A_TOKEN
+(supply side) and instrument_type=DEBT_TOKEN (borrow side).
 
 Data source: The Graph (Messari Compound V3 subgraph).
 Reference: https://docs.compound.finance/
@@ -17,6 +18,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import get_subgraph_id
 from unified_trading_library import log_event
 
@@ -109,7 +111,7 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Compound V3 lending markets as instruments."""
-        if instrument_type not in (None, "lending_market"):
+        if instrument_type not in (None, InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN):
             return []
 
         url = self._resolve_api_url()
@@ -237,7 +239,6 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": market_name or str(market_id),
-            "instrument_type": InstrumentType.LENDING,
             "base_asset": sym_upper,
             "quote_asset": "",
             "tick_size": Decimal("0.000001"),
@@ -256,20 +257,38 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             "base_asset_symbol_onchain": symbol or None,
         }
 
-        # Supply instrument (lend base asset)
+        # Supply instrument (lend base asset). Key segment + instrument_type both
+        # canonicalized to A_TOKEN/DEBT_TOKEN (2026-07-13, defi_lending_atoken_
+        # debttoken_instrument_split_2026_07_07.md) — previously the key used an
+        # ad hoc `:SUPPLY:`/`:BORROW:` segment (not a real InstrumentType member,
+        # a real UnknownInstrumentTypeError risk had the key ever reached
+        # InstrumentKey.from_string()) while the field was the unrelated, shared
+        # `LENDING` value. Both now agree, matching the AAVE_V3/SPARK pattern.
         supply_symbol = f"C{sym_upper}"
+        supply_instrument_key = build_instrument_id(venue_tag, InstrumentType.A_TOKEN, supply_symbol, passthrough=True)
         results = [
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:SUPPLY:{supply_symbol}",
+                instrument_key=supply_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=supply_instrument_key,
+                instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             )
         ]
 
         # Borrow instrument (borrow base asset against collateral)
         borrow_symbol = f"BORROW{sym_upper}"
+        borrow_instrument_key = build_instrument_id(
+            venue_tag, InstrumentType.DEBT_TOKEN, borrow_symbol, passthrough=True
+        )
         results.append(
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:BORROW:{borrow_symbol}",
+                instrument_key=borrow_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=borrow_instrument_key,
+                instrument_type=InstrumentType.DEBT_TOKEN,
                 **base_kwargs,
             )
         )

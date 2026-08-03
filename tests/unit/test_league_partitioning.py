@@ -4,7 +4,7 @@ Phase 2A: Verifies that:
   - Sports fixtures are grouped by league_id and written per-league
   - ManifestWriter.add() is called with league_id for sports fixtures
   - League filter (--league CLI arg) restricts processing to specified leagues
-  - Empty fixture markers are written per prediction league
+  - Empty fixture markers are written per expected api_football league
   - Reference data (teams, standings) is partitioned by league
   - process_instruments wires league_filter for sports zero-fixture path
 """
@@ -22,6 +22,20 @@ from unified_api_contracts.internal import InstrumentRecord
 
 from instruments_service.engine.orchestrator import process_instruments
 from instruments_service.engine.urdi_reference_provider import VenueFetchResult
+
+
+def _league_defs(*league_ids: str) -> list[object]:
+    """Real UAC league definitions for the given ids (2026-07-14: the
+    zero-fixture marker denominator is ``get_expected_leagues_for_source``,
+    the full api_football write universe — not the retired
+    ``get_all_prediction_league_ids`` 33-league Prediction tier)."""
+    from unified_api_contracts import get_expected_leagues_for_source
+
+    wanted = set(league_ids)
+    subset = [lg for lg in get_expected_leagues_for_source("api_football") if lg.league_id in wanted]
+    assert {lg.league_id for lg in subset} == wanted, f"missing league defs for {wanted}"
+    return subset
+
 
 # ---------------------------------------------------------------------------
 # Fixture write: groupby league_id extracted from instrument_key
@@ -81,7 +95,7 @@ class TestManifestLeagueId:
             mock_manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=row_count,
-                data_type="FIXTURES",
+                data_type="FIXTURES_SCHEDULE",
                 league_id=league_id,
             )
 
@@ -92,14 +106,14 @@ class TestManifestLeagueId:
         assert calls[0] == call(
             processing_date=date_type.fromisoformat(date),
             row_count=5,
-            data_type="FIXTURES",
+            data_type="FIXTURES_SCHEDULE",
             league_id="EPL",
         )
         # Second call: BUNDESLIGA
         assert calls[1] == call(
             processing_date=date_type.fromisoformat(date),
             row_count=3,
-            data_type="FIXTURES",
+            data_type="FIXTURES_SCHEDULE",
             league_id="BUNDESLIGA",
         )
 
@@ -130,7 +144,7 @@ class TestEmptyFixtureMarkers:
             mock_manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=0,
-                data_type="FIXTURES",
+                data_type="FIXTURES_SCHEDULE",
                 league_id=league_id,
             )
 
@@ -262,7 +276,7 @@ class TestOrchestratorSportsLeaguePartitioning:
 
     @pytest.mark.asyncio
     async def test_zero_fixtures_writes_per_league_empty_markers(self) -> None:
-        """Sports zero-fixture path writes ``record_empty`` per prediction league.
+        """Sports zero-fixture path writes ``record_empty`` per expected league.
 
         Honest-coverage rule (CLAUDE.md "4 pillars" #1): zero-fixture days
         emit ``record_empty`` markers, NOT ``add(row_count=0)`` and NOT a
@@ -295,8 +309,12 @@ class TestOrchestratorSportsLeaguePartitioning:
             ),
             patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
             patch(
-                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
-                return_value=["EPL", "BUNDESLIGA"],
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=_league_defs("EPL", "BUNDESLIGA"),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._list_present_parquet_leagues",
+                return_value=set(),
             ),
         ):
             result = await process_instruments("2026-04-12", ["SPORTS"])
@@ -310,7 +328,7 @@ class TestOrchestratorSportsLeaguePartitioning:
         league_ids = {c.kwargs["row_key"]["league_id"] for c in empty_calls}
         data_types = {c.kwargs["row_key"]["data_type"] for c in empty_calls}
         assert league_ids == {"EPL", "BUNDESLIGA"}
-        assert "FIXTURES" in data_types
+        assert "FIXTURES_SCHEDULE" in data_types
 
     @pytest.mark.asyncio
     async def test_zero_fixtures_with_league_filter(self) -> None:
@@ -339,6 +357,10 @@ class TestOrchestratorSportsLeaguePartitioning:
                 return_value=(False, [], ["API_FOOTBALL"]),
             ),
             patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
+            patch(
+                "instruments_service.engine.orchestrator._list_present_parquet_leagues",
+                return_value=set(),
+            ),
         ):
             # Pass league_filter=["EPL"] — should only emit 1 record_empty
             result = await process_instruments("2026-04-12", ["SPORTS"], league_filter=["EPL"])
@@ -348,7 +370,8 @@ class TestOrchestratorSportsLeaguePartitioning:
         epl_empty_calls = [
             c
             for c in mock_manifest_instance.record_empty.call_args_list
-            if c.kwargs["row_key"].get("league_id") == "EPL" and c.kwargs["row_key"].get("data_type") == "FIXTURES"
+            if c.kwargs["row_key"].get("league_id") == "EPL"
+            and c.kwargs["row_key"].get("data_type") == "FIXTURES_SCHEDULE"
         ]
         assert len(epl_empty_calls) >= 1
 
@@ -368,8 +391,8 @@ class TestOrchestratorSportsLeaguePartitioning:
         with (
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_cls),
             patch(
-                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
-                return_value=["EPL", "BUNDESLIGA"],
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=_league_defs("EPL", "BUNDESLIGA"),
             ),
         ):
             _zero_sports_empty_fixture_markers(
@@ -382,7 +405,7 @@ class TestOrchestratorSportsLeaguePartitioning:
         assert mock_manifest.record_empty.call_count == 0
         failed_calls = mock_manifest.record_failed.call_args_list
         assert len(failed_calls) == 2
-        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES" for c in failed_calls)
+        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES_SCHEDULE" for c in failed_calls)
         mock_manifest.write.assert_called_once()
 
     def test_zero_sports_markers_clean_empty_records_empty(self) -> None:
@@ -400,8 +423,12 @@ class TestOrchestratorSportsLeaguePartitioning:
         with (
             patch("instruments_service.engine.orchestrator.ManifestWriter", mock_cls),
             patch(
-                "instruments_service.engine.orchestrator.get_all_prediction_league_ids",
-                return_value=["EPL", "BUNDESLIGA"],
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=_league_defs("EPL", "BUNDESLIGA"),
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._list_present_parquet_leagues",
+                return_value=set(),
             ),
         ):
             _zero_sports_empty_fixture_markers(
@@ -414,7 +441,7 @@ class TestOrchestratorSportsLeaguePartitioning:
         assert mock_manifest.record_failed.call_count == 0
         empty_calls = mock_manifest.record_empty.call_args_list
         assert len(empty_calls) == 2
-        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES" for c in empty_calls)
+        assert all(c.kwargs["row_key"]["data_type"] == "FIXTURES_SCHEDULE" for c in empty_calls)
         mock_manifest.write.assert_called_once()
 
     @pytest.mark.asyncio

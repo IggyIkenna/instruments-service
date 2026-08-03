@@ -16,6 +16,7 @@ from unified_api_contracts.registry import NO_ADAPTER_YET, VENUE_TO_ADAPTER_KEY
 from instruments_service.reference_data.factory import (
     ADAPTER_DATA_SOURCES,
     _adapter_pool,
+    _resolve_tardis_exchanges_for_venue,
     _run_refdata_preflight,
     clear_adapter_pool,
     create_reference_data_adapter,
@@ -135,6 +136,16 @@ class TestFactoryDefiChainParsing:
 # ---------------------------------------------------------------------------
 
 
+# reason: DERIBIT-COMBO deregistered from VENUE_TO_ADAPTER_KEY by unified-api-contracts@11adf279
+# (2026-07-21, already-committed, clean, unrelated to this session's diff) pending the leg-aware
+# signed-weight spec rework -- see 'Combo cross-AG hand-off' P2 in defi_consolidated_closeout_2026_07_18.md
+# Track 1. Re-enable once DERIBIT-COMBO routing is re-registered under that work.
+_DERIBIT_COMBO_DEREGISTERED_SKIP_REASON = (
+    "DERIBIT-COMBO deregistered from VENUE_TO_ADAPTER_KEY by unified-api-contracts@11adf279 -- "
+    "see 'Combo cross-AG hand-off' P2 in defi_consolidated_closeout_2026_07_18.md Track 1."
+)
+
+
 class TestFactoryTardisRouting:
     def test_tardis_venue_resolution(self) -> None:
         clear_adapter_pool()
@@ -142,12 +153,127 @@ class TestFactoryTardisRouting:
         assert adapter is not None
         assert adapter.venue == "tardis"
 
+    def test_okx_bare_venue_resolves_all_itype_exchanges(self) -> None:
+        """OKX spans 4 real Tardis exchanges depending on instrument_type
+        (okex/okex-swap/okex-futures/okex-options) — the itype-aware gather
+        must resolve ALL of them (not just one via the venue-only lookup),
+        and the adapter must be told to tag every parsed instrument
+        canonical_venue="OKX" (not the per-exchange reverse-map values like
+        OKX-SPOT/OKX-SWAP). Regression guard for
+        cefi_deribit_combo_and_okx_bare_venue_gaps_2026_07_12.md — bare "OKX"
+        used to raise ValueError here (no direct tardis_to_venue value, and
+        no "-" in "OKX" to trigger the suffixed-venue fallback)."""
+        clear_adapter_pool()
+        adapter = get_adapter_for_canonical_venue("OKX", mode="batch")
+        assert adapter.venue == "tardis"
+        assert sorted(adapter._exchanges) == [
+            "okex",
+            "okex-futures",
+            "okex-options",
+            "okex-swap",
+        ]
+        assert adapter._canonical_venue_override == "OKX"
+
+    @pytest.mark.skip(reason=_DERIBIT_COMBO_DEREGISTERED_SKIP_REASON)
+    def test_deribit_combo_batch_routes_to_tardis(self) -> None:
+        """Historical/batch DERIBIT-COMBO catalogue population routes through
+        the Tardis adapter (exchange "deribit", combo-type self-filtered),
+        NOT the live-only deribit_combo REST adapter. Regression guard for
+        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14):
+        the instrument catalogue was permanently live-only because
+        VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"] was hardcoded to "deribit_combo"
+        regardless of mode."""
+        clear_adapter_pool()
+        adapter = get_adapter_for_canonical_venue("DERIBIT-COMBO", mode="batch")
+        assert adapter.venue == "tardis"
+        assert adapter._exchanges == ["deribit"]
+        assert adapter._canonical_venue_override == "DERIBIT-COMBO"
+
+    @pytest.mark.skip(reason=_DERIBIT_COMBO_DEREGISTERED_SKIP_REASON)
+    def test_deribit_combo_live_routes_to_rest_adapter(self) -> None:
+        """Live/forward DERIBIT-COMBO capture keeps using the Deribit public
+        REST adapter (public/get_combos) — that endpoint only exposes
+        currently-active combos, which is exactly what live mode needs."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        clear_adapter_pool()
+        adapter = get_adapter_for_canonical_venue("DERIBIT-COMBO", mode="live")
+        assert isinstance(adapter, DeribitComboReferenceDataAdapter)
+        assert adapter.venue == "DERIBIT-COMBO"
+
+    @pytest.mark.skip(reason=_DERIBIT_COMBO_DEREGISTERED_SKIP_REASON)
+    def test_deribit_combo_live_pool_reuse(self) -> None:
+        clear_adapter_pool()
+        a1 = get_adapter_for_canonical_venue("DERIBIT-COMBO", mode="live")
+        a2 = get_adapter_for_canonical_venue("DERIBIT-COMBO", mode="live")
+        assert a1 is a2
+
+    def test_resolve_tardis_exchanges_itype_aware_multi_exchange(self) -> None:
+        """Pure-function unit test for the extracted helper: a venue with
+        multiple itype-scoped Tardis exchanges (OKX-shaped) returns ALL of
+        them, sorted, ignoring the single-exchange fallback entirely."""
+        result = _resolve_tardis_exchanges_for_venue(
+            "OKX",
+            {
+                ("OKX", "SPOT_PAIR"): "okex",
+                ("OKX", "PERPETUAL"): "okex-swap",
+                ("OKX", "FUTURE"): "okex-futures",
+                ("OKX", "OPTION"): "okex-options",
+                ("BYBIT", "PERPETUAL"): "bybit",
+            },
+            {"bybit": "BYBIT"},
+            None,  # venue-only lookup would fail for bare OKX — must be ignored
+        )
+        assert result == ["okex", "okex-futures", "okex-options", "okex-swap"]
+
+    def test_resolve_tardis_exchanges_single_exchange_fallback(self) -> None:
+        """A venue with no itype-scoped entries falls back to the venue-only
+        (direct/suffixed) exchange resolution — unchanged behaviour for
+        every venue that was already working (BYBIT/DERIBIT/etc.)."""
+        result = _resolve_tardis_exchanges_for_venue(
+            "BYBIT",
+            {},
+            {"bybit": "BYBIT"},
+            "bybit",
+        )
+        assert result == ["bybit"]
+
+    def test_resolve_tardis_exchanges_lowercase_candidate_fallback(self) -> None:
+        """No itype entries, no direct/suffixed match (direct_or_suffixed_exchange
+        is None) — the lowercase-conversion candidate fallback still applies
+        when the lowercased venue is a tardis_to_venue KEY, regardless of
+        that key's mapped value."""
+        result = _resolve_tardis_exchanges_for_venue(
+            "UPBIT",
+            {},
+            {"upbit": "SOME-OTHER-VENUE"},
+            None,
+        )
+        assert result == ["upbit"]
+
+    def test_resolve_tardis_exchanges_lowercase_candidate_miss_returns_empty(self) -> None:
+        """Lowercased venue is NOT a tardis_to_venue key — no fallback fires."""
+        result = _resolve_tardis_exchanges_for_venue(
+            "UPBIT",
+            {},
+            {"someone-else": "SOME-OTHER-VENUE"},
+            None,
+        )
+        assert result == []
+
+    def test_resolve_tardis_exchanges_no_mapping_returns_empty(self) -> None:
+        result = _resolve_tardis_exchanges_for_venue("UNKNOWN-VENUE", {}, {}, None)
+        assert result == []
+
     def test_tardis_no_mapping_raises(self) -> None:
         """Venue in VENUE_TO_ADAPTER_KEY as tardis but no Tardis exchange mapping raises ValueError."""
         clear_adapter_pool()
         mock_vm = MagicMock()
         mock_vm.get_tardis_exchange_for_venue.return_value = None
         mock_vm.tardis_to_venue = {}
+        mock_vm.venue_instrument_type_to_tardis = {}
 
         # VenueMapping is lazily imported inside factory function body as:
         #   from unified_api_contracts import VenueMapping as _VM_cls
@@ -228,7 +354,7 @@ class TestCanonicalVenueMapping:
             assert v in VENUE_TO_ADAPTER_KEY, f"{v} missing"
 
     def test_all_solana_venues_mapped(self) -> None:
-        solana = ["DRIFT-SOLANA", "KAMINO-SOLANA", "RAYDIUM-SOLANA", "ORCA-SOLANA"]
+        solana = ["KAMINO-SOLANA", "RAYDIUM-SOLANA", "ORCA-SOLANA"]
         for v in solana:
             assert v in VENUE_TO_ADAPTER_KEY, f"{v} missing"
 

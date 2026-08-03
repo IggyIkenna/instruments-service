@@ -1,11 +1,13 @@
 """Unit tests — Phase 3.D.4 enumerate_expected_universe.py.
 
-Tests cover the per-asset-group enumerators + the present-set / row-key
-helpers. They exercise real UAC SSOTs (`CHAIN_GENESIS_DATES`,
-`CEFI_VENUE_LAUNCH_DATES`, `PREDICTION_VENUE_LAUNCH_DATES`,
-`SOURCE_COVERAGE_START`, `non_trading_day_reason`) against a small known
-window per asset_group and assert that yielded rows have the right shape
-+ closed-set reasons. They DO NOT touch the network or GCS — pure
+Tests cover the shared present-set / row-key / bucket-resolution / MVP-gate
+helpers. The v1 venue-grain per-asset-group enumerators (`_enumerate_tradfi`
+etc.) were retired 2026-07-09 per
+`plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md`; their
+v2 per-instrument-grain equivalents (`_enumerate_v2_*`) are covered by
+`tests/unit/scripts/test_enumerate_expected_universe_v2.py`, including the
+closed-set-reasons + dispatch-table-completeness invariants this file used to
+assert against `_ENUMERATORS`. They DO NOT touch the network or GCS — pure
 generator-driven inspection.
 
 Plan: writegate_honest_coverage_endtoend_2026_05_06.md § Phase 3.D.4
@@ -22,9 +24,6 @@ from types import ModuleType
 
 import pandas as pd
 import pytest
-from unified_api_contracts.canonical.crosscutting.honest_coverage import (
-    EMPTY_CONFIRMED_REASONS,
-)
 
 # --- Module loader ----------------------------------------------------------
 
@@ -49,208 +48,6 @@ def _load_enumerator_module() -> ModuleType:
 
 enumerator_module = _load_enumerator_module()
 ExpectedRow = enumerator_module.ExpectedRow
-
-
-# --- Per-asset-group enumerator tests ---------------------------------------
-
-
-def test_tradfi_yields_expected_weekend_for_known_saturday() -> None:
-    """2018-01-06 is a Saturday; every TradFi venue x data_type should
-    yield a row with reason=EXPECTED_WEEKEND."""
-    rows = list(enumerator_module._enumerate_tradfi("2018-01-06", "2018-01-06"))
-    assert len(rows) > 0, "expected at least one row for Saturday 2018-01-06"
-    weekend_rows = [r for r in rows if r.reason == "EXPECTED_WEEKEND"]
-    assert len(weekend_rows) > 0, "expected at least one EXPECTED_WEEKEND row"
-    sample = weekend_rows[0]
-    assert sample.asset_group == "tradfi"
-    assert sample.date == "2018-01-06"
-    assert sample.chain == ""  # tradfi has no chain axis
-
-
-def test_tradfi_yields_no_rows_for_known_trading_day() -> None:
-    """Tuesday 2018-01-09 should be a normal trading day across all
-    standard TradFi venues — no EXPECTED_HOLIDAY/WEEKEND rows."""
-    rows = list(enumerator_module._enumerate_tradfi("2018-01-09", "2018-01-09"))
-    # Most TradFi venues open Tuesday Jan-9; a few specialty venues might
-    # have a holiday but the count should be small or zero.
-    saturday_or_holiday = [r for r in rows if r.reason in ("EXPECTED_WEEKEND",)]
-    assert len(saturday_or_holiday) == 0, "Tuesday 2018-01-09 should not yield EXPECTED_WEEKEND rows"
-
-
-def test_tradfi_index_pre_genesis_for_dxy_pre_2019() -> None:
-    """DXY genesis is 2019-01-02; ICE:INDEX:DXY-USD on 2015-06-01 should yield
-    an instrument-grain EXPECTED_INSTRUMENT_NOT_LISTED row."""
-    rows = list(enumerator_module._enumerate_tradfi_indices("2015-06-01", "2015-06-01"))
-    dxy = [r for r in rows if r.instrument_id == "ICE:INDEX:DXY-USD"]
-    assert len(dxy) > 0, "expected DXY pre-genesis row for 2015-06-01 (genesis 2019-01-02)"
-    sample = dxy[0]
-    assert sample.asset_group == "tradfi"
-    assert sample.venue == "ICE"
-    assert sample.instrument_type == "INDEX"
-    assert sample.data_type == "ohlcv_24h"
-    assert sample.reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
-    assert sample.date == "2015-06-01"
-
-
-def test_tradfi_index_pre_genesis_for_treasuries_pre_2000() -> None:
-    """US treasury indices genesis 2000-01-03; on 1999-06-01 every tenor should
-    pre-list under its canonical -USD key."""
-    rows = list(enumerator_module._enumerate_tradfi_indices("1999-06-01", "1999-06-01"))
-    keys = {r.instrument_id for r in rows if r.reason == "EXPECTED_INSTRUMENT_NOT_LISTED"}
-    for tenor in ("US3M", "US5Y", "US10Y", "US30Y"):
-        assert f"CBOE:INDEX:{tenor}-USD" in keys, f"{tenor} pre-genesis row missing"
-
-
-def test_tradfi_index_no_rows_post_all_genesis() -> None:
-    """A date past every Yahoo-index genesis (DXY 2019 is the latest) yields no
-    pre-genesis index rows."""
-    rows = list(enumerator_module._enumerate_tradfi_indices("2020-06-01", "2020-06-01"))
-    assert rows == [], "expected zero index pre-genesis rows for 2020-06-01"
-
-
-def test_tradfi_holiday_excludes_cboe_and_ice_on_new_year() -> None:
-    """P2 regression: 2025-01-01 (New Year) is a holiday for CBOE + ICE — the
-    venue-level tradfi pass must emit EXPECTED_HOLIDAY for both."""
-    rows = list(enumerator_module._enumerate_tradfi("2025-01-01", "2025-01-01"))
-    holiday_venues = {r.venue for r in rows if r.reason == "EXPECTED_HOLIDAY"}
-    assert "CBOE" in holiday_venues, "CBOE should be holiday-excluded on 2025-01-01"
-    assert "ICE" in holiday_venues, "ICE should be holiday-excluded on 2025-01-01"
-
-
-def test_defi_yields_pre_genesis_for_arbitrum_pre_2021() -> None:
-    """Arbitrum genesis is 2021-08-31; AAVE_V3-ARBITRUM on 2018-01-01 should
-    yield EXPECTED_PRE_GENESIS_CHAIN (chain didn't exist yet)."""
-    rows = list(enumerator_module._enumerate_defi("2018-01-01", "2018-01-01"))
-    arbitrum_rows = [r for r in rows if r.chain == "ARBITRUM"]
-    assert len(arbitrum_rows) > 0, "expected ARBITRUM rows for 2018-01-01"
-    pre_genesis = [r for r in arbitrum_rows if r.reason == "EXPECTED_PRE_GENESIS_CHAIN"]
-    assert len(pre_genesis) > 0, "expected EXPECTED_PRE_GENESIS_CHAIN for ARBITRUM 2018-01-01 (genesis 2021-08-31)"
-    sample = pre_genesis[0]
-    assert sample.asset_group == "defi"
-    assert sample.date == "2018-01-01"
-    assert sample.chain == "ARBITRUM"
-
-
-def test_defi_yields_no_rows_for_post_protocol_launch() -> None:
-    """A date well past every chain genesis + protocol launch (e.g.
-    2026-01-01) should yield zero pre-launch rows for the entire window."""
-    rows = list(enumerator_module._enumerate_defi("2026-01-01", "2026-01-01"))
-    assert len(rows) == 0, "expected zero pre-launch rows for 2026-01-01 (all chains + protocols launched)"
-
-
-def test_sports_yields_pre_source_coverage_before_source_start() -> None:
-    """The day BEFORE a source's SOURCE_COVERAGE_START yields
-    EXPECTED_PRE_SOURCE_COVERAGE_START rows for that source.
-
-    Derives the date from the UAC SSOT (``SOURCE_COVERAGE_START``) rather than a
-    hardcoded year so it never goes stale: api_football's start moved 2018-01-01 →
-    2015-01-01, which silently broke the prior literal-"2017-12-31" assertion (2017
-    is now AFTER coverage start, so it correctly yields no pre-source rows)."""
-    import pandas as pd
-    from unified_api_contracts.sports import SOURCE_COVERAGE_START
-
-    af_start = pd.Timestamp(SOURCE_COVERAGE_START["api_football"])
-    pre_day = (af_start - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    rows = list(enumerator_module._enumerate_sports(pre_day, pre_day))
-    af_rows = [r for r in rows if r.venue == "api_football"]
-    assert len(af_rows) > 0, f"expected api_football rows for {pre_day} (day before coverage start)"
-    pre_coverage = [r for r in af_rows if r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"]
-    assert len(pre_coverage) > 0, f"expected EXPECTED_PRE_SOURCE_COVERAGE_START for api_football {pre_day}"
-    sample = pre_coverage[0]
-    assert sample.asset_group == "sports"
-    assert sample.date == pre_day
-
-
-def test_cefi_yields_pre_venue_launch_for_lighter_pre_2024_09() -> None:
-    """LIGHTER-ZKSYNC launched 2024-09-01; 2024-01-01 should yield
-    EXPECTED_PRE_VENUE_LAUNCH rows."""
-    rows = list(enumerator_module._enumerate_cefi("2024-01-01", "2024-01-01"))
-    lighter_rows = [r for r in rows if r.venue == "LIGHTER-ZKSYNC"]
-    assert len(lighter_rows) > 0, "expected LIGHTER-ZKSYNC rows for 2024-01-01"
-    for r in lighter_rows:
-        assert r.reason == "EXPECTED_PRE_VENUE_LAUNCH"
-        assert r.asset_group == "cefi"
-        assert r.date == "2024-01-01"
-
-
-def test_cefi_yields_no_rows_for_post_all_venue_launches() -> None:
-    """A date past every CeFi venue launch (use 2026-07-01, after the latest —
-    KALSHI-PERP launched 2026-05-29, POLYMARKET-PERP 2026-04-21) should yield
-    zero pre-venue-launch rows. NOTE: bump this date whenever a later-launching
-    CeFi venue is added, else newly-added post-date venues yield pre-launch rows."""
-    rows = list(enumerator_module._enumerate_cefi("2026-07-01", "2026-07-01"))
-    assert len(rows) == 0, "expected zero pre-venue-launch rows for 2026-07-01 (every cefi venue launched)"
-
-
-def test_prediction_yields_pre_venue_launch_for_pre_2020_polymarket() -> None:
-    """POLYMARKET launched 2020-09-01; 2020-01-01 should yield
-    EXPECTED_PRE_VENUE_LAUNCH rows."""
-    rows = list(enumerator_module._enumerate_prediction("2020-01-01", "2020-01-01"))
-    polymarket_rows = [r for r in rows if r.venue == "POLYMARKET"]
-    assert len(polymarket_rows) > 0, "expected POLYMARKET rows for 2020-01-01"
-    for r in polymarket_rows:
-        assert r.reason == "EXPECTED_PRE_VENUE_LAUNCH"
-        assert r.asset_group == "prediction"
-        assert r.date == "2020-01-01"
-
-
-def test_prediction_yields_pre_venue_launch_for_pre_2021_kalshi() -> None:
-    """KALSHI launched 2021-07-30; 2021-01-01 should yield EXPECTED_PRE_VENUE_LAUNCH."""
-    rows = list(enumerator_module._enumerate_prediction("2021-01-01", "2021-01-01"))
-    kalshi_rows = [r for r in rows if r.venue == "KALSHI"]
-    assert len(kalshi_rows) > 0, "expected KALSHI rows for 2021-01-01"
-    for r in kalshi_rows:
-        assert r.reason == "EXPECTED_PRE_VENUE_LAUNCH"
-
-
-# --- Cross-asset-group invariants -------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "asset_group,start,end",
-    [
-        ("tradfi", "2018-01-06", "2018-01-06"),  # Saturday
-        ("defi", "2018-01-01", "2018-01-01"),  # pre-genesis
-        ("sports", "2017-12-31", "2017-12-31"),  # pre-source-coverage
-        ("cefi", "2024-01-01", "2024-01-01"),  # pre-venue-launch (LIGHTER)
-        ("prediction", "2020-01-01", "2020-01-01"),  # pre-venue-launch (POLYMARKET)
-    ],
-)
-def test_every_yielded_reason_is_in_closed_set(asset_group: str, start: str, end: str) -> None:
-    """Every reason yielded by the enumerator MUST be in
-    `EMPTY_CONFIRMED_REASONS` (UAC closed-set)."""
-    enumerator_func = enumerator_module._ENUMERATORS[asset_group]
-    rows = list(enumerator_func(start, end))
-    assert len(rows) > 0, f"sanity: expected at least one row for {asset_group} {start}"
-    for r in rows:
-        assert r.reason in EMPTY_CONFIRMED_REASONS, (
-            f"reason {r.reason!r} not in EMPTY_CONFIRMED_REASONS closed-set (asset_group={asset_group}, date={r.date})"
-        )
-        assert r.asset_group == asset_group
-
-
-@pytest.mark.parametrize(
-    "asset_group,start,end",
-    [
-        ("tradfi", "2018-01-06", "2018-01-06"),
-        ("defi", "2018-01-01", "2018-01-01"),
-        ("sports", "2017-12-31", "2017-12-31"),
-        ("cefi", "2024-01-01", "2024-01-01"),
-        ("prediction", "2020-01-01", "2020-01-01"),
-    ],
-)
-def test_every_yielded_row_has_required_fields(asset_group: str, start: str, end: str) -> None:
-    """Every yielded ExpectedRow must have non-empty asset_group, date, and reason."""
-    enumerator_func = enumerator_module._ENUMERATORS[asset_group]
-    rows = list(enumerator_func(start, end))
-    assert len(rows) > 0
-    for r in rows:
-        assert r.asset_group, f"empty asset_group on row {r}"
-        assert r.date, f"empty date on row {r}"
-        assert r.reason, f"empty reason on row {r}"
-        # Either venue or chain (or league_id for sports) must be set so the
-        # manifest row key is unique.
-        assert r.venue or r.chain or r.league_id, f"row has no venue/chain/league_id identifier: {r}"
 
 
 # --- Helper tests -----------------------------------------------------------
@@ -343,20 +140,6 @@ def test_row_key_handles_missing_columns() -> None:
     assert key == ("BARCHART", "ohlcv_1m", "2018-01-06")
 
 
-# --- Enumerator dispatch table ---------------------------------------------
-
-
-def test_all_5_asset_groups_in_enumerator_dispatch() -> None:
-    """The _ENUMERATORS dict must cover all 5 asset_groups."""
-    assert set(enumerator_module._ENUMERATORS.keys()) == {
-        "cefi",
-        "defi",
-        "tradfi",
-        "sports",
-        "prediction",
-    }
-
-
 # --- Canonical bucket resolution (⑦ coverage-denominator readiness) ----------
 
 
@@ -385,7 +168,8 @@ def test_default_bucket_for_resolves_canonical_env_tiered_per_asset_group(
     _tier = r"(?:prd|stg|dev|test|ci)"
 
     # Prediction: the canonical env-tiered ``pred-<tier>`` bucket, NOT the legacy
-    # long-form ``market-data-tick-prediction-<pid>`` slated for L6 delete.
+    # long-form ``market-data-tick-prediction-<pid>`` — deleted 2026-07-12 (404 now;
+    # see mdps_prediction_tick_bucket_uac_ssot_404_2026_07_14.md), pred-prd is the sole live SSOT.
     pred = enumerator_module._default_bucket_for("prediction")
     assert re.fullmatch(rf"market-data-tick-pred-{_tier}-test-project", pred), pred
     assert pred != "market-data-tick-prediction-test-project"
@@ -432,18 +216,37 @@ def _entry(venue: str, instrument_type: str) -> object:
     )
 
 
-def test_row_data_types_aster_capability_carveout() -> None:
-    """ASTER cannot produce book_snapshot_5/liquidations (absent from
-    VENUE_DATA_TYPE_CAPABILITIES["ASTER"]) — the enumerator must NEVER seed
-    them (the 2026-06-29 over-seed contradiction: UAC is correct, the
-    enumerator over-seeded 3,477 expected_unattempted rows each)."""
+def test_row_data_types_aster_capability_profile() -> None:
+    """ASTER capability profile: book_snapshot_5 IS a declared capability
+    (live-only from 2026-06-23 via aster_book_liq_ws) but is NOT seeded by the
+    enumerator — REVISED 2026-07-15 (operator ruling, supersedes the prior
+    "must be seeded" assertion this test carried): book_snapshot_5 has NO
+    batch/historical source at all (its REST endpoint is current-snapshot-only),
+    so it is excluded via UAC's ``VENUE_DATA_TYPE_NO_BATCH_SOURCE`` — a
+    "short of magic cannot physically be retrieved" BATCH combo must not seed the
+    honest-coverage denominator, even as a declared (live-only) capability.
+    liquidations is EXCLUDED too — since v15 (2026-07-15) liquidations IS a
+    PERPETUAL-leg MVP data_type, but ASTER's liquidations is a LIVE-ONLY feed with
+    ZERO batch capture, so it was removed from ASTER's ``VENUE_DATA_TYPE_CAPABILITIES``
+    gate entry entirely (operator ruling: live-only feeds must not seed the batch
+    honest-coverage denominator) — carved out at the CAPABILITY layer, not the
+    MVP-scope layer, and would ALSO now be caught by VENUE_DATA_TYPE_NO_BATCH_SOURCE
+    even if it were still a declared capability. Retains the historical guard that
+    survivors ⊆ capabilities.
+    SSOT: plans/active/issues/
+    cefi_live_only_data_types_vs_layer1_denominator_contradiction_2026_07_12.md."""
     from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
 
     cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations", "perp_funding"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("ASTER", "PERPETUAL"), cefi_dts)
-    assert "book_snapshot_5" not in row_dts, "ASTER book_snapshot_5 must be carved out"
-    assert "liquidations" not in row_dts, "ASTER liquidations must be carved out"
-    # What survives is exactly the venue's declared capability ∩ validity.
+    assert "book_snapshot_5" not in row_dts, (
+        "ASTER book_snapshot_5 has no batch source (live-only) — must NOT be seeded"
+    )
+    assert "liquidations" not in row_dts, (
+        "ASTER liquidations removed from the batch capability gate (live-only, 0 batch)"
+    )
+    assert "liquidations" not in VENUE_DATA_TYPE_CAPABILITIES["ASTER"], "ASTER liquidations gate entry removed (v15)"
+    # What survives is exactly the venue's declared capability ∩ validity ∩ MVP ∩ batch-source.
     assert set(row_dts) <= set(VENUE_DATA_TYPE_CAPABILITIES["ASTER"]), row_dts
     assert "trades" in row_dts, "ASTER trades is a declared capability and must survive"
 
@@ -459,3 +262,250 @@ def test_row_data_types_capability_absent_venue_not_gated() -> None:
     cefi_dts = ["trades", "book_snapshot_5"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("BINANCE-DELIVERY", "PERPETUAL"), cefi_dts)
     assert "trades" in row_dts
+
+
+# --- MVP data_type gate (bundle-aware) — C2 point-fix per
+# cefi_layer1_denominator_gaps_2026_07_03.md ---------------------------------
+
+
+def test_row_data_types_coinbase_spot_mvp_cut_drops_book_snapshot_5() -> None:
+    """COINBASE-SPOT ships trades+book_snapshot_5 as raw capability, but
+    MVP_SCOPE narrows COINBASE-SPOT to {trades} only (venue_data_types
+    override — no depth features derived from Coinbase, ~30 GB pandas peak
+    on book5 backfill). The C2 point-fix intersection must drop
+    book_snapshot_5 from the seeded denominator so VMs are not asked to
+    capture cells MVP has excluded (over-seed → false EXPECTED_UNATTEMPTED)."""
+    from unified_api_contracts import get_mvp_data_types_for_cefi_venue
+    from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
+
+    # Pre-conditions the fix relies on: capability HAS book5, MVP drops it.
+    assert "book_snapshot_5" in VENUE_DATA_TYPE_CAPABILITIES["COINBASE-SPOT"]
+    assert "book_snapshot_5" not in get_mvp_data_types_for_cefi_venue("COINBASE-SPOT")
+    assert "trades" in get_mvp_data_types_for_cefi_venue("COINBASE-SPOT")
+
+    cefi_dts = ["trades", "book_snapshot_5"]
+    row_dts = enumerator_module._row_data_types("cefi", _entry("COINBASE-SPOT", "SPOT_PAIR"), cefi_dts)
+    assert row_dts == ["trades"], f"MVP gate must drop book_snapshot_5 for COINBASE-SPOT; got {row_dts}"
+
+
+def test_row_data_types_deribit_options_chain_bundle_survives_mvp_gate() -> None:
+    """Deribit OPTION leaves roll up into a synthetic per-underlying
+    ``options_chain`` bundle entry (BUNDLE_INSTRUMENT_TYPE_BY_AG_AND_LEAF).
+    The UAC validity matrix narrows that bundle to data_type=trades. But
+    ``get_mvp_data_types_for_cefi_venue_itype("DERIBIT", "options_chain")``
+    would resolve the flat cefi tick set (Deribit has no venue-level override).
+    Applying the intersection naively at the bundle entry would… still keep
+    trades (trades IS in the flat MVP set), so this test primarily guards the
+    SKIP-BY-BUNDLE-GRAIN branch: the itype-aware MVP gate (v15) must recognise
+    that OPTIONS_CHAIN is a per-underlying BUNDLE grain — ``_mvp_capture_itype``
+    CHANGES it (OPTIONS_CHAIN → OPTION), which is exactly the ``is_bundle_grain``
+    signal — and skip the intersection entirely, since the validity matrix has
+    already narrowed the bundle to its correct data_type. This guards against any
+    future widening of the flat MVP set accidentally re-widening options_chain
+    seeding. This is the exact regression class the plan CAUTION documents
+    (attempts 1+2 wiped the Deribit options_chain denominator by intersecting
+    against the venue-only set — G1 backfill mvp_backfill_cefi_tick_v10)."""
+    from unified_api_contracts import MVP_SCOPE, CeFiMvpRule
+
+    # Pre-conditions: MVP scope declares the OPTION override + Deribit has no venue override.
+    cefi_rule = MVP_SCOPE.get("cefi")
+    assert isinstance(cefi_rule, CeFiMvpRule)
+    assert "OPTION" in cefi_rule.instrument_type_data_types
+    assert cefi_rule.instrument_type_data_types["OPTION"] == frozenset({"options_chain"})
+    assert "DERIBIT" not in cefi_rule.venue_data_types  # Deribit stays v10 (no venue override)
+
+    # Bundle-post-rollup shape: instrument_type=options_chain (the synthetic
+    # entry _rollup_bundle_grain emits for Deribit OPTION leaves). The full
+    # cefi data_types list mirrors DATA_TYPES_BY_ASSET_GROUP["cefi"].
+    cefi_dts = [
+        "trades",
+        "book_snapshot_5",
+        "derivative_ticker",
+        "liquidations",
+        "options_chain",
+        "futures_chain",
+        "ohlcv_1m",
+        "perp_funding",
+    ]
+    row_dts = enumerator_module._row_data_types("cefi", _entry("DERIBIT", "options_chain"), cefi_dts)
+    # ERA-B: the cefi options_chain instrument_type's market data_type is
+    # ``trades`` (not the chain name). The MVP gate must NOT empty this to [].
+    assert row_dts == ["trades"], f"Deribit options_chain must survive MVP gate as ['trades']; got {row_dts}"
+
+    # Additional bundle: FUTURES_CHAIN also normalises via _mvp_capture_itype
+    # → FUTURE, which CHANGES the itype → is_bundle_grain True → the MVP-cut is
+    # SKIPPED (same as options_chain). Deribit futures_chain validity → ["trades"]
+    # and the skip leaves it unchanged → survives as ["trades"] (not emptied).
+    row_dts_futures = enumerator_module._row_data_types("cefi", _entry("DERIBIT", "futures_chain"), cefi_dts)
+    assert row_dts_futures == ["trades"], (
+        f"Deribit futures_chain must survive MVP gate as ['trades']; got {row_dts_futures}"
+    )
+
+
+def test_row_data_types_deribit_perpetual_mvp_gate_drops_liquidations() -> None:
+    """Deribit PERPETUAL must NOT seed liquidations. Since v15 (2026-07-15)
+    liquidations IS a PERPETUAL-leg MVP data_type (instrument_type_data_types
+    ["PERPETUAL"] includes it), so the MVP-scope layer no longer excludes it.
+    DERIBIT is excluded at the CAPABILITY layer instead: it is NOT one of the 6
+    real-feed liquidations venues (only 3 noise ``captured`` rows in the live
+    manifest), so liquidations was removed from ``VENUE_DATA_TYPE_CAPABILITIES
+    ["DERIBIT"]`` — the capability carve-out drops it before the MVP gate, so no
+    phantom EXPECTED_UNATTEMPTED liquidations cell is seeded for Deribit perps."""
+    from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
+
+    assert "liquidations" not in VENUE_DATA_TYPE_CAPABILITIES["DERIBIT"], (
+        "DERIBIT liquidations gate entry removed (v15)"
+    )
+    cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations"]
+    row_dts = enumerator_module._row_data_types("cefi", _entry("DERIBIT", "PERPETUAL"), cefi_dts)
+    assert "trades" in row_dts
+    assert "book_snapshot_5" in row_dts
+    assert "derivative_ticker" in row_dts
+    assert "liquidations" not in row_dts, (
+        f"capability gate must drop liquidations for Deribit PERPETUAL (not a real-feed venue); got {row_dts}"
+    )
+
+
+def test_row_data_types_liquidations_seeded_for_six_feed_venues() -> None:
+    """v15 (2026-07-15): liquidations IS seeded for PERPETUAL cells on exactly the
+    6 perp venues with a real captured liquidations feed. The itype-aware MVP gate
+    (instrument_type_data_types["PERPETUAL"] includes liquidations) ∩ the venue
+    capability gate (each of the 6 declares liquidations) admits it."""
+    cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations"]
+    for venue in ("BINANCE-FUTURES", "OKX-SWAP", "BYBIT", "KRAKEN-FUTURES", "BITFINEX-FUTURES", "BITGET-FUTURES"):
+        row_dts = enumerator_module._row_data_types("cefi", _entry(venue, "PERPETUAL"), cefi_dts)
+        assert "liquidations" in row_dts, f"{venue} PERPETUAL must seed liquidations (real feed): {row_dts}"
+
+
+def test_row_data_types_liquidations_excluded_for_future_and_non_feed() -> None:
+    """liquidations is PERPETUAL-leg ONLY. FUTURE cells on the feed venues do NOT
+    seed it (dated-futures liq is negligible — the itype-aware helper returns the
+    flat set, no liquidations, for FUTURE). Non-feed perp venues (HYPERLIQUID,
+    OKX-FUTURES) also do NOT seed it (no liquidations capability entry)."""
+    cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations"]
+    # FUTURE on real-feed venues → NO liquidations (PERPETUAL-only override).
+    for venue in ("BINANCE-FUTURES", "BYBIT", "KRAKEN-FUTURES"):
+        row_dts = enumerator_module._row_data_types("cefi", _entry(venue, "FUTURE"), cefi_dts)
+        assert "liquidations" not in row_dts, f"{venue} FUTURE must NOT seed liquidations: {row_dts}"
+    # Non-feed perp venues → NO liquidations (absent from capability gate).
+    for venue in ("HYPERLIQUID", "OKX-FUTURES"):
+        row_dts = enumerator_module._row_data_types("cefi", _entry(venue, "PERPETUAL"), cefi_dts)
+        assert "liquidations" not in row_dts, f"{venue} PERPETUAL must NOT seed liquidations: {row_dts}"
+
+
+def test_row_data_types_coinbase_futures_perpetual_stays_trades_only() -> None:
+    """COINBASE-FUTURES venue_data_types={trades} override MUST still win for its
+    PERPETUAL cells under the itype-aware gate (no liquidations/book5/
+    derivative_ticker over-seed). This is the exact regression the itype-aware
+    fix prevents — a venue-only skip would have bypassed the override."""
+    cefi_dts = ["trades", "book_snapshot_5", "derivative_ticker", "liquidations"]
+    row_dts = enumerator_module._row_data_types("cefi", _entry("COINBASE-FUTURES", "PERPETUAL"), cefi_dts)
+    assert row_dts == ["trades"], f"COINBASE-FUTURES PERPETUAL must stay trades-only; got {row_dts}"
+
+
+def test_row_data_types_non_mvp_venue_skips_intersection() -> None:
+    """A cefi venue absent from MVP_SCOPE.cefi.venues (e.g. BINANCE-DELIVERY
+    per operator decision #3 — COIN-M delivery not MVP) yields an empty
+    MVP data_type set from ``get_mvp_data_types_for_cefi_venue``. The
+    ``if mvp_dts:`` guard must skip the intersection so those cells are not
+    blanket-blocked. Denominator semantics for MVP-absent venues are a
+    SEPARATE open finding (BLK-5cc7590e for COINBASE/DERIBIT-COMBO)."""
+    from unified_api_contracts import get_mvp_data_types_for_cefi_venue
+
+    assert get_mvp_data_types_for_cefi_venue("BINANCE-DELIVERY") == frozenset()
+    cefi_dts = ["trades", "book_snapshot_5"]
+    row_dts = enumerator_module._row_data_types("cefi", _entry("BINANCE-DELIVERY", "PERPETUAL"), cefi_dts)
+    # Both survive: validity matrix admits them + no cap entry to gate + MVP
+    # gate is inactive for a non-MVP-scoped venue → unchanged.
+    assert row_dts == ["trades", "book_snapshot_5"], (
+        f"MVP gate must NOT blanket-block a non-MVP-scoped cefi venue; got {row_dts}"
+    )
+
+
+# --- MVP data_type gate (TRADFI) — tradfi_eu_not_draining_source_axis_drift_
+# 2026_06_24.md #2 root-cause fix (2026-07-14): tradfi never had the
+# cefi-style MVP data_type-narrowing gate above, so an MVP-scoped CME OPTION
+# bundle emitted its FULL raw capability set (trades + ohlcv_1m +
+# options_chain) instead of the MVP-declared {ohlcv_1m} only — a 3x over-fan
+# that (combined with the per-underlying bundle grain) pushed a full-history
+# CME OPTION scan-only dry-run past the 1,000,000-candidate safety cap. -----
+
+
+def _tradfi_entry(
+    venue: str,
+    instrument_type: str,
+    *,
+    underlying: str = "",
+    base_asset: str = "",
+    mvp: bool | None = None,
+) -> object:
+    """Minimal tradfi catalogue entry for ``_row_data_types`` tests."""
+    return enumerator_module.InstrumentCatalogEntry(
+        instrument_id=f"{venue}:{instrument_type}:TEST",
+        instrument_type=instrument_type,
+        venue=venue,
+        chain="",
+        league_id="",
+        available_from=None,
+        available_to=None,
+        market_created_at=None,
+        settlement_time=None,
+        underlying=underlying,
+        base_asset=base_asset,
+        mvp=mvp,
+    )
+
+
+def test_row_data_types_cme_options_chain_mvp_narrows_to_ohlcv_1m() -> None:
+    """An MVP-scoped CME OPTION bundle (options_chain, underlier=GC — gold, a
+    real TradFiMvpRule underlier) admits {trades, ohlcv_1m, options_chain}
+    from the raw validity matrix (options_chain the non-canonical snapshot
+    data_type is filtered separately, never reaches this list), but MVP_SCOPE
+    narrows tradfi to {ohlcv_1m} ONLY (operator 2026-06-27 decision #7 — no
+    trades in tradfi MVP). This is the exact root-cause cell class from the
+    2026-07-14 >1M candidate-cap trip."""
+    tradfi_dts = ["trades", "ohlcv_1m"]
+    entry = _tradfi_entry("CME", "options_chain", underlying="GC", base_asset="GC", mvp=True)
+    row_dts = enumerator_module._row_data_types("tradfi", entry, tradfi_dts)
+    assert row_dts == ["ohlcv_1m"], f"MVP gate must narrow CME options_chain to ['ohlcv_1m']; got {row_dts}"
+
+
+def test_row_data_types_cme_futures_chain_mvp_narrows_to_ohlcv_1m_and_1s() -> None:
+    """An MVP-scoped CME futures_chain bundle (underlier=ES) narrows the same
+    way — the MVP data_type set is not OPTION-specific. MVP_SCOPE for CME
+    admits BOTH ohlcv_1m and ohlcv_1s (operator 2026-06-27 decision #7,
+    revised 2026-07-22 — the 2026-07-21/22 backfill fleet captured both
+    grains, so the predicate now matches what was actually captured); tbbo
+    stays excluded (billing-gated L1/L2 microstructure, not MVP)."""
+    tradfi_dts = ["trades", "ohlcv_1s", "ohlcv_1m", "tbbo"]
+    entry = _tradfi_entry("CME", "futures_chain", underlying="ES", base_asset="ES", mvp=True)
+    row_dts = enumerator_module._row_data_types("tradfi", entry, tradfi_dts)
+    assert row_dts == ["ohlcv_1s", "ohlcv_1m"], (
+        f"MVP gate must narrow CME futures_chain to ['ohlcv_1s', 'ohlcv_1m']; got {row_dts}"
+    )
+
+
+def test_row_data_types_krx_equity_mvp_narrows_to_ohlcv_24h() -> None:
+    """The KRX equity-basis carve-out (operator 2026-07-12) is narrower still
+    — {ohlcv_24h} only, NOT {ohlcv_1m} (Yahoo-sourced KRX has no reliable
+    intraday backfill). The gate must select the KRX-specific set, not the
+    flat CME futures/options complex set."""
+    equity_dts = ["trades", "ohlcv_1m", "ohlcv_24h"]
+    entry = _tradfi_entry("KRX", "EQUITY", base_asset="005930", mvp=True)
+    row_dts = enumerator_module._row_data_types("tradfi", entry, equity_dts)
+    assert row_dts == ["ohlcv_24h"], f"MVP gate must narrow KRX EQUITY to ['ohlcv_24h']; got {row_dts}"
+
+
+def test_row_data_types_tradfi_non_mvp_instrument_skips_narrowing() -> None:
+    """A tradfi instrument NOT within MVP scope (``mvp=False``, e.g. a
+    non-MVP-underlier CME future) must be left UNCHANGED by this gate — it
+    mirrors the cefi ``if mvp_dts:`` guard: narrow only, never blanket-empty
+    a cell this function did not itself determine to be out of MVP scope.
+    (In production ``_enumerate_v2_tradfi``'s own instrument-level MVP gate
+    already excludes non-MVP instruments before they reach this function;
+    this test exercises the function directly, in isolation, as its own
+    defense-in-depth guard.)"""
+    tradfi_dts = ["trades", "ohlcv_1s", "ohlcv_1m", "tbbo"]
+    entry = _tradfi_entry("CME", "futures_chain", underlying="ZC", base_asset="ZC", mvp=False)
+    row_dts = enumerator_module._row_data_types("tradfi", entry, tradfi_dts)
+    assert row_dts == tradfi_dts, f"non-MVP tradfi cell must be unchanged by the MVP-narrowing gate; got {row_dts}"

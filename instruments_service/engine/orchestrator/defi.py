@@ -65,38 +65,175 @@ _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX: dict[str, str] = {
     "camelot_v3": "CAMELOT_V3",
     "velodrome_v2": "VELODROME_V2",
     "trader_joe_v2": "TRADER_JOE_V2",
-    "gmx": "GMX",
+    # gmx removed from universe 2026-07-25 (operator ruling — perp_funding's
+    # entire captured history was a synthetic OI-imbalance proxy, not real
+    # funding-rate data; native subgraph query never worked for this venue).
+    # SSOT: unified-trading-pm/plans/active/defi_gmx_venue_removal_2026_07_25.md.
     "sushiswap": "SUSHISWAP",
     # Lending forks
     "spark": "SPARK",
 }
 
 
-# Protocols that don't use subgraphs (Ethereum-only, custom data sources).
+# Protocols that don't use subgraphs (custom data sources — curated markets/
+# registries, not GraphQL discovery). Not all are Ethereum-only: VENUS/RADIANT
+# are multi-chain via a per-chain curated-markets dict (see venus.py/radiant.py
+# _MVP_MARKETS_BY_CHAIN), BENQI is Avalanche-only, EULER_V2 is Ethereum-only.
 _STATIC_DEFI_VENUES: list[str] = [
     "LIDO-ETHEREUM",
     "ETHERFI-ETHEREUM",
     "ETHENA-ETHEREUM",
     "EIGENLAYER-ETHEREUM",
+    # Phase-4 lending protocols (2026-07-07 finding — factory.py/router.py already
+    # wire venus/benqi/radiant/euler_v2 adapters incl. chain parsing via
+    # defi_graph_adapters, but this venue list never requested them, so 0 real
+    # catalogue rows were ever produced despite working code. Chains per adapter's
+    # own _MVP_MARKETS_BY_CHAIN / _DEFAULT_CHAIN.
+    "VENUS-BSC",
+    "VENUS-ETHEREUM",
+    "BENQI-AVALANCHE",
+    "RADIANT-ARBITRUM",
+    "RADIANT-BSC",
+    "RADIANT-ETHEREUM",
+    "EULER_V2-ETHEREUM",
+    # LST / restaking / vault protocols (2026-07-18 wiring — factory + adapters
+    # existed with populated curated registries but this venue list never
+    # requested them, so 0 catalogue rows were ever produced despite working
+    # code, exactly like the 2026-07-10 VENUS/RADIANT/BENQI finding. Only chains
+    # with a POPULATED per-chain registry are listed (measured: each returns >=1
+    # real instrument via the factory). Chains whose adapter registry is empty
+    # for that chain (YEARN_V3-OPTIMISM / BEEFY-POLYGON / IDLE-ARBITRUM /
+    # IDLE-POLYGON) are deliberately NOT enumerated — they'd emit 0 rows and
+    # pollute honest-coverage as expected-but-always-empty; they stay phase=
+    # "pipeline" in UAC until their curated vault addresses are researched.
+    # UAC DEFI_VENUE_PHASE flips these to "live" in lockstep (denominator drift
+    # guard: set(_build_defi_venues()) == VENUES_BY_ASSET_GROUP["defi"]).
+    "ROCKETPOOL-ETHEREUM",
+    "RENZO-ETHEREUM",
+    "RENZO-ARBITRUM",
+    "KELPDAO-ETHEREUM",
+    "PUFFER-ETHEREUM",
+    "KARAK-ETHEREUM",
+    "KARAK-ARBITRUM",
+    "SYMBIOTIC-ETHEREUM",
+    "YEARN_V3-ETHEREUM",
+    "YEARN_V3-ARBITRUM",
+    "BEEFY-ETHEREUM",
+    "BEEFY-ARBITRUM",
+    "BEEFY-BASE",
+    "BEEFY-AVALANCHE",
+    "BEEFY-BSC",
+    "PENDLE-ETHEREUM",
+    "PENDLE-ARBITRUM",
+    "CONVEX-ETHEREUM",
+    "IDLE-ETHEREUM",
+    # Single-token exchange-issued LSTs (cbeth.py / wbeth.py, new 2026-07-18).
+    # cbETH = Coinbase (ETHEREUM only); wBETH = Binance (ETHEREUM + BSC, same
+    # contract address on both chains).
+    "COINBASE-ETHEREUM",
+    "BINANCE-ETHEREUM",
+    "BINANCE-BSC",
+    # Chainlink oracle price feeds (chainlink.py, 2026-07-20 — resolves
+    # BLK-0c7b82fe). Multi-chain via factory._DEFI_GRAPH_ADAPTERS chain
+    # parsing; 45 curated aggregator addresses, verified subset of MTDS's
+    # production _oracle_prices_constants.py. UAC flips these to phase="live"
+    # in lockstep (denominator drift guard).
+    "CHAINLINK-ETHEREUM",
+    "CHAINLINK-ARBITRUM",
+    "CHAINLINK-BASE",
+    "CHAINLINK-OPTIMISM",
+    "CHAINLINK-POLYGON",
+    # AAVE V3 on-chain oracle reserves (aave_oracle.py, 2026-07-21 —
+    # lst_rate_honest_coverage_2026_07_21.md Phase 1). Single fixed venue
+    # (Ethereum-only Phase 0; NOT in factory._DEFI_GRAPH_ADAPTERS — no chain
+    # parsing needed). UAC flips AAVE-ETHEREUM to phase="live" in lockstep
+    # (denominator drift guard, unified-api-contracts@6bdbc31d).
+    "AAVE-ETHEREUM",
+    # 6 LST/vault venues (defi_venue_pipeline_to_live_ao_build_2026_07_30.md
+    # todo 5 — operator ruling 2026-07-29). Genuine instruments-service
+    # reference-data adapters (ankr.py/stader.py/stakewise.py/swell.py/
+    # mantle.py/maker.py, todo 1), a verified-healthy production capture cron
+    # (todo 2), a complete 90-day manifest backfill (todo 3, 90/90 days per
+    # venue), and instruments-catalogue registration (todo 4) all preceded
+    # this — UAC flips these to phase="live" in the SAME commit (denominator
+    # drift guard, unified-api-contracts).
+    "ANKR-ETHEREUM",
+    "STADER-ETHEREUM",
+    "STAKEWISE-ETHEREUM",
+    "SWELL-ETHEREUM",
+    "MANTLE-ETHEREUM",
+    "MAKER-ETHEREUM",
+    # AAVE-PLASMA (2026-08-01 — defi_plasma_chain_onboarding_gap_2026_07_26.md /
+    # defi_satellite_ao_dispatch_batch6_2026_07_30.md todo). Genuinely an Aave V3
+    # market (same aave_v3 adapter as every AAVE_V3-* venue; UAC
+    # unified-api-contracts@18ed167f registers "AAVE-PLASMA": "aave_v3" in
+    # VENUE_TO_ADAPTER_KEY) — its UAC venue constant is the bare "AAVE" form set
+    # 2026-05-22 (before chain identity was resolved), not "AAVE_V3-PLASMA", so
+    # the subgraph auto-gen loop above can never discover it (Plasma also has no
+    # subgraph_id — RPC-only). Real capture verified: 18 manifest rows,
+    # venue=AAVE_V3/chain=PLASMA, date=2026-07-30. UAC flipped phase
+    # pipeline->live in the SAME window (unified-api-contracts@06c54fee) —
+    # listing it here restores the denominator drift guard
+    # (set(_build_defi_venues()) == VENUES_BY_ASSET_GROUP["defi"]).
+    "AAVE-PLASMA",
 ]
 
 
 # Solana DeFi venues (non-EVM, REST API-based discovery).
+# DRIFT (Solana) removed 2026-07-16 (operator ruling: all Solana perp DEXes
+# dropped except Jupiter, not integrated). SSOT: unified-trading-pm/codex/
+# 04-architecture/solana-defi-coverage.md.
 _SOLANA_DEFI_VENUES: list[str] = [
-    "DRIFT-SOLANA",
     "KAMINO-SOLANA",
     "RAYDIUM-SOLANA",
     "ORCA-SOLANA",
     "MARINADE-SOLANA",
     "JITO-SOLANA",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
+    # MarginFi + Solend Solana lending adapters (2026-07-09) — real public
+    # REST/JSON APIs, now IS-producible (marginfi.py / solend.py).
+    "MARGINFI-SOLANA",
+    "SOLEND-SOLANA",
+    # Solana LST / restaking / native-staking (2026-07-18 wiring — sanctum.py /
+    # solblaze.py / jito_restaking.py / solana_native_staking.py adapters exist
+    # with populated curated registries but were never requested. Each returns
+    # >=1 real instrument (measured via the factory). UAC flips these to phase=
+    # "live" in lockstep. Canonical venue spellings match each adapter's own
+    # venue_tag: JITORESTAKING-SOLANA (not JITO_RESTAKING) and SOLANA-NATIVE-
+    # SOLANA (not SOLANA_NATIVE) — the underscored forms would create duplicate
+    # canonical venues and break the per-venue monotonicity count.
+    "SANCTUM-SOLANA",
+    "SOLBLAZE-SOLANA",
+    "JITORESTAKING-SOLANA",
+    "SOLANA-NATIVE-SOLANA",
+    # Solana oracle (2026-07-20 DeFi catalogue canonicalization — pyth.py
+    # adapter, Hermes upstream measured healthy). UAC keeps this phase="live"
+    # (denominator drift guard).
+    #
+    # METEORA-SOLANA / LIFINITY-SOLANA / PHOENIX-SOLANA deliberately NOT listed
+    # here (narrowed back out 2026-07-22): meteora.py/lifinity.py/phoenix.py
+    # adapters are wired + registered in factory._ADAPTERS, but all 3
+    # upstreams are measurably dead (app.meteora.ag/api/pools -> 404,
+    # api.lifinity.io/pools -> no response/522, api.phoenix.trade -> NXDOMAIN;
+    # re-verified 2026-07-22, same result as the original 2026-07-20 finding),
+    # so requesting them here would enumerate 0-instrument venues and pollute
+    # honest-coverage as expected-but-always-empty. UAC's DEFI_VENUE_PHASE for
+    # these 3 is "pipeline" in lockstep (denominator drift guard) — re-add
+    # here in the SAME commit an upstream migration/replacement makes the
+    # adapter produce >=1 real instrument again. SSOT: unified-trading-pm/
+    # plans/active/issues/uac_is_defi_oracle_dex_adapter_drift_2026_07_20.md.
+    # CHAINLINK-* stays phase="live" via a separate per-chain adapter (not
+    # Solana-listed here).
+    "PYTH-SOLANA",
 ]
-# NOTE: PACIFICA-SOLANA / LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp
-# CLOBs classified as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, same as HYPERLIQUID/
-# ASTER). They were wrongly enumerated here → captured into the defi
-# instrument-catalog. Reclassified to the UAC cefi registry 2026-06-25
+# NOTE: LIGHTER-ZKSYNC / EXTENDED-STARKNET are on-chain perp CLOBs classified
+# as CeFi (UAC VENUE_TO_ASSET_GROUP=cefi, same as HYPERLIQUID/ASTER). They
+# were wrongly enumerated here → captured into the defi instrument-catalog.
+# Reclassified to the UAC cefi registry 2026-06-25
 # (instruments_foundation_completeness_2026_06_24.md): they ride the cefi
-# backfill like HYPERLIQUID/ASTER, not the defi path.
+# backfill like HYPERLIQUID/ASTER, not the defi path. (PACIFICA (Solana) was
+# a third venue in this note until removed entirely 2026-07-16 — operator
+# ruling: all Solana perp DEXes dropped except Jupiter, not integrated.)
 
 
 def _build_defi_venues() -> list[str]:
@@ -126,34 +263,14 @@ def _get_defi_manifest_high_watermarks() -> dict[str, int]:
     DeFi instruments are monotonically increasing (immutable smart contracts,
     never deleted). If a fresh API call returns fewer instruments for a venue
     than the manifest's post-epoch maximum, the API gave an incomplete result.
+
+    Thin wrapper over the asset-group-parameterized
+    ``venue_core._get_manifest_high_watermarks`` (extracted 2026-07-10,
+    Todo 6 of cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md)
+    — kept as a zero-arg DeFi-named entry point since callers/tests already
+    reference this exact name.
     """
-    try:
-        bucket = _orch._get_instruments_bucket("DEFI")
-        index_df = _orch.read_availability_index(bucket)
-        if index_df.empty:
-            return {}
-        hwm: dict[str, int] = {}
-        venue_vals: list[object] = list(index_df["venue"])
-        count_vals: list[object] = list(index_df["instrument_count"])
-        date_vals: list[object] = list(index_df["date"])
-        for v_raw, c_raw, d_raw in zip(venue_vals, count_vals, date_vals, strict=True):
-            v = str(v_raw)
-            c = int(str(c_raw))
-            d = str(d_raw)
-            # Skip entries from before the current adapter epoch
-            epoch = _orch._get_venue_epoch(v)
-            if epoch is not None and d < epoch:
-                continue
-            if c > hwm.get(v, 0):
-                hwm[v] = c
-        return hwm
-    except Exception as exc:
-        _orch.classify_and_emit_error(
-            exc,
-            service_name="instruments-service",
-            operation="read_defi_manifest",
-        )
-        return {}
+    return _orch._get_manifest_high_watermarks("DEFI")
 
 
 def _count_per_venue(records: list[_orch.InstrumentRecord]) -> dict[str, int]:
@@ -188,41 +305,38 @@ def _enforce_defi_monotonicity(
     records: list[_orch.InstrumentRecord],
     hwm: dict[str, int],
 ) -> tuple[list[_orch.InstrumentRecord], set[str]]:
-    """Remove venues from records that regressed below their manifest high-water mark.
+    """Block only a CATASTROPHIC per-venue count collapse; let real delistings through.
 
-    Returns (clean_records, blocked_venues). Blocked venues had fewer instruments
-    than the manifest max and must NOT be written to GCS (would overwrite better data).
-    Only checks venues that are actually present in the records — venues not fetched
-    are ignored (they have 0 count but were never requested).
+    Returns (clean_records, blocked_venues). Blocked venues collapsed to *below half*
+    their manifest max — a broken / partial API fetch that would overwrite better data —
+    and must NOT be written to GCS. Only checks venues actually present in the records
+    (venues not fetched this run have 0 count but were never requested, not a regression).
+
+    R2c honest-``available_to`` relax (IS R2c — instruments-service availability-
+    denominator honesty): the original DeFi policy was ``min_ratio=1.0`` ("any decrease
+    at all is an incomplete fetch — immutable smart-contract instruments never shrink").
+    That premise is wrong at the *per-instrument active-set* grain the catalogue tracks:
+    a governance-token delisting, a pool going below a subgraph's TVL cut, or a lending
+    market being retired IS a real, small decrease in a venue's live count. Blocking on
+    it SUPPRESSED the fresh (smaller) record set, so the delisting never reached
+    ``by_date/`` → the catalogue roll-up never observed the drop → the instrument's
+    ``available_to`` was never closed and it sat permanently "active". A real count
+    regression is a real delist, not an error.
+
+    So this now passes ``min_ratio=_CEFI_TRADFI_THIN_COLLAPSE_RATIO`` (0.5) while keeping
+    ``block_on_regression=True``: a real delisting (>=50% of the HWM retained) writes
+    through — the drop reaches ``by_date/`` and the roll-up's §7.3 liveness closes
+    ``available_to`` at the instrument's last-seen day — while a genuinely broken fetch
+    (a subgraph returning a fraction of the universe, <50% of the HWM) is still blocked
+    from clobbering good data. This is now the SAME thin-collapse ratio CeFi/TradFi use
+    (``venue_core`` docstring), since CeFi delistings, TradFi expiries and DeFi delistings
+    are all legitimate small decreases in today's active count. The full per-instrument
+    TVL-time-series close is a documented follow-up; this is the guard-relax + last-seen
+    ``available_to`` first cut.
     """
-    new_counts = _orch._count_per_venue(records)
-    fetched_venues = set(new_counts.keys())
-    blocked: set[str] = set()
-    for venue, old_max in hwm.items():
-        if venue not in fetched_venues:
-            continue
-        new_count = new_counts.get(venue, 0)
-        if new_count < old_max:
-            blocked.add(venue)
-            _orch.logger.error(
-                "DeFi monotonicity BLOCKED: %s has %d instruments (manifest max=%d) — "
-                "will NOT write to GCS (would overwrite better data)",
-                venue,
-                new_count,
-                old_max,
-            )
-        elif new_count > old_max:
-            _orch.logger.info(
-                "DeFi monotonicity OK: %s grew %d → %d (+%d)",
-                venue,
-                old_max,
-                new_count,
-                new_count - old_max,
-            )
-
-    if blocked:
-        records = [r for r in records if r.venue not in blocked]
-    return records, blocked
+    return _orch._enforce_monotonicity(
+        records, hwm, block_on_regression=True, min_ratio=_orch._CEFI_TRADFI_THIN_COLLAPSE_RATIO
+    )
 
 
 async def _get_or_fetch_defi_universe(
@@ -373,7 +487,13 @@ def filter_defi_instruments_by_relevance(records: list) -> list:
         venue = (getattr(r, "venue", None) or "").upper()
         is_dex = any(kw in venue for kw in _orch.DEX_VENUE_KEYWORDS)
         if is_dex:
+            pool_address = (getattr(r, "pool_address", None) or getattr(r, "raw_symbol", None) or "").lower()
             if base in major and quote in major:
+                result.append(r)
+            elif _orch.is_defi_force_include_pool(pool_address):
+                # Operator-curated high-TVL pool allowlist (UAC SSOT) — kept even
+                # when a leg is outside the major-assets set (e.g. high-liquidity
+                # Raydium pools that would otherwise be relevance-rejected).
                 result.append(r)
             else:
                 _orch.logger.debug(

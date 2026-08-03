@@ -22,7 +22,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from unified_api_contracts.registry.market_data_categories import VENUE_TO_ASSET_GROUP
+from unified_api_contracts import VENUE_TO_ASSET_GROUP
+
+from instruments_service.engine.orchestrator.process_preflight import _ENRICHMENT_PROVIDERS
 
 if TYPE_CHECKING:
     from instruments_service.engine import orchestrator as _orch
@@ -97,7 +99,6 @@ async def _fetch_urdi_records(
     api_keys: dict[str, str] | None,
     date: str,
     mode: str,
-    source: str | None,
     skip_urdi: bool,
 ) -> _UrdiFetchOutcome:
     """Stage 2 — fetch from URDI, the sole external API path.
@@ -116,13 +117,28 @@ async def _fetch_urdi_records(
     _non_error_venues = out.non_error_venues
 
     defi_venue_names = frozenset(_orch._DEFI_VENUES)
+    # `active_venues` for a sports run also carries the enrichment-provider
+    # pseudo-venues (FOOTYSTATS/UNDERSTAT/TRANSFERMARKT/SOCCER_FOOTBALL_INFO/
+    # OPEN_METEO) purely so downstream stage-7 enrichment (process_enrichment.py)
+    # and stage-4 zero-record handling (process_zero_records.py) can do
+    # membership checks against it (see process.py's `_fixtures_fetch_failed`
+    # docstring). They are never real URDI-fetchable venues — they carry
+    # NO_ADAPTER_YET sentinels by design (their real capture path is the
+    # sports orchestrator's own per-fixture/enrichment dispatch, never the
+    # generic URDI/master factory: sports_stats_delayed_live_capture_still_dead_post_fix_2026_07_29).
+    # Excluding them HERE (not just from the post-fetch success check) stops
+    # every non-enrichment-only, non-per-fixture sports dispatch from logging
+    # a spurious "No URDI adapter for N venue(s)" WARNING + "URDI fetch: N
+    # venue(s) failed with PERMANENT errors" ERROR for venues that were never
+    # meant to be fetched via this path at all.
+    _fetchable_venues = [v for v in active_venues if v not in _ENRICHMENT_PROVIDERS]
     if skip_urdi:
         # Enrichment-only: empty the venue lists so URDI fetch loops are no-ops.
         defi_active: list[str] = []
         non_defi_active: list[str] = []
     else:
-        defi_active = [v for v in active_venues if v in defi_venue_names]
-        non_defi_active = [v for v in active_venues if v not in defi_venue_names]
+        defi_active = [v for v in _fetchable_venues if v in defi_venue_names]
+        non_defi_active = [v for v in _fetchable_venues if v not in defi_venue_names]
 
     # DeFi: use cached universe (one API call for entire batch run)
     if defi_active and mode == "batch":  # noqa: L2-mode-seam — DeFi caching decision; design call pending per batch_live_symmetry Q3
@@ -170,9 +186,42 @@ async def _fetch_urdi_records(
     if non_defi_active:
         with _orch.SolanaCacheSession():
             non_defi_result = await _orch.fetch_instruments_for_all_venues(
-                non_defi_active, api_keys=api_keys, date=date, mode=mode, source=source
+                non_defi_active, api_keys=api_keys, date=date, mode=mode
             )
-        records.extend(non_defi_result.records)
+        non_defi_records = non_defi_result.records
+
+        # Cross-cutting venue-count-regression DETECTION (non-blocking) for
+        # CeFi/TradFi — generalizes DeFi's _enforce_defi_monotonicity via the
+        # shared venue_core._enforce_monotonicity helper (Todo 6 of
+        # cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md, the
+        # gap that let LIGHTER/PACIFICA's earlier OOM-driven capture failures
+        # go unnoticed at this per-fetch layer). Unlike DeFi's hard block,
+        # this NEVER removes records — CeFi delistings and TradFi contract
+        # expiries are legitimate decreases in today's active count, so a
+        # DeFi-style block would permanently false-block the first legitimate
+        # CeFi delisting. Detection only; the write proceeds either way.
+        for _ag in ("CEFI", "TRADFI"):
+            _ag_venues = {v for v in non_defi_active if VENUE_TO_ASSET_GROUP.get(v) == _ag.lower()}
+            if not _ag_venues:
+                continue
+            _ag_hwm = {v: c for v, c in _orch._get_manifest_high_watermarks(_ag).items() if v in _ag_venues}
+            if not _ag_hwm:
+                continue
+            _, _flagged = _orch._enforce_monotonicity(
+                [r for r in non_defi_records if r.venue in _ag_venues],
+                _ag_hwm,
+                block_on_regression=False,
+                min_ratio=_orch._CEFI_TRADFI_THIN_COLLAPSE_RATIO,
+            )
+            if _flagged:
+                _orch.logger.error(
+                    "%s venue count collapse detected (non-blocking, date=%s): %s",
+                    _ag,
+                    date,
+                    sorted(_flagged),
+                )
+
+        records.extend(non_defi_records)
         _retryable_venues.extend(non_defi_result.retryable_venues)
         _non_error_venues.update(
             v for v in non_defi_active if v not in {e.venue for e in non_defi_result.failed_venues}
@@ -246,22 +295,55 @@ async def _per_fixture_gcs_fast_path(
     return pf_counts
 
 
+def _pre_launch_venues_from_raw_fetch(
+    records: list[_orch.InstrumentRecord],
+    date_dt: _orch.datetime,
+) -> frozenset[str]:
+    """Venues whose every URDI-fetched (pre-filter) record honestly post-dates ``date_dt``.
+
+    A venue qualifies only when EVERY one of its fetched instruments carries an
+    explicit ``available_from_datetime`` later than the requested date — a
+    record with ``available_from_datetime=None`` never counts (the date filter
+    treats None as "always available", so it is not evidence of a pre-launch
+    venue). Feeds ``_zero_records_non_sports``'s honest
+    ``EXPECTED_PRE_VENUE_LAUNCH`` marker so a backfill over a pre-launch
+    historical date for a real adapter-backed venue (e.g. COINBASE-CDE before
+    its registration date) writes an honest absence instead of crashing.
+    Issue: cefi_coinbase_cde_urdi_zero_records_2026_07_28.md.
+    """
+    by_venue: dict[str, list[_orch.InstrumentRecord]] = {}
+    for r in records:
+        venue = (getattr(r, "venue", None) or "").upper()
+        by_venue.setdefault(venue, []).append(r)
+    return frozenset(
+        venue
+        for venue, venue_records in by_venue.items()
+        if venue_records
+        and all(
+            (since := getattr(r, "available_from_datetime", None)) is not None and since > date_dt
+            for r in venue_records
+        )
+    )
+
+
 def _filter_and_enrich_records(
     *,
     records: list[_orch.InstrumentRecord],
     date: str,
     asset_groups: list[str],
-) -> tuple[list[_orch.InstrumentRecord], _orch.datetime, frozenset[str] | None]:
+) -> tuple[list[_orch.InstrumentRecord], _orch.datetime, frozenset[str] | None, frozenset[str]]:
     """Stage 3 — filter to instruments active on the requested date + enrich.
 
     URDI adapters return the full historical instrument universe; this reduces
     it to only instruments tradeable on the requested day. Passes the DeFi
     venue set so the filter can warn on missing available_from_datetime.
-    Returns ``(records, date_dt, defi_venue_set)`` for downstream stages.
+    Returns ``(records, date_dt, defi_venue_set, pre_launch_venues)`` for
+    downstream stages — see ``_pre_launch_venues_from_raw_fetch`` for the last.
     """
     is_defi_run = any(c.upper() in ("DEFI", "ALL") for c in asset_groups)
     defi_venue_set: frozenset[str] | None = frozenset(_orch._DEFI_VENUES) if is_defi_run else None
     date_dt = _orch.datetime.fromisoformat(date).replace(tzinfo=_orch.UTC)
+    pre_launch_venues = _pre_launch_venues_from_raw_fetch(records, date_dt)
     records = _orch.filter_instruments_by_date(records, date_dt, defi_venues=defi_venue_set)
     _orch.logger.info(
         "Date filter %s: %d instruments active (from URDI fetch)",
@@ -328,4 +410,4 @@ def _filter_and_enrich_records(
             before - len(records),
         )
 
-    return records, date_dt, defi_venue_set
+    return records, date_dt, defi_venue_set, pre_launch_venues

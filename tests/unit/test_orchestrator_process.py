@@ -184,8 +184,73 @@ class TestProcessInstruments:
             )
         assert isinstance(result, dict)
 
+    @pytest.mark.asyncio
+    async def test_cefi_venue_collapse_is_detected_but_not_blocked(self, caplog) -> None:
+        """A CeFi venue whose count collapsed vs. its manifest HWM is flagged in the
+        logs (the exact LIGHTER/PACIFICA-shape regression from
+        cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md) but the
+        record is STILL WRITTEN — the generalized non-DeFi policy detects, it
+        never blocks (CeFi delistings/TradFi expiries are legitimate decreases,
+        unlike DeFi's immutable-contract invariant)."""
+        records = [_make_record(venue="LIGHTER-ZKSYNC", instrument_key="LIGHTER-ZKSYNC:PERP:1")]
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        # Manifest HWM shows 213 (the venue's real pre-incident steady-state) —
+        # this run only fetched 1 record, an ~99.5% collapse, well under the 50%
+        # thin-collapse ratio.
+        hwm_df = pd.DataFrame(
+            {
+                "venue": ["LIGHTER-ZKSYNC"],
+                "instrument_count": [213],
+                "date": ["2026-06-25"],
+            }
+        )
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
+                return_value=["LIGHTER-ZKSYNC"],
+            ),
+            patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
+            patch(
+                "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
+                AsyncMock(return_value=VenueFetchResult(records=records)),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator.DomainValidationService") as mock_dvs,
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, [], ["LIGHTER-ZKSYNC"]),
+            ),
+            patch("instruments_service.engine.orchestrator.ManifestWriter"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=hwm_df),
+            patch("instruments_service.engine.orchestrator._get_venue_epoch", return_value=None),
+            caplog.at_level("ERROR"),
+        ):
+            mock_dvs.return_value.validate_for_domain = MagicMock()
+            result = await process_instruments("2026-07-10", ["CEFI"])
+
+        # Detected: an ERROR-level collapse log fired for this venue.
+        assert any(
+            "CEFI venue count collapse detected" in r.message and "LIGHTER-ZKSYNC" in r.message for r in caplog.records
+        )
+        # NOT blocked: the record was still written (result carries the venue's count).
+        assert result.get("LIGHTER-ZKSYNC") == 1
+
 
 class TestWriteVenue:
+    """``_write_venue`` builds its OWN per-shard hive sink internally (full-hive
+    instrument_availability, operator R2 2026-07-21 —
+    ``_instrument_availability_sink_for``) rather than using the ``sink`` argument
+    directly, so every test patches ``get_data_sink`` to return the same mock the
+    caller passed in — mirrors the established pattern for the sports-lane
+    ``_sports_ref_sink_for`` sink-builder tests elsewhere in this suite."""
+
     def test_write_success(self) -> None:
         import pandas as pd
 
@@ -195,7 +260,10 @@ class TestWriteVenue:
         mock_sampler.enable_sampling = False
         counts: dict[str, int] = {}
 
-        with patch("instruments_service.engine.orchestrator._write_catalogue_record"):
+        with (
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+        ):
             _write_venue("BINANCE-SPOT", df, "2026-03-22", "test-bucket", mock_sink, counts, mock_sampler)
 
         assert counts["BINANCE-SPOT"] == 1
@@ -211,7 +279,10 @@ class TestWriteVenue:
         mock_sampler.enable_sampling = False
         counts: dict[str, int] = {}
 
-        with patch("instruments_service.engine.orchestrator.log_event"):
+        with (
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+        ):
             _write_venue("BINANCE-SPOT", df, "2026-03-22", "test-bucket", mock_sink, counts, mock_sampler)
 
         assert "BINANCE-SPOT" not in counts  # not written due to error
@@ -225,7 +296,119 @@ class TestWriteVenue:
         mock_sampler.enable_sampling = True
         counts: dict[str, int] = {}
 
-        with patch("instruments_service.engine.orchestrator._write_catalogue_record"):
+        with (
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+        ):
             _write_venue("BINANCE-SPOT", df, "2026-03-22", "test-bucket", mock_sink, counts, mock_sampler)
 
         mock_sampler.generate_csv_sample.assert_called_once()
+
+    def test_cefi_manifest_stamps_data_type_instruments(self) -> None:
+        """Non-sports (cefi/tradfi/defi) manifest emission must stamp
+        data_type='instruments' — never blank.
+
+        Regression guard for the 2026-06-29..2026-07-06 blank-data_type leak
+        (issue: is_cefi_manifest_blank_data_type_since_2026_06_29_2026_07_06).
+        The canonical honest-coverage filter is
+        capture_status=='captured' AND data_type=='instruments'; a blank stamp
+        makes 260 cefi shards read as absent. writer is SSOT for the atom —
+        migrate_instruments_store_v9.REFERENCE_DATA_TYPE promotes legacy blanks,
+        but new emissions must land canonical from the first write.
+        """
+        import pandas as pd
+
+        df = pd.DataFrame({"instrument_key": ["A"], "venue": ["BINANCE-SPOT"]})
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        mock_manifest = MagicMock()
+        counts: dict[str, int] = {}
+
+        with patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink):
+            _write_venue(
+                "BINANCE-SPOT",
+                df,
+                "2026-07-06",
+                "test-bucket",
+                mock_sink,
+                counts,
+                mock_sampler,
+                manifest=mock_manifest,
+            )
+
+        mock_manifest.record_captured.assert_called_once()
+        call_kwargs = mock_manifest.record_captured.call_args.kwargs
+        assert call_kwargs["data_type"] == "instruments", (
+            f"cefi manifest emission must stamp data_type='instruments', got {call_kwargs['data_type']!r}"
+        )
+        assert call_kwargs["asset_group"] == "cefi"
+        assert call_kwargs["venue"] == "BINANCE-SPOT"
+        assert call_kwargs["chain"] == ""
+
+    def test_defi_manifest_stamps_data_type_instruments(self) -> None:
+        """DeFi (chain-bearing) manifest emission must also stamp
+        data_type='instruments' — the same fix applies to the chain-split branch.
+        """
+        import pandas as pd
+
+        df = pd.DataFrame({"instrument_key": ["A"], "venue": ["AAVE_V3-ETHEREUM"]})
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        mock_manifest = MagicMock()
+        counts: dict[str, int] = {}
+
+        with patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink):
+            _write_venue(
+                "AAVE_V3-ETHEREUM",
+                df,
+                "2026-07-06",
+                "test-bucket",
+                mock_sink,
+                counts,
+                mock_sampler,
+                manifest=mock_manifest,
+            )
+
+        mock_manifest.record_captured.assert_called_once()
+        call_kwargs = mock_manifest.record_captured.call_args.kwargs
+        assert call_kwargs["data_type"] == "instruments"
+        assert call_kwargs["asset_group"] == "defi"
+        assert call_kwargs["chain"] == "ETHEREUM"
+
+    def test_write_venue_never_doubles_day_segment(self) -> None:
+        """Regression pin for defi_migration_audit_log_2026_07_24.md P1 (the
+        ``day={D}/day={D}/`` writer regression, ~2026-05-05..2026-05-22): the hive
+        sink prefix built by ``_instrument_availability_sink_for`` must carry
+        exactly ONE ``day=`` segment, and ``partition`` passed to the write gate
+        must stay empty (day never re-supplied through the partition dict — see
+        the alphabetical-sort-trap docstring on that helper). Structurally true
+        since operator R2 (2026-07-22, `a9be6ce9`); pinned here so a future
+        refactor can't silently reintroduce the doubling.
+        """
+        import pandas as pd
+
+        df = pd.DataFrame({"instrument_key": ["A"], "venue": ["AAVE_V3-ARBITRUM"]})
+        mock_sink = MagicMock()
+        mock_sampler = MagicMock()
+        mock_sampler.enable_sampling = False
+        counts: dict[str, int] = {}
+
+        with (
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch("instruments_service.engine.orchestrator._WRITE_GATE") as mock_gate,
+            patch("instruments_service.engine.orchestrator.get_data_sink") as mock_get_data_sink,
+        ):
+            mock_get_data_sink.return_value = mock_sink
+            _write_venue("AAVE_V3-ARBITRUM", df, "2026-05-07", "test-bucket", mock_sink, counts, mock_sampler)
+
+        mock_get_data_sink.assert_called_once()
+        prefix = mock_get_data_sink.call_args.kwargs["prefix"]
+        assert prefix.count("day=") == 1, f"doubled day= segment in sink prefix: {prefix!r}"
+        assert prefix == (
+            "instrument_availability/by_date/day=2026-05-07/pipeline_mode=batch_instruments_service/"
+            "asset_group=defi/venue=AAVE_V3-ARBITRUM"
+        )
+        mock_gate.validate_and_write.assert_called_once()
+        assert mock_gate.validate_and_write.call_args.kwargs["partition"] == {}

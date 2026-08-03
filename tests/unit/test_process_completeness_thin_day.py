@@ -43,14 +43,12 @@ class TestDetectThinDayVenues:
             counts={},
             written_venues=set(),
             date="2026-06-26",
-            bucket="instruments-store-cefi-prd-central-element-323112",
+            bucket="test-bucket",
         )
         assert result == set()
 
     def test_index_load_failure_returns_empty(self) -> None:
-        with patch(
-            "instruments_service.engine.orchestrator.process_completeness._orch"
-        ) as mock_orch:
+        with patch("instruments_service.engine.orchestrator.process_completeness._orch") as mock_orch:
             mock_orch.read_availability_index.side_effect = Exception("GCS unavailable")
             mock_orch.logger = MagicMock()
             result = _detect_thin_day_venues(
@@ -63,9 +61,7 @@ class TestDetectThinDayVenues:
 
     def test_thin_day_detected_below_fraction(self, cefi_history_normal: pd.DataFrame) -> None:
         # 47 / 678 ≈ 6.9% — well below the 50% threshold
-        with patch(
-            "instruments_service.engine.orchestrator.process_completeness._orch"
-        ) as mock_orch:
+        with patch("instruments_service.engine.orchestrator.process_completeness._orch") as mock_orch:
             mock_orch.read_availability_index.return_value = cefi_history_normal
             mock_orch.logger = MagicMock()
             result = _detect_thin_day_venues(
@@ -78,9 +74,7 @@ class TestDetectThinDayVenues:
 
     def test_healthy_day_not_flagged(self, cefi_history_normal: pd.DataFrame) -> None:
         # 678 / 678 = 100% — not thin
-        with patch(
-            "instruments_service.engine.orchestrator.process_completeness._orch"
-        ) as mock_orch:
+        with patch("instruments_service.engine.orchestrator.process_completeness._orch") as mock_orch:
             mock_orch.read_availability_index.return_value = cefi_history_normal
             mock_orch.logger = MagicMock()
             result = _detect_thin_day_venues(
@@ -93,9 +87,7 @@ class TestDetectThinDayVenues:
 
     def test_borderline_exactly_at_threshold_not_flagged(self, cefi_history_normal: pd.DataFrame) -> None:
         # median=678; threshold=339; count=339 → NOT flagged (strict <, not <=)
-        with patch(
-            "instruments_service.engine.orchestrator.process_completeness._orch"
-        ) as mock_orch:
+        with patch("instruments_service.engine.orchestrator.process_completeness._orch") as mock_orch:
             mock_orch.read_availability_index.return_value = cefi_history_normal
             mock_orch.logger = MagicMock()
             result = _detect_thin_day_venues(
@@ -108,9 +100,7 @@ class TestDetectThinDayVenues:
 
     def test_count_below_abs_floor_skipped(self, cefi_history_normal: pd.DataFrame) -> None:
         # count=5 < _THIN_DAY_ABS_FLOOR=20 → skip even if ratio is terrible
-        with patch(
-            "instruments_service.engine.orchestrator.process_completeness._orch"
-        ) as mock_orch:
+        with patch("instruments_service.engine.orchestrator.process_completeness._orch") as mock_orch:
             mock_orch.read_availability_index.return_value = cefi_history_normal
             mock_orch.logger = MagicMock()
             result = _detect_thin_day_venues(
@@ -134,9 +124,7 @@ class TestDetectThinDayVenues:
                 }
             ]
         )
-        with patch(
-            "instruments_service.engine.orchestrator.process_completeness._orch"
-        ) as mock_orch:
+        with patch("instruments_service.engine.orchestrator.process_completeness._orch") as mock_orch:
             mock_orch.read_availability_index.return_value = idx
             mock_orch.logger = MagicMock()
             result = _detect_thin_day_venues(
@@ -160,9 +148,7 @@ class TestDetectThinDayVenues:
                 }
             ]
         )
-        with patch(
-            "instruments_service.engine.orchestrator.process_completeness._orch"
-        ) as mock_orch:
+        with patch("instruments_service.engine.orchestrator.process_completeness._orch") as mock_orch:
             mock_orch.read_availability_index.return_value = idx
             mock_orch.logger = MagicMock()
             result = _detect_thin_day_venues(
@@ -186,9 +172,7 @@ class TestDetectThinDayVenues:
             for d in range(12, 27)  # 12..26 inclusive
         ]
         idx = _make_index(rows)
-        with patch(
-            "instruments_service.engine.orchestrator.process_completeness._orch"
-        ) as mock_orch:
+        with patch("instruments_service.engine.orchestrator.process_completeness._orch") as mock_orch:
             mock_orch.read_availability_index.return_value = idx
             mock_orch.logger = MagicMock()
             result = _detect_thin_day_venues(
@@ -213,9 +197,7 @@ class TestDetectThinDayVenues:
             for d in range(1, 15)
         ]
         idx = _make_index(extra_rows)
-        with patch(
-            "instruments_service.engine.orchestrator.process_completeness._orch"
-        ) as mock_orch:
+        with patch("instruments_service.engine.orchestrator.process_completeness._orch") as mock_orch:
             mock_orch.read_availability_index.return_value = idx
             mock_orch.logger = MagicMock()
             result = _detect_thin_day_venues(

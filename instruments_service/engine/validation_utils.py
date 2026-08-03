@@ -29,10 +29,13 @@ def get_venue_epoch(venue: str) -> str | None:
         "balancer": "2020-03-01",
         "sushi": "2020-08-01",
         "pancakeswap": "2020-09-01",
-        # Sports venues
-        "api_football": "2018-01-01",
-        "soccerfootball_info": "2015-01-01",
-        "footystats": "2015-01-01",
+        # Sports venues — clamped to the 2020-06 DATA FLOOR (operator ruling 2026-07-21).
+        # Odds tick data starts 2020-06-06; there is no legitimate sports data before it, so
+        # nothing may fetch/skip-gate on a pre-floor epoch (that re-introduces fabrication).
+        # SSOT: codex/02-data/sports-2020-06-data-floor.md.
+        "api_football": "2020-06-06",
+        "soccerfootball_info": "2020-06-06",
+        "footystats": "2020-06-06",
         # TradFi venues
         "ibkr": "2000-01-01",
         "databento": "2020-01-01",

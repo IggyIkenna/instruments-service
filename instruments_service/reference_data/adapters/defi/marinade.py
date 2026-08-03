@@ -1,7 +1,11 @@
 """Marinade Finance reference data adapter -- instrument discovery via REST API.
 
 Discovers Marinade stake pools on Solana (mSOL liquid staking + native staking).
-Pools are returned as InstrumentRecord with instrument_type="STAKING".
+Pools are returned as InstrumentRecord with instrument_type=STAKING. The
+`instrument_key` is built via `build_canonical_instrument_id` so its middle TYPE
+segment is the real `InstrumentType.STAKING` enum value
+(`MARINADE-SOLANA:STAKING:MSOL`), not the pre-fix `:STAKE:` shorthand literal
+that mismatched the `STAKING` field (mirrors jito.py's STAKING minting).
 
 Data source: Marinade REST API (https://api.marinade.finance).
 Reference: https://docs.marinade.finance/
@@ -12,7 +16,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -141,8 +145,16 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
         venue_tag: str,
     ) -> InstrumentRecord:
         """Build InstrumentRecord for mSOL liquid staking."""
+        # Route through the shared canonical builder so the TYPE segment is the
+        # real InstrumentType.STAKING enum value, not the old `:STAKE:` shorthand.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, venue_tag, InstrumentType.STAKING, "MSOL", passthrough=True
+        )
         return InstrumentRecord(
-            instrument_key=f"{venue_tag}:STAKE:MSOL",
+            instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol="mSo1iD7sSuqGMvkKPzYGBAjJrpF9VRdrByciFizSJhc",
             base_asset_contract_address="mSo1iD7sSuqGMvkKPzYGBAjJrpF9VRdrByciFizSJhc",
@@ -169,8 +181,16 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
         venue_tag: str,
     ) -> InstrumentRecord:
         """Build InstrumentRecord for Marinade native staking."""
+        # Route through the shared canonical builder so the TYPE segment is the
+        # real InstrumentType.STAKING enum value, not the old `:STAKE:` shorthand.
+        instrument_key = build_canonical_instrument_id(
+            AssetGroup.DEFI, venue_tag, InstrumentType.STAKING, "NATIVE-SOL", passthrough=True
+        )
         return InstrumentRecord(
-            instrument_key=f"{venue_tag}:STAKE:NATIVE-SOL",
+            instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol="MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD",
             pool_address="MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD",

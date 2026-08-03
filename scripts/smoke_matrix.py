@@ -59,11 +59,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
-from unified_api_contracts import DATA_TYPES_BY_ASSET_GROUP, VENUES_BY_ASSET_GROUP
+from unified_api_contracts import (
+    DATA_TYPES_BY_ASSET_GROUP,
+    VENUE_TO_ASSET_GROUP,
+    VENUES_BY_ASSET_GROUP,
+    PipelineMode,
+)
 from unified_trading_library import (
     get_bucket_name,
     get_project_id,
     get_storage_client,
+    resolve_bucket_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,8 +77,30 @@ logger = logging.getLogger(__name__)
 CellStatus = Literal["passed", "failed", "skipped"]
 
 _SPORTS_T0_PROVIDER: str = "API_FOOTBALL"
-_SPORTS_T0_VENUE: str = "ODDS_API"  # Placeholder: sports reference is driven via --sports-provider, not venue.
 _DEFAULT_TIMEOUT_SEC: int = 600
+
+# SPORTS venues that are genuinely MTDS-owned, NOT instruments-service-owned
+# (registry-consolidation Decision C, 2026-06-29 — see
+# instruments_service/engine/orchestrator/venue_core.py::get_venues_for_asset_groups
+# and unified_api_contracts/registry/venue_adapter_keys.py, where every one of these
+# resolves to NO_ADAPTER_YET). Re-confirmed with LIVE evidence 2026-07-12
+# (unified-trading-pm/plans/active/data_pipeline_e2e_check_2026_07_10.md todo 26
+# Progress Log): force-refetching each of these against instruments-service's real
+# CLI produces "WARNING No active venues" — a fast no-op, NOT a genuine capture.
+# They are ODDS_API's aggregated bookmaker-fanout OUTPUT tags (MTDS manifest
+# sub-venues), not independently-fetchable instruments-service shard keys. Use
+# market-tick-data-service's own pipeline checker for these venues instead.
+_MTDS_ONLY_SPORTS_VENUES: frozenset[str] = frozenset(
+    {
+        "ODDS_API",
+        "PINNACLE",
+        "BETFAIR_SB_UK",
+        "BETFAIR_EX_UK",
+        "BETFAIR_EX_EU",
+        "DRAFTKINGS",
+        "FANDUEL",
+    }
+)
 _SERVICE_MODULE: str = "instruments_service"
 _SERVICE_NAME: str = "instruments-service"
 
@@ -135,10 +163,16 @@ def enumerate_cells(
 ) -> list[SmokeCell]:
     """Enumerate viable (asset_group, venue, data_type) cells for instruments-service.
 
-    SPORTS cells are specialised: instruments-service drives SPORTS via
-    ``--sports-provider`` rather than ``--venues`` + ``--data-types``. api-football
+    SPORTS cells are mostly specialised: instruments-service drives its own
+    reference-data providers (API_FOOTBALL T0 + 5 T1 enrichment providers) via
+    ``--sports-provider`` rather than ``--venues`` + ``--data-types`` — api-football
     (T0) is emitted FIRST; T1 enrichment providers follow — see
-    ``codex/02-data/sports-adapter-dependency-order.md``.
+    ``codex/02-data/sports-adapter-dependency-order.md``. ONE SPORTS venue is the
+    exception: bare ``BETFAIR`` has a real, credential-gated instruments-service
+    adapter (``instruments_service/reference_data/adapters/sports/adapters/betfair.py``)
+    and is driven the normal ``--venues`` way, same as CEFI/DEFI/TRADFI. See
+    ``_enumerate_sports_cells`` for the full instruments-service-vs-MTDS venue-
+    ownership split (registry-consolidation Decision C, 2026-06-29).
     """
     cells: list[SmokeCell] = []
     asset_groups = [c.upper() for c in DATA_TYPES_BY_ASSET_GROUP]
@@ -168,12 +202,47 @@ def _enumerate_sports_cells(
     data_type_filter: str | None,
     venue_filter: str | None,
 ) -> list[SmokeCell]:
-    """SPORTS enumeration honours T0 (api-football) first, then T1 enrichment.
+    """SPORTS enumeration: instruments-service-owned providers + the one real venue.
 
-    Each provider is modelled as a cell. The smoke matrix orders them
-    deterministically so the pre-flight DependencyError for T1-without-T0
-    fires only when an operator explicitly skips the T0 cell.
+    instruments-service's SPORTS registry is DELIBERATELY disjoint from UAC's
+    global ``VENUES_BY_ASSET_GROUP["sports"]`` (registry-consolidation Decision C,
+    2026-06-29 — see ``instruments_service/engine/orchestrator/venue_core.py::
+    get_venues_for_asset_groups`` + ``unified_api_contracts/registry/
+    venue_adapter_keys.py``). Two genuinely different instruments-service SPORTS
+    shard families exist:
+
+    1. Reference-data PROVIDERS (T0 api-football + 5 T1 enrichment providers),
+       driven via ``--sports-provider``. Each provider is modelled as a cell,
+       ordered so the pre-flight DependencyError for T1-without-T0 fires only
+       when an operator explicitly skips the T0 cell.
+    2. Bare ``BETFAIR`` — a real, credential-gated instruments-service adapter
+       (``betfair`` key in ``venue_adapter_keys.py``), driven via ``--venues``
+       like any CEFI/DEFI/TRADFI venue (NOT ``--sports-provider``). Currently
+       BLOCKED-CREDENTIALS with zero captured rows ever in PROD (same gap as
+       ``wsfeedconnector_phase35_gap_2026_07_06.md`` gap-009) — smoked anyway so
+       the checker reports an honest, informative failure instead of silently
+       omitting the one real SPORTS venue cell.
+
+    The REMAINING UAC sports venues (ODDS_API, PINNACLE, BETFAIR_SB_UK,
+    BETFAIR_EX_UK, BETFAIR_EX_EU, DRAFTKINGS, FANDUEL — see
+    ``_MTDS_ONLY_SPORTS_VENUES``) are MTDS-owned odds/bookmaker venues with
+    NO instruments-service adapter (``NO_ADAPTER_YET`` sentinel). A
+    ``venue_filter`` naming one of these correctly enumerates ZERO cells here —
+    that is not a bug in this function, it is the honest answer for an
+    instruments-service smoke check. See market-tick-data-service's own
+    pipeline checker for those venues.
     """
+    if venue_filter and venue_filter.upper() in _MTDS_ONLY_SPORTS_VENUES:
+        logger.warning(
+            "venue=%s is MTDS-owned (NO_ADAPTER_YET in instruments-service's "
+            "venue_adapter_keys.py — registry-consolidation Decision C, 2026-06-29). "
+            "instruments-service has no adapter for it and never will by design; "
+            "0 cells is the correct, honest answer here. Check "
+            "market-tick-data-service's pipeline checker for this venue instead.",
+            venue_filter.upper(),
+        )
+        return []
+
     providers_ordered: list[str] = [
         _SPORTS_T0_PROVIDER,  # T0
         "OPEN_METEO",
@@ -185,9 +254,7 @@ def _enumerate_sports_cells(
     sports_data_types = DATA_TYPES_BY_ASSET_GROUP.get("sports", [])
     cells: list[SmokeCell] = []
     for provider in providers_ordered:
-        # SPORTS instruments-service writes reference data (fixtures, odds, etc.).
-        # Sports venue filter is a pass-through — instruments-service routes by
-        # --sports-provider rather than --venues.
+        # Provider-routed cells: --sports-provider, not --venues.
         if venue_filter and provider != venue_filter:
             continue
         for data_type in sports_data_types:
@@ -201,6 +268,16 @@ def _enumerate_sports_cells(
                     sports_provider=provider,
                 )
             )
+
+    # Bare BETFAIR: real venue-routed (--venues) SPORTS cell, sports_provider=None
+    # so build_cli_args/expected_write_prefix/verify_manifest_row treat it like any
+    # other venue-based instrument-catalog write (instrument_availability/by_date/
+    # .../venue=BETFAIR/), not the sports_reference/ provider path.
+    if (not venue_filter or venue_filter.upper() == "BETFAIR") and (
+        not data_type_filter or data_type_filter == "instruments"
+    ):
+        cells.append(SmokeCell(asset_group="SPORTS", venue="BETFAIR", data_type="instruments"))
+
     return cells
 
 
@@ -210,21 +287,118 @@ def _enumerate_sports_cells(
 
 
 def resolve_test_bucket(asset_group: str, project_id: str | None = None) -> str:
-    """Return the ``-test-`` bucket name for instruments-service + asset group."""
+    """Return the ``-test-`` bucket name for instruments-service + asset group.
+
+    Prediction's instruments store is a DEDICATED flat yaml kind
+    (``instruments-store-prediction`` -> ``instruments-store-pred-${DEPLOYMENT_ENV_SHORT}-
+    ${pid}`` — the abbreviated ``pred`` token), NOT a ``PREDICTION`` entry in the
+    per-asset_group ``instruments-store`` dict. So it MUST resolve via its own flat kind
+    with ``deployment_env="test"`` — EXACTLY like the IS write path
+    (``engine/orchestrator/catalogue.py::_get_instruments_bucket`` via
+    ``resolve_instruments_store_kind``) and the MTDS harness's ``_test_bucket``. The
+    generic ``get_bucket_name(...)+`.replace('-{pid}','-test-{pid}')`` path below yields
+    the non-existent LONG ``instruments-store-prediction-test-{pid}`` (it uses ``prediction``
+    verbatim as the asset_group suffix and never abbreviates to ``pred``), which 404s — the
+    same string-mangle anti-pattern the real ``get_write_bucket_name`` fix already retired.
+    Non-prediction asset_groups (cefi/tradfi/defi/sports) are byte-unchanged.
+    """
+    if asset_group.lower() == "prediction":
+        return resolve_bucket_name(
+            cloud="gcp",
+            kind="instruments-store-prediction",
+            deployment_env="test",
+        )
     pid = project_id or get_project_id()
     prod = get_bucket_name("instruments", asset_group, pid)
     return prod.replace(f"-{pid}", f"-test-{pid}")
 
 
+# PREDICTION writes ``instruments.parquet`` under the CQG-FIRST availability layout
+# ``instrument_availability/by_date/canonical_question_group={CQG}/day={day}/venue={venue}/``
+# (``engine/orchestrator/process_write.py::_write_prediction_venue``, partition
+# ``{day, venue, canonical_question_group}`` — the sink orders the segments CQG-first). The
+# data-dependent CQG segment PRECEDES ``day=``/``venue=``, so NO single literal day-first prefix
+# (the shape every other asset_group uses) can ever match a prediction object. The prediction
+# write-verify therefore lists under the base ``by_date/`` tree and substring-scopes by
+# day+venue — mirrors MTDS ``_verify_write_scoped_to_data_type``. The filter is deliberately
+# layout-agnostic (it also matches legacy day-first prediction objects), so it stays correct
+# across the writer's CQG migration.
+_PREDICTION_INSTRUMENTS_LIST_PREFIX = "instrument_availability/by_date/"
+_PREDICTION_INSTRUMENTS_FILENAME = "instruments.parquet"
+
+
+def is_prediction_venue_cell(cell: SmokeCell) -> bool:
+    """True for a prediction venue-routed cell (POLYMARKET/KALSHI), whose writer lands the
+    CQG-first availability layout. ``sports_provider`` cells never reach that writer, so they
+    are excluded defensively (prediction never sets ``sports_provider`` anyway)."""
+    return cell.asset_group.upper() == "PREDICTION" and not cell.sports_provider
+
+
+def prediction_instruments_object_matches(name: str, smoke_date: str, venue: str) -> bool:
+    """True iff a GCS object name is a prediction ``instruments.parquet`` for (smoke_date,
+    venue), under EITHER the CQG-first or a legacy day-first availability layout — the
+    substring test a day-first single-prefix listing cannot express."""
+    return (
+        name.endswith(_PREDICTION_INSTRUMENTS_FILENAME) and f"day={smoke_date}/" in name and f"venue={venue}/" in name
+    )
+
+
+def list_prediction_instruments_objects(
+    bucket: str,
+    smoke_date: str,
+    venue: str,
+    storage_client: object | None = None,
+) -> list[str]:
+    """Sorted GCS object names of the prediction ``instruments.parquet`` files for
+    (smoke_date, venue) under the CQG-first availability layout — the single, shared
+    day+venue-scoped enumeration every prediction verify/read path reuses (write-verify,
+    skip-fingerprint, canonical read) so they all match the SAME object set."""
+    client = storage_client if storage_client is not None else get_storage_client()
+    blobs = client.list_blobs(  # pyright: ignore[reportAttributeAccessIssue]
+        bucket=bucket, prefix=_PREDICTION_INSTRUMENTS_LIST_PREFIX
+    )
+    return sorted(
+        getattr(b, "name", "")
+        for b in blobs
+        if prediction_instruments_object_matches(getattr(b, "name", ""), smoke_date, venue)
+    )
+
+
 def expected_write_prefix(cell: SmokeCell, smoke_date: str) -> str:
     """Return the GCS prefix under which the CLI is expected to land parquet(s).
 
-    SPORTS uses ``sports_reference/by_date/day=...`` (NOT ``instrument_availability/``).
-    Other categories use ``instrument_availability/by_date/day={date}/venue={venue}/``.
+    Provider-routed SPORTS cells (``cell.sports_provider`` set — API_FOOTBALL +
+    T1 enrichment) write ``sports_reference/by_date/day=...`` via
+    ``_fetch_sports_reference_data`` (NOT ``instrument_availability/``). PREDICTION
+    venue cells land ``instruments.parquet`` under the CQG-FIRST availability layout
+    (``instrument_availability/by_date/canonical_question_group={CQG}/day={day}/
+    venue={venue}/``); the CQG segment is data-dependent and precedes day/venue, so the
+    coarsest literal ancestor is the base ``instrument_availability/by_date/`` tree — the
+    day+venue scope is applied by ``verify_prediction_parquet_written``'s substring filter,
+    NOT by this prefix. Every other cell — including venue-routed SPORTS (bare BETFAIR) —
+    flows through the generic per-venue instrument-catalog writer (``_write_venue`` /
+    ``_write_all_venues``, ``instruments_service/engine/orchestrator/writers.py``), which
+    always lands under ``instrument_availability/by_date/day={date}/venue={venue}/``
+    regardless of asset_group.
     """
-    if cell.asset_group == "SPORTS":
+    if cell.sports_provider:
         return f"sports_reference/by_date/day={smoke_date}/"
-    return f"instrument_availability/by_date/day={smoke_date}/venue={cell.venue}/"
+    if is_prediction_venue_cell(cell):
+        return _PREDICTION_INSTRUMENTS_LIST_PREFIX
+    # Full canonical hive (operator HARD RULE R2, 2026-07-21 —
+    # instrument_availability_hive_canonicalisation_2026_07_21.md): day/pipeline_mode/
+    # asset_group/venue, in that order — matches
+    # writers.py::_instrument_availability_sink_for exactly (this checker's prefix went
+    # stale when that canonicalisation landed, producing a false no_parquet_at failure on
+    # every non-sports/non-prediction cell — 2026-07-23, tradfi Phase D investigation).
+    # pipeline_mode is always BATCH_INSTRUMENTS_SERVICE here (producer-emitted instrument
+    # definitions; see writers.py::_classify_venue_write's non-sports-ref branch).
+    asset_group = VENUE_TO_ASSET_GROUP.get(cell.venue, "cefi")
+    pipeline_mode = PipelineMode.BATCH_INSTRUMENTS_SERVICE.value
+    return (
+        f"instrument_availability/by_date/day={smoke_date}/pipeline_mode={pipeline_mode}/"
+        f"asset_group={asset_group}/venue={cell.venue}/"
+    )
 
 
 def verify_parquet_written(
@@ -237,6 +411,24 @@ def verify_parquet_written(
     blobs = list(client.list_blobs(bucket=bucket, prefix=prefix))  # pyright: ignore[reportAttributeAccessIssue]
     parquet_blobs = [b for b in blobs if getattr(b, "name", "").endswith(".parquet")]
     return (bool(parquet_blobs), len(parquet_blobs))
+
+
+def verify_prediction_parquet_written(
+    bucket: str,
+    smoke_date: str,
+    venue: str,
+    storage_client: object | None = None,
+) -> tuple[bool, int]:
+    """PREDICTION Step-2 write-verify against the CQG-FIRST availability layout.
+
+    Lists under ``instrument_availability/by_date/`` and counts ``instruments.parquet``
+    objects whose path carries BOTH ``day={smoke_date}/`` AND ``venue={venue}/`` (see
+    ``prediction_instruments_object_matches``). The day-first single-prefix listing
+    ``verify_parquet_written`` uses for cefi/tradfi/defi/sports can NEVER match prediction's
+    CQG-first objects — the CQG segment precedes day/venue — so it reports n=0 even when real
+    objects exist; prediction needs this substring post-filter instead."""
+    names = list_prediction_instruments_objects(bucket, smoke_date, venue, storage_client)
+    return (bool(names), len(names))
 
 
 def verify_manifest_row(
@@ -269,16 +461,20 @@ def verify_manifest_row(
     if df.empty:
         return (False, "manifest_empty")
 
-    # Filter by the cell's shard tuple. SPORTS manifests key on
-    # sports_provider/entity, others key on venue+data_type.
+    # Filter by the cell's shard tuple. Provider-routed SPORTS cells (API_FOOTBALL
+    # + T1 enrichment) key on sports_provider/entity, not venue+data_type — the
+    # writer stamps manifest_venue="" for those (see writers.py::_write_venue).
+    # Venue-routed SPORTS (bare BETFAIR) writes through the SAME generic
+    # venue+data_type keying as CEFI/DEFI/TRADFI, so it must NOT skip that filter.
+    is_sports_provider_cell = cell.asset_group == "SPORTS" and bool(cell.sports_provider)
     mask = df.get("date", df.get("day")) == smoke_date
     if "asset_group" in df.columns:
         mask = mask & (df["asset_group"].astype(str).str.upper() == cell.asset_group)
     elif "category" in df.columns:
         mask = mask & (df["category"].astype(str).str.upper() == cell.asset_group)
-    if "venue" in df.columns and cell.asset_group != "SPORTS":
+    if "venue" in df.columns and not is_sports_provider_cell:
         mask = mask & (df["venue"] == cell.venue)
-    if "data_type" in df.columns and cell.asset_group != "SPORTS":
+    if "data_type" in df.columns and not is_sports_provider_cell:
         mask = mask & (df["data_type"] == cell.data_type)
 
     matching = df[mask]
@@ -313,11 +509,15 @@ def build_cli_args(cell: SmokeCell, smoke_date: str) -> list[str]:
         "--end-date",
         smoke_date,
     ]
-    if cell.asset_group == "SPORTS":
-        # SPORTS is driven via --sports-provider, not --venues.
-        if cell.sports_provider:
-            argv.extend(["--sports-provider", cell.sports_provider])
+    if cell.sports_provider:
+        # Provider-routed SPORTS cell (API_FOOTBALL + T1 enrichment): --sports-provider.
+        argv.extend(["--sports-provider", cell.sports_provider])
     else:
+        # Every other cell — including venue-routed SPORTS (bare BETFAIR) — uses
+        # --venues like CEFI/DEFI/TRADFI. Falling through to a bare --asset-group
+        # SPORTS invocation here (the pre-fix behaviour for a sports_provider=None
+        # cell) silently ran the FULL default SPORTS provider set instead of the
+        # one requested venue.
         argv.extend(["--venues", cell.venue])
     return argv
 
@@ -386,9 +586,14 @@ def run_cell(
         result.reason = f"cli_nonzero_rc={completed.returncode}"
         return _finalise(result, started)
 
-    # Step 2: verify parquet written.
+    # Step 2: verify parquet written. PREDICTION writes the CQG-FIRST availability layout
+    # (CQG segment precedes day/venue), so it lists the base by_date/ tree + substring-scopes
+    # by day+venue rather than the day-first single-prefix listing the other asset_groups use.
     try:
-        ok_parquet, count = verify_parquet_written(bucket, prefix, storage_client)
+        if is_prediction_venue_cell(cell):
+            ok_parquet, count = verify_prediction_parquet_written(bucket, smoke_date, cell.venue, storage_client)
+        else:
+            ok_parquet, count = verify_parquet_written(bucket, prefix, storage_client)
     except Exception as exc:  # pragma: no cover — storage transport failure
         result.reason = f"gcs_list_error:{type(exc).__name__}"
         return _finalise(result, started)

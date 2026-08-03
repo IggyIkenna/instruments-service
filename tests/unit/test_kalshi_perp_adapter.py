@@ -152,6 +152,19 @@ class TestParseMarketFilter:
         assert record.status == InstrumentStatus.ACTIVE
         assert record.quote_asset == "USD"
 
+    def test_event_contract_ticker_rejected_even_with_crypto_category(self) -> None:
+        """Write-time guardrail (defense-in-depth): a market mislabeled
+        category=Crypto but carrying an event-contract ticker (KXMVE*) is still
+        rejected — the category field alone is not trusted, per the write-time
+        guard added after the KALSHI-PERP contamination incident."""
+        adapter = KalshiPerpReferenceDataAdapter()
+        market: dict[str, object] = {
+            "ticker": "KXMVECROSSCATEGORY-26JUL05",
+            "category": "Crypto",
+            "status": "active",
+        }
+        assert adapter._parse_market(market, datetime.now(UTC)) is None
+
 
 # ---------------------------------------------------------------------------
 # Tests: error classification (pure fn — reused by the Phase-2 margin-API path)

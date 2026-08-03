@@ -70,7 +70,6 @@ from datetime import UTC, date, datetime
 
 import pandas as pd
 from unified_api_contracts.canonical.domain.sports import (
-    get_all_league_ids,
     get_expected_fixture_count,
 )
 from unified_trading_library import get_storage_client, resolve_bucket_name
@@ -83,12 +82,26 @@ _AUDITS_PREFIX = "_audits"
 _DT_FIXTURES = "FIXTURES"
 _CAP_CAPTURED = "captured"
 _CAP_FAILED = "attempted_failed"
+_CAP_EXPECTED_UNATTEMPTED = "expected_unattempted"
+
+# Dedup atom for the raw pending-fetch metric — the manifest shard atom
+# (latest ``written_at`` per atom wins, matching the consolidator convention).
+# ``_date_str`` stands in for ``date`` (normalised by ``_build_fixtures_index``).
+_RAW_PENDING_ATOM_COLS = (
+    "league_id",
+    "data_type",
+    "_date_str",
+    "source",
+    "pipeline_mode",
+    "venue",
+    "asset_group",
+)
 
 # Seasons covered by the UAC registry — pre-2019 have no expected counts.
 _REGISTRY_START_YEAR = 2019
 _REGISTRY_END_YEAR = 2026  # inclusive
 
-# Football season: Aug–Jul, so month >= 8 → season_year = calendar_year.
+# Football season: Aug-Jul, so month >= 8 -> season_year = calendar_year.
 _SEASON_MONTH_CUTOFF = 8
 
 
@@ -98,7 +111,7 @@ _SEASON_MONTH_CUTOFF = 8
 
 
 def _season_year(d: date) -> int:
-    """Football season start-year for *d* (Aug–Jul boundary)."""
+    """Football season start-year for *d* (Aug-Jul boundary)."""
     return d.year if d.month >= _SEASON_MONTH_CUTOFF else d.year - 1
 
 
@@ -143,9 +156,7 @@ def _build_fixtures_index(
         filt = filt[filt["_date_str"] <= end_date]
 
     parsed = pd.to_datetime(filt["_date_str"], errors="coerce")
-    filt["season_year"] = parsed.apply(
-        lambda ts: _season_year(ts.date()) if pd.notna(ts) else None
-    )
+    filt["season_year"] = parsed.apply(lambda ts: _season_year(ts.date()) if pd.notna(ts) else None)
     filt = filt.dropna(subset=["season_year", "league_id"])
     filt["season_year"] = filt["season_year"].astype(int)
 
@@ -155,9 +166,7 @@ def _build_fixtures_index(
     # IS writes instrument_count; row_count is a legacy/unused field (always 0).
     # Use instrument_count for fixture counting; keep row_count as fallback.
     if "instrument_count" in filt.columns:
-        filt["instrument_count"] = pd.to_numeric(
-            filt["instrument_count"], errors="coerce"
-        ).fillna(0)
+        filt["instrument_count"] = pd.to_numeric(filt["instrument_count"], errors="coerce").fillna(0)
     else:
         filt["instrument_count"] = 0
     if "row_count" in filt.columns:
@@ -175,9 +184,7 @@ def _compute_season_summary(
     rows: list[dict[str, object]] = []
     groups = filt.groupby(["league_id", "season_year"], sort=True)
     for (league_id, season_year), grp in groups:
-        captured_count = int(
-            grp.loc[grp["capture_status"] == _CAP_CAPTURED, "instrument_count"].sum()
-        )
+        captured_count = int(grp.loc[grp["capture_status"] == _CAP_CAPTURED, "instrument_count"].sum())
         expected_count: int | None = get_expected_fixture_count(str(league_id), int(season_year))
         if expected_count is not None and expected_count > 0:
             shortfall = max(0, expected_count - captured_count)
@@ -209,6 +216,35 @@ def _compute_season_summary(
     return rows
 
 
+def _count_raw_pending_fetch(filt: pd.DataFrame) -> int:
+    """Count deduped FIXTURES ``expected_unattempted`` (pending_fetch) index rows.
+
+    The depth metric below (captured vs registry expected counts) is BLIND to raw
+    ``expected_unattempted`` rows — 2026-07-13 forensics found 38,255 deduped
+    phantom pending FIXTURES rows in the index while the depth-based summary read
+    as a clean gate pass ("Targeted re-fetch shards: 0"). This surfaces the raw
+    number in the SAME report so a gate pass can never again read as "0 pending"
+    while raw EU rows exist.
+
+    Dedup = latest ``written_at`` per shard atom (``_RAW_PENDING_ATOM_COLS``,
+    consolidator convention). pending_fetch = ``capture_status ==
+    expected_unattempted`` with a blank / non-``EXPECTED_``-prefixed
+    ``error_reason`` (an ``EXPECTED_*`` reason is a typed honest-absence row,
+    not a pending fetch).
+    """
+    df = filt
+    if "written_at" in df.columns:
+        df = df.sort_values("written_at")
+    atom_cols = [c for c in _RAW_PENDING_ATOM_COLS if c in df.columns]
+    if atom_cols:
+        df = df.drop_duplicates(subset=atom_cols, keep="last")
+    pending = df[df["capture_status"] == _CAP_EXPECTED_UNATTEMPTED]
+    if "error_reason" in pending.columns:
+        reasons = pending["error_reason"].fillna("").astype(str).str.strip()
+        pending = pending[~reasons.str.startswith("EXPECTED_")]
+    return len(pending)
+
+
 def _compute_targeted_refetch(
     filt: pd.DataFrame,
     summary: list[dict[str, object]],
@@ -224,9 +260,7 @@ def _compute_targeted_refetch(
     to avoid re-fetching shards for leagues already at 100% coverage.
     """
     shortfall_leagues: set[str] = {
-        str(r["league_id"])
-        for r in summary
-        if r["in_registry"] and r["shortfall"] is not None and r["shortfall"] > 0
+        str(r["league_id"]) for r in summary if r["in_registry"] and r["shortfall"] is not None and r["shortfall"] > 0
     }
 
     refetch_rows: list[dict[str, object]] = []
@@ -234,7 +268,11 @@ def _compute_targeted_refetch(
         lid = str(row["league_id"])
         if lid not in shortfall_leagues:
             continue
-        status = str(row.get("capture_status", ""))
+        # capture_status is a guaranteed manifest column (already accessed
+        # unconditionally via bracket notation at grp["capture_status"] in
+        # _compute_season_summary above) — fail fast instead of silently
+        # typing a structurally-missing column as "" in the refetch report.
+        status = str(row["capture_status"])
         if status in (_CAP_CAPTURED, "empty_confirmed"):
             continue
         refetch_rows.append(
@@ -341,22 +379,19 @@ def main(argv: list[str] | None = None) -> int:
     # Compute targeted re-fetch list.
     refetch = _compute_targeted_refetch(filt, summary)
 
+    # Raw pending-fetch metric — deduped expected_unattempted rows the
+    # depth-based numbers above cannot see (2026-07-13 phantom-pending class).
+    raw_pending = _count_raw_pending_fetch(filt)
+
     # --- Print summary to stdout ---
     total_shortfall_rows = sum(1 for r in summary if r.get("shortfall") and r["shortfall"] > 0)
     registered_rows = [r for r in summary if r["in_registry"]]
     overall_captured = sum(int(r["captured_fixtures"]) for r in registered_rows)
-    overall_expected = sum(
-        int(r["expected_fixtures"])
-        for r in registered_rows
-        if r["expected_fixtures"] is not None
-    )
-    if overall_expected > 0:
-        overall_depth = round(overall_captured / overall_expected, 6)
-    else:
-        overall_depth = None
+    overall_expected = sum(int(r["expected_fixtures"]) for r in registered_rows if r["expected_fixtures"] is not None)
+    overall_depth = round(overall_captured / overall_expected, 6) if overall_expected > 0 else None
 
     print(
-        f"\n{'='*72}\n"
+        f"\n{'=' * 72}\n"
         f"  FIXTURE COMPLETENESS AUDIT\n"
         f"  Leagues in summary:  {len(summary)}\n"
         f"  Registered (have expected count): {len(registered_rows)}\n"
@@ -364,17 +399,24 @@ def main(argv: list[str] | None = None) -> int:
         f"  Total captured fixtures:          {overall_captured:,}\n"
         f"  Total expected fixtures:          {overall_expected:,}\n"
         f"  Overall depth coverage:           "
-        f"{overall_depth:.4%}\n" if overall_depth is not None else "  Overall depth coverage: N/A\n",
+        f"{overall_depth:.4%}\n"
+        if overall_depth is not None
+        else "  Overall depth coverage: N/A\n",
         end="",
     )
-    print(f"  Targeted re-fetch shards:         {len(refetch)}\n{'='*72}\n")
+    print(f"  Targeted re-fetch shards:         {len(refetch)}")
+    print(f"  Raw pending-fetch EU rows (deduped index): {raw_pending:,}")
+    # Both-numbers summary line — a depth-based gate pass MUST NOT read as
+    # "0 pending" while raw expected_unattempted rows exist in the index.
+    _depth_str = f"{overall_depth:.4%}" if overall_depth is not None else "N/A"
+    print(f"  SUMMARY: depth {_depth_str} | raw pending-fetch rows: {raw_pending}\n{'=' * 72}\n")
 
     # Print per-season rows with shortfalls.
     if total_shortfall_rows > 0:
         print("  SHORTFALLS:")
-        display = summary if not args.shortfalls_only else [
-            r for r in summary if r.get("shortfall") and r["shortfall"] > 0
-        ]
+        display = (
+            summary if not args.shortfalls_only else [r for r in summary if r.get("shortfall") and r["shortfall"] > 0]
+        )
         for r in sorted(display, key=lambda x: (str(x["league_id"]), int(x["season_year"]))):
             if r["shortfall"] is not None and r["shortfall"] > 0:
                 print(
@@ -386,7 +428,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
         print()
     else:
-        print("  No shortfalls found — all registered leagues/seasons are complete.\n")
+        print(
+            "  No depth shortfalls found — all registered leagues/seasons are complete "
+            f"(depth {_depth_str} | raw pending-fetch rows: {raw_pending}).\n"
+        )
 
     # Write CSV outputs.
     out_dir = args.out_dir or tempfile.gettempdir()

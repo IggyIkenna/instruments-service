@@ -44,6 +44,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ._perp_write_guard import PerpRecordRejectedError, validate_perp_instrument_record
 
 logger = logging.getLogger(__name__)
 
@@ -325,8 +326,11 @@ class PolymarketPerpReferenceDataAdapter(BaseReferenceDataAdapter):
         is_active_bool = str(status_raw).lower() in ("active", "open") if status_raw else True
         instrument_status = InstrumentStatus.ACTIVE if is_active_bool else InstrumentStatus.DELISTED
 
-        return InstrumentRecord(
+        record = InstrumentRecord(
             instrument_key=market_id,
+            # No CeFi raw-code-to-human-name translation gap (see other CeFi adapters'
+            # identical comment) — canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=market_id,
             venue=self.venue,
             raw_symbol=market_id,
             instrument_type=InstrumentType.PERPETUAL,
@@ -343,6 +347,21 @@ class PolymarketPerpReferenceDataAdapter(BaseReferenceDataAdapter):
             available_from_datetime=None,
             available_to_datetime=None,
         )
+
+        # Write-time guardrail (see _perp_write_guard) — this adapter's parser
+        # previously had NO rejection filter at all; reject at write time rather
+        # than silently accept an event-contract ticker that leaks into this feed.
+        try:
+            validate_perp_instrument_record(record)
+        except PerpRecordRejectedError as exc:
+            logger.warning("POLYMARKET-PERP: rejected instrument record at write time: %s", exc)
+            log_event(
+                "PERP_RECORD_REJECTED",
+                details={"venue": self.venue, "ticker": market_id, "reason": str(exc)},
+            )
+            return None
+
+        return record
 
     async def get_options_chain(
         self,

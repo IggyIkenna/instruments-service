@@ -5,7 +5,7 @@
 # pyright: reportAny=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 """Phase 5 IS backfill: populate instruments-store-defi with archive-metadata fields.
 
-Runs instruments-service in batch mode for Solana DeFi venues (Drift, Phoenix,
+Runs instruments-service in batch mode for Solana DeFi venues (Phoenix,
 Marinade, Jito) to populate the instruments-store-defi parquets with the new
 archive-metadata fields introduced in Phase 2 (IS@919c1e2):
 
@@ -25,8 +25,9 @@ Command issued (one per venue chunk)::
         --start-date <start> \\
         --end-date <end>
 
-Drift archive window: 2021-11-05 (V2 launch) → 2025-01-08 (S3 archive end).
-Phoenix/Marinade/Jito: use the same window (conservative).
+(Drift was a fourth venue in this window until removed entirely 2026-07-16
+-- operator ruling: all Solana perp DEXes dropped except Jupiter, not
+integrated.) Phoenix/Marinade/Jito: use the same conservative window.
 
 Dry-run (default): prints the commands, no writes.
 Apply (--apply --confirm): runs the IS CLI sequentially.
@@ -46,7 +47,7 @@ Usage::
 execution:
   owner: operator (Tab 8 / slot-8 — Phase 5b of is_mtds_contract_audit_2026_05_20)
   cadence: one-shot
-  verifier: instruments-store-defi DRIFT-SOLANA parquet for any date in window
+  verifier: instruments-store-defi PHOENIX-SOLANA parquet for any date in window
             contains non-null source_archive_url_template column
   last_executed: NEVER
 """
@@ -62,9 +63,11 @@ from datetime import date
 
 logger = logging.getLogger(__name__)
 
-# Drift V2 mainnet launch (earliest meaningful date for S3 archive).
+# Conservative Solana DeFi archive window (Phoenix/Marinade/Jito). (Was
+# originally anchored to the Drift V2 S3 archive window before Drift was
+# removed entirely 2026-07-16 -- operator ruling: all Solana perp DEXes
+# dropped except Jupiter, not integrated.)
 _SOLANA_DEFI_START = date(2021, 11, 5)
-# Drift V1 S3 archive coverage end (matches _DRIFT_S3_ARCHIVE_END in MTDS handler).
 _SOLANA_DEFI_END = date(2025, 1, 8)
 
 
@@ -138,7 +141,7 @@ def _run(*, start_date: str, end_date: str, apply: bool, confirm: bool) -> int:
     logger.info("%s IS defi batch %s → %s", "Running" if apply else "DRY RUN —", start_date, end_date)
     logger.info("Command: %s", " ".join(cmd))
     logger.info(
-        "What this populates: instruments-store-defi DRIFT-SOLANA + PHOENIX-SOLANA + "
+        "What this populates: instruments-store-defi PHOENIX-SOLANA + "
         "MARINADE-SOLANA + JITO-SOLANA parquets with source_archive_url_template field."
     )
 
@@ -171,7 +174,7 @@ def _run(*, start_date: str, end_date: str, apply: bool, confirm: bool) -> int:
     logger.info(
         "Verify: gsutil cat "
         "'gs://instruments-store-defi-central-element-323112/"
-        "instrument_availability/by_date/day=2024-01-01/venue=DRIFT-SOLANA/instruments.parquet' "
+        "instrument_availability/by_date/day=2024-01-01/venue=PHOENIX-SOLANA/instruments.parquet' "
         '| python3 -c "import io, pandas, sys; '
         "df=pandas.read_parquet(io.BytesIO(sys.stdin.buffer.read())); "
         "print(df[['source_archive_url_template']].dropna().head())\""

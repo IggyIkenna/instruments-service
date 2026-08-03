@@ -1,7 +1,7 @@
 """Raydium reference data adapter -- instrument discovery via REST + RPC.
 
 Discovers Raydium CLMM and standard AMM pools on Solana.
-Pools are returned as InstrumentRecord with instrument_type="POOL".
+Pools are returned as InstrumentRecord with instrument_type="SOLANA_AMM_POOL".
 
 Data sources:
   - REST API (https://api-v3.raydium.io) -- currently active pools with metadata
@@ -20,10 +20,11 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import build_pool_identity, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 from unified_api_contracts.registry import SOLANA_DEFI_PROTOCOLS, get_solana_protocol_url
-from unified_trading_library import log_event
+from unified_trading_library import log_event, resolve_solana_token_symbol
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -77,7 +78,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
     """Raydium reference data: pool discovery from REST API.
 
     Discovers CLMM and standard AMM pools. Each pool produces one instrument
-    with instrument_type="POOL" and symbol=f"{tokenA}/{tokenB}".
+    with instrument_type="SOLANA_AMM_POOL" and symbol=f"{tokenA}/{tokenB}".
     """
 
     def __init__(
@@ -127,14 +128,14 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch Raydium pools as instruments.
 
         Args:
-            instrument_type: Filter by instrument type (only POOL supported).
+            instrument_type: Filter by instrument type (only SOLANA_AMM_POOL supported).
             include_historical: If True, also discover historical pools via
                 on-chain RPC (getProgramAccounts). Disabled by default — the
                 704K+ historical pools are overwhelmingly dead meme coin pools
                 with zero liquidity. The REST API set (~994 active pools) is
                 the tradeable universe.
         """
-        if instrument_type not in (None, InstrumentType.POOL):
+        if instrument_type not in (None, InstrumentType.SOLANA_AMM_POOL):
             return []
 
         # Phase 1: Fetch active pools from REST API
@@ -200,7 +201,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         for pool in pools:
             if not isinstance(pool, dict):
                 continue
-            record = self._build_pool_record(pool)
+            record = await self._build_pool_record(pool)
             if record:
                 results.append(record)
 
@@ -283,16 +284,47 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         Historical pools have no REST API metadata, so we use a placeholder
         symbol and mark them as DELISTED. The creation timestamp will be
         resolved by batch_resolve_creation_timestamps() in the caller.
+
+        Deliberately still "UNKNOWN"/DELISTED (2026-07-21 scoping decision,
+        ``defi_consolidated_closeout_2026_07_18.md`` "eliminate the
+        address/UUID fallback" sub-item 2): unlike ``_build_pool_record``
+        (REST metadata always carries both mint addresses even when a
+        symbol is blank), this path's caller (``_discover_historical_pools``
+        -> ``discover_program_pool_accounts``) enumerates pool PUBKEYS ONLY
+        via ``getProgramAccounts`` with ``dataSlice={"offset": 0, "length":
+        0}`` — the account's mint-address fields are never fetched, so there
+        is no address here for the resolver to look up. Genuinely resolving
+        these would require a second on-chain step (decode ``baseMint``/
+        ``quoteMint`` from the Raydium AMM V4 752-byte account layout at
+        offsets 400/432, via a NEW ``dataSlice``-scoped RPC fetch) — that
+        decode was deliberately NOT implemented in this pass: the byte
+        offsets cannot be verified against live data in this environment,
+        and this whole path is already opt-in and disabled by default
+        (``include_historical=False`` — "the 704K+ historical pools are
+        overwhelmingly dead meme coin pools"), so shipping an unverified
+        binary-layout guess here risks fabricating a WRONG symbol, which is
+        worse than an honest "UNKNOWN" placeholder. Tracked as its own
+        follow-up in the plan rather than silently dropped.
         """
         venue_tag = self.venue
-        instrument_key = f"{venue_tag}:POOL:{pool_id}:Historical"
+        # Canonical 3-segment glued pool id -- the historical marker is folded INTO the symbol
+        # segment hyphen-glued (...:POOL:<pool_id>-Historical), NEVER a 4th colon (Wave B
+        # convergence, defi_consolidated_closeout_2026_07_18). The pool_id is a case-sensitive
+        # Solana base58 address, preserved verbatim as BOTH the symbol and the machine id
+        # (raw_symbol / pool_address); the pair is unknown for on-chain-discovered pools, so
+        # build_pool_identity's address-lowercasing pair fallback is intentionally NOT used here.
+        instrument_key = build_instrument_id(venue_tag, InstrumentType.POOL, f"{pool_id}-Historical", passthrough=True)
 
         return InstrumentRecord(
             instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key (the
+            # symbolic 3-seg glued id); the pool ADDRESS is the separate machine id (raw_symbol).
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=pool_id,
             pool_address=pool_id,
-            instrument_type=InstrumentType.POOL,
+            instrument_type=InstrumentType.SOLANA_AMM_POOL,
             base_asset="UNKNOWN",
             quote_asset="UNKNOWN",
             tick_size=Decimal("0.000001"),
@@ -311,7 +343,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             source_coverage_end=None,
         )
 
-    def _build_pool_record(
+    async def _build_pool_record(
         self,
         pool: dict[str, object],
     ) -> InstrumentRecord | None:
@@ -320,9 +352,11 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         if not pool_id:
             return None
 
-        # Extract token symbols from mintA/mintB or nested token info
-        sym_a = self._extract_token_symbol(pool, "mintA")
-        sym_b = self._extract_token_symbol(pool, "mintB")
+        # Extract token symbols from mintA/mintB or nested token info — each
+        # symbol is resolved via _extract_token_symbol (real on-chain mint
+        # lookup before giving up; see its docstring for the 2026-07-21 ruling).
+        sym_a = await self._extract_token_symbol(pool, "mintA")
+        sym_b = await self._extract_token_symbol(pool, "mintB")
         if not sym_a or not sym_b:
             return None
 
@@ -350,15 +384,32 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         venue_tag = self.venue
+        # Canonical 3-segment glued pool id (VENUE-CHAIN:POOL:BASE-QUOTE[-DISC]) built via
+        # the UAC SSOT builder -- the Raydium pool-type (Standard / Concentrated) is folded
+        # INTO the symbol segment hyphen-glued (...:SOL-USDC-Standard), NEVER a 4th colon
+        # (Wave B convergence, defi_consolidated_closeout_2026_07_18). instrument_id stays the
+        # pool ADDRESS (raw_symbol / pool_address, case-preserved -- base/quote are set, so the
+        # builder's address-lowercasing fallback never touches the glued symbol).
         pool_type = str(pool.get("type", "Standard"))
-        instrument_key = f"{venue_tag}:POOL:{base}-{quote}:{pool_type}"
+        instrument_key = build_pool_identity(
+            venue=venue_tag,
+            chain=self._chain,
+            pool_address=str(pool_id),
+            base_asset=base,
+            quote_asset=quote,
+            fee=pool_type or None,
+        ).glued_pair_id
 
         return InstrumentRecord(
             instrument_key=instrument_key,
+            # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+            # are already human-readable) -- canonical_instrument_id mirrors instrument_key (the
+            # symbolic 3-seg glued id); the pool ADDRESS is the separate machine id (raw_symbol).
+            canonical_instrument_id=instrument_key,
             venue=venue_tag,
             raw_symbol=str(pool_id),
             pool_address=str(pool_id),
-            instrument_type=InstrumentType.POOL,
+            instrument_type=InstrumentType.SOLANA_AMM_POOL,
             base_asset=base,
             quote_asset=quote,
             tick_size=Decimal("0.000001"),
@@ -377,15 +428,27 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             source_coverage_end=None,
         )
 
-    def _extract_token_symbol(self, pool: dict[str, object], key: str) -> str:
-        """Extract token symbol from pool data.
+    async def _extract_token_symbol(self, pool: dict[str, object], key: str) -> str:
+        """Extract token symbol from pool data, resolving on-chain when blank.
 
         Raydium API may nest token info as { "mintA": { "symbol": "SOL", ... } }
         or provide flat fields like "mintSymbolA".
+
+        Operator ruling 2026-07-21 (``defi_consolidated_closeout_2026_07_18.md``,
+        "eliminate the address/UUID fallback"): the nested ``mintA``/``mintB``
+        blob always carries the token's Solana mint address (``address``) even
+        on the rare response where ``symbol`` is blank — so a blank symbol is
+        not a dead end. Tries, in order: (1) the nested ``symbol``, (2) the
+        flat ``mintSymbol{A,B}`` field, (3) the shared UTL token-metadata
+        resolver against the nested mint address. Returns ``""`` only when
+        NONE of the three have an answer — the caller drops the pool on an
+        empty symbol, same as before this fix.
         """
         token_data = pool.get(key)
         if isinstance(token_data, dict):
-            return str(token_data.get("symbol", "")).upper()
+            raw_symbol = token_data.get("symbol")
+            if raw_symbol:
+                return str(raw_symbol).upper()
 
         # Fallback: check for flat symbol fields (e.g. "mintSymbolA" for "mintA")
         suffix = key[-1] if key.endswith(("A", "B")) else ""
@@ -393,6 +456,13 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         flat_symbol = pool.get(flat_key)
         if flat_symbol:
             return str(flat_symbol).upper()
+
+        if isinstance(token_data, dict):
+            mint_address = token_data.get("address")
+            if isinstance(mint_address, str) and mint_address:
+                resolved = await resolve_solana_token_symbol(mint_address)
+                if resolved:
+                    return resolved.upper()
 
         return ""
 

@@ -44,6 +44,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ._perp_write_guard import PerpRecordRejectedError, validate_perp_instrument_record
 
 logger = logging.getLogger(__name__)
 
@@ -330,8 +331,11 @@ class KalshiPerpReferenceDataAdapter(BaseReferenceDataAdapter):
         # Perpetual contracts: no expiry date (None signals continuous contract).
         # Kalshi perps may have a close_time for the current funding period;
         # we do NOT treat that as an instrument expiry.
-        return InstrumentRecord(
+        record = InstrumentRecord(
             instrument_key=ticker,
+            # No CeFi raw-code-to-human-name translation gap (see other CeFi adapters'
+            # identical comment) — canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=ticker,
             venue=self.venue,
             raw_symbol=ticker,
             instrument_type=InstrumentType.PERPETUAL,
@@ -348,6 +352,22 @@ class KalshiPerpReferenceDataAdapter(BaseReferenceDataAdapter):
             available_from_datetime=None,
             available_to_datetime=None,
         )
+
+        # Write-time guardrail (defense-in-depth, independent of the category
+        # check above): reject at write time rather than silently accept if a
+        # future field-mapping regression ever reintroduces the KALSHI-PERP
+        # contamination class through a different door. See _perp_write_guard.
+        try:
+            validate_perp_instrument_record(record)
+        except PerpRecordRejectedError as exc:
+            logger.warning("KALSHI-PERP: rejected instrument record at write time: %s", exc)
+            log_event(
+                "PERP_RECORD_REJECTED",
+                details={"venue": self.venue, "ticker": ticker, "reason": str(exc)},
+            )
+            return None
+
+        return record
 
     async def get_options_chain(
         self,

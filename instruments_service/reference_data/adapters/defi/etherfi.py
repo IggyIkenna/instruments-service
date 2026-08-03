@@ -1,7 +1,21 @@
-"""EtherFi reference data adapter — instrument discovery for LST tokens.
+"""EtherFi reference data adapter — instrument discovery for LRT tokens.
 
-Discovers EtherFi liquid staking token (weETH) on Ethereum.
-Token is returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Discovers EtherFi's liquid RESTAKING token weETH (Wrapped eETH) on Ethereum.
+weETH is minted when ETH is deposited into ether.fi's liquid pool and restaked
+via ether.fi's node operators into EigenLayer — the same EigenLayer-AVS-slashing-
+stacked-on-base-staking-slashing risk shape as Renzo/KelpDAO/Puffer, not a plain
+LST (operator decision 2026-07-20/22, distinct_values_noncanonical_audit_2026_07_20.md
+— confirmed by mechanism, not by name: eETH is the rebasing receipt token, weETH
+is its non-rebasing DeFi-composable wrapper; only weETH is discovered here — IS
+does not enumerate the unwrapped eETH as a separate instrument, and only the
+wrapped form is accepted as AAVE/Morpho collateral). Token is returned as
+InstrumentRecord with instrument_type=RESTAKING (was InstrumentType.LST until
+this classification landed — fixed 2026-07-08 as LST for the key/field mismatch,
+same class as PERP-vs-PERPETUAL; see `lido.py`'s module docstring for that
+rationale). The ``instrument_key``/``canonical_instrument_id`` string keeps its
+legacy ``:LST:`` segment deliberately unchanged — this is a values-only
+reclassification of the ``instrument_type`` column, not an id/GCS-partition-path
+rename.
 
 Reference: https://www.ether.fi/
 """
@@ -10,6 +24,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from unified_api_contracts import AssetGroup, build_canonical_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -19,6 +34,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ...utils.defi_utils import build_spot_asset_record
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +83,12 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return EtherFi weETH as a yield-bearing instrument."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (
+            None,
+            InstrumentType.LST,
+            InstrumentType.YIELD_BEARING,
+            InstrumentType.RESTAKING,
+        ):
             return []
 
         results: list[InstrumentRecord] = []
@@ -78,13 +99,22 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
+            # Routed through the shared canonical builder (2026-07-09 retrofit,
+            # canonical_id_builder_retrofit_checklist_2026_07_08.md todo 1) — DRY,
+            # no output change.
+            instrument_key = build_canonical_instrument_id(
+                AssetGroup.DEFI, venue_tag, InstrumentType.LST, symbol, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:LST:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
                     base_asset_contract_address=address,
-                    instrument_type=InstrumentType.YIELD_BEARING,
+                    instrument_type=InstrumentType.RESTAKING,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000001"),
@@ -100,6 +130,18 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
                     source_archive_url_template=_ETHERFI_APY_URL_TEMPLATE,
                 )
             )
+            # SPOT_ASSET sibling (P4-B): the LST receipt token itself (weETH — NOT its
+            # "ETH" economic-peg label) as a directly-queryable on-chain instrument,
+            # reusing the SAME address/decimals just resolved above — no re-fetch.
+            spot_asset = build_spot_asset_record(
+                venue=venue_tag,
+                symbol=symbol,
+                contract_address=address,
+                decimals=18,
+                available_from_datetime=_ETHERFI_DEPLOY_DATE,
+            )
+            if spot_asset is not None:
+                results.append(spot_asset)
 
         logger.info("EtherFi: fetched %d LST instruments on %s", len(results), self._chain)
         return results

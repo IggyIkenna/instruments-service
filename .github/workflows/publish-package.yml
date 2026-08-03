@@ -1,92 +1,56 @@
-name: Publish to GitHub Packages
+name: publish-package
+
+# Per-repo workflow: triggers PM's publish-package reusable workflow on push to main.
+# Dispatches to unified-trading-pm with repo name, version, and commit SHA.
+#
+# To install in a library repo:
+#   cp this file to .github/workflows/publish-package.yml
+#
+# Prerequisites:
+#   - GH_PAT secret with repo dispatch permissions
+#   - pyproject.toml with version field
 
 on:
-  release:
-    types: [created]
   push:
-    tags:
-      - "v*" # Publish when tags like v0.1.0, v0.2.0, etc. are pushed
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to publish (e.g., 0.1.0)"
-        required: true
-        default: "0.1.0"
+    branches: [main]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
+  dispatch-publish:
+    runs-on: [self-hosted, glue]
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
-          cache: "pip"
+          # Every repo is now `dynamic = ["version"]` + hatch-vcs (source = "vcs") — a shallow
+          # checkout carries no tags, so `git describe` below would silently resolve to nothing.
+          fetch-depth: 0
 
-      - name: Install build tools
+      - name: Extract version and dispatch
         run: |
-          python -m pip install --upgrade pip build twine
+          set -euo pipefail
 
-      - name: Determine version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" == "release" ]; then
-            # From GitHub Release
-            VERSION="${{ github.event.release.tag_name }}"
-            # Remove 'v' prefix if present
-            VERSION="${VERSION#v}"
-          elif [ "${{ github.event_name }}" == "push" ]; then
-            # From git tag push (e.g., v0.1.0)
-            VERSION="${GITHUB_REF#refs/tags/}"
-            # Remove 'v' prefix if present
-            VERSION="${VERSION#v}"
-          else
-            # From workflow_dispatch (manual trigger)
-            VERSION="${{ github.event.inputs.version }}"
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "📦 Publishing version: $VERSION"
+          REPO="${{ github.event.repository.name }}"
+          COMMIT_SHA="${{ github.sha }}"
 
-      - name: Update version in pyproject.toml
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          # Update version in pyproject.toml using sed
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-          echo "✅ Updated pyproject.toml version to $VERSION"
+          # VERSION here is a best-effort HINT only — the receiver (PM's publish-package.yml)
+          # builds the actual wheel and republishes under the BUILT version, which is the one
+          # that's authoritative. A static `version = "X.Y.Z"` grep matches nothing under
+          # `dynamic = ["version"]` (every repo, since the hatch-vcs migration), so derive it
+          # the same way hatch-vcs does: from the nearest reachable tag. An unreachable tag
+          # (shallow history, no v* tag yet) must NOT block the dispatch — the receiver's own
+          # fetch-depth:0 checkout + fail-closed-on-0.0.0.dev0 guard is the real gate.
+          VERSION=$(git describe --tags --always --match 'v*' 2>/dev/null | sed 's/^v//' || echo "unknown")
 
-      - name: Build package
-        run: |
-          python -m build
+          echo "Dispatching publish-package: repo=$REPO version=$VERSION sha=$COMMIT_SHA"
 
-      - name: Note about GitHub Packages
-        run: |
-          echo "⚠️  GitHub Packages does NOT support Python/PyPI packages"
-          echo "📦 Python packages are distributed via GitHub repository installation"
-          echo "🔗 Install with: pip install git+https://x-access-token:\$GITHUB_TOKEN@github.com/iggyikenna/instruments-service.git"
-          echo ""
-          echo "For more info, see: GITHUB_PACKAGES_PYTHON_LIMITATION.md"
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository_owner }}/unified-trading-pm/dispatches" \
+            -d "{\"event_type\": \"publish-package\", \"client_payload\": {\"repo\": \"${REPO}\", \"version\": \"${VERSION}\", \"commit_sha\": \"${COMMIT_SHA}\"}}"
 
-      - name: Create Release Artifacts
-        run: |
-          echo "📦 Creating release artifacts for version ${{ steps.version.outputs.version }}"
-          # The built packages in dist/ can be attached to GitHub Releases manually
-          # or downloaded from the workflow artifacts
-          ls -lh dist/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: instruments-service-${{ steps.version.outputs.version }}
-          path: dist/
-          retention-days: 90
+          echo "Dispatch sent successfully"

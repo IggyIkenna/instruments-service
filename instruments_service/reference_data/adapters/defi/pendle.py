@@ -22,8 +22,10 @@ Ethereum + Arbitrum. No network access. Tests are credential-free and offline.
 Encoding choice — instrument_type
 ---------------------------------
 The closest UAC ``InstrumentType`` value for Pendle PT/YT/SY is ``YIELD_BEARING``
-(no PT/YT-specific enum exists). The role (PT/YT/SY) is encoded in the
-``instrument_key`` segment, e.g. ``PENDLE-ETHEREUM:PT:PT-stETH-25JUN2026``.
+(no PT/YT-specific enum exists). The ``instrument_key``'s TYPE segment is
+``YIELD_BEARING`` (must match ``instrument_type`` — 2026-07-27 key-vs-field fix);
+the role (PT/YT/SY) lives in the symbol segment instead, e.g.
+``PENDLE-ETHEREUM:YIELD_BEARING:PT-stETH-25JUN2026``.
 PT/YT carry an ``expiry`` datetime; SY carries ``expiry=None`` (no maturity).
 
 References
@@ -245,7 +247,7 @@ class PendleReferenceDataAdapter(BaseReferenceDataAdapter):
         Each curated market emits THREE records (PT, YT, SY). PT/YT carry the
         market's maturity datetime in ``expiry``; SY carries ``expiry=None``.
         """
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (None, InstrumentType.YIELD_BEARING):
             return []
 
         results: list[InstrumentRecord] = []
@@ -264,9 +266,18 @@ class PendleReferenceDataAdapter(BaseReferenceDataAdapter):
                 # maturity. PT/YT redeem/decay at the market's expiry.
                 expiry: datetime | None = None if role == "SY" else maturity
 
+                # Key segment must match instrument_type (YIELD_BEARING) -- "PT"/"YT"/"SY" are not
+                # real InstrumentType members (2026-07-27, canonical_id_builder_retrofit_checklist_
+                # 2026_07_08.md todo 2, same key-vs-field mismatch class as AAVE_V3/SPARK/COMPOUND_V3;
+                # MTDS's own vault_pendle_adapter.py already made this exact fix independently). The
+                # role stays in the symbol segment (still unique per market) so PT/YT/SY don't collide.
+                instrument_key = f"{venue_tag}:YIELD_BEARING:{role}-{symbol}"
                 results.append(
                     InstrumentRecord(
-                        instrument_key=f"{venue_tag}:{role}:{role}-{symbol}",
+                        instrument_key=instrument_key,
+                        # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                        # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                        canonical_instrument_id=instrument_key,
                         venue=venue_tag,
                         raw_symbol=token_address,
                         instrument_type=InstrumentType.YIELD_BEARING,

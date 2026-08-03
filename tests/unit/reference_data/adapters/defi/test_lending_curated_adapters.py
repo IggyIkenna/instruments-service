@@ -10,9 +10,12 @@ creation timestamp resolved via ``batch_resolve_evm_creation_timestamps``:
 
 All three share the same shape: ``get_instruments`` filters on instrument_type,
 short-circuits on an unknown chain, resolves creation timestamps (mocked here so
-the tests are offline + credential-free), and emits one ``InstrumentRecord`` per
-curated market. ``get_instrument`` is a linear scan over ``get_instruments`` and
-the market-data methods are unsupported (``NotImplementedError``).
+the tests are offline + credential-free), and emits an A_TOKEN (supply) +
+DEBT_TOKEN (borrow) ``InstrumentRecord`` pair per curated market — the same
+split ``aave_v3.py`` uses per reserve
+(defi_lending_atoken_debttoken_instrument_split_2026_07_07.md). ``get_instrument``
+is a linear scan over ``get_instruments`` and the market-data methods are
+unsupported (``NotImplementedError``).
 
 The resolver is patched to return ``{}`` so each record falls back to the
 protocol floor date (a static offline lookup) — exercising the real
@@ -58,17 +61,17 @@ def test_chain_is_uppercased() -> None:
 
 
 @pytest.mark.asyncio
-async def test_venus_get_instruments_emits_lending_records() -> None:
+async def test_venus_get_instruments_emits_supply_debt_records() -> None:
     adapter = VenusReferenceDataAdapter(chain="BSC")
     with patch(_RESOLVER_PATHS["venus"], return_value={}):
         records = await adapter.get_instruments()
 
-    assert len(records) == 3  # BNB / BTCB / USDT curated markets
+    # BNB / BTCB / USDT curated markets, each an A_TOKEN + DEBT_TOKEN pair.
+    assert len(records) == 6
     for rec in records:
         assert isinstance(rec, InstrumentRecord)
         assert rec.venue == "VENUS-BSC"
-        assert rec.instrument_key.startswith("VENUS-BSC:LENDING_MARKET:")
-        assert rec.instrument_type == InstrumentType.LENDING
+        assert rec.instrument_type in (InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN)
         assert rec.status == InstrumentStatus.ACTIVE
         assert rec.quote_asset == "USDC"
         assert rec.tick_size == Decimal("0.000001")
@@ -77,30 +80,39 @@ async def test_venus_get_instruments_emits_lending_records() -> None:
         # UAC is the SSOT, consulted before the local LENDING_PROTOCOL_DEPLOY_DATES fallback).
         assert rec.available_from_datetime == datetime.fromisoformat("2020-10-08T00:00:00+00:00")
 
+    a_token_keys = {r.instrument_key for r in records if r.instrument_type == InstrumentType.A_TOKEN}
+    debt_token_keys = {r.instrument_key for r in records if r.instrument_type == InstrumentType.DEBT_TOKEN}
+    assert "VENUS-BSC:A_TOKEN:ABNB-USDC" in a_token_keys
+    assert "VENUS-BSC:DEBT_TOKEN:DEBTBNB-USDC" in debt_token_keys
+
 
 @pytest.mark.asyncio
-async def test_fluid_get_instruments_emits_lending_records() -> None:
+async def test_fluid_get_instruments_emits_supply_debt_records() -> None:
     adapter = FluidReferenceDataAdapter()
     with patch(_RESOLVER_PATHS["fluid"], return_value={}):
         records = await adapter.get_instruments()
 
-    assert len(records) == 6
+    # 6 curated markets, each an A_TOKEN + DEBT_TOKEN pair.
+    assert len(records) == 12
     for rec in records:
         assert rec.venue == "FLUID-ETHEREUM"
-        assert rec.instrument_type == InstrumentType.LENDING
+        assert rec.instrument_type in (InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN)
         assert rec.base_asset_decimals == 18
         assert rec.pool_address == rec.raw_symbol  # vault address is the raw symbol
+    assert {r.instrument_type for r in records} == {InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN}
 
 
 @pytest.mark.asyncio
-async def test_radiant_get_instruments_emits_lending_records() -> None:
+async def test_radiant_get_instruments_emits_supply_debt_records() -> None:
     adapter = RadiantReferenceDataAdapter(chain="ARBITRUM")
     with patch(_RESOLVER_PATHS["radiant"], return_value={}):
         records = await adapter.get_instruments()
 
-    assert len(records) == 3  # WETH / WBTC / ARB on Arbitrum
+    # WETH / WBTC / ARB on Arbitrum, each an A_TOKEN + DEBT_TOKEN pair.
+    assert len(records) == 6
     keys = {r.instrument_key for r in records}
-    assert "RADIANT-ARBITRUM:LENDING_MARKET:WETH-USDC" in keys
+    assert "RADIANT-ARBITRUM:A_TOKEN:AWETH-USDC" in keys
+    assert "RADIANT-ARBITRUM:DEBT_TOKEN:DEBTWETH-USDC" in keys
     assert all(r.available_from_datetime is not None for r in records)
 
 
@@ -132,10 +144,36 @@ async def test_instrument_type_filter_rejects_non_lending() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lending_market_alias_is_accepted() -> None:
+async def test_canonical_split_types_accepted_stale_lending_rejected() -> None:
+    """P0 regression guard: these adapters MINT the A_TOKEN (supply) + DEBT_TOKEN
+    (borrow) split (defi_lending_atoken_debttoken_instrument_split_2026_07_07), so
+    real callers filter on the canonical ``InstrumentType.A_TOKEN`` /
+    ``InstrumentType.DEBT_TOKEN`` values. ``instrument_type`` is a call-level GUARD
+    (accept the whole fetch or reject with ``[]``), not a per-record filter, so
+    either minted value returns the FULL supply+debt fetch.
+
+    The pre-split ``LENDING`` literal — which the stale guard used to whitelist while
+    silently rejecting the real minted A_TOKEN/DEBT_TOKEN (a capture gap masquerading
+    as empty; instruments_service_defi_lending_type_guard_fix_2026_07_18) — and the
+    never-real lowercase ``"lending_market"`` literal (the earlier
+    canonical_id_p0_defi_adapter_type_filter_bug_2026_07_08 bug) are now BOTH correctly
+    rejected like any other non-matching value.
+    """
     adapter = VenusReferenceDataAdapter(chain="BSC")
     with patch(_RESOLVER_PATHS["venus"], return_value={}):
-        assert await adapter.get_instruments(instrument_type="lending_market")
+        unfiltered = await adapter.get_instruments()
+        a_tokens = await adapter.get_instruments(instrument_type=InstrumentType.A_TOKEN)
+        debt_tokens = await adapter.get_instruments(instrument_type=InstrumentType.DEBT_TOKEN)
+        stale_lending = await adapter.get_instruments(instrument_type=InstrumentType.LENDING)
+        legacy_literal = await adapter.get_instruments(instrument_type="lending_market")
+
+    # A canonical minted value is a call-level GUARD → returns the WHOLE fetch.
+    assert a_tokens == unfiltered
+    assert debt_tokens == unfiltered
+    assert {r.instrument_type for r in unfiltered} == {InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN}
+    # The no-longer-minted LENDING literal (and the never-real lowercase alias) → [].
+    assert stale_lending == []
+    assert legacy_literal == []
 
 
 @pytest.mark.asyncio
@@ -147,11 +185,12 @@ async def test_unknown_chain_returns_empty() -> None:
 
 @pytest.mark.asyncio
 async def test_radiant_secondary_chains_have_markets() -> None:
-    for chain, expected in (("BSC", 2), ("ETHEREUM", 1)):
+    # Each curated market now emits an A_TOKEN + DEBT_TOKEN pair (2 records/market).
+    for chain, expected_markets in (("BSC", 2), ("ETHEREUM", 1)):
         adapter = RadiantReferenceDataAdapter(chain=chain)
         with patch(_RESOLVER_PATHS["radiant"], return_value={}):
             records = await adapter.get_instruments()
-        assert len(records) == expected
+        assert len(records) == expected_markets * 2
         assert all(r.venue == f"RADIANT-{chain}" for r in records)
 
 
@@ -160,21 +199,27 @@ async def test_radiant_secondary_chains_have_markets() -> None:
 
 @pytest.mark.asyncio
 async def test_get_instrument_lookup_by_address_and_symbol_and_miss() -> None:
-    # The first BSC market is BNB collateral / USDC borrow → symbol "BNB-USDC".
+    # The first BSC market is BNB collateral / USDC borrow → A_TOKEN symbol
+    # "ABNB-USDC", DEBT_TOKEN symbol "DEBTBNB-USDC" — both share the vault address.
     bnb_vault = "0xA07c5b74C9B40447a954e1466938b865b6BBea36"
 
     adapter = VenusReferenceDataAdapter(chain="BSC")
     with patch(_RESOLVER_PATHS["venus"], return_value={}):
+        # Address lookup hits the first record sharing that address (A_TOKEN, emitted first).
         by_addr = await adapter.get_instrument(bnb_vault)
     with patch(_RESOLVER_PATHS["venus"], return_value={}):
-        by_symbol = await adapter.get_instrument("BNB-USDC")
+        by_a_token_symbol = await adapter.get_instrument("ABNB-USDC")
+    with patch(_RESOLVER_PATHS["venus"], return_value={}):
+        by_debt_token_symbol = await adapter.get_instrument("DEBTBNB-USDC")
     with patch(_RESOLVER_PATHS["venus"], return_value={}):
         # A non-matching symbol must walk every record without raising and return None.
         missing = await adapter.get_instrument("0xNOT-A-REAL-VAULT")
 
     assert by_addr is not None
-    assert by_symbol is not None
-    assert by_addr.instrument_key == by_symbol.instrument_key == "VENUS-BSC:LENDING_MARKET:BNB-USDC"
+    assert by_a_token_symbol is not None
+    assert by_debt_token_symbol is not None
+    assert by_addr.instrument_key == by_a_token_symbol.instrument_key == "VENUS-BSC:A_TOKEN:ABNB-USDC"
+    assert by_debt_token_symbol.instrument_key == "VENUS-BSC:DEBT_TOKEN:DEBTBNB-USDC"
     assert missing is None
 
 

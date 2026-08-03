@@ -21,6 +21,7 @@ from unified_api_contracts.internal import (
     InstrumentStatus,
     InstrumentType,
 )
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id, build_leg
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -38,6 +39,14 @@ _BASE = "https://www.deribit.com/api/v2"
 # Deribit underlyings that are actively traded.
 _DERIBIT_COMBO_UNDERLYINGS: list[str] = ["BTC", "ETH", "SOL", "BNB", "XRP"]
 
+# Hard cap on real combo/spread leg count (operator spec, 2026-07-09 —
+# canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md): 1-4 legs
+# supported; a real combo with 5+ legs is DROPPED (not captured, not
+# truncated) — logged with the real leg count rather than silently lost.
+# Mirrors the CME/CBOE hard cap already implemented in
+# instruments_service/reference_data/adapters/tradfi/databento/symbology.py.
+_MAX_COMBO_LEGS = 4
+
 
 def _classify_deribit_error(exc: Exception, status: int | None = None) -> str:
     """Map a Deribit HTTP/network error to a UAC error code for classification."""
@@ -49,6 +58,34 @@ def _classify_deribit_error(exc: Exception, status: int | None = None) -> str:
     if (status is not None and status >= 500) or "500" in msg or "internal" in msg:
         return "500"
     return "UNKNOWN"
+
+
+_OPTION_RIGHTS: frozenset[str] = frozenset({"C", "P"})
+
+
+def _classify_deribit_leg_instrument_type(leg_name: str) -> InstrumentType | None:
+    """Classify a Deribit combo leg's ``InstrumentType`` from its ``instrument_name`` shape.
+
+    Deribit's ``public/get_combos`` leg objects are ``{amount, instrument_name}``
+    only — no per-leg type field is returned — so the type must be inferred
+    from the dash-delimited shape of ``instrument_name`` itself. Verified
+    against real, live ``get_combos`` responses for BTC/ETH (2026-07-09, every
+    currently-active combo for both currencies): every leg name is either 2
+    dash-parts (``{BASE}-PERPETUAL`` or ``{BASE}-{DDMMMYY}``) or 4 dash-parts
+    (``{BASE}-{DDMMMYY}-{STRIKE}-{C|P}``) — no 3-part or 5+-part shape was
+    observed. Real examples seen: ``BTC-PERPETUAL``, ``BTC-10JUL26``,
+    ``BTC-17JUL26-65000-C``.
+
+    Returns ``None`` (caller drops the leg — same degrade-gracefully
+    convention already used for a leg with a missing/empty ``instrument_name``
+    or zero ``amount``) if the name doesn't match any known shape.
+    """
+    parts = leg_name.split("-")
+    if len(parts) == 2:
+        return InstrumentType.PERPETUAL if parts[1] == "PERPETUAL" else InstrumentType.FUTURE
+    if len(parts) == 4 and parts[3] in _OPTION_RIGHTS:
+        return InstrumentType.OPTION
+    return None
 
 
 class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
@@ -68,9 +105,11 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
     def venue(self) -> str:
         """Return the venue identifier.
 
-        MUST be the registered venue id ``DERIBIT-COMBO`` (factory.py
-        ``VENUE_TO_ADAPTER["DERIBIT-COMBO"]="deribit_combo"``), NOT the bare
-        exchange ``DERIBIT`` — the URDI venue-tag filter
+        MUST be the registered venue id ``DERIBIT-COMBO`` (factory.py's
+        ``get_adapter_for_canonical_venue`` routes ``mode="live"`` DERIBIT-COMBO
+        to this adapter; ``VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"]="tardis"`` is
+        the batch/default), NOT the bare exchange ``DERIBIT`` — the URDI
+        venue-tag filter
         (``_filter_records_to_venue``) keeps only records whose ``venue`` equals
         the BATCH canonical venue, so tagging combos ``DERIBIT`` dropped every
         fetched row as an "unknown venue" (the venue had 0 captured days since it
@@ -194,27 +233,29 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         caller's shard-isolation routes it to attempted_failed (CF-11). SSOT:
         https://docs.deribit.com/#public-get_combos.
 
-        SOURCE LIMITATION — DERIBIT-COMBO HISTORICAL DATA IS UNBACKFILLABLE:
-        ``public/get_combos`` returns ONLY currently-live (active) combo
-        instruments.  Deribit does NOT retain or expose the state of historical /
-        expired combos — once a combo expires it disappears from the endpoint
-        permanently.  Consequently:
+        SOURCE LIMITATION (THIS ADAPTER ONLY) — ``public/get_combos`` returns
+        ONLY currently-live (active) combo instruments.  Deribit does NOT
+        retain or expose the state of historical / expired combos via REST —
+        once a combo expires it disappears from this endpoint permanently.
+        This is why the URDI factory routes THIS adapter for ``mode="live"``
+        only; historical/batch DERIBIT-COMBO catalogue population routes to
+        the Tardis adapter instead (``VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"]
+        = "tardis"``, ``canonical_venue_override="DERIBIT-COMBO"``) — Tardis
+        archives the market feed in real time and its no-auth metadata
+        endpoint (``api.tardis.dev/v1/exchanges/deribit``) genuinely carries
+        68,847 ``type=='combo'`` symbols back to 2022-08-23 (live-verified
+        2026-07-14), independent of what Deribit's own REST API currently
+        lists.  Fixed 2026-07-14 — see
+        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14):
 
-        * Instrument-history cells for DERIBIT-COMBO prior to the live-capture
-          window (i.e., dates before the adapter was deployed and running) are
-          **structurally unbackfillable via REST** — this is a genuine upstream
-          source limitation, NOT a pipeline gap or missing credential.
-        * The manifest must represent those historical cells as
-          ``empty_confirmed[EXPECTED_SOURCE_DOES_NOT_OFFER_DATA_TYPE]`` (the
-          source has no historical endpoint for this data, ever).  A
-          ``SOURCE_RETURNED_ZERO`` would be incorrect (no fetch was made);
-          ``attempted_failed`` is incorrect (no retry will succeed).
-        * **DO NOT re-attempt a historical DERIBIT-COMBO backfill.**  The cefi
-          8-venue backfill correctly could not fill it.  Any future audit that
-          sees DERIBIT-COMBO historical cells as empty should classify them as
-          expected typed-empty, not a fillable gap.
-        * For live / forward capture the adapter works correctly: combos active
-          today are returned and written as ``captured``.
+        * This REST adapter (``get_combos``) still cannot backfill history —
+          do not re-attempt a historical DERIBIT-COMBO fetch through THIS
+          adapter/endpoint specifically.
+        * For live / forward capture this adapter works correctly: combos
+          active today are returned and written as ``captured``.
+        * Historical DERIBIT-COMBO cells are fillable via the Tardis-routed
+          batch path (see factory.py ``get_adapter_for_canonical_venue``) —
+          they are NOT permanently ``empty_confirmed``.
 
         SSOT: ``codex/02-data/honest-absence-downstream-handling.md``
         § "DERIBIT-COMBO historical unavailability".
@@ -283,15 +324,37 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         return records
 
     @staticmethod
-    def _build_legs(raw_legs: object) -> list[InstrumentLeg]:
+    def _build_legs(raw_legs: object, combo_id: str = "") -> list[InstrumentLeg]:
         """Map Deribit get_combos structured ``legs`` → list[InstrumentLeg].
 
         Each Deribit leg is ``{"amount": <signed int>, "instrument_name": <str>}``.
         ``amount`` sign → side (>0 BUY / <0 SELL); ``abs(amount)`` → ratio;
-        ``instrument_name`` → the leg's ``instrument_key`` (DERIBIT:<name>).
+        ``instrument_name`` → the leg's ``instrument_key``, built via the
+        shared UAC ``build_leg()`` (canonical ``VENUE:TYPE:SYMBOL`` grammar)
+        instead of the prior ad hoc ``f"DERIBIT:{leg_name}"`` — which was
+        missing the ``:TYPE:`` segment entirely (2 colon-parts instead of 3).
+        The per-leg ``InstrumentType`` is classified from the raw
+        ``instrument_name`` shape via ``_classify_deribit_leg_instrument_type``
+        since ``get_combos`` doesn't return a per-leg type field. A leg whose
+        name doesn't match any known shape is dropped (logged) rather than
+        raised, matching the existing malformed-leg-skip convention below.
+
+        A combo carrying 5+ real legs is dropped ENTIRELY (empty list, not a
+        truncated 4-leg one) with the real leg count logged — mirroring the
+        CME/CBOE hard cap (operator spec 2026-07-09,
+        canonical_id_p1_tradfi_combo_leg_canonicalization_2026_07_08.md).
+        ``combo_id`` is optional context for the drop log line only.
         """
         legs: list[InstrumentLeg] = []
         if not isinstance(raw_legs, list):
+            return legs
+        if len(raw_legs) > _MAX_COMBO_LEGS:
+            logger.warning(
+                "DeribitComboAdapter: dropping combo with %d legs (hard cap is %d, combo_id=%r)",
+                len(raw_legs),
+                _MAX_COMBO_LEGS,
+                combo_id,
+            )
             return legs
         for raw in raw_legs:
             if not isinstance(raw, dict):
@@ -305,11 +368,22 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
                 amount = 0
             if amount == 0:
                 continue
+            leg_type = _classify_deribit_leg_instrument_type(leg_name)
+            if leg_type is None:
+                logger.warning(
+                    "DeribitComboAdapter: cannot classify leg instrument_type for "
+                    "instrument_name=%s (unexpected shape) — dropping leg",
+                    leg_name,
+                )
+                continue
             legs.append(
-                InstrumentLeg(
-                    instrument_key=f"DERIBIT:{leg_name}",
+                build_leg(
+                    "DERIBIT",
+                    leg_type,
+                    leg_name,
                     side="BUY" if amount > 0 else "SELL",
                     ratio=abs(amount),
+                    passthrough=True,
                 )
             )
         return legs
@@ -349,12 +423,19 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # Legs: from the get_combos STRUCTURED legs (canonical source). A combo
         # without parseable legs is invalid → drop (validation requires legs).
-        legs: list[InstrumentLeg] = self._build_legs(item.get("legs"))
+        legs: list[InstrumentLeg] = self._build_legs(item.get("legs"), combo_id)
         if not legs:
             return None
 
+        combo_instrument_key = build_instrument_id("DERIBIT", InstrumentType.COMBO, combo_id)
         return InstrumentRecord(
-            instrument_key=f"DERIBIT:COMBO:{combo_id}",
+            # Bare "DERIBIT" venue (NOT self.venue == "DERIBIT-COMBO", see this class's
+            # `venue` property docstring) — a combo's instrument_key groups under the
+            # same DERIBIT: namespace as its own legs (also bare-DERIBIT-keyed).
+            instrument_key=combo_instrument_key,
+            # No CeFi raw-code-to-human-name translation gap (see other CeFi adapters'
+            # identical comment) — canonical_instrument_id mirrors instrument_key.
+            canonical_instrument_id=combo_instrument_key,
             venue=self.venue,
             raw_symbol=combo_id,
             instrument_type=InstrumentType.COMBO,

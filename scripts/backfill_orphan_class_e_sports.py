@@ -61,7 +61,7 @@ from pathlib import Path
 from types import ModuleType
 
 from unified_api_contracts import PipelineMode
-from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE
+from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE, is_pre_launch_date
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -139,6 +139,27 @@ def load_report_e(client: object, report_uri: str) -> list[dict[str, str]]:
     raw = client.download_bytes(bucket, blob_path)  # type: ignore[attr-defined]
     df = pd.read_parquet(io.BytesIO(raw))
     return df[df["obj_class"] == "E_orphan_real"].to_dict("records")  # type: ignore[return-value]
+
+
+def split_pre_floor(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Split ``E_orphan_real`` rows into (legitimate, pre-floor) via ``is_pre_launch_date``.
+
+    Found 2026-07-22 (``sports_pre_floor_fixtures_orphan_misclassification_2026_07_22.md``):
+    the sweep report itself can hold pre-2020-06-06 rows the C3 guard should have caught but
+    didn't (a since-fixed UAC registry gap for FIXTURES_SCHEDULE/FIXTURES_OUTCOMES). Never
+    ``record_captured`` a pre-floor row — per ``sports-2020-06-data-floor.md`` those are
+    fabrication-by-construction and are an operator-gated WIPE candidate, not backfill scope.
+    """
+    legit: list[dict[str, str]] = []
+    pre_floor: list[dict[str, str]] = []
+    for r in rows:
+        data_type = str(r.get("data_type", ""))
+        day = str(r.get("day", ""))
+        if day and is_pre_launch_date(data_type, day):
+            pre_floor.append(r)
+        else:
+            legit.append(r)
+    return legit, pre_floor
 
 
 def reverify(sweep: ModuleType, index: object, rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
@@ -309,8 +330,25 @@ def main(argv: list[str] | None = None) -> int:
     bucket = sweep._resolve_sports_bucket(args.bucket)
     report_uri = args.report_uri or f"gs://{bucket}/_index/audit/orphan_sweep_sports.parquet"
 
-    e_rows = load_report_e(client, report_uri)
-    logger.info("report %s: %d class-E rows", report_uri, len(e_rows))
+    e_rows_raw = load_report_e(client, report_uri)
+    e_rows, pre_floor_rows = split_pre_floor(e_rows_raw)
+    logger.info(
+        "report %s: %d class-E rows (%d legitimate, %d pre-floor EXCLUDED)",
+        report_uri,
+        len(e_rows_raw),
+        len(e_rows),
+        len(pre_floor_rows),
+    )
+    if pre_floor_rows:
+        by_dt: dict[str, int] = defaultdict(int)
+        for r in pre_floor_rows:
+            by_dt[str(r.get("data_type", ""))] += 1
+        logger.warning(
+            "EXCLUDED %d pre-2020-06-06-floor rows from backfill (fabrication-by-construction, NOT recorded): %s "
+            "— see sports_pre_floor_fixtures_orphan_misclassification_2026_07_22.md for the operator-gated WIPE ask",
+            len(pre_floor_rows),
+            dict(sorted(by_dt.items())),
+        )
     index = sweep._load_covered_index(client, bucket, with_definitions=(args.bucket == "reference"))
     still, covered = reverify(sweep, index, e_rows)
     logger.info("re-verify vs LIVE index: %d already covered, %d still orphan", covered, len(still))

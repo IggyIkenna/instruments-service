@@ -38,6 +38,9 @@ from instruments_service.reference_data.adapters.defi._solana_utils import (
 
 class TestGetProtocolFloorDate:
     def test_known_protocol(self) -> None:
+        # "drift" has no UAC venue_launch_dates entry (DRIFT-SOLANA was
+        # removed 2026-07-16, operator ruling) — falls through to the
+        # local SOLANA_PROTOCOL_DEPLOY_DATES fallback unchanged.
         dt = get_protocol_floor_date("drift")
         assert dt == datetime(2022, 11, 4, tzinfo=UTC)
 
@@ -53,6 +56,53 @@ class TestGetProtocolFloorDate:
     def test_unknown_protocol_raises_key_error(self) -> None:
         with pytest.raises(KeyError, match="No floor date for Solana protocol"):
             get_protocol_floor_date("nonexistent_protocol")
+
+    # -- UAC venue_launch_dates SSOT precedence (2026-07-18 fix) ----------
+    # The DeFi drilldown was showing a generic pre-2020 floor for Solana
+    # protocols instead of their real launch dates: the local
+    # SOLANA_PROTOCOL_DEPLOY_DATES fallback carried stale entries (kamino
+    # 2024-01-01, jito 2021-11-01) that UAC's operator-curated
+    # ``venue_launch_dates.DEFI_VENUE_LAUNCH_DATES`` now corrects. UAC is
+    # consulted FIRST as the chain-suffixed venue form (``KAMINO-SOLANA``)
+    # matching the manifest's ``venue`` column for per-chain DeFi rows.
+
+    def test_kamino_uses_uac_ssot_over_stale_local_fallback(self) -> None:
+        # UAC DEFI_VENUE_LAUNCH_DATES["KAMINO-SOLANA"] = 2022-08-24 (real
+        # Kamino mainnet launch); the local dict's 2024-01-01 predates the
+        # UAC fix and silently floored ~17 months of legitimate history.
+        dt = get_protocol_floor_date("kamino")
+        assert dt == datetime(2022, 8, 24, tzinfo=UTC)
+
+    def test_jito_uses_uac_ssot_over_stale_local_fallback(self) -> None:
+        # UAC DEFI_VENUE_LAUNCH_DATES["JITO-SOLANA"] = 2022-08-16; the
+        # local dict's 2021-11-01 was ~9.5 months too early.
+        dt = get_protocol_floor_date("jito")
+        assert dt == datetime(2022, 8, 16, tzinfo=UTC)
+
+    def test_raydium_uses_uac_ssot(self) -> None:
+        dt = get_protocol_floor_date("raydium")
+        assert dt == datetime(2021, 2, 21, tzinfo=UTC)
+
+    def test_orca_uses_uac_ssot_over_stale_local_fallback(self) -> None:
+        # UAC DEFI_VENUE_LAUNCH_DATES["ORCA-SOLANA"] = 2021-02-09; the
+        # local dict's 2022-03-01 (Whirlpools CLMM launch) was over a year
+        # too late relative to Orca's actual AMM launch.
+        dt = get_protocol_floor_date("orca")
+        assert dt == datetime(2021, 2, 9, tzinfo=UTC)
+
+    def test_marinade_uses_uac_ssot(self) -> None:
+        dt = get_protocol_floor_date("marinade")
+        assert dt == datetime(2021, 8, 2, tzinfo=UTC)
+
+    def test_case_insensitive_uac_lookup(self) -> None:
+        dt = get_protocol_floor_date("KAMINO")
+        assert dt == datetime(2022, 8, 24, tzinfo=UTC)
+
+    def test_protocol_without_uac_entry_uses_local_fallback(self) -> None:
+        # "phoenix" has no UAC DEFI_VENUE_LAUNCH_DATES entry — falls
+        # through to the local dict unchanged.
+        dt = get_protocol_floor_date("phoenix")
+        assert dt == datetime(2023, 6, 1, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

@@ -133,9 +133,7 @@ def test_rollup_thin_latest_day_does_not_false_delist_other_venues(rollup: Modul
     """
     d1, d2, d3 = date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)
     # VENUE_A: 10 perps every day INCLUDING the latest → all active.
-    a_rows = [
-        {"instrument_key": f"A{i}", "venue": "VENUE_A", "instrument_type": "PERPETUAL"} for i in range(10)
-    ]
+    a_rows = [{"instrument_key": f"A{i}", "venue": "VENUE_A", "instrument_type": "PERPETUAL"} for i in range(10)]
     snapshots = [
         (d1, _snapshot(a_rows)),
         (d2, _snapshot(a_rows)),
@@ -177,6 +175,55 @@ def test_rollup_dated_instrument_available_to_is_venue_truth_expiry(rollup: Modu
     assert row["available_to"] == "2024-01-02"  # venue-truth expiry, not None/last-seen
 
 
+def test_rollup_emits_distinct_expiry_column_for_dated_derivative(rollup: ModuleType) -> None:
+    """A2: a dated FUTURE/OPTION carries its venue-declared expiry in the NEW ``expiry``
+    column, distinct from (though here equal to) ``available_to``. The point is that
+    ``expiry`` is the CLEAN value — see the perp/spot cases below where the two diverge."""
+    d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
+    rows = [
+        {
+            "instrument_key": "DERIBIT:OPTION:BTC-2JAN24",
+            "venue": "DERIBIT",
+            "instrument_type": "OPTION",
+            "expiry": "2024-01-02",
+        }
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    assert "expiry" in df.columns
+    row = df.to_dict("records")[0]
+    assert row["expiry"] == "2024-01-02"
+
+
+def test_rollup_expiry_is_null_when_available_to_is_a_delisting_not_an_expiry(rollup: ModuleType) -> None:
+    """THE reason the column exists: ``available_to`` is overloaded. A delisted SPOT
+    pair has ``available_to`` = its delisting date but NO expiry — ``expiry`` must be
+    NULL, not the delisting date. This is what a consumer could not tell from
+    ``available_to`` alone."""
+    d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
+    rows = [
+        {
+            "instrument_key": "BINANCE-SPOT:SPOT_PAIR:FOO-USDT",
+            "venue": "BINANCE-SPOT",
+            "instrument_type": "SPOT_PAIR",
+            "delisted_at": "2024-05-15",
+        }
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    row = df.to_dict("records")[0]
+    assert row["available_to"] == "2024-05-15"  # delisting date, unchanged
+    assert row["expiry"] is None  # but it is NOT an expiry — honest-null
+
+
+def test_rollup_expiry_is_null_for_active_perp(rollup: ModuleType) -> None:
+    """A live perp has no expiry — the column is honestly NULL (available_to is also
+    None here, but the column must be NULL regardless of available_to's value)."""
+    d1, d2 = date(2024, 1, 1), date(2024, 1, 2)
+    rows = [{"instrument_key": "HYPERLIQUID:PERPETUAL:BTC", "venue": "HYPERLIQUID", "instrument_type": "PERPETUAL"}]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    row = df.to_dict("records")[0]
+    assert row["expiry"] is None
+
+
 def test_rollup_delisted_at_takes_priority_over_liveness(rollup: ModuleType) -> None:
     """An explicit ``delisted_at`` (venue-reported removal) wins over last-seen liveness."""
     d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
@@ -213,6 +260,167 @@ def test_rollup_genuine_delisting_still_stamped(rollup: ModuleType) -> None:
     by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
     assert by_id["DEAD"]["available_to"] == "2024-01-01"  # genuinely delisted, last-seen stamp
     assert all(by_id[f"K{i}"]["available_to"] is None for i in range(10))
+
+
+def test_rollup_defi_dropout_stays_active_but_truth_gate_closes(rollup: ModuleType) -> None:
+    """DeFi carve-out (Option A, codex instruments-foundation-and-catalogue-completeness §1.3).
+
+    For ``asset_group="defi"`` a pool/market drop-out is a TVL/source-set gap, NOT a
+    delisting → it stays active (``available_to=None``). A genuine venue-declared
+    ``delisted_at`` STILL closes it (truth-gate seam preserved). The SAME drop-out under
+    a non-defi run (``asset_group="cefi"``) delists via last-seen — proving the gate is
+    asset_group-scoped, not instrument_type-scoped (the clustered false-delistings were
+    SPOT_ASSET/LENDING/A_TOKEN rows, not POOL rows). Covers full-rebuild + incremental.
+    """
+    d1, d2, d3 = date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)
+    venue = "UNISWAP_V3-ARBITRUM"
+    addr_gone = "0x" + "a" * 40
+    addr_truth = "0x" + "b" * 40
+    # 10 always-present filler pools so every day is a FULL venue day.
+    filler = [
+        {
+            "instrument_key": f"{venue}:POOL:TOK{i}",
+            "venue": venue,
+            "instrument_type": "POOL",
+            "raw_symbol": f"0x{i:040x}",
+            "pool_address": f"0x{i:040x}",
+        }
+        for i in range(10)
+    ]
+    gone = {
+        "instrument_key": f"{venue}:POOL:GONE",
+        "venue": venue,
+        "instrument_type": "POOL",
+        "raw_symbol": addr_gone,
+        "pool_address": addr_gone,
+    }
+    # Present on every day but carries a venue-declared delisted_at (truth-gate).
+    truth = {
+        **gone,
+        "instrument_key": f"{venue}:POOL:TRUTH",
+        "raw_symbol": addr_truth,
+        "pool_address": addr_truth,
+        "delisted_at": "2026-06-02",
+    }
+    # GONE present only d1; d2/d3 are FULL without it → a drop-out. TRUTH present all days.
+    snapshots = [
+        (d1, _snapshot([*filler, gone, truth])),
+        (d2, _snapshot([*filler, truth])),
+        (d3, _snapshot([*filler, truth])),
+    ]
+
+    # DeFi run: drop-out stays active (None); delisted_at truth still closes.
+    defi = {
+        r["instrument_id"]: r
+        for r in rollup.build_catalogue_dataframe(snapshots, asset_group="defi").to_dict("records")
+    }
+    assert defi[addr_gone]["available_to"] is None, "DeFi drop-out must stay active (None), not delisted"
+    assert defi[addr_truth]["available_to"] == "2026-06-02", "delisted_at truth-gate must still close a DeFi pool"
+    assert all(defi[f"0x{i:040x}"]["available_to"] is None for i in range(10))
+
+    # Discrimination: the SAME drop-out under a non-defi run delists via last-seen.
+    cefi = {
+        r["instrument_id"]: r
+        for r in rollup.build_catalogue_dataframe(snapshots, asset_group="cefi").to_dict("records")
+    }
+    assert cefi[addr_gone]["available_to"] == "2026-06-01", "non-defi drop-out must still delist (last-seen)"
+
+    # Incremental path parity: a DeFi pool absent from the window must also stay active.
+    prev = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id=addr_gone,
+                instrument_type="POOL",
+                venue=venue,
+                pool_address=addr_gone,
+                available_from="2026-06-01",
+                available_to=None,
+            )
+        ]
+    )
+    window = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id="0x" + "c" * 40,
+                instrument_type="POOL",
+                venue=venue,
+                pool_address="0x" + "c" * 40,
+                available_from="2026-06-03",
+                available_to=None,
+            )
+        ]
+    ).drop(columns=["mvp"])
+    merged = {
+        r["instrument_id"]: r
+        for r in rollup._merge_incremental(prev, window, window_start=d3, asset_group="defi").to_dict("records")
+    }
+    gone_to = merged[addr_gone]["available_to"]
+    assert gone_to is None or gone_to == "" or pd.isna(gone_to), (
+        f"incremental DeFi drop-out must stay active (None), got {gone_to!r}"
+    )
+
+
+def test_apply_defi_removals_closes_only_blank_rows_in_map(rollup: ModuleType) -> None:
+    """Option B: `_apply_defi_removals` sets available_to for a confirmed-gone row (blank +
+    in the removal map), leaves a not-in-map row live, and NEVER overrides an already-set
+    available_to (a delisted_at/expiry truth or an existing close)."""
+    df = pd.DataFrame(
+        [
+            {"instrument_id": "0xgone", "raw_symbol": "0xgone", "pool_address": "0xgone", "available_to": None},
+            {"instrument_id": "0xlive", "raw_symbol": "0xlive", "pool_address": "0xlive", "available_to": None},
+            {
+                "instrument_id": "0xtruth",
+                "raw_symbol": "0xtruth",
+                "pool_address": "0xtruth",
+                "available_to": "2026-05-01",
+            },
+        ]
+    )
+    removal_map = {"0xgone": "2026-06-15", "0xtruth": "2026-09-09"}
+    out = {r["instrument_id"]: r for r in rollup._apply_defi_removals(df, removal_map).to_dict("records")}
+    assert out["0xgone"]["available_to"] == "2026-06-15"  # confirmed gone → closed
+    live_to = out["0xlive"]["available_to"]
+    assert live_to is None or live_to == "" or pd.isna(live_to)  # not in map → stays live
+    assert out["0xtruth"]["available_to"] == "2026-05-01"  # already closed → NOT overridden
+
+
+def test_rollup_defi_removal_probe_closes_confirmed_gone_pool(
+    rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Option B end-to-end via build_catalogue_dataframe: a DeFi pool present on the venue's
+    latest full day is kept live by Option A (available_to=None), UNLESS the on-chain removal
+    probe confirmed it gone — then available_to is closed at the removal date. A pool not in the
+    removal artifact stays live. Proves the preserved delisted_at seam is wired to the probe."""
+    addr = "0x" + "a" * 40
+    venue = "UNISWAP_V3-ARBITRUM"
+    filler = [
+        {
+            "instrument_key": f"{venue}:POOL:TOK{i}",
+            "venue": venue,
+            "instrument_type": "POOL",
+            "raw_symbol": f"0x{i:040x}",
+            "pool_address": f"0x{i:040x}",
+        }
+        for i in range(5)
+    ]
+    gone = {
+        "instrument_key": f"{venue}:POOL:GONE",
+        "venue": venue,
+        "instrument_type": "POOL",
+        "raw_symbol": addr,
+        "pool_address": addr,
+    }
+    d1, d2 = date(2026, 6, 1), date(2026, 6, 2)
+    snapshots = [(d1, _snapshot([*filler, gone])), (d2, _snapshot([*filler, gone]))]
+    # Removal artifact confirms `addr` is gone on-chain as of 2026-06-02.
+    monkeypatch.setattr(rollup, "_load_defi_removal_map", lambda: {addr: "2026-06-02"})
+    by_id = {
+        r["instrument_id"]: r
+        for r in rollup.build_catalogue_dataframe(snapshots, asset_group="defi").to_dict("records")
+    }
+    assert by_id[addr]["available_to"] == "2026-06-02", "on-chain-confirmed removal must close the pool (Option B)"
+    filler0 = f"0x{0:040x}"
+    assert by_id[filler0]["available_to"] is None, "a pool NOT in the removal artifact stays live (Option A)"
 
 
 def test_rollup_metadata_follows_most_recent_snapshot(rollup: ModuleType) -> None:
@@ -297,7 +505,13 @@ def test_rollup_defi_pool_emits_dual_form_ids(rollup: ModuleType) -> None:
     assert row["instrument_id"] == "0x45dda9cb7c25131df268515131f647d726f50608"
     assert row["venue"] == "UNISWAP_V3"
     assert row["chain"] == "POLYGON"
-    assert row["glued_pair_id"] == "UNISWAPV3-POLYGON:POOL:USDC-WETH:500"
+    # glued_pair_id is the canonical 3-segment form (fee hyphen-glued INTO the symbol
+    # segment, never a 4th colon) after the UAC POOL-key 4→3-seg convergence
+    # (operator ruling 2026-07-18); the retired `…:USDC-WETH:500` shape is gone.
+    # Fee value is the structured bps column (5, real basis points) — corrected
+    # 2026-08-03 to prefer ``pool_fee_tier`` over the legacy key's raw on-wire
+    # feeTier token (500), per finding 2 bug 3.
+    assert row["glued_pair_id"] == "UNISWAP_V3-POLYGON:POOL:USDC-WETH-5"
     assert row["pool_address"] == "0x45dda9cb7c25131df268515131f647d726f50608"
 
 
@@ -334,7 +548,106 @@ def test_rollup_defi_pool_dual_form_round_trips_via_converter(rollup: ModuleType
     assert parsed.chain == "ARBITRUM"
     assert parsed.base_asset == "AAVE"
     assert parsed.quote_asset == "USDC"
-    assert parsed.fee == "100"
+    # Structured bps column (1, real basis points) wins over the legacy key's raw
+    # on-wire feeTier token (100) — corrected 2026-08-03, finding 2 bug 3.
+    assert parsed.fee == "1"
+
+
+def test_rollup_defi_pool_bps_fee_wins_over_legacy_key_garbage(rollup: ModuleType) -> None:
+    """Regression, live 2026-08-03 (finding 2 bug 3): a row whose per-day
+    ``instrument_key`` still carries an old-format 4-segment legacy value (real
+    example found in ``prod/catalog.parquet``: ``BALANCER-AVALANCHE:POOL:
+    USDC-DAI.E:0.0`` — colon-before-fee, float-string garbage) must NOT leak that
+    garbage into the re-derived ``glued_pair_id`` when a clean structured
+    ``pool_fee_tier`` bps value is available. Before the 2026-08-03 precedence fix,
+    ``_fee_from_instrument_key`` fired first and reproduced the colon + ``0.0``
+    garbage on every regen."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BALANCER-AVALANCHE:POOL:USDC-DAI.E:0.0",
+                            "venue": "BALANCER-AVALANCHE",
+                            "instrument_type": "POOL",
+                            "raw_symbol": "0x26ed04762e97810c0e551e22d3601fed13e7b2c4",
+                            "pool_address": "0x26ed04762e97810c0e551e22d3601fed13e7b2c4",
+                            "base_asset": "USDC",
+                            "quote_asset": "DAI.E",
+                            "pool_fee_tier": 30.0,
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["glued_pair_id"] == "BALANCER-AVALANCHE:POOL:USDC-DAI.E-30"
+
+
+def test_bps_fee_str_helper(rollup: ModuleType) -> None:
+    """``_bps_fee_str`` strips a pandas float64 artifact (``30.0`` -> ``"30"``) and
+    is blank-safe."""
+    f = rollup._bps_fee_str
+    assert f(30.0) == "30"
+    assert f(5) == "5"
+    assert f("100") == "100"
+    assert f(None) == ""
+    assert f("") == ""
+
+
+def test_rollup_solana_amm_pool_discriminator_survives_into_glued_pair_id(rollup: ModuleType) -> None:
+    """Solana-AMM POOL (orca/raydium, Wave B): the tick-spacing / pool-type discriminator
+    folded into the 3-seg symbol (``…:SOL-USDC-WP64``) survives into the re-derived
+    ``glued_pair_id``, so it stays byte-identical to the passthrough
+    ``canonical_instrument_id`` — even with NO structured ``pool_fee_tier`` column."""
+    d1 = date(2024, 1, 1)
+    addr = "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ"
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "ORCA-SOLANA:POOL:SOL-USDC-WP64",
+                            "canonical_instrument_id": "ORCA-SOLANA:POOL:SOL-USDC-WP64",
+                            "venue": "ORCA-SOLANA",
+                            "instrument_type": "POOL",
+                            "raw_symbol": addr,
+                            "pool_address": addr,
+                            "base_asset": "SOL",
+                            "quote_asset": "USDC",
+                            "pool_fee_tier": None,
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    # machine id = pool_address.lower(); symbolic columns keep the WP64 discriminator + agree.
+    assert row["instrument_id"] == addr.lower()
+    assert row["venue"] == "ORCA"
+    assert row["chain"] == "SOLANA"
+    assert row["glued_pair_id"] == "ORCA-SOLANA:POOL:SOL-USDC-WP64"
+    assert row["canonical_instrument_id"] == "ORCA-SOLANA:POOL:SOL-USDC-WP64"
+    assert row["glued_pair_id"] == row["canonical_instrument_id"]
+
+
+def test_pool_symbol_discriminator_helper(rollup: ModuleType) -> None:
+    """``_pool_symbol_discriminator`` peels the trailing hyphen-glued discriminator off a
+    3-seg POOL symbol, and returns "" for plain pairs / non-POOL / blank-pair keys."""
+    f = rollup._pool_symbol_discriminator
+    assert f("ORCA-SOLANA:POOL:SOL-USDC-WP64", "SOL", "USDC") == "WP64"
+    assert f("RAYDIUM-SOLANA:POOL:SOL-USDC-Standard", "SOL", "USDC") == "Standard"
+    assert f("UNISWAP_V3-ARBITRUM:POOL:USDC-WETH", "USDC", "WETH") == ""  # plain pair, no disc
+    assert f("UNISWAP_V3-ARBITRUM:POOL:USDC-WETH:500", "USDC", "WETH") == ""  # legacy 4-seg
+    assert f("BINANCE:PERPETUAL:BTC-USD", "BTC", "USD") == ""  # non-POOL
+    assert f("ORCA-SOLANA:POOL:SOL-USDC-WP64", "", "") == ""  # blank base/quote
 
 
 def test_rollup_defi_pool_spelling_variants_collapse_to_one_open_lifecycle(rollup: ModuleType) -> None:
@@ -376,6 +689,46 @@ def test_rollup_defi_pool_spelling_variants_collapse_to_one_open_lifecycle(rollu
     assert row["chain"] == "POLYGON"
 
 
+def test_rollup_defi_pool_same_symbol_different_address_stay_distinct_lifecycles(
+    rollup: ModuleType,
+) -> None:
+    """Regression for `defi_instrument_availability_duplicate_instrument_key_rows_2026_07_26.md`:
+    two genuinely different on-chain pools can share the SAME base/quote/fee-tier and thus the
+    SAME symbolic ``instrument_key``/``glued_pair_id`` (confirmed real 2026-07-29, e.g.
+    ``PANCAKESWAP_V3-BSC:POOL:USDT-USDC-100`` mapping to two distinct ``pool_address`` values).
+
+    Per the operator's 2026-07-18 two-id/dual-key ruling (Option A,
+    codex/02-data/defi-canonical-naming-ssot.md), the symbolic key is documented as the
+    human-readable/UI form ONLY — it is NOT the uniqueness guarantee, and is not meant to be one.
+    The real machine/lifecycle key is ``pool::<chain>::<pool_address>`` (:func:`_aggregate_key`),
+    which IS always unique because ``pool_address`` is the on-chain contract address. This test
+    proves the roll-up does not collapse/overwrite one colliding pool with the other -- both
+    ``instrument_id`` (bare pool_address) rows survive as distinct catalogue entries, even though
+    they share one ``glued_pair_id``.
+    """
+    d1 = date(2024, 1, 1)
+    addr_a = "0x846d0c9c1b1e6f7fda1d1c1f0d2e3f4a5b6c7d8e"
+    addr_b = "0x1750d0c9c1b1e6f7fda1d1c1f0d2e3f4a5b6c7d8"
+    pool_a = {
+        "instrument_key": "PANCAKESWAP_V3-BSC:POOL:USDT-USDC-100",
+        "venue": "PANCAKESWAP_V3-BSC",
+        "instrument_type": "POOL",
+        "raw_symbol": addr_a,
+        "pool_address": addr_a,
+        "base_asset": "USDT",
+        "quote_asset": "USDC",
+        "pool_fee_tier": 100,
+    }
+    pool_b = {**pool_a, "raw_symbol": addr_b, "pool_address": addr_b}
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot([pool_a, pool_b]))])
+    pool_rows = df[df["instrument_type"].astype(str).str.upper() == "POOL"].to_dict("records")
+    assert len(pool_rows) == 2
+    ids = {row["instrument_id"] for row in pool_rows}
+    assert ids == {addr_a, addr_b}
+    glued_ids = {row["glued_pair_id"] for row in pool_rows}
+    assert glued_ids == {"PANCAKESWAP_V3-BSC:POOL:USDT-USDC-100"}
+
+
 def test_rollup_non_pool_row_has_blank_dual_form(rollup: ModuleType) -> None:
     """A CeFi/non-pool row carries blank glued_pair_id + pool_address (no fabrication)."""
     d1 = date(2024, 1, 1)
@@ -403,11 +756,901 @@ def test_rollup_non_pool_row_has_blank_dual_form(rollup: ModuleType) -> None:
     assert row["pool_address"] == ""
 
 
+def test_rollup_legacy_raw_binance_futures_dated_future_id_canonicalized(rollup: ModuleType) -> None:
+    """A legacy by_date row captured BEFORE the adapter's 2026-07-09 fix still carries the
+    raw wire-form dated-FUTURE id (``BINANCE-FUTURES:FUTURE:ETHUSDT_260626``) — the roll-up
+    must rebuild it to the dash-canonical shape every other dated-futures venue in the same
+    catalogue produces (cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_
+    2026_07_15.md)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-FUTURES:FUTURE:ETHUSDT_260626",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "ETHUSDT_260626",
+                            "base_asset": "ETH",
+                            "quote_asset": "USDT",
+                            "margin_type": "linear",
+                            "expiry": "2026-06-26",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "BINANCE-FUTURES:FUTURE:ETH-USDT@LIN-20260626"
+
+
+def test_rollup_legacy_raw_binance_delivery_inverse_dated_future_id_canonicalized(rollup: ModuleType) -> None:
+    """Same defect class, BINANCE-DELIVERY inverse side (``@INV``)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-DELIVERY:FUTURE:BTCUSD_260925",
+                            "venue": "BINANCE-DELIVERY",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "BTCUSD_260925",
+                            "base_asset": "BTC",
+                            "quote_asset": "USD",
+                            "margin_type": "inverse",
+                            "expiry": "2026-09-25",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "BINANCE-DELIVERY:FUTURE:BTC-USD@INV-20260925"
+
+
+def test_rollup_already_canonical_dated_future_id_untouched(rollup: ModuleType) -> None:
+    """A row already fixed at the adapter (KRAKEN-FUTURES, carries ``@``) is an idempotent
+    no-op — the roll-up must never re-derive/mangle an already-canonical id."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260626",
+                            "venue": "KRAKEN-FUTURES",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "FF_XBTUSD_260626",
+                            "base_asset": "BTC",
+                            "quote_asset": "USD",
+                            "margin_type": "linear",
+                            "expiry": "2026-06-26",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260626"
+
+
+def test_rollup_raw_dated_future_missing_fields_degrades_unchanged(rollup: ModuleType) -> None:
+    """A dated-FUTURE row missing a field the rebuild needs (here: quote_asset) must
+    degrade to the raw id unchanged rather than guess or raise."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-FUTURES:FUTURE:ETHUSDT_260626",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "ETHUSDT_260626",
+                            "base_asset": "ETH",
+                            "margin_type": "linear",
+                            "expiry": "2026-06-26",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "BINANCE-FUTURES:FUTURE:ETHUSDT_260626"
+
+
+# ---------------------------------------------------------------------------
+# Legacy ``VENUE:PERP:<raw>`` on-chain perp id rebuild (Phase -1 catalogue gate 1)
+# ---------------------------------------------------------------------------
+
+
+def _legacy_perp_row(iid: str, base: str, quote: str, raw_symbol: str) -> dict[str, object]:
+    """A pre-2026-07-08 on-chain perp by_date row, in the legacy ``:PERP:`` id form.
+
+    Field values mirror the LIVE by_date corpus exactly (measured 2026-07-17): the
+    legacy rows do carry base_asset + quote_asset + margin_type.
+    """
+    return {
+        "instrument_key": iid,
+        "venue": iid.split(":", 1)[0],
+        "instrument_type": "PERPETUAL",
+        "raw_symbol": raw_symbol,
+        "base_asset": base,
+        "quote_asset": quote,
+        "margin_type": "linear",
+    }
+
+
+@pytest.mark.parametrize(
+    ("legacy_id", "base", "quote", "raw_symbol", "expected"),
+    [
+        # The exact 9 live-catalogue defect rows (2026-07-17 Phase -1 gate 1 measurement),
+        # each expected id byte-matching its live canonical sibling on the same venue.
+        ("HYPERLIQUID:PERP:ARK", "ARK", "USD", "ARK", "HYPERLIQUID:PERPETUAL:ARK-USD@LIN"),
+        ("HYPERLIQUID:PERP:DOOD", "DOOD", "USD", "DOOD", "HYPERLIQUID:PERPETUAL:DOOD-USD@LIN"),
+        ("HYPERLIQUID:PERP:FTT", "FTT", "USD", "FTT", "HYPERLIQUID:PERPETUAL:FTT-USD@LIN"),
+        ("HYPERLIQUID:PERP:MATIC", "MATIC", "USD", "MATIC", "HYPERLIQUID:PERPETUAL:MATIC-USD@LIN"),
+        ("HYPERLIQUID:PERP:IP", "IP", "USD", "IP", "HYPERLIQUID:PERPETUAL:IP-USD@LIN"),
+        ("ASTER:PERP:IPUSDT", "IP", "USDT", "IPUSDT", "ASTER:PERPETUAL:IP-USDT@LIN"),
+        (
+            "EXTENDED-STARKNET:PERP:IP-USD",
+            "IP",
+            "USD",
+            "IP-USD",
+            "EXTENDED-STARKNET:PERPETUAL:IP-USD@LIN",
+        ),
+        (
+            "EXTENDED-STARKNET:PERP:TON-USD",
+            "TON",
+            "USD",
+            "TON-USD",
+            "EXTENDED-STARKNET:PERPETUAL:TON-USD@LIN",
+        ),
+        ("LIGHTER-ZKSYNC:PERP:IP", "IP", "USDC", "IP", "LIGHTER-ZKSYNC:PERPETUAL:IP-USDC@LIN"),
+    ],
+)
+def test_rollup_legacy_perp_id_rebuilt_to_canonical(
+    rollup: ModuleType, legacy_id: str, base: str, quote: str, raw_symbol: str, expected: str
+) -> None:
+    """A perp DELISTED before the 2026-07-08 id-format fix has NO post-fix snapshot, so
+    its most-recent by_date row carries the legacy ``VENUE:PERP:<raw>`` id and the roll-up
+    used to pass it straight through — the 9 stale ``:PERP:`` ids the Phase -1 catalogue
+    gate measured RED. The roll-up now rebuilds it via the shared UAC builder, and the
+    ``canonical_instrument_id`` mirror follows.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot([_legacy_perp_row(legacy_id, base, quote, raw_symbol)]))])
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == expected
+    assert row["canonical_instrument_id"] == expected
+    assert ":PERP:" not in row["instrument_id"]
+
+
+def test_rollup_legacy_perp_rebuild_is_idempotent(rollup: ModuleType) -> None:
+    """Re-rolling an ALREADY-canonical ``@LIN`` perp is a byte-for-byte no-op — the
+    rebuild triggers on the legacy ``PERP`` token only, so a rebuilt catalogue re-rolled
+    a second time produces the identical id (the gate's re-run must stay green).
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot([_legacy_perp_row("HYPERLIQUID:PERPETUAL:ARK-USD@LIN", "ARK", "USD", "ARK")]),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "HYPERLIQUID:PERPETUAL:ARK-USD@LIN"
+    assert row["canonical_instrument_id"] == "HYPERLIQUID:PERPETUAL:ARK-USD@LIN"
+
+
+def test_rollup_marker_less_canonical_perp_left_untouched(rollup: ModuleType) -> None:
+    """SCOPE GUARD: the 586 live ``VENUE:PERPETUAL:BASE-QUOTE`` rows that carry the
+    canonical type token but NO ``@marker`` are a SEPARATE catalogue-completeness concern
+    (blueprint open-q #19) and are deliberately NOT rewritten here — the Phase -1 gate is
+    ``0`` rows containing ``:PERP:``, not ``0`` marker-less perps. Rewriting them would be
+    a silent 586-row blast-radius expansion beyond the documented gate.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot([_legacy_perp_row("BINANCE-DELIVERY:PERPETUAL:ALGO-USD", "ALGO", "USD", "algousd_perp")]),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "BINANCE-DELIVERY:PERPETUAL:ALGO-USD"
+    assert row["canonical_instrument_id"] == "BINANCE-DELIVERY:PERPETUAL:ALGO-USD"
+
+
+def test_rollup_legacy_perp_missing_fields_degrades_unchanged(rollup: ModuleType) -> None:
+    """A legacy ``:PERP:`` row missing a field the rebuild needs (here: quote_asset) must
+    degrade to the raw id unchanged rather than guess or raise — honest, never invented.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "HYPERLIQUID:PERP:ARK",
+                            "venue": "HYPERLIQUID",
+                            "instrument_type": "PERPETUAL",
+                            "raw_symbol": "ARK",
+                            "base_asset": "ARK",
+                            "margin_type": "linear",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "HYPERLIQUID:PERP:ARK"
+    assert row["canonical_instrument_id"] == "HYPERLIQUID:PERP:ARK"
+
+
+def test_rollup_live_perp_lineage_still_collapses_onto_canonical_form(rollup: ModuleType) -> None:
+    """REGRESSION: a perp that survived the convention churn still collapses to ONE
+    lineage via _cefi_perp_lineage_key — the legacy-id rebuild must not fork it into a
+    second row (the rebuilt legacy id and the live id are the SAME string).
+    """
+    d_old, d_live = date(2026, 6, 20), date(2026, 7, 14)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (d_old, _snapshot([_legacy_perp_row("ASTER:PERP:IPUSDT", "IP", "USDT", "IPUSDT")])),
+            (
+                d_live,
+                _snapshot([_legacy_perp_row("ASTER:PERPETUAL:IP-USDT@LIN", "IP", "USDT", "IPUSDT")]),
+            ),
+        ]
+    )
+    ids = list(df["instrument_id"])
+    assert ids == ["ASTER:PERPETUAL:IP-USDT@LIN"], ids
+
+
+def test_rollup_cefi_row_carries_through_adapter_populated_canonical_instrument_id(rollup: ModuleType) -> None:
+    """A CeFi row captured AFTER the adapter fix (canonical_instrument_id_cefi_defi_
+    backfill_2026_07_14.md) carries its own value through unchanged."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "DERIBIT:OPTION:BTC-USD@INV-20260713-56000-C",
+                            "canonical_instrument_id": "DERIBIT:OPTION:BTC-USD@INV-20260713-56000-C",
+                            "venue": "DERIBIT",
+                            "instrument_type": "OPTION",
+                            "raw_symbol": "BTC-13JUL26-56000-C",
+                            "base_asset": "BTC",
+                            "quote_asset": "USD",
+                            "margin_type": "inverse",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["canonical_instrument_id"] == "DERIBIT:OPTION:BTC-USD@INV-20260713-56000-C"
+
+
+def test_rollup_cefi_row_backfills_canonical_instrument_id_from_instrument_key(rollup: ModuleType) -> None:
+    """A historical CeFi row captured BEFORE the adapter fix (no canonical_instrument_id
+    in the source) is backfilled from instrument_key -- the exact value a fresh capture
+    would have produced, since CeFi has no raw-code-to-human-name translation gap."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "BINANCE-FUTURES:PERPETUAL:ADA-USDT",
+                            "venue": "BINANCE-FUTURES",
+                            "instrument_type": "PERPETUAL",
+                            "raw_symbol": "ADA-PERP",
+                            "base_asset": "ADA",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["canonical_instrument_id"] == "BINANCE-FUTURES:PERPETUAL:ADA-USDT"
+
+
+def test_rollup_defi_pool_row_backfills_canonical_instrument_id_from_instrument_key(rollup: ModuleType) -> None:
+    """A DeFi POOL row backfills canonical_instrument_id from instrument_key -- NOT
+    from the pool_address-based DefiPoolIdentity.canonical_instrument_id concept,
+    which is a separate, unrelated field."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "UNISWAP_V3-ARBITRUM:POOL:USDC-WETH:3000",
+                            "venue": "UNISWAP_V3-ARBITRUM",
+                            "instrument_type": "POOL",
+                            "pool_address": "0x88E6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
+                            "base_asset": "USDC",
+                            "quote_asset": "WETH",
+                            "pool_fee_tier": "3000",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    # instrument_id is re-keyed to the pool address (DUAL-FORM) -- canonical_instrument_id
+    # is NOT that; it mirrors instrument_key instead, per the operator-approved policy.
+    assert row["instrument_id"] == "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640"
+    assert row["canonical_instrument_id"] == "UNISWAP_V3-ARBITRUM:POOL:USDC-WETH:3000"
+
+
+# ---------------------------------------------------------------------------
+# canonical_instrument_id MIRRORS the canonicalized instrument_id (Phase -1 gate 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("legacy_id", "venue", "base", "raw_symbol", "margin", "expiry", "expected"),
+    [
+        # The exact live-catalogue gate-2 defect rows (2026-07-17): instrument_id already
+        # held the CORRECT canonical form while canonical_instrument_id held the STALE
+        # raw-glued one. 511 rows across these 5 venues, ALL instrument_type=FUTURE.
+        (
+            "BINANCE-DELIVERY:FUTURE:ADAUSD_200925",
+            "BINANCE-DELIVERY",
+            "ADA",
+            "adausd_200925",
+            "inverse",
+            "2020-09-26",
+            "BINANCE-DELIVERY:FUTURE:ADA-USD@INV-20200926",
+        ),
+        (
+            "BINANCE-FUTURES:FUTURE:ETHUSDT_260626",
+            "BINANCE-FUTURES",
+            "ETH",
+            "ethusdt_260626",
+            "linear",
+            "2026-06-26",
+            "BINANCE-FUTURES:FUTURE:ETH-USDT@LIN-20260626",
+        ),
+    ],
+)
+def test_rollup_canonical_instrument_id_mirrors_rebuilt_future_id(
+    rollup: ModuleType,
+    legacy_id: str,
+    venue: str,
+    base: str,
+    raw_symbol: str,
+    margin: str,
+    expiry: str,
+    expected: str,
+) -> None:
+    """GATE 2: the dated-FUTURE roll-up rebuild must be reflected in BOTH surfaces.
+
+    instruments-service@79d4dbcb rebuilt the emitted ``instrument_id`` but never
+    re-applied the ``canonical_instrument_id`` mirror, which kept sourcing the stale
+    adapter/instrument_key value -> 511 live rows where the two disagreed. Both now run
+    through the same ``_canonicalize_cefi_rollup_id`` chain.
+    """
+    quote = "USD" if margin == "inverse" else "USDT"
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": legacy_id,
+                            # The adapter stamped the stale raw-glued form here too --
+                            # this is the exact live-catalogue shape.
+                            "canonical_instrument_id": legacy_id,
+                            "venue": venue,
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": raw_symbol,
+                            "base_asset": base,
+                            "quote_asset": quote,
+                            "margin_type": margin,
+                            "expiry": expiry,
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == expected
+    assert row["canonical_instrument_id"] == expected, (
+        "canonical_instrument_id must MIRROR the canonicalized instrument_id"
+    )
+
+
+# ---------------------------------------------------------------------------
+# DERIBIT dated-quote heal (operator ruling 2026-07-18): legacy ``by_date``
+# snapshot rows still carrying the quote-less ``DERIBIT:FUTURE:AVAX@LIN-…`` /
+# ``DERIBIT:OPTION:BTC@INV-…`` form are self-healed to the quote-carrying
+# canonical shape at roll-up (so a rebuild-from-snapshot need not re-fetch
+# Deribit's ~264k historical rows). DERIBIT-scoped + idempotent.
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalizeCefiDeribitDatedQuote:
+    def test_linear_future_inserts_usdc(self, rollup: ModuleType) -> None:
+        """The exact live FUTURE defect row: raw ``AVAX_USDC-1APR26`` (linear)."""
+        meta = {
+            "instrument_type": "FUTURE",
+            "venue": "DERIBIT",
+            "base_asset": "AVAX",
+            "quote_asset": "USDC",
+            "margin_type": "linear",
+        }
+        healed = rollup._canonicalize_cefi_deribit_dated_quote("DERIBIT:FUTURE:AVAX@LIN-20260401", meta)
+        assert healed == "DERIBIT:FUTURE:AVAX-USDC@LIN-20260401"
+
+    def test_inverse_option_inserts_usd(self, rollup: ModuleType) -> None:
+        """The exact live OPTION defect row: raw ``BTC-5APR19-3250-C`` (inverse)."""
+        meta = {
+            "instrument_type": "OPTION",
+            "venue": "DERIBIT",
+            "base_asset": "BTC",
+            "quote_asset": "USD",
+            "margin_type": "inverse",
+        }
+        healed = rollup._canonicalize_cefi_deribit_dated_quote("DERIBIT:OPTION:BTC@INV-20190405-3250-C", meta)
+        assert healed == "DERIBIT:OPTION:BTC-USD@INV-20190405-3250-C"
+
+    def test_falls_back_to_margin_type_when_quote_asset_blank(self, rollup: ModuleType) -> None:
+        """No quote_asset on the row → operator rule linear→USDC / inverse→USD."""
+        meta = {"instrument_type": "FUTURE", "venue": "DERIBIT", "base_asset": "AVAX", "margin_type": "linear"}
+        healed = rollup._canonicalize_cefi_deribit_dated_quote("DERIBIT:FUTURE:AVAX@LIN-20260401", meta)
+        assert healed == "DERIBIT:FUTURE:AVAX-USDC@LIN-20260401"
+
+    def test_idempotent_on_already_quote_carrying_id(self, rollup: ModuleType) -> None:
+        """A post-fix id (base segment already has the quote) is left byte-identical."""
+        meta = {
+            "instrument_type": "OPTION",
+            "venue": "DERIBIT",
+            "base_asset": "BTC",
+            "quote_asset": "USD",
+            "margin_type": "inverse",
+        }
+        canonical = "DERIBIT:OPTION:BTC-USD@INV-20190405-3250-C"
+        assert rollup._canonicalize_cefi_deribit_dated_quote(canonical, meta) == canonical
+
+    def test_no_op_for_non_deribit_venue(self, rollup: ModuleType) -> None:
+        """Zero blast radius: a non-DERIBIT dated id is untouched even if quote-less."""
+        meta = {"instrument_type": "FUTURE", "venue": "BYBIT", "base_asset": "BTC", "margin_type": "inverse"}
+        other = "BYBIT:FUTURE:BTC@INV-20231201"
+        assert rollup._canonicalize_cefi_deribit_dated_quote(other, meta) == other
+
+    def test_no_op_for_quote_less_non_marker_legacy_shape(self, rollup: ModuleType) -> None:
+        """A raw DDMMMYY legacy shape (no ``@``) is left to the sibling rebuilders."""
+        meta = {"instrument_type": "OPTION", "venue": "DERIBIT", "base_asset": "BTC", "margin_type": "inverse"}
+        raw = "DERIBIT:OPTION:BTC-2JAN24"
+        assert rollup._canonicalize_cefi_deribit_dated_quote(raw, meta) == raw
+
+    def test_degrades_when_no_quote_resolvable(self, rollup: ModuleType) -> None:
+        """No quote_asset and no margin_type → degrade (return unchanged), never guess."""
+        meta = {"instrument_type": "FUTURE", "venue": "DERIBIT", "base_asset": "AVAX"}
+        quote_less = "DERIBIT:FUTURE:AVAX@LIN-20260401"
+        assert rollup._canonicalize_cefi_deribit_dated_quote(quote_less, meta) == quote_less
+
+
+def test_rollup_heals_legacy_quote_less_deribit_snapshot_end_to_end(rollup: ModuleType) -> None:
+    """A legacy DERIBIT ``by_date`` snapshot row (quote-less ``@`` form, captured
+    before the 2026-07-18 adapter fix) is healed to the quote-carrying canonical
+    shape on BOTH surfaces (instrument_id + canonical_instrument_id mirror) at
+    roll-up — proving the fix propagates via a rebuild-from-snapshot, not only a
+    re-capture.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "DERIBIT:FUTURE:AVAX@LIN-20260401",
+                            "canonical_instrument_id": "DERIBIT:FUTURE:AVAX@LIN-20260401",
+                            "venue": "DERIBIT",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "AVAX_USDC-1APR26",
+                            "base_asset": "AVAX",
+                            "quote_asset": "USDC",
+                            "margin_type": "linear",
+                            "expiry": "2026-04-01",
+                        }
+                    ]
+                ),
+            )
+        ]
+    )
+    row = df.to_dict("records")[0]
+    assert row["instrument_id"] == "DERIBIT:FUTURE:AVAX-USDC@LIN-20260401"
+    assert row["canonical_instrument_id"] == "DERIBIT:FUTURE:AVAX-USDC@LIN-20260401"
+
+
+def test_rollup_canonical_instrument_id_mirrors_instrument_id_for_every_cefi_row(
+    rollup: ModuleType,
+) -> None:
+    """GATE 1 + GATE 2 together, end-to-end: a mixed frame of every legacy CeFi id class
+    rolls up with ``0`` ``:PERP:`` ids and ``0`` ``instrument_id != canonical_instrument_id``
+    -- the Phase -1 verify gate, asserted in-process.
+    """
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        _legacy_perp_row("HYPERLIQUID:PERP:ARK", "ARK", "USD", "ARK"),
+                        _legacy_perp_row("ASTER:PERP:IPUSDT", "IP", "USDT", "IPUSDT"),
+                        _legacy_perp_row("LIGHTER-ZKSYNC:PERP:IP", "IP", "USDC", "IP"),
+                        _legacy_perp_row("EXTENDED-STARKNET:PERP:TON-USD", "TON", "USD", "TON-USD"),
+                        # already-canonical perp -- untouched
+                        _legacy_perp_row("ASTER:PERPETUAL:BNB-USDT@LIN", "BNB", "USDT", "BNBUSDT"),
+                        {
+                            "instrument_key": "BINANCE-DELIVERY:FUTURE:ADAUSD_200925",
+                            "canonical_instrument_id": "BINANCE-DELIVERY:FUTURE:ADAUSD_200925",
+                            "venue": "BINANCE-DELIVERY",
+                            "instrument_type": "FUTURE",
+                            "raw_symbol": "adausd_200925",
+                            "base_asset": "ADA",
+                            "quote_asset": "USD",
+                            "margin_type": "inverse",
+                            "expiry": "2020-09-26",
+                        },
+                    ]
+                ),
+            )
+        ]
+    )
+    records = df.to_dict("records")
+    assert [r for r in records if ":PERP:" in r["instrument_id"]] == [], "gate 1: no :PERP: ids"
+    drift = [
+        (r["instrument_id"], r["canonical_instrument_id"])
+        for r in records
+        if r["instrument_id"] != r["canonical_instrument_id"]
+    ]
+    assert drift == [], f"gate 2: instrument_id != canonical_instrument_id for {drift}"
+
+
 def test_rollup_supports_instrument_id_column(rollup: ModuleType) -> None:
     """The id column falls back to instrument_id when instrument_key is absent."""
     d1 = date(2024, 1, 1)
     df = rollup.build_catalogue_dataframe([(d1, _snapshot([{"instrument_id": "ZZZ", "venue": "V"}]))])
     assert df.to_dict("records")[0]["instrument_id"] == "ZZZ"
+
+
+def test_rollup_on_chain_cefi_perp_venue_kept_glued(rollup: ModuleType) -> None:
+    """On-chain CeFi perp CLOBs (LIGHTER-ZKSYNC / EXTENDED-STARKNET)
+    stay GLUED in the catalogue — the DeFi PROTOCOL-CHAIN split does NOT apply, they
+    are cefi venues per UAC ``VENUE_TO_ASSET_GROUP`` and must match the by_date PATH
+    + the ``_index`` writer (writers._canonical_manifest_venue_chain @ 24c0dd5) + the
+    ``instrument_key`` prefix. Ref: instruments_foundation_completeness_2026_06_24.md
+    §G1.3 follow-up (2026-06-27) — originally 3 venues, one row each; PACIFICA (Solana)
+    removed entirely 2026-07-16 (operator ruling: all Solana perp DEXes dropped
+    except Jupiter, not integrated).
+    """
+    d1 = date(2024, 10, 19)
+    snapshots = [
+        {
+            "instrument_key": "LIGHTER-ZKSYNC:PERP:BTC-USDC",
+            "venue": "LIGHTER-ZKSYNC",
+            "instrument_type": "PERPETUAL",
+            "raw_symbol": "BTC-PERP",
+            "base_asset": "BTC",
+        },
+        {
+            "instrument_key": "EXTENDED-STARKNET:PERP:ETH-USD",
+            "venue": "EXTENDED-STARKNET",
+            "instrument_type": "PERPETUAL",
+            "raw_symbol": "ETH-PERP",
+            "base_asset": "ETH",
+        },
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(snapshots))])
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    for full_id in (
+        "LIGHTER-ZKSYNC:PERP:BTC-USDC",
+        "EXTENDED-STARKNET:PERP:ETH-USD",
+    ):
+        assert full_id in by_id, f"catalogue dropped {full_id}"
+        row = by_id[full_id]
+        expected_venue = full_id.split(":", 1)[0]
+        assert row["venue"] == expected_venue, (
+            f"{full_id}: venue split to {row['venue']!r} (should stay glued {expected_venue!r})"
+        )
+        assert row["chain"] == "", f"{full_id}: chain leaked to {row['chain']!r} (cefi venue has no chain column)"
+
+
+# ---------------------------------------------------------------------------
+# instrument_type canonicalisation (2026-07-18: measured live COINBASE-SPOT/BYBIT
+# legacy-lowercase + literal-"None" instrument_type values reaching the rollup)
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalize_instrument_type_legacy_lowercase_aliases(rollup: ModuleType) -> None:
+    """Every documented UAC InstrumentType legacy lowercase spelling canonicalises."""
+    cases = {
+        "spot": "SPOT_PAIR",
+        "spot_pair": "SPOT_PAIR",
+        "perp": "PERPETUAL",
+        "perpetual": "PERPETUAL",
+        "futures": "FUTURE",
+        "futures_chain": "FUTURE",
+        "future": "FUTURE",
+        "option": "OPTION",
+        "pool": "POOL",
+        "lending_market": "LENDING",
+        "lending": "LENDING",
+        "lst": "LST",
+        "yield": "YIELD_BEARING",
+        "etf": "ETF",
+    }
+    for raw, expected in cases.items():
+        assert rollup._canonicalize_instrument_type(raw) == expected, raw
+        # Case-insensitive on the raw side.
+        assert rollup._canonicalize_instrument_type(raw.upper()) == expected, raw.upper()
+
+
+def test_canonicalize_instrument_type_blank_and_literal_none_become_unknown(rollup: ModuleType) -> None:
+    """Blank, ``None``, and the literal string ``"None"`` all collapse to the single
+    honest UNKNOWN sentinel — never fabricated, never the literal ``"None"`` string."""
+    assert rollup._canonicalize_instrument_type("") == rollup.INSTRUMENT_TYPE_UNKNOWN
+    assert rollup._canonicalize_instrument_type(None) == rollup.INSTRUMENT_TYPE_UNKNOWN
+    assert rollup._canonicalize_instrument_type("None") == rollup.INSTRUMENT_TYPE_UNKNOWN
+    assert rollup._canonicalize_instrument_type("   ") == rollup.INSTRUMENT_TYPE_UNKNOWN
+    assert rollup.INSTRUMENT_TYPE_UNKNOWN == "UNKNOWN"
+
+
+def test_canonicalize_instrument_type_already_canonical_round_trips(rollup: ModuleType) -> None:
+    """An already-canonical uppercase value passes through unchanged (idempotent)."""
+    for value in ("SPOT_PAIR", "PERPETUAL", "FUTURE", "OPTION", "POOL", "LST", "STAKING"):
+        assert rollup._canonicalize_instrument_type(value) == value
+
+
+def test_canonicalize_instrument_type_unrecognised_value_uppercased_not_fabricated(rollup: ModuleType) -> None:
+    """A genuinely new/unrecognised venue-side type is uppercased and preserved for
+    triage — never silently swallowed into UNKNOWN (never a fabricated real type)."""
+    assert rollup._canonicalize_instrument_type("some_new_type") == "SOME_NEW_TYPE"
+
+
+def test_rollup_stamps_canonical_instrument_type_from_legacy_lowercase_source(rollup: ModuleType) -> None:
+    """End-to-end: a per-date row's raw legacy-lowercase ``instrument_type`` reaches
+    the emitted catalogue row already canonicalised (COINBASE-SPOT/BYBIT measured-live
+    shape: blank, canonical uppercase, legacy lowercase, and literal-"None" values for
+    the SAME venue on the same day)."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {"instrument_key": "COINBASE-SPOT:1", "venue": "COINBASE-SPOT", "instrument_type": "spot"},
+                        {
+                            "instrument_key": "COINBASE-SPOT:2",
+                            "venue": "COINBASE-SPOT",
+                            "instrument_type": "spot_pair",
+                        },
+                        {
+                            "instrument_key": "COINBASE-SPOT:3",
+                            "venue": "COINBASE-SPOT",
+                            "instrument_type": "SPOT_PAIR",
+                        },
+                        {"instrument_key": "COINBASE-SPOT:4", "venue": "COINBASE-SPOT", "instrument_type": ""},
+                        {"instrument_key": "COINBASE-SPOT:5", "venue": "COINBASE-SPOT", "instrument_type": "None"},
+                    ]
+                ),
+            )
+        ]
+    )
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    assert by_id["COINBASE-SPOT:1"]["instrument_type"] == "SPOT_PAIR"
+    assert by_id["COINBASE-SPOT:2"]["instrument_type"] == "SPOT_PAIR"
+    assert by_id["COINBASE-SPOT:3"]["instrument_type"] == "SPOT_PAIR"
+    assert by_id["COINBASE-SPOT:4"]["instrument_type"] == "UNKNOWN"
+    assert by_id["COINBASE-SPOT:5"]["instrument_type"] == "UNKNOWN"
+
+
+def test_canonicalize_instrument_type_defi_split_id_is_authoritative(rollup: ModuleType) -> None:
+    """FIX 2 durability guard (defi_lending_atoken_debttoken_instrument_split_2026_07_07):
+    when the emitted ``instrument_id`` already carries an A_TOKEN/DEBT_TOKEN/SPOT_ASSET
+    split segment, that ID is AUTHORITATIVE over a stale ``LENDING`` column — so a
+    ``--mode full`` rebuild re-derives the split from the id and can NEVER revert an
+    already-split row back to LENDING (the 2026-07-14 landmine)."""
+    fn = rollup._canonicalize_instrument_type
+    # Split id + any stale/legacy lending column → the id's split type WINS.
+    assert fn("LENDING", instrument_id="VENUS-BSC:A_TOKEN:ABNB-USDC") == "A_TOKEN"
+    assert fn("lending", instrument_id="VENUS-BSC:DEBT_TOKEN:DEBTBNB-USDC") == "DEBT_TOKEN"
+    assert fn("lending_market", instrument_id="MARGINFI-SOLANA:A_TOKEN:AUSDC") == "A_TOKEN"
+    assert fn("LENDING", instrument_id="SOLEND-SOLANA:SPOT_ASSET:mSOL") == "SPOT_ASSET"
+    # A non-split id TYPE segment falls through to the existing raw-column logic
+    # UNCHANGED — no behaviour change for CeFi / pool / non-split DeFi rows.
+    assert fn("spot", instrument_id="BINANCE-SPOT:SPOT_PAIR:BTC-USDT") == "SPOT_PAIR"
+    assert fn("perpetual", instrument_id="HYPERLIQUID:PERPETUAL:BTC") == "PERPETUAL"
+    # A genuinely-LENDING-id row (no split in the id) stays LENDING — that residual is
+    # the separate ~16.7M-row DATA migration, out of scope for the CODE half.
+    assert fn("LENDING", instrument_id="OLDPROTO-ETH:LENDING:DAI") == "LENDING"
+    # A bare pool_address id (no VENUE:TYPE:SYMBOL shape) → no TYPE segment → fall through.
+    assert fn("LENDING", instrument_id="0xpooladdressnotype") == "LENDING"
+    # Backward-compatible: no id → pure raw-column logic (existing callers unaffected).
+    assert fn("LENDING", instrument_id=None) == "LENDING"
+    assert fn("A_TOKEN", instrument_id=None) == "A_TOKEN"
+
+
+def test_instrument_type_from_id_sports_resolves_market_not_bookmaker(rollup: ModuleType) -> None:
+    """sports_closeout_batch1_ao_ready_2026_07_24.md todo 2: sports ids are
+    SPORT:BOOKMAKER:MARKET:LEAGUE:SEASON:HOME-AWAY::SELECTION — the second
+    colon-segment (position 1) is the BOOKMAKER, not a type. With
+    asset_group="sports" the market-equivalent (position 2) resolves instead.
+    Currently defensive/inert for the live pipeline (no reachable sports call
+    path through build_catalogue_dataframe today — sports catalogue rows are
+    stamped explicitly by the dedicated build_sports_* roll-ups)."""
+    fn = rollup._instrument_type_from_id
+    raw = "FOOTBALL:BETFAIR_EX_UK:MATCH_ODDS:ENG_PREMIER_LEAGUE:2025-26:ARSENAL-CHELSEA::HOME"
+    assert fn(raw, asset_group="sports") == "MATCH_ODDS"
+    # Without the asset_group gate (default), behaviour is unchanged (bookmaker
+    # token) — no regression for the existing CeFi/DeFi/TradFi callers.
+    assert fn(raw) == "BETFAIR_EX_UK"
+
+
+def test_instrument_type_from_id_non_sports_unaffected_by_gate(rollup: ModuleType) -> None:
+    fn = rollup._instrument_type_from_id
+    assert fn("VENUS-BSC:A_TOKEN:ABNB-USDC", asset_group="cefi") == "A_TOKEN"
+    assert fn("VENUS-BSC:A_TOKEN:ABNB-USDC") == "A_TOKEN"
+
+
+def test_rollup_lending_split_id_emits_split_not_lending(rollup: ModuleType) -> None:
+    """End-to-end FIX 2: a per-date lending row whose id already carries the A_TOKEN/
+    DEBT_TOKEN/SPOT_ASSET split but whose ``instrument_type`` COLUMN is a stale legacy
+    ``LENDING`` emits the SPLIT type in the rolled-up catalogue — the split is intrinsic
+    to row-construction, so a ``--mode full`` rebuild cannot revert it to LENDING (the
+    2026-07-14 durability landmine). A genuinely-LENDING-id row (no split in the id)
+    stays LENDING — the residual the separate DATA migration owns."""
+    d1 = date(2024, 1, 1)
+    rows = [
+        {"instrument_key": "VENUS-BSC:A_TOKEN:ABNB-USDC", "venue": "VENUS-BSC", "instrument_type": "LENDING"},
+        {"instrument_key": "VENUS-BSC:DEBT_TOKEN:DEBTBNB-USDC", "venue": "VENUS-BSC", "instrument_type": "LENDING"},
+        {"instrument_key": "SOLEND-SOLANA:SPOT_ASSET:mSOL", "venue": "SOLEND-SOLANA", "instrument_type": "lending"},
+        {"instrument_key": "OLDPROTO-ETH:LENDING:DAI", "venue": "OLDPROTO-ETH", "instrument_type": "LENDING"},
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows))])
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    assert by_id["VENUS-BSC:A_TOKEN:ABNB-USDC"]["instrument_type"] == "A_TOKEN"
+    assert by_id["VENUS-BSC:DEBT_TOKEN:DEBTBNB-USDC"]["instrument_type"] == "DEBT_TOKEN"
+    assert by_id["SOLEND-SOLANA:SPOT_ASSET:mSOL"]["instrument_type"] == "SPOT_ASSET"
+    assert by_id["OLDPROTO-ETH:LENDING:DAI"]["instrument_type"] == "LENDING"
+
+
+# ---------------------------------------------------------------------------
+# Removed-venue exclusion + bare-vs-chain duplicate venue collapse (2026-07-18)
+# ---------------------------------------------------------------------------
+
+
+def test_rollup_excludes_registry_removed_venues(rollup: ModuleType) -> None:
+    """Stale historical rows for a registry-removed venue (bare or -SOLANA-suffixed
+    spelling) never re-mint a catalogue row on a fresh regen."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {"instrument_key": "DRIFT:1", "venue": "DRIFT", "instrument_type": "PERPETUAL"},
+                        {
+                            "instrument_key": "PACIFICA-SOLANA:1",
+                            "venue": "PACIFICA-SOLANA",
+                            "instrument_type": "PERPETUAL",
+                        },
+                        {
+                            "instrument_key": "MANGO-SOLANA:1",
+                            "venue": "MANGO-SOLANA",
+                            "instrument_type": "SPOT_ASSET",
+                        },
+                        {"instrument_key": "ZETA:1", "venue": "ZETA", "instrument_type": "PERPETUAL"},
+                        {
+                            "instrument_key": "FLASH-SOLANA:1",
+                            "venue": "FLASH-SOLANA",
+                            "instrument_type": "PERPETUAL",
+                        },
+                        {"instrument_key": "SURVIVOR:1", "venue": "JITO-SOLANA", "instrument_type": "STAKING"},
+                    ]
+                ),
+            )
+        ]
+    )
+    ids = set(df["instrument_id"])
+    assert ids == {"SURVIVOR:1"}
+
+
+def test_rollup_is_removed_venue_matches_bare_and_suffixed_forms(rollup: ModuleType) -> None:
+    removed = (
+        "DRIFT",
+        "drift",
+        "DRIFT-SOLANA",
+        "PACIFICA",
+        "PACIFICA-SOLANA",
+        "MANGO-SOLANA",
+        "MANGO",
+        "ZETA-SOLANA",
+        "ZETA",
+        "FLASH-SOLANA",
+        "FLASH",
+    )
+    for venue in removed:
+        assert rollup._is_removed_venue(venue), venue
+    for venue in ("JITO-SOLANA", "RAYDIUM-SOLANA", "BINANCE-FUTURES", ""):
+        assert not rollup._is_removed_venue(venue), venue
+
+
+def test_rollup_collapses_bare_and_suffixed_duplicate_venue_to_one_canonical_form(rollup: ModuleType) -> None:
+    """JITO and JITO-SOLANA (same protocol, two venue-column spellings measured live
+    in the IS defi availability index) both resolve to the SAME (venue, chain) pair."""
+    d1 = date(2024, 1, 1)
+    df = rollup.build_catalogue_dataframe(
+        [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {"instrument_key": "JITO:STAKED", "venue": "JITO", "instrument_type": "STAKING"},
+                        {
+                            "instrument_key": "JITO-SOLANA:STAKED",
+                            "venue": "JITO-SOLANA",
+                            "instrument_type": "STAKING",
+                        },
+                    ]
+                ),
+            )
+        ]
+    )
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    for key in ("JITO:STAKED", "JITO-SOLANA:STAKED"):
+        assert by_id[key]["venue"] == "JITO"
+        assert by_id[key]["chain"] == "SOLANA"
+
+
+def test_canonical_bare_venue_chain_collapses_raydium_and_marinade(rollup: ModuleType) -> None:
+    for bare, suffixed in (("RAYDIUM", "RAYDIUM-SOLANA"), ("MARINADE", "MARINADE-SOLANA")):
+        assert rollup._canonical_bare_venue_chain(bare, "") == rollup._canonical_bare_venue_chain(suffixed, "")
+        assert rollup._canonical_bare_venue_chain(bare, "") == (bare, "SOLANA")
 
 
 def test_rollup_skips_blank_ids_and_empty_frames(rollup: ModuleType) -> None:
@@ -516,20 +1759,69 @@ def test_prediction_rollup_cqg_lifecycle_spans_member_window(rollup: ModuleType)
 
 
 def test_prediction_rollup_blank_cqg_emits_conditionid_grain_no_bundle(rollup: ModuleType) -> None:
-    """249-a: a blank cqg (the real venue=/market= writer layout, which emits NO
-    canonical_question_group) yields NO cqg-bundle row but DOES emit the
-    conditionId grain (trades + market_lifecycle). Pre-fix this skipped the whole
-    frame → 0-row catalogue; the bundle/cqg grain stays absent (gated on 338)."""
+    """249-a: a blank path-cqg AND no row-level canonical_question_group column
+    (a historical pre-249-b snapshot) yields NO cqg-bundle row but DOES emit the
+    conditionId grain (trades + market_lifecycle). Pre-249-a this skipped the
+    whole frame → 0-row catalogue; the cqg bundle grain legitimately stays absent
+    when NEITHER cqg source is populated."""
     d1 = date(2025, 3, 14)
     df = rollup.build_prediction_catalogue_dataframe(
         [(d1, "POLYMARKET", "", _pred_snap([{"instrument_key": "c1", "venue": "POLYMARKET"}]))]
     )
     recs = df.to_dict("records")
-    # No cqg bundle row (no empty-string bundle; the cqg grain is 249-b, gated on 338).
+    # No cqg bundle row — genuinely absent from both the path AND the row.
     assert not [r for r in recs if r["data_type"] == "prediction_canonical_question_group"]
     # ...but the conditionId grain IS materialised (the 249-a fix — was 0 rows before).
     assert {r["instrument_id"] for r in recs if r["data_type"] == "trades"} == {"c1"}
     assert {r["instrument_id"] for r in recs if r["data_type"] == "market_lifecycle"} == {"c1"}
+
+
+def test_prediction_rollup_row_level_cqg_column_emits_bundle_249b(rollup: ModuleType) -> None:
+    """249-b (decision 338 — RESOLVED, prediction_satellite_ao_dispatch_batch5_2026_07_26.md
+    todo 2): the REAL production shape — path-cqg is blank (the writer never emits a
+    canonical_question_group= path segment) but each row carries its OWN
+    canonical_question_group column (the write-back from
+    classify_{polymarket,kalshi}_to_canonical_group(), UAC
+    InstrumentRecord.canonical_question_group). Previously this yielded ZERO cqg-bundle
+    rows (the function only ever looked at the blank path value); now the cqg grain
+    materialises per-row, and TWO markets sharing the same group correctly fold into
+    ONE bundle row (not two)."""
+    d1 = date(2025, 3, 14)
+    df = rollup.build_prediction_catalogue_dataframe(
+        [
+            (
+                d1,
+                "POLYMARKET",
+                "",  # path-cqg blank — the real writer layout
+                _pred_snap(
+                    [
+                        {
+                            "instrument_key": "0xaaa",
+                            "venue": "POLYMARKET",
+                            "canonical_question_group": "BTC_UP_DOWN_DAILY",
+                        },
+                        {
+                            "instrument_key": "0xbbb",
+                            "venue": "POLYMARKET",
+                            "canonical_question_group": "BTC_UP_DOWN_DAILY",
+                        },
+                        {
+                            "instrument_key": "0xccc",
+                            "venue": "POLYMARKET",
+                            "canonical_question_group": "ETH_PRICE_RANGE",
+                        },
+                    ]
+                ),
+            ),
+        ]
+    )
+    recs = df.to_dict("records")
+    cqg_rows = {r["instrument_id"]: r for r in recs if r["data_type"] == "prediction_canonical_question_group"}
+    # Two distinct groups → two bundle rows (not zero, not three — the two BTC markets fold).
+    assert set(cqg_rows) == {"BTC_UP_DOWN_DAILY", "ETH_PRICE_RANGE"}
+    # The conditionId grain is unaffected (still one row per market, per data_type).
+    trades = {r["instrument_id"] for r in recs if r["data_type"] == "trades"}
+    assert trades == {"0xaaa", "0xbbb", "0xccc"}
 
 
 def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleType) -> None:
@@ -558,6 +1850,361 @@ def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleTy
     assert rows[0].data_type == "prediction_canonical_question_group"
     assert rows[0].instrument_id == "BTC_UP_DOWN_DAILY"
     assert rows[0].capture_status == "expected_unattempted"
+
+
+# ---------------------------------------------------------------------------
+# underlying / canonical_instrument_id threading + cross-venue mapping wiring
+# (prediction_canonical_identity_migration_2026_07_08.md todos 1 + 2 + 5)
+# ---------------------------------------------------------------------------
+
+
+def test_prediction_rollup_threads_underlying_from_per_date_row(rollup: ModuleType) -> None:
+    """A real, adapter-populated ``underlying`` column on the per-date row survives
+    into the catalogue's ``underlying`` column (was hardcoded "" before todo 1)."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "underlying": "BTC",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["underlying"] == "BTC"
+
+
+def test_prediction_rollup_strips_base_asset_whitespace(rollup: ModuleType) -> None:
+    """A ``base_asset`` carrying a fixed-length-truncated title with a trailing pad
+    space is stored STRIPPED at the writer (prod hygiene: 209 whitespace-only-distinct
+    values collapsed on ``.strip()``). Applies to prediction only."""
+    d1 = date(2026, 6, 24)
+    padded = "Will the highest temperature in Jeddah be 23 degrees C or "
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "0xjeddah",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "base_asset": padded,
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["base_asset"] == padded.strip()
+    assert row["base_asset"] == "Will the highest temperature in Jeddah be 23 degrees C or"
+
+
+def test_prediction_rollup_base_asset_whitespace_variants_collapse_before_dedup(
+    rollup: ModuleType,
+) -> None:
+    """Two per-date observations of the SAME conditionId whose ``base_asset`` differs
+    ONLY by trailing whitespace collapse to ONE clean stored value — the strip happens
+    BEFORE the ``(venue, conditionId)`` lifecycle dedup, so the accumulator never races
+    between a padded and an unpadded spelling of the same market."""
+    d1, d2 = date(2026, 6, 24), date(2026, 6, 25)
+    base = "Oscars Best Picture 2026"
+    snapshots = [
+        (d1, "POLYMARKET", "", _pred_snap([{"instrument_key": "0xoscars", "venue": "POLYMARKET", "base_asset": base}])),
+        (
+            d2,
+            "POLYMARKET",
+            "",
+            _pred_snap([{"instrument_key": "0xoscars", "venue": "POLYMARKET", "base_asset": base + "   "}]),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    values = {r["base_asset"] for r in df.to_dict("records") if r["instrument_id"] == "0xoscars"}
+    assert values == {base}
+
+
+def test_prediction_rollup_emits_question_column(rollup: ModuleType) -> None:
+    """A real, adapter-populated ``question`` on the per-date row survives into the
+    catalogue's ``question`` column (uac@c1de078a InstrumentRecord.question)."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xabc",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "btc-above-100k",
+                        "question": "Will Bitcoin reach $100,000 by end of 2026?",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    assert "question" in df.columns
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["question"] == "Will Bitcoin reach $100,000 by end of 2026?"
+
+
+def test_prediction_rollup_question_honest_none_when_absent(rollup: ModuleType) -> None:
+    """FORWARD-ONLY: a per-date row with no ``question`` (pre-migration capture)
+    yields honest ``None`` in the catalogue, never a fabricated title."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXBTCD",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    assert "question" in df.columns
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["question"] is None
+
+
+def test_prediction_rollup_threads_soccer_fixture_fields(rollup: ModuleType) -> None:
+    """A per-date row carrying the uac soccer-fixture linkage fields (af_league_id /
+    home_team_canonical_id / away_team_canonical_id / fixture_date / af_fixture_id /
+    af_fixture_match_status) surfaces them on the emitted per-conditionId catalogue
+    rows. ``af_fixture_id`` is a nullable int upstream → stringified by _opt_field."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xsoccer",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "af_league_id": "39",
+                        "home_team_canonical_id": "arsenal",
+                        "away_team_canonical_id": "chelsea",
+                        "fixture_date": "2026-06-24",
+                        "af_fixture_id": 868031,  # nullable int upstream
+                        "af_fixture_match_status": "MATCHED",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    for col in (
+        "af_league_id",
+        "home_team_canonical_id",
+        "away_team_canonical_id",
+        "fixture_date",
+        "af_fixture_id",
+        "af_fixture_match_status",
+    ):
+        assert col in df.columns
+    # Both per-conditionId grains carry the fixture linkage.
+    for dt in ("trades", "market_lifecycle"):
+        row = next(r for r in df.to_dict("records") if r["data_type"] == dt)
+        assert row["af_league_id"] == "39"
+        assert row["home_team_canonical_id"] == "arsenal"
+        assert row["away_team_canonical_id"] == "chelsea"
+        assert row["fixture_date"] == "2026-06-24"
+        # int upstream, stringified honest (same convention as the numeric league_id).
+        assert row["af_fixture_id"] == "868031"
+        assert row["af_fixture_match_status"] == "MATCHED"
+
+
+def test_prediction_rollup_soccer_fixture_fields_honest_none_when_absent(rollup: ModuleType) -> None:
+    """FORWARD-ONLY: a per-date row with NONE of the soccer-fixture columns (the
+    real snapshot shape until the IS ``_records_to_dataframe`` parquet JOIN lands,
+    or a non-soccer market) yields honest ``None`` for all six — never fabricated,
+    and safe when the columns are entirely absent from the frame."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXBTCD",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    for col in (
+        "af_league_id",
+        "home_team_canonical_id",
+        "away_team_canonical_id",
+        "fixture_date",
+        "af_fixture_id",
+        "af_fixture_match_status",
+    ):
+        assert col in df.columns
+        assert row[col] is None
+
+
+def test_prediction_rollup_cross_venue_mapping_matches_same_market(rollup: ModuleType) -> None:
+    """A real Kalshi<->Polymarket BTC UP_DOWN pair on the SAME settlement date gets
+    the SAME canonical_instrument_id on BOTH sides (todo 2's cross-venue join,
+    wired into this roll-up as the real, scheduled step)."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXBTCD-26JUN24",
+                        "end_date_iso": "2026-06-24T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xabc123",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "bitcoin-up-or-down-june-24-2026",
+                        "end_date_iso": "2026-06-24T00:00:00Z",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    trades = {
+        r["instrument_id"]: r["canonical_instrument_id"] for r in df.to_dict("records") if r["data_type"] == "trades"
+    }
+    kalshi_id = trades["KALSHI:PREDICTION_MARKET:KXBTCD-26JUN24-T95000"]
+    poly_id = trades["POLYMARKET:PREDICTION_MARKET:0xabc123"]
+    assert kalshi_id  # non-empty — a real match was found
+    assert kalshi_id == poly_id  # SAME canonical_instrument_id on both venues
+
+
+def test_prediction_rollup_unmatched_instrument_keeps_blank_canonical_instrument_id(rollup: ModuleType) -> None:
+    """A Kalshi-only instrument (no Polymarket counterpart present) gets NO
+    canonical_instrument_id — honest absence, never a guessed/false pair."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "KALSHI",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "KALSHI:PREDICTION_MARKET:KXWEIRDTHING-26JUL",
+                        "venue": "KALSHI",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "KXWEIRDTHING-26JUL",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["canonical_instrument_id"] == ""
+
+
+def test_prediction_rollup_preserves_adapter_populated_sports_fixture_id(rollup: ModuleType) -> None:
+    """A Polymarket sports row's adapter-populated canonical_instrument_id (todo 5's
+    Sports-asset-group-aligned fixture_id) survives the roll-up even though the
+    cross-venue matcher (todo 2, no titles supplied) can never produce a sports
+    match on its own — the two mechanisms are complementary, not conflicting."""
+    d1 = date(2026, 3, 22)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "POLYMARKET:PREDICTION_MARKET:0xsports1",
+                        "venue": "POLYMARKET",
+                        "instrument_type": "PREDICTION_MARKET",
+                        "raw_symbol": "epl-arsenal-vs-chelsea-2026-03-22",
+                        "canonical_instrument_id": "EPL:CHELSEA_v_ARSENAL:20260322",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    row = next(r for r in df.to_dict("records") if r["data_type"] == "trades")
+    assert row["canonical_instrument_id"] == "EPL:CHELSEA_v_ARSENAL:20260322"
+
+
+def test_prediction_rollup_cqg_grain_never_gets_canonical_instrument_id(rollup: ModuleType) -> None:
+    """The cqg bundle row (family grain) never carries a per-instance
+    canonical_instrument_id — a family has no single per-market identity."""
+    d1 = date(2026, 6, 24)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "BTC_UP_DOWN_DAILY",
+            _pred_snap(
+                [
+                    {
+                        "instrument_key": "0xaaa",
+                        "venue": "POLYMARKET",
+                        "canonical_instrument_id": "SHOULD_NEVER_LEAK",
+                    }
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    cqg_row = next(r for r in df.to_dict("records") if r["data_type"] == "prediction_canonical_question_group")
+    assert cqg_row["canonical_instrument_id"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +2291,9 @@ def test_prediction_rollup_available_to_datetime_used_as_settlement(rollup: Modu
         (latest, "KALSHI", "BTC_UP_DOWN_DAILY", _pred_snap([{"instrument_key": "0xfuture", "venue": "KALSHI"}])),
     ]
     df = rollup.build_prediction_catalogue_dataframe(snapshots)
-    row = next(r for r in df.to_dict("records") if r["instrument_id"] == "KXBTCUSD-26JUN27" and r["data_type"] == "trades")
+    row = next(
+        r for r in df.to_dict("records") if r["instrument_id"] == "KXBTCUSD-26JUN27" and r["data_type"] == "trades"
+    )
     # The Timestamp's DATE (Jun 27) should be the available_to.
     assert row["available_to"] == "2026-06-27", (
         f"Expected available_to='2026-06-27' from available_to_datetime but got {row['available_to']!r}."
@@ -774,9 +2423,9 @@ def test_sports_catalogue_from_manifest_superset_and_excludes_retired(rollup: Mo
     """
     manifest = pd.DataFrame(
         [
-            {"league_id": "ENG_PREMIER", "data_type": "FIXTURES", "date": "2024-01-05"},
-            {"league_id": "ENG_PREMIER", "data_type": "XG", "date": "2024-02-01"},
-            {"league_id": "ITA_SERIE_A", "data_type": "MATCHES", "date": "2023-08-01"},
+            {"league_id": "EPL", "data_type": "FIXTURES", "date": "2024-01-05"},
+            {"league_id": "EPL", "data_type": "XG", "date": "2024-02-01"},
+            {"league_id": "SERIE_A", "data_type": "MATCHES", "date": "2023-08-01"},
             {"league_id": "99", "data_type": "LEAGUES", "date": "2020-01-01"},  # RETIRED data_type
             {"league_id": "", "data_type": "FIXTURES", "date": "2024-01-01"},  # blank league
         ]
@@ -784,25 +2433,61 @@ def test_sports_catalogue_from_manifest_superset_and_excludes_retired(rollup: Mo
     df = rollup.build_sports_catalogue_from_manifest(manifest)
     by_id = {row["league_id"]: row for row in df.to_dict("records")}
     # ⊇ manifest CURRENT leagues; retired-only numeric league + blank dropped.
-    assert set(by_id) == {"ENG_PREMIER", "ITA_SERIE_A"}
-    assert by_id["ENG_PREMIER"]["instrument_type"] == rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE
-    assert by_id["ENG_PREMIER"]["venue"] == ""
-    assert by_id["ENG_PREMIER"]["data_type"] is None
+    assert set(by_id) == {"EPL", "SERIE_A"}
+    assert by_id["EPL"]["instrument_type"] == rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE
+    assert by_id["EPL"]["venue"] == ""
+    assert by_id["EPL"]["data_type"] is None
     # available_from = earliest captured date across that league's current data_types.
-    assert by_id["ENG_PREMIER"]["available_from"] == "2024-01-05"
-    assert by_id["ENG_PREMIER"]["available_to"] is None  # active (enumerator applies coverage window)
+    assert by_id["EPL"]["available_from"] == "2024-01-05"
+    assert by_id["EPL"]["available_to"] is None  # active (enumerator applies coverage window)
+
+
+def test_sports_catalogue_from_manifest_excludes_sentinel_and_unregistered_league_ids(rollup: ModuleType) -> None:
+    """Sentinel AND non-LEAGUE_REGISTRY league_ids never roll up into a catalogue row.
+
+    Regression for A1 (2026-07-08/09): an unguarded roll-up minted a real,
+    persisted ``instrument_id="UNKNOWN"/league_id="UNKNOWN"`` catalogue row that
+    the v2 enumerator then amplified into thousands of manifest
+    expected_unattempted/empty_confirmed rows. A case-variant is also excluded
+    (defensive — the known writer only ever emits the exact uppercase literal,
+    but the filter is a case-insensitive compare).
+
+    2026-07-13 (24-league de-registration ruling — supersedes the 2026-07-09
+    keep-the-long-tail convention): league_ids outside UAC ``LEAGUE_REGISTRY``
+    (raw numeric long-tail ids like ``15066``, alias strings like ``LA_LIGA_2``/
+    ``RFPL``) are de-registered and must ALSO be excluded — their surviving GCS
+    data must never re-mint a catalogue row the enumerator would re-amplify.
+    """
+    manifest = pd.DataFrame(
+        [
+            {"league_id": "EPL", "data_type": "FIXTURES", "date": "2024-01-05"},
+            {"league_id": "UNKNOWN", "data_type": "FIXTURES", "date": "2025-12-15"},
+            {"league_id": "unknown", "data_type": "XG", "date": "2025-12-16"},
+            # De-registered long-tail / alias league_ids (2026-07-13 ruling) — excluded.
+            {"league_id": "15066", "data_type": "MATCHES", "date": "2024-03-01"},
+            {"league_id": "LA_LIGA_2", "data_type": "ODDS", "date": "2024-03-02"},
+            {"league_id": "RFPL", "data_type": "XG", "date": "2024-03-03"},
+        ]
+    )
+    df = rollup.build_sports_catalogue_from_manifest(manifest)
+    by_id = {row["league_id"]: row for row in df.to_dict("records")}
+    assert set(by_id) == {"EPL"}
+    assert "UNKNOWN" not in by_id
+    assert "unknown" not in by_id
 
 
 def test_sports_catalogue_from_manifest_empty_or_missing_cols(rollup: ModuleType) -> None:
     assert rollup.build_sports_catalogue_from_manifest(pd.DataFrame()).empty
     # missing required columns → empty (never a crash)
-    bad = pd.DataFrame([{"league_id": "ENG_PREMIER"}])
+    bad = pd.DataFrame([{"league_id": "EPL"}])
     out = rollup.build_sports_catalogue_from_manifest(bad)
     assert out.empty
     assert list(out.columns) == list(rollup.CATALOG_COLUMNS)
 
 
-def test_sports_enumerator_skips_league_outside_entity_coverage(rollup: ModuleType) -> None:
+def test_sports_enumerator_skips_league_outside_entity_coverage(
+    rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """XG (Understat) must NOT seed expected_unattempted for a non-Understat league.
 
     Regression for the entity-coverage gate: get_entity_league_coverage("XG") is the
@@ -811,6 +2496,11 @@ def test_sports_enumerator_skips_league_outside_entity_coverage(rollup: ModuleTy
     """
     enumerator = _load_script_module("enumerate_expected_universe.py", "_enum_v2_sports_cov")
     d = date(2024, 6, 1)
+    # Stub out the matchday-aware fixture-index build (Root-cause writer fix, part
+    # (b)) so this GCS-free test file stays GCS-free — pretend EPL has a fixture on
+    # this day so the seed falls through to the entity-coverage behaviour under
+    # test, not the (orthogonal) matchday check.
+    monkeypatch.setattr(enumerator, "_build_understat_fixture_index", lambda days: {("EPL", "2024-06-01")})
     # EPL IS in Understat coverage; A_RANDOM_LEAGUE is NOT.
     manifest = pd.DataFrame(
         [
@@ -842,21 +2532,27 @@ def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted
     """
     enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_v2_sports_verify")
     # api_football FIXTURES source coverage starts 2018-01-01 → use 2024 dates (in-coverage).
+    # league_id must be a UAC LEAGUE_REGISTRY member (2026-07-13 de-registration
+    # gate: non-registry leagues never seed expected rows).
     d1, d2, d3 = date(2024, 6, 1), date(2024, 6, 2), date(2024, 6, 3)
     df = rollup.build_sports_catalogue_dataframe(
         [
-            (d1, _league_snap([{"league_id": "39", "name": "PL"}])),
-            (d2, _league_snap([{"league_id": "39", "name": "PL"}])),
-            (d3, _league_snap([{"league_id": "39", "name": "PL"}])),
+            (d1, _league_snap([{"league_id": "EPL", "name": "PL"}])),
+            (d2, _league_snap([{"league_id": "EPL", "name": "PL"}])),
+            (d3, _league_snap([{"league_id": "EPL", "name": "PL"}])),
         ]
     )
     catalog = enumerator._catalog_from_dataframe(df)
     assert len(catalog) == 1
-    assert catalog[0].league_id == "39"
+    assert catalog[0].league_id == "EPL"
 
-    # League-grain present_set: league 39 FIXTURES captured on d2 only.
+    # League-grain present_set: league EPL FIXTURES_SCHEDULE captured on d2 only. The present_set
+    # key uses the MANIFEST atom ("FIXTURES_SCHEDULE"), not the UAC axis key ("FIXTURES") passed to
+    # data_types= below — _sports_manifest_data_type() translates via
+    # _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE (fixtures_manifest_legacy_backfill_2026_07_24.md, 2026-07-26
+    # finding: this override was missing, causing the enumerator to seed the legacy "FIXTURES" atom).
     present_cols = ["data_type", "league_id", "date"]
-    present_set = {("FIXTURES", "39", "2024-06-02")}
+    present_set = {("FIXTURES_SCHEDULE", "EPL", "2024-06-02")}
 
     rows = list(
         enumerator.enumerate_v2(
@@ -872,14 +2568,28 @@ def test_sports_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted
     # d2 captured → NOT emitted; d1 + d3 alive + missing → expected_unattempted, league-grain blanks.
     assert "2024-06-02" not in by_date
     assert by_date["2024-06-01"].capture_status == "expected_unattempted"
-    assert by_date["2024-06-01"].league_id == "39"
+    assert by_date["2024-06-01"].league_id == "EPL"
     assert by_date["2024-06-01"].instrument_id == ""  # blanked → matches captured atom grain
     assert by_date["2024-06-01"].venue == ""
+    # Emitted rows carry the manifest atom (FIXTURES_SCHEDULE), not the raw UAC axis key.
+    assert by_date["2024-06-01"].data_type == "FIXTURES_SCHEDULE"
     assert by_date["2024-06-03"].capture_status == "expected_unattempted"
+    assert by_date["2024-06-03"].data_type == "FIXTURES_SCHEDULE"
 
 
-def test_sports_enumerator_skips_pre_source_coverage_dates(rollup: ModuleType) -> None:
-    """Dates before the data_type's source coverage start are owned by v1 → v2 emits nothing."""
+def test_sports_enumerator_emits_per_source_pre_coverage_and_skips_per_league(rollup: ModuleType) -> None:
+    """Pre-coverage dates: v2 emits ONE per-source sentinel + zero per-league rows.
+
+    Prior behaviour (pre-2026-07-06) skipped pre-coverage dates entirely and
+    deferred to v1 ``_enumerate_sports``. After the
+    ``_yield_v2_sports_pre_source_coverage_rows`` helper landed
+    (``v1_enumerator_dispatch_not_deletable_2026_07_06.md`` task 2), v2 owns
+    the per-source pre-coverage slice at ``(source, data_type, day,
+    league_id="")`` grain. The per-league branch STILL skips those dates to
+    avoid double-counting the ``(data_type, date)`` cell at two grains AND to
+    prevent fabricating expected_unattempted for alive leagues on dates the
+    source could never have covered.
+    """
     enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_v2_sports_precov")
     # XG → understat, coverage starts 2014-01-01. Use a canonical understat league_id
     # ("EPL" — in UNDERSTAT_NAMES) and a date well before coverage start so the
@@ -899,7 +2609,16 @@ def test_sports_enumerator_skips_pre_source_coverage_dates(rollup: ModuleType) -
             present_cols=["data_type", "league_id", "date"],
         )
     )
-    assert rows == []  # pre-coverage → skipped (no double-emit with v1)
+    # Exactly ONE per-source sentinel row: (venue="understat", data_type="XG",
+    # league_id="", reason="EXPECTED_PRE_SOURCE_COVERAGE_START"). No per-league
+    # rows for the pre-coverage date.
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.venue == "understat"
+    assert r.data_type == "XG"
+    assert r.league_id == ""
+    assert r.reason == "EXPECTED_PRE_SOURCE_COVERAGE_START"
+    assert r.date == d_pre.isoformat()
 
 
 def test_sports_could_exist_denominator_never_shrinks(rollup: ModuleType) -> None:
@@ -930,6 +2649,410 @@ def test_sports_could_exist_denominator_never_shrinks(rollup: ModuleType) -> Non
     )
     # No expected_unattempted for already-captured cells → denominator == captured (no shrink).
     assert [r for r in rows if r.capture_status == "expected_unattempted"] == []
+
+
+# ---------------------------------------------------------------------------
+# build_sports_fixture_team_player_catalogue — FIXTURE/TEAM/PLAYER-grain
+# roll-up from REAL captured entity=fixtures/teams/injuries by_date data
+# (2026-07-09, extends the sports catalogue past league-grain-only).
+# ---------------------------------------------------------------------------
+
+
+#: Track the LIVE fixtures entity rather than hardcoding it. These tests pin
+#: "real-shaped paths", so they must follow the constant the rollup actually reads: the
+#: 2026-05-23 schedule/outcomes split moved the writer to ``entity=fixtures_schedule`` and a
+#: hardcoded ``"fixtures"`` here would keep asserting green against a corpus that stopped
+#: being written (sports_features_layer_findings_sweep § R).
+_FIXTURE_ENTITY: str = str(
+    _load_script_module("build_instrument_catalogue.py", "_cat_fixture_entity_probe").SPORTS_FIXTURE_ENTITY
+)
+
+
+def _sports_blob(day: str, entity: str, league: str, rows: list[dict[str, object]]) -> tuple[str, pd.DataFrame]:
+    """Build a ``(blob_path, frame)`` pair matching the real GCS shape."""
+    path = (
+        f"sports_reference/by_date/day={day}/pipeline_mode=batch_api_football/"
+        f"entity={entity}/league={league}/{entity}.parquet"
+    )
+    return path, pd.DataFrame(rows)
+
+
+def test_split_full_name_two_and_one_token(rollup: ModuleType) -> None:
+    assert rollup._split_full_name("Bukayo Saka") == ("Saka", "Bukayo")
+    assert rollup._split_full_name("Neymar") == ("Neymar", "")
+    assert rollup._split_full_name("Cristiano Ronaldo dos Santos") == ("Santos", "Cristiano Ronaldo dos")
+
+
+def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollup: ModuleType) -> None:
+    """End-to-end via a _FakeStorage populated with real GCS-shaped blob paths.
+
+    Covers: canonical fixture_id construction (LEAGUE:HOME_v_AWAY:DATE), team
+    lifecycle (available_to=None when present on the latest scanned day),
+    player_id construction from a real injuries row's ``player_name``, sentinel
+    league_id exclusion, and that a non-FTP entity (``entity=leagues``) is
+    never picked up by this walk.
+    """
+    d1, d2 = "2026-03-22", "2026-03-23"
+    blobs = dict(
+        [
+            _sports_blob(
+                d1,
+                _FIXTURE_ENTITY,
+                "EPL",
+                [{"af_fixture_id": 1, "date": d1, "af_home_name": "Arsenal", "af_away_name": "Chelsea"}],
+            ),
+            _sports_blob(
+                d1,
+                "teams",
+                "EPL",
+                [
+                    {"team_id": "ARSENAL", "name": "Arsenal", "league_id": "EPL"},
+                    {"team_id": "CHELSEA", "name": "Chelsea", "league_id": "EPL"},
+                ],
+            ),
+            _sports_blob(
+                d1,
+                "injuries",
+                "EPL",
+                [{"player_id": 1, "player_name": "Bukayo Saka", "team_id": 1, "league_id": 39}],
+            ),
+            # Arsenal present on the LATEST scanned day too → still active.
+            _sports_blob(
+                d2,
+                "teams",
+                "EPL",
+                [{"team_id": "ARSENAL", "name": "Arsenal", "league_id": "EPL"}],
+            ),
+            # Sentinel league_id must never roll up into a row.
+            _sports_blob(
+                d1,
+                _FIXTURE_ENTITY,
+                "UNKNOWN",
+                [{"af_fixture_id": 2, "date": d1, "af_home_name": "X", "af_away_name": "Y"}],
+            ),
+            # De-registered / non-LEAGUE_REGISTRY league_ids (2026-07-13 ruling):
+            # their GCS data objects remain in place, but the FTP walk must not
+            # re-mint catalogue rows for them — raw numeric long-tail id + the
+            # SCOTTISH_LEAGUE_CUP_185 alias both excluded.
+            _sports_blob(
+                d1, _FIXTURE_ENTITY, "110", [{"af_fixture_id": 3, "date": d1, "af_home_name": "A", "af_away_name": "B"}]
+            ),
+            _sports_blob(
+                d1,
+                "injuries",
+                "SCOTTISH_LEAGUE_CUP_185",
+                [{"player_id": 9, "player_name": "Some Player", "team_id": 9, "league_id": 185}],
+            ),
+            # entity=leagues is NOT one of the three FTP entities — must be ignored by this walk.
+            _sports_blob(d1, "leagues", "", [{"league_id": "39"}]),
+        ]
+    )
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records")) for path, frame in blobs.items()})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(
+        storage, "test-bucket", by_date_prefix=rollup.SPORTS_BY_DATE_PREFIX, since=date(2026, 3, 1)
+    )
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+
+    assert set(by_id) == {
+        "EPL:ARSENAL_v_CHELSEA:20260322",
+        "ARSENAL",
+        "CHELSEA",
+        "SAKA_B",
+    }
+
+    fixture_row = by_id["EPL:ARSENAL_v_CHELSEA:20260322"]
+    assert fixture_row["instrument_type"] == rollup.SPORTS_FIXTURE_INSTRUMENT_TYPE
+    assert fixture_row["league_id"] == "EPL"
+    assert fixture_row["venue"] == ""
+    assert fixture_row["available_from"] == "2026-03-22"
+
+    assert by_id["ARSENAL"]["instrument_type"] == rollup.SPORTS_TEAM_INSTRUMENT_TYPE
+    assert by_id["ARSENAL"]["available_to"] is None  # present on latest scanned day → still active
+    assert by_id["CHELSEA"]["available_to"] == "2026-03-22"  # only seen on d1 → delisted vs the latest day
+
+    assert by_id["SAKA_B"]["instrument_type"] == rollup.SPORTS_PLAYER_INSTRUMENT_TYPE
+    assert by_id["SAKA_B"]["league_id"] == "EPL"
+
+
+def test_ftp_rollup_empty_walk_returns_catalog_columns(rollup: ModuleType) -> None:
+    storage = _FakeStorage({})
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 1, 1))
+    assert df.empty
+    assert list(df.columns) == list(rollup.CATALOG_COLUMNS)
+
+
+# ---------------------------------------------------------------------------
+# Fixture scheduling/display fields on the rolled-up FIXTURE rows (operator
+# round-3, 2026-07-17 — "all the fixtures ... searching by date, league and/or
+# team"). The entity=fixtures snapshot ALREADY carries kickoff/status/venue/
+# round; the roll-up used to discard them, which is why deployment-api had to
+# re-walk the per-day parquets over a <=120-day window for a kickoff time.
+# ---------------------------------------------------------------------------
+
+
+def _fixture_snapshot_row(**overrides: object) -> dict[str, object]:
+    """A real-shaped ``entity=fixtures`` snapshot row (column names as the live
+    GCS objects carry them — verified 2026-07-17 against
+    ``sports_reference/by_date/day=2026-07-15/entity=fixtures/``)."""
+    row: dict[str, object] = {
+        "af_fixture_id": 1493574,
+        "date": "2026-03-22",
+        "timestamp": "2026-03-22T15:00:00+00:00",
+        "venue_id": None,
+        "venue_name": "Emirates Stadium",
+        "status_long": "Not Started",
+        "status_short": "NS",
+        "af_league_id": 39,
+        "round": "Regular Season - 30",
+        "af_home_name": "Arsenal",
+        "af_away_name": "Chelsea",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_sports_attr_str_collapses_missing_and_stringified_sentinels(rollup: ModuleType) -> None:
+    """Never a silent placeholder: a literal "None"/"nan" in the catalogue would
+    be a FABRICATED value, not an absent one."""
+    assert rollup._sports_attr_str(None) == ""
+    assert rollup._sports_attr_str(float("nan")) == ""
+    assert rollup._sports_attr_str("None") == ""
+    assert rollup._sports_attr_str("nan") == ""
+    assert rollup._sports_attr_str("  Emirates Stadium  ") == "Emirates Stadium"
+    assert rollup._sports_attr_str(123) == "123"
+
+
+def test_ftp_rollup_carries_fixture_kickoff_status_and_display_fields(rollup: ModuleType) -> None:
+    d1 = "2026-03-22"
+    path, frame = _sports_blob(d1, _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row()])
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records"))})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    row = by_id["EPL:ARSENAL_v_CHELSEA:20260322"]
+
+    assert row["kickoff_utc"] == "2026-03-22T15:00:00+00:00"
+    assert row["status"] == "NS"
+    assert row["home_team_name"] == "Arsenal"
+    assert row["away_team_name"] == "Chelsea"
+    assert row["venue_name"] == "Emirates Stadium"
+    assert row["round"] == "Regular Season - 30"
+    # The stadium is NOT the `venue` axis (bookmaker/exchange association) —
+    # that stays honestly blank for sports reference rows.
+    assert row["venue"] == ""
+
+
+def test_ftp_rollup_fixture_status_takes_the_latest_snapshot(rollup: ModuleType) -> None:
+    """``status`` evolves NS -> FT across snapshot days — the catalogue must
+    carry the NEWEST observation; a stale "NS" on a played fixture is a lie."""
+    d1, d2 = "2026-03-22", "2026-03-23"
+    # Same fixture (date stays d1) re-observed on d2 with a settled status.
+    p1, f1 = _sports_blob(d1, _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row(status_short="NS")])
+    p2, f2 = _sports_blob(d2, _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row(status_short="FT")])
+    storage = _FakeStorage({p1: _parquet_bytes(f1.to_dict("records")), p2: _parquet_bytes(f2.to_dict("records"))})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    row = by_id["EPL:ARSENAL_v_CHELSEA:20260322"]
+
+    assert row["status"] == "FT"
+    # ...and the lifecycle still reflects BOTH observation days.
+    assert row["available_from"] == d1
+
+
+def test_ftp_rollup_missing_optional_fixture_fields_are_blank_not_none_strings(rollup: ModuleType) -> None:
+    """A snapshot with a None venue_name/round (common in the real data) must
+    yield "" — never the string "None"."""
+    path, frame = _sports_blob(
+        "2026-03-22", _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row(venue_name=None, round=None)]
+    )
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records"))})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    row = {r["instrument_id"]: r for r in df.to_dict("records")}["EPL:ARSENAL_v_CHELSEA:20260322"]
+
+    assert row["venue_name"] == ""
+    assert row["round"] == ""
+    assert row["status"] == "NS"  # the fields that WERE present still land
+
+
+def test_ftp_rollup_team_and_player_grains_get_no_fixture_display_fields(rollup: ModuleType) -> None:
+    """No leakage: only the FIXTURE grain carries kickoff/status — team/player
+    rows keep the honest blank the shared row-assembly gives them."""
+    d1 = "2026-03-22"
+    blobs = dict(
+        [
+            _sports_blob(d1, _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row()]),
+            _sports_blob(d1, "teams", "EPL", [{"team_id": "ARSENAL", "name": "Arsenal", "league_id": "EPL"}]),
+            _sports_blob(d1, "injuries", "EPL", [{"player_id": 1, "player_name": "Bukayo Saka", "league_id": 39}]),
+        ]
+    )
+    storage = _FakeStorage({p: _parquet_bytes(f.to_dict("records")) for p, f in blobs.items()})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+
+    for non_fixture_id in ("ARSENAL", "SAKA_B"):
+        row = by_id[non_fixture_id]
+        for col in ("kickoff_utc", "status", "home_team_name", "away_team_name", "venue_name", "round"):
+            assert pd.isna(row[col]) or row[col] in ("", None), f"{non_fixture_id}.{col} leaked: {row[col]!r}"
+    # ...while the fixture row in the SAME roll-up does carry them.
+    assert by_id["EPL:ARSENAL_v_CHELSEA:20260322"]["status"] == "NS"
+
+
+def test_ftp_rollup_rows_never_treated_as_league_by_v2_enumerator(rollup: ModuleType) -> None:
+    """Cross-module regression: a fixture-grain catalogue row concatenated onto
+    league-grain rows must be invisible to enumerate_expected_universe.py's
+    league-grain loop — see that module's own test for the isolated unit
+    version; this proves the REAL producer output (this file's CATALOG_COLUMNS
+    shape) round-trips through _catalog_from_dataframe correctly.
+    """
+    enumerator = _load_script_module("enumerate_expected_universe.py", "_enum_v2_sports_ftp_filter")
+    d1 = "2026-03-22"
+    fixture_blobs = {
+        p: _parquet_bytes(f.to_dict("records"))
+        for p, f in [
+            _sports_blob(
+                d1,
+                _FIXTURE_ENTITY,
+                "EPL",
+                [{"af_fixture_id": 1, "date": d1, "af_home_name": "Arsenal", "af_away_name": "Chelsea"}],
+            )
+        ]
+    }
+    storage = _FakeStorage(fixture_blobs)
+    ftp_df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 3, 1))
+    manifest = pd.DataFrame([{"league_id": "EPL", "data_type": "FIXTURES", "date": "2026-03-01"}])
+    league_df = rollup.build_sports_catalogue_from_manifest(manifest)
+    combined = pd.concat([league_df, ftp_df], ignore_index=True)
+
+    catalog = enumerator._catalog_from_dataframe(combined)
+    rows = list(
+        enumerator.enumerate_v2(
+            asset_group="sports",
+            catalog=catalog,
+            date_axis=[date(2026, 3, 1)],
+            data_types=["FIXTURES"],
+            present_set=set(),
+            present_cols=["data_type", "league_id", "date"],
+        )
+    )
+    # Exactly ONE league-grain expected_unattempted seed (from league_df's "EPL"
+    # row) — the fixture-grain row must not ALSO seed one.
+    seeded = [r for r in rows if r.capture_status == "expected_unattempted" and r.league_id == "EPL"]
+    assert len(seeded) == 1
+
+
+# ---------------------------------------------------------------------------
+# _merge_sports_ftp_with_frozen_tail — 2026-07-15 CATALOGUE_SHRINK_BLOCKED fix.
+#
+# Regression: build_sports_fixture_team_player_catalogue's trailing
+# SPORTS_FTP_WINDOW_DAYS window is a full rebuild every run with NO memory of
+# a prior run — an instrument whose only captured day ages off the window's
+# bottom edge simply has no blob left in the fresh walk, so its row vanishes
+# from the catalogue entirely (confirmed live incident: 9 single-day-only
+# fixture/player rows aged off day=2025-06-09 while only 3 new same-day
+# fixtures were gained, netting a 27216→27210 shrink that jammed the
+# monotonic guard). The frozen-tail merge must carry an aged-off row through
+# UNCHANGED rather than silently dropping it.
+# ---------------------------------------------------------------------------
+
+
+def test_sports_ftp_frozen_tail_keeps_row_that_aged_off_the_window(rollup: ModuleType) -> None:
+    """An FTP row whose sole captured day is now OUTSIDE the fresh window must
+    survive (frozen, unchanged) rather than vanish — the exact 2026-07-15 bug."""
+    # OLD_FIXTURE's only observed day (2025-06-09) is now before `since` — a
+    # bare full rebuild of the window would never see it again.
+    prev_catalogue = (
+        pd.DataFrame(
+            [
+                _cat_row(
+                    instrument_id="MLS:LOS_ANGELES_FC_v_SPORTING_KANSAS_CITY:20250609",
+                    instrument_type=rollup.SPORTS_FIXTURE_INSTRUMENT_TYPE,
+                    venue="",
+                    league_id="MLS",
+                    available_from="2025-06-09",
+                    available_to="2025-06-09",
+                ),
+                _cat_row(
+                    instrument_id="JOHNSON_T",
+                    instrument_type=rollup.SPORTS_PLAYER_INSTRUMENT_TYPE,
+                    venue="",
+                    league_id="MLS",
+                    available_from="2025-06-09",
+                    available_to="2025-06-09",
+                ),
+                # A league-grain row in the SAME previous catalogue must be
+                # filtered out by the helper — it is not FTP-grain.
+                _cat_row(
+                    instrument_id="MLS",
+                    instrument_type=rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE,
+                    venue="",
+                    league_id="MLS",
+                    available_from="2020-01-01",
+                    available_to=None,
+                ),
+            ]
+        ),
+        None,
+    )
+    # Fresh window walk (since=2025-06-10) — a brand-new fixture played today,
+    # OLD_FIXTURE/JOHNSON_T have no blob left inside the window at all.
+    since = date(2025, 6, 10)
+    d = "2026-07-15"
+    blobs = dict(
+        [
+            _sports_blob(
+                d,
+                _FIXTURE_ENTITY,
+                "USL_CHAMPIONSHIP",
+                [{"af_fixture_id": 1, "date": d, "af_home_name": "Miami FC", "af_away_name": "Indy Eleven"}],
+            ),
+        ]
+    )
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records")) for path, frame in blobs.items()})
+
+    merged = rollup._merge_sports_ftp_with_frozen_tail(
+        storage,
+        "test-bucket",
+        by_date_prefix=rollup.SPORTS_BY_DATE_PREFIX,
+        since=since,
+        max_blobs=None,
+        prev_catalogue=prev_catalogue,
+    )
+    by_id = {row["instrument_id"]: row for row in merged.to_dict("records")}
+
+    # The aged-off rows survive, frozen, with their original lifecycle window —
+    # NOT silently dropped (the bug) and NOT re-closed a second time.
+    assert "MLS:LOS_ANGELES_FC_v_SPORTING_KANSAS_CITY:20250609" in by_id
+    assert by_id["MLS:LOS_ANGELES_FC_v_SPORTING_KANSAS_CITY:20250609"]["available_from"] == "2025-06-09"
+    assert by_id["MLS:LOS_ANGELES_FC_v_SPORTING_KANSAS_CITY:20250609"]["available_to"] == "2025-06-09"
+    assert "JOHNSON_T" in by_id
+    assert by_id["JOHNSON_T"]["available_to"] == "2025-06-09"
+    # The league-grain row from the previous catalogue must NOT leak into the
+    # FTP-grain merge output (the caller concats league_df separately).
+    assert "MLS" not in by_id or by_id["MLS"]["instrument_type"] != rollup.SPORTS_LEAGUE_INSTRUMENT_TYPE
+    # The brand-new same-day fixture is also present — net effect is growth,
+    # never a shrink, once the frozen tail is applied.
+    fresh_id = "USL_CHAMPIONSHIP:MIAMI_FC_v_INDY_ELEVEN:20260715"
+    assert fresh_id in by_id
+    assert len(merged) == 3  # 2 frozen-tail rows + 1 fresh row — never fewer than prev's FTP rows.
+
+
+def test_sports_ftp_frozen_tail_no_prev_catalogue_returns_window_only(rollup: ModuleType) -> None:
+    """Cold start (no previous catalogue) — no tail to merge, window passes through."""
+    storage = _FakeStorage({})
+    out = rollup._merge_sports_ftp_with_frozen_tail(
+        storage,
+        "test-bucket",
+        by_date_prefix=rollup.SPORTS_BY_DATE_PREFIX,
+        since=date(2025, 6, 10),
+        max_blobs=None,
+        prev_catalogue=None,
+    )
+    assert out.empty
+    assert list(out.columns) == list(rollup.CATALOG_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
@@ -1029,6 +3152,42 @@ def test_iter_by_date_walk_parses_day_and_reads_frames(rollup: ModuleType) -> No
     assert all(not f.empty for _, f in out)
 
 
+def test_iter_by_date_walk_excludes_non_instruments_parquet_litter(rollup: ModuleType) -> None:
+    """The walk reads ONLY ``instruments.parquet`` — never co-located non-snapshot parquets.
+
+    Regression for tradfi_catalogue_rollup_ingests_sweep_bak_backups_2026_07_20: the
+    id-canonicalization sweeps write a pre-sweep RAW-id backup next to the file they
+    rewrite (``instruments.usdlin.<ts>.bak.parquet`` / ``instruments.okxmarginfix.*``),
+    and the sibling ``futures_contracts.parquet`` (no instrument id column) sits in the
+    same dir. A bare ``endswith('.parquet')`` swept all three in, re-deriving raw+canonical
+    TWINS from the swept snapshot AND its raw backup. Only ``instruments.parquet`` is a
+    real instrument snapshot the roll-up must aggregate.
+    """
+    blobs = {
+        # the ONLY file that should be read
+        "instrument_availability/by_date/day=2024-01-01/venue=CME/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": "CME:FUTURE:CRUDE-USD@LIN-20240115", "venue": "CME"}]
+        ),
+        # sweep pre-sweep RAW backups — MUST be excluded (else raw twins reappear)
+        "instrument_availability/by_date/day=2024-01-01/venue=CME/instruments.usdlin.20260718-140236.bak.parquet": _parquet_bytes(
+            [{"instrument_key": "CME:FUTURE:CLF4", "venue": "CME"}]
+        ),
+        "instrument_availability/by_date/day=2024-01-01/venue=OKX/instruments.okxmarginfix.20260709-113120.bak.parquet": _parquet_bytes(
+            [{"instrument_key": "OKX:PERP:BTC", "venue": "OKX"}]
+        ),
+        # sibling lifecycle-dates file (no instrument id) — MUST be excluded
+        "instrument_availability/by_date/day=2024-01-01/venue=CME/futures_contracts.parquet": _parquet_bytes(
+            [{"root": "CL", "contract_symbol": "CLF4", "venue": "CME"}]
+        ),
+    }
+    out = list(rollup._iter_by_date_snapshots(_FakeStorage(blobs), "bkt", "instrument_availability/by_date"))
+    assert len(out) == 1  # only instruments.parquet was read
+    (_, frame) = out[0]
+    ids = frame["instrument_key"].astype(str).tolist()
+    assert ids == ["CME:FUTURE:CRUDE-USD@LIN-20240115"]  # canonical only — no raw backup twin
+    assert not any("CLF4" in i or "OKX:PERP" in i for i in ids)
+
+
 def test_iter_by_date_max_blobs_truncates(rollup: ModuleType) -> None:
     blobs = {
         f"instrument_availability/by_date/day=2024-01-0{i}/venue=V/instruments.parquet": _parquet_bytes(
@@ -1121,8 +3280,11 @@ def test_cefi_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(r
     catalog = enumerator._catalog_from_dataframe(catalogue_df)
 
     # Manifest says BTC was captured on d3 only.
-    # present_cols default: venue, chain, data_type, instrument_type, instrument_id, league_id, date
-    present_set = {("BINANCE-FUTURES", "", "INSTRUMENTS", "PERPETUAL", "BTC", "", "2024-06-03")}
+    # present_cols default (cefi, underlying-aware since
+    # cefi_mtds_writer_raw_symbol_vs_canonical_eu_namespace_mismatch_2026_07_15.md):
+    # venue, chain, data_type, instrument_type, instrument_id, underlying, league_id, date.
+    # This fixture is a PERPETUAL leaf, so underlying="" on both sides — a no-op slot.
+    present_set = {("BINANCE-FUTURES", "", "INSTRUMENTS", "PERPETUAL", "BTC", "", "", "2024-06-03")}
 
     rows = list(
         enumerator.enumerate_v2(
@@ -1372,7 +3534,7 @@ def test_rollup_non_pool_defi_ghost_lending_collapses_to_one_lifecycle(rollup: M
     catalogue row, NOT two.  Without the fix both keys produced separate rows
     each marked active → +171 AAVE_V3 catalogue over-count vs manifest.
     """
-    d_old = date(2026, 5, 1)   # old adapter (ghost prefix AAVEV3-)
+    d_old = date(2026, 5, 1)  # old adapter (ghost prefix AAVEV3-)
     d_switch = date(2026, 5, 8)  # adapter switched to canonical AAVE_V3-
     d_now = date(2026, 6, 20)  # recent snapshot (canonical)
 
@@ -1395,13 +3557,16 @@ def test_rollup_non_pool_defi_ghost_lending_collapses_to_one_lifecycle(rollup: M
             (d_now, _snapshot([canonical_row])),
         ]
     )
-    lending_rows = df[df["instrument_type"].astype(str).str.lower() == "lending"].to_dict("records")
+    # Post-split (defi_lending_atoken_debttoken_instrument_split_2026_07_07): the id's
+    # ``:A_TOKEN:`` segment is AUTHORITATIVE over the legacy ``"lending"`` source COLUMN,
+    # so these rows emit instrument_type=A_TOKEN (FIX 2 durability) — select on that.
+    a_token_rows = df[df["instrument_type"].astype(str) == "A_TOKEN"].to_dict("records")
     # Must collapse to exactly ONE row (not two).
-    assert len(lending_rows) == 1, (
-        f"Expected 1 lending row (ghost+canonical collapsed) but got {len(lending_rows)}. "
+    assert len(a_token_rows) == 1, (
+        f"Expected 1 A_TOKEN row (ghost+canonical collapsed) but got {len(a_token_rows)}. "
         "The dual-key ghost collapse fix is missing."
     )
-    row = lending_rows[0]
+    row = a_token_rows[0]
     # available_to=None: the market is present on the latest day (d_now).
     assert row["available_to"] is None, (
         f"Expected available_to=None (active on latest day) but got {row['available_to']!r}."
@@ -1435,9 +3600,7 @@ def test_rollup_compound_v3_ghost_collapses_like_aave_v3(rollup: ModuleType) -> 
         ]
     )
     lending_rows = df[df["instrument_type"].astype(str).str.lower() == "lending"].to_dict("records")
-    assert len(lending_rows) == 1, (
-        f"COMPOUND_V3 ghost collapse failed: got {len(lending_rows)} rows."
-    )
+    assert len(lending_rows) == 1, f"COMPOUND_V3 ghost collapse failed: got {len(lending_rows)} rows."
     assert lending_rows[0]["available_to"] is None  # active on latest day (d_now)
 
 
@@ -1504,6 +3667,11 @@ def test_rollup_ghost_venue_liveness_merges_into_canonical_window(rollup: Module
         for i in range(1, 21)  # 20 canonical pools — makes d_old/d_stop/d_now full days
     ]
 
+    # NOTE: asset_group is intentionally omitted (defaults to None = legacy last-seen
+    # delisting) so this test ISOLATES the ghost→canonical liveness-MERGE mechanic via
+    # the observable delist. Under a real defi run (asset_group="defi") the DeFi
+    # carve-out keeps addr_stopped active (None) regardless of the merge; that carve-out
+    # is covered by test_rollup_defi_dropout_stays_active_but_truth_gate_closes.
     df = rollup.build_catalogue_dataframe(
         [
             (d_old, _snapshot([ghost_stopped, ghost_active, *full_canon])),
@@ -1527,6 +3695,382 @@ def test_rollup_ghost_venue_liveness_merges_into_canonical_window(rollup: Module
         f"Active pool (still captured today) should be active (available_to=None), "
         f"but got {by_addr[addr_active]['available_to']!r}."
     )
+
+
+# ---------------------------------------------------------------------------
+# CeFi perp-family lineage collapse (HYPERLIQUID / ASTER 2026-07 id-convention
+# churn) + crypto-venue equity-identity tags (is_equity_perp / tracks_equity).
+# Operator 2026-07-16: instrument_type stays the BROAD mechanics type (PERPETUAL /
+# SPOT_PAIR), equity identity rides the two tags — NOT a distinct EQUITY_PERP /
+# TOKENIZED_EQUITY type.
+# Plans: cefi_completion_program_2026_07_15.md +
+#        cryptovenue_equity_perps_and_tokenized_stocks_2026_06_20.md.
+# ---------------------------------------------------------------------------
+
+
+def test_cefi_equity_tags_classifier(rollup: ModuleType) -> None:
+    """Pure classifier → (is_equity_perp, tracks_equity). instrument_type is NEVER
+    changed (operator 2026-07-16): equity identity rides the two tags."""
+    r = rollup._cefi_equity_tags
+    # equity single-stock perps → (True, real-equity ticker) via tracks_equity
+    assert r("PERPETUAL", "AAPL") == (True, "AAPL")
+    assert r("PERPETUAL", "NVDA") == (True, "NVDA")
+    assert r("PERPETUAL", "META") == (True, "META")
+    # commodity RAW form / index are in the universe → is_equity_perp True, but they
+    # have no Databento equity twin in the link map → tracks_equity "".
+    assert r("PERPETUAL", "XAU") == (True, "")  # commodity RAW form
+    assert r("PERPETUAL", "SPX") == (True, "")  # index
+    # standalone / pre-IPO equity perp: in the universe (is_equity_perp True) but no
+    # real-equity twin → tracks_equity "".
+    assert r("PERPETUAL", "SPCX") == (True, "")  # SpaceX pre-IPO
+    # 2026-07-18 Binance full-listing widen (operator "get all the Binance
+    # listings, we can curate our end"): the 20 new TRADIFI_PERPETUAL bases tag
+    # is_equity_perp=True. tracks_equity stays "" (no wired Databento twin yet,
+    # exactly like SPCX above) until the tradfi DBEQ.BASIC leg is added.
+    assert r("PERPETUAL", "APP") == (True, "")  # AppLovin (US EQUITY)
+    assert r("PERPETUAL", "GEV") == (True, "")  # GE Vernova (US EQUITY)
+    assert r("PERPETUAL", "SNOW") == (True, "")  # Snowflake (US EQUITY)
+    assert r("PERPETUAL", "XBI") == (True, "")  # SPDR S&P Biotech ETF
+    assert r("PERPETUAL", "TENCENT") == (True, "")  # HK_EQUITY (new category)
+    assert r("PERPETUAL", "ZHIPU") == (True, "")  # HK_EQUITY (new category)
+    # tokenized-share spot form of a NEW base still rides base[:-1] membership
+    assert r("SPOT_PAIR", "SNOWX") == (True, "")  # SNOWX → SNOW ∈ equity universe
+    # crypto perps → not equity (not in the equity universe)
+    assert r("PERPETUAL", "BTC") == (False, "")
+    assert r("PERPETUAL", "0G") == (False, "")
+    # tokenized-share spot: base <TICKER>X where TICKER in the equity universe →
+    # is_equity_perp True (it's an equity instrument), tracks_equity = the ticker.
+    assert r("SPOT_PAIR", "AAPLX") == (True, "AAPL")
+    assert r("SPOT_PAIR", "TSLAX") == (True, "TSLA")
+    # spot that only LOOKS tokenized but strips to a non-equity → not equity
+    assert r("SPOT_PAIR", "SPX") == (False, "")  # SPX[:-1]=SP not an equity ticker
+    assert r("SPOT_PAIR", "BTC") == (False, "")
+    # blank base is a no-op
+    assert r("PERPETUAL", "") == (False, "")
+
+
+def test_cefi_perp_lineage_key_helper(rollup: ModuleType) -> None:
+    """The (venue-prefix, raw_symbol, margin) key is STABLE across the id-convention chain."""
+    k = rollup._cefi_perp_lineage_key
+    # All three id forms of the SAME HL BTC perp collapse to one key.
+    k1 = k("HYPERLIQUID:PERP:BTC", "PERPETUAL", "BTC", "linear")
+    k2 = k("HYPERLIQUID:PERPETUAL:BTC-USD", "PERPETUAL", "BTC", "linear")
+    k3 = k("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "PERPETUAL", "BTC", "linear")
+    assert k1 == k2 == k3 is not None
+    # A crypto-venue equity perp is typed PERPETUAL (operator 2026-07-16, no distinct
+    # EQUITY_PERP type) so it rides the same family across the id-convention chain.
+    assert k("BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN", "PERPETUAL", "AAPLUSDT", "linear") == k(
+        "BINANCE-FUTURES:PERP:AAPLUSDT", "PERPETUAL", "AAPLUSDT", "linear"
+    )
+    # Distinct quotes on the SAME venue/base stay DISTINCT (raw_symbol differs) — no over-collapse.
+    assert k("BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN", "PERPETUAL", "BTCUSDT", "linear") != k(
+        "BINANCE-FUTURES:PERPETUAL:BTC-USDC@LIN", "PERPETUAL", "BTCUSDC", "linear"
+    )
+    # Different venues never collapse.
+    assert k("BYBIT:PERPETUAL:BTC-USDT@LIN", "PERPETUAL", "BTCUSDT", "linear") != k(
+        "BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN", "PERPETUAL", "BTCUSDT", "linear"
+    )
+    # Non-perp types and blank raw_symbol return None (caller falls back to the id key).
+    assert k("DERIBIT:COMBO:BTC-X", "COMBO", "BTC-X", "") is None
+    assert k("HYPERLIQUID:SPOT_PAIR:BTC-USD", "SPOT_PAIR", "BTCUSD", "") is None
+    assert k("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "PERPETUAL", "", "linear") is None
+
+
+def _perp_row(iid: str, base: str, raw_symbol: str, genesis: str) -> dict[str, object]:
+    """A HYPERLIQUID/ASTER-style perp by_date row (linear, with a declared genesis)."""
+    venue = iid.split(":", 1)[0]
+    return {
+        "instrument_key": iid,
+        "venue": venue,
+        "instrument_type": "PERPETUAL",
+        "base_asset": base,
+        "raw_symbol": raw_symbol,
+        "margin_type": "linear",
+        "available_from_datetime": genesis,
+    }
+
+
+def test_rollup_hyperliquid_perp_convention_chain_collapses_to_one_lineage(rollup: ModuleType) -> None:
+    """The PERP:BTC → PERPETUAL:BTC-USD → PERPETUAL:BTC-USD@LIN chain (3 IDs for ONE
+    perp across the 2026-07 convention churn) collapses to ONE row — the current live
+    ``@LIN`` id, earliest available_from, active. The stale old-form rows do NOT
+    survive (the HYPERLIQUID ~176-of-534 stale-dup class)."""
+    d_old, d_mid, d_live = date(2026, 6, 20), date(2026, 7, 7), date(2026, 7, 14)
+    # Two live bases so no day is a thin-day outlier.
+    snapshots = [
+        (
+            d_old,
+            _snapshot(
+                [
+                    _perp_row("HYPERLIQUID:PERP:BTC", "BTC", "BTC", "2023-05-12"),
+                    _perp_row("HYPERLIQUID:PERP:ETH", "ETH", "ETH", "2023-05-12"),
+                ]
+            ),
+        ),
+        (
+            d_mid,
+            _snapshot(
+                [
+                    _perp_row("HYPERLIQUID:PERPETUAL:BTC-USD", "BTC", "BTC", "2023-05-12"),
+                    _perp_row("HYPERLIQUID:PERPETUAL:ETH-USD", "ETH", "ETH", "2023-05-12"),
+                ]
+            ),
+        ),
+        (
+            d_live,
+            _snapshot(
+                [
+                    _perp_row("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "BTC", "BTC", "2023-05-12"),
+                    _perp_row("HYPERLIQUID:PERPETUAL:ETH-USD@LIN", "ETH", "ETH", "2023-05-12"),
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_catalogue_dataframe(snapshots)
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    # Exactly one lineage per base — the live @LIN id survives, the stale forms are gone.
+    assert set(by_id) == {"HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "HYPERLIQUID:PERPETUAL:ETH-USD@LIN"}, by_id
+    btc = by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]
+    assert btc["available_from"] == "2023-05-12"  # earliest per-instrument genesis carried
+    assert btc["available_to"] is None  # re-observed on the latest day → active
+
+
+def test_rollup_aster_legacy_perp_date_folds_to_live_form(rollup: ModuleType) -> None:
+    """ASTER dating bug: the dead ``ASTER:PERP:0GUSDT`` form carries a spurious
+    uniform venue-launch genesis (2023-07-22, which PREDATES the 0G token). Folded
+    into the canonical lineage, available_from must follow the LIVE ``@LIN`` form's
+    true listing date (2025-09-24), NOT the spurious earlier old-form date."""
+    d_old, d_live = date(2026, 6, 20), date(2026, 7, 14)
+    snapshots = [
+        (
+            d_old,
+            _snapshot(
+                [
+                    _perp_row("ASTER:PERP:0GUSDT", "0G", "0GUSDT", "2023-07-22"),
+                    _perp_row("ASTER:PERP:BTCUSDT", "BTC", "BTCUSDT", "2021-08-27"),
+                ]
+            ),
+        ),
+        (
+            d_live,
+            _snapshot(
+                [
+                    _perp_row("ASTER:PERPETUAL:0G-USDT@LIN", "0G", "0GUSDT", "2025-09-24"),
+                    _perp_row("ASTER:PERPETUAL:BTC-USDT@LIN", "BTC", "BTCUSDT", "2021-08-27"),
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_catalogue_dataframe(snapshots)
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    assert set(by_id) == {"ASTER:PERPETUAL:0G-USDT@LIN", "ASTER:PERPETUAL:BTC-USDT@LIN"}, by_id
+    # 0G: spurious 2023-07-22 old-form date DISCARDED for the live form's real listing.
+    assert by_id["ASTER:PERPETUAL:0G-USDT@LIN"]["available_from"] == "2025-09-24"
+    # BTC: both forms agree on the genuine early date → preserved.
+    assert by_id["ASTER:PERPETUAL:BTC-USDT@LIN"]["available_from"] == "2021-08-27"
+
+
+def test_rollup_perp_collapse_never_merges_distinct_quotes(rollup: ModuleType) -> None:
+    """SAFETY: two genuinely-different live perps on the SAME venue/base but different
+    quote (Binance BTC-USDT vs BTC-USDC linear) have distinct raw_symbols → stay TWO
+    rows. No live instrument is ever lost to the collapse."""
+    d1, d2 = date(2026, 7, 10), date(2026, 7, 14)
+    rows = [
+        _perp_row("BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN", "BTC", "BTCUSDT", "2020-01-01"),
+        _perp_row("BINANCE-FUTURES:PERPETUAL:BTC-USDC@LIN", "BTC", "BTCUSDC", "2022-01-01"),
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    ids = {row["instrument_id"] for row in df.to_dict("records")}
+    assert ids == {"BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN", "BINANCE-FUTURES:PERPETUAL:BTC-USDC@LIN"}
+
+
+def test_rollup_equity_instrument_type_broad_and_tags_stamped(rollup: ModuleType) -> None:
+    """Operator 2026-07-16: a tradfi-underlying PERPETUAL STAYS PERPETUAL and a
+    tokenized-share SPOT STAYS SPOT_PAIR (instrument_type is the broad mechanics
+    type, id unchanged). The equity identity rides the is_equity_perp / tracks_equity
+    tags stamped by _add_equity_tags. A crypto perp is untouched + untagged."""
+    d1, d2 = date(2026, 7, 10), date(2026, 7, 14)
+    rows = [
+        _perp_row("BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN", "AAPL", "AAPLUSDT", "2026-06-01"),
+        _perp_row("BINANCE-FUTURES:PERPETUAL:NVDA-USDT@LIN", "NVDA", "NVDAUSDT", "2026-06-01"),
+        _perp_row("HYPERLIQUID:PERPETUAL:BTC-USD@LIN", "BTC", "BTC", "2023-05-12"),
+        {
+            "instrument_key": "BYBIT:SPOT_PAIR:AAPLX-USDT",
+            "venue": "BYBIT-SPOT",
+            "instrument_type": "SPOT_PAIR",
+            "base_asset": "AAPLX",
+            "raw_symbol": "AAPLXUSDT",
+        },
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    df = rollup._add_equity_tags(df, "cefi")
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+    # instrument_type stays the BROAD mechanics type — NOT EQUITY_PERP / TOKENIZED_EQUITY.
+    assert by_id["BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN"]["instrument_type"] == "PERPETUAL"
+    assert by_id["BINANCE-FUTURES:PERPETUAL:NVDA-USDT@LIN"]["instrument_type"] == "PERPETUAL"
+    assert by_id["BYBIT:SPOT_PAIR:AAPLX-USDT"]["instrument_type"] == "SPOT_PAIR"
+    assert by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]["instrument_type"] == "PERPETUAL"
+    # equity instruments carry the tags (NVDA → NVDA, AAPL perp/tokenized → AAPL).
+    assert bool(by_id["BINANCE-FUTURES:PERPETUAL:NVDA-USDT@LIN"]["is_equity_perp"]) is True
+    assert by_id["BINANCE-FUTURES:PERPETUAL:NVDA-USDT@LIN"]["tracks_equity"] == "NVDA"
+    assert bool(by_id["BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN"]["is_equity_perp"]) is True
+    assert by_id["BINANCE-FUTURES:PERPETUAL:AAPL-USDT@LIN"]["tracks_equity"] == "AAPL"
+    assert bool(by_id["BYBIT:SPOT_PAIR:AAPLX-USDT"]["is_equity_perp"]) is True
+    assert by_id["BYBIT:SPOT_PAIR:AAPLX-USDT"]["tracks_equity"] == "AAPL"
+    # a crypto perp is NOT an equity instrument.
+    assert bool(by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]["is_equity_perp"]) is False
+    assert by_id["HYPERLIQUID:PERPETUAL:BTC-USD@LIN"]["tracks_equity"] == ""
+
+
+def test_add_equity_tags_non_cefi_defaults_and_dtype(rollup: ModuleType) -> None:
+    """Non-cefi rows carry (is_equity_perp=False, tracks_equity=""); empty frame keeps
+    a typed bool column (stable schema)."""
+    df = pd.DataFrame(
+        [{"instrument_id": "UNI-1", "instrument_type": "POOL", "venue": "UNISWAP_V3-ARBITRUM", "base_asset": ""}],
+        columns=[c for c in rollup.CATALOG_COLUMNS if c not in ("mvp", "tracks_equity", "is_equity_perp")],
+    )
+    out = rollup._add_equity_tags(df, "defi")
+    assert bool(out["is_equity_perp"].iloc[0]) is False
+    assert out["tracks_equity"].iloc[0] == ""
+    empty = rollup.build_catalogue_dataframe([])
+    out_empty = rollup._add_equity_tags(empty, "cefi")
+    assert out_empty["is_equity_perp"].dtype == bool
+
+
+# ---------------------------------------------------------------------------
+# IS R2c — force_include TVL-exempt governance/forced token marker
+# ---------------------------------------------------------------------------
+
+
+def test_add_force_include_flags_governance_tokens_not_coincidental_liquidity(rollup: ModuleType) -> None:
+    """A DeFi governance token issued by a governance-token venue (EIGENLAYER→EIGEN,
+    ETHERFI→ETHFI) is force_include=True; a DEX pool that merely CONTAINS the token
+    (coincidental liquidity) is force_include=False — the R2c denominator-honesty
+    distinction. Derived via the UAC SSOT is_defi_force_include over (venue, base_asset).
+    """
+    d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
+    rows = [
+        {
+            "instrument_key": "EIGENLAYER-ETHEREUM:SPOT_PAIR:EIGEN",
+            "venue": "EIGENLAYER-ETHEREUM",
+            "instrument_type": "SPOT_PAIR",
+            "base_asset": "EIGEN",
+            "quote_asset": "ETH",
+        },
+        {
+            "instrument_key": "ETHERFI-ETHEREUM:SPOT_PAIR:ETHFI",
+            "venue": "ETHERFI-ETHEREUM",
+            "instrument_type": "SPOT_PAIR",
+            "base_asset": "ETHFI",
+            "quote_asset": "ETH",
+        },
+        {
+            "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:EIGEN-WETH:3000",
+            "venue": "UNISWAP_V3-ETHEREUM",
+            "instrument_type": "POOL",
+            "base_asset": "EIGEN",
+            "quote_asset": "WETH",
+            "raw_symbol": "0xabc0000000000000000000000000000000000001",
+            "pool_address": "0xabc0000000000000000000000000000000000001",
+        },
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    df = rollup._add_force_include(df, "defi")
+    by_venue = {row["venue"]: row for row in df.to_dict("records")}
+    # Catalogue stores bare-protocol venue (dual-form split).
+    assert bool(by_venue["EIGENLAYER"]["force_include"]) is True
+    assert bool(by_venue["ETHERFI"]["force_include"]) is True
+    assert bool(by_venue["UNISWAP_V3"]["force_include"]) is False
+    assert "force_include" in rollup.CATALOG_COLUMNS
+
+
+def test_add_force_include_non_defi_and_empty_typed(rollup: ModuleType) -> None:
+    """Every non-defi row is force_include=False; the empty frame keeps a typed bool column."""
+    cefi = pd.DataFrame([{"venue": "BINANCE-FUTURES", "base_asset": "EIGEN"}])
+    out = rollup._add_force_include(cefi, "cefi")
+    assert bool(out["force_include"].iloc[0]) is False
+    empty = rollup.build_catalogue_dataframe([])
+    out_empty = rollup._add_force_include(empty, "defi")
+    assert out_empty["force_include"].dtype == bool
+
+
+def test_add_force_include_flags_high_tvl_pool_by_address(rollup: ModuleType) -> None:
+    """A DEX pool whose ``pool_address`` is on UAC's ``DEFI_FORCE_INCLUDE_POOLS`` high-TVL
+    allowlist (e.g. XMR/USDC, ~$47M TVL) is force_include=True even though NEITHER leg is a
+    major asset (the venue/base_asset-keyed ``is_defi_force_include`` predicate alone would
+    have said False here) — the catalogue-side counterpart to the IS DEX relevance-filter
+    pool_address carve-out in ``filter_defi_instruments_by_relevance``. A structurally-
+    identical minor-asset pool whose address is NOT on the allowlist stays force_include=False.
+    """
+    d1, d2 = date(2024, 6, 1), date(2024, 6, 2)
+    force_include_address = "4usrwhonydfubz1kcupz4xcjeadzqzptby4mzu6wegkm"  # XMR/USDC, DEFI_FORCE_INCLUDE_POOLS
+    non_force_include_address = "1111111111111111111111111111111111111111111"
+    rows = [
+        {
+            "instrument_key": f"RAYDIUM-SOLANA:POOL:XMR-USDC:{force_include_address}",
+            "venue": "RAYDIUM-SOLANA",
+            "instrument_type": "POOL",
+            "base_asset": "XMR",
+            "quote_asset": "USDC",
+            "raw_symbol": force_include_address,
+            "pool_address": force_include_address,
+        },
+        {
+            "instrument_key": f"RAYDIUM-SOLANA:POOL:SHITCOIN-WETH:{non_force_include_address}",
+            "venue": "RAYDIUM-SOLANA",
+            "instrument_type": "POOL",
+            "base_asset": "SHITCOIN",
+            "quote_asset": "WETH",
+            "raw_symbol": non_force_include_address,
+            "pool_address": non_force_include_address,
+        },
+    ]
+    df = rollup.build_catalogue_dataframe([(d1, _snapshot(rows)), (d2, _snapshot(rows))])
+    df = rollup._add_force_include(df, "defi")
+    by_pool = {str(row["pool_address"]).lower(): row for row in df.to_dict("records")}
+    assert bool(by_pool[force_include_address]["force_include"]) is True
+    assert bool(by_pool[non_force_include_address]["force_include"]) is False
+
+
+def test_add_instrument_name_stamps_krx_issuer_names(rollup: ModuleType) -> None:
+    """_add_instrument_name stamps a human-readable ``name`` on a KRX equity row from
+    the UAC ``KRX_EQUITY_NAMES`` SSOT (keyed on base_asset = the bare 6-digit code) and
+    leaves a non-KRX tradfi row blank. Deliverable: krx_name 2026-07-20."""
+    from unified_api_contracts.registry import KRX_EQUITY_NAMES
+
+    df = pd.DataFrame(
+        [
+            {"instrument_id": "KRX:EQUITY:005930", "venue": "KRX", "base_asset": "005930"},
+            {"instrument_id": "KRX:EQUITY:000660", "venue": "KRX", "base_asset": "000660"},
+            {"instrument_id": "CME:FUTURE:ESZ5", "venue": "CME", "base_asset": "SP500"},
+        ]
+    )
+    out = rollup._add_instrument_name(df, "tradfi")
+    by_id = {row["instrument_id"]: row for row in out.to_dict("records")}
+    assert by_id["KRX:EQUITY:005930"]["name"] == "Samsung Electronics" == KRX_EQUITY_NAMES["005930"]
+    assert by_id["KRX:EQUITY:000660"]["name"] == KRX_EQUITY_NAMES["000660"]
+    # Non-KRX tradfi row: honest-blank (its instrument_id is already readable).
+    assert by_id["CME:FUTURE:ESZ5"]["name"] == ""
+    assert "name" in rollup.CATALOG_COLUMNS
+
+
+def test_add_instrument_name_preserves_existing_and_skips_non_tradfi(rollup: ModuleType) -> None:
+    """An adapter-populated ``name`` already on the frame is the floor (registry only
+    fills blanks); non-tradfi asset groups get an all-blank ``name`` column; the empty
+    frame keeps a typed object column."""
+    # Existing name is preserved even for a KRX-looking row (round-trip floor wins).
+    df = pd.DataFrame([{"venue": "KRX", "base_asset": "005930", "name": "Custom Override"}])
+    out = rollup._add_instrument_name(df, "tradfi")
+    assert out["name"].iloc[0] == "Custom Override"
+
+    # A KRX-shaped row under a non-tradfi asset group is NOT registry-filled.
+    cefi = pd.DataFrame([{"venue": "KRX", "base_asset": "005930"}])
+    out_cefi = rollup._add_instrument_name(cefi, "cefi")
+    assert out_cefi["name"].iloc[0] == ""
+
+    empty = rollup.build_catalogue_dataframe([])
+    out_empty = rollup._add_instrument_name(empty, "tradfi")
+    assert out_empty["name"].dtype == object
 
 
 # ---------------------------------------------------------------------------
@@ -1594,6 +4138,84 @@ def test_parse_args_mode_defaults_incremental(rollup: ModuleType) -> None:
     assert args.mode == "full"
 
 
+# ---------------------------------------------------------------------------
+# --since: the one-off full-history sports backfill escape hatch (2026-07-17).
+# Before this, the sports FTP window start was HARDCODED to today-400d with no
+# CLI override, so the sports catalogue could only ever hold ~13 months — and
+# the frozen-tail merge can only preserve rows already present, never recover
+# history that was never rolled up in the first place.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_args_since_defaults_none(rollup: ModuleType) -> None:
+    assert rollup._parse_args(["--asset-group", "sports"]).since is None
+    assert rollup._parse_args(["--asset-group", "sports", "--since", "2019-01-01"]).since == "2019-01-01"
+
+
+def test_main_rejects_unparseable_since(rollup: ModuleType) -> None:
+    """Fail LOUD: a typo must not silently roll up 13 months on a multi-hour
+    full-history backfill and look like success."""
+    assert rollup.main(["--asset-group", "sports", "--since", "01-01-2019"]) == 2
+    assert rollup.main(["--asset-group", "sports", "--since", "not-a-date"]) == 2
+
+
+def test_main_rejects_since_for_non_sports_asset_groups(rollup: ModuleType) -> None:
+    """--since only drives the sports FTP window; the other groups' window comes
+    from --mode + the incremental engine, so accepting it there would be a lie."""
+    for ag in ("cefi", "defi", "tradfi", "prediction"):
+        assert rollup.main(["--asset-group", ag, "--since", "2019-01-01"]) == 2
+
+
+def _spy_ftp_window(rollup: ModuleType, monkeypatch: pytest.MonkeyPatch, seen: dict[str, object]) -> None:
+    """Capture the ``since`` the sports FTP roll-up is actually called with."""
+
+    def _spy(
+        _storage: object,
+        _bucket: str,
+        *,
+        by_date_prefix: str,
+        since: date,
+        max_blobs: int | None,
+        prev_catalogue: object,
+    ) -> pd.DataFrame:
+        seen["since"] = since
+        return pd.DataFrame(columns=list(rollup.CATALOG_COLUMNS))
+
+    monkeypatch.setattr(rollup, "_merge_sports_ftp_with_frozen_tail", _spy)
+
+
+def test_run_rollup_threads_since_into_the_sports_ftp_window(
+    rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The explicit --since must reach the FTP roll-up as the window start
+    (otherwise the full-history backfill silently stays on the 400d default —
+    a 3-hour walk that quietly produced 13 months would look like success)."""
+    seen: dict[str, object] = {}
+    _spy_ftp_window(rollup, monkeypatch, seen)
+
+    rollup.run_rollup(
+        "sports",
+        allow_shrink=False,
+        dry_run=True,
+        since=date(2019, 1, 1),
+        storage=_FakeStorage({}),
+    )
+    assert seen["since"] == date(2019, 1, 1)
+
+
+def test_run_rollup_without_since_keeps_the_trailing_window_default(
+    rollup: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No --since → the affordable cron default, unchanged."""
+    seen: dict[str, object] = {}
+    _spy_ftp_window(rollup, monkeypatch, seen)
+
+    rollup.run_rollup("sports", allow_shrink=False, dry_run=True, storage=_FakeStorage({}))
+
+    expected = _datetime.now(_UTC).date() - _timedelta(days=rollup.SPORTS_FTP_WINDOW_DAYS)
+    assert seen["since"] == expected
+
+
 def test_compute_window_start_fresh_and_stale(rollup: ModuleType) -> None:
     """Fresh catalogue → 21-day window; stale catalogue → SELF-WIDENING covers the gap."""
     today = date(2026, 7, 3)
@@ -1641,7 +4263,9 @@ def test_iter_by_date_since_lists_only_window_days(rollup: ModuleType) -> None:
 def test_merge_updated_row_carries_available_from_and_refreshes(rollup: ModuleType) -> None:
     """Branch 1: window recompute wins, but available_from is immutable (min of both)."""
     prev = pd.DataFrame([_cat_row(instrument_id="A", available_from="2024-01-01", available_to=None, raw_symbol="old")])
-    window = pd.DataFrame([_cat_row(instrument_id="A", available_from="2026-06-20", available_to=None, raw_symbol="new")])
+    window = pd.DataFrame(
+        [_cat_row(instrument_id="A", available_from="2026-06-20", available_to=None, raw_symbol="new")]
+    )
     window = window.drop(columns=["mvp"])
     merged = rollup._merge_incremental(prev, window, window_start=date(2026, 6, 12), asset_group="cefi")
     assert len(merged) == 1
@@ -1733,6 +4357,69 @@ def test_merge_ghost_venue_spelling_updates_not_duplicates(rollup: ModuleType) -
     assert row["available_to"] is None  # re-observed in the window → active
 
 
+def test_merge_perp_convention_chain_collapses_to_live_lineage(rollup: ModuleType) -> None:
+    """Incremental merge over the EXISTING (unmigrated) catalogue: the 3 stale HL id
+    forms in prev collapse onto the single live ``@LIN`` lineage the window rebuild
+    emits — one row, live id, earliest available_from carried. This is the D-code HL
+    dedup applied through the incremental path (a legitimate corrective SHRINK: the
+    prod materialisation needs ``--allow-catalogue-shrink`` / a full rebuild)."""
+    prev = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id="HYPERLIQUID:PERP:BTC",
+                instrument_type="PERPETUAL",
+                venue="HYPERLIQUID",
+                base_asset="BTC",
+                raw_symbol="BTC",
+                margin_type="linear",
+                available_from="2023-05-12",
+                available_to="2026-07-06",
+            ),
+            _cat_row(
+                instrument_id="HYPERLIQUID:PERPETUAL:BTC-USD",
+                instrument_type="PERPETUAL",
+                venue="HYPERLIQUID",
+                base_asset="BTC",
+                raw_symbol="BTC",
+                margin_type="linear",
+                available_from="2023-05-12",
+                available_to="2026-07-08",
+            ),
+            _cat_row(
+                instrument_id="HYPERLIQUID:PERPETUAL:BTC-USD@LIN",
+                instrument_type="PERPETUAL",
+                venue="HYPERLIQUID",
+                base_asset="BTC",
+                raw_symbol="BTC",
+                margin_type="linear",
+                available_from="2023-05-12",
+                available_to=None,
+            ),
+        ]
+    )
+    # The window rebuild sees only the live @LIN form (current convention).
+    window = pd.DataFrame(
+        [
+            _cat_row(
+                instrument_id="HYPERLIQUID:PERPETUAL:BTC-USD@LIN",
+                instrument_type="PERPETUAL",
+                venue="HYPERLIQUID",
+                base_asset="BTC",
+                raw_symbol="BTC",
+                margin_type="linear",
+                available_from="2023-05-12",
+                available_to=None,
+            )
+        ]
+    ).drop(columns=["mvp"])
+    merged = rollup._merge_incremental(prev, window, window_start=date(2026, 7, 10), asset_group="cefi")
+    assert len(merged) == 1, "the 3 id-convention forms must collapse to ONE live lineage row"
+    row = merged.to_dict("records")[0]
+    assert row["instrument_id"] == "HYPERLIQUID:PERPETUAL:BTC-USD@LIN"  # the live id survives
+    assert row["available_from"] == "2023-05-12"  # earliest carried
+    assert row["available_to"] is None
+
+
 def test_merge_defi_pool_keys_on_dual_form_identity(rollup: ModuleType) -> None:
     """Pool rows merge on pool::<CHAIN>::<addr> — same address on two chains stays two rows."""
     addr = "0xabcdef0000000000000000000000000000000001"
@@ -1776,8 +4463,13 @@ def test_merge_defi_pool_keys_on_dual_form_identity(rollup: ModuleType) -> None:
     assert len(merged) == 2
     by_chain = {r["chain"]: r for r in merged.to_dict("records")}
     assert by_chain["POLYGON"]["available_from"] == "2024-03-01"  # updated, af carried
-    # ARBITRUM pool absent from window but venue present → closed (genuine per-pool absence).
-    assert by_chain["ARBITRUM"]["available_to"] == "2026-06-11"
+    # Option A (codex §1.3): a DeFi pool absent from the window does NOT delist —
+    # on-chain-perpetual, so its drop-out is a TVL/source-set gap, not a removal.
+    # It stays active (available_to unchanged = None), unlike a cefi/tradfi drop-out.
+    arb_to = by_chain["ARBITRUM"]["available_to"]
+    assert arb_to is None or arb_to == "" or pd.isna(arb_to), (
+        f"DeFi pool absent from window must stay active (None), got {arb_to!r}"
+    )
 
 
 def test_merge_empty_window_preserves_catalogue(rollup: ModuleType) -> None:
@@ -1828,17 +4520,25 @@ def _parity_frames(rollup: ModuleType, all_snapshots: list, prev_age_days: int =
     """
     today = _datetime.now(tz=_UTC).date()
     prev_cutoff = today - _timedelta(days=prev_age_days)
-    prev_df = rollup.build_catalogue_dataframe([(d, f) for d, f in all_snapshots if d <= prev_cutoff])
+    prev_df = rollup.build_catalogue_dataframe(
+        [(d, f) for d, f in all_snapshots if d <= prev_cutoff], asset_group=asset_group
+    )
     prev_mtime = _datetime(prev_cutoff.year, prev_cutoff.month, prev_cutoff.day, 1, 0, tzinfo=_UTC)
     window_start = rollup.compute_window_start(today, prev_mtime)
-    window_df = rollup.build_catalogue_dataframe([(d, f) for d, f in all_snapshots if d >= window_start])
+    window_df = rollup.build_catalogue_dataframe(
+        [(d, f) for d, f in all_snapshots if d >= window_start], asset_group=asset_group
+    )
     incremental = rollup._merge_incremental(prev_df, window_df, window_start=window_start, asset_group=asset_group)
-    full = rollup.build_catalogue_dataframe(all_snapshots)
+    full = rollup.build_catalogue_dataframe(all_snapshots, asset_group=asset_group)
     return full, incremental
 
 
 def _assert_frames_match(full: pd.DataFrame, incremental: pd.DataFrame) -> None:
-    cols = [c for c in full.columns if c != "mvp"]
+    # Compare only the stable rollup columns — mvp + the equity-identity tags +
+    # force_include are derived/finalization columns stamped AFTER the merge
+    # (build_catalogue_dataframe emits them NaN in the full path; _merge_incremental
+    # drops them), so they are not part of the merge-parity invariant here.
+    cols = [c for c in full.columns if c not in ("mvp", "tracks_equity", "is_equity_perp", "force_include")]
     f = full[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True)
     i = incremental[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True)
     pd.testing.assert_frame_equal(f, i)
@@ -1853,17 +4553,58 @@ def _cefi_corpus() -> list:
     for d in days:
         age = (today - d).days
         rows = [
-            {"instrument_key": "BTC-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "BTC"},
-            {"instrument_key": "ETH-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "ETH"},
-            {"instrument_key": "BTC-USDT", "venue": "BINANCE-SPOT", "instrument_type": "SPOT_PAIR", "base_asset": "BTC"},
-            {"instrument_key": "ETH-USDT", "venue": "BINANCE-SPOT", "instrument_type": "SPOT_PAIR", "base_asset": "ETH"},
+            {
+                "instrument_key": "BTC-PERP",
+                "venue": "BINANCE-FUTURES",
+                "instrument_type": "PERPETUAL",
+                "base_asset": "BTC",
+            },
+            {
+                "instrument_key": "ETH-PERP",
+                "venue": "BINANCE-FUTURES",
+                "instrument_type": "PERPETUAL",
+                "base_asset": "ETH",
+            },
+            {
+                "instrument_key": "BTC-USDT",
+                "venue": "BINANCE-SPOT",
+                "instrument_type": "SPOT_PAIR",
+                "base_asset": "BTC",
+            },
+            {
+                "instrument_key": "ETH-USDT",
+                "venue": "BINANCE-SPOT",
+                "instrument_type": "SPOT_PAIR",
+                "base_asset": "ETH",
+            },
         ]
         if age >= 30:  # delisted long before the window (frozen tail)
-            rows.append({"instrument_key": "OLD-USDT", "venue": "BINANCE-SPOT", "instrument_type": "SPOT_PAIR", "base_asset": "OLD"})
+            rows.append(
+                {
+                    "instrument_key": "OLD-USDT",
+                    "venue": "BINANCE-SPOT",
+                    "instrument_type": "SPOT_PAIR",
+                    "base_asset": "OLD",
+                }
+            )
         if age >= 8:  # delists mid-window
-            rows.append({"instrument_key": "MID-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "MID"})
+            rows.append(
+                {
+                    "instrument_key": "MID-PERP",
+                    "venue": "BINANCE-FUTURES",
+                    "instrument_type": "PERPETUAL",
+                    "base_asset": "MID",
+                }
+            )
         if age <= 5:  # brand-new listing inside the window
-            rows.append({"instrument_key": "NEW-PERP", "venue": "BINANCE-FUTURES", "instrument_type": "PERPETUAL", "base_asset": "NEW"})
+            rows.append(
+                {
+                    "instrument_key": "NEW-PERP",
+                    "venue": "BINANCE-FUTURES",
+                    "instrument_type": "PERPETUAL",
+                    "base_asset": "NEW",
+                }
+            )
         snapshots.append((d, _snapshot(rows)))
     return snapshots
 
@@ -1871,13 +4612,19 @@ def _cefi_corpus() -> list:
 def test_incremental_matches_full_rebuild_cefi(rollup: ModuleType) -> None:
     full, incremental = _parity_frames(rollup, _cefi_corpus())
     _assert_frames_match(full, incremental)
-    # And the MVP tag is identical on both (perp-gate computed over the full frame).
-    full_mvp = rollup._add_mvp_column(full, "cefi")
-    inc_mvp = rollup._add_mvp_column(incremental, "cefi")
-    cols = list(full_mvp.columns)
+    # The finalization tags (mvp + equity tags) are identical on both paths — the
+    # full pipeline is merge → _add_mvp_column → _add_equity_tags (perp-gate + equity
+    # tags computed over the whole finalized frame, not the window slice).
+    full_final = rollup._add_force_include(
+        rollup._add_equity_tags(rollup._add_mvp_column(full, "cefi"), "cefi"), "cefi"
+    )
+    inc_final = rollup._add_force_include(
+        rollup._add_equity_tags(rollup._add_mvp_column(incremental, "cefi"), "cefi"), "cefi"
+    )
+    cols = list(full_final.columns)
     pd.testing.assert_frame_equal(
-        full_mvp[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
-        inc_mvp[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
+        full_final[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
+        inc_final[cols].fillna("").astype(str).sort_values(cols).reset_index(drop=True),
     )
 
 
@@ -1891,15 +4638,43 @@ def test_incremental_matches_full_rebuild_tradfi(rollup: ModuleType) -> None:
     for d in days:
         age = (today - d).days
         rows = [
-            {"instrument_key": "ESZ6", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "ES"},
-            {"instrument_key": "NQZ6", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "NQ"},
+            {
+                "instrument_key": "ESZ6",
+                "venue": "CME",
+                "instrument_type": "FUTURE",
+                "expiry": far_expiry,
+                "underlying": "ES",
+            },
+            {
+                "instrument_key": "NQZ6",
+                "venue": "CME",
+                "instrument_type": "FUTURE",
+                "expiry": far_expiry,
+                "underlying": "NQ",
+            },
             {"instrument_key": "SPY", "venue": "ARCA", "instrument_type": "SPOT_PAIR", "base_asset": "SPY"},
             {"instrument_key": "QQQ", "venue": "ARCA", "instrument_type": "SPOT_PAIR", "base_asset": "QQQ"},
         ]
         if age >= 25:  # expired contract that stopped appearing pre-window
-            rows.append({"instrument_key": "ESU6", "venue": "CME", "instrument_type": "FUTURE", "expiry": past_expiry, "underlying": "ES"})
+            rows.append(
+                {
+                    "instrument_key": "ESU6",
+                    "venue": "CME",
+                    "instrument_type": "FUTURE",
+                    "expiry": past_expiry,
+                    "underlying": "ES",
+                }
+            )
         if age <= 4:  # new contract series after the roll
-            rows.append({"instrument_key": "ESH7", "venue": "CME", "instrument_type": "FUTURE", "expiry": far_expiry, "underlying": "ES"})
+            rows.append(
+                {
+                    "instrument_key": "ESH7",
+                    "venue": "CME",
+                    "instrument_type": "FUTURE",
+                    "expiry": far_expiry,
+                    "underlying": "ES",
+                }
+            )
         snapshots.append((d, _snapshot(rows)))
     full, incremental = _parity_frames(rollup, snapshots, asset_group="tradfi")
     _assert_frames_match(full, incremental)
@@ -2060,3 +4835,1071 @@ def test_coverage_horizon_warns_on_sharp_count_drop(rollup: ModuleType) -> None:
         assert any(e == "CATALOGUE_STALE_BY_DATE" and kw.get("reason") == "no_window_data" for e, kw in events)
     finally:
         rollup._emit_event = orig
+
+
+# ---------------------------------------------------------------------------
+# _wire_symbol_expiry_date / _dedup_cefi_expiry_off_by_one — ambiguous-wire-key
+# expiry off-by-one artifact (cefi_ambiguous_wire_key_expiry_off_by_one_2026_07_22).
+#
+# Concrete example rows below are the EXACT shapes measured live against the prod
+# cefi catalogue 2026-07-22 (venue=DERIBIT, key=(DERIBIT, OPTION, ETH-17JUL26-2200-P)):
+# two rows whose ``instrument_id`` differ ONLY in the embedded expiry date
+# (...20260717... vs ...20260718...), all other columns byte-identical.
+# ---------------------------------------------------------------------------
+
+
+class TestWireSymbolExpiryDate:
+    def test_parses_deribit_dated_option_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date("ETH-17JUL26-2200-P") == date(2026, 7, 17)
+
+    def test_parses_bybit_underscore_future_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date("MNTUSDT-17JUL26") == date(2026, 7, 17)
+
+    def test_parses_deribit_usdc_linear_future_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date("XRP_USDC-16JUL26") == date(2026, 7, 16)
+
+    def test_none_for_non_dated_symbol(self, rollup: ModuleType) -> None:
+        """A perp/spot wire symbol carries no DDMonYY token -> honest None."""
+        assert rollup._wire_symbol_expiry_date("BTCUSDT") is None
+
+    def test_none_for_yymmdd_numeric_wire_symbol(self, rollup: ModuleType) -> None:
+        """BINANCE-DELIVERY/BINANCE-FUTURES/KRAKEN-FUTURES/some OKX-FUTURES rows embed
+        a numeric YYMMDD date (``ETHUSD_260626``), NOT DERIBIT/BYBIT's DDMonYY shape —
+        deliberately out of scope for THIS helper (see
+        _wire_symbol_expiry_date_numeric_yymmdd for the dedicated numeric parser
+        _dedup_cefi_expiry_off_by_one's check #4 also falls back to)."""
+        assert rollup._wire_symbol_expiry_date("ETHUSD_260626") is None
+
+
+class TestWireSymbolExpiryDateNumericYymmdd:
+    """The numeric-YYMMDD wire-date fallback (check #4's OR'd second parser) —
+    OKX-FUTURES's dash-separated encoding + BINANCE-DELIVERY/BINANCE-FUTURES/
+    KRAKEN-FUTURES's underscore-separated encoding (live-verified 2026-07-22)."""
+
+    def test_parses_okx_futures_dash_separated_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("BTC-USDT-200103") == date(2020, 1, 3)
+
+    def test_parses_binance_delivery_underscore_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("BTCUSD_260626") == date(2026, 6, 26)
+
+    def test_parses_binance_futures_underscore_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("BTCUSDT_260626") == date(2026, 6, 26)
+
+    def test_parses_kraken_futures_underscore_symbol(self, rollup: ModuleType) -> None:
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("FF_XBTUSD_260717") == date(2026, 7, 17)
+
+    def test_none_for_bare_perpetual_symbol(self, rollup: ModuleType) -> None:
+        """No trailing YYMMDD digit run on a perpetual -> honest None."""
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("BTC-USD-SWAP") is None
+
+    def test_none_for_alphabetic_deribit_symbol(self, rollup: ModuleType) -> None:
+        """DERIBIT/BYBIT's DDMonYY shape has no 6-digit numeric tail -> honest None
+        (this parser is a DISTINCT encoding from _wire_symbol_expiry_date, not a
+        superset of it)."""
+        assert rollup._wire_symbol_expiry_date_numeric_yymmdd("ETH-17JUL26-2200-P") is None
+
+
+def _off_by_one_option_rows() -> list[dict[str, object]]:
+    """The real DERIBIT (venue, instrument_type, raw_symbol) 3-tuple that maps to two
+    catalogue rows differing only in the embedded expiry date (measured 2026-07-22)."""
+    base = {
+        "venue": "DERIBIT",
+        "instrument_type": "OPTION",
+        "raw_symbol": "ETH-17JUL26-2200-P",
+        "base_asset": "ETH",
+        "margin_type": "inverse",
+        "available_from": "2026-07-15",
+    }
+    correct = {
+        **base,
+        "instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P",
+        "canonical_instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P",
+        "expiry": "2026-07-17",
+        "available_to": "2026-07-17",
+    }
+    off_by_one = {
+        **base,
+        "instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260718-2200-P",
+        "canonical_instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260718-2200-P",
+        "expiry": "2026-07-18",
+        "available_to": "2026-07-18",
+    }
+    return [correct, off_by_one]
+
+
+class TestDedupCefiExpiryOffByOne:
+    def test_collapses_confirmed_off_by_one_pair_keeping_wire_matching_row(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_off_by_one_option_rows())
+        out = rollup._dedup_cefi_expiry_off_by_one(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["instrument_id"] == "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P"
+        assert kept["expiry"] == "2026-07-17"
+        assert kept["available_to"] == "2026-07-17"
+
+    def test_kept_row_available_from_is_min_across_group(self, rollup: ModuleType) -> None:
+        rows = _off_by_one_option_rows()
+        rows[1]["available_from"] = "2026-07-10"  # the "wrong" row observed earlier
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["available_from"] == "2026-07-10"
+
+    def test_three_row_group_with_a_literal_duplicate_still_collapses_to_one(self, rollup: ModuleType) -> None:
+        """Real shape (DERIBIT, FUTURE, XRP_USDC-16JUL26): 3 rows, 2 distinct expiries,
+        one expiry value repeated verbatim across 2 of the 3 rows."""
+        rows = _off_by_one_option_rows()
+        rows.append(dict(rows[1]))  # duplicate of the off-by-one row
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["expiry"] == "2026-07-17"
+
+    def test_leaves_real_ambiguity_untouched_when_margin_type_differs(self, rollup: ModuleType) -> None:
+        """BITGET-FUTURES/OKX-SWAP shape: same wire symbol, genuinely different
+        margin_type (linear vs inverse) — NOT this artifact, must stay excluded."""
+        rows = [
+            {
+                "venue": "BITGET-FUTURES",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "UNIUSD_CM",
+                "instrument_id": "BITGET-FUTURES:PERPETUAL:UNI-USD@INV",
+                "canonical_instrument_id": "BITGET-FUTURES:PERPETUAL:UNI-USD@INV",
+                "base_asset": "UNI",
+                "margin_type": "inverse",
+                "available_from": "2026-04-28",
+                "expiry": None,
+                "available_to": None,
+            },
+            {
+                "venue": "BITGET-FUTURES",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "UNIUSD_CM",
+                "instrument_id": "BITGET-FUTURES:PERPETUAL:UNI-USD@LIN",
+                "canonical_instrument_id": "BITGET-FUTURES:PERPETUAL:UNI-USD@LIN",
+                "base_asset": "UNI",
+                "margin_type": "linear",
+                "available_from": "2026-04-28",
+                "expiry": None,
+                "available_to": "2026-07-11",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2  # untouched — real ambiguity (margin_type differs)
+
+    def test_leaves_untouched_when_expiries_more_than_one_day_apart(self, rollup: ModuleType) -> None:
+        rows = _off_by_one_option_rows()
+        rows[1]["instrument_id"] = "DERIBIT:OPTION:ETH-USD@INV-20260720-2200-P"
+        rows[1]["expiry"] = "2026-07-20"
+        rows[1]["available_to"] = "2026-07-20"
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2  # 3 days apart — not this artifact, left alone
+
+    def test_collapses_binance_delivery_numeric_wire_date_off_by_one(self, rollup: ModuleType) -> None:
+        """BINANCE-DELIVERY's numeric-YYMMDD wire encoding (``ETHUSD_260626``) fits
+        the off-by-one shape and is now resolved via
+        _wire_symbol_expiry_date_numeric_yymmdd's check #4 fallback (previously left
+        ambiguous — see the superseded test this replaces in git history)."""
+        rows = [
+            {
+                "venue": "BINANCE-DELIVERY",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "ETHUSD_260626",
+                "instrument_id": "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260626",
+                "canonical_instrument_id": "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260626",
+                "base_asset": "ETH",
+                "margin_type": "inverse",
+                "available_from": "2026-06-01",
+                "expiry": "2026-06-26",
+                "available_to": "2026-06-26",
+            },
+            {
+                "venue": "BINANCE-DELIVERY",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "ETHUSD_260626",
+                "instrument_id": "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260627",
+                "canonical_instrument_id": "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260627",
+                "base_asset": "ETH",
+                "margin_type": "inverse",
+                "available_from": "2026-06-02",
+                "expiry": "2026-06-27",
+                "available_to": "2026-06-27",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["instrument_id"] == "BINANCE-DELIVERY:FUTURE:ETH-USD@INV-20260626"
+        assert kept["expiry"] == "2026-06-26"
+        assert kept["available_from"] == "2026-06-01"  # MIN across the group
+
+    def test_collapses_binance_futures_numeric_wire_date_off_by_one(self, rollup: ModuleType) -> None:
+        rows = [
+            {
+                "venue": "BINANCE-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTCUSDT_260626",
+                "instrument_id": "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260626",
+                "canonical_instrument_id": "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260626",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2026-01-01",
+                "expiry": "2026-06-26",
+                "available_to": "2026-06-26",
+            },
+            {
+                "venue": "BINANCE-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTCUSDT_260626",
+                "instrument_id": "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260627",
+                "canonical_instrument_id": "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260627",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2026-01-01",
+                "expiry": "2026-06-27",
+                "available_to": "2026-06-27",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["instrument_id"] == "BINANCE-FUTURES:FUTURE:BTC-USDT@LIN-20260626"
+
+    def test_collapses_kraken_futures_numeric_wire_date_off_by_one(self, rollup: ModuleType) -> None:
+        rows = [
+            {
+                "venue": "KRAKEN-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_XBTUSD_260717",
+                "instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260717",
+                "canonical_instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260717",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2026-07-10",
+                "expiry": "2026-07-17",
+                "available_to": "2026-07-17",
+            },
+            {
+                "venue": "KRAKEN-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_XBTUSD_260717",
+                "instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260718",
+                "canonical_instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260718",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2026-07-10",
+                "expiry": "2026-07-18",
+                "available_to": "2026-07-18",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["instrument_id"] == "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20260717"
+
+    def test_collapses_okx_futures_dash_numeric_wire_date_off_by_one(self, rollup: ModuleType) -> None:
+        """OKX-FUTURES sub-pattern A (pure off-by-one, margin_type identical): the
+        dash-separated numeric wire encoding (``BTC-USDT-200103``) is resolved the
+        same way as the underscore-separated venues above."""
+        rows = [
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USDT-200103",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200103",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200103",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2019-12-20",
+                "expiry": "2020-01-03",
+                "available_to": "2020-01-03",
+            },
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USDT-200103",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200104",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200104",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2019-12-21",
+                "expiry": "2020-01-04",
+                "available_to": "2020-01-04",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 1
+        assert out.to_dict("records")[0]["instrument_id"] == "OKX-FUTURES:FUTURE:BTC-USDT@LIN-20200103"
+
+    def test_leaves_okx_futures_margin_type_collision_untouched_even_with_numeric_wire_date(
+        self, rollup: ModuleType
+    ) -> None:
+        """OKX-FUTURES sub-pattern B (70/146): margin_type AND expiry both differ,
+        correlated — a margin-mislabeling collision, NOT this artifact. Left
+        untouched via check #3 (margin_type is a compared column) even though the
+        numeric wire-date fallback WOULD otherwise resolve a candidate expiry here —
+        this shape is a deliberately separate, not-yet-implemented follow-up (see
+        _dedup_cefi_expiry_off_by_one's docstring)."""
+        rows = [
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USD-200103",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104",
+                "base_asset": "BTC",
+                "margin_type": "linear",
+                "available_from": "2019-12-20",
+                "expiry": "2020-01-04",
+                "available_to": "2020-01-04",
+            },
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USD-200103",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103",
+                "base_asset": "BTC",
+                "margin_type": "inverse",
+                "available_from": "2019-12-21",
+                "expiry": "2020-01-03",
+                "available_to": "2020-01-03",
+            },
+        ]
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2  # untouched — margin_type differs (real ambiguity, not this artifact)
+
+    def test_leaves_untouched_when_wire_symbol_has_no_matching_date_in_either_encoding(
+        self, rollup: ModuleType
+    ) -> None:
+        """A wire symbol with no dated-expiry token in EITHER supported shape
+        (alphabetic DDMonYY or numeric YYMMDD) — e.g. a bare perpetual marker — must
+        degrade to a no-op, never guess, even though the rest of the group fits the
+        off-by-one shape on checks #1-3."""
+        rows = _off_by_one_option_rows()
+        rows[0]["raw_symbol"] = rows[1]["raw_symbol"] = "BTC-USD-SWAP"
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2
+
+    def test_leaves_untouched_when_another_column_genuinely_differs(self, rollup: ModuleType) -> None:
+        rows = _off_by_one_option_rows()
+        rows[1]["base_asset"] = "BTC"  # a real difference unrelated to the artifact
+        out = rollup._dedup_cefi_expiry_off_by_one(pd.DataFrame(rows))
+        assert len(out) == 2
+
+    def test_is_idempotent(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_off_by_one_option_rows())
+        once = rollup._dedup_cefi_expiry_off_by_one(df)
+        twice = rollup._dedup_cefi_expiry_off_by_one(once)
+        assert len(once) == len(twice) == 1
+
+    def test_noop_on_empty_frame(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(columns=list(rollup.CATALOG_COLUMNS))
+        out = rollup._dedup_cefi_expiry_off_by_one(df)
+        assert out.empty
+
+    def test_noop_when_required_columns_absent(self, rollup: ModuleType) -> None:
+        """Prediction/sports-shaped frames carry no raw_symbol/expiry -> pass through."""
+        df = pd.DataFrame([{"instrument_id": "X", "venue": "KALSHI"}])
+        out = rollup._dedup_cefi_expiry_off_by_one(df)
+        assert len(out) == 1
+
+    def test_end_to_end_through_build_catalogue_dataframe(self, rollup: ModuleType) -> None:
+        """The bug in context: two per-date snapshot rows for the SAME wire contract,
+        whose per-date instrument_id embeds a different (off-by-one) expiry day, mint
+        TWO separate lifecycle rows out of build_catalogue_dataframe today — feeding
+        that straight through _dedup_cefi_expiry_off_by_one (mirroring run_rollup's
+        Phase D) collapses them back to one."""
+        d1 = date(2026, 7, 15)
+        d2 = date(2026, 7, 16)
+        snapshots = [
+            (
+                d1,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P",
+                            "canonical_instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P",
+                            "venue": "DERIBIT",
+                            "instrument_type": "OPTION",
+                            "raw_symbol": "ETH-17JUL26-2200-P",
+                            "base_asset": "ETH",
+                            "margin_type": "inverse",
+                            "expiry": "2026-07-17",
+                        }
+                    ]
+                ),
+            ),
+            (
+                d2,
+                _snapshot(
+                    [
+                        {
+                            "instrument_key": "DERIBIT:OPTION:ETH-USD@INV-20260718-2200-P",
+                            "canonical_instrument_id": "DERIBIT:OPTION:ETH-USD@INV-20260718-2200-P",
+                            "venue": "DERIBIT",
+                            "instrument_type": "OPTION",
+                            "raw_symbol": "ETH-17JUL26-2200-P",
+                            "base_asset": "ETH",
+                            "margin_type": "inverse",
+                            "expiry": "2026-07-18",
+                        }
+                    ]
+                ),
+            ),
+        ]
+        raw = rollup.build_catalogue_dataframe(snapshots)
+        assert len(raw) == 2, "confirms the pre-fix bug: 2 separate rows for one instrument"
+        deduped = rollup._dedup_cefi_expiry_off_by_one(raw)
+        assert len(deduped) == 1
+        assert deduped.to_dict("records")[0]["instrument_id"] == "DERIBIT:OPTION:ETH-USD@INV-20260717-2200-P"
+
+
+# ---------------------------------------------------------------------------
+# _dedup_bybit_future_base_asset_parsing — BYBIT FUTURE base-asset PARSING
+# REGRESSION collapse (cefi_ambiguous_wire_key_bybit_base_asset_parsing_2026_07_22).
+#
+# Concrete example rows below are the EXACT shapes measured live against the prod
+# cefi catalogue 2026-07-22: an older catalogue-build generation's dash-split
+# fallback failed to strip the quote off a Bybit dated FUTURE's left segment
+# (BTCUSDT-10JUL26 -> base="BTCUSDT" instead of "BTC"), producing a stale
+# duplicate row alongside the correctly-parsed one.
+# ---------------------------------------------------------------------------
+
+
+def _bybit_future_simple_pair_rows() -> list[dict[str, object]]:
+    """Real (BYBIT, FUTURE, BTCUSDT-10JUL26) 2-row shape: one correctly-parsed
+    row (base_asset=BTC) + one stale parsing-regression row (base_asset=BTCUSDT)."""
+    base = {
+        "venue": "BYBIT",
+        "instrument_type": "FUTURE",
+        "raw_symbol": "BTCUSDT-10JUL26",
+        "margin_type": "linear",
+        "expiry": "2026-07-10",
+        "available_from": "2026-06-19",
+        "available_to": "2026-07-10",
+    }
+    correct = {
+        **base,
+        "instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260710",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260710",
+        "base_asset": "BTC",
+        "underlying": "BTC",
+    }
+    stale = {
+        **base,
+        "instrument_id": "BYBIT:FUTURE:BTCUSDT-USDT@LIN-20260710",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTCUSDT-USDT@LIN-20260710",
+        "base_asset": "BTCUSDT",
+        "underlying": "BTCUSDT",
+    }
+    return [correct, stale]
+
+
+def _bybit_future_compound_group_rows() -> list[dict[str, object]]:
+    """Real (BYBIT, FUTURE, BTCUSDT-17JUL26) 3-row COMPOUND shape: the correct-base
+    (BTC) off-by-one-day pair (2026-07-17 / 2026-07-18) PLUS the stale-base
+    (BTCUSDT) parsing-regression 3rd row nested at the same 2026-07-17 expiry."""
+    correct_717 = {
+        "venue": "BYBIT",
+        "instrument_type": "FUTURE",
+        "raw_symbol": "BTCUSDT-17JUL26",
+        "instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260717",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260717",
+        "base_asset": "BTC",
+        "underlying": "BTC",
+        "margin_type": "linear",
+        "expiry": "2026-07-17",
+        "available_from": "2026-06-26",
+        "available_to": "2026-07-17",
+    }
+    correct_718 = {
+        **correct_717,
+        "instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260718",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTC-USDT@LIN-20260718",
+        "expiry": "2026-07-18",
+        "available_to": "2026-07-18",
+    }
+    stale_717 = {
+        **correct_717,
+        "instrument_id": "BYBIT:FUTURE:BTCUSDT-USDT@LIN-20260717",
+        "canonical_instrument_id": "BYBIT:FUTURE:BTCUSDT-USDT@LIN-20260717",
+        "base_asset": "BTCUSDT",
+        "underlying": "BTCUSDT",
+    }
+    return [correct_717, correct_718, stale_717]
+
+
+def _bybit_perpetual_ambiguous_rows() -> list[dict[str, object]]:
+    """The 3 real BYBIT PERPETUAL ambiguous wire keys (measured 2026-07-22) —
+    a closed 2019-2020 linear market and a separate still-active inverse market
+    sharing one un-marked wire spelling. Two REAL different products; must NEVER
+    be touched by the FUTURE-scoped base-asset dedup."""
+    rows: list[dict[str, object]] = []
+    for base in ("BTC", "ETH", "XRP"):
+        raw_symbol = f"{base}USD"
+        rows.append(
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": raw_symbol,
+                "instrument_id": f"BYBIT:PERPETUAL:{base}-USD",
+                "canonical_instrument_id": f"BYBIT:PERPETUAL:{base}-USD",
+                "base_asset": base,
+                "underlying": base,
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2019-11-07",
+                "available_to": "2020-03-08",
+            }
+        )
+        rows.append(
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": raw_symbol,
+                "instrument_id": f"BYBIT:PERPETUAL:{base}-USD@INV",
+                "canonical_instrument_id": f"BYBIT:PERPETUAL:{base}-USD@INV",
+                "base_asset": base,
+                "underlying": base,
+                "margin_type": "inverse",
+                "expiry": None,
+                "available_from": "2019-11-07",
+                "available_to": None,
+            }
+        )
+    return rows
+
+
+class TestBackfillCefiMissingExpiryFromWireSymbol:
+    """Tardis HTTP 400 systematic-cause fix (cefi_hl_aster_batch_data_gaps_2026_06_22.md):
+    a dated CeFi derivative whose structured expiry/available_to never resolved but whose
+    wire symbol proves it already expired must be backfilled, never left reading ACTIVE
+    forever."""
+
+    def test_backfills_confirmed_cryptofacilities_numeric_symbol_past_expiry(self, rollup: ModuleType) -> None:
+        """The plan's first confirmed instance: CRYPTOFACILITIES:FF_ETHUSD_250228,
+        fetched 2025-03-01 (one day past its real 2025-02-28 expiry) because expiry/
+        available_to never resolved on capture."""
+        rows = [
+            {
+                "venue": "CRYPTOFACILITIES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_ETHUSD_250228",
+                "instrument_id": "CRYPTOFACILITIES:FUTURE:ETH-USD@INV-20250228",
+                "base_asset": "ETH",
+                "available_from": "2025-01-01",
+                "expiry": None,
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] == "2025-02-28"
+        assert row["available_to"] == "2025-02-28"
+
+    def test_backfills_confirmed_bybit_alphabetic_symbol_past_expiry(self, rollup: ModuleType) -> None:
+        """The plan's second confirmed instance: BYBIT:BTC-21APR23, fetched 2023-04-22
+        (one day past its real 2023-04-21 expiry)."""
+        rows = [
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-21APR23",
+                "instrument_id": "BYBIT:FUTURE:BTC-USD@INV-20230421",
+                "base_asset": "BTC",
+                "available_from": "2023-01-01",
+                "expiry": None,
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] == "2023-04-21"
+        assert row["available_to"] == "2023-04-21"
+
+    def test_leaves_untouched_when_expiry_already_populated(self, rollup: ModuleType) -> None:
+        """Never overwrite an already-resolved value — even a blank available_to
+        alongside a populated expiry is not this artifact's shape."""
+        rows = [
+            {
+                "venue": "CRYPTOFACILITIES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_ETHUSD_250228",
+                "instrument_id": "CRYPTOFACILITIES:FUTURE:ETH-USD@INV-20250227",
+                "base_asset": "ETH",
+                "available_from": "2025-01-01",
+                "expiry": "2025-02-27",
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] == "2025-02-27"
+        assert row["available_to"] is None
+
+    def test_leaves_untouched_when_wire_symbol_expiry_is_still_future(self, rollup: ModuleType) -> None:
+        """A dated future/option whose wire expiry hasn't happened yet is genuinely
+        active — must not be pre-emptively clipped."""
+        rows = [
+            {
+                "venue": "KRAKEN-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "FF_XBTUSD_991231",
+                "instrument_id": "KRAKEN-FUTURES:FUTURE:BTC-USD@LIN-20991231",
+                "base_asset": "BTC",
+                "available_from": "2026-01-01",
+                "expiry": None,
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] is None
+        assert row["available_to"] is None
+
+    def test_leaves_untouched_when_raw_symbol_carries_no_dated_token(self, rollup: ModuleType) -> None:
+        """A perpetual's wire symbol has no DDMonYY / numeric-YYMMDD token — honest
+        no-op, never guessed."""
+        rows = [
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "BTCUSD",
+                "instrument_id": "BYBIT:PERPETUAL:BTC-USD@INV",
+                "base_asset": "BTC",
+                "available_from": "2019-01-01",
+                "expiry": None,
+                "available_to": None,
+            }
+        ]
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(pd.DataFrame(rows))
+        row = out.to_dict("records")[0]
+        assert row["expiry"] is None
+        assert row["available_to"] is None
+
+    def test_empty_frame_returns_unchanged(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(columns=["venue", "instrument_type", "raw_symbol", "expiry", "available_to"])
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(df)
+        assert out.empty
+
+    def test_missing_required_columns_returns_unchanged(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame([{"venue": "BYBIT", "instrument_type": "PERPETUAL"}])
+        out = rollup._backfill_cefi_missing_expiry_from_wire_symbol(df)
+        pd.testing.assert_frame_equal(out, df)
+
+
+class TestDedupBybitFutureBaseAssetParsing:
+    def test_collapses_simple_two_row_pair_keeping_correctly_parsed_row(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_bybit_future_simple_pair_rows())
+        out = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["instrument_id"] == "BYBIT:FUTURE:BTC-USDT@LIN-20260710"
+        assert kept["base_asset"] == "BTC"
+
+    def test_compound_three_row_group_fully_resolves_to_one_after_both_dedups(self, rollup: ModuleType) -> None:
+        """The 7 real 3-row compound groups: base-asset dedup strips the stale
+        3rd row FIRST, leaving a pure 2-row off-by-one pair the EXISTING expiry
+        dedup then collapses to 1 on its own next pass — verifying the
+        composition, not just each dedup in isolation."""
+        df = pd.DataFrame(_bybit_future_compound_group_rows())
+        after_base_dedup = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert len(after_base_dedup) == 2, "stale base_asset=BTCUSDT row must be stripped first"
+        assert set(after_base_dedup["base_asset"]) == {"BTC"}
+        after_expiry_dedup = rollup._dedup_cefi_expiry_off_by_one(after_base_dedup)
+        assert len(after_expiry_dedup) == 1
+        kept = after_expiry_dedup.to_dict("records")[0]
+        assert kept["instrument_id"] == "BYBIT:FUTURE:BTC-USDT@LIN-20260717"
+        assert kept["expiry"] == "2026-07-17"
+
+    def test_perpetual_groups_are_completely_untouched(self, rollup: ModuleType) -> None:
+        """The 3 real BYBIT PERPETUAL ambiguous keys are a genuinely different
+        real-product ambiguity (not this parsing bug) and must round-trip with
+        zero drops — scoped strictly to instrument_type == FUTURE."""
+        rows = _bybit_perpetual_ambiguous_rows()
+        df = pd.DataFrame(rows)
+        out = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert len(out) == len(rows) == 6
+        assert sorted(out["instrument_id"]) == sorted(r["instrument_id"] for r in rows)
+
+    def test_no_base_asset_match_in_either_row_raises_stop_on_surprise(self, rollup: ModuleType) -> None:
+        """A group whose raw_symbol re-parses to an authoritative base_asset that
+        matches NEITHER row must never guess (silently dropping the whole group)
+        -- it raises for diagnosis instead."""
+        rows = [
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTCUSDT-17JUL26",
+                "instrument_id": "BYBIT:FUTURE:ETH-USDT@LIN-20260717",
+                "canonical_instrument_id": "BYBIT:FUTURE:ETH-USDT@LIN-20260717",
+                "base_asset": "ETH",
+                "underlying": "ETH",
+                "margin_type": "linear",
+                "expiry": "2026-07-17",
+                "available_from": "2026-06-26",
+                "available_to": "2026-07-17",
+            },
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTCUSDT-17JUL26",
+                "instrument_id": "BYBIT:FUTURE:SOL-USDT@LIN-20260717",
+                "canonical_instrument_id": "BYBIT:FUTURE:SOL-USDT@LIN-20260717",
+                "base_asset": "SOL",
+                "underlying": "SOL",
+                "margin_type": "linear",
+                "expiry": "2026-07-17",
+                "available_from": "2026-06-26",
+                "available_to": "2026-07-17",
+            },
+        ]
+        with pytest.raises(ValueError, match="STOP-ON-SURPRISE"):
+            rollup._dedup_bybit_future_base_asset_parsing(pd.DataFrame(rows))
+
+    def test_unparseable_raw_symbol_also_raises_stop_on_surprise(self, rollup: ModuleType) -> None:
+        """_split_bybit_symbol resolving NO base at all (none of its 3 known
+        shapes match) is equally a surprise -- never silently drop the group."""
+        rows = [
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "NOTAKNOWNSHAPE",
+                "instrument_id": "BYBIT:FUTURE:X-1",
+                "canonical_instrument_id": "BYBIT:FUTURE:X-1",
+                "base_asset": "FOO",
+                "underlying": "FOO",
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2026-01-01",
+                "available_to": None,
+            },
+            {
+                "venue": "BYBIT",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "NOTAKNOWNSHAPE",
+                "instrument_id": "BYBIT:FUTURE:X-2",
+                "canonical_instrument_id": "BYBIT:FUTURE:X-2",
+                "base_asset": "BAR",
+                "underlying": "BAR",
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2026-01-01",
+                "available_to": None,
+            },
+        ]
+        with pytest.raises(ValueError, match="STOP-ON-SURPRISE"):
+            rollup._dedup_bybit_future_base_asset_parsing(pd.DataFrame(rows))
+
+    def test_leaves_non_bybit_venue_untouched(self, rollup: ModuleType) -> None:
+        """Same wire-symbol shape on a different venue is out of scope entirely
+        -- scoped STRICTLY to venue == BYBIT."""
+        rows = _bybit_future_simple_pair_rows()
+        for row in rows:
+            row["venue"] = "OKX-FUTURES"
+        out = rollup._dedup_bybit_future_base_asset_parsing(pd.DataFrame(rows))
+        assert len(out) == 2
+
+    def test_is_idempotent(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_bybit_future_simple_pair_rows())
+        once = rollup._dedup_bybit_future_base_asset_parsing(df)
+        twice = rollup._dedup_bybit_future_base_asset_parsing(once)
+        assert len(once) == len(twice) == 1
+
+    def test_noop_on_empty_frame(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(columns=list(rollup.CATALOG_COLUMNS))
+        out = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert out.empty
+
+    def test_noop_when_required_columns_absent(self, rollup: ModuleType) -> None:
+        """Prediction/sports-shaped frames carry no raw_symbol/base_asset -> pass through."""
+        df = pd.DataFrame([{"instrument_id": "X", "venue": "KALSHI"}])
+        out = rollup._dedup_bybit_future_base_asset_parsing(df)
+        assert len(out) == 1
+
+
+# ---------------------------------------------------------------------------
+# _dedup_cefi_margin_type_mislabel — OKX-FUTURES/OKX-SWAP/BITGET-FUTURES stale
+# margin_type mislabel collapse (operator ruling 2026-07-23,
+# cefi_okx_margin_type_wire_key_ambiguity_reclassification_2026_07_22.md).
+#
+# Concrete rows below are the EXACT shapes measured live against the prod cefi
+# catalogue 2026-07-23 (independent fresh pull): 93/93 real collapsible pairs
+# split 70 OKX-FUTURES + 5 OKX-SWAP + 18 BITGET-FUTURES, and BYBIT's 3 real
+# PERPETUAL ambiguous keys are untouched (out of scope).
+# ---------------------------------------------------------------------------
+
+
+def _okx_futures_margin_mislabel_pair_rows() -> list[dict[str, object]]:
+    """Real (OKX-FUTURES, FUTURE, BTC-USD-200103) 2-row shape: a pre-2026-07-09-fix
+    stale LINEAR row + the correct INVERSE row a fresh ``_infer_margin_type`` call
+    resolves for this bare (no ``_UM``/``_CM`` infix) wire symbol."""
+    stale_linear = {
+        "venue": "OKX-FUTURES",
+        "instrument_type": "FUTURE",
+        "raw_symbol": "BTC-USD-200103",
+        "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104",
+        "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104",
+        "base_asset": "BTC",
+        "underlying": "BTC",
+        "margin_type": "linear",
+        "expiry": "2020-01-04",
+        "available_from": "2019-12-20",
+        "available_to": "2020-01-04",
+    }
+    correct_inverse = {
+        **stale_linear,
+        "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103",
+        "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103",
+        "margin_type": "inverse",
+        "expiry": "2020-01-03",
+        "available_to": "2020-01-03",
+    }
+    return [stale_linear, correct_inverse]
+
+
+def _okx_swap_margin_mislabel_pair_rows() -> list[dict[str, object]]:
+    """Real (OKX-SWAP, PERPETUAL, TRX-USD-SWAP) 2-row shape — the exact example
+    cited in the operator ruling doc: bare SWAP wire symbol, same pre-2026-07-09
+    OKX margin-inversion bug, no expiry (perpetual)."""
+    stale_linear = {
+        "venue": "OKX-SWAP",
+        "instrument_type": "PERPETUAL",
+        "raw_symbol": "TRX-USD-SWAP",
+        "instrument_id": "OKX-SWAP:PERPETUAL:TRX-USD",
+        "canonical_instrument_id": "OKX-SWAP:PERPETUAL:TRX-USD",
+        "base_asset": "TRX",
+        "underlying": "TRX",
+        "margin_type": "linear",
+        "expiry": None,
+        "available_from": "2019-03-30",
+        "available_to": "2025-08-16",
+    }
+    correct_inverse = {
+        **stale_linear,
+        "instrument_id": "OKX-SWAP:PERPETUAL:TRX-USD@INV",
+        "canonical_instrument_id": "OKX-SWAP:PERPETUAL:TRX-USD@INV",
+        "margin_type": "inverse",
+    }
+    return [stale_linear, correct_inverse]
+
+
+def _bitget_futures_margin_mislabel_pair_rows() -> list[dict[str, object]]:
+    """Real (BITGET-FUTURES, PERPETUAL, AAVEUSD_CM) 2-row shape: before the
+    2026-07-14 fix (commit 75bdf02d) this coin-margined (``_CM``-suffixed,
+    USD-quote) symbol fell through to the LINEAR default instead of INVERSE."""
+    stale_linear = {
+        "venue": "BITGET-FUTURES",
+        "instrument_type": "PERPETUAL",
+        "raw_symbol": "AAVEUSD_CM",
+        "instrument_id": "BITGET-FUTURES:PERPETUAL:AAVE-USD@LIN",
+        "canonical_instrument_id": "BITGET-FUTURES:PERPETUAL:AAVE-USD@LIN",
+        "base_asset": "AAVE",
+        "underlying": "AAVE",
+        "margin_type": "linear",
+        "expiry": None,
+        "available_from": "2026-04-28",
+        "available_to": "2026-07-11",
+    }
+    correct_inverse = {
+        **stale_linear,
+        "instrument_id": "BITGET-FUTURES:PERPETUAL:AAVE-USD@INV",
+        "canonical_instrument_id": "BITGET-FUTURES:PERPETUAL:AAVE-USD@INV",
+        "margin_type": "inverse",
+        "available_to": None,
+    }
+    return [stale_linear, correct_inverse]
+
+
+def _bybit_perpetual_real_different_products_rows() -> list[dict[str, object]]:
+    """BYBIT's 3 real PERPETUAL ambiguous wire keys, out of THIS ruling's scope
+    entirely (a different venue) — must round-trip with zero drops."""
+    rows: list[dict[str, object]] = []
+    for base in ("BTC", "ETH", "XRP"):
+        raw_symbol = f"{base}USD"
+        rows.append(
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": raw_symbol,
+                "instrument_id": f"BYBIT:PERPETUAL:{base}-USD",
+                "canonical_instrument_id": f"BYBIT:PERPETUAL:{base}-USD",
+                "base_asset": base,
+                "underlying": base,
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2019-11-07",
+                "available_to": "2020-03-08",
+            }
+        )
+        rows.append(
+            {
+                "venue": "BYBIT",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": raw_symbol,
+                "instrument_id": f"BYBIT:PERPETUAL:{base}-USD@INV",
+                "canonical_instrument_id": f"BYBIT:PERPETUAL:{base}-USD@INV",
+                "base_asset": base,
+                "underlying": base,
+                "margin_type": "inverse",
+                "expiry": None,
+                "available_from": "2019-11-07",
+                "available_to": None,
+            }
+        )
+    return rows
+
+
+class TestDedupCefiMarginTypeMislabel:
+    def test_collapses_okx_futures_pair_keeping_correct_inverse_row(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_okx_futures_margin_mislabel_pair_rows())
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["margin_type"] == "inverse"
+        assert kept["instrument_id"] == "OKX-FUTURES:FUTURE:BTC-USD@INV-20200103"
+
+    def test_collapses_okx_swap_pair_keeping_correct_inverse_row(self, rollup: ModuleType) -> None:
+        """The exact TRX-USD-SWAP example cited in the operator ruling doc."""
+        df = pd.DataFrame(_okx_swap_margin_mislabel_pair_rows())
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["margin_type"] == "inverse"
+        assert kept["instrument_id"] == "OKX-SWAP:PERPETUAL:TRX-USD@INV"
+
+    def test_collapses_bitget_futures_pair_keeping_correct_inverse_row(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_bitget_futures_margin_mislabel_pair_rows())
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 1
+        kept = out.to_dict("records")[0]
+        assert kept["margin_type"] == "inverse"
+        assert kept["instrument_id"] == "BITGET-FUTURES:PERPETUAL:AAVE-USD@INV"
+
+    def test_bybit_perpetual_groups_are_completely_untouched(self, rollup: ModuleType) -> None:
+        """BYBIT is not in this ruling's venue scope at all -- out-of-scope venue,
+        never even considered, regardless of any margin_type ambiguity shape."""
+        rows = _bybit_perpetual_real_different_products_rows()
+        df = pd.DataFrame(rows)
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == len(rows) == 6
+        assert sorted(out["instrument_id"]) == sorted(r["instrument_id"] for r in rows)
+
+    def test_group_where_neither_row_matches_classifier_falls_through_safely(self, rollup: ModuleType) -> None:
+        """Both rows carry a margin_type the fresh classifier agrees with NEITHER of
+        (a synthetic surprise, not the known mislabel shape) -- never guess which to
+        drop; leave the whole group untouched."""
+        rows = [
+            {
+                "venue": "OKX-SWAP",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "TRX-USD-SWAP",
+                "instrument_id": "OKX-SWAP:PERPETUAL:TRX-USDC@LIN",
+                "canonical_instrument_id": "OKX-SWAP:PERPETUAL:TRX-USDC@LIN",
+                "base_asset": "TRX",
+                "underlying": "TRX",
+                # Fresh classifier resolves "inverse" for this bare USD-quote wire
+                # symbol -- neither row below carries that value.
+                "margin_type": "quanto",
+                "expiry": None,
+                "available_from": "2019-03-30",
+                "available_to": "2025-08-16",
+            },
+            {
+                "venue": "OKX-SWAP",
+                "instrument_type": "PERPETUAL",
+                "raw_symbol": "TRX-USD-SWAP",
+                "instrument_id": "OKX-SWAP:PERPETUAL:TRX-USDC@LIN2",
+                "canonical_instrument_id": "OKX-SWAP:PERPETUAL:TRX-USDC@LIN2",
+                "base_asset": "TRX",
+                "underlying": "TRX",
+                "margin_type": "linear",
+                "expiry": None,
+                "available_from": "2019-03-30",
+                "available_to": "2025-08-16",
+            },
+        ]
+        df = pd.DataFrame(rows)
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 2, "neither row matches the fresh classifier -- must not guess"
+        assert sorted(out["instrument_id"]) == sorted(r["instrument_id"] for r in rows)
+
+    def test_already_matching_off_by_one_pair_falls_through_safely(self, rollup: ModuleType) -> None:
+        """A group whose margin_type is IDENTICAL on both rows (the off-by-one-day
+        expiry artifact, e.g. real BTC-USD-260717) is NOT this function's shape
+        (matches.sum() == 2, never 1) -- belongs to _dedup_cefi_expiry_off_by_one."""
+        rows = [
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USD-260717",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20260717",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20260717",
+                "base_asset": "BTC",
+                "underlying": "BTC",
+                "margin_type": "inverse",
+                "expiry": "2026-07-17",
+                "available_from": "2026-07-03",
+                "available_to": "2026-07-17",
+            },
+            {
+                "venue": "OKX-FUTURES",
+                "instrument_type": "FUTURE",
+                "raw_symbol": "BTC-USD-260717",
+                "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20260718",
+                "canonical_instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@INV-20260718",
+                "base_asset": "BTC",
+                "underlying": "BTC",
+                "margin_type": "inverse",
+                "expiry": "2026-07-18",
+                "available_from": "2026-07-03",
+                "available_to": "2026-07-18",
+            },
+        ]
+        df = pd.DataFrame(rows)
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 2, "both rows already agree with the classifier -- not this function's job"
+
+    def test_three_row_group_falls_through_untouched(self, rollup: ModuleType) -> None:
+        """More than 2 rows in a group is not this narrow pattern -- never guess."""
+        rows = _okx_futures_margin_mislabel_pair_rows()
+        extra = {**rows[0], "instrument_id": "OKX-FUTURES:FUTURE:BTC-USD@LIN-20200104-DUP"}
+        df = pd.DataFrame([*rows, extra])
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 3
+
+    def test_order_independent_vs_the_other_two_cefi_dedups(self, rollup: ModuleType) -> None:
+        """Running this dedup BEFORE vs AFTER the other two Phase-D CeFi dedups
+        yields the identical surviving row set -- the three operate on disjoint
+        groups by construction (see this function's docstring)."""
+        rows = [
+            *_okx_futures_margin_mislabel_pair_rows(),
+            *_okx_swap_margin_mislabel_pair_rows(),
+            *_bitget_futures_margin_mislabel_pair_rows(),
+        ]
+        df = pd.DataFrame(rows)
+
+        after_first = rollup._dedup_cefi_margin_type_mislabel(df)
+        after_first = rollup._dedup_bybit_future_base_asset_parsing(after_first)
+        after_first = rollup._dedup_cefi_expiry_off_by_one(after_first)
+
+        after_last = rollup._dedup_bybit_future_base_asset_parsing(df)
+        after_last = rollup._dedup_cefi_expiry_off_by_one(after_last)
+        after_last = rollup._dedup_cefi_margin_type_mislabel(after_last)
+
+        assert len(after_first) == len(after_last) == 3
+        assert sorted(after_first["instrument_id"]) == sorted(after_last["instrument_id"])
+
+    def test_is_idempotent(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(_okx_futures_margin_mislabel_pair_rows())
+        once = rollup._dedup_cefi_margin_type_mislabel(df)
+        twice = rollup._dedup_cefi_margin_type_mislabel(once)
+        assert len(once) == len(twice) == 1
+
+    def test_noop_on_empty_frame(self, rollup: ModuleType) -> None:
+        df = pd.DataFrame(columns=list(rollup.CATALOG_COLUMNS))
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert out.empty
+
+    def test_noop_when_required_columns_absent(self, rollup: ModuleType) -> None:
+        """Prediction/sports-shaped frames carry no raw_symbol/margin_type -> pass through."""
+        df = pd.DataFrame([{"instrument_id": "X", "venue": "KALSHI"}])
+        out = rollup._dedup_cefi_margin_type_mislabel(df)
+        assert len(out) == 1

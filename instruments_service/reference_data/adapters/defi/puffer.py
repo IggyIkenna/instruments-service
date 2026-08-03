@@ -1,7 +1,14 @@
 """Puffer Finance reference data adapter — instrument discovery for the pufETH LRT.
 
 Discovers the Puffer Finance liquid restaking token (pufETH) on Ethereum.
-Token is returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Token is returned as InstrumentRecord with instrument_type=RESTAKING (operator
+decision 2026-07-20/22, distinct_values_noncanonical_audit_2026_07_20.md — pufETH
+carries EigenLayer AVS slashing risk stacked on base ETH staking slashing,
+distinct from a plain LST; was InstrumentType.LST until this classification
+landed). The ``instrument_key``/``canonical_instrument_id`` string keeps its
+legacy ``:LST:`` segment deliberately unchanged — this is a values-only
+reclassification of the ``instrument_type`` column, not an id/GCS-partition-path
+rename.
 
 References:
 - https://www.puffer.fi/
@@ -15,6 +22,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -72,7 +80,12 @@ class PufferReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Return Puffer LRT tokens as yield-bearing instruments."""
-        if instrument_type not in (None, "yield_bearing"):
+        if instrument_type not in (
+            None,
+            InstrumentType.LST,
+            InstrumentType.YIELD_BEARING,
+            InstrumentType.RESTAKING,
+        ):
             return []
 
         results: list[InstrumentRecord] = []
@@ -83,12 +96,17 @@ class PufferReferenceDataAdapter(BaseReferenceDataAdapter):
             address = token["contract_address"]
             underlying = token["underlying"]
 
+            instrument_key = build_instrument_id(venue_tag, InstrumentType.LST, symbol, passthrough=True)
+
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:LST:{symbol}",
+                    instrument_key=instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
-                    instrument_type=InstrumentType.YIELD_BEARING,
+                    instrument_type=InstrumentType.RESTAKING,
                     base_asset=underlying,
                     quote_asset="",
                     tick_size=Decimal("0.000001"),

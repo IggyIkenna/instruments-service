@@ -13,7 +13,6 @@ from instruments_service.reference_data.adapters.defi.balancer import BalancerRe
 from instruments_service.reference_data.adapters.defi.benqi import BenqiReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.curve import CurveReferenceDataAdapter
-from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.ethena import EthenaReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.etherfi import EtherFiReferenceDataAdapter
 from instruments_service.reference_data.adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
@@ -82,9 +81,8 @@ class TestDefiAdapterVenueProperty:
         adapter = EthenaReferenceDataAdapter()
         assert adapter.venue is not None and len(adapter.venue) > 0
 
-    def test_drift_venue(self) -> None:
-        adapter = DriftReferenceDataAdapter()
-        assert adapter.venue is not None and len(adapter.venue) > 0
+    # test_drift_venue removed 2026-07-16 (operator ruling: all Solana perp
+    # DEXes dropped except Jupiter, not integrated).
 
     def test_kamino_venue(self) -> None:
         adapter = KaminoReferenceDataAdapter()
@@ -140,9 +138,12 @@ class TestPhase4LendingAdaptersBehaviour:
         )
         adapter = EulerV2ReferenceDataAdapter(chain="ETHEREUM")
         out = await adapter.get_instruments()
-        assert len(out) >= 1
+        # Each curated market emits an A_TOKEN (supply) + DEBT_TOKEN (borrow) pair.
+        assert len(out) >= 2
+        assert len(out) % 2 == 0
         assert all(rec.venue == "EULER_V2-ETHEREUM" for rec in out)
-        assert all(rec.instrument_type.value == "LENDING" for rec in out)
+        assert all(rec.instrument_type.value in ("A_TOKEN", "DEBT_TOKEN") for rec in out)
+        assert {rec.instrument_type.value for rec in out} == {"A_TOKEN", "DEBT_TOKEN"}
 
     @pytest.mark.asyncio
     async def test_radiant_returns_per_chain_markets(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,11 +154,13 @@ class TestPhase4LendingAdaptersBehaviour:
             "instruments_service.reference_data.adapters.defi.radiant.batch_resolve_evm_creation_timestamps",
             _fake_resolver,
         )
-        # Arbitrum (primary deployment) returns markets.
+        # Arbitrum (primary deployment) returns markets — each an A_TOKEN + DEBT_TOKEN pair.
         adapter = RadiantReferenceDataAdapter(chain="ARBITRUM")
         out = await adapter.get_instruments()
-        assert len(out) >= 1
+        assert len(out) >= 2
+        assert len(out) % 2 == 0
         assert all(rec.venue == "RADIANT-ARBITRUM" for rec in out)
+        assert {rec.instrument_type.value for rec in out} == {"A_TOKEN", "DEBT_TOKEN"}
         # Unsupported chain returns empty.
         adapter_polygon = RadiantReferenceDataAdapter(chain="POLYGON")
         assert await adapter_polygon.get_instruments() == []
@@ -173,8 +176,10 @@ class TestPhase4LendingAdaptersBehaviour:
         )
         adapter = VenusReferenceDataAdapter()
         out = await adapter.get_instruments()
-        assert len(out) >= 1
+        assert len(out) >= 2
+        assert len(out) % 2 == 0
         assert all(rec.venue == "VENUS-BSC" for rec in out)
+        assert {rec.instrument_type.value for rec in out} == {"A_TOKEN", "DEBT_TOKEN"}
 
     @pytest.mark.asyncio
     async def test_benqi_returns_avalanche_markets_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -188,8 +193,10 @@ class TestPhase4LendingAdaptersBehaviour:
         # Avalanche is the only supported chain.
         adapter = BenqiReferenceDataAdapter()
         out = await adapter.get_instruments()
-        assert len(out) >= 1
+        assert len(out) >= 2
+        assert len(out) % 2 == 0
         assert all(rec.venue == "BENQI-AVALANCHE" for rec in out)
+        assert {rec.instrument_type.value for rec in out} == {"A_TOKEN", "DEBT_TOKEN"}
         # Other chains return empty.
         adapter_eth = BenqiReferenceDataAdapter(chain="ETHEREUM")
         assert await adapter_eth.get_instruments() == []
@@ -283,17 +290,9 @@ class TestDefiAdapterUnsupportedMethods:
         with pytest.raises(NotImplementedError):
             await adapter.get_funding_rate("stETH")
 
-    @pytest.mark.asyncio
-    async def test_drift_get_options_chain_raises(self) -> None:
-        adapter = DriftReferenceDataAdapter()
-        with pytest.raises(NotImplementedError):
-            await adapter.get_options_chain("SOL")
-
-    @pytest.mark.asyncio
-    async def test_drift_get_expiry_calendar_raises(self) -> None:
-        adapter = DriftReferenceDataAdapter()
-        with pytest.raises(NotImplementedError):
-            await adapter.get_expiry_calendar("SOL")
+    # test_drift_get_options_chain_raises / test_drift_get_expiry_calendar_raises
+    # removed 2026-07-16 (operator ruling: all Solana perp DEXes dropped
+    # except Jupiter, not integrated).
 
     @pytest.mark.asyncio
     async def test_kamino_get_funding_rate_raises(self) -> None:

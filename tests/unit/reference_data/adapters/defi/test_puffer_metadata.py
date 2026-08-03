@@ -33,7 +33,11 @@ async def test_get_instruments_yields_pufeth_record() -> None:
     assert rec.venue == "PUFFER-ETHEREUM"
     assert rec.instrument_key == "PUFFER-ETHEREUM:LST:PUFETH"
     assert rec.raw_symbol == _PUFETH_ADDRESS
-    assert rec.instrument_type == InstrumentType.YIELD_BEARING
+    # Operator decision 2026-07-20/22 (distinct_values_noncanonical_audit_2026_07_20.md):
+    # pufETH is a liquid RESTAKING token (EigenLayer AVS slashing stacked on base ETH
+    # staking slashing), not a plain LST. The `:LST:` key segment is intentionally left
+    # unchanged (values-only reclassification, not an id rename — see puffer.py docstring).
+    assert rec.instrument_type == InstrumentType.RESTAKING
     assert rec.base_asset == "ETH"
     assert rec.underlying == "ETH"
     assert rec.status == InstrumentStatus.ACTIVE
@@ -45,7 +49,10 @@ async def test_get_instruments_yields_pufeth_record() -> None:
 @pytest.mark.asyncio
 async def test_get_instruments_filters_on_instrument_type() -> None:
     adapter = PufferReferenceDataAdapter()
-    assert await adapter.get_instruments(instrument_type="yield_bearing")
+    assert await adapter.get_instruments(instrument_type=InstrumentType.YIELD_BEARING)
+    # RESTAKING is the token's real canonical type (2026-07-20/22 reclassification) —
+    # a caller filtering on it must not be rejected.
+    assert await adapter.get_instruments(instrument_type=InstrumentType.RESTAKING)
     assert await adapter.get_instruments(instrument_type="perpetual") == []
 
 

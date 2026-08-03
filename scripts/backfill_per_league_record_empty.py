@@ -45,7 +45,6 @@ from unified_api_contracts.canonical.domain.sports.league_data import (
     clip_dates_to_source_coverage,
     get_expected_leagues_for_source,
     get_prediction_leagues,
-    is_in_known_gap,
 )
 from unified_trading_library import ManifestWriter
 
@@ -98,7 +97,7 @@ def _expected_dates(source: str, data_type: str, end_iso: str) -> list[str]:
     if not clipped_end or clipped_start > clipped_end:
         return []
     rng = pd.date_range(start=clipped_start, end=clipped_end, freq="D")
-    return [str(d.date()) for d in rng if not is_in_known_gap(source, data_type, str(d.date()))]
+    return [str(d.date()) for d in rng]
 
 
 def _existing_keys_for_data_type(df: pd.DataFrame, data_type: str) -> set[tuple[str, str]]:

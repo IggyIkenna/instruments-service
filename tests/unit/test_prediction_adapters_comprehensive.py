@@ -294,8 +294,124 @@ class TestPolymarketParseMarketBranches:
         assert result is not None
         assert result.instrument_type == "PREDICTION_MARKET"
         assert result.venue == "POLYMARKET"
-        assert result.instrument_key == "0xcrypto123"
+        assert result.instrument_key == "POLYMARKET:PREDICTION_MARKET:0xcrypto123"
         assert str(result.status) == "active"
+
+    def test_parse_market_threads_question_and_survives(self) -> None:
+        """The Gamma ``question`` is threaded into InstrumentRecord.question and SURVIVES.
+
+        Regression: the adapter previously passed only ``symbol=slug`` and the human
+        market question was never carried, so downstream (catalogue) had no title.
+        Now that uac added ``InstrumentRecord.question``, ``market.question`` (99.3%
+        unique per the workflow) must arrive on ``record.question`` verbatim.
+        """
+        from unified_api_contracts import PolymarketGammaMarket
+
+        adapter = PolymarketReferenceDataAdapter()
+        market = PolymarketGammaMarket.model_validate(
+            {
+                "conditionId": "0xcrypto123",
+                "marketSlug": "btc-above-100k",
+                "question": "Will Bitcoin reach $100,000 by end of 2026?",
+                "active": True,
+                "closed": False,
+                "outcomes": "Yes,No",
+                "endDateIso": "2026-12-31T23:59:59Z",
+            }
+        )
+        now = datetime.now(UTC)
+        result = adapter._parse_market(market, now)
+        assert result is not None
+        assert result.question == "Will Bitcoin reach $100,000 by end of 2026?"
+
+    def test_parse_market_question_honest_none_when_absent(self) -> None:
+        """A market with no ``question`` yields honest ``None`` (never fabricated)."""
+        from unified_api_contracts import PolymarketGammaMarket
+
+        adapter = PolymarketReferenceDataAdapter()
+        market = PolymarketGammaMarket.model_validate(
+            {
+                "conditionId": "0xnoquestion",
+                "marketSlug": "some-slug",
+                "active": True,
+                "closed": False,
+                "outcomes": "Yes,No",
+                "endDateIso": "2026-12-31T23:59:59Z",
+            }
+        )
+        now = datetime.now(UTC)
+        result = adapter._parse_market(market, now)
+        assert result is not None
+        assert result.question is None
+
+    def test_parse_market_instrument_key_preserves_condition_id_case(self) -> None:
+        """The wrapped instrument_key must NOT upper-case condition_id.
+
+        2026-07-09 fix (canonical_id_builder_retrofit_checklist_2026_07_08.md todo 7):
+        condition_id is a real, lowercase 0x…64hex hash — ``passthrough=True`` would
+        upper-case it via ``canonical_id_builder.py::_build_passthrough`` and corrupt
+        it into a non-matching id, so the adapter deliberately calls
+        ``build_canonical_instrument_id`` WITHOUT ``passthrough=True`` (dispatches to
+        ``_build_sports_or_prediction``, which preserves symbol case verbatim).
+        """
+        from unified_api_contracts import PolymarketGammaMarket
+
+        adapter = PolymarketReferenceDataAdapter()
+        market = PolymarketGammaMarket.model_validate(
+            {
+                "conditionId": "0xdeadbeefCaFe",
+                "marketSlug": "btc-above-100k",
+                "question": "Will Bitcoin reach $100,000 by end of 2026?",
+                "active": True,
+                "closed": False,
+                "outcomes": "Yes,No",
+                "endDateIso": "2026-12-31T23:59:59Z",
+            }
+        )
+        now = datetime.now(UTC)
+        result = adapter._parse_market(market, now)
+        assert result is not None
+        assert result.instrument_key == "POLYMARKET:PREDICTION_MARKET:0xdeadbeefCaFe", (
+            f"condition_id case must be preserved verbatim, got: {result.instrument_key!r}"
+        )
+
+    def test_parse_market_registers_clob_token_ids_under_wrapped_instrument_key(self) -> None:
+        """The clob_token_ids side-table must be keyed by the FINAL instrument_key.
+
+        process_write.py::_records_to_dataframe joins clob_token_ids by whatever
+        instrument_key resolves to (``key == instrument_key``) — this regression-
+        guards that the 2026-07-09 instrument_key wrap didn't break that join by
+        registering under the bare (pre-wrap) condition_id instead.
+        """
+        from unified_api_contracts import PolymarketGammaMarket
+
+        from instruments_service.reference_data.adapters.prediction.polymarket import (
+            _clob_token_ids_for_condition_id,
+        )
+
+        adapter = PolymarketReferenceDataAdapter()
+        market = PolymarketGammaMarket.model_validate(
+            {
+                "conditionId": "0xclobjoin1",
+                "marketSlug": "clob-join-test",
+                "question": "Will X happen?",
+                "active": True,
+                "closed": False,
+                "outcomes": "Yes,No",
+                "endDateIso": "2026-12-31T23:59:59Z",
+                "clobTokenIds": ["111", "222"],
+            }
+        )
+        now = datetime.now(UTC)
+        result = adapter._parse_market(market, now)
+        assert result is not None
+        assert result.instrument_key == "POLYMARKET:PREDICTION_MARKET:0xclobjoin1"
+        assert _clob_token_ids_for_condition_id(result.instrument_key) == ["111", "222"], (
+            "clob_token_ids must be registered under the SAME final instrument_key "
+            "the orchestrator's _records_to_dataframe looks up by."
+        )
+        # The bare (pre-wrap) condition_id must NOT be a separate, stale registration.
+        assert _clob_token_ids_for_condition_id("0xclobjoin1") is None
 
     def test_parse_market_macro_question(self) -> None:
         """Macro/financial question."""
@@ -616,11 +732,16 @@ class TestPolymarketFetchPageErrorPaths:
 
     @pytest.mark.asyncio
     async def test_fetch_page_client_error(self) -> None:
-        """Client error in _fetch_page RAISES (→ attempted_failed), not return [].
+        """Client error in _fetch_page RAISES RuntimeError (→ attempted_failed), not return [].
 
         Updated from the pre-CF-11 return-empty contract (which let a transient
         failure truncate the live universe to a silent-complete empty) per
-        prediction_manifest_canonicalisation_2026_06_01 § CF-11 IS write-path.
+        prediction_manifest_canonicalisation_2026_06_01 § CF-11 IS write-path. The
+        re-raise MUST be a ``RuntimeError`` (wrapping the ``aiohttp.ClientError``): a bare
+        ``ClientError``/``ClientResponseError`` is NOT in ``_fetch_one_venue``'s except-ladder
+        and would propagate uncaught through the caller's ``asyncio.gather`` (no
+        ``return_exceptions=True``), crashing the whole multi-venue batch instead of landing
+        the cell in ``attempted_failed`` (mirrors cefi ``aster.py``).
         """
         adapter = PolymarketReferenceDataAdapter()
         mock_session_obj = MagicMock()
@@ -629,8 +750,37 @@ class TestPolymarketFetchPageErrorPaths:
         mock_cm.__aexit__ = AsyncMock(return_value=None)
         mock_session_obj.get = MagicMock(return_value=mock_cm)
         now = datetime.now(UTC)
-        with pytest.raises(aiohttp.ClientError):
+        with pytest.raises(RuntimeError) as excinfo:
             await adapter._fetch_page(mock_session_obj, 0, now)
+        # chained cause preserved for classification/debugging
+        assert isinstance(excinfo.value.__cause__, aiohttp.ClientError)
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_raw_clob_markets_client_error_raises(self) -> None:
+        """Client error in the CLOB full-scan RAISES RuntimeError (→ attempted_failed).
+
+        ``_fetch_all_raw_clob_markets`` is the historical/backfill CLOB pagination path.
+        A mid-scan ``aiohttp.ClientError`` (4xx/429/5xx) must re-raise as ``RuntimeError``
+        (caught by ``_fetch_one_venue`` → ``attempted_failed``), never truncate the market
+        universe to a silent-complete partial list. Mirrors the ``_fetch_page`` gamma path +
+        cefi ``aster.py``. Was previously UNTESTED (CF-11 audit gap, 2026-07-10).
+        """
+        adapter = PolymarketReferenceDataAdapter()
+        # session.get(...) context manager raises the ClientError on enter.
+        get_cm = MagicMock()
+        get_cm.__aenter__ = AsyncMock(side_effect=aiohttp.ClientError("network error"))
+        get_cm.__aexit__ = AsyncMock(return_value=None)
+        session_obj = MagicMock()
+        session_obj.get = MagicMock(return_value=get_cm)
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session_obj)
+        session_cm.__aexit__ = AsyncMock(return_value=None)
+        with (
+            patch.object(adapter, "_make_session", return_value=session_cm),
+            pytest.raises(RuntimeError) as excinfo,
+        ):
+            await adapter._fetch_all_raw_clob_markets()
+        assert isinstance(excinfo.value.__cause__, aiohttp.ClientError)
 
     @pytest.mark.asyncio
     async def test_fetch_page_validation_error_skipped(self) -> None:
@@ -828,7 +978,7 @@ class TestKalshiParseMarket:
         now = datetime.now(UTC)
         result = adapter._parse_market(raw, now)
         assert result is not None
-        assert result.instrument_key == "KXBTC-26MAR-90000"
+        assert result.instrument_key == "KALSHI:PREDICTION_MARKET:KXBTC-26MAR-90000"
         assert result.venue == "KALSHI"
         assert result.quote_asset == "USD"
         assert str(result.status) == "active"
@@ -877,6 +1027,96 @@ class TestKalshiParseMarket:
         assert result is not None
         assert result.tick_size == Decimal("0.01")
         assert result.min_size == Decimal("1")
+
+    def test_sports_fixture_stamps_canonical_instrument_id(self) -> None:
+        """Fixture-pairing residual: a Kalshi sports market (ANY league fixture_parsing
+        covers, not just soccer) gets canonical_instrument_id = build_fixture_id(...) —
+        mirrors the Polymarket adapter's already-shipped sports_canonical_instrument_id.
+        """
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXMLBGAME-26JUN261910SEACLE-SEA",
+            "event_ticker": "KXMLBGAME-26JUN261910SEACLE",
+            "title": "Seattle vs Cleveland",
+            "status": "active",
+            "close_time": "2026-06-26T23:10:00Z",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.canonical_instrument_id == "MLB:CLEVELAND_v_SEATTLE:20260626"
+
+    def test_sports_season_future_leaves_canonical_instrument_id_none(self) -> None:
+        """A season-future/award ticker (no GAME/MATCH token) parses to no fixture —
+        honest absence, never a guessed id."""
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXNBA-27",
+            "event_ticker": "KXNBA-27",
+            "title": "2027 Pro Basketball Champion",
+            "status": "active",
+            "close_time": "2027-06-01T00:00:00Z",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.canonical_instrument_id is None
+
+    def test_market_question_composed_with_yes_sub_title(self) -> None:
+        """The human title is threaded into InstrumentRecord.question and SURVIVES.
+
+        Regression: the adapter previously passed the title as ``symbol=``, which
+        InstrumentRecord does not declare, so pydantic's ``extra='ignore'`` SILENTLY
+        DROPPED it every capture. Now that uac added ``InstrumentRecord.question``,
+        the title must arrive on ``record.question``. When ``yes_sub_title`` is
+        present the adapter composes ``title — yes_sub_title`` (100% unique vs 43.3%
+        for title alone per the workflow measurement).
+        """
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXBTC-26MAR-90000",
+            "event_ticker": "KXBTC",
+            "title": "BTC price on Mar 26?",
+            "yes_sub_title": "Above $90,000",
+            "status": "active",
+            "close_time": "2026-03-26T23:59:59Z",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.question == "BTC price on Mar 26? — Above $90,000"
+
+    def test_market_question_bare_title_when_no_yes_sub_title(self) -> None:
+        """With no ``yes_sub_title`` the question is the bare title (honest floor)."""
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXTEST",
+            "event_ticker": "KXTEST",
+            "title": "Will it rain tomorrow?",
+            "status": "active",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.question == "Will it rain tomorrow?"
+
+    def test_market_question_is_none_when_no_human_title(self) -> None:
+        """Honest-absence: a market with NO title/subtitle yields question=None — the
+        ticker is NOT a human question, so it must NOT surface as one. raw_symbol
+        (event_ticker) remains the label floor, symmetric with Polymarket. (Guards the
+        fix for the wx1ogy6pl verifier's caveat: the adapter previously fell title back
+        to the ticker, so question was never None.)"""
+        adapter = KalshiReferenceDataAdapter()
+        raw = {
+            "ticker": "KXNOTITLE",
+            "event_ticker": "KXNOTITLE",
+            "status": "active",
+        }
+        now = datetime.now(UTC)
+        result = adapter._parse_market(raw, now)
+        assert result is not None
+        assert result.question is None
+        assert result.raw_symbol == "KXNOTITLE"  # the honest label floor is intact
 
 
 class TestKalshiParseCloseTime:
@@ -1113,9 +1353,8 @@ class TestBetfairBuildRunnerRecord:
 
         adapter = BetfairReferenceDataAdapter()
         runner = BetfairRunnerCatalog.model_validate({"selectionId": 12345, "runnerName": "Home Team"})
-        now = datetime.now(UTC)
         expiry = datetime(2026, 6, 15, 15, 0, 0, tzinfo=UTC)
-        record = adapter._build_runner_record(runner, "1.234", "Match Odds", "Soccer", "Event Name", expiry, now)
+        record = adapter._build_runner_record(runner, "1.234", "Soccer", "Event Name", expiry)
         assert record.instrument_key == "1.234/12345"
         assert record.raw_symbol == "Event Name/Home Team"
         assert record.base_asset == "Soccer"
@@ -1128,8 +1367,7 @@ class TestBetfairBuildRunnerRecord:
 
         adapter = BetfairReferenceDataAdapter()
         runner = BetfairRunnerCatalog.model_validate({"selectionId": 99999})
-        now = datetime.now(UTC)
-        record = adapter._build_runner_record(runner, "1.999", "Outright", "", "", None, now)
+        record = adapter._build_runner_record(runner, "1.999", "", "", None)
         assert "Selection_99999" in record.raw_symbol
         assert record.instrument_key == "1.999/99999"
 
@@ -1138,8 +1376,7 @@ class TestBetfairBuildRunnerRecord:
 
         adapter = BetfairReferenceDataAdapter()
         runner = BetfairRunnerCatalog.model_validate({"selectionId": 111, "runnerName": "Draw"})
-        now = datetime.now(UTC)
-        record = adapter._build_runner_record(runner, "1.111", "Correct Score", "", "", None, now)
+        record = adapter._build_runner_record(runner, "1.111", "", "", None)
         assert record.raw_symbol == "Draw"
 
 
@@ -1164,8 +1401,7 @@ class TestBetfairParseCatalogueItem:
                 ],
             }
         )
-        now = datetime.now(UTC)
-        results = adapter._parse_catalogue_item(catalogue, now)
+        results = adapter._parse_catalogue_item(catalogue)
         assert len(results) == 3
         assert results[0].instrument_key == "1.555/101"
         assert results[0].base_asset == "Soccer"
@@ -1182,8 +1418,7 @@ class TestBetfairParseCatalogueItem:
                 "runners": [],
             }
         )
-        now = datetime.now(UTC)
-        results = adapter._parse_catalogue_item(catalogue, now)
+        results = adapter._parse_catalogue_item(catalogue)
         assert results == []
 
     def test_no_event_type_uses_empty_string(self) -> None:
@@ -1197,8 +1432,7 @@ class TestBetfairParseCatalogueItem:
                 "runners": [{"selectionId": 1, "runnerName": "Yes"}],
             }
         )
-        now = datetime.now(UTC)
-        results = adapter._parse_catalogue_item(catalogue, now)
+        results = adapter._parse_catalogue_item(catalogue)
         assert len(results) == 1
         assert results[0].base_asset == ""
 

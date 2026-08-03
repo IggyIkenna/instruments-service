@@ -1,3 +1,6 @@
+# Epic: instruments_master
+# Lifecycle: permanent
+# Delete-when: NA
 """Migration scripts for instruments-service historical parquets.
 
 Each module is a standalone CLI script (run with `python -m scripts.migrations.<name>`

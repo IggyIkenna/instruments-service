@@ -16,29 +16,31 @@ from unified_api_contracts.registry import (
 
 from .adapters.cefi.aster import AsterReferenceDataAdapter
 from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
+from .adapters.cefi.coinbase_cde import CoinbaseCdeReferenceDataAdapter
 from .adapters.cefi.deribit_combo_adapter import DeribitComboReferenceDataAdapter
 from .adapters.cefi.deribit_options_adapter import DeribitOptionsReferenceDataAdapter
 from .adapters.cefi.extended import ExtendedReferenceDataAdapter
 from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.cefi.kalshi_perp import KalshiPerpReferenceDataAdapter
 from .adapters.cefi.lighter import LighterReferenceDataAdapter
-from .adapters.cefi.pacifica import PacificaReferenceDataAdapter
 from .adapters.cefi.polymarket_perp import PolymarketPerpReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
+from .adapters.defi.aave_oracle import AaveOracleReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+from .adapters.defi.ankr import AnkrReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
 from .adapters.defi.beefy import BeefyReferenceDataAdapter
 from .adapters.defi.benqi import BenqiReferenceDataAdapter
+from .adapters.defi.cbeth import CbethReferenceDataAdapter
+from .adapters.defi.chainlink import ChainlinkOracleReferenceDataAdapter
 from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.defi.convex import ConvexReferenceDataAdapter
 from .adapters.defi.curve import CurveReferenceDataAdapter
-from .adapters.defi.drift import DriftReferenceDataAdapter
 from .adapters.defi.eigenlayer import EigenLayerReferenceDataAdapter
 from .adapters.defi.ethena import EthenaReferenceDataAdapter
 from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
 from .adapters.defi.ethfi import EthFiGovernanceReferenceDataAdapter
 from .adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
-from .adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
 from .adapters.defi.fluid import FluidReferenceDataAdapter
 from .adapters.defi.idle import IdleReferenceDataAdapter
 from .adapters.defi.jito import JitoReferenceDataAdapter
@@ -47,12 +49,18 @@ from .adapters.defi.kamino import KaminoReferenceDataAdapter
 from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
-from .adapters.defi.mango import MangoReferenceDataAdapter
+from .adapters.defi.lifinity import LifinityReferenceDataAdapter
+from .adapters.defi.maker import MakerReferenceDataAdapter
+from .adapters.defi.mantle import MantleReferenceDataAdapter
+from .adapters.defi.marginfi import MarginfiReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
+from .adapters.defi.meteora import MeteoraReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
 from .adapters.defi.pendle import PendleReferenceDataAdapter
+from .adapters.defi.phoenix import PhoenixReferenceDataAdapter
 from .adapters.defi.puffer import PufferReferenceDataAdapter
+from .adapters.defi.pyth import PythOracleReferenceDataAdapter
 from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
 from .adapters.defi.renzo import RenzoReferenceDataAdapter
@@ -60,21 +68,25 @@ from .adapters.defi.rocket_pool import RocketPoolReferenceDataAdapter
 from .adapters.defi.sanctum import SanctumReferenceDataAdapter
 from .adapters.defi.solana_native_staking import SolanaNativeStakingAdapter
 from .adapters.defi.solblaze import SolblazeReferenceDataAdapter
+from .adapters.defi.solend import SolendReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
+from .adapters.defi.stader import StaderReferenceDataAdapter
+from .adapters.defi.stakewise import StakewiseReferenceDataAdapter
+from .adapters.defi.swell import SwellReferenceDataAdapter
 from .adapters.defi.symbiotic import SymbioticReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
 from .adapters.defi.venus import VenusReferenceDataAdapter
+from .adapters.defi.wbeth import WbethReferenceDataAdapter
 from .adapters.defi.yearn import YearnReferenceDataAdapter
-from .adapters.defi.zeta import ZetaReferenceDataAdapter
 from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
 from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
 from .adapters.sports.adapters.api_football_reference import ApiFootballReferenceDataAdapter
 from .adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
+from .adapters.tradfi.fx import FxReferenceDataAdapter
 from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
-from .adapters.tradfi.massive import MassiveReferenceDataAdapter
 from .adapters.tradfi.tradfi_live import TradFiLiveReferenceDataAdapter
 from .base_adapter import BaseReferenceDataAdapter
 
@@ -114,28 +126,34 @@ _CANONICAL_VENUE_TO_CCXT_EXCHANGE: dict[str, str] = {
 }
 
 _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
+    "aave_oracle": AaveOracleReferenceDataAdapter,
     "aave_v3": AaveV3ReferenceDataAdapter,
+    "ankr": AnkrReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
     "aster": AsterReferenceDataAdapter,
+    "coinbase_cde": CoinbaseCdeReferenceDataAdapter,
     "deribit_combo": DeribitComboReferenceDataAdapter,
     "deribit_options": DeribitOptionsReferenceDataAdapter,
     "balancer": BalancerReferenceDataAdapter,
     "beefy": BeefyReferenceDataAdapter,
     "benqi": BenqiReferenceDataAdapter,
     "betfair": BetfairReferenceDataAdapter,
+    # Single-token LST adapters (Coinbase cbETH / Binance wBETH — curated static
+    # registry, modelled on renzo.py). cbETH = ETHEREUM only; wBETH = ETHEREUM + BSC.
+    "cbeth": CbethReferenceDataAdapter,
+    "wbeth": WbethReferenceDataAdapter,
     "compound_v3": CompoundV3ReferenceDataAdapter,
     "convex": ConvexReferenceDataAdapter,
     "curve": CurveReferenceDataAdapter,
     "databento": DatabentoReferenceDataAdapter,
-    "drift": DriftReferenceDataAdapter,
     "extended": ExtendedReferenceDataAdapter,
     "eigenlayer": EigenLayerReferenceDataAdapter,
-    "flash_trade": FlashTradeReferenceDataAdapter,
     "ethena": EthenaReferenceDataAdapter,
     "ethfi_governance": EthFiGovernanceReferenceDataAdapter,
     "etherfi": EtherFiReferenceDataAdapter,
     "euler_v2": EulerV2ReferenceDataAdapter,
     "fluid": FluidReferenceDataAdapter,
+    "fx": FxReferenceDataAdapter,
     "hyperliquid": HyperliquidReferenceDataAdapter,
     "idle": IdleReferenceDataAdapter,
     "jito": JitoReferenceDataAdapter,
@@ -143,20 +161,34 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "kelpdao": KelpDaoReferenceDataAdapter,
     "kamino": KaminoReferenceDataAdapter,
     "karak": KarakReferenceDataAdapter,
-    "mango": MangoReferenceDataAdapter,
+    "marginfi": MarginfiReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
-    "massive": MassiveReferenceDataAdapter,
+    # "massive" (= Polygon.io, rebranded) removed 2026-08-03 — the reference-data
+    # adapter + its --source routing are DELETED; Databento is the sole TradFi
+    # reference-data source. Completes the 2026-07-19 removal that landed in
+    # unified-api-contracts@a2beed46 (SOURCE_PRIORITY) + market-tick-data-service@362a487e
+    # (tick routing) but never reached this repo. SSOT:
+    # unified-trading-pm/codex/02-data/tradfi-databento-sourcing-ssot.md.
+    # Registered but currently unreachable via UAC VENUE_TO_ADAPTER_KEY — see
+    # adapters/tradfi/ibkr.py's module docstring STATUS note for the full explanation
+    # + activation path (tradfi_adapter_dead_code_fallback_audit_2026_07_25.md Finding I-3).
     "ibkr": IBKRReferenceDataAdapter,
     "kalshi": KalshiReferenceDataAdapter,
     "kalshi_perp": KalshiPerpReferenceDataAdapter,
     "lighter": LighterReferenceDataAdapter,
     "lido": LidoReferenceDataAdapter,
+    "lifinity": LifinityReferenceDataAdapter,
+    "maker": MakerReferenceDataAdapter,
+    "mantle": MantleReferenceDataAdapter,
+    "meteora": MeteoraReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
     "orca": OrcaReferenceDataAdapter,
-    "pacifica": PacificaReferenceDataAdapter,
     "pendle": PendleReferenceDataAdapter,
+    "phoenix": PhoenixReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "polymarket_perp": PolymarketPerpReferenceDataAdapter,
+    "chainlink": ChainlinkOracleReferenceDataAdapter,
+    "pyth": PythOracleReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
     "puffer": PufferReferenceDataAdapter,
     "raydium": RaydiumReferenceDataAdapter,
@@ -165,7 +197,11 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "sanctum": SanctumReferenceDataAdapter,
     "solana_native": SolanaNativeStakingAdapter,
     "solblaze": SolblazeReferenceDataAdapter,
+    "solend": SolendReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
+    "stader": StaderReferenceDataAdapter,
+    "stakewise": StakewiseReferenceDataAdapter,
+    "swell": SwellReferenceDataAdapter,
     "symbiotic": SymbioticReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
     "uniswap_v2": UniswapV2ReferenceDataAdapter,
@@ -173,7 +209,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "uniswap_v4": UniswapV4ReferenceDataAdapter,
     "venus": VenusReferenceDataAdapter,
     "yearn": YearnReferenceDataAdapter,
-    "zeta": ZetaReferenceDataAdapter,
 }
 
 
@@ -183,10 +218,15 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
 ADAPTER_DATA_SOURCES: dict[str, str] = {
     "hyperliquid": "hyperliquid",
     "aster": "aster",
+    # Coinbase Derivatives Exchange (CDE) — public REST endpoint (Advanced Trade
+    # products?product_type=FUTURE), no API key needed for instrument discovery.
+    "coinbase_cde": "",
     "tardis": "tardis",
     "databento": "databento",
-    "massive": "massive",
+    # "massive" removed 2026-08-03 alongside its adapter (see _ADAPTERS above).
     "ibkr": "ibkr",
+    # Curated static FX_SPOT_PAIRS list (UAC registry) — no vendor call, no API key.
+    "fx": "",
     "polymarket": "polymarket",
     "kalshi": "kalshi",
     # Crypto-perp CLOBs — public REST endpoints for contract enumeration, no API key needed.
@@ -213,7 +253,9 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "camelot_v3": "thegraph",
     "velodrome_v2": "thegraph",
     "trader_joe_v2": "thegraph",
-    "gmx": "thegraph",
+    # gmx removed 2026-07-25 (operator ruling — perp_funding history was a
+    # synthetic OI-imbalance proxy, not real funding-rate data). SSOT:
+    # unified-trading-pm/plans/active/defi_gmx_venue_removal_2026_07_25.md.
     "spark": "thegraph",
     "api_football": "api_football",
     "betfair": "betfair",
@@ -225,17 +267,40 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "eigenlayer": "",
     "ethfi_governance": "",
     # Solana adapters use public REST APIs (no API key needed)
-    "drift": "",
+    # "drift" removed 2026-07-16 (operator ruling: all Solana perp DEXes
+    # dropped except Jupiter, not integrated).
     "kamino": "",
     "raydium": "",
     "orca": "",
     "marinade": "",
     "jito": "",
-    # Solana perp DEX adapters (Plan B 2026-05-13) — public REST APIs, no API key needed
-    "mango": "",
-    "zeta": "",
-    "flash_trade": "",
-    "pacifica": "",
+    # Solana DEX pools (2026-07-20 catalogue canonicalization) — public REST
+    # APIs (meteora.ag / lifinity.io / phoenix.trade), no API key needed.
+    "meteora": "",
+    "lifinity": "",
+    "phoenix": "",
+    # Pyth Network / Chainlink oracles — Hermes REST + on-chain reads, no API key needed.
+    # BLK-0c7b82fe RESOLVED (2026-07-20): the "no adapter class exists yet" precondition that kept
+    # CHAINLINK out of this table no longer holds — ChainlinkOracleReferenceDataAdapter now exists and
+    # is registered in _ADAPTERS above. Registration alone does NOT move the defi denominator:
+    # _build_defi_venues() derives from _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX + _STATIC_DEFI_VENUES +
+    # _SOLANA_DEFI_VENUES, NOT from _ADAPTERS, so the strict set-equality drift guard stays 93 == 93.
+    # Declaring CHAINLINK-* live in UAC (phase=live + VENUE_TO_ADAPTER_KEY) and adding it to
+    # _STATIC_DEFI_VENUES is the REMAINING coordinated step — adapter first, declaration second.
+    "chainlink": "",
+    "pyth": "",
+    # AAVE on-chain oracle (aave_oracle.py, 2026-07-21 — lst_rate_honest_coverage_2026_07_21.md
+    # Phase 1) — static reserve enumeration, no API key needed (prices fetched by MTDS via RPC).
+    "aave_oracle": "",
+    # Solana lending adapters (2026-07-09) — public REST/JSON APIs, no API key needed.
+    "solend": "",
+    "marginfi": "",
+    # MANGO/ZETA/FLASH_TRADE (Plan B 2026-05-13) removed 2026-07-15 — operator ruling: all 3
+    # declared API hosts are dead (api.mngo.cloud/api.flash.trade NXDOMAIN, dex.zeta.markets/api
+    # returns HTML), ~$0 DeFiLlama TVL, zero MTDS market-data capture ever wired. SSOT:
+    # unified-trading-pm/codex/04-architecture/solana-defi-coverage.md.
+    # "pacifica" removed 2026-07-16 (same SSOT, operator ruling: all Solana
+    # perp DEXes dropped except Jupiter, not integrated).
     # Layer-2 perp DEX adapters — public REST APIs, no API key needed
     "lighter": "",
     "extended": "",
@@ -247,11 +312,34 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "benqi": "",
     # LST / LRT protocols — curated single-token registries (deploy dates hardcoded).
     "rocket_pool": "",
+    # cbETH (Coinbase) / wBETH (Binance) single-token LSTs — curated static registries.
+    "cbeth": "",
+    "wbeth": "",
     "renzo": "",
     "kelpdao": "",
     "puffer": "",
     "sanctum": "",
     "solblaze": "",
+    # ANKR / STADER / STAKEWISE / SWELL / MANTLE (LST) + MAKER (YIELD_BEARING,
+    # sDAI) — curated single-token registries, no API key needed (2026-07-30,
+    # defi_venue_pipeline_to_live_ao_build_2026_07_30.md todo 1). Registration
+    # alone does NOT move the defi denominator — same two-step precedent as
+    # CHAINLINK above: _build_defi_venues() derives from
+    # _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX + _STATIC_DEFI_VENUES +
+    # _SOLANA_DEFI_VENUES, NOT from _ADAPTERS, so the strict set-equality
+    # drift guard (test_defi_set_equals_uac_denominator_drift_guard) stays
+    # green. Declaring these 6 venues live in UAC (phase=live +
+    # VENUE_TO_ADAPTER_KEY) and adding them to _STATIC_DEFI_VENUES is the
+    # REMAINING coordinated step — deliberately deferred to this same plan's
+    # todo 5 (the phase flip), gated behind cron-health + 90-day backfill +
+    # catalogue registration (todos 2-4) per the plan's `sequential: true`
+    # ordering.
+    "ankr": "",
+    "stader": "",
+    "stakewise": "",
+    "swell": "",
+    "mantle": "",
+    "maker": "",
     "solana_native": "",  # static registry; MTDS fetches rates via solana_rpc + helius_rpc
     # Restaking vault protocols — curated static vault registries.
     "symbiotic": "",
@@ -283,10 +371,63 @@ def clear_adapter_pool() -> None:
     _adapter_pool.clear()
 
 
-#: TradFi reference adapter keys sharing the target_date + venue_filter contract
-#: (both emit the canonical InstrumentRecord; Massive is Polygon.io-API compatible
-#: — the sanctioned alt to Databento whose re-runs are billing-blocked 2026-06).
-_DATE_AWARE_TRADFI_ADAPTER_KEYS: frozenset[str] = frozenset({"databento", "massive"})
+# DeFi adapters that accept a chain parameter (EVM + Solana). Membership here =
+# factory parses the chain segment from "<VENUE>-<CHAIN>" and passes it as
+# `chain=` to the adapter ctor. Adapters NOT in this set default to ETHEREUM
+# regardless of canonical-venue suffix — fine for true single-chain adapters;
+# latent bug for multi-chain ones (see 2026-05-12 additions: renzo / karak /
+# idle / yearn / beefy / pendle / jito_restaking).
+_DEFI_GRAPH_ADAPTERS: frozenset[str] = frozenset(
+    {
+        "uniswap_v2",
+        "uniswap_v3",
+        "uniswap_v4",
+        "aave_v3",
+        "compound_v3",
+        "morpho",
+        "fluid",
+        "balancer",
+        "curve",
+        "spark",
+        # Phase-4 lending protocols (multi-chain via curated registries).
+        "euler_v2",
+        "radiant",
+        "venus",
+        "benqi",
+        # Solana adapters
+        # "drift" removed 2026-07-16 (operator ruling: all Solana perp DEXes
+        # dropped except Jupiter, not integrated).
+        "kamino",
+        "raydium",
+        "orca",
+        "marinade",
+        "jito",
+        # Solana DEX pools / oracle (2026-07-20 catalogue canonicalization) —
+        # Solana-only, ctor accepts chain= like kamino/raydium/orca above.
+        "meteora",
+        "lifinity",
+        "phoenix",
+        "pyth",
+        "chainlink",
+        # Multi-chain LST/LRT/restaking adapters (2026-05-12 latent fix —
+        # these were registered for multiple canonical venues earlier in the
+        # session but were missing from this set, so non-Ethereum venues
+        # silently used the ETHEREUM default chain).
+        "renzo",
+        "karak",
+        "idle",
+        "yearn",
+        # Phase-2 deferred adapters shipped 2026-05-12.
+        "beefy",
+        "pendle",
+        "jito_restaking",
+        # Single-token LST adapters that encode chain in the canonical venue
+        # (COINBASE-ETHEREUM / BINANCE-ETHEREUM / BINANCE-BSC) — factory parses
+        # the chain segment and passes chain= so wBETH resolves BSC vs ETHEREUM.
+        "cbeth",
+        "wbeth",
+    }
+)
 
 
 def _resolve_uac_adapter_key(canonical_venue: str) -> str:
@@ -308,39 +449,84 @@ def _resolve_uac_adapter_key(canonical_venue: str) -> str:
     return adapter_key
 
 
-def _resolve_source_aware_adapter_key(adapter_key: str, source: str | None) -> str:
-    """Source-aware routing: ``source="massive"`` re-points a TradFi venue that
-    defaults to Databento → the Massive adapter (Databento re-runs billing-blocked
-    2026-06; Massive refills ``by_date/``). Same canonical InstrumentRecord output."""
-    if source == "massive" and adapter_key == "databento":
-        return "massive"
-    return adapter_key
-
-
 def _build_date_aware_tradfi_adapter(
-    adapter_key: str,
     *,
     project_id: str | None,
     api_key: str | None,
     date: str | None,
     canonical_venue: str,
 ) -> BaseReferenceDataAdapter:
-    """Build a Databento/Massive adapter — date + venue filter so each venue only
-    fetches its own instruments (target_date baked in at init)."""
+    """Build the Databento adapter — date + venue filter so each venue only
+    fetches its own instruments (target_date baked in at init).
+
+    Databento is the SOLE TradFi reference-data source: the Massive (Polygon.io)
+    alternate adapter and its ``--source massive`` re-pointing were deleted
+    2026-08-03. SSOT: unified-trading-pm/codex/02-data/tradfi-databento-sourcing-ssot.md.
+    """
     target = date_type.fromisoformat(date) if date else None
-    if adapter_key == "massive":
-        return MassiveReferenceDataAdapter(
-            project_id=project_id,
-            api_key=api_key,
-            target_date=target,
-            venue_filter=canonical_venue,
-        )
     return DatabentoReferenceDataAdapter(
         project_id=project_id,
         api_key=api_key,
         target_date=target,
         venue_filter=canonical_venue,
     )
+
+
+def _build_deribit_combo_live_adapter(
+    canonical_venue: str,
+    *,
+    project_id: str | None,
+    api_key: str | None,
+) -> BaseReferenceDataAdapter:
+    """Live mode: DERIBIT-COMBO routes to its own live-native REST adapter
+    (deribit_combo, public/get_combos) instead of Tardis — Deribit's REST
+    endpoint only exposes currently-active combos (no historical retention),
+    so live/forward capture needs the real-time source while batch mode
+    (VENUE_TO_ADAPTER_KEY["DERIBIT-COMBO"]="tardis", the default) uses
+    Tardis's archived feed for the full historical combo universe. Inverse
+    of the CCXT-live pattern above: DERIBIT-COMBO's live-native adapter is
+    deribit_combo, not CCXT. See cefi_layer1_denominator_gaps_2026_07_03.md
+    (NEW FINDING 2026-07-14)."""
+    pool_key = ("deribit_combo", None, canonical_venue, None)
+    if pool_key in _adapter_pool:
+        return _adapter_pool[pool_key]
+    _logger.info("Live mode: %s → deribit_combo REST adapter instead of Tardis", canonical_venue)
+    adapter = DeribitComboReferenceDataAdapter(project_id=project_id, api_key=api_key)
+    _adapter_pool[pool_key] = adapter
+    return adapter
+
+
+def _resolve_tardis_exchanges_for_venue(
+    canonical_venue: str,
+    venue_instrument_type_to_tardis: dict[tuple[str, str], str],
+    tardis_to_venue: dict[str, str],
+    direct_or_suffixed_exchange: str | None,
+) -> list[str]:
+    """Resolve ALL Tardis exchanges backing a canonical venue for IS enumeration.
+
+    Itype-aware FIRST: some venues (e.g. OKX) span MULTIPLE real Tardis
+    exchanges depending on instrument_type (okex/okex-swap/okex-futures/
+    okex-options) — the venue-only lookup (``direct_or_suffixed_exchange``,
+    from ``VenueMapping.get_tardis_exchange_for_venue``) can return at most
+    ONE exchange, silently dropping every other instrument type's universe.
+    Falls back to the venue-only lookup (then a direct lowercase-conversion
+    candidate) for venues with a single 1:1 exchange. Mirrors MTDS's
+    itype-aware ``_resolve_tardis_exchange`` fix — see
+    cefi_deribit_combo_and_okx_bare_venue_gaps_2026_07_12.md.
+    """
+    itype_exchanges = sorted(
+        {exch for (venue, _itype), exch in venue_instrument_type_to_tardis.items() if venue == canonical_venue}
+    )
+    if itype_exchanges:
+        return itype_exchanges
+    tardis_exchange = direct_or_suffixed_exchange
+    if tardis_exchange is None:
+        # Fallback: try direct lowercase conversion (BYBIT → bybit, DERIBIT → deribit)
+        # Only valid if the result exists as a key in tardis_to_venue
+        candidate = canonical_venue.lower()
+        if candidate in tardis_to_venue:
+            tardis_exchange = candidate
+    return [tardis_exchange] if tardis_exchange else []
 
 
 def get_adapter_for_canonical_venue(
@@ -350,7 +536,6 @@ def get_adapter_for_canonical_venue(
     date: str | None = None,
     extra_api_keys: dict[str, str] | None = None,
     mode: str = "batch",
-    source: str | None = None,
 ) -> BaseReferenceDataAdapter:
     """Create a reference data adapter for a UAC canonical venue name.
 
@@ -376,7 +561,6 @@ def get_adapter_for_canonical_venue(
             unknown to UAC, or declared adapterless via NO_ADAPTER_YET).
     """
     adapter_key = _resolve_uac_adapter_key(canonical_venue)
-    adapter_key = _resolve_source_aware_adapter_key(adapter_key, source)
 
     # Live mode: route CeFi Tardis venues to CCXT (real-time public endpoints).
     # Tardis is historical-only and can't provide live instrument definitions.
@@ -396,6 +580,11 @@ def get_adapter_for_canonical_venue(
         )
         _adapter_pool[pool_key] = adapter
         return adapter
+
+    # Live mode: DERIBIT-COMBO routes to its own live-native REST adapter
+    # instead of Tardis — see _build_deribit_combo_live_adapter docstring.
+    if mode == "live" and adapter_key == "tardis" and canonical_venue == "DERIBIT-COMBO":  # noqa: L2-mode-seam — adapter source-routing (different source per mode is the one allowed L2 seam)
+        return _build_deribit_combo_live_adapter(canonical_venue, project_id=project_id, api_key=api_key)
 
     # Live mode: route TradFi Databento venues to GCS-first adapter.
     # Reads the most recent GCS snapshot, filters expired instruments,
@@ -418,60 +607,24 @@ def get_adapter_for_canonical_venue(
 
     # Check pool — reuse existing adapter if same key + credentials + venue + date
     # Include canonical_venue in pool key so AAVE_V3-ARBITRUM != AAVE_V3-ETHEREUM
-    # Include date for Databento (target_date baked into adapter at init time)
-    pool_date = date if adapter_key in ("databento", "massive") else None
+    # Include date for adapters whose target date is baked in at init time:
+    # Databento AND api_football (2026-07-14: the api_football URDI
+    # adapter pins ``self._date`` at construction; pooling it WITHOUT the date
+    # made every later date of a multi-date batch run reuse the FIRST date's
+    # fixture universe — the per-date filter then saw 0 active instruments and
+    # the zero-record path stamped false EXPECTED_NO_FIXTURE markers over real
+    # fixture days. GW enrichment RED, issue
+    # sports_gw_enrichment_false_empty_manifest_and_dropped_rows_2026_07_14).
+    pool_date = date if adapter_key in ("databento", "api_football") else None
     pool_key = (adapter_key, api_key, canonical_venue, pool_date)
     if pool_key in _adapter_pool:
         return _adapter_pool[pool_key]
-
-    # DeFi adapters that accept chain parameter (EVM + Solana).
-    # Membership here = factory parses the chain segment from "<VENUE>-<CHAIN>"
-    # and passes it as `chain=` to the adapter ctor. Adapters NOT in this set
-    # default to ETHEREUM regardless of canonical-venue suffix — fine for true
-    # single-chain adapters; latent bug for multi-chain ones (see 2026-05-12
-    # additions: renzo / karak / idle / yearn / beefy / pendle / jito_restaking).
-    defi_graph_adapters = {
-        "uniswap_v2",
-        "uniswap_v3",
-        "uniswap_v4",
-        "aave_v3",
-        "compound_v3",
-        "morpho",
-        "fluid",
-        "balancer",
-        "curve",
-        "spark",
-        # Phase-4 lending protocols (multi-chain via curated registries).
-        "euler_v2",
-        "radiant",
-        "venus",
-        "benqi",
-        # Solana adapters
-        "drift",
-        "kamino",
-        "raydium",
-        "orca",
-        "marinade",
-        "jito",
-        # Multi-chain LST/LRT/restaking adapters (2026-05-12 latent fix —
-        # these were registered for multiple canonical venues earlier in the
-        # session but were missing from this set, so non-Ethereum venues
-        # silently used the ETHEREUM default chain).
-        "renzo",
-        "karak",
-        "idle",
-        "yearn",
-        # Phase-2 deferred adapters shipped 2026-05-12.
-        "beefy",
-        "pendle",
-        "jito_restaking",
-    }
 
     # Some adapters need extra constructor parameters derived from the canonical venue name.
     adapter: BaseReferenceDataAdapter
     if adapter_key == "api_football" and date is not None:
         adapter = ApiFootballReferenceDataAdapter(api_key=api_key, project_id=project_id, date=date)
-    elif adapter_key in defi_graph_adapters:
+    elif adapter_key in _DEFI_GRAPH_ADAPTERS:
         # DeFi adapters: parse chain from venue name, pass chain + optional date
         parts = canonical_venue.split("-", 1)
         chain = parts[1] if len(parts) == 2 else "ETHEREUM"
@@ -491,30 +644,38 @@ def get_adapter_for_canonical_venue(
             kwargs["protocol_slug"] = resolved_protocol
         adapter = adapter_class(**kwargs)
     elif adapter_key == "tardis":
-        # Tardis: pass ONLY the specific exchange for this venue (not all defaults)
+        # Tardis: pass ONLY the specific exchange(s) for this venue (not all
+        # defaults) — see _resolve_tardis_exchanges_for_venue for the
+        # itype-aware multi-exchange resolution (e.g. bare "OKX").
         from unified_api_contracts import VenueMapping as _VM_cls
 
         _vm = _VM_cls()
-        tardis_exchange = _vm.get_tardis_exchange_for_venue(canonical_venue)
-        if tardis_exchange is None:
-            # Fallback: try direct lowercase conversion (BYBIT → bybit, DERIBIT → deribit)
-            # Only valid if the result exists as a key in tardis_to_venue
-            candidate = canonical_venue.lower()
-            if candidate in _vm.tardis_to_venue:
-                tardis_exchange = candidate
-        if not tardis_exchange:
+        tardis_exchanges = _resolve_tardis_exchanges_for_venue(
+            canonical_venue,
+            _vm.venue_instrument_type_to_tardis,
+            _vm.tardis_to_venue,
+            _vm.get_tardis_exchange_for_venue(canonical_venue),
+        )
+        if not tardis_exchanges:
             # FAIL LOUD — do not silently fetch all exchanges
             raise ValueError(
                 f"No Tardis exchange mapping for canonical venue {canonical_venue!r}. "
                 f"Add a mapping in VenueMapping.tardis_to_venue or "
                 f"venue_instrument_type_to_tardis for this venue."
             )
-        _logger.debug("Tardis: %s → exchange=%s", canonical_venue, tardis_exchange)
+        _logger.debug("Tardis: %s → exchanges=%s", canonical_venue, tardis_exchanges)
         # NO api_key — IS enumeration uses the free no-auth /v1/exchanges path (operator 2026-06-23).
-        adapter = TardisReferenceDataAdapter(project_id=project_id, exchanges=[tardis_exchange])
-    elif adapter_key in _DATE_AWARE_TRADFI_ADAPTER_KEYS:
+        # canonical_venue_override tags every parsed instrument as canonical_venue
+        # explicitly — required because the adapter's per-exchange venue
+        # resolution (tardis_to_venue, a 1:1 reverse map) cannot represent
+        # "these N exchanges' rows all belong to this ONE requested venue".
+        adapter = TardisReferenceDataAdapter(
+            project_id=project_id,
+            exchanges=tardis_exchanges,
+            canonical_venue_override=canonical_venue,
+        )
+    elif adapter_key == "databento":
         adapter = _build_date_aware_tradfi_adapter(
-            adapter_key,
             project_id=project_id,
             api_key=api_key,
             date=date,

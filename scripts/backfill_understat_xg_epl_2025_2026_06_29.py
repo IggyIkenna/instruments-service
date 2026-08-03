@@ -35,6 +35,7 @@ After the run: verify with::
 
     python scripts/query_sports_is_gaps.py --data-type XG --league EPL --start 2025-08-01
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,6 +44,7 @@ import logging
 import sys
 from datetime import date, timedelta
 
+import unified_trading_library.manifest_writer as _mw
 from unified_trading_library import resolve_bucket_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -71,6 +73,16 @@ async def _run_backfill(dates: list[str], bucket: str) -> dict[str, int]:
         counts = await _fetch_understat_xg(d, bucket, force=True)
         for k, v in counts.items():
             total[k] = total.get(k, 0) + v
+
+    # Guaranteed drain BEFORE the coroutine returns, not via atexit: atexit's
+    # process_final=True drain races the asyncio event loop's own executor
+    # teardown ("cannot schedule new futures after interpreter shutdown"),
+    # silently dropping buffered writes. Calling the drain explicitly here,
+    # while the loop is still alive, avoids the race for this one-off script.
+    # See plans/active/issues/manifest_atexit_drain_races_asyncio_shutdown_2026_07_09.md.
+    flushed = _mw.flush_all_pending_buckets()
+    logger.info("EXPLICIT PRE-EXIT DRAIN: %s", flushed)
+
     return total
 
 

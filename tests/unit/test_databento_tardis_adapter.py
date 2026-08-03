@@ -1,11 +1,11 @@
 """Unit tests for Databento and Tardis adapters (no live network — mocked responses)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentLeg, InstrumentRecord
 
 from instruments_service.reference_data.adapters.cefi.tardis import TardisReferenceDataAdapter
 from instruments_service.reference_data.adapters.tradfi.databento import DatabentoReferenceDataAdapter
@@ -317,25 +317,35 @@ class TestDatabentoCanonicalIdentity:
         return adapter
 
     def test_es_future_gets_sp500_product_root_and_canonical_id(self) -> None:
+        # tradfi_consolidated_closeout_2026_07_18.md A1: CME FUTURE →
+        # VENUE:FUTURE:PRODUCT_ROOT-USD@LIN-YYYYMMDD, byte-identical to the
+        # MTDS databento_enrichment.py::_classify_row write path.
         adapter = self._make_adapter()
-        row = self._make_row("ESM0", instrument_class="F", expiry="2026-06-19T13:30:00+00:00")
+        adapter._target_date = date(2029, 6, 25)  # within 365d of the 2030-06-21 expiry
+        row = self._make_row("ESM0", instrument_class="F", expiry="2030-06-21T13:30:00+00:00")
         record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
         assert record is not None
         assert record.instrument_type == "FUTURE"
         # raw_symbol unchanged — canonicals are additive.
         assert record.raw_symbol == "ESM0"
         assert record.product_root == "SP500"
-        assert record.canonical_instrument_id is not None
-        assert record.canonical_instrument_id.startswith("CME:FUTURE:SP500:")
+        assert record.instrument_key == "CME:FUTURE:SP500-USD@LIN-20300621"
+        # canonical_instrument_id is byte-equal to instrument_key (no second,
+        # independently-built id field — the old colon/month-only additive
+        # shape is gone).
+        assert record.canonical_instrument_id == record.instrument_key
 
     def test_spaced_option_gets_sp500_product_root_and_canonical_id(self) -> None:
+        # tradfi_consolidated_closeout_2026_07_18.md A1: CME OPTION →
+        # VENUE:OPTION:PRODUCT_ROOT-USD@LIN-YYYYMMDD-STRIKE-C|P.
         adapter = self._make_adapter()
+        adapter._target_date = date(2025, 9, 20)  # within 365d of the 2025-10-17 expiry
         # E5A = Friday-daily ES option root; spaced contract code + strike token.
         row = self._make_row(
             "E5AH0 C2510",
             instrument_class="C",
-            expiry="2026-09-18T14:00:00+00:00",
-            strike_price=2510.0,
+            expiry="2025-10-17T14:00:00+00:00",
+            strike_price=5000.0,
         )
         record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
         assert record is not None
@@ -343,10 +353,54 @@ class TestDatabentoCanonicalIdentity:
         # raw_symbol stays the raw spaced exchange code.
         assert record.raw_symbol == "E5AH0 C2510"
         assert record.product_root == "SP500"
-        assert record.canonical_instrument_id is not None
-        assert record.canonical_instrument_id.startswith("CME:OPTION:SP500:")
-        # strike + C/P suffix encoded in the canonical id.
-        assert record.canonical_instrument_id.endswith("C")
+        assert record.instrument_key == "CME:OPTION:SP500-USD@LIN-20251017-5000-C"
+        assert record.canonical_instrument_id == record.instrument_key
+
+    def test_cboe_vix_future_gets_vix_product_root_and_canonical_id(self) -> None:
+        # tradfi_consolidated_closeout_2026_07_18.md A1: CBOE/XCBF.PITCH VIX
+        # future → VENUE:FUTURE:VIX-USD@LIN-YYYYMMDD.
+        adapter = self._make_adapter()
+        adapter._target_date = date(2026, 5, 20)  # within 365d of the 2026-07-22 expiry
+        row = self._make_row("VXQ6", instrument_class="F", expiry="2026-07-22T13:30:00+00:00")
+        record = adapter._parse_row_to_record(row, dataset="XCBF.PITCH", canonical_venue="CBOE")
+        assert record is not None
+        assert record.instrument_type == "FUTURE"
+        assert record.raw_symbol == "VXQ6"
+        assert record.product_root == "VIX"
+        assert record.instrument_key == "CBOE:FUTURE:VIX-USD@LIN-20260722"
+        assert record.canonical_instrument_id == record.instrument_key
+
+    def test_unresolved_product_root_falls_back_to_raw_shape(self) -> None:
+        # OSI-format option symbol the exchange-code registry doesn't cover
+        # (e.g. secondary-source SPX options) — must not crash and must not
+        # fabricate a canonical id; falls back to the sanitized-raw shape.
+        adapter = self._make_adapter()
+        # underlying is set explicitly (as the real Databento/secondary-source
+        # API row would carry it) so the instrument stays OPTION instead of
+        # being reclassified COMBO by the "no derivable underlying" fallback
+        # — isolates the product-root-resolution edge case from that
+        # unrelated COMBO-reclassification path.
+        row = self._make_row(
+            "O:SPX260618C00200000",
+            instrument_class="C",
+            expiry="2026-06-18T14:00:00+00:00",
+            strike_price=200.0,
+            underlying="SPX",
+        )
+        record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
+        assert record is not None
+        assert record.product_root is None
+        assert record.instrument_key == "CME:OPTION:O:SPX260618C00200000"
+        assert record.canonical_instrument_id == record.instrument_key
+
+    # NOTE: a FUTURE with a missing/null expiry is not testable at this layer —
+    # the InstrumentRecord schema HARD-REQUIRES non-null expiry for FUTURE
+    # (futures shard by expiry for contract-roll detection, per
+    # hard_schema_enforcement_2026_05_08), so such a record can never be
+    # constructed regardless of the id logic. Continuous/generic-roll futures
+    # (e.g. "VX/F1") are handled upstream (dropped/rebuilt), not persisted as a
+    # dated FUTURE record. The real writer-side fallback (product root does not
+    # resolve) is covered by test_unresolved_product_root_falls_back_to_raw_shape.
 
     def test_cefi_instrument_unaffected(self) -> None:
         # A CeFi spot/perp record (built directly, not via the TradFi adapter)
@@ -408,6 +462,47 @@ class TestDatabentoFetchFailureStateThreading:
 
             with pytest.raises(RuntimeError, match="Databento fetch failed"):
                 await adapter.get_instruments()
+
+    @pytest.mark.asyncio
+    async def test_equity_bento_error_raises_not_swallowed(self) -> None:
+        """A genuine (non-subscription) BentoError on the DBEQ.BASIC equity fetch
+        (get_instruments step 2, lines ~157-176) must propagate — NOT be swallowed
+        to ``batch = []`` — so the venue lands in attempted_failed, not a clean
+        empty. The equity branch's own ``except DatabentoSubscriptionError`` only
+        catches the PERMANENT off-allowlist condition (see
+        test_get_instruments_isolates_banned_dataset); it does NOT catch the
+        plain ``RuntimeError`` that ``_fetch_symbols`` re-raises for a transient
+        SDK ``BentoError`` (see test_bento_error_raises_runtime_error_not_returns_empty
+        above — same re-raise mechanism, exercised here at the equity call site).
+
+        Every existing test mocks ``_get_equity_symbols`` to ``[]`` so this branch
+        is never entered — a genuine CF-11 gap before this test. Uses a sentinel
+        equity symbol (absent from the curated TRADFI_DATABENTO_INSTRUMENTS list,
+        which also targets DBEQ.BASIC for NASDAQ/NYSE) so only the step-2 equity
+        call raises; step-1's curated-def group loop returns cleanly.
+        """
+        adapter = DatabentoReferenceDataAdapter(api_key="test-key")
+        sentinel_equity_symbol = "ZZZZ_TEST_EQUITY_SENTINEL"
+
+        def _fetch_side_effect(api_key: str, dataset: str, symbols: list[str], stype_in: str):
+            if dataset == "DBEQ.BASIC" and sentinel_equity_symbol in symbols:
+                # Mirrors the exact re-raise shape _fetch_symbols produces for a
+                # genuine (non-entitlement) BentoError — a plain RuntimeError,
+                # NOT a DatabentoSubscriptionError.
+                raise RuntimeError(
+                    "Databento fetch failed for dataset=DBEQ.BASIC "
+                    "(error_code=RATE_LIMIT, retry_safe=True): 429 rate limit exceeded"
+                )
+            # Step-1 curated-def groups (any dataset/venue) return cleanly —
+            # isolates the failure to the equity call specifically.
+            return []
+
+        with (
+            patch.object(adapter, "_fetch_symbols", side_effect=_fetch_side_effect),
+            patch.object(adapter, "_get_equity_symbols", return_value=[sentinel_equity_symbol]),
+            pytest.raises(RuntimeError, match="Databento fetch failed"),
+        ):
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_parse_failure_raises_runtime_error_not_returns_empty(self) -> None:
@@ -646,6 +741,62 @@ class TestTardisAdapterMocked:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_canonical_venue_override_tags_every_exchange(self) -> None:
+        """OKX's real universe spans 4 different Tardis exchanges (okex/okex-
+        swap/okex-futures/okex-options). Without an explicit override, the
+        adapter's per-exchange venue resolution (tardis_to_venue, a 1:1
+        reverse map) tags rows from "okex"/"okex-swap" as OKX-SPOT/OKX-SWAP,
+        never bare "OKX" — silently dropped downstream by
+        urdi_reference_provider._filter_records_to_venue's canonical-match
+        filter. canonical_venue_override fixes this: every row from every
+        passed exchange is tagged with the override venue. Regression guard
+        for cefi_deribit_combo_and_okx_bare_venue_gaps_2026_07_12.md."""
+        adapter = TardisReferenceDataAdapter(
+            exchanges=["okex", "okex-swap"],
+            canonical_venue_override="OKX",
+        )
+
+        def _make_exchange_resp(exchange: str) -> AsyncMock:
+            mock_resp = AsyncMock()
+            mock_resp.status = 200
+            mock_resp.raise_for_status = MagicMock()
+            is_spot = exchange == "okex"
+            mock_resp.json = AsyncMock(
+                return_value={
+                    "id": exchange,
+                    "name": exchange,
+                    "availableSymbols": [
+                        {
+                            "id": "BTC-USDT" if is_spot else "BTC-USDT-SWAP",
+                            "type": "spot" if is_spot else "perpetual",
+                            "baseCurrency": "BTC",
+                            "quoteCurrency": "USDT",
+                            "availableSince": "2020-01-01T00:00:00Z",
+                            "availableTo": None,
+                        }
+                    ],
+                }
+            )
+            return mock_resp
+
+        def _get(url: str) -> MagicMock:
+            exchange = url.rsplit("/", 1)[-1]
+            mock_cm = MagicMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=_make_exchange_resp(exchange))
+            mock_cm.__aexit__ = AsyncMock(return_value=None)
+            return mock_cm
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(side_effect=_get)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+        assert len(results) == 2
+        assert {r.venue for r in results} == {"OKX"}
+
+    @pytest.mark.asyncio
     async def test_exchange_not_found_skips(self) -> None:
         adapter = TardisReferenceDataAdapter(exchanges=["unknown-exchange"])
         mock_resp = AsyncMock()
@@ -661,6 +812,44 @@ class TestTardisAdapterMocked:
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
             results = await adapter.get_instruments()
         assert results == []
+
+    @pytest.mark.asyncio
+    async def test_deribit_combo_override_filters_to_combo_type_only(self) -> None:
+        """canonical_venue_override="DERIBIT-COMBO" shares the "deribit" Tardis
+        exchange slug with bare DERIBIT (option/future/perpetual/spot) — without
+        a self-filter, every row from that exchange would be mistagged venue=
+        DERIBIT-COMBO. Regression guard for
+        cefi_layer1_denominator_gaps_2026_07_03.md (NEW FINDING 2026-07-14):
+        only type=='combo' rows may survive when this override is set."""
+        adapter = TardisReferenceDataAdapter(
+            exchanges=["deribit"],
+            canonical_venue_override="DERIBIT-COMBO",
+        )
+        combo_leg = InstrumentLeg(instrument_key="DERIBIT:PERPETUAL:BTC-PERPETUAL", side="BUY", ratio=1)
+        mixed_batch = [
+            _make_record(
+                key="DERIBIT-COMBO:COMBO:BTC-FS-25APR26_PERP",
+                venue="DERIBIT-COMBO",
+                instrument_type="COMBO",
+                raw_symbol="BTC-FS-25APR26_PERP",
+                base_asset="BTC",
+                quote_asset="USD",
+                legs=[combo_leg],
+            ),
+            _make_record(
+                key="DERIBIT-COMBO:PERPETUAL:BTC-PERPETUAL",
+                venue="DERIBIT-COMBO",
+                instrument_type="PERPETUAL",
+                raw_symbol="BTC-PERPETUAL",
+                base_asset="BTC",
+                quote_asset="USD",
+            ),
+        ]
+        with patch.object(adapter, "_fetch_exchange_instruments", AsyncMock(return_value=mixed_batch)):
+            results = await adapter.get_instruments()
+        assert len(results) == 1
+        assert results[0].instrument_type == "COMBO"
+        assert results[0].raw_symbol == "BTC-FS-25APR26_PERP"
 
     @pytest.mark.asyncio
     async def test_enumeration_is_no_auth_free_metadata_endpoint(self) -> None:
@@ -981,10 +1170,13 @@ def test_default_exchanges_track_ssot_no_drift() -> None:
 def test_default_exchanges_cover_captured_cefi_venues() -> None:
     """The Tardis exchange ids behind the CeFi venues MTDS actually captures must be in
     the default universe — KRAKEN-SPOT (kraken) + KRAKEN-FUTURES (cryptofacilities) +
-    BITFINEX-SPOT (bitfinex) + BITGET (bitget). Their absence is the exact CF-14 gap."""
+    BITFINEX-SPOT (bitfinex) + BITGET (bitget) + LIGHTER-ZKSYNC (lighter). Their absence
+    is the exact CF-14 gap. "lighter" not "lighter-zksync": UAC's VenueMapping corrected
+    the slug to the real Tardis identifier (unified-api-contracts@f16c79e8) — "lighter-
+    zksync" is not a valid Tardis exchange slug."""
     from instruments_service.reference_data.adapters.cefi.tardis import _DEFAULT_EXCHANGES
 
-    for exch in ("kraken", "cryptofacilities", "bitfinex", "bitget", "lighter-zksync"):
+    for exch in ("kraken", "cryptofacilities", "bitfinex", "bitget", "lighter"):
         assert exch in _DEFAULT_EXCHANGES, f"captured-venue Tardis exchange {exch!r} missing from IS reference universe"
 
 
@@ -993,7 +1185,7 @@ def test_derivatives_only_classifies_kraken_futures() -> None:
     must be classified so unknown-type instruments are skipped, not defaulted to SPOT."""
     from instruments_service.reference_data.adapters.cefi.tardis import _DERIVATIVES_ONLY_EXCHANGES
 
-    for exch in ("cryptofacilities", "okex-futures", "okex-swap", "huobi-dm", "bitfinex-derivatives", "bitget-futures"):
+    for exch in ("cryptofacilities", "okex-futures", "okex-swap", "bitfinex-derivatives", "bitget-futures"):
         assert exch in _DERIVATIVES_ONLY_EXCHANGES, f"derivatives-only Tardis exchange {exch!r} not classified"
 
 
@@ -1089,9 +1281,7 @@ def test_create_fx_spot_records_contains_g10_majors() -> None:
     records = adapter._create_fx_spot_records()
     keys = {r.instrument_key for r in records}
     for expected_key in _FX_G10_INSTRUMENT_KEYS:
-        assert expected_key in keys, (
-            f"{expected_key} missing from _create_fx_spot_records — check UAC FX_SPOT_PAIRS"
-        )
+        assert expected_key in keys, f"{expected_key} missing from _create_fx_spot_records — check UAC FX_SPOT_PAIRS"
 
 
 def test_create_fx_spot_records_all_are_fx_venue_spot_pair() -> None:
@@ -1113,9 +1303,7 @@ def test_create_fx_spot_records_yahoo_ticker_ends_with_equals_x() -> None:
     adapter = DatabentoReferenceDataAdapter()
     records = adapter._create_fx_spot_records()
     for r in records:
-        assert r.raw_symbol.endswith("=X"), (
-            f"{r.instrument_key}: raw_symbol={r.raw_symbol!r} must end with '=X'"
-        )
+        assert r.raw_symbol.endswith("=X"), f"{r.instrument_key}: raw_symbol={r.raw_symbol!r} must end with '=X'"
 
 
 # ---------------------------------------------------------------------------
@@ -1229,6 +1417,27 @@ class TestKRXStaticRecords:
                 f"KRX record has wrong instrument_key prefix: {rec.instrument_key!r}"
             )
 
+    def test_krx_records_carry_human_readable_name(self) -> None:
+        """Every KRX static record carries a human-readable issuer ``name`` (from the
+        UAC ``KRX_EQUITIES`` registry) so the opaque 6-digit code (``KRX:EQUITY:005930``)
+        surfaces a readable label downstream (catalogue ``name`` column, data-status
+        Catalogue Explorer). Deliverable: krx_name 2026-07-20."""
+        from unified_api_contracts.registry import KRX_EQUITY_NAMES
+
+        from instruments_service.reference_data.adapters.tradfi.databento.adapter import (
+            DatabentoReferenceDataAdapter,
+        )
+
+        records = DatabentoReferenceDataAdapter()._create_krx_equity_records()
+        by_symbol = {rec.base_asset: rec for rec in records}
+        # Samsung Electronics is the canonical worked example (KRX:EQUITY:005930).
+        assert by_symbol["005930"].name == "Samsung Electronics"
+        for rec in records:
+            assert rec.name, f"KRX record {rec.instrument_key} has no display name"
+            assert rec.name == KRX_EQUITY_NAMES[rec.base_asset], (
+                f"KRX record {rec.instrument_key} name {rec.name!r} != registry SSOT"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Tradfi instruments-foundation G1 regression guards (2026-06-25, slot-3).
@@ -1285,8 +1494,10 @@ class TestTradfiG1FoundationRegression:
             assert non_billable not in _DATASET_TO_asset_group
         # G1.c: XCBF.PITCH (VX/VIX) is COMMODITY, not EQUITY.
         assert _DATASET_TO_asset_group["XCBF.PITCH"] == AssetClass.COMMODITY
-        # XCBF deliberately NOT a futures-dataset (VX spreads are dropped, not COMBO-kept).
-        assert frozenset({"GLBX.MDP3"}) == _FUTURES_DATASETS
+        # 2026-07-08 canonicalization fix: XCBF.PITCH IS a futures-dataset now — VX class-"S"
+        # calendar spreads are DECOMPOSED via InstrumentLeg/COMBO (see
+        # test_g1c_xcbf_spreads_decompose_to_combo), not dropped.
+        assert frozenset({"GLBX.MDP3", "XCBF.PITCH"}) == _FUTURES_DATASETS
 
     # NB: the UAC VX.FUT asset_group=commodity assertion lives in UAC's own test suite
     # (test_net_profitable_equity_perp_singles.py::test_vx_future_asset_group_is_commodity) —
@@ -1307,14 +1518,48 @@ class TestTradfiG1FoundationRegression:
         kept = [d for d in TRADFI_DATABENTO_INSTRUMENTS if d.asset_group in valid]
         assert all(d.asset_group != "cefi" for d in kept), "cefi-singles must not survive the tradfi filter"
 
-    def test_g1c_xcbf_outright_only_drops_vx_spreads(self) -> None:
-        """XCBF.PITCH class-S VX calendar spreads are dropped; outright VX futures are kept."""
+    def test_g1c_xcbf_spreads_decompose_to_combo(self) -> None:
+        """XCBF.PITCH class-S VX calendar spreads DECOMPOSE to COMBO (2026-07-08 fix,
+        superseding the 2026-06-25 G1.c drop) — real legs, human product names, no
+        redundant per-leg venue, no whitespace ANYWHERE (top-level key included — the
+        whitespace-padded-dash separator collapses to a single "-" via
+        _sanitize_symbol_for_key). Outright VX futures are unaffected."""
         adapter = self._adapter()
         spread = self._row("VX/F1:1:S - VX/G1:1:B", instrument_class="S")
-        assert adapter._parse_row_to_record(spread, dataset="XCBF.PITCH", canonical_venue="CBOE") is None
+        rec = adapter._parse_row_to_record(spread, dataset="XCBF.PITCH", canonical_venue="CBOE")
+        assert rec is not None
+        assert rec.instrument_type == "COMBO"
+        assert rec.instrument_key == "CBOE:COMBO:VX/F1:1:S-VX/G1:1:B"
+        assert " " not in rec.instrument_key
+        assert rec.legs is not None and len(rec.legs) == 2
+        assert rec.legs[0].instrument_key == "FUTURE:VIX"
+        assert rec.legs[0].side == "SELL"
+        assert rec.legs[1].instrument_key == "FUTURE:VIX"
+        assert rec.legs[1].side == "BUY"
+        for leg in rec.legs:
+            assert " " not in leg.instrument_key
+            assert not leg.instrument_key.startswith("CBOE:")
+
+        # 3-leg butterfly — real production shape (ratio=2 on the middle leg).
+        butterfly = self._row("VX/H1:1:B - VX/J1:2:S - VX/K1:1:B", instrument_class="S")
+        rec3 = adapter._parse_row_to_record(butterfly, dataset="XCBF.PITCH", canonical_venue="CBOE")
+        assert rec3 is not None and rec3.instrument_type == "COMBO"
+        assert rec3.legs is not None and len(rec3.legs) == 3
+        assert [leg.ratio for leg in rec3.legs] == [1, 2, 1]
+
+        # A genuinely unparseable non-outright row (not the documented shape) still drops.
+        unparseable = self._row("garbage", instrument_class="S")
+        assert adapter._parse_row_to_record(unparseable, dataset="XCBF.PITCH", canonical_venue="CBOE") is None
+
+        # A real 5-leg combo is DROPPED, not truncated (operator spec 2026-07-09:
+        # 1-4 legs hard cap) — no real 5-leg row exists in production today, but
+        # the parser must still refuse to silently truncate one if it ever shows up.
+        five_leg = self._row("VX/F1:1:B - VX/G1:1:S - VX/H1:1:B - VX/J1:1:S - VX/K1:1:B", instrument_class="S")
+        assert adapter._parse_row_to_record(five_leg, dataset="XCBF.PITCH", canonical_venue="CBOE") is None
+
         outright = self._row("VX/F1", instrument_class="F", expiry="2026-06-18T21:00:00+00:00")
-        rec = adapter._parse_row_to_record(outright, dataset="XCBF.PITCH", canonical_venue="CBOE")
-        assert rec is not None and rec.instrument_type == "FUTURE"
+        rec_outright = adapter._parse_row_to_record(outright, dataset="XCBF.PITCH", canonical_venue="CBOE")
+        assert rec_outright is not None and rec_outright.instrument_type == "FUTURE"
 
     def test_g1d_dbeq_class_s_is_equity_not_spot_pair(self) -> None:
         """DBEQ.BASIC equity-spot (class 'S') maps to EQUITY, not the default SPOT_PAIR."""
@@ -1322,6 +1567,31 @@ class TestTradfiG1FoundationRegression:
         row = self._row("AAPL", instrument_class="S")
         rec = adapter._parse_row_to_record(row, dataset="DBEQ.BASIC", canonical_venue="NASDAQ")
         assert rec is not None and rec.instrument_type == "EQUITY"
+
+    def test_dbeq_class_k_stock_is_equity_not_spot_pair(self) -> None:
+        """2026-07-08 fix: real Databento instrument_class "K" (STOCK, confirmed via
+        both the SDK's own InstrumentClass enum and a live definition-schema call for
+        AAPL/SPY/IBIT) must map to EQUITY. Before this fix, "K" fell through to the
+        default SPOT_PAIR — a real, live bug that mistyped 100% of fresh NASDAQ/NYSE
+        single-stock captures (0 of 100 real rows in the 2026-07-08 snapshot were
+        EQUITY) and was the root cause of the "224 securities double-keyed as EQUITY
+        and SPOT_PAIR" finding."""
+        adapter = self._adapter()
+        for sym, venue in (("AAPL", "NASDAQ"), ("MSFT", "NASDAQ"), ("XOM", "NYSE")):
+            row = self._row(sym, instrument_class="K")
+            rec = adapter._parse_row_to_record(row, dataset="DBEQ.BASIC", canonical_venue=venue)
+            assert rec is not None and rec.instrument_type == "EQUITY", (
+                f"{sym}: expected EQUITY, got {rec.instrument_type if rec else None!r}"
+            )
+
+    def test_dbeq_class_k_known_etf_still_reclassifies_etf(self) -> None:
+        """A class-"K" row whose raw_symbol is a known ETF (e.g. IBIT) still reclassifies
+        to ETF — the KNOWN_ETFS override downstream of _CLASS_TO_TYPE is unaffected by
+        the K->EQUITY fix."""
+        adapter = self._adapter()
+        row = self._row("IBIT", instrument_class="K")
+        rec = adapter._parse_row_to_record(row, dataset="DBEQ.BASIC", canonical_venue="NASDAQ")
+        assert rec is not None and rec.instrument_type == "ETF"
 
     def test_g1e_krx_uses_korean_calendar(self) -> None:
         """KRX is declared with the Korean (XKRX) calendar — not the silent 24/7 default."""

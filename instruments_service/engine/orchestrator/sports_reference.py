@@ -30,6 +30,9 @@ from instruments_service.engine.orchestrator.sports_reference_core import (
     _fetch_injuries,
     _fetch_teams_and_standings,
 )
+from instruments_service.engine.orchestrator.sports_reference_filters import (
+    _filter_fixtures_for_enrichment,
+)
 from instruments_service.engine.orchestrator.sports_reference_fixtures import (
     _resolve_fixture_ids,
     _run_per_fixture_enrichment,
@@ -69,6 +72,17 @@ async def _fetch_sports_reference_data(
     but we re-fetch on each run to capture mid-season transfers, promotions,
     and new referee assignments.
 
+    Per-fixture ENRICHMENT scope varies by entity (``SPORTS_ENTITY_LEAGUE_COVERAGE``,
+    ``unified_api_contracts``) — operator ruling 2026-07-28: FIXTURE_STATS (game
+    results) and FIXTURE_LINEUPS follow the full curated universe (383 leagues,
+    same as FIXTURES), while FIXTURE_EVENTS and PLAYER_STATS stay restricted to
+    the MVP/prediction-scope league set (``get_mvp_football_league_ids()``, 96
+    leagues) regardless of how many leagues ``fixture_ids``/``fixture_ids_override``
+    span — per-event/per-player enrichment fan-out for leagues we don't predict
+    on is pure API-Football quota burn for data nobody consumes there. The check
+    runs per-entity inside ``_gather_per_fixture_rows``, not as a shared
+    pre-filter (see ``_filter_fixtures_for_enrichment``'s docstring).
+
     Args:
         entities_to_fetch: Specific manifest entity names to fetch (e.g.
             ["FIXTURE_LINEUPS", "PLAYER_STATS"]).
@@ -106,7 +120,7 @@ async def _fetch_sports_reference_data(
     # Honest-coverage hooks: only record when an external manifest is wired
     # in by the caller (existing call-sites always pass one, but the default
     # signature keeps it optional for legacy use).
-    hooks = _AfManifestHooks(date=date, manifest=manifest, attempt_ts=_orch.datetime.now(_orch.UTC))
+    hooks = _AfManifestHooks(date=date, manifest=manifest, attempt_ts=_orch.datetime.now(_orch.UTC), bucket=bucket)
 
     def _should_fetch(entity_short: str) -> bool:
         """Check if this entity should be fetched (not in _fetch_set or _fetch_set is None)."""
@@ -124,10 +138,14 @@ async def _fetch_sports_reference_data(
     # schema-only declarations (features-sports LEAGUES_COLUMNS) — no actual feature
     # consumed `logo_url` or other fields beyond what UAC already provides.
     # The api_football `/leagues` endpoint is no longer called from the daily
-    # orchestrator path; teams fetch reads `get_prediction_leagues()` from UAC
-    # instead of the freshly-fetched leagues_df.
+    # orchestrator path; teams fetch reads
+    # `get_expected_leagues_for_source("api_football")` from UAC instead of the
+    # freshly-fetched leagues_df (2026-07-13: widened from the narrower
+    # `get_prediction_leagues()`, which silently starved 61 of 94 expected
+    # leagues of any per-league TEAMS/STANDINGS capture — see
+    # sports_reference_core.py::_fetch_teams_and_standings docstring).
 
-    # Teams + standings — for each prediction league (cached across dates).
+    # Teams + standings — for every api_football-covered league (cached across dates).
     # Guard accepts "leagues" (legacy umbrella), "teams", or "standings" so that
     # entity-scoped VM runs (e.g. --entity STANDINGS) still invoke the combined
     # fetcher.  DP-VM-002 root-cause: only "leagues" was checked, so a
@@ -164,36 +182,23 @@ async def _fetch_sports_reference_data(
         bucket=bucket,
         fixture_ids_override=fixture_ids_override,
         hooks=hooks,
+        redo_all=redo_all,
     )
 
-    # Recovery-mode fixture-id allowlist filter — runs BEFORE the per-fixture
-    # entity loop so we only call api_football for the targeted set. Lifts
-    # the per-fixture work from O(all_fixtures_on_day x 5 entities) to
-    # O(allowlist_intersection_with_day x N_requested_entities). Used for
-    # targeted recovery (e.g. Phase 2's truth-set audit produced a 39k
-    # fixture-id list; we feed it here so we don't re-burn ~560k api_football
-    # calls re-fetching already-captured fixtures' per-fixture entities).
-    if recovery_fixture_ids is not None and fixture_ids:
-        _pre_filter = len(fixture_ids)
-        fixture_ids = [fid for fid in fixture_ids if fid in recovery_fixture_ids]
-        _orch.logger.info(
-            "Recovery fixture-id filter applied for date=%s: %d → %d fixtures (%d skipped — not in allowlist)",
-            date,
-            _pre_filter,
-            len(fixture_ids),
-            _pre_filter - len(fixture_ids),
-        )
-        if not fixture_ids:
-            # Allowlist intersected to zero on this date — no per-fixture work
-            # to do. Return early so we don't write phantom empty manifest rows
-            # for entities we never attempted to fetch on this date.
-            _orch.logger.info(
-                "Recovery fixture-id filter: no targeted fixtures on date=%s — skipping per-fixture loop",
-                date,
-            )
-            # Cross-provider mapping tables can still be useful here, but skip
-            # them in recovery mode to keep the run cheap.
-            return counts
+    # MVP-league + recovery-allowlist filters — extracted to
+    # ``_filter_fixtures_for_enrichment`` (function-size ratchet; see its
+    # docstring for the MVP-scope and recovery-mode rationale). ``None``
+    # signals the recovery allowlist intersected to zero: no per-fixture work
+    # to do, so we return early (also skipping the cross-provider mapping
+    # writes below, same as the original inline behaviour).
+    fixture_ids = _filter_fixtures_for_enrichment(
+        fixture_ids=fixture_ids,
+        af_fid_to_league=_af_fid_to_league,
+        recovery_fixture_ids=recovery_fixture_ids,
+        date=date,
+    )
+    if fixture_ids is None:
+        return counts
 
     if fixture_ids:
         await _run_per_fixture_enrichment(

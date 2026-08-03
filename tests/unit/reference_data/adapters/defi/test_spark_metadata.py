@@ -204,7 +204,7 @@ class TestSparkMetadataPopulation:
         a_record = next(r for r in records if "A_TOKEN" in r.instrument_key)
 
         assert isinstance(a_record, InstrumentRecord)
-        assert a_record.instrument_type == InstrumentType.LENDING
+        assert a_record.instrument_type == InstrumentType.A_TOKEN
         assert a_record.status == InstrumentStatus.ACTIVE
         assert a_record.venue == "SPARK-ETHEREUM"
         assert a_record.base_asset == "WSTETH"
@@ -223,7 +223,7 @@ class TestSparkMetadataPopulation:
         records = _records_for(_wsteth_market_fixture())
         debt_record = next(r for r in records if "DEBT_TOKEN" in r.instrument_key)
 
-        assert debt_record.instrument_type == InstrumentType.LENDING
+        assert debt_record.instrument_type == InstrumentType.DEBT_TOKEN
         assert debt_record.base_asset == "WSTETH"
         assert debt_record.atoken_address == "0x12b54025c112aa61face2cdb7118740875a566e9"
         assert debt_record.debt_token_address == "0xd5c3e3b566a42a6110513ac7670c1a86d76e13e6"

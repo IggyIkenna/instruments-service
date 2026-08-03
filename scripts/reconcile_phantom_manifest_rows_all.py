@@ -17,20 +17,36 @@ prefix triple, then check each captured manifest row for membership.
 Idempotent: ``attempted_failed`` rows are skipped, real captures are
 left at ``captured``, only true phantoms get flipped.
 
-**v8 column shape (codified 2026-05-12)**: this reconciler reads the manifest
-via ``pd.read_parquet`` and modifies a small fixed set of columns
-(``capture_status`` / ``error_reason`` / ``attempted_at``) at the specified
-row indices, then writes back via ``df.to_parquet``. By construction this is
-**read-tolerant** to new schema columns (the read accepts whatever columns
-the parquet carries) and **write-preserving** (pandas DataFrame.to_parquet
-preserves every column already on the dataframe). The v8 emission-tracking
-columns added by ``gcs_migration_bundle_pipeline_mode_2026_05_08`` —
-``pipeline_mode`` / ``service_emission_state`` / ``last_emission_decision_at``
-/ ``expected_window_completeness_fraction`` — pass through transparently
+**v8 column shape (codified 2026-05-12)**: this reconciler reads the manifest,
+modifies a small fixed set of columns (``capture_status`` / ``error_reason``
+/ ``attempted_at``) at the specified rows, then writes back via
+``df.to_parquet``. By construction this is **read-tolerant** to new schema
+columns (the read accepts whatever columns the parquet carries) and
+**write-preserving** (pandas DataFrame.to_parquet preserves every column
+already on the dataframe). The v8 emission-tracking columns added by
+``gcs_migration_bundle_pipeline_mode_2026_05_08`` — ``pipeline_mode`` /
+``service_emission_state`` / ``last_emission_decision_at`` /
+``expected_window_completeness_fraction`` — pass through transparently
 without any reconciler-side handling. Rows written by pre-v8 writers (no
 new columns on disk) round-trip with the columns absent; rows written by
 post-v8 writers round-trip with the columns intact. No special-case logic
 needed in this script.
+
+**Staleness guard (codified 2026-07-12,
+reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12)**: the
+audit pass below (a bulk multi-worker GCS listing) can run for minutes on
+large asset_groups. Both the initial read AND the read immediately before
+the bulk write-back go through
+``unified_trading_library.merge_canonical_with_outstanding_shards``, which
+merges the canonical blob with every outstanding ``_index/per_vm/`` shard —
+never a raw ``pd.read_parquet`` of a point-in-time snapshot. This closes the
+lost-update window where a per-VM shard write (e.g. a concurrent backfill VM
+completing) lands between this script's read and its write: without the
+final re-merge, the bulk re-upload of the FIRST snapshot would silently
+revert that shard's already-consolidated-pending progress. The
+phantom/unphantom row sets are relocated onto the freshly re-merged frame by
+identity key (date/venue/data_type/... — see ``_row_identity_cols``) before
+the flip is applied, since positional indices don't survive a re-merge.
 
 Usage::
 
@@ -58,11 +74,17 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pandas as pd
 from unified_api_contracts import canonical_path_templates
-from unified_trading_library import StorageClient, get_storage_client, resolve_bucket_name
+from unified_trading_library import (
+    MANIFEST_ONLY_BUNDLE_DATA_TYPES,
+    StorageClient,
+    get_storage_client,
+    merge_canonical_with_outstanding_shards,
+    resolve_bucket_name,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -223,9 +245,8 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
        data_type needle as capture evidence. See ``_TRADFI_DATABENTO_PAIRED_SCHEMAS``.
     8. **Cross-asset venue=UNKNOWN** (2026-05-13) — UNKNOWN sentinel has no
        canonical path; skip the venue needle. See ``_VENUE_UNKNOWN_SENTINELS``.
-    9. **Sports pre-coverage + known-gap** (2026-05-13) — rows before source
-       launch date or in registered gaps are not phantoms; excluded in
-       ``_audit_sports`` via ``is_pre_launch_date`` + ``is_in_known_gap``.
+    9. **Sports pre-coverage** (2026-05-13) — rows before source launch date
+       are not phantoms; excluded in ``_audit_sports`` via ``is_pre_launch_date``.
     10. **Phase-3 pipeline_mode= prefix** (2026-05-19) — the GCS migration
         bundle (``gcs_migration_bundle_pipeline_mode_2026_05_08``) Phase 3
         prepended ``pipeline_mode={batch_*}/`` before ``asset_group=`` on all
@@ -234,8 +255,8 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
         shapes are covered by ``ASSET_GROUP_CONFIG[ag]["prefix_tpls"]``.
     """
     cfg = ASSET_GROUP_CONFIG[asset_group]
-    raw_venue = str(row.get("venue", "") or "")
-    raw_chain = str(row.get("chain", "") or "")
+    raw_venue = str(row.get("venue", "") or "")  # noqa: qg-empty-fallback — column may be absent for this asset_group (cross-AG audit)
+    raw_chain = str(row.get("chain", "") or "")  # noqa: qg-empty-fallback — cefi/tradfi/sports rows have no chain column
     # DeFi-only: probe BOTH protocol-name spellings (underscored + plain).
     venue_variants = _defi_protocol_variants(raw_venue) if asset_group == "defi" else [raw_venue]
     tpls = cfg["prefix_tpls"]
@@ -277,8 +298,6 @@ def _audit_sports(
     """
     from unified_api_contracts.sports import (
         candidate_parquet_paths,
-        get_source_for_data_type,
-        is_in_known_gap,
         is_pre_launch_date,
     )
 
@@ -312,26 +331,20 @@ def _audit_sports(
     # Probe each captured row.
     real_or_phantom: dict[int, bool] = {}  # idx -> True if real
     _axis9_pre_coverage = 0
-    _axis9_known_gap = 0
     for idx in captured_idx:
         row = df.loc[idx]
         date = str(row["date"])
-        data_type = str(row.get("data_type", "") or "")
-        league_id = str(row.get("league_id", "") or "")
+        data_type = str(row.get("data_type", "") or "")  # noqa: qg-empty-fallback — missing col => preserved, not dropped
+        league_id = str(row.get("league_id", "") or "")  # noqa: qg-empty-fallback — non-sports rows have no league_id
         # Axis-9 (sports per-league SSOT + UAC date-range clips, 2026-05-13):
-        # Rows before the source's coverage start or inside a known gap are
-        # NOT phantoms — the source never had data for that (data_type, date).
-        # Flipping to attempted_failed would re-queue them for retry (wrong).
-        # Mark real=True to exclude from phantom detection; the absence-reason
+        # Rows before the source's coverage start are NOT phantoms — the
+        # source never had data for that (data_type, date). Flipping to
+        # attempted_failed would re-queue them for retry (wrong). Mark
+        # real=True to exclude from phantom detection; the absence-reason
         # reconciler handles these rows separately.
         if is_pre_launch_date(data_type, date):
             real_or_phantom[idx] = True
             _axis9_pre_coverage += 1
-            continue
-        _src_key = get_source_for_data_type(data_type)
-        if _src_key and is_in_known_gap(_src_key, data_type, date):
-            real_or_phantom[idx] = True
-            _axis9_known_gap += 1
             continue
         # Pass the row's pipeline_mode so the CANONICAL pipeline_mode= path is probed.
         # Post-Phase-3 migration the parquet lives at
@@ -340,7 +353,7 @@ def _audit_sports(
         # non-pipeline_mode fallback after). Omitting it probed ONLY the legacy path →
         # false phantom flip of real captured rows (e.g. PLAYER_VALUES/transfermarkt +
         # FIXTURE_LINEUPS/FIXTURE_STATS, golden-window 2026-06-24 — data was on disk).
-        pipeline_mode = str(row.get("pipeline_mode", "") or "")
+        pipeline_mode = str(row.get("pipeline_mode", "") or "")  # noqa: qg-empty-fallback — pre-Phase-3 rows have no pipeline_mode column
         candidates = candidate_parquet_paths(data_type, date, league_id, pipeline_mode=pipeline_mode or None)
         blobs = day_blobs.get(date, set())
         is_real = False
@@ -366,11 +379,10 @@ def _audit_sports(
                     is_real = True
                     break
         real_or_phantom[idx] = is_real
-    if _axis9_pre_coverage or _axis9_known_gap:
+    if _axis9_pre_coverage:
         logger.info(
-            "Sports axis-9 coverage clip: %d pre-launch + %d known-gap rows excluded from phantom check",
+            "Sports axis-9 coverage clip: %d pre-launch rows excluded from phantom check",
             _axis9_pre_coverage,
-            _axis9_known_gap,
         )
     return real_or_phantom
 
@@ -466,10 +478,27 @@ def _audit_generic(
     real_or_phantom: dict[int, bool] = {}
     for idx, plist in prefixes_by_idx.items():
         row = df.loc[idx]
-        data_type = str(row.get("data_type", "") or "")
-        raw_it = str(row.get("instrument_type", "") or "")
-        venue = str(row.get("venue", "") or "")
-        chain = str(row.get("chain", "") or "")
+        data_type = str(row.get("data_type", "") or "")  # noqa: qg-empty-fallback — column may be absent (cross-AG report)
+        # Manifest-only bundle atom (e.g. prediction_canonical_question_group):
+        # synthetic cluster instrument_id (a canonical_question_group label like
+        # BTC_UP_DOWN_DAILY), NO on-disk data_type={dt}/ folder — the raw objects
+        # live under a per-object data_type (prediction trades / per-conditionId
+        # parquets). Existence is proven by write-time CLUSTER validation
+        # (ManifestWriter.record_captured_from_counts), not an object at a
+        # canonical path, so the venue-level prefix probe can NEVER match and
+        # would false-flag 100% of these rows (2026-07-10 incident: ~15,769 legit
+        # captured prediction bundle cells wiped). Mark real (never phantom) —
+        # mirrors the it_not_on_disk exemption at the instrument_type level. This
+        # is the STRICT SUBSET of UAC BUNDLED_DATA_TYPES with no on-disk object
+        # (SSOT: unified_trading_library.reconcile.manifest); object-backed
+        # bundles (options_chain/futures_chain/event_contract/sports) stay in
+        # phantom scope — per-object phantom detection for other AGs is unweakened.
+        if data_type in MANIFEST_ONLY_BUNDLE_DATA_TYPES:
+            real_or_phantom[idx] = True
+            continue
+        raw_it = str(row.get("instrument_type", "") or "")  # noqa: qg-empty-fallback — schema-4 rows have no instrument_type (see docstring above)
+        venue = str(row.get("venue", "") or "")  # noqa: qg-empty-fallback — column may be absent for this asset_group (cross-AG audit)
+        chain = str(row.get("chain", "") or "")  # noqa: qg-empty-fallback — chain only applies to DeFi rows; absent elsewhere
         dt_needle = f"data_type={data_type}/"
         # Axis-7: for TradFi, Databento writes ``trades`` + ``tbbo`` under
         # the same prefix. Accept either paired data_type needle as capture.
@@ -547,6 +576,93 @@ def _audit_generic(
     return real_or_phantom
 
 
+# Base + optional dedup-identity columns — MIRRORS
+# unified_trading_library.manifest_writer._read_index._merge_shard_frames'
+# dedup key so a row located in the initial audit read can be relocated onto
+# a freshly re-merged frame (see the staleness-guard docstring above).
+_ROW_IDENTITY_BASE_COLS: tuple[str, ...] = ("date", "venue", "data_type", "service_name")
+_ROW_IDENTITY_OPTIONAL_COLS: tuple[str, ...] = (
+    "timeframe",
+    "league_id",
+    "chain",
+    "instrument_type",
+    "underlying",
+    "feature_group",
+    "model_family",
+    "training_period",
+    "strategy_id",
+    "client_id",
+    "instruction_type",
+    "instrument_id",
+)
+
+
+def _row_identity_cols(df: pd.DataFrame) -> list[str]:
+    """Identity columns present in ``df`` to key row lookups across a re-merge.
+
+    Base columns are always included when present; optional dims are included
+    only when at least one row carries a non-empty value (matching
+    ``_merge_shard_frames``' dedup-key construction, so the same rows compare
+    equal across two reads of "the same logical manifest state").
+    """
+    cols = [c for c in _ROW_IDENTITY_BASE_COLS if c in df.columns]
+    for c in _ROW_IDENTITY_OPTIONAL_COLS:
+        if c in df.columns and df[c].fillna("").astype(str).str.len().sum() > 0:
+            cols.append(c)
+    return cols
+
+
+def _relocate_indices_by_identity(
+    original_df: pd.DataFrame,
+    target_idx: list[int],
+    fresh_df: pd.DataFrame,
+) -> list[int]:
+    """Map row indices audited against ``original_df`` onto their matching rows
+    in ``fresh_df`` (a separately-read/merged frame) by identity key.
+
+    Positional indices from the initial audit read do not survive a
+    canonical+shard re-merge (row order and the DataFrame's positional index
+    are not stable across two independent reads). A target row missing from
+    ``fresh_df`` (a per-VM shard superseded it with a newer write in the
+    interim) is logged and skipped rather than force-flipped — the fresher
+    shard's version of that row wins.
+    """
+    if not target_idx:
+        return []
+    id_cols = _row_identity_cols(original_df)
+    if not id_cols:
+        logger.warning("No identity columns available — cannot relocate %d flagged rows", len(target_idx))
+        return []
+    key_df = original_df.loc[target_idx, id_cols].fillna("").astype(str)
+    fresh_key_df = fresh_df[[c for c in id_cols if c in fresh_df.columns]].fillna("").astype(str)
+    if list(fresh_key_df.columns) != id_cols:
+        # Fresh frame is missing an identity column the original had — cannot
+        # safely key-match; caller should treat as "nothing relocatable".
+        logger.warning("Fresh manifest read is missing identity columns %s — skipping relocation", id_cols)
+        return []
+
+    fresh_lookup: dict[tuple[str, ...], list[int]] = {}
+    for pos, key in zip(fresh_df.index, fresh_key_df.itertuples(index=False, name=None), strict=True):
+        fresh_lookup.setdefault(key, []).append(pos)
+
+    relocated: list[int] = []
+    missing = 0
+    for key in key_df.itertuples(index=False, name=None):
+        matches = fresh_lookup.get(key)
+        if matches:
+            relocated.extend(matches)
+        else:
+            missing += 1
+    if missing:
+        logger.warning(
+            "%d of %d flagged rows not found in the freshly re-merged canonical "
+            "(a per-VM shard superseded them with a newer write) — skipping their flip",
+            missing,
+            len(target_idx),
+        )
+    return relocated
+
+
 def _build_triage_records(
     asset_group: str,
     phantom_df: pd.DataFrame,
@@ -560,12 +676,22 @@ def _build_triage_records(
     """
     records: list[dict] = []
     for _, row in phantom_df.iterrows():
-        venue = str(row.get("venue", "") or "")
-        data_type = str(row.get("data_type", "") or "")
-        date_str = str(row.get("date", "") or "")
-        instrument_id = str(row.get("instrument_id", "") or "")
-        error_reason = str(row.get("error_reason", "") or "")
-        written_at = str(row.get("written_at", row.get("available_at", "")) or "")
+        # This report spans EVERY asset_group (cefi/defi/sports/tradfi/prediction) and
+        # every manifest schema vintage — unlike the DeFi-only helpers above (which
+        # unconditionally bracket-access these same column names because DeFi rows are
+        # schema-homogeneous), a generic cross-asset-group row genuinely may lack any of
+        # these columns (see the `"venue" in phantom_df.columns` guard a few dozen lines
+        # below in main(), which treats venue as legitimately-optional for exactly this
+        # reason). "" is the correct not-present marker for this best-effort triage JSONL
+        # — a human reviews it, no downstream code branches on these fields being non-empty.
+        venue = str(row.get("venue", "") or "")  # noqa: qg-empty-fallback — column may be absent for this asset_group
+        data_type = str(row.get("data_type", "") or "")  # noqa: qg-empty-fallback — column may be absent (cross-AG report)
+        date_str = str(row.get("date", "") or "")  # noqa: qg-empty-fallback — column may be absent (cross-AG report)
+        instrument_id = str(row.get("instrument_id", "") or "")  # noqa: qg-empty-fallback — row-key col defaults to "" by schema design
+        error_reason = str(row.get("error_reason", "") or "")  # noqa: qg-empty-fallback — pre-v8 rows lack this column entirely
+        # "" is the documented available_at sentinel (readers test truthiness, not is-not-None).
+        fallback_ts = row.get("available_at", "")  # noqa: qg-empty-fallback — available_at defaults to "" by schema design
+        written_at = str(row.get("written_at", fallback_ts) or "")
 
         reason = "PHANTOM_NO_PARQUET"
         confidence = "MEDIUM"
@@ -580,7 +706,8 @@ def _build_triage_records(
             recommendation = "accept_expected_gap"
         elif asset_group == "tradfi" and date_str:
             try:
-                dt = datetime.strptime(date_str[:10], "%Y-%m-%d")  # noqa: DTZ007  # date-only parse, no tz needed — weekday check only
+                # date (not datetime) — weekday check only, no tz concept applies to a date-only value.
+                dt = date.fromisoformat(date_str[:10])
                 if dt.weekday() >= 5:  # 5=Saturday, 6=Sunday
                     reason = "PHANTOM_WEEKEND_TRADFI"
                     confidence = "HIGH"
@@ -627,6 +754,49 @@ def _write_triage_jsonl_gcs(
         gcs_uri,
         len(records),
     )
+
+
+# Stable per-AG phantom-audit summary, written next to the availability index in the AG's
+# manifest bucket (the SAME bucket the consolidator card for that AG reads). The cockpit
+# consolidator page reads this to show "last phantom audit: N phantoms (Xd ago)". Overwritten
+# every canonical (non --manifest-bucket) audit run so the age is always the last audit; schema
+# v1 mirrors the consolidator's own `_index/latest.json` convention (an absent object = "no
+# phantom audit yet", never a fabricated all-clear). See consolidator_throughput_backlog_monitor
+# plan WS-3 (phantom/reprobe visibility). The timestamped triage JSONL stays the drill-down; this
+# is the stable pointer the UI reads.
+_PHANTOM_AUDIT_LATEST_BLOB = "_index/phantom_audit_latest.json"
+_PHANTOM_AUDIT_SCHEMA_VERSION = 1
+
+
+def _write_phantom_audit_latest(
+    storage_client: StorageClient,
+    bucket: str,
+    asset_group: str,
+    phantom_count: int,
+    triage_link: str | None,
+) -> None:
+    """Best-effort: publish the AG's last phantom-audit summary to `_index/phantom_audit_latest.json`.
+
+    Never raises — a summary-write hiccup must not fail the reconcile (it is an observability
+    side-channel, not the manifest mutation). Called on the canonical AG audit only.
+    """
+    payload = {
+        "schema_version": _PHANTOM_AUDIT_SCHEMA_VERSION,
+        "audit": "phantom",
+        "asset_group": asset_group,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "phantom_count": phantom_count,
+        "triage_jsonl": triage_link,
+    }
+    try:
+        storage_client.upload_from_file_obj(
+            bucket, _PHANTOM_AUDIT_LATEST_BLOB, io.BytesIO(json.dumps(payload).encode("utf-8"))
+        )
+        logger.info(
+            "Phantom-audit summary written: gs://%s/%s (%d phantoms)", bucket, _PHANTOM_AUDIT_LATEST_BLOB, phantom_count
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        logger.warning("phantom-audit: latest.json write skipped for %s (%s): %s", asset_group, bucket, exc)
 
 
 # Chain-/source-level DeFi data_types -> canonical chain-level venue. Fetched
@@ -713,8 +883,11 @@ def _apply_delete_chain_level_defi_phantoms(
     df: pd.DataFrame,
 ) -> int:
     """APPLY mode: DELETE the chain-level DeFi wrong-key phantom rows from the
-    ``_index`` and write the trimmed index back. Single-walk (reuses the
-    already-loaded ``df``; one index read + one write, no whole-corpus GCS walk).
+    ``_index`` and write the trimmed index back. No whole-corpus GCS walk — the
+    predicate is a cheap boolean mask. Re-fetches fresh via
+    ``merge_canonical_with_outstanding_shards`` immediately before the write-back
+    (staleness guard, reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12
+    todo #2) rather than trusting the ``df`` passed in from the caller's earlier read.
 
     The delete predicate is ``_chain_level_phantom_mask`` (SSOT) — it removes the
     BOTH wrong-key reason classes (NOT_LISTED + PRE_GENESIS_CHAIN) keyed
@@ -727,15 +900,26 @@ def _apply_delete_chain_level_defi_phantoms(
     Asserts captured/attempted_failed totals are preserved before writing back.
     Returns the number of rows deleted.
     """
+    phantom_mask = _chain_level_phantom_mask(df)
+    n_delete = int(phantom_mask.sum())
+    logger.info("APPLY chain-level DeFi phantom DELETE: %d rows match the predicate", n_delete)
+    if n_delete == 0:
+        logger.info("Nothing to delete — chain-level phantom set is empty. No write.")
+        return 0
+
+    # Staleness guard (reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12
+    # todo #2): re-fetch fresh + re-derive the delete predicate immediately before the
+    # write-back so any per-VM shard written since the initial read above isn't
+    # silently discarded by this bulk re-upload.
+    df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, index_blob)
     status_before = df["capture_status"].fillna("").astype(str)
     captured_before = int((status_before == "captured").sum())
     attempted_failed_before = int((status_before == "attempted_failed").sum())
 
     phantom_mask = _chain_level_phantom_mask(df)
     n_delete = int(phantom_mask.sum())
-    logger.info("APPLY chain-level DeFi phantom DELETE: %d rows match the predicate", n_delete)
     if n_delete == 0:
-        logger.info("Nothing to delete — chain-level phantom set is empty. No write.")
+        logger.info("Nothing to delete after fresh re-check — chain-level phantom set is empty. No write.")
         return 0
 
     # Defensive guard: the predicate must never select a captured/failed row.
@@ -837,19 +1021,33 @@ def _apply_delete_legacy_combined_venue_defi_phantoms(
     df: pd.DataFrame,
 ) -> int:
     """APPLY mode: DELETE the legacy-combined-venue DeFi phantom rows from the
-    ``_index`` and write the trimmed index back. Single-walk (one index read +
-    one write, no whole-corpus GCS walk). Predicate =
-    ``_legacy_combined_venue_phantom_mask`` (SSOT). Asserts captured/
-    attempted_failed totals are preserved before writing back. Returns rows deleted."""
+    ``_index`` and write the trimmed index back. No whole-corpus GCS walk — the
+    predicate is a cheap boolean mask. Predicate = ``_legacy_combined_venue_phantom_mask``
+    (SSOT). Re-fetches fresh via ``merge_canonical_with_outstanding_shards`` immediately
+    before the write-back (staleness guard,
+    reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12 todo #2). Asserts
+    captured/attempted_failed totals are preserved before writing back. Returns rows
+    deleted."""
+    phantom_mask = _legacy_combined_venue_phantom_mask(df)
+    n_delete = int(phantom_mask.sum())
+    logger.info("APPLY legacy-combined-venue DeFi phantom DELETE: %d rows match the predicate", n_delete)
+    if n_delete == 0:
+        logger.info("Nothing to delete — legacy-combined-venue phantom set is empty. No write.")
+        return 0
+
+    # Staleness guard (reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12
+    # todo #2): re-fetch fresh + re-derive the delete predicate immediately before the
+    # write-back so any per-VM shard written since the initial read above isn't
+    # silently discarded by this bulk re-upload.
+    df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, index_blob)
     status_before = df["capture_status"].fillna("").astype(str)
     captured_before = int((status_before == "captured").sum())
     attempted_failed_before = int((status_before == "attempted_failed").sum())
 
     phantom_mask = _legacy_combined_venue_phantom_mask(df)
     n_delete = int(phantom_mask.sum())
-    logger.info("APPLY legacy-combined-venue DeFi phantom DELETE: %d rows match the predicate", n_delete)
     if n_delete == 0:
-        logger.info("Nothing to delete — legacy-combined-venue phantom set is empty. No write.")
+        logger.info("Nothing to delete after fresh re-check — legacy-combined-venue phantom set is empty. No write.")
         return 0
 
     deleting = df[phantom_mask]
@@ -888,6 +1086,153 @@ def _apply_delete_legacy_combined_venue_defi_phantoms(
     )
     storage_client.upload_from_file_obj(bucket_name, index_blob, out)
     logger.info("Done — legacy-combined-venue DeFi phantom DELETE applied.")
+    return n_delete
+
+
+def _pyth_oracle_prices_ghost_failure_mask(df: pd.DataFrame) -> pd.Series:
+    """Boolean mask for the PYTH ``oracle_prices`` stale day-level ``attempted_failed``
+    ghost-row phantom set (SSOT predicate).
+
+    Root cause (see
+    ``plans/active/issues/pyth_oracle_prices_stale_ghost_failure_rows_2026_07_28.md``):
+    pre-fix (before ``market-tick-data-service@533514c2``) the aiodns-missing-resolver
+    crash was recorded as a DAY-LEVEL failure (``instrument_id`` blank) because the whole
+    day's fetch aborted before any per-instrument row was written. The fixed writer
+    succeeds at PER-INSTRUMENT granularity, so a later successful re-run captures real
+    per-instrument rows for that date WITHOUT ever touching/superseding the old
+    day-level failure entry — different shard-key components (blank vs populated
+    ``instrument_id``) mean the ghost row is never overwritten, it just sits alongside
+    the real captures forever.
+
+    A row is a phantom IFF: ``venue=='PYTH'``, ``data_type=='oracle_prices'``,
+    ``capture_status=='attempted_failed'``, ``instrument_id`` is blank, AND at least one
+    ``captured`` row exists for the SAME ``date`` with a non-blank ``instrument_id``
+    (i.e. the fixed per-instrument writer already captured real data for that date,
+    superseding the stale day-level failure marker). Scoped to PYTH oracle_prices only
+    per the issue doc's explicit scope-first instruction — day-vs-instrument granularity
+    drift is a DeFi-oracle-handler-specific pattern, not assumed to generalize.
+    """
+    status = df["capture_status"].fillna("").astype(str)
+    venue = df["venue"].fillna("").astype(str)
+    dt_col = df["data_type"].fillna("").astype(str)
+    instrument_id = (
+        df["instrument_id"].fillna("").astype(str) if "instrument_id" in df.columns else pd.Series("", index=df.index)
+    )
+    is_pyth_oracle = (venue == "PYTH") & (dt_col == "oracle_prices")
+    ghost_candidates = is_pyth_oracle & (status == "attempted_failed") & (instrument_id == "")
+    if not int(ghost_candidates.sum()):
+        return ghost_candidates
+    superseding_dates = set(df.loc[is_pyth_oracle & (status == "captured") & (instrument_id != ""), "date"].astype(str))
+    dates = df["date"].astype(str)
+    return ghost_candidates & dates.isin(superseding_dates)
+
+
+def _report_pyth_oracle_prices_ghost_failures(df: pd.DataFrame) -> None:
+    """DRY-RUN report (no mutation): PYTH oracle_prices stale day-level
+    ``attempted_failed`` ghost rows superseded by a real per-instrument capture for
+    the same date. Single-walk — reads only the already-loaded ``_index`` ``df``."""
+    mask = _pyth_oracle_prices_ghost_failure_mask(df)
+    n = int(mask.sum())
+    logger.info("=== DRY-RUN: PYTH oracle_prices stale day-level attempted_failed ghost-row report ===")
+    logger.info(
+        "GHOST rows (PYTH oracle_prices, attempted_failed, instrument_id blank, "
+        "date superseded by a captured per-instrument row): %d",
+        n,
+    )
+    if n:
+        ghost = df[mask]
+        if "error_reason" in ghost.columns:
+            logger.info(
+                "    by error_reason: %s", ghost["error_reason"].fillna("").astype(str).value_counts().to_dict()
+            )
+        logger.info("    date range: %s .. %s", ghost["date"].min(), ghost["date"].max())
+    logger.info(
+        "DECISION: DELETE (day-level ghost failure superseded by real per-instrument "
+        "captures for the same date — the actual PYTH data for these dates IS captured; "
+        "see plans/active/issues/pyth_oracle_prices_stale_ghost_failure_rows_2026_07_28.md). "
+        "Dry-run only — no writes."
+    )
+
+
+def _apply_delete_pyth_oracle_prices_ghost_failures(
+    storage_client: StorageClient,
+    bucket_name: str,
+    index_blob: str,
+    df: pd.DataFrame,
+) -> int:
+    """APPLY mode: DELETE the PYTH oracle_prices stale day-level ghost ``attempted_failed``
+    rows superseded by a captured per-instrument row for the same date, and write the
+    trimmed ``_index`` back. No whole-corpus GCS walk — the predicate is a cheap boolean
+    mask over the already-loaded index. Re-fetches fresh via
+    ``merge_canonical_with_outstanding_shards`` immediately before the write-back
+    (staleness guard, same pattern as the chain-level / legacy-venue passes above).
+
+    Unlike those two sibling passes (which delete ``empty_confirmed`` rows and assert
+    ``attempted_failed`` is UNCHANGED), this pass deletes ``attempted_failed`` rows BY
+    DESIGN — the invariant here is ``captured`` unchanged and ``attempted_failed``
+    decreases by EXACTLY the deleted count (never more, and the predicate must never
+    select a non-``attempted_failed`` row).
+    """
+    mask = _pyth_oracle_prices_ghost_failure_mask(df)
+    n_delete = int(mask.sum())
+    logger.info("APPLY PYTH oracle_prices ghost-failure DELETE: %d rows match the predicate", n_delete)
+    if n_delete == 0:
+        logger.info("Nothing to delete — PYTH oracle_prices ghost-failure set is empty. No write.")
+        return 0
+
+    # Staleness guard (reconcile_phantom_manifest_rows_stale_read_overwrite_2026_07_12
+    # todo #2): re-fetch fresh + re-derive the delete predicate immediately before the
+    # write-back so any per-VM shard written since the initial read above isn't
+    # silently discarded by this bulk re-upload.
+    df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, index_blob)
+    status_before = df["capture_status"].fillna("").astype(str)
+    captured_before = int((status_before == "captured").sum())
+    attempted_failed_before = int((status_before == "attempted_failed").sum())
+
+    mask = _pyth_oracle_prices_ghost_failure_mask(df)
+    n_delete = int(mask.sum())
+    if n_delete == 0:
+        logger.info("Nothing to delete after fresh re-check — ghost-failure set is empty. No write.")
+        return 0
+
+    # Defensive guard: the predicate must never select a non-attempted_failed row.
+    deleting = df[mask]
+    deleting_status = deleting["capture_status"].fillna("").astype(str)
+    bad = int((deleting_status != "attempted_failed").sum())
+    if bad:
+        raise RuntimeError(
+            f"REFUSING DELETE — predicate selected {bad} non-attempted_failed rows (would destroy captured data)"
+        )
+
+    kept = df[~mask].copy()
+    status_after = kept["capture_status"].fillna("").astype(str)
+    captured_after = int((status_after == "captured").sum())
+    attempted_failed_after = int((status_after == "attempted_failed").sum())
+    if captured_after != captured_before:
+        raise RuntimeError(
+            f"REFUSING WRITE — captured count changed {captured_before} -> {captured_after} (delete bug)"
+        )
+    expected_attempted_failed_after = attempted_failed_before - n_delete
+    if attempted_failed_after != expected_attempted_failed_after:
+        raise RuntimeError(
+            f"REFUSING WRITE — attempted_failed count {attempted_failed_after} != expected "
+            f"{expected_attempted_failed_after} (before={attempted_failed_before}, deleted={n_delete})"
+        )
+
+    out = io.BytesIO()
+    kept.to_parquet(out, index=False)
+    out.seek(0)
+    logger.info(
+        "Writing trimmed index: %d -> %d rows (%d deleted; captured=%d unchanged; attempted_failed=%d -> %d)",
+        len(df),
+        len(kept),
+        n_delete,
+        captured_after,
+        attempted_failed_before,
+        attempted_failed_after,
+    )
+    storage_client.upload_from_file_obj(bucket_name, index_blob, out)
+    logger.info("Done — PYTH oracle_prices ghost-failure DELETE applied.")
     return n_delete
 
 
@@ -1025,6 +1370,20 @@ def main() -> int:
             "genuine cells re-seed canonically via the FIXED v2 enumerator)."
         ),
     )
+    p.add_argument(
+        "--report-pyth-oracle-prices-ghost-failures",
+        action="store_true",
+        help=(
+            "PYTH oracle_prices stale day-level ghost-failure pass (single _index read). "
+            "WITHOUT --apply: DRY-RUN report of attempted_failed rows (instrument_id blank) "
+            "superseded by a real captured per-instrument row for the same date — a "
+            "pre-aiodns-fix day-level failure entry never touched by the fixed "
+            "per-instrument-granularity writer. WITH --apply: DELETE that ghost set and "
+            "write the trimmed _index back (preserves captured; attempted_failed decreases "
+            "by exactly the deleted count). See "
+            "plans/active/issues/pyth_oracle_prices_stale_ghost_failure_rows_2026_07_28.md."
+        ),
+    )
     args = p.parse_args()
 
     # --unphantom-only implies --unphantom (it runs the reverse re-validation only).
@@ -1066,8 +1425,7 @@ def main() -> int:
             logger.warning("Could not tune GCS HTTP pool — falling back to default 10")
 
     logger.info("Loading manifest from %s://%s/%s", args.cloud, bucket_name, cfg["index"])
-    raw_bytes = storage_client.download_bytes(bucket_name, cfg["index"])
-    df = pd.read_parquet(io.BytesIO(raw_bytes))
+    df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, str(cfg["index"]))
     logger.info("Manifest rows: %d", len(df))
 
     # Chain-level DeFi phantom report — DRY-RUN ONLY, single-walk (reuses the
@@ -1095,6 +1453,19 @@ def main() -> int:
             _apply_delete_legacy_combined_venue_defi_phantoms(storage_client, bucket_name, str(cfg["index"]), df)
         else:
             logger.info("DRY-RUN — pass --apply to DELETE the phantom set. No writes.")
+        return 0
+
+    # PYTH oracle_prices stale day-level ghost-failure pass — single-walk (reuses the
+    # index read above). Returns before any disk-audit / mutation path.
+    if args.report_pyth_oracle_prices_ghost_failures:
+        if args.asset_group != "defi":
+            logger.error("--report-pyth-oracle-prices-ghost-failures requires --asset-group defi")
+            return 2
+        _report_pyth_oracle_prices_ghost_failures(df)
+        if args.apply:
+            _apply_delete_pyth_oracle_prices_ghost_failures(storage_client, bucket_name, str(cfg["index"]), df)
+        else:
+            logger.info("DRY-RUN — pass --apply to DELETE the ghost-failure set. No writes.")
         return 0
 
     # --unphantom-only: skip the FORWARD phantom-flagging pass ENTIRELY. We never
@@ -1127,6 +1498,11 @@ def main() -> int:
         logger.info("  Real captures:    %d", real_count)
         logger.info("  Phantom captures: %d  ← will flip to attempted_failed", len(phantom_idx))
         logger.info("=" * 60)
+        # Publish the stable per-AG summary the cockpit consolidator page reads (best-effort). Only
+        # on the canonical AG audit (a --manifest-bucket override is a per-data-type slice, not the
+        # AG-level count). Baseline link=None; the dry-run branch below overwrites with the triage link.
+        if not args.manifest_bucket:
+            _write_phantom_audit_latest(storage_client, bucket_name, args.asset_group, len(phantom_idx), None)
 
     # Reverse pass: re-validate previously phantom-flagged rows. The forward
     # audit can only ADD phantoms — it never UN-flags rows that earlier audit
@@ -1187,18 +1563,30 @@ def main() -> int:
             snapshot_time = args.manifest_snapshot_time or datetime.now(UTC).isoformat()
             triage_records = _build_triage_records(args.asset_group, df.loc[phantom_idx], snapshot_time)
             _write_triage_jsonl_gcs(storage_client, triage_gcs, triage_records)
+            # Re-publish the summary WITH the triage-JSONL drill-down link now that we have it
+            # (the baseline write above carried link=None). Canonical AG audit only.
+            if not args.manifest_bucket:
+                _write_phantom_audit_latest(storage_client, bucket_name, args.asset_group, len(phantom_idx), triage_gcs)
         logger.info("DRY RUN — manifest not modified.")
         return 0
 
+    # Staleness guard: re-read + re-merge the canonical immediately before the
+    # write-back (the audit pass above can run for minutes) and relocate the
+    # flagged rows onto the fresh frame by identity key — see the module
+    # docstring's "Staleness guard" section for the full rationale.
+    write_df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, str(cfg["index"]))
+    phantom_write_idx = _relocate_indices_by_identity(df, phantom_idx, write_df)
+    unphantom_write_idx = _relocate_indices_by_identity(df, unphantom_idx, write_df)
+
     now_iso = datetime.now(UTC).isoformat()
-    if phantom_idx:
-        df.loc[phantom_idx, "capture_status"] = "attempted_failed"
-        df.loc[phantom_idx, "error_reason"] = "phantom_captured_no_parquet_at_canonical_path"
-        df.loc[phantom_idx, "attempted_at"] = now_iso
-    if unphantom_idx:
-        df.loc[unphantom_idx, "capture_status"] = "captured"
-        df.loc[unphantom_idx, "error_reason"] = ""
-        df.loc[unphantom_idx, "attempted_at"] = now_iso
+    if phantom_write_idx:
+        write_df.loc[phantom_write_idx, "capture_status"] = "attempted_failed"
+        write_df.loc[phantom_write_idx, "error_reason"] = "phantom_captured_no_parquet_at_canonical_path"
+        write_df.loc[phantom_write_idx, "attempted_at"] = now_iso
+    if unphantom_write_idx:
+        write_df.loc[unphantom_write_idx, "capture_status"] = "captured"
+        write_df.loc[unphantom_write_idx, "error_reason"] = ""
+        write_df.loc[unphantom_write_idx, "attempted_at"] = now_iso
 
     # Write back. v8 columns (pipeline_mode / service_emission_state /
     # last_emission_decision_at / expected_window_completeness_fraction)
@@ -1207,13 +1595,13 @@ def main() -> int:
     # round-trips back unchanged. Pre-v8 manifests (no new columns) also
     # round-trip cleanly because the read-side never invents columns.
     out = io.BytesIO()
-    df.to_parquet(out, index=False)
+    write_df.to_parquet(out, index=False)
     out.seek(0)
     logger.info(
         "Uploading reconciled manifest (%d rows, %d phantoms flipped, %d unphantomed)",
-        len(df),
-        len(phantom_idx),
-        len(unphantom_idx),
+        len(write_df),
+        len(phantom_write_idx),
+        len(unphantom_write_idx),
     )
     storage_client.upload_from_file_obj(bucket_name, cfg["index"], out)
     logger.info("Done.")
@@ -1224,9 +1612,9 @@ def _build_forward_captured_idx(df: pd.DataFrame, args: argparse.Namespace) -> p
     """Build the captured-rows index for the FORWARD phantom-flagging pass.
 
     Applies the venue / data_type / start-date / end-date scope filters and the
-    schema_v4 vestigial-row drop, returning the captured rows in scope. Extracted
-    from ``main`` so ``--unphantom-only`` can cleanly skip the entire forward pass
-    (it never calls this).
+    blank/null-data_type structural-blind-spot drop, returning the captured rows
+    in scope. Extracted from ``main`` so ``--unphantom-only`` can cleanly skip
+    the entire forward pass (it never calls this).
     """
     captured_mask = df["capture_status"].fillna("") == "captured"
     if args.venues:
@@ -1240,25 +1628,51 @@ def _build_forward_captured_idx(df: pd.DataFrame, args: argparse.Namespace) -> p
     if args.end_date:
         captured_mask = captured_mask & (df["date"].astype(str) <= args.end_date)
 
-    # 2026-05-04: drop schema_v4 vestigial rows from audit scope. These are
-    # pre-v5 daily-manifest records with only ``venue`` populated (no
-    # ``data_type``, ``instrument_type``, etc.) and represent informational
-    # "this venue was touched on this date" markers, not real shards. The
-    # audit can't probe an empty ``data_type=`` substring, so these
-    # systematically false-positive as phantoms (9,757 rows on 2026-05-04
-    # CeFi). They're harmless legacy and should be filtered out, not flipped
-    # to attempted_failed (which would force VMs to retry venues that don't
-    # have a target data_type to retry against).
-    if "schema_version" in df.columns:
-        v4_empty_dt = (df["schema_version"] == 4) & (df["data_type"].fillna("").astype(str).str.len() == 0)
-        v4_in_scope = (captured_mask & v4_empty_dt).sum()
-        if v4_in_scope > 0:
-            logger.info(
-                "Dropping %d schema_v4 vestigial rows (empty data_type — "
-                "pre-v5 informational manifest records, not real shards)",
-                v4_in_scope,
-            )
-        captured_mask = captured_mask & ~v4_empty_dt
+    # Blank/null data_type rows are structurally unauditable by this tool's
+    # generic strategy (phantom_captures_cefi_2026_06_28.md todo #3, corrected
+    # 2026-07-15 investigation section): ``_audit_generic`` builds the on-disk
+    # match needle as ``data_type={data_type}/`` — for a blank data_type this
+    # needle is literally ``"data_type=/"``, a path segment that can NEVER
+    # exist on any real GCS object (every real write always carries a
+    # non-blank data_type in its hive path). So a ``captured`` row with
+    # blank/null data_type is UNCONDITIONALLY, PERMANENTLY flagged phantom by
+    # the forward pass regardless of whether real data exists elsewhere for
+    # that (date, venue) — a structural blind spot in the probe, not evidence
+    # the underlying data is missing.
+    #
+    # Originally scoped to ``schema_version==4`` only (2026-05-04, the first
+    # CeFi incident — 9,757 pre-v5 vestigial rows with only ``venue``
+    # populated, informational "this venue was touched on this date"
+    # markers, not real shards). Generalized here to ANY blank data_type
+    # regardless of schema_version: the needle-construction blind spot is
+    # structural, not schema-version-specific, and the narrower
+    # ``schema_version==4`` scoping is exactly what let an undocumented
+    # 2026-06-28T03:12:34Z apply run (a DIFFERENT invocation than the
+    # canonical forward pass covered by this filter at the time) flip a
+    # byte-identical 9,757-row population that live re-verification
+    # (2026-07-15) confirmed was 99.0% (9,658/9,757) redundant with an
+    # already-correctly-typed ``captured`` sibling row for the same (date,
+    # venue) elsewhere in the manifest. Never flipped to ``attempted_failed``
+    # (would force VMs to retry a data_type that doesn't exist to retry
+    # against); logged distinctly below (with a schema_version breakdown)
+    # rather than silently folded into the ordinary phantom count, so the
+    # hygiene signal stays visible instead of disappearing into "0 phantoms".
+    blank_dt = df["data_type"].fillna("").astype(str).str.len() == 0
+    blank_dt_in_scope = int((captured_mask & blank_dt).sum())
+    if blank_dt_in_scope > 0:
+        sv_breakdown = (
+            df.loc[captured_mask & blank_dt, "schema_version"].value_counts(dropna=False).to_dict()
+            if "schema_version" in df.columns
+            else {}
+        )
+        logger.info(
+            "Dropping %d captured rows with blank/null data_type from phantom-audit "
+            "scope — structurally unauditable (the data_type={} needle can never "
+            "match on disk); schema_version breakdown: %s",
+            blank_dt_in_scope,
+            sv_breakdown,
+        )
+    captured_mask = captured_mask & ~blank_dt
 
     return df[captured_mask].index
 

@@ -114,12 +114,35 @@ def _ref_index() -> object:
             "timeframe": "",
             "capture_status": "captured",
         },
+        # a captured cell BELOW the amended 2018-01-01 api_football floor — exercises
+        # "covered wins over pre-launch" (such rows exist historically: the 2026-05-04
+        # incident purged 229,224 of them)
+        {
+            "date": "2017-06-02",
+            "data_type": "FIXTURE_STATS",
+            "venue": "",
+            "league_id": "EPL",
+            "timeframe": "",
+            "capture_status": "captured",
+        },
         # PER_DAY_PER_SEASON entity (season is path-only — not a manifest axis)
         {
             "date": "2026-05-01",
             "data_type": "PLAYER_VALUES",
             "venue": "transfermarkt",
             "league_id": "",
+            "timeframe": "",
+            "capture_status": "captured",
+        },
+        # STALE captured row for a pre-2020-06-06-floor flat-legacy cell — the exact
+        # shape of the 4,735-row bug (sports_legacy_duplicate_triage_2026_07_22.md
+        # §2): the manifest still carries this cell as `captured` even though the
+        # underlying GCS object was already wiped by the 2026-07-21 pre-floor purge.
+        {
+            "date": "2019-06-01",
+            "data_type": "FIXTURES",
+            "venue": "",
+            "league_id": "EPL",
             "timeframe": "",
             "capture_status": "captured",
         },
@@ -355,26 +378,42 @@ def test_reference_v2_tree_covered_is_legacy_duplicate() -> None:
 
 
 def test_reference_v2_tree_uncovered_is_class_e() -> None:
-    path = "sports_reference_v2/by_date/day=2018-01-05/entity=fixtures/fixtures.parquet"
+    # post-2020-06-06 floor (SOURCE_COVERAGE_START clamps every sports source there,
+    # sports-2020-06-data-floor.md) — a pre-floor date now unconditionally classifies
+    # C3 regardless of coverage (see test_flat_legacy_pre_floor_stale_captured_is_c3
+    # and test_pre_launch_window_is_c3_not_e), so this genuine-E example must use a
+    # post-floor, uncovered date to stay a valid E case.
+    path = "sports_reference_v2/by_date/day=2024-01-05/entity=fixtures/fixtures.parquet"
     cls, _f, _ = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
     assert cls is OC.ORPHAN_REAL
 
 
 def test_pre_launch_window_is_c3_not_e() -> None:
-    # footystats coverage starts 2019-01-01 (UAC SOURCE_COVERAGE_START) — a 2018 day
+    # Floors amended 2026-07-15 to the earliest date real objects exist (operator
+    # ruling "amend floors to reality"): footystats 2019-01-01→2018-01-01, and the
+    # api_football per-fixture 2020-06-06 overrides DELETED (they now inherit the
+    # source-wide 2018-01-01). Dates below track the AMENDED floors.
+    #
+    # footystats coverage starts 2018-01-01 (UAC SOURCE_COVERAGE_START) — a 2017 day
     # is contractually un-manifestable (ManifestWriter pre-launch guard) → C3, not E
     path = (
-        "sports_reference/by_date/day=2018-06-01/entity=footystats_predictions/"
+        "sports_reference/by_date/day=2017-06-01/entity=footystats_predictions/"
         "league=EPL/footystats_predictions.parquet"
     )
     cls, _f, reason = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
     assert cls is OC.PRE_LAUNCH_WINDOW and "pre-launch" in reason
-    # api_football FIXTURE_STATS window starts 2020-06-06 (DATA_TYPE_COVERAGE_START)
-    path = "sports_reference/by_date/day=2020-01-01/entity=fixture_stats/league=EPL/fixture_stats.parquet"
+    # SFI_PROGRESSIVE_STATS window starts 2020-01-01 (DATA_TYPE_COVERAGE_START — the
+    # one surviving override; earliest real progressive_stats object measures exactly
+    # 2020-01-01), so a 2019 day is pre-launch even though SFI's source-wide is 2019-01-01
+    path = "sports_reference/by_date/day=2019-06-01/entity=progressive_stats/progressive_stats.parquet"
     assert _mod.classify_reference_object(path, _ref_index(), is_parquet=True)[0] is OC.PRE_LAUNCH_WINDOW
-    # a COVERED pre-launch-window object stays A (covered wins; e.g. the 2018
-    # FIXTURE_STATS cells the manifest already carries as captured)
+    # 2018 per-fixture data is NO LONGER pre-launch — it is real data we hold
+    # (fixture_events ENG_CHAMPIONSHIP 2018-01-01 = 20 rows). Covered → A.
     path = "sports_reference/by_date/day=2018-01-02/entity=fixture_stats/league=EPL/fixture_stats.parquet"
+    assert _mod.classify_reference_object(path, _ref_index(), is_parquet=True)[0] is OC.CANONICAL_MANIFESTED
+    # a COVERED pre-launch-window object stays A (covered wins) — the 2017 FIXTURE_STATS
+    # cell the manifest carries as captured, below the amended 2018-01-01 floor
+    path = "sports_reference/by_date/day=2017-06-02/entity=fixture_stats/league=EPL/fixture_stats.parquet"
     assert _mod.classify_reference_object(path, _ref_index(), is_parquet=True)[0] is OC.CANONICAL_MANIFESTED
     # post-window uncovered stays E
     path = "sports_reference/by_date/day=2026-05-02/entity=fixture_stats/league=EPL/fixture_stats.parquet"
@@ -397,6 +436,24 @@ def test_legacy_flat_by_day_twin_is_class_b() -> None:
     path = "sports_reference/fixtures/day=2026-05-01/league=EPL/fixtures.parquet"
     cls, _f, reason = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
     assert cls is OC.LEGACY_DUPLICATE and "legacy flat-by-day" in reason
+
+
+def test_flat_legacy_pre_floor_stale_captured_is_c3_not_b() -> None:
+    # Regression for sports_legacy_duplicate_triage_2026_07_22.md §2: the classifier
+    # used to check is_covered_sports BEFORE _is_pre_launch on this branch, so a
+    # pre-2020-06-06 flat-legacy cell with a stale `captured` manifest row (the object
+    # itself already wiped from GCS) classified B_legacy_duplicate instead of
+    # C3_pre_launch_window — exactly the 4,735-row misclassification the rescan must
+    # retire. Pre-launch now takes precedence regardless of manifest coverage.
+    path = "sports_reference/fixtures/day=2019-06-01/league=EPL/fixtures.parquet"
+    cls, _f, reason = _mod.classify_reference_object(path, _ref_index(), is_parquet=True)
+    assert cls is OC.PRE_LAUNCH_WINDOW and "pre-launch" in reason
+    # the day-less FLAT singleton path is untouched by this reordering (never
+    # pre-launch — _is_pre_launch returns False on day="").
+    assert (
+        _mod.classify_reference_object("sports_reference/venues/venues.parquet", _ref_index(), is_parquet=True)[0]
+        is OC.CANONICAL_MANIFESTED
+    )
 
 
 def test_reference_aux_mapping_corpora_are_c2() -> None:

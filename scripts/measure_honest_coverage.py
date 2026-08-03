@@ -11,6 +11,7 @@ coverage at multiple aggregation levels:
   - per (asset_group, venue, instrument_type)                 [NEW v2]
   - per (asset_group, venue, instrument_type, data_type)      [NEW v2]
   - per (asset_group, date)                                   [NEW v2]
+  - per (asset_group, chain)                                  [chain-enum]
 
 Also computes Layer-1 enumeration-completeness (instrument denominator audit)
 via check_enumeration_completeness.py and adds a top-level ``layer_1`` block
@@ -35,19 +36,26 @@ execution:
              exists and parses without error
   last_executed: NEVER
 
-Bucket selection (Bug 1 fix):
-  Prefer the bucket whose _index/availability_index.parquet blob was MOST RECENTLY
-  modified (blob.updated timestamp), not the bucket with the most rows. This prevents
-  picking stale non-prd buckets (35.8M rows, 20 days old) over fresh prd buckets
-  (5.2M rows, live data).
+Bucket selection (hardened 2026-07-06 vs. surgery-bumped mtimes):
+  PRIMARY is pinned by tuple order in ``_MANIFEST_BUCKET_CANDIDATES`` — the first
+  accessible candidate wins (which is the ``-prd`` bucket by construction, for every
+  asset_group). This replaces the earlier mtime-based selection which was fragile to
+  manifest surgery: rewriting the legacy bucket bumped its ``blob.updated`` past prd,
+  flipping roles → prd's captured-only tuples dropped from ENUMERATED and 3 artifact
+  "holes" appeared (2026-07-03 ASTER corrective pass on cefi legacy).
+  ``blob.updated`` is still logged (a secondary bucket with a newer mtime raises a
+  SURGERY-SIGNAL warning) but no longer drives selection. An operator override
+  ``--primary-bucket=<name>`` picks a specific bucket when surgery or debugging
+  requires it; if the override is not accessible, selection falls back to the
+  tuple-order pin.
 
 Manifest merge (Bug 2 fix):
-  After picking the freshest bucket as PRIMARY, the secondary bucket is also read and
+  After picking the pinned bucket as PRIMARY, the secondary bucket is also read and
   merged. If the ``date`` column is present in both DataFrames, shards are deduplicated
   on (date, venue, data_type) keeping the PRIMARY row's capture_status (prd wins).
   This ensures the full expected_unattempted skeleton (from the legacy non-prd bucket)
   is combined with fresh captured/attempted_failed/empty_confirmed from prd.
-  Use ``--no-merge`` to disable this merging and fall back to freshest-wins-only.
+  Use ``--no-merge`` to disable this merging and fall back to primary-only.
 
 Instrument-type column (v2):
   Reads ``instrument_type`` as a 5th bounded column. Legacy buckets may not have this
@@ -55,15 +63,43 @@ Instrument-type column (v2):
   and a warning is logged. Bounded-column reads remain mandatory (cefi index is
   tens-of-millions of rows; loading the full frame OOM-kills the VM).
 
+Per-asset-group streaming (real column-prune refactor, 2026-08-01):
+  ``main()`` reads, computes, and releases ONE asset_group's manifest at a time instead
+  of accumulating every requested asset_group's primary DataFrame in memory for the
+  whole run before computing coverage. ``_compute_coverage``'s per-ag loop body has no
+  cross-ag state, so streaming one ag at a time is behaviorally identical to the old
+  batched ``dfs: dict[str, pd.DataFrame]`` call (see
+  ``TestPerAssetGroupStreaming.test_streaming_equals_batch_for_multiple_asset_groups``)
+  — it bounds peak memory to the single largest asset_group's read instead of the sum
+  of all 5. A naive drop of ``instrument_id`` from ``_READ_COLUMNS`` was considered and
+  REJECTED (see ``issues/honest_coverage_nightly_cron_undersized_and_launcher_ssot_drift
+  _2026_07_16.md``): ``_merge_manifests`` dedups the prd+oracle merge on
+  ``(date, venue, instrument_id, data_type)``, and dropping the column collapses
+  distinct instruments onto ``(date, venue, data_type)``, corrupting the coverage
+  denominator. This refactor changes ONLY *when* each asset_group's DataFrame is read
+  and released — the read columns, the merge key, and the per-ag computation are
+  byte-for-byte unchanged.
+
+  D1 migration robustness (2026-07-20 ruling — column moves lowercase writer grain
+  -> UPPERCASE catalogue enum): the by_venue_instrument_type / by_venue_instrument_type
+  _data_type Layer-2 drill-down projections GROUP on a case-folded instrument_type
+  (see _casefold_instrument_type_series) so a shard spanning both the pre-migration
+  lowercase spelling and the post-migration UPPERCASE spelling merges into ONE
+  coverage cell instead of silently splitting into two. Layer-1 (imported from
+  check_enumeration_completeness) already normalises case for the EXPECTED/ENUMERATED
+  intersection. SSOT: codex/02-data/honest-coverage-model.md § Layer-2 read grain.
+
 Usage:
   python measure_honest_coverage.py [--asset-group cefi|defi|tradfi|sports|prediction|all]
   python measure_honest_coverage.py --output-path /tmp/coverage.json   # local probe
-  python measure_honest_coverage.py --no-merge                         # freshest-wins only
+  python measure_honest_coverage.py --no-merge                         # primary-only
+  python measure_honest_coverage.py --primary-bucket <name>            # force primary
 """
 
 from __future__ import annotations
 
 import argparse
+import gc
 import importlib.util
 import json
 import logging
@@ -71,7 +107,7 @@ import sys
 from collections import defaultdict
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Final, Protocol, cast
 
 import pandas as pd
 from google.cloud import storage
@@ -103,6 +139,14 @@ class _CompletenessModuleProto(Protocol):
     def check_enumeration_completeness(
         self, asset_group: str, df: pd.DataFrame, *, diagnose: bool = ...
     ) -> _AgLayer1ResultProto: ...
+
+    def filter_manifest_to_expected(
+        self,
+        asset_group: str,
+        df: pd.DataFrame,
+        *,
+        expected: set[tuple[str, str, str]] | None = ...,
+    ) -> pd.DataFrame: ...
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +182,7 @@ def _get_completeness_module() -> _CompletenessModuleProto:
         _completeness_module = _load_completeness_module()
     return _completeness_module
 
+
 PROJECT_ID = "central-element-323112"
 
 # Manifest bucket candidates per asset_group (scripts/ excluded from inline-URI QG ratchet).
@@ -163,11 +208,38 @@ _CAPTURE_STATUSES = ("captured", "empty_confirmed", "attempted_failed", "expecte
 _INDEX_BLOB_PATH = "_index/availability_index.parquet"
 # v2: added "instrument_type" for the new projections; "instrument_id" for dedup shard key.
 # Legacy buckets that lack either column degrade gracefully (see _read_parquet_safe).
+# chain-enum (2026-07-18): "chain" is the FIRST-tried superset column so the nightly
+# coverage.json can enumerate the distinct chains present per asset_group (the
+# deployment-api ``/data-status/distinct-values`` drift panel reads ``by_chain``'s
+# keys). ``chain`` is a shard axis only for defi (UAC SHARD_AXIS_MATRIX) but is read
+# for every AG so residual cross-AG chain drift (e.g. cefi CLOB-perp venue names
+# leaking a ``chain=SOLANA`` row) stays visible; the raw values are NOT collapsed.
+# A bucket whose parquet lacks ``chain`` cleanly falls through to _READ_COLUMNS (the
+# 6-col v2 read) so nothing else degrades — see _read_parquet_safe's tier order.
+_READ_COLUMNS_WITH_CHAIN = ["capture_status", "venue", "data_type", "date", "instrument_id", "instrument_type", "chain"]
 _READ_COLUMNS = ["capture_status", "venue", "data_type", "date", "instrument_id", "instrument_type"]
 # Preferred shard key (instrument-level dedup); fallback used when instrument_id absent.
 _READ_COLUMNS_FALLBACK = ["capture_status", "venue", "data_type", "date", "instrument_type"]
 _READ_COLUMNS_LEGACY = ["capture_status", "venue", "data_type", "date"]
 _READ_COLUMNS_MIN = ["capture_status", "venue", "data_type"]
+# Column-prune hardening (defence-in-depth, 2026-07-16): the availability-index
+# parquet stores every one of these columns PLAIN_DICTIONARY-encoded per row
+# group (verified via pyarrow row-group metadata on real prd buckets). pandas'
+# default `pd.read_parquet` DECODES that dictionary encoding into a plain
+# python-object array per row — on a real 1.96M-row sports bucket this cost
+# 613.8MB for the 6 columns; passing `read_dictionary=<columns>` (forwarded by
+# pandas to `pyarrow.parquet.read_table`) instead preserves the on-disk
+# dictionary as pandas `category` dtype, measured at 15.9MB for the identical
+# read (~38.6x smaller, same values — `instrument_id.nunique()` verified
+# identical before/after). This is what stops the read from scaling toward
+# OOM on tens-of-millions-of-row corpora (cefi/tradfi/sports) — no row-group
+# streaming needed, the parquet file already carries the compact encoding.
+# NOTE: this changes 3 of _READ_COLUMNS' dtypes to `category`; see
+# _merge_manifests (defensive .astype("int64") on the priority column — a
+# Categorical.map() result stays Categorical and SORTS BY CATEGORY-DISCOVERY
+# ORDER, not numeric order, if left uncast) and _compute_coverage (groupby
+# calls pass observed=True to avoid phantom empty groups pandas' groupby
+# would otherwise synthesise for every unobserved category combination).
 _SHARD_KEY = ["date", "venue", "data_type"]
 _SHARD_KEY_WITH_IID = ["date", "venue", "instrument_id", "data_type"]
 # Priority order for deduplication: lower index = higher priority.
@@ -177,6 +249,21 @@ _STATUS_PRIORITY: dict[str, int] = {
     "empty_confirmed": 2,
     "expected_unattempted": 3,
 }
+
+# Asset groups whose Layer-2 counts are filtered to the EXPECTED-in-scope
+# manifest rows (the MVP read-time gate, cefi Layer-1 denominator gaps plan
+# task 2c, 2026-07-06).  For cefi this aligns Layer-2 numerator/denominator
+# with the Layer-1 EXPECTED matrix (MVP-scoped via
+# `get_mvp_data_types_for_cefi_venue`), killing the class of dishonest %
+# where non-MVP captures inflate the Layer-2 "captured" count over a
+# MVP-scoped EXPECTED denominator.  The MVP filter itself lives in
+# `expected_universe.build_expected` (2a); this constant enables the
+# read-time application in the Layer-2 harness.  Other AGs are excluded
+# until their EXPECTED matrices are certified complete (defi PROTOCOL work
+# in-flight; tradfi/sports/prediction on separate spines).  Layer-1
+# strays remain visible — the check consumes the UNFILTERED df.
+# SSOT: codex/02-data/honest-coverage-model.md § MVP filter (row `is_mvp`).
+_MVP_READ_TIME_GATE_AGS: frozenset[str] = frozenset({"cefi"})
 
 
 def _get_blob_updated(client: storage.Client, bucket_name: str) -> datetime | None:
@@ -196,25 +283,38 @@ def _read_parquet_safe(
 ) -> pd.DataFrame | None:
     """Read the availability index parquet for a bucket, returning None on failure.
 
-    v2: attempts to read all 6 columns (capture_status, venue, data_type, date,
-    instrument_id, instrument_type). Falls back progressively:
-      1. All 6 columns (preferred — v2 full)
+    v2: attempts to read all 7 columns (capture_status, venue, data_type, date,
+    instrument_id, instrument_type, chain). Falls back progressively:
+      0. All 7 columns incl. chain (preferred — chain-enum)
+      1. 6 columns without chain (v2 full — buckets whose parquet predates chain)
       2. 5 columns without instrument_id (older pre-iid buckets)
       3. 4 columns without instrument_type (legacy pre-v2 buckets)
       4. 3 columns minimal (oldest buckets — no date/iid/itype)
-    A warning is logged for each degraded mode.
+    A warning is logged for each degraded mode. Tier 0 -> tier 1 is a SILENT
+    fall-through (a missing ``chain`` column is expected on any bucket written
+    before the chain axis existed and costs nothing beyond an empty by_chain).
     """
     uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
     try:
-        # Preferred: all 6 columns incl. instrument_id + instrument_type (v2).
-        df = pd.read_parquet(uri, columns=_READ_COLUMNS)
+        # Preferred: all 7 columns incl. chain (chain-enum, 2026-07-18).
+        # read_dictionary preserves the parquet's on-disk PLAIN_DICTIONARY
+        # encoding as pandas `category` dtype instead of expanding every row
+        # into a python-object string — the memory-bounded read (see the
+        # _READ_COLUMNS comment above for the measured ~38.6x reduction).
+        return pd.read_parquet(uri, columns=_READ_COLUMNS_WITH_CHAIN, read_dictionary=_READ_COLUMNS_WITH_CHAIN)
+    except Exception:
+        pass  # bucket parquet lacks `chain` — fall through to the 6-col v2 read
+
+    try:
+        # v2 full: 6 columns incl. instrument_id + instrument_type, no chain.
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS, read_dictionary=_READ_COLUMNS)
         return df
     except Exception:
         pass  # fall through
 
     # Fallback 1: 5 columns (no instrument_id — bucket lacks iid column).
     try:
-        df = pd.read_parquet(uri, columns=_READ_COLUMNS_FALLBACK)
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS_FALLBACK, read_dictionary=_READ_COLUMNS_FALLBACK)
         logger.warning(
             "  [%s] 'instrument_id' column absent in parquet — "
             "merge dedup will fall back to (date, venue, data_type) key.",
@@ -226,7 +326,7 @@ def _read_parquet_safe(
 
     # Fallback 2: 4 columns (no instrument_id, no instrument_type — legacy bucket).
     try:
-        df = pd.read_parquet(uri, columns=_READ_COLUMNS_LEGACY)
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS_LEGACY, read_dictionary=_READ_COLUMNS_LEGACY)
         logger.warning(
             "  [%s] 'instrument_type' column absent in parquet — "
             "Layer-1 ENUMERATED set and instrument_type projections will be empty. "
@@ -239,7 +339,7 @@ def _read_parquet_safe(
 
     # Fallback 3: 3 columns minimal (oldest buckets — no date/iid/itype).
     try:
-        df = pd.read_parquet(uri, columns=_READ_COLUMNS_MIN)
+        df = pd.read_parquet(uri, columns=_READ_COLUMNS_MIN, read_dictionary=_READ_COLUMNS_MIN)
         logger.warning(
             "  [%s] Only 3 columns available — merge dedup, by_day and v2 projections unavailable.",
             bucket_name,
@@ -258,9 +358,19 @@ def _read_parquet_eu_only(bucket_name: str) -> pd.DataFrame | None:
     """
     uri = f"gs://{bucket_name}/{_INDEX_BLOB_PATH}"
     eu_filter = [("capture_status", "==", "expected_unattempted")]
-    for cols in (_READ_COLUMNS, _READ_COLUMNS_FALLBACK, _READ_COLUMNS_LEGACY, _READ_COLUMNS_MIN):
+    for cols in (
+        _READ_COLUMNS_WITH_CHAIN,
+        _READ_COLUMNS,
+        _READ_COLUMNS_FALLBACK,
+        _READ_COLUMNS_LEGACY,
+        _READ_COLUMNS_MIN,
+    ):
         try:
-            return pd.read_parquet(uri, columns=list(cols), filters=eu_filter)
+            # read_dictionary: same column-prune hardening as _read_parquet_safe
+            # (category dtype instead of python-object strings) — this read is
+            # already row-filtered to expected_unattempted, but the dtype win is
+            # free and keeps the two readers' output dtypes consistent.
+            return pd.read_parquet(uri, columns=list(cols), filters=eu_filter, read_dictionary=list(cols))
         except Exception:
             pass
     logger.info("  eu-only read failed for all column variants: %s", uri)
@@ -305,11 +415,17 @@ def _merge_manifests(
     # Add priority column so sort-then-drop_duplicates keeps the best status per shard.
     df_primary = df_primary.copy()
     df_secondary = df_secondary.copy()
-    df_primary["_priority"] = df_primary["capture_status"].map(
-        lambda s: _STATUS_PRIORITY.get(s, 99)
-    )
-    df_secondary["_priority"] = df_secondary["capture_status"].map(
-        lambda s: _STATUS_PRIORITY.get(s, 99)
+    # .astype("int64") is mandatory, not cosmetic: when capture_status is
+    # `category` dtype (read_dictionary hardening, see _read_parquet_safe),
+    # Series.map() on a Categorical returns a Categorical result that SORTS BY
+    # CATEGORY-DISCOVERY ORDER rather than numeric value order (verified: an
+    # uncast map of {captured:0, attempted_failed:1, expected_unattempted:3}
+    # sorted as [1, 0, 3] instead of [0, 1, 3]) — silently picking the WRONG
+    # "best status" per shard. Casting to int64 forces correct numeric sort
+    # regardless of the input column's dtype.
+    df_primary["_priority"] = df_primary["capture_status"].map(lambda s: _STATUS_PRIORITY.get(s, 99)).astype("int64")
+    df_secondary["_priority"] = (
+        df_secondary["capture_status"].map(lambda s: _STATUS_PRIORITY.get(s, 99)).astype("int64")
     )
 
     combined = pd.concat([df_primary, df_secondary], ignore_index=True)
@@ -328,23 +444,96 @@ def _merge_manifests(
     return combined
 
 
-def _read_manifest(asset_group: str, *, merge: bool = True) -> pd.DataFrame | None:
+def _select_primary_index(
+    accessible: list[tuple[str, datetime | None, pd.DataFrame]],
+    *,
+    override: str | None,
+    asset_group: str,
+) -> int:
+    """Return the index of the primary bucket in ``accessible``.
+
+    Selection rules (hardened 2026-07-06 vs. surgery-bumped mtimes):
+      1. ``override`` wins when it matches an accessible bucket by name.
+      2. Otherwise return index 0 — accessible preserves tuple order from
+         ``_MANIFEST_BUCKET_CANDIDATES[asset_group]``, whose first entry is the
+         ``-prd`` bucket by construction.
+      3. If ``override`` is set but no accessible bucket matches, log a warning
+         and fall back to rule 2 (do not silently ignore an operator directive).
+    """
+    if override is not None:
+        for i, (name, _ts, _df) in enumerate(accessible):
+            if name == override:
+                logger.info(
+                    "  %s primary override active: %s",
+                    asset_group,
+                    override,
+                )
+                return i
+        logger.warning(
+            "  %s --primary-bucket=%s not accessible; falling back to tuple-order pin",
+            asset_group,
+            override,
+        )
+    return 0
+
+
+def _warn_if_secondary_newer(
+    asset_group: str,
+    primary_name: str,
+    primary_ts: datetime | None,
+    secondaries: list[tuple[str, datetime | None, pd.DataFrame]],
+) -> None:
+    """Log a SURGERY-SIGNAL warning when a secondary bucket has a newer ``blob.updated``.
+
+    ``blob.updated`` is no longer a selection criterion (see ``_select_primary_index``),
+    but a secondary bucket with a newer mtime than the primary usually means the legacy
+    bucket was rewritten (e.g. an ASTER-style corrective pass). Loudly surface that so
+    reviewers can decide whether to switch primary via ``--primary-bucket`` for the run.
+    """
+    if primary_ts is None:
+        return
+    for name, ts, _df in secondaries:
+        if ts is not None and ts > primary_ts:
+            logger.warning(
+                "  %s SURGERY-SIGNAL: secondary %s blob.updated=%s is NEWER than "
+                "primary %s blob.updated=%s. Selection pinned to primary regardless; "
+                "pass --primary-bucket=%s to override if the newer bucket is authoritative.",
+                asset_group,
+                name,
+                ts.isoformat(),
+                primary_name,
+                primary_ts.isoformat(),
+                name,
+            )
+
+
+def _read_manifest(
+    asset_group: str,
+    *,
+    merge: bool = True,
+    primary_bucket_override: str | None = None,
+) -> pd.DataFrame | None:
     """Read the live availability manifest for an asset_group.
 
-    Bug 1 fix: compare blob.updated timestamps instead of row counts to select the
-    FRESHEST bucket as primary. The stale non-prd bucket has 35.8M rows (written
-    2026-06-08) which previously beat the live prd bucket (5.2M rows, fresh). Timestamp
-    comparison correctly picks prd.
+    Bucket selection (pinned-primary; hardened 2026-07-06):
+      PRIMARY is the first accessible candidate in
+      ``_MANIFEST_BUCKET_CANDIDATES[asset_group]`` tuple order. The tuple places
+      ``-prd`` first for every asset_group, so prd wins by default. This is
+      deterministic against surgery bumps on the legacy bucket's ``blob.updated``.
+      Pass ``primary_bucket_override`` (CLI ``--primary-bucket=<name>``) to force a
+      specific bucket when surgery or debugging demands it; if the override is not
+      accessible, selection falls back to the tuple-order pin. A secondary bucket with
+      a newer ``blob.updated`` than the primary triggers a SURGERY-SIGNAL log warning.
 
-    Bug 2 fix (when merge=True): after picking the freshest bucket as primary, also read
-    the secondary bucket and merge the two DataFrames. Non-prd holds the full
-    expected_unattempted skeleton that prd lacks; merging gives accurate denominator
-    counts without double-counting (dedup on day/venue/data_type preferring prd status).
+    Merge (when ``merge=True``): after primary is chosen, the secondary bucket is also
+    read and merged. Non-prd holds the full expected_unattempted skeleton that prd
+    lacks; merging gives accurate denominator counts without double-counting (dedup on
+    day/venue/data_type preferring prd status).
     """
     candidates = _MANIFEST_BUCKET_CANDIDATES[asset_group]
 
-    # Step 1: get blob timestamps for all candidates in parallel (serial loop is fine
-    # since we only have 2 candidates per asset_group).
+    # Step 1: get blob timestamps + read parquets for all candidates.
+    # bucket_info preserves tuple order — critical for the pinned-primary rule.
     gcs_client = storage.Client(project=PROJECT_ID)
     bucket_info: list[tuple[str, datetime | None, pd.DataFrame | None]] = []
     for bucket_name in candidates:
@@ -364,48 +553,58 @@ def _read_manifest(asset_group: str, *, merge: bool = True) -> pd.DataFrame | No
             )
         bucket_info.append((bucket_name, updated, df))
 
-    # Step 2: rank by blob.updated (newest first); fall back to row count if timestamps unavailable.
+    # Step 2: filter to accessible candidates, preserving tuple order.
     accessible = [(name, ts, df) for name, ts, df in bucket_info if df is not None]
     if not accessible:
         logger.warning("  SKIP %s — no candidate manifest accessible", asset_group)
         return None
+    if merge and len(accessible) < len(candidates):
+        unreachable = [name for name in candidates if name not in {a[0] for a in accessible}]
+        logger.warning(
+            "  MERGE DISABLED for %s: legacy bucket(s) unreachable (%s), "
+            "expected_unattempted skeleton may be incomplete",
+            asset_group,
+            ", ".join(unreachable),
+        )
 
-    def _sort_key(item: tuple[str, datetime | None, pd.DataFrame]) -> tuple[int, int]:
-        _, ts, df = item
-        # Primary sort: newest timestamp (negative epoch seconds); if ts is None use 0.
-        ts_score = -int(ts.timestamp()) if ts is not None else 0
-        # Secondary sort: row count as tiebreaker (more rows = better).
-        return (ts_score, -len(df))
+    # Step 3: pinned-primary selection (override wins, else tuple-order first).
+    primary_idx = _select_primary_index(
+        accessible,
+        override=primary_bucket_override,
+        asset_group=asset_group,
+    )
+    primary_name, primary_ts, primary_df = accessible[primary_idx]
+    secondaries = [entry for i, entry in enumerate(accessible) if i != primary_idx]
 
-    accessible.sort(key=_sort_key)
-    primary_name, primary_ts, primary_df = accessible[0]
     primary_uri = f"gs://{primary_name}/{_INDEX_BLOB_PATH}"
     primary_ts_str = primary_ts.isoformat() if primary_ts is not None else "unknown"
     logger.info(
-        "  %s manifest SELECTED (freshest): %s (%d rows, blob.updated=%s)",
+        "  %s manifest SELECTED (pinned primary): %s (%d rows, blob.updated=%s)",
         asset_group,
         primary_uri,
         len(primary_df),
         primary_ts_str,
     )
-    for name, ts, df in accessible[1:]:
+    for name, ts, df in secondaries:
         uri = f"gs://{name}/{_INDEX_BLOB_PATH}"
         ts_str = ts.isoformat() if ts is not None else "unknown"
         logger.info(
-            "  %s manifest NOT SELECTED (older): %s (%d rows, blob.updated=%s)",
+            "  %s manifest NOT SELECTED (secondary): %s (%d rows, blob.updated=%s)",
             asset_group,
             uri,
             len(df),
             ts_str,
         )
 
+    _warn_if_secondary_newer(asset_group, primary_name, primary_ts, secondaries)
+
     result_df = primary_df
 
-    if merge and len(accessible) > 1:
+    if merge and secondaries:
         # Re-read secondary as eu_only (pyarrow push-down filter) before merging.
         # The non-prd oracle can be 35.8M rows; only ~4.1M are expected_unattempted.
         # Reading eu_only keeps peak memory bounded while providing the full skeleton.
-        for secondary_name, _ts, _secondary_full in accessible[1:]:
+        for secondary_name, _ts, _secondary_full in secondaries:
             secondary_eu = _read_parquet_eu_only(secondary_name)
             if secondary_eu is not None:
                 result_df = _merge_manifests(result_df, secondary_eu)
@@ -432,6 +631,45 @@ def _count_statuses(df: pd.DataFrame) -> dict[str, int | float]:
     return counts
 
 
+def _casefold_instrument_type_series(series: pd.Series) -> pd.Series:
+    """Case-fold an ``instrument_type`` column for GROUPING only (D1 migration robustness).
+
+    The D1 ruling (2026-07-20, ``/codex/02-data/cross-asset-canonical-target-ssot.md``
+    §7/§11) migrates the manifest ``instrument_type`` column from its current lowercase
+    writer grain to the UPPERCASE catalogue enum. During the ``migration_pending``
+    window (and any transient mixed-case state while a given asset_group's cutover is
+    in flight), the SAME logical ``(venue, instrument_type, data_type)`` shard can carry
+    both spellings across its history. Grouping the Layer-2 drill-down projections
+    (``by_venue_instrument_type`` / ``by_venue_instrument_type_data_type``) on the raw
+    string would silently SPLIT that shard's coverage into two cells (one per casing)
+    instead of one, making a fully-covered shard look partially/newly uncovered purely
+    from a case artifact — see
+    ``plans/active/issues/honest_coverage_harness_instrument_type_case_break_on_d1_migration_2026_07_20.md``.
+
+    This is GROUPING-key normalisation only — the raw, as-written casing is preserved
+    for the reported dict key (see :func:`_representative_instrument_type`) so
+    downstream consumers that deliberately read the raw writer-grain spelling (e.g.
+    deployment-api's distinct-values drift panel, which case-sensitively tracks the
+    cefi/tradfi in-flight uppercase migration) are unaffected outside the transient
+    mixed-case window this exists to protect. Layer-1 (``check_enumeration_completeness
+    ._canon_instrument_type``) already normalises case for the EXPECTED/ENUMERATED
+    matrix intersection; this is the matching fix for the Layer-2 drill-down views,
+    which read the manifest directly and never went through that normaliser.
+    """
+    return series.astype(str).str.strip().str.casefold()
+
+
+def _representative_instrument_type(values: pd.Series) -> str:
+    """Deterministic display label for a case-merged ``instrument_type`` group.
+
+    Picks the lexicographically-smallest raw spelling present in the group — the same
+    determinism precedent as ``check_enumeration_completeness._canonicalise_tuple_set``
+    ("the first original tuple seen for a canonical key wins, deterministic via the
+    sorted input").
+    """
+    return sorted({str(v) for v in values})[0]
+
+
 def _compute_coverage(
     dfs: dict[str, pd.DataFrame],
     *,
@@ -446,6 +684,7 @@ def _compute_coverage(
       by_venue_instrument_type       — ag → venue → itype → counts
       by_venue_instrument_type_data_type — ag → venue → itype → dt → counts
       by_day                         — ag → date → counts
+      by_chain                       — ag → chain → counts  [chain-enum 2026-07-18]
 
     New v2 top-level block:
       layer_1                        — AgLayer1Result per AG
@@ -464,34 +703,67 @@ def _compute_coverage(
     by_venue_instrument_type: dict[str, dict[str, dict[str, object]]] = {}
     by_venue_instrument_type_data_type: dict[str, dict[str, dict[str, dict[str, object]]]] = {}
     by_day: dict[str, dict[str, object]] = {}
+    # chain-enum (2026-07-18): distinct chains present per asset_group. Its KEYS are
+    # the raw ``chain`` values the manifest actually carries — the enumeration the
+    # deployment-api ``/data-status/distinct-values`` drift panel badges against the
+    # UAC canonical chain set. Raw + uncollapsed by design (case/spelling drift must
+    # survive). Empty for AGs whose bucket parquet lacks the ``chain`` column.
+    by_chain: dict[str, dict[str, object]] = {}
 
     # Layer-1 check (enumeration completeness)
     layer_1_by_ag: dict[str, object] = {}
     checker = _get_completeness_module()
     check_fn = checker.check_enumeration_completeness
+    filter_fn = checker.filter_manifest_to_expected
 
     for ag, df in dfs.items():
+        # MVP read-time gate (task 2c, 2026-07-06) — filter df to
+        # EXPECTED-in-scope rows for Layer-2 counting so that numerator +
+        # denominator align at the MVP grain.  ZERO manifest rows mutated
+        # (the input df is untouched; the gate returns a filtered VIEW).
+        # Layer-1 continues to consume the FULL, unfiltered df below so that
+        # stray tuples (writer emitting something UAC doesn't sanction) stay
+        # visible in `stray_tuples`.
+        if ag in _MVP_READ_TIME_GATE_AGS:
+            logger.info("  Applying MVP read-time gate for %s (Layer-2 in-scope filter) …", ag)
+            df_l2 = filter_fn(ag, df)
+        else:
+            df_l2 = df
+
         # level 1 — per asset_group
-        ag_counts = _count_statuses(df)
+        ag_counts = _count_statuses(df_l2)
         by_asset_group[ag] = ag_counts
 
         # level 2 — per (ag, venue)
+        # observed=True: mandatory once any grouper column can be `category`
+        # dtype (read_dictionary hardening, see _read_parquet_safe) — without
+        # it, pandas' groupby synthesises a phantom EMPTY group for every
+        # category value that was never actually observed together in this
+        # (possibly MVP-filtered) slice, injecting bogus zero-count cells into
+        # the coverage output. A no-op when grouper columns are plain object
+        # dtype (legacy buckets), so this is safe either way.
         venue_group: dict[str, object] = {}
-        for venue, vdf in df.groupby("venue"):
+        for venue, vdf in df_l2.groupby("venue", observed=True):
             venue_group[str(venue)] = _count_statuses(vdf)
         by_venue[ag] = venue_group
 
         # level 3 — per (ag, venue, data_type)
         vdt_group: dict[str, dict[str, object]] = defaultdict(dict)
-        for (venue, data_type), vtdf in df.groupby(["venue", "data_type"]):
+        for (venue, data_type), vtdf in df_l2.groupby(["venue", "data_type"], observed=True):
             vdt_group[str(venue)][str(data_type)] = _count_statuses(vtdf)
         by_venue_data_type[ag] = dict(vdt_group)
 
         # level 4 — per (ag, venue, instrument_type) [v2]
+        # Grouped on the CASE-FOLDED instrument_type (D1 migration robustness — see
+        # _casefold_instrument_type_series) so a shard whose history spans the
+        # lowercase writer grain and the post-D1-migration UPPERCASE catalogue enum
+        # stays ONE coverage cell instead of silently splitting into two.
         vit_group: dict[str, dict[str, object]] = defaultdict(dict)
-        if "instrument_type" in df.columns:
-            for (venue, itype), vitdf in df.groupby(["venue", "instrument_type"]):
-                vit_group[str(venue)][str(itype)] = _count_statuses(vitdf)
+        if "instrument_type" in df_l2.columns:
+            itype_fold = _casefold_instrument_type_series(df_l2["instrument_type"])
+            for (venue, _itype_fold), vitdf in df_l2.groupby([df_l2["venue"], itype_fold], observed=True):
+                display_itype = _representative_instrument_type(vitdf["instrument_type"])
+                vit_group[str(venue)][display_itype] = _count_statuses(vitdf)
         else:
             logger.warning(
                 "  [%s] instrument_type column absent — by_venue_instrument_type will be empty",
@@ -500,24 +772,41 @@ def _compute_coverage(
         by_venue_instrument_type[ag] = dict(vit_group)
 
         # level 5 — per (ag, venue, instrument_type, data_type) [v2]
+        # Same case-fold grouping as level 4 — see the comment there.
         vitdt_group: dict[str, dict[str, dict[str, object]]] = defaultdict(lambda: defaultdict(dict))
-        if "instrument_type" in df.columns:
-            for (venue, itype, dt), vitdtdf in df.groupby(["venue", "instrument_type", "data_type"]):
-                vitdt_group[str(venue)][str(itype)][str(dt)] = _count_statuses(vitdtdf)
-        by_venue_instrument_type_data_type[ag] = {
-            v: dict(it_map) for v, it_map in vitdt_group.items()
-        }
+        if "instrument_type" in df_l2.columns:
+            itype_fold = _casefold_instrument_type_series(df_l2["instrument_type"])
+            for (venue, _itype_fold, dt), vitdtdf in df_l2.groupby(
+                [df_l2["venue"], itype_fold, df_l2["data_type"]], observed=True
+            ):
+                display_itype = _representative_instrument_type(vitdtdf["instrument_type"])
+                vitdt_group[str(venue)][display_itype][str(dt)] = _count_statuses(vitdtdf)
+        by_venue_instrument_type_data_type[ag] = {v: dict(it_map) for v, it_map in vitdt_group.items()}
 
         # level 6 — per (ag, date) [v2]
         day_group: dict[str, object] = {}
-        if "date" in df.columns:
-            for day_val, daydf in df.groupby("date"):
+        if "date" in df_l2.columns:
+            for day_val, daydf in df_l2.groupby("date", observed=True):
                 day_group[str(day_val)] = _count_statuses(daydf)
         else:
             logger.warning("  [%s] date column absent — by_day will be empty", ag)
         by_day[ag] = day_group
 
-        # Layer-1 enumeration completeness check
+        # level 7 — per (ag, chain) [chain-enum 2026-07-18]
+        # observed=True mirrors the by_venue projection (chain can be `category`
+        # dtype from the read_dictionary hardening). Guarded on column presence so
+        # a bucket whose parquet predates the chain axis yields an empty {} rather
+        # than raising — that AG simply has no enumerable chains.
+        chain_group: dict[str, object] = {}
+        if "chain" in df_l2.columns:
+            for chain_val, cdf in df_l2.groupby("chain", observed=True):
+                chain_group[str(chain_val)] = _count_statuses(cdf)
+        else:
+            logger.info("  [%s] chain column absent — by_chain will be empty", ag)
+        by_chain[ag] = chain_group
+
+        # Layer-1 enumeration completeness check — uses the UNFILTERED df so
+        # stray tuples (writer emissions UAC doesn't sanction) remain visible.
         logger.info("  Running Layer-1 completeness check for %s …", ag)
         try:
             l1_result = check_fn(ag, df, diagnose=diagnose)
@@ -532,14 +821,12 @@ def _compute_coverage(
             ag_cell["instrument_gates_download"] = not l1_result.denominator_complete
             if l1_result.denominator_status == "UNDEFINED":
                 logger.error(
-                    "  [%s] Layer-1 UNDEFINED (EXPECTED==0) — denominator not wired. "
-                    "CK3 cannot certify this AG.",
+                    "  [%s] Layer-1 UNDEFINED (EXPECTED==0) — denominator not wired. CK3 cannot certify this AG.",
                     ag,
                 )
             elif not l1_result.denominator_complete:
                 logger.warning(
-                    "  [%s] Layer-1 INCOMPLETE (%.1f%%) — Layer-2 coverage is a LOWER BOUND. "
-                    "Missing tuples: %d",
+                    "  [%s] Layer-1 INCOMPLETE (%.1f%%) — Layer-2 coverage is a LOWER BOUND. Missing tuples: %d",
                     ag,
                     l1_result.completeness_pct,
                     len(l1_result.missing_tuples),
@@ -560,20 +847,146 @@ def _compute_coverage(
         "by_venue_instrument_type": by_venue_instrument_type,
         "by_venue_instrument_type_data_type": by_venue_instrument_type_data_type,
         "by_day": by_day,
+        "by_chain": by_chain,
         "layer_1": {"by_asset_group": layer_1_by_ag},
     }
 
 
-def _write_output(payload: dict[str, object], output_path: str | None) -> None:
-    blob_bytes = json.dumps(payload, indent=2).encode()
+# The per-asset_group projections _compute_coverage returns — every one keyed
+# FIRST by asset_group, which is what makes a per-key merge well-defined.
+_MERGEABLE_BY_AG_KEYS: Final[tuple[str, ...]] = (
+    "by_asset_group",
+    "by_venue",
+    "by_venue_data_type",
+    "by_venue_instrument_type",
+    "by_venue_instrument_type_data_type",
+    "by_day",
+    "by_chain",
+)
 
+
+def _init_coverage_accumulator() -> dict[str, object]:
+    """Return an empty structure shaped like ``_compute_coverage``'s return value.
+
+    Seeds every ``_MERGEABLE_BY_AG_KEYS`` entry (+ ``layer_1.by_asset_group``) with an
+    empty dict so ``_accumulate_coverage`` can unconditionally ``.update()`` into it as
+    each asset_group streams through — see main()'s per-asset_group loop.
+    """
+    acc: dict[str, object] = {key: {} for key in _MERGEABLE_BY_AG_KEYS}
+    acc["layer_1"] = {"by_asset_group": {}}
+    return acc
+
+
+def _accumulate_coverage(acc: dict[str, object], ag_coverage: dict[str, object]) -> None:
+    """Merge one asset_group's ``_compute_coverage()`` output into ``acc``, in place.
+
+    Unlike ``_merge_with_existing`` (which reconciles a fresh run against a possibly
+    STALE existing GCS payload from earlier the same day, so freshness/priority
+    matters), each asset_group here is computed exactly once per run — main() streams
+    one ag at a time, releasing its manifest DataFrame before reading the next — so
+    this is a plain per-key union with no priority logic needed.
+    """
+    for key in _MERGEABLE_BY_AG_KEYS:
+        acc_map = cast("dict[str, object]", acc[key])
+        new_map = cast("dict[str, object]", ag_coverage.get(key) or {})
+        acc_map.update(new_map)
+    acc_layer1 = cast("dict[str, object]", acc["layer_1"])
+    acc_layer1_by_ag = cast("dict[str, object]", acc_layer1["by_asset_group"])
+    new_layer1 = cast("dict[str, object]", ag_coverage.get("layer_1") or {})
+    acc_layer1_by_ag.update(cast("dict[str, object]", new_layer1.get("by_asset_group") or {}))
+
+
+def _read_existing_payload(run_date: str) -> dict[str, object] | None:
+    """Read today's already-written coverage.json, if any, for same-day merge.
+
+    Root-caused 2026-07-26 (deployment_api_honest_coverage_regression_2026_07_26.md):
+    a same-day run that measures only a SUBSET of asset_groups (e.g. a manual
+    ``--asset-group cefi`` dev/debug invocation of launch-measure-honest-coverage-vm.sh
+    — an explicitly documented, normal usage mode) used to silently CLOBBER the
+    day's coverage.json, because ``_write_output`` overwrites the object
+    unconditionally and GCS has no merge semantics. The scheduled nightly
+    ``--asset-group all`` cron measured all 5 groups just fine for days at a
+    time, then a same-day narrower run erased everything but its own group —
+    with no error, no partial banner, nothing: the OTHER asset_groups' data
+    simply vanished from that day's file. Returns None on any read/parse
+    failure (first run of the day, or a malformed prior file) so the caller
+    falls back to writing this run's payload standalone, same as before.
+    """
+    client = storage.Client(project=PROJECT_ID)
+    bucket = client.bucket(_OUTPUT_BUCKET)
+    blob = bucket.blob(f"{run_date}/coverage.json")
+    try:
+        raw = blob.download_as_text()
+    except Exception as exc:
+        logger.info("No existing coverage.json for %s to merge with (%s)", run_date, exc)
+        return None
+    try:
+        existing = json.loads(raw)
+    except Exception as exc:
+        logger.warning("Existing coverage.json for %s is malformed — not merging (%s)", run_date, exc)
+        return None
+    if not isinstance(existing, dict):
+        return None
+    return cast(dict[str, object], existing)
+
+
+def _merge_with_existing(payload: dict[str, object], existing: dict[str, object]) -> dict[str, object]:
+    """Merge this run's payload on top of an existing same-day coverage.json.
+
+    Per-asset_group projections are merged key-by-key: an asset_group THIS run
+    measured overwrites the existing cell (fresh data wins); an asset_group
+    this run did not touch keeps whatever the existing file already had.
+    ``asset_groups_requested``/``measured``/``failed`` are then recomputed off
+    the MERGED ``by_asset_group`` so they describe the combined day rather
+    than just this run — a full ``all`` run naturally supersedes everything
+    (it re-measures every group), while a narrower run only ever ADDS to or
+    refreshes what is already there.
+    """
+    merged: dict[str, object] = dict(existing)
+    for key in _MERGEABLE_BY_AG_KEYS:
+        existing_map = cast("dict[str, object]", existing.get(key) or {})
+        new_map = cast("dict[str, object]", payload.get(key) or {})
+        merged[key] = {**existing_map, **new_map}
+
+    existing_layer1 = cast("dict[str, object]", existing.get("layer_1") or {})
+    new_layer1 = cast("dict[str, object]", payload.get("layer_1") or {})
+    merged["layer_1"] = {
+        "by_asset_group": {
+            **cast("dict[str, object]", existing_layer1.get("by_asset_group") or {}),
+            **cast("dict[str, object]", new_layer1.get("by_asset_group") or {}),
+        },
+    }
+
+    merged_by_ag = cast("dict[str, object]", merged["by_asset_group"])
+    existing_requested = cast("list[str]", existing.get("asset_groups_requested") or [])
+    new_requested = cast("list[str]", payload.get("asset_groups_requested") or [])
+    requested_set = {*existing_requested, *new_requested}
+    requested = [ag for ag in _KNOWN_ASSET_GROUPS if ag in requested_set]
+
+    merged["asset_groups_requested"] = requested
+    merged["asset_groups_measured"] = [ag for ag in _KNOWN_ASSET_GROUPS if ag in merged_by_ag]
+    merged["asset_groups_failed"] = [ag for ag in requested if ag not in merged_by_ag]
+    merged["partial"] = bool(merged["asset_groups_failed"])
+    merged["generated_at"] = payload["generated_at"]
+    merged["date"] = payload["date"]
+    merged["schema_version"] = payload["schema_version"]
+    return merged
+
+
+def _write_output(payload: dict[str, object], output_path: str | None) -> None:
     if output_path:
+        blob_bytes = json.dumps(payload, indent=2).encode()
         with open(output_path, "wb") as f:
             f.write(blob_bytes)
         logger.info("Wrote coverage JSON to %s", output_path)
         return
 
-    run_date = payload["date"]
+    run_date = cast(str, payload["date"])
+    existing = _read_existing_payload(run_date)
+    if existing is not None:
+        payload = _merge_with_existing(payload, existing)
+
+    blob_bytes = json.dumps(payload, indent=2).encode()
     client = storage.Client(project=PROJECT_ID)
     bucket = client.bucket(_OUTPUT_BUCKET)
     blob = bucket.blob(f"{run_date}/coverage.json")
@@ -599,9 +1012,19 @@ def main() -> None:
         action="store_true",
         default=False,
         help=(
-            "Disable prd/non-prd manifest merging. Falls back to freshest-wins only. "
+            "Disable prd/non-prd manifest merging. Falls back to primary-only. "
             "Use when you want to measure a single bucket in isolation without combining "
             "the expected_unattempted skeleton from the secondary bucket."
+        ),
+    )
+    parser.add_argument(
+        "--primary-bucket",
+        default=None,
+        help=(
+            "Force PRIMARY selection to a specific bucket name (matched against "
+            "_MANIFEST_BUCKET_CANDIDATES for the run's asset_groups). Overrides the "
+            "default tuple-order pin. If not accessible for a given asset_group, that "
+            "AG falls back to the pinned primary. Use for surgery/debugging."
         ),
     )
     parser.add_argument(
@@ -619,25 +1042,65 @@ def main() -> None:
 
     asset_groups = list(_KNOWN_ASSET_GROUPS) if args.asset_group == "all" else [args.asset_group]
     merge = not args.no_merge
+    primary_bucket_override = args.primary_bucket
 
-    dfs: dict[str, pd.DataFrame] = {}
+    # Per-asset-group streaming (real column-prune refactor, 2026-08-01 — see the
+    # module docstring section of the same name): read, compute, and release ONE
+    # asset_group's manifest at a time instead of holding every requested asset_group's
+    # primary DataFrame in memory simultaneously for the whole run. _compute_coverage's
+    # per-ag loop body has no cross-ag state, so calling it once per ag and merging the
+    # single-ag result via _accumulate_coverage is behaviorally identical to the old
+    # batched dict-of-all-ags call — peak memory is now bounded by the single largest
+    # asset_group's read instead of the sum of all 5.
+    coverage = _init_coverage_accumulator()
+    asset_groups_measured: list[str] = []
     for ag in asset_groups:
-        df = _read_manifest(ag, merge=merge)
-        if df is not None and not df.empty:
-            dfs[ag] = df
+        df = _read_manifest(
+            ag,
+            merge=merge,
+            primary_bucket_override=primary_bucket_override,
+        )
+        if df is None or df.empty:
+            continue
+        ag_coverage = _compute_coverage({ag: df}, diagnose=args.diagnose_layer1)
+        _accumulate_coverage(coverage, ag_coverage)
+        asset_groups_measured.append(ag)
+        del df, ag_coverage
+        gc.collect()
 
-    if not dfs:
+    if not asset_groups_measured:
         logger.error("No manifests loaded — nothing to measure")
         sys.exit(1)
 
-    coverage = _compute_coverage(dfs, diagnose=args.diagnose_layer1)
+    # Honest-absence: a PARTIAL run — some requested asset_groups failed to load
+    # (typically an availability-index parquet that OOM'd inside _read_parquet_safe,
+    # which swallows the error and returns None) — must be stamped LOUDLY, never
+    # served as if complete. Without this, a partial file (e.g. defi-only) is
+    # indistinguishable from a healthy full run and the Honest Coverage card
+    # silently renders only the asset groups that happened to load. Consumers read
+    # ``partial`` + ``asset_groups_failed`` to surface a "coverage incomplete" banner.
+    asset_groups_failed = [ag for ag in asset_groups if ag not in asset_groups_measured]
+    partial = bool(asset_groups_failed)
+    if partial:
+        logger.error(
+            "PARTIAL coverage run: %d/%d asset_groups failed to load (%s) — output "
+            "marked partial=true. Most likely an availability-index read failure "
+            "(OOM/transient); verify the runner VM has enough RAM for the largest "
+            "single-asset-group parquet.",
+            len(asset_groups_failed),
+            len(asset_groups),
+            ", ".join(asset_groups_failed),
+        )
 
     now_utc = datetime.now(UTC)
     payload: dict[str, object] = {
         "generated_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "date": date.today().isoformat(),
         "schema_version": 2,
-        "asset_groups_measured": list(dfs.keys()),
+        "asset_groups_requested": asset_groups,
+        "asset_groups_measured": asset_groups_measured,
+        "asset_groups_failed": asset_groups_failed,
+        "partial": partial,
         **coverage,
     }
 

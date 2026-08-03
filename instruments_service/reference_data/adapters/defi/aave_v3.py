@@ -1,12 +1,14 @@
 """Aave V3 reference data adapter — instrument discovery via Aave subgraph.
 
 Discovers Aave V3 lending markets (aToken and debtToken instruments) on Ethereum.
-Markets are returned as InstrumentRecord with instrument_type=InstrumentType.LENDING.
+Markets are returned as two InstrumentRecords per reserve: instrument_type=A_TOKEN
+(supply side) and instrument_type=DEBT_TOKEN (borrow side, when borrowingEnabled).
 
 Data source: The Graph (Aave V3 subgraph).
 Reference: https://aave.com/
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from decimal import Decimal
@@ -14,7 +16,8 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
-from unified_api_contracts.registry import get_subgraph_id
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
+from unified_api_contracts.registry import get_subgraph_id, resolve_rpc_url
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -30,6 +33,7 @@ from ...utils.evm_creation_resolver import (
     batch_resolve_evm_creation_timestamps,
     get_protocol_floor_date,
 )
+from .aave_v3_plasma_rpc import discover_plasma_reserves_sync, resolve_plasma_alchemy_key
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +245,64 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         )
         return results
 
+    async def _get_plasma_reserves_via_rpc(self) -> list[InstrumentRecord]:
+        """Discover PLASMA Aave V3 reserves live via AaveProtocolDataProvider RPC.
+
+        No subgraph exists for Plasma (too new for The Graph indexing). Mirrors
+        MTDS's own ``lending_indices_rpc.py`` RPC-discovery pattern against the SAME
+        contract address (proven working: 18 real rows captured 2026-07-30), extended
+        with the two companion AaveProtocolDataProvider calls needed for a full
+        InstrumentRecord (aToken address, decimals, borrowingEnabled).
+
+        Total failure (no key / no RPC URL / getAllReservesTokens itself fails) is a
+        TRANSIENT FETCH FAILURE, not an empty universe — raises so the caller records
+        it ``attempted_failed`` (honest gap), matching the subgraph path's own
+        ConnectionError convention above. A single reserve's detail-call failing is
+        shard-level isolated: logged + skipped, never raised (this is a Plasma-wide
+        producer, not a per-reserve one — one bad reserve shouldn't blank the venue).
+        """
+        key = resolve_plasma_alchemy_key(None)
+        if not key:
+            logger.warning("AaveV3 PLASMA RPC: no Alchemy API key available")
+            return []
+        url = resolve_rpc_url("PLASMA", env="mainnet", alchemy_api_key=key)
+        if not url:
+            logger.warning("AaveV3 PLASMA RPC: no RPC URL resolved for PLASMA")
+            return []
+
+        try:
+            reserves = await asyncio.to_thread(discover_plasma_reserves_sync, url)
+        except (ConnectionError, TimeoutError, ValueError, RuntimeError) as exc:
+            logger.error("AaveV3 PLASMA RPC: getAllReservesTokens fetch failed: %s", exc)
+            raise ConnectionError(str(exc)) from exc
+
+        venue_tag = f"{self._venue_prefix}-{self._chain}"
+        atoken_addresses: list[str] = []
+        for reserve in reserves:
+            atoken_obj = reserve.get("aToken")
+            if isinstance(atoken_obj, dict):
+                atoken_addr = str(atoken_obj.get("id", ""))  # noqa: qg-empty-fallback — "" is the cache-miss sentinel below, same as the subgraph path
+                if atoken_addr:
+                    atoken_addresses.append(atoken_addr)
+        creation_ts_map: dict[str, datetime] = {}
+        if atoken_addresses:
+            creation_ts_map = await batch_resolve_evm_creation_timestamps(atoken_addresses, self._chain)
+
+        floor_date = get_protocol_floor_date("aave_v3", self._chain)
+        results: list[InstrumentRecord] = []
+        for reserve in reserves:
+            atoken_obj = reserve.get("aToken")
+            atoken_addr = (
+                str(atoken_obj.get("id", ""))  # noqa: qg-empty-fallback — "" is the cache-miss sentinel for creation_ts_map.get() below
+                if isinstance(atoken_obj, dict)
+                else ""
+            )
+            available_since = creation_ts_map.get(atoken_addr, floor_date)
+            results.extend(self._build_reserve_records(reserve, venue_tag, available_since))
+
+        logger.info("AaveV3: PLASMA RPC discovery — returned %d lending instruments", len(results))
+        return results
+
     async def get_instruments(
         self,
         instrument_type: str | None = None,
@@ -249,11 +311,14 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         For OPTIMISM: routes to static reserve registry (abandoned subgraph).
         """
-        if instrument_type not in (None, InstrumentType.LENDING):
+        if instrument_type not in (None, InstrumentType.A_TOKEN, InstrumentType.DEBT_TOKEN):
             return []
 
         if self._chain == "OPTIMISM":
             return self._get_optimism_reserves_static()
+
+        if self._chain == "PLASMA":
+            return await self._get_plasma_reserves_via_rpc()
 
         url = self._resolve_api_url()
         if not url:
@@ -397,7 +462,6 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": underlying,
-            "instrument_type": InstrumentType.LENDING,
             "base_asset": sym_upper,
             "quote_asset": "",
             "tick_size": Decimal("0.000001"),
@@ -419,18 +483,30 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         }
 
         a_symbol = f"A{sym_upper}"
+        a_token_instrument_key = build_instrument_id(venue_tag, InstrumentType.A_TOKEN, a_symbol, passthrough=True)
         results = [
             InstrumentRecord(
-                instrument_key=f"{venue_tag}:A_TOKEN:{a_symbol}",
+                instrument_key=a_token_instrument_key,
+                # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                canonical_instrument_id=a_token_instrument_key,
+                instrument_type=InstrumentType.A_TOKEN,
                 **base_kwargs,
             )
         ]
 
         if reserve.get("borrowingEnabled", False):
             debt_symbol = f"DEBT{sym_upper}"
+            debt_token_instrument_key = build_instrument_id(
+                venue_tag, InstrumentType.DEBT_TOKEN, debt_symbol, passthrough=True
+            )
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{venue_tag}:DEBT_TOKEN:{debt_symbol}",
+                    instrument_key=debt_token_instrument_key,
+                    # DeFi has no raw-code-to-human-name translation gap the way TradFi does (its symbols
+                    # are already human-readable) -- canonical_instrument_id mirrors instrument_key.
+                    canonical_instrument_id=debt_token_instrument_key,
+                    instrument_type=InstrumentType.DEBT_TOKEN,
                     **base_kwargs,
                 )
             )
