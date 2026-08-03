@@ -708,6 +708,9 @@ from instruments_service.engine.orchestrator.writers import (
     _write_market_lifecycle as _write_market_lifecycle,
 )
 from instruments_service.engine.orchestrator.writers import (
+    _write_sports_fixture_venue as _write_sports_fixture_venue,
+)
+from instruments_service.engine.orchestrator.writers import (
     _write_venue as _write_venue,
 )
 from instruments_service.engine.orchestrator.writers import (
@@ -859,6 +862,7 @@ __all__ = [
     "_write_master_append",
     "_write_sfi_league_mapping",
     "_write_snapshot_player_values",
+    "_write_sports_fixture_venue",
     "_write_team_mapping",
     "_write_transfermarkt_team_mapping",
     "_write_venue",

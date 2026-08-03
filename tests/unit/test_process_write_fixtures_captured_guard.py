@@ -32,8 +32,8 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
-from instruments_service.engine.orchestrator.process_write import _write_sports_fixture_venue
 from instruments_service.engine.orchestrator.sports_reference_core import _manifest_captured_leagues_for_data_type
+from instruments_service.engine.orchestrator.writers import _write_sports_fixture_venue
 
 
 class TestManifestCapturedFixtureLeagues:
@@ -109,6 +109,7 @@ class TestWriteSportsFixtureVenueOscillationGuard:
                 venue_str="API_FOOTBALL",
                 venue_df=venue_df,
                 date=_date,
+                bucket="test-bucket",
                 league_filter=None,
                 sink=MagicMock(),
                 manifest=mock_manifest,
@@ -154,6 +155,7 @@ class TestWriteSportsFixtureVenueOscillationGuard:
                 venue_str="API_FOOTBALL",
                 venue_df=venue_df,
                 date=_date,
+                bucket="test-bucket",
                 league_filter=None,
                 sink=MagicMock(),
                 manifest=mock_manifest,
@@ -189,6 +191,7 @@ class TestWriteSportsFixtureVenueOscillationGuard:
                 venue_str="API_FOOTBALL",
                 venue_df=venue_df,
                 date=_date,
+                bucket="test-bucket",
                 league_filter=None,
                 sink=MagicMock(),
                 manifest=mock_manifest,

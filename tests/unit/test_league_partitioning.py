@@ -486,7 +486,9 @@ class TestOrchestratorSportsLeaguePartitioning:
             mock_dvs.return_value.validate_for_domain = MagicMock()
             result = await process_instruments("2026-04-12", ["SPORTS"])
 
-        # Verify writes: should have 2 writes (EPL and BUNDESLIGA)
+        # Sports exception (operator ruling 2026-08-03): league= is a
+        # legitimate trailing key — one write per (day, venue, league), NOT
+        # consolidated (cross-asset-canonical-target-ssot.md §8 sports banner).
         league_writes = [c for c in mock_sink.write.call_args_list if "league" in c.kwargs.get("partition", {})]
         assert len(league_writes) == 2
         partition_leagues = {c.kwargs["partition"]["league"] for c in league_writes}

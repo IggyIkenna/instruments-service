@@ -35,6 +35,7 @@ __all__ = [
     "_market_lifecycle_sink_for",
     "_write_futures_contracts",
     "_write_market_lifecycle",
+    "_write_sports_fixture_venue",
     "_write_venue",
     "_write_venues_from_teams",
 ]
@@ -515,6 +516,172 @@ def _write_futures_contracts(
                 "error": str(exc),
             },
         )
+
+
+def _write_sports_fixture_venue(
+    *,
+    venue_str: str,
+    venue_df: _orch.pd.DataFrame,
+    date: str,
+    bucket: str,
+    league_filter: list[str] | None,
+    sink: _orch.DataSink,
+    manifest: _orch.ManifestWriter,
+    counts: dict[str, int],
+    sampler: _orch.SamplingService,
+) -> None:
+    """Sports fixtures: per-(day, venue, league) ``instruments.parquet`` — R2 2026-07-21
+    + the sports exception ruled 2026-08-03 (todo 1 of
+    ``instrument_availability_hive_migration_unrecognized_shapes_and_content_mismatch_2026_08_03.md``).
+
+    instrument_key format: {LEAGUE}:{HOME}_v_{AWAY}:{DATE} — extract league_id
+    as the part before the first colon.
+
+    Operator ruled option (a): ``league=`` IS a legitimate trailing key for
+    sports's ``instrument_availability`` — the writer keeps its per-league
+    split (no rollup), target shape (``cross-asset-canonical-target-ssot.md``
+    §8 sports-exception banner):
+    ``instrument_availability/by_date/day={D}/pipeline_mode={mode}_{src}/asset_group=sports/venue={V}/league={L}/instruments.parquet``.
+    This writer previously fanned out to the SAME per-league grain but via the
+    flat ``sink`` + a ``{day, venue, league}`` partition dict — invisible to the
+    full-hive rule (missing ``pipeline_mode=``/``asset_group=``, and
+    alphabetically-sorted to ``day=/league=/venue=/...`` — the ``league=``
+    segment landed BEFORE ``venue=`` instead of trailing after it, per the
+    alphabetical-sort trap). The fix bakes the ordered 4-key hive prefix via
+    ``_instrument_availability_sink_for`` (mirrors ``_write_venue``) ONCE per
+    venue, then passes ``league`` as a SINGLE trailing partition key per write
+    (mirrors ``_write_prediction_venue``'s ``canonical_question_group`` —  a
+    single-key dict can't hit the alphabetical-sort trap). Manifest
+    honest-coverage tracking (``record_captured``/``record_empty``) is
+    unchanged — already per-league. ``sink`` is accepted for call-site
+    compatibility (see ``_write_venue``'s docstring) but is not the write
+    target.
+    """
+    _sports_df = venue_df.copy()
+    _sports_df["_league_id"] = _sports_df["instrument_key"].str.split(":").str[0]
+    # Apply league filter if set (--league CLI arg)
+    if league_filter:
+        _sports_df = _sports_df[_sports_df["_league_id"].isin(league_filter)]
+    _hive_sink = _instrument_availability_sink_for(
+        bucket,
+        date=date,
+        pipeline_mode=str(_orch.PipelineMode.BATCH_API_FOOTBALL),
+        asset_group="sports",
+        venue=venue_str,
+    )
+    _captured_lids: set[str] = set()
+    for _lid, _league_df in _sports_df.groupby("_league_id"):
+        _league_id_str = str(_lid)
+        _canonical_lid_str = _orch._canonical_league_id(_league_id_str)
+        # WRITE-UNIVERSE gate: skip non-canonical leagues to keep the IS index clean.
+        if not _orch._is_in_canonical_write_universe(_canonical_lid_str):
+            continue
+        _captured_lids.add(_league_id_str)
+        _league_df_clean = _league_df.drop(columns=["_league_id"])
+        _stamped_fixture_df = _orch.stamp_available_at_explicit(_league_df_clean, when=_orch.datetime.now(_orch.UTC))
+        _orch._gated_sink_write(
+            _hive_sink,
+            data=_stamped_fixture_df,
+            partition={"league": _canonical_lid_str},
+            filename="instruments.parquet",
+            venue=venue_str,
+            entity="instruments",
+        )
+        manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+            row_key={
+                "date": date,
+                "data_type": FIXTURES_SCHEDULE,
+                "league_id": _canonical_lid_str,
+            },
+            df=_stamped_fixture_df,
+            asset_group="sports",
+            instrument_type="",
+            data_type=FIXTURES_SCHEDULE,
+            league_id=_canonical_lid_str,
+            pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+            # FIXTURES_SCHEDULE is multi-source (api_football + footystats) →
+            # explicit source required (data_source_provenance Phase 4).
+            # This branch is the API_FOOTBALL venue (venue_str filter).
+            source="api_football",
+            service_emission_state=None,
+        )
+        counts[f"{FIXTURES_SCHEDULE}/{_league_id_str}"] = len(_league_df_clean)
+        if sampler.enable_sampling:
+            sampler.generate_csv_sample(
+                _league_df_clean,
+                filename_prefix=f"instruments_API_FOOTBALL_{_league_id_str}_{date}",
+            )
+
+    # Honest-coverage: every league that is in-season on this date
+    # but had zero fixtures gets a record_empty row. Without this,
+    # mid-week gaps render as red "missing" in the data-status
+    # drilldown even though the adapter ran and the API legitimately
+    # returned zero for that league. Season window comes from UAC
+    # get_league_fixture_calendar — only leagues whose season
+    # actually covers this date are claimed empty.
+    # Root-cause fix (api_football_fixtures_stuck_612_residual_2026_07_15,
+    # see plans/active/sports_data_sources_canonical_completion_2026_07_13.md):
+    # TWO bugs previously left a pre-existing stale FIXTURES attempted_failed
+    # row permanently un-superseded even on a genuinely clean re-fetch:
+    #   1. Off-season leagues (``get_league_fixture_calendar`` returns []) hit
+    #      a bare ``continue`` — NEITHER captured NOR empty was ever written
+    #      for that (date, league) cell, so a stale row from before this
+    #      off-season check existed (or from any other bug) could never be
+    #      cleared. Now write a terminal ``record_empty`` with
+    #      ``EXPECTED_PAUSED_LEAGUE`` (the existing off-season reason used by
+    #      ``sports_reference_core.py`` for INJURIES/TEAMS/STANDINGS) instead
+    #      of silently skipping.
+    #   2. Neither this loop's ``record_empty`` calls NOR the off-season skip
+    #      touched ``counts``, which is the ONLY per-league write signal
+    #      ``process_completeness.py`` reads (via ``_fold_written_venues``) to
+    #      decide whether ``API_FOOTBALL`` is a real "0 records" venue. A
+    #      league-scoped run whose target league had zero fixtures (the
+    #      common, correct case) always left ``counts`` FIXTURES-empty, so
+    #      completeness misclassified the whole venue as
+    #      ``SOURCE_RETURNED_ZERO`` and stamped a REDUNDANT blanket
+    #      ``{date, venue}`` row — live-verified (2026-07-15) to interfere
+    #      with the correct per-league row landing in the same per-VM shard
+    #      flush. Stamping ``counts[f"FIXTURES_SCHEDULE/{league}"] = 0`` for every
+    #      league this loop handles (mirrors the captured branch's
+    #      ``counts[...] = len(...)``) makes ``written_venues`` correctly
+    #      include ``API_FOOTBALL`` whenever ANY per-league write (captured OR
+    #      honest-empty) happened, so the wrong blanket stamp no longer fires.
+    _fx_attempt_ts = _orch.datetime.now(_orch.UTC)
+    _expected_af_lids = {league.league_id for league in _orch.get_expected_leagues_for_source("api_football")}
+    if league_filter:
+        _expected_af_lids &= set(league_filter)
+    _mlids = _orch._manifest_captured_leagues_for_data_type(
+        bucket=manifest.catalogue_bucket, date=date, data_type=FIXTURES_SCHEDULE
+    )
+    if _mlids is None:
+        return
+    for _exp_lid in sorted(_expected_af_lids - _captured_lids - _mlids):
+        if not _orch.get_league_fixture_calendar(_exp_lid, date, date):
+            manifest.record_empty(
+                row_key={
+                    "date": date,
+                    "data_type": FIXTURES_SCHEDULE,
+                    "league_id": _exp_lid,
+                },
+                attempted_at=_fx_attempt_ts,
+                reason=_orch.EmptyConfirmedReason.EXPECTED_PAUSED_LEAGUE,
+                pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                source="api_football",
+            )
+            counts[f"{FIXTURES_SCHEDULE}/{_exp_lid}"] = 0
+            continue
+        manifest.record_empty(
+            row_key={
+                "date": date,
+                "data_type": FIXTURES_SCHEDULE,
+                "league_id": _exp_lid,
+            },
+            attempted_at=_fx_attempt_ts,
+            reason=_orch.EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+            pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+            source="api_football",
+        )
+        counts[f"{FIXTURES_SCHEDULE}/{_exp_lid}"] = 0
 
 
 def _build_market_lifecycle_df(
