@@ -155,6 +155,7 @@ def _get_xcal(calendar_name: str) -> object | None:
         _db._XCAL_CACHE[calendar_name] = cal
         return cal
     except Exception as _exc:
+        _db.logger.warning("Failed to load exchange calendar %s (%s): %s", calendar_name, xcal_code, _exc)
         return None
 
 
@@ -173,6 +174,7 @@ def _is_trading_holiday(target: date, calendar_name: str) -> bool:
         ts = pd.Timestamp(target)
         return not cal.is_session(ts)
     except Exception as _exc:
+        _db.logger.debug("Holiday check failed for %s on %s: %s", calendar_name, target, _exc)
         return False
 
 
