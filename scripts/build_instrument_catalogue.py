@@ -58,6 +58,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
 
 import pandas as pd
+from google.api_core.exceptions import NotFound
 from unified_api_contracts import (
     CEFI_BASE_ASSET_UNIVERSE,
     CEFI_EQUITY_PERP_BASE_UNIVERSE,
@@ -2774,6 +2775,26 @@ def _download_by_date_blob(storage: StorageClient, bucket: str, name: str) -> by
     )
 
 
+def _warn_vanished_snapshot(name: str) -> None:
+    """Log a skip for a by_date snapshot that 404'd between listing and download.
+
+    **Root cause (2026-08-03, DP-VM-001 agt-b0a3db).** A ``--mode full`` walk lists its
+    full target set up front, then spends tens of minutes to hours downloading it — long
+    enough for a concurrent, independently-authorized migration/purge to legitimately
+    delete a ``by_date`` snapshot this walk already listed (confirmed live: defi's
+    ``day=2025-02-24/venue=AAVE_V3-LINEA/instruments.parquet`` 404'd mid-run, and a direct
+    GCS check afterward confirmed the object is genuinely gone, not a transient blip).
+    ``_download_by_date_blob`` already retries transient network failures; a 404 is not
+    transient and retrying it would just waste the retry budget. Skipping (rather than
+    letting the whole multi-hour roll-up crash) is the shard-level-failure-isolation
+    treatment applied to this per-blob download — honest-absence: the day/venue this
+    snapshot covered will simply be under-represented in `available_from`/`available_to`
+    for that one row rather than fabricated, and the NEXT rollup (which re-lists) picks up
+    whatever the concurrent process left in its place.
+    """
+    logger.warning("Skipping vanished by_date snapshot (404 since listing): %s", name)
+
+
 def _bounded_parallel_load(
     items: list[_LoadItemT],
     load: Callable[[_LoadItemT], _LoadResultT],
@@ -2900,16 +2921,22 @@ def _iter_by_date_snapshots(
         targets = targets[:max_blobs]
     logger.info("Found %d by_date parquet(s) to roll up (workers=%d)", len(targets), max_workers)
 
-    def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame]:
+    def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame] | None:
         day, name = item
-        payload = _download_by_date_blob(storage, bucket, name)
+        try:
+            payload = _download_by_date_blob(storage, bucket, name)
+        except NotFound:
+            _warn_vanished_snapshot(name)
+            return None
         return day, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
     # — see _bounded_parallel_load: the full-corpus pool.map() OOM-killed the
     # catalogue-regen Cloud Run job. Completion-order yield is correct here (the
     # lifecycle roll-up is order-independent).
-    yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
+    for result in _bounded_parallel_load(targets, _load, max_workers=max_workers):
+        if result is not None:
+            yield result
 
 
 def _iter_prediction_by_date_snapshots(
@@ -2988,16 +3015,22 @@ def _iter_prediction_by_date_snapshots(
         targets = targets[:max_blobs]
     logger.info("Found %d prediction by_date parquet(s) to roll up (workers=%d)", len(targets), max_workers)
 
-    def _load(item: tuple[date, str, str, str]) -> tuple[date, str, str, pd.DataFrame]:
+    def _load(item: tuple[date, str, str, str]) -> tuple[date, str, str, pd.DataFrame] | None:
         day, venue, cqg, name = item
-        payload = _download_by_date_blob(storage, bucket, name)
+        try:
+            payload = _download_by_date_blob(storage, bucket, name)
+        except NotFound:
+            _warn_vanished_snapshot(name)
+            return None
         return day, venue, cqg, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
     # — see _bounded_parallel_load: the full-corpus pool.map() OOM-killed the
     # catalogue-regen Cloud Run job. Completion-order yield is correct here (the
     # lifecycle roll-up is order-independent).
-    yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
+    for result in _bounded_parallel_load(targets, _load, max_workers=max_workers):
+        if result is not None:
+            yield result
 
 
 def _iter_sports_by_date_snapshots(
@@ -3039,16 +3072,22 @@ def _iter_sports_by_date_snapshots(
         targets = targets[:max_blobs]
     logger.info("Found %d sports leagues by_date parquet(s) to roll up (workers=%d)", len(targets), max_workers)
 
-    def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame]:
+    def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame] | None:
         day, name = item
-        payload = _download_by_date_blob(storage, bucket, name)
+        try:
+            payload = _download_by_date_blob(storage, bucket, name)
+        except NotFound:
+            _warn_vanished_snapshot(name)
+            return None
         return day, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window (peak O(max_workers) frames, NOT O(len(targets)))
     # — see _bounded_parallel_load: the full-corpus pool.map() OOM-killed the
     # catalogue-regen Cloud Run job. Completion-order yield is correct here (the
     # lifecycle roll-up is order-independent).
-    yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
+    for result in _bounded_parallel_load(targets, _load, max_workers=max_workers):
+        if result is not None:
+            yield result
 
 
 def _iter_sports_ftp_snapshots(
@@ -3138,9 +3177,13 @@ def _iter_sports_ftp_snapshots(
         max_workers,
     )
 
-    def _load(item: tuple[str, date, str, str]) -> tuple[str, date, str, pd.DataFrame]:
+    def _load(item: tuple[str, date, str, str]) -> tuple[str, date, str, pd.DataFrame] | None:
         entity, day, league_id, name = item
-        payload = _download_by_date_blob(storage, bucket, name)
+        try:
+            payload = _download_by_date_blob(storage, bucket, name)
+        except NotFound:
+            _warn_vanished_snapshot(name)
+            return None
         return entity, day, league_id, pd.read_parquet(io.BytesIO(payload))
 
     # Memory-bounded sliding window — see _bounded_parallel_load. Streamed
@@ -3149,7 +3192,9 @@ def _iter_sports_ftp_snapshots(
     # O(max_workers) frames + O(distinct fixture/team/player count), NOT
     # O(len(targets)) — the fixture/team/injuries by_date corpus can span
     # hundreds of thousands of small blobs over the full history.
-    yield from _bounded_parallel_load(targets, _load, max_workers=max_workers)
+    for result in _bounded_parallel_load(targets, _load, max_workers=max_workers):
+        if result is not None:
+            yield result
 
 
 def build_sports_fixture_team_player_catalogue(
