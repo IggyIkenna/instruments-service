@@ -112,3 +112,62 @@ def test_tradfi_corporate_action_and_macro_seeds_use_databento_fallback() -> Non
         assert pm == "batch_databento", dt
         assert source == "databento", dt
         assert transport == "rest", dt
+
+
+def test_kalshi_scaffold_rows_carry_kalshi_provenance_not_polymarket() -> None:
+    """KALSHI scaffold-provenance fix (2026-08-03,
+    prediction_phantom_reconciler_wipes_bundle_atom_2026_07_10.md todo 3):
+    ``SOURCE_PRIORITY[("prediction", <data_type>)]`` lists Polymarket sources FIRST
+    (read-time priority), so the venue-blind ``external[0]`` branch was stamping
+    every KALSHI scaffold row with Polymarket's provenance. venue="KALSHI" must
+    resolve to batch_kalshi/kalshi for every real prediction data_type, including
+    market_lifecycle (whose SOURCE_PRIORITY entry is polymarket_gamma_api-only)."""
+    for dt in ("trades", "book_snapshot_5", "prediction_canonical_question_group", "market_lifecycle"):
+        pm, source, transport = _derive("prediction", dt, venue="KALSHI")
+        assert pm == "batch_kalshi", dt
+        assert source == "kalshi", dt
+        assert transport, dt
+
+
+def test_kalshi_scaffold_rows_case_and_upper_lower_data_type_variants() -> None:
+    """Sports-style upper/lower data_type variants (module docstring: 'Sports
+    data_types are registered upper-case ... so both are tried') must not affect
+    the KALSHI venue-first resolution."""
+    pm, source, _transport = _derive("prediction", "MARKET_LIFECYCLE", venue="KALSHI")
+    assert pm == "batch_kalshi"
+    assert source == "kalshi"
+
+
+def test_polymarket_scaffold_rows_are_unchanged_by_the_kalshi_fix() -> None:
+    """The venue-first branch is a provable safe superset for POLYMARKET: it is
+    deliberately absent from ``_VENUE_OVERRIDES`` (multi-source venue), so
+    ``derive_pipeline_mode_for_row`` falls through to the SAME SOURCE_PRIORITY
+    lookup ``external[0]`` already used — zero behavior change."""
+    pm, source, transport = _derive("prediction", "trades", venue="POLYMARKET")
+    assert pm == "batch_polymarket_clob"
+    assert source == "polymarket_clob"
+    assert transport
+
+    pm, source, _transport = _derive("prediction", "market_lifecycle", venue="POLYMARKET")
+    assert pm == "batch_polymarket_gamma_api"
+    assert source == "polymarket_gamma_api"
+
+
+def test_prediction_seed_with_no_venue_falls_back_to_source_priority_unchanged() -> None:
+    """A venue-blank prediction seed (defensive — real prediction rows always carry
+    a venue) must keep the pre-fix SOURCE_PRIORITY[0] behavior, not blank out."""
+    pm, source, _transport = _derive("prediction", "trades")
+    assert pm == "batch_polymarket_clob"
+    assert source == "polymarket_clob"
+
+
+def test_non_prediction_asset_groups_are_unreachable_by_the_kalshi_branch() -> None:
+    """The new venue-first branch is gated on ``asset_group == "prediction"`` only
+    — every other asset_group's scaffold-row stamping is BYTE-IDENTICAL to before
+    the fix (same code path, unreachable new branch). Spot-check a venue that IS in
+    ``_VENUE_OVERRIDES`` (IBKR) to prove the SOURCE_PRIORITY-first behavior for
+    tradfi is untouched."""
+    pm, source, transport = _derive("tradfi", "ohlcv_1d", venue="IBKR")
+    assert pm == "batch_fred"
+    assert source == "fred"
+    assert transport

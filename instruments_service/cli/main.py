@@ -41,6 +41,9 @@ import pandas as pd  # pyright: ignore[reportMissingImports]
 from unified_trading_library import ServiceBootstrap, get_write_bucket_name
 
 from instruments_service.cli.instruments_handler import InstrumentsHandler
+from instruments_service.cli.instruments_handler import (
+    _get_instruments_bucket_for_asset_group as get_instruments_bucket_for_asset_group,  # pyright: ignore[reportPrivateUsage]
+)
 from instruments_service.config import get_config
 
 _SERVICE_NAME = "instruments-service"  # pragma: no cover
@@ -73,7 +76,7 @@ def _run_coverage_status(argv: list[str] | None = None) -> None:  # pragma: no c
     args, _ = parser.parse_known_args(argv)
 
     asset_group: str | None = str(args.asset_group) if args.asset_group is not None else None  # pyright: ignore[reportAny]
-    bucket: str = str(args.bucket) if args.bucket else get_write_bucket_name("instruments", asset_group or "defi")  # pyright: ignore[reportAny]
+    bucket: str = str(args.bucket) if args.bucket else get_instruments_bucket_for_asset_group(asset_group or "defi")  # pyright: ignore[reportAny]
 
     try:
         index: pd.DataFrame = read_availability_index(bucket)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
