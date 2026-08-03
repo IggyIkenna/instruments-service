@@ -24,10 +24,12 @@ does the missing step: for each stuck CF11 cell whose per-league parquet EXISTS
 ``captured`` truthfully. Cells with NO present parquet are SKIPPED + reported
 (never fake-stamped).
 
-Reads the sports availability index with a generous
-``MANIFEST_CONSOLIDATED_STALENESS_SEC`` so the ~11-min-cadence sports
-consolidator's healthy consolidated blob is served (see sibling finding
-sports_manifest_read_staleness_budget_missing_2026_07_15.md).
+Reads the sports availability index via the standard resolver -- no per-script
+``MANIFEST_CONSOLIDATED_STALENESS_SEC`` override needed: UTL's per-AG staleness
+budget now carries a ``"sports": 1800`` entry that always wins for a sports
+bucket read regardless of any env var (see
+``unified_trading_library.manifest_writer._staleness_budget.staleness_budget_for_bucket``),
+closing sports_manifest_read_staleness_budget_missing_2026_07_15.md's finding.
 
 Usage: api_football_cf11_manifest_reconcile_2026_07_15.py [--vm-name <tag>] [--dry-run]
 Writes to REAL prod GCS (instruments-store-sports-prd-<project>).
@@ -67,7 +69,6 @@ os.environ["GOOGLE_CLOUD_PROJECT"] = ARGS.project
 os.environ["DEPLOYMENT_ENV"] = "prod"
 os.environ["MANIFEST_PER_VM_SHARDS"] = "true"
 os.environ["VM_NAME"] = ARGS.vm_name
-os.environ["MANIFEST_CONSOLIDATED_STALENESS_SEC"] = "3600"
 os.environ.pop("CLOUD_MOCK_MODE", None)
 
 from unified_trading_library import setup_events
