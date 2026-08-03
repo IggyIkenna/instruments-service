@@ -40,13 +40,23 @@ on the shared planning-vm.
 
 **Scope**: all 12 EVM default DEX protocols (from UAC's own ``SUBGRAPH_IDS`` SSOT,
 address-shaped ``instrument_id`` filtered via the SAME ``0x[hex]`` regex the reference
-purge tool uses) + ORCA/RAYDIUM/PHOENIX (Solana, base58-pubkey ``instrument_id``,
-confirmed address-shaped by direct manifest sampling). KAMINO is DELIBERATELY EXCLUDED:
-its ``dex_pool_state`` ``instrument_id`` values are UUID-shaped, not a recognizable pool
-address — its manifest rows also carry ``lending_indices``/``solana_lending``
-instrument_types under the same venue, so its capture-id semantics need a dedicated
-investigation before any address gets written into ``pool_address`` (filed as a
-follow-up, not guessed here).
+purge tool uses) + ORCA/RAYDIUM/PHOENIX/KAMINO (Solana, base58-pubkey ``instrument_id``,
+confirmed address-shaped by direct manifest sampling).
+
+**KAMINO correction (2026-08-03,
+issues/defi_dex_pools_catalogue_undercoverage_vs_historical_capture_2026_07_28.md, the
+KAMINO follow-up todo)**: an earlier pass of this script DELIBERATELY EXCLUDED kamino,
+believing its ``dex_pool_state`` ``instrument_id`` values were UUID-shaped vault ids, not
+a recognizable pool address. Direct manifest sampling disproves that: KAMINO's
+``dex_pool_state`` rows carry 44-char base58 Solana addresses (e.g.
+``BLP7UHUg1yNry94Qk3sM8pAfEyDhTZirwFghw9DoBjn7``, confirmed via
+``_solana_defi_fetch.py::fetch_kamino_vault``'s ``vault_addr = s["address"]`` — the same
+on-chain vault-strategy address instruments-service's own ``kamino.py`` adapter already
+catalogues as ``pool_address``/``raw_symbol``). The UUID-shaped ids the earlier pass
+actually saw belong to KAMINO's ``lending_indices`` rows (a DIFFERENT data_type this
+script never reads — see ``_DEX_DATA_TYPES`` below) — the two data_types were conflated.
+KAMINO is therefore included in ``_SOLANA_PROTOCOLS`` like its Solana DEX siblings; no new
+discovery technique was needed.
 
 # Epic: infrastructure_master
 # Lifecycle: one-off -- DeFi pool catalogue historical-discovery expansion
@@ -92,9 +102,11 @@ _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{20,}$")
 
 _DEX_DATA_TYPES = ("dex_pool_state", "dex_pool_swaps")
 
-#: Solana AMM protocols confirmed address-shaped (base58 pubkey) instrument_id via
-#: direct manifest sampling. KAMINO is deliberately excluded (see module docstring).
-_SOLANA_PROTOCOLS: tuple[str, ...] = ("ORCA", "RAYDIUM", "PHOENIX")
+#: Solana protocols confirmed address-shaped (base58 pubkey) instrument_id via direct
+#: manifest sampling for their dex_pool_state rows (see module docstring's KAMINO
+#: correction, 2026-08-03 — KAMINO's UUID-shaped ids live in lending_indices, a
+#: different data_type this script never reads).
+_SOLANA_PROTOCOLS: tuple[str, ...] = ("ORCA", "RAYDIUM", "PHOENIX", "KAMINO")
 
 
 def _evm_protocol_chain_pairs() -> list[tuple[str, str]]:

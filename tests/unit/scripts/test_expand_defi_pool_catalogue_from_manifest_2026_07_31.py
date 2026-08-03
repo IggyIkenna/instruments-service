@@ -139,9 +139,13 @@ def test_discover_gap_addresses_excludes_out_of_scope_pair(expand_mod: ModuleTyp
     assert gap.empty
 
 
-def test_discover_gap_addresses_excludes_kamino(expand_mod: ModuleType) -> None:
-    """KAMINO is deliberately excluded (UUID-shaped instrument_id, not a recognizable
-    pool address — see module docstring) even though it is a Solana venue."""
+def test_discover_gap_addresses_includes_kamino(expand_mod: ModuleType) -> None:
+    """KAMINO's dex_pool_state instrument_id is a base58 Solana vault-strategy address
+    (see module docstring's 2026-08-03 correction), not a UUID — an earlier pass wrongly
+    excluded it after conflating dex_pool_state with the UUID-shaped lending_indices
+    rows KAMINO also writes under the same venue. It is included like its Solana DEX
+    siblings."""
+    kamino_addr = "BLP7UHUg1yNry94Qk3sM8pAfEyDhTZirwFghw9DoBjn7"
     manifest = pd.DataFrame(
         [
             _manifest_row(
@@ -149,6 +153,25 @@ def test_discover_gap_addresses_excludes_kamino(expand_mod: ModuleType) -> None:
                 venue="KAMINO",
                 chain="SOLANA",
                 data_type="dex_pool_state",
+                instrument_id=kamino_addr,
+            ),
+        ]
+    )
+    gap = expand_mod.discover_gap_addresses(manifest)
+    assert list(gap["pool_address"]) == [kamino_addr.lower()]
+
+
+def test_discover_gap_addresses_excludes_kamino_lending_indices(expand_mod: ModuleType) -> None:
+    """KAMINO's UUID-shaped lending_indices rows are never discovered — the data_type
+    filter (_DEX_DATA_TYPES) excludes them regardless of venue, so the actual
+    UUID-shaped ids the earlier conflation was worried about never reach this scope."""
+    manifest = pd.DataFrame(
+        [
+            _manifest_row(
+                date="2023-01-01",
+                venue="KAMINO",
+                chain="SOLANA",
+                data_type="lending_indices",
                 instrument_id="7d954b46-a2e9-461c-b1e3-f1e0cdd05c65",
             ),
         ]
@@ -158,9 +181,9 @@ def test_discover_gap_addresses_excludes_kamino(expand_mod: ModuleType) -> None:
 
 
 def test_discover_gap_addresses_includes_solana_allowlisted_venue(expand_mod: ModuleType) -> None:
-    """ORCA/RAYDIUM/PHOENIX (Solana) instrument_ids are discovered without an address-shape
-    regex filter — they are base58 pubkeys, not 0x-hex, so the EVM regex would wrongly
-    exclude them."""
+    """ORCA/RAYDIUM/PHOENIX/KAMINO (Solana) instrument_ids are discovered without an
+    address-shape regex filter — they are base58 pubkeys, not 0x-hex, so the EVM regex
+    would wrongly exclude them."""
     manifest = pd.DataFrame(
         [
             _manifest_row(
