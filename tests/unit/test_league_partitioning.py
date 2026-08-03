@@ -486,11 +486,18 @@ class TestOrchestratorSportsLeaguePartitioning:
             mock_dvs.return_value.validate_for_domain = MagicMock()
             result = await process_instruments("2026-04-12", ["SPORTS"])
 
-        # Verify writes: should have 2 writes (EPL and BUNDESLIGA)
-        league_writes = [c for c in mock_sink.write.call_args_list if "league" in c.kwargs.get("partition", {})]
-        assert len(league_writes) == 2
-        partition_leagues = {c.kwargs["partition"]["league"] for c in league_writes}
-        assert partition_leagues == {"EPL", "BUNDESLIGA"}
+        # Full-hive fix (2026-08-03): both leagues land in ONE combined
+        # instruments.parquet per (day, venue) — the ruled grain has no
+        # per-league path split (cross-asset-canonical-target-ssot.md §8);
+        # league identity survives in each row's own instrument_key.
+        instruments_writes = [
+            c for c in mock_sink.write.call_args_list if c.kwargs.get("filename") == "instruments.parquet"
+        ]
+        assert len(instruments_writes) == 1
+        assert "league" not in instruments_writes[0].kwargs.get("partition", {})
+        written_df = instruments_writes[0].kwargs["data"]
+        assert len(written_df) == len(records)
+        assert set(written_df["instrument_key"].str.split(":").str[0]) == {"EPL", "BUNDESLIGA"}
 
         # Verify manifest.record_captured() called with league_id for each league
         manifest_captured_calls = mock_manifest_instance.record_captured.call_args_list
@@ -541,7 +548,11 @@ class TestOrchestratorSportsLeaguePartitioning:
             mock_dvs.return_value.validate_for_domain = MagicMock()
             result = await process_instruments("2026-04-12", ["SPORTS"], league_filter=["EPL"])
 
-        # Only EPL should be written
-        league_writes = [c for c in mock_sink.write.call_args_list if "league" in c.kwargs.get("partition", {})]
-        assert len(league_writes) == 1
-        assert league_writes[0].kwargs["partition"]["league"] == "EPL"
+        # Only EPL should be written — one combined instruments.parquet write
+        # (full-hive fix 2026-08-03), containing only the EPL row.
+        instruments_writes = [
+            c for c in mock_sink.write.call_args_list if c.kwargs.get("filename") == "instruments.parquet"
+        ]
+        assert len(instruments_writes) == 1
+        written_df = instruments_writes[0].kwargs["data"]
+        assert set(written_df["instrument_key"].str.split(":").str[0]) == {"EPL"}

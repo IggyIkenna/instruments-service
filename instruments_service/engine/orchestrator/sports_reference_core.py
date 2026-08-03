@@ -86,7 +86,7 @@ def _manifest_captured_leagues_for_data_type(*, bucket: str, date: str, data_typ
     atom a PRIOR run already captured (that loop previously only consulted
     THIS run's captured leagues, so a run that legitimately returned zero
     results for an already-captured league would mask it):
-    ``process_write._write_sports_fixture_venue`` (FIXTURES_SCHEDULE) and
+    ``writers._write_sports_fixture_venue`` (FIXTURES_SCHEDULE) and
     ``_AfManifestHooks.emit_empty_gaps_for_entity`` (the "regular sports
     instruments" — TEAMS/STANDINGS/INJURIES/etc. — via
     :meth:`_AfManifestHooks._manifest_index_guarded_captured_leagues`).
@@ -230,7 +230,7 @@ class _AfManifestHooks:
     ) -> set[str] | None:
         """Union any league with an EXISTING manifest ``captured`` row for
         ``(date, data_type)`` into ``captured_league_ids`` — the same
-        cross-identity oscillation guard ``process_write._write_sports_fixture_venue``
+        cross-identity oscillation guard ``writers._write_sports_fixture_venue``
         already applies to FIXTURES_SCHEDULE
         (:func:`_manifest_captured_leagues_for_data_type`), extended here to the
         "regular sports instruments" entities (TEAMS/STANDINGS/INJURIES/...)
