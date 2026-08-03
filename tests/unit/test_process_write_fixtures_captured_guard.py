@@ -139,6 +139,15 @@ class TestWriteSportsFixtureVenueOscillationGuard:
             ),
             patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
             patch("instruments_service.engine.orchestrator.get_league_fixture_calendar", return_value=["x"]),
+            # _write_sports_fixture_venue now builds its own hive sink internally
+            # (instruments-service@ba87cc32) rather than taking an injected sink=
+            # param — without this mock the captured-league branch below constructs
+            # a REAL GCSStorageClient, which reaches out to the GCE metadata server
+            # and only fails in CI (blocked by pytest-socket; passes locally where
+            # ambient GOOGLE_APPLICATION_CREDENTIALS masks the gap).
+            patch(
+                "instruments_service.engine.orchestrator._instrument_availability_sink_for", return_value=MagicMock()
+            ),
             patch("instruments_service.engine.orchestrator._gated_sink_write"),
             patch(
                 "instruments_service.engine.orchestrator.stamp_available_at_explicit",
