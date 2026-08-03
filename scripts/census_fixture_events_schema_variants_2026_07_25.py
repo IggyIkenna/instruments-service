@@ -102,7 +102,16 @@ def main() -> int:
     ap.add_argument("--out-census", default="scripts/_fixture_events_census_2026_07_25.json")
     args = ap.parse_args()
 
-    manifest = pd.read_parquet(f"gs://{BUCKET}/_index/availability_index.parquet")
+    # Read via the UTL storage client (same credential path every other read in
+    # this script already uses) rather than pandas/pyarrow's native gs:// reader,
+    # which resolves ADC independently and can silently go stale mid-session
+    # (2026-08-03: this bare pd.read_parquet("gs://...") call started failing
+    # with a NOT_FOUND on an object confirmed to exist via `gcloud storage
+    # objects describe`, while every UTL-backed read in this same script kept
+    # working -- an ADC/credential-path mismatch, not a real absence).
+    _manifest_client = get_storage_client()
+    _manifest_bytes = _manifest_client.download_bytes(BUCKET, "_index/availability_index.parquet")
+    manifest = pd.read_parquet(io.BytesIO(_manifest_bytes))
     fe = manifest[(manifest["data_type"] == "FIXTURE_EVENTS") & (manifest["capture_status"] == "captured")]
     fe = fe.drop_duplicates(subset=["date", "league_id"])
     if args.limit:
