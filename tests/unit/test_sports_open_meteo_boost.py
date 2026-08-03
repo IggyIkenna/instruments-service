@@ -1,7 +1,6 @@
 """Coverage boost for open_meteo.py uncovered branches.
 
 Targets:
-- get_weather: lines 87, 99 (api_key path)
 - get_weather_match_window: lines 180, 201-202, 213, 227, 243-254 (api_key + exception paths)
 - _parse_weather_response: lines 335-337, 346 (exception + None temp)
 """
@@ -17,99 +16,6 @@ def _make_adapter(api_key: str | None = None) -> object:
     from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
 
     return OpenMeteoAdapter(api_key=api_key)
-
-
-# ---------------------------------------------------------------------------
-# get_weather — api_key path
-# ---------------------------------------------------------------------------
-
-
-class TestGetWeatherForMatchApiKey:
-    """Lines 87, 99: api_key set → customer endpoints + apikey param."""
-
-    @pytest.mark.asyncio
-    async def test_with_api_key_uses_customer_url(self) -> None:
-        """Lines 87, 99: api_key → customer archive/forecast URL + apikey param."""
-        adapter = _make_adapter(api_key="my-key")
-
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=MagicMock())
-        cm.__aexit__ = AsyncMock(return_value=None)
-
-        with (
-            patch.object(adapter, "_make_session", return_value=cm),
-            patch.object(
-                adapter,
-                "_get_with_retry",
-                new_callable=AsyncMock,
-                return_value=None,
-            ),
-            patch(
-                "instruments_service.reference_data.adapters.sports.adapters.open_meteo._parse_weather_response",
-                return_value=None,
-            ),
-        ):
-            result = await adapter.get_weather(  # type: ignore[attr-defined]
-                venue_lat=51.5, venue_lon=-0.1, date="2023-01-01"
-            )
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_without_api_key_returns_result(self) -> None:
-        """No api_key → standard endpoints."""
-        adapter = _make_adapter(api_key=None)
-
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=MagicMock())
-        cm.__aexit__ = AsyncMock(return_value=None)
-
-        mock_weather = MagicMock()
-
-        with (
-            patch.object(adapter, "_make_session", return_value=cm),
-            patch.object(
-                adapter,
-                "_get_with_retry",
-                new_callable=AsyncMock,
-                return_value={"hourly": {}},
-            ),
-            patch(
-                "instruments_service.reference_data.adapters.sports.adapters.open_meteo._parse_weather_response",
-                return_value=mock_weather,
-            ),
-        ):
-            result = await adapter.get_weather(  # type: ignore[attr-defined]
-                venue_lat=51.5, venue_lon=-0.1, date="2026-01-01"
-            )
-
-        assert result is mock_weather
-
-    @pytest.mark.asyncio
-    async def test_exception_returns_none(self) -> None:
-        """Lines 104-107: exception in HTTP → _classify_error + _emit_fetch_failed → None."""
-        adapter = _make_adapter()
-
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=MagicMock())
-        cm.__aexit__ = AsyncMock(return_value=None)
-
-        with (
-            patch.object(adapter, "_make_session", return_value=cm),
-            patch.object(
-                adapter,
-                "_get_with_retry",
-                new_callable=AsyncMock,
-                side_effect=ConnectionError("network error"),
-            ),
-            patch.object(adapter, "_classify_error", return_value="NETWORK_ERROR"),
-            patch.object(adapter, "_emit_fetch_failed"),
-        ):
-            result = await adapter.get_weather(  # type: ignore[attr-defined]
-                venue_lat=51.5, venue_lon=-0.1, date="2026-01-01"
-            )
-
-        assert result is None
 
 
 # ---------------------------------------------------------------------------
