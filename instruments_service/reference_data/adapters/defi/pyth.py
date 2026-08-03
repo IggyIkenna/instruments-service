@@ -27,6 +27,20 @@ Pyth price feed IDs for major Solana pairs (SSOT — never hardcode elsewhere):
   WIF/USD:     6ABgrEZkHDexkBEBhXAHmCFmcj1mNLyyhGEe3VC2DfcK
   JTO/USD:     nJnMsAf9Es6SKY9YaB88weinqoNVrav3wGD7SVoiPaC
   USDC/USD:    Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD
+  BTC/USD:     0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43 (Hermes id, see note below)
+  ETH/USD:     0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace (Hermes id, see note below)
+  INF/USD:     0xf51570985c642c49c2d6e50156390fdba80bb6d5f7fa389d2f012ced4f7d208f (Hermes id, see note below)
+
+BTC/ETH/INF (2026-08-03): were missing from this enumerated set entirely, which caused
+`market-tick-data-service`'s `_filter_pyth_rows_to_is` to silently drop real, successfully-fetched
+Hermes prices for these 3 symbols every day from 2026-07-19 onward (defi_pyth_oracle_prices_seeded_
+feeds_unfetchable_2026_08_03.md). The other entries above are Pythnet on-chain account addresses;
+these 3 instead carry the Hermes REST feed-id (`hermes.pyth.network/v2/price_feeds?query=<SYM>`,
+live-verified 2026-08-03, byte-identical to the values already live-verified in
+market-tick-data-service's `_oracle_prices_constants.py::_PYTH_FEEDS`) — `raw_symbol` below is
+traceability-only (never parsed/dereferenced as an on-chain address by this adapter), so the format
+mismatch does not affect correctness; a genuine on-chain address for these 3 was not sourced in this
+pass.
 """
 
 from __future__ import annotations
@@ -99,6 +113,26 @@ PYTH_PRICE_FEEDS: dict[str, tuple[str, str]] = {
     "USDC/USD": (
         "Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD",
         "Pyth USDC/USD price feed",
+    ),
+    # BTC/ETH/INF (2026-08-03, defi_pyth_oracle_prices_seeded_feeds_unfetchable_2026_08_03.md):
+    # restores these 3 to the enumerated PYTH-SOLANA set — their absence was silently dropping
+    # real, successfully-fetched daily oracle prices via MTDS's `_filter_pyth_rows_to_is`
+    # (a live, ongoing regression since 2026-07-19). Ids are the Hermes REST feed-id (not a
+    # Pythnet on-chain account address like the entries above) — live-verified 2026-08-03 against
+    # hermes.pyth.network/v2/price_feeds?query=<SYM>, byte-identical to market-tick-data-service's
+    # already-live-verified `_PYTH_FEEDS` entries for these same 3 symbols. `raw_symbol` is
+    # traceability-only (see module docstring) so the format difference doesn't affect correctness.
+    "BTC/USD": (
+        "0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+        "Pyth BTC/USD price feed",
+    ),
+    "ETH/USD": (
+        "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+        "Pyth ETH/USD price feed",
+    ),
+    "INF/USD": (
+        "0xf51570985c642c49c2d6e50156390fdba80bb6d5f7fa389d2f012ced4f7d208f",
+        "Pyth INF/USD price feed",
     ),
 }
 
