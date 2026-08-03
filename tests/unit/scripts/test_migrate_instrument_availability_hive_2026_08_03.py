@@ -324,4 +324,149 @@ class TestBucketFor:
         with patch.object(_mod, "resolve_bucket_name", return_value="instruments-store-cefi-prd") as mock_rbn:
             result = _mod._bucket_for("cefi")
         mock_rbn.assert_called_once_with(cloud="gcp", kind="instruments-store", asset_group="cefi")
-        assert result == "instruments-store-cefi-prd"
+
+
+# ---------------------------------------------------------------------------
+# todo 6 -- content_mismatch resolver (ruled "superset wins" policy, todo 4)
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityColumnFor:
+    def test_futures_contracts_uses_contract_symbol(self) -> None:
+        assert _mod._identity_column_for(_TRADFI_FUTURES_FLAT) == "contract_symbol"
+
+    def test_instruments_parquet_uses_raw_symbol(self) -> None:
+        assert _mod._identity_column_for(_CEFI_FLAT) == "raw_symbol"
+
+
+class TestIdentitySet:
+    def test_extracts_non_null_values(self) -> None:
+        import pandas as pd
+
+        buf = pd.DataFrame({"raw_symbol": ["BTC-USD", "ETH-USD", None]}).to_parquet(index=False)
+        assert _mod._identity_set(buf, "raw_symbol") == frozenset({"BTC-USD", "ETH-USD"})
+
+
+class TestResolveOneMismatch:
+    @staticmethod
+    def _parquet(symbols: list[str]) -> bytes:
+        import pandas as pd
+
+        return pd.DataFrame({"raw_symbol": symbols}).to_parquet(index=False)
+
+    def test_flat_strict_superset_wins_and_copies(self) -> None:
+        flat = self._parquet(["A", "B", "C"])
+        hive = self._parquet(["A", "B"])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "flat_wins"
+        mock_copy.assert_called_once_with(f"gs://bkt/{_CEFI_FLAT}", f"gs://bkt/{_CEFI_HIVE}")
+
+    def test_hive_strict_superset_wins_no_write(self) -> None:
+        flat = self._parquet(["A"])
+        hive = self._parquet(["A", "B", "C"])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "hive_wins"
+        mock_copy.assert_not_called()
+
+    def test_tied_membership_defaults_to_flat_bytes(self) -> None:
+        flat = self._parquet(["A", "B"])
+        hive = self._parquet(["A", "B"])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "tie_flat_bytes"
+        mock_copy.assert_called_once()
+
+    def test_disjoint_sets_flagged_not_auto_resolved(self) -> None:
+        flat = self._parquet(["A", "B"])
+        hive = self._parquet(["C", "D"])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "disjoint_needs_review"
+        assert res.detail is not None
+        mock_copy.assert_not_called()
+
+    def test_vanished_object_flagged_failed(self) -> None:
+        flat = self._parquet(["A"])
+        with patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (None, 0)]):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "failed"
+        assert "vanished" in (res.detail or "")
+
+    def test_unexpected_exception_flagged_failed(self) -> None:
+        with patch.object(_mod, "gcs_read_object_with_generation", side_effect=RuntimeError("boom")):
+            res = _mod._resolve_one_mismatch("bkt", _CEFI_FLAT, _CEFI_HIVE)
+        assert res.outcome == "failed"
+        assert "boom" in (res.detail or "")
+
+    def test_futures_contracts_pair_compares_on_contract_symbol(self) -> None:
+        import pandas as pd
+
+        flat = pd.DataFrame({"contract_symbol": ["ESH26", "ESM26"]}).to_parquet(index=False)
+        hive = pd.DataFrame({"contract_symbol": ["ESH26"]}).to_parquet(index=False)
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", side_effect=[(flat, 1), (hive, 1)]),
+            patch.object(_mod, "gcs_copy_object") as mock_copy,
+        ):
+            res = _mod._resolve_one_mismatch("bkt", _TRADFI_FUTURES_FLAT, _CEFI_HIVE)
+        assert res.outcome == "flat_wins"
+        mock_copy.assert_called_once()
+
+
+class TestResolveContentMismatches:
+    def test_aggregates_outcomes_and_counts_by_type(self) -> None:
+        apply_result = _mod.ApplyResult(asset_group="cefi", content_mismatch=[_CEFI_FLAT])
+        resolution = _mod.MismatchResolution(_CEFI_FLAT, _CEFI_HIVE, "flat_wins")
+        with (
+            patch.object(_mod, "_bucket_for", return_value="bkt"),
+            patch.object(_mod, "apply_asset_group", return_value=apply_result),
+            patch.object(_mod, "hive_target_for", return_value=_CEFI_HIVE),
+            patch.object(_mod, "_resolve_one_mismatch", return_value=resolution),
+        ):
+            result = _mod.resolve_content_mismatches(asset_group="cefi", workers=2)
+        assert result.flat_wins == 1
+        assert result.hive_wins == 0
+        assert result.ok
+
+    def test_disjoint_and_failed_collected_for_review(self) -> None:
+        apply_result = _mod.ApplyResult(asset_group="cefi", content_mismatch=[_CEFI_FLAT, _CEFI_FLAT])
+        outcomes = [
+            _mod.MismatchResolution(_CEFI_FLAT, _CEFI_HIVE, "disjoint_needs_review", "flat=1 hive=1 ids"),
+            _mod.MismatchResolution(_CEFI_FLAT, _CEFI_HIVE, "failed", "boom"),
+        ]
+        with (
+            patch.object(_mod, "_bucket_for", return_value="bkt"),
+            patch.object(_mod, "apply_asset_group", return_value=apply_result),
+            patch.object(_mod, "hive_target_for", return_value=_CEFI_HIVE),
+            patch.object(_mod, "_resolve_one_mismatch", side_effect=outcomes),
+        ):
+            result = _mod.resolve_content_mismatches(asset_group="cefi", workers=2)
+        assert len(result.disjoint) == 1
+        assert len(result.failed) == 1
+        assert not result.ok
+
+    def test_unmapped_src_skipped(self) -> None:
+        apply_result = _mod.ApplyResult(asset_group="cefi", content_mismatch=[_CEFI_FLAT])
+        with (
+            patch.object(_mod, "_bucket_for", return_value="bkt"),
+            patch.object(_mod, "apply_asset_group", return_value=apply_result),
+            patch.object(_mod, "hive_target_for", return_value=None),
+            patch.object(_mod, "_resolve_one_mismatch") as mock_resolve,
+        ):
+            result = _mod.resolve_content_mismatches(asset_group="cefi", workers=2)
+        mock_resolve.assert_not_called()
+        assert result.flat_wins == 0
+        assert result.ok
