@@ -3408,11 +3408,67 @@ def promote_catalogue(
     catalogue's row count is computed AFTER re-running the same Phase D dedup
     passes the freshly-rolled ``df`` already went through, so the comparison is
     apples-to-apples.
+
+    **Benign-shrink auto-accept** (DP-CATALOG-001 cefi, 2026-08-03 — a THIRD
+    recurrence of the dedup-asymmetry class the 07-28/08-02 fixes narrowed, this
+    time structurally undiscoverable by re-dedup-ing ``current`` alone): the
+    self-widening incremental window (``WINDOW_DAYS_MIN=21``) re-derives raw
+    by_date data for any instrument whose expiry sits near the window's start
+    boundary. For a dated CeFi contract that expired the day BEFORE
+    ``window_start``, that re-derivation can mint a fresh, transient off-by-one
+    duplicate (see :func:`_dedup_cefi_expiry_off_by_one`) whose OTHER half is an
+    already-existing frozen-tail row — Phase D correctly collapses the pair back
+    to 1 row, but the pair never existed as 2 rows in the STORED ``current``
+    catalogue, so re-running Phase D on ``current`` alone (the existing
+    dedup-aware guard) can never discover a partner to collapse there. Row COUNT
+    is therefore an inherently unreliable proxy for THIS class — live-confirmed
+    2026-08-03: ``new=431120 < current=431238``, 265 dropped ids, 100% already
+    `available_to`-stamped DERIBIT OPTION/FUTURE rows expired 2026-07-12 (one day
+    before ``window_start=2026-07-13``), ``dropped_active=0``. Rather than add a
+    4th narrow dedup-symmetry patch that will recur for tomorrow's boundary
+    batch, this enforces the guard's ACTUAL safety contract directly: reuse the
+    already-reviewed :func:`_shrink_drop_diagnostics` (same code the rejection
+    path already used to report a block) to check the DROPPED rows' identity —
+    if every dropped id was already delisted (``dropped_active == 0``, i.e. no
+    ACTIVE instrument's presence flips to absent), the shrink is provably benign
+    and is auto-accepted with a distinct ``shrink_benign_no_active_loss`` reason
+    (never silently conflated with an operator-passed ``--allow-catalogue-shrink``
+    override). A shrink touching even ONE active instrument (``dropped_active >
+    0``) still hard-blocks exactly as before — this narrows the guard's blast
+    radius, it does not weaken the real protection.
     """
     canonical_blob, temp_blob = _catalogue_object_paths(env)
     new_count = len(df)
     current_count = _read_current_row_count(storage, bucket, canonical_blob, asset_group=asset_group)
-    decision = evaluate_monotonic_guard(new_count, current_count, allow_shrink=allow_shrink)
+
+    # Diagnose WHICH instruments a candidate shrink would drop BEFORE deciding, so a
+    # provably-benign shrink (dropped_active == 0) can auto-accept instead of blocking.
+    # Best-effort + only on a (rare) shrink candidate: never masks the guard decision.
+    drop_diagnostics: dict[str, object] = {}
+    if current_count is not None and new_count < current_count:
+        previous = _load_previous_catalogue(storage, bucket, canonical_blob)
+        if previous is not None:
+            try:
+                drop_diagnostics = _shrink_drop_diagnostics(df, previous[0])
+            except (KeyError, ValueError, TypeError) as exc:
+                logger.warning("shrink drop-diagnostics failed (guard falls back to the strict count check): %s", exc)
+
+    benign_shrink = bool(drop_diagnostics) and drop_diagnostics.get("dropped_active") == 0
+    decision = evaluate_monotonic_guard(new_count, current_count, allow_shrink=allow_shrink or benign_shrink)
+    if benign_shrink and decision.accept and not allow_shrink:
+        decision = GuardDecision(accept=True, reason="shrink_benign_no_active_loss")
+        logger.info("CATALOGUE_SHRINK auto-accepted (no active instrument lost): %s", drop_diagnostics)
+        log_event(
+            "CATALOGUE_SHRINK_BENIGN_AUTO_ACCEPTED",
+            severity="INFO",
+            details={
+                "bucket": bucket,
+                "env": env,
+                "new_count": new_count,
+                "current_count": current_count,
+                "drop_diagnostics": drop_diagnostics,
+            },
+        )
 
     logger.info(
         "Monotonic guard: new=%d current=%s decision=%s (%s)",
@@ -3423,17 +3479,8 @@ def promote_catalogue(
     )
 
     if not decision.accept:
-        # Diagnose WHICH instruments the rejected catalogue would drop, so the block is
-        # reviewable rather than opaque (F8 2026-07-18). Best-effort: the diagnostic must
-        # never mask the block itself, and it pays one extra GCS read only on a (rare) block.
-        drop_diagnostics: dict[str, object] = {}
-        previous = _load_previous_catalogue(storage, bucket, canonical_blob)
-        if previous is not None:
-            try:
-                drop_diagnostics = _shrink_drop_diagnostics(df, previous[0])
-                logger.error("CATALOGUE_SHRINK_BLOCKED drop-list: %s", drop_diagnostics)
-            except (KeyError, ValueError, TypeError) as exc:
-                logger.warning("shrink drop-diagnostics failed (block still stands): %s", exc)
+        if drop_diagnostics:
+            logger.error("CATALOGUE_SHRINK_BLOCKED drop-list: %s", drop_diagnostics)
         # Real event-log emission (was best-effort logger.info-only via _emit_event —
         # cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md). CRITICAL
         # severity + this event name route through UAC's DP-CATALOG-002 rule to
