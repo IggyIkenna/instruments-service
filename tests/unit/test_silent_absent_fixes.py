@@ -255,7 +255,6 @@ class TestEmptyOkVenuesGetSourceReturnedZero:
                     asset_groups=["PREDICTION"],
                     api_keys=None,
                     mode="batch",
-                    source=None,
                     bucket="prediction-bucket",
                     sink=MagicMock(),
                     sampler=MagicMock(),
@@ -425,7 +424,6 @@ class TestPredictionCompositeWriteNotMisreadAsEmpty:
                     asset_groups=["PREDICTION"],
                     api_keys=None,
                     mode="batch",
-                    source=None,
                     bucket="prediction-bucket",
                     sink=MagicMock(),
                     sampler=MagicMock(),
@@ -507,6 +505,7 @@ class TestTradfiNonTradingDayInMissingShards:
                 written_venues={"NASDAQ"},
                 missing_shards={"NYSE"},
                 bucket="tradfi-bucket",
+                venue_bucket=lambda _v: "tradfi-bucket",
                 asset_groups=["tradfi"],
             )
 
@@ -569,12 +568,186 @@ class TestTradfiNonTradingDayInMissingShards:
                 written_venues={"DERIBIT"},
                 missing_shards={"BYBIT"},
                 bucket="cefi-bucket",
+                venue_bucket=lambda _v: "cefi-bucket",
                 asset_groups=["cefi"],
             )
 
         assert len(_failed_calls) == 1, f"Expected 1 attempted_failed, got {_failed_calls}"
         assert _failed_calls[0]["row_key"]["venue"] == "BYBIT"
         assert _expected_empty_calls == [], f"No empty_confirmed expected for BYBIT: {_expected_empty_calls}"
+
+
+# ---------------------------------------------------------------------------
+# Completeness-stage multi-AG bucket routing — follow-up todo from Finding C
+# row 1, api_football_reverify_attempted_failed_and_asset_group_2026_07_14.md:
+# process_completeness.py's honest-coverage ManifestWriter instances (the
+# empty-ok-venues record_zero_rows loop and the missing-shards
+# record_failed/record_expected_empty loop) must route each venue to its OWN
+# asset_group bucket during a combined multi-AG run, mirroring
+# _write_all_venues's existing _get_venue_bucket per-venue routing — not
+# always the run's primary bucket.
+# ---------------------------------------------------------------------------
+
+
+class TestCompletenessStageMultiAssetGroupBucketRouting:
+    @staticmethod
+    def _bucket_for(asset_group: str | None) -> str:
+        return f"bucket-{asset_group}"
+
+    def test_empty_ok_venue_routes_to_own_asset_group_bucket(self) -> None:
+        """A non-primary-AG venue that ran clean but wrote 0 records must get its
+        SOURCE_RETURNED_ZERO stamp in ITS OWN bucket, not the run's primary bucket."""
+        import asyncio
+
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _completeness_and_retry,
+        )
+
+        _captured: list[dict[str, object]] = []
+
+        class _CapturingManifest:
+            def __init__(self, *_: object, catalogue_bucket: str, **__: object) -> None:
+                self._bucket = catalogue_bucket
+
+            def record_zero_rows(
+                self,
+                *,
+                row_key: Mapping[str, object],
+                reason: str,
+                was_expected: bool,
+                **_kw: object,
+            ) -> None:
+                if not was_expected:
+                    _captured.append({"row_key": dict(row_key), "bucket": self._bucket})
+
+            def record_empty(self, **_kw: object) -> None:
+                pass
+
+            def record_failed(self, **_kw: object) -> None:
+                pass
+
+            def record_expected_empty(self, **_kw: object) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.ManifestWriter",
+                side_effect=_CapturingManifest,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                side_effect=self._bucket_for,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._check_emission_policy",
+                return_value=MagicMock(
+                    service_emission_state="PUBLISHED",
+                    completeness_fraction=1.0,
+                ),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=False),
+        ):
+            asyncio.run(
+                _completeness_and_retry(
+                    counts={},
+                    date="2026-06-26",
+                    date_dt=MagicMock(),
+                    defi_venue_set=None,
+                    # Combined multi-AG run: SPORTS is primary, CEFI is non-primary.
+                    asset_groups=["SPORTS", "CEFI"],
+                    api_keys=None,
+                    mode="batch",
+                    bucket="bucket-sports",
+                    sink=MagicMock(),
+                    sampler=MagicMock(),
+                    # BYBIT is a CEFI venue (VENUE_TO_ASSET_GROUP) that ran OK but wrote 0 rows.
+                    active_venues=["BYBIT"],
+                    non_error_venues={"BYBIT"},
+                    validation_failed_venues=set(),
+                    retryable_venues=[],
+                    is_sports_run=False,
+                    sports_entity_filter=None,
+                    recovery_fixture_ids=None,
+                )
+            )
+
+        assert _captured, f"expected a SOURCE_RETURNED_ZERO stamp for BYBIT; got none (buckets seen: {_captured})"
+        assert _captured[0]["bucket"] == "bucket-cefi", (
+            f"BYBIT (a CEFI venue, non-primary in this SPORTS+CEFI run) must stamp its honest-coverage "
+            f"row in the cefi bucket, not the run's primary sports bucket — got {_captured[0]['bucket']}"
+        )
+
+    def test_missing_shard_non_primary_ag_routes_to_own_bucket(self) -> None:
+        """A missing (never-fetched) non-primary-AG venue's attempted_failed row
+        must land in ITS OWN bucket, not the run's primary bucket."""
+        from instruments_service.engine.orchestrator.process_completeness import (
+            _finalize_completeness,
+        )
+        from instruments_service.engine.orchestrator.process_write import _venue_bucket_resolver
+
+        _failed_calls: list[dict[str, object]] = []
+
+        class _CapturingManifest:
+            def __init__(self, *_: object, catalogue_bucket: str, **__: object) -> None:
+                self._bucket = catalogue_bucket
+
+            def record_failed(self, *, row_key: Mapping[str, object], **_kw: object) -> None:
+                _failed_calls.append({"row_key": dict(row_key), "bucket": self._bucket})
+
+            def record_expected_empty(self, **_kw: object) -> None:
+                pass
+
+            def record_empty(self, **_: object) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch("instruments_service.engine.orchestrator.ManifestWriter", side_effect=_CapturingManifest),
+            patch(
+                "instruments_service.engine.orchestrator._get_instruments_bucket",
+                side_effect=self._bucket_for,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator._check_emission_policy",
+                return_value=MagicMock(
+                    service_emission_state="PUBLISHED",
+                    completeness_fraction=1.0,
+                ),
+            ),
+            patch("instruments_service.engine.orchestrator.log_event"),
+            patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=False),
+            # written_venues is non-empty here, so the CeFi-scoped G1.2 thin-day check
+            # (asset_groups includes "CEFI") reaches its availability-index read —
+            # short-circuit it deterministically rather than hitting real GCS.
+            patch(
+                "instruments_service.engine.orchestrator.read_availability_index",
+                side_effect=Exception("no index in this unit test"),
+            ),
+        ):
+            venue_bucket = _venue_bucket_resolver(asset_groups=["SPORTS", "CEFI"], primary_bucket="bucket-sports")
+            _finalize_completeness(
+                counts={"API_FOOTBALL": 5},
+                date="2026-06-26",
+                expected_venues={"API_FOOTBALL", "BYBIT"},
+                written_venues={"API_FOOTBALL"},
+                missing_shards={"BYBIT"},
+                bucket="bucket-sports",
+                venue_bucket=venue_bucket,
+                asset_groups=["SPORTS", "CEFI"],
+            )
+
+        assert len(_failed_calls) == 1, f"Expected 1 attempted_failed, got {_failed_calls}"
+        assert _failed_calls[0]["row_key"]["venue"] == "BYBIT"
+        assert _failed_calls[0]["bucket"] == "bucket-cefi", (
+            f"BYBIT (a CEFI venue, non-primary in this SPORTS+CEFI run) must land its attempted_failed "
+            f"row in the cefi bucket, not the run's primary sports bucket — got {_failed_calls[0]['bucket']}"
+        )
 
 
 # ---------------------------------------------------------------------------

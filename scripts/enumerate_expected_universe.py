@@ -1029,6 +1029,61 @@ def _tradfi_mtds_tick_manifest_data_types() -> list[str]:
     ]
 
 
+# `swaps_ohlcv_{15s,1m,5m,15m,1h,4h,1d}` are MDPS Phase-5b.1 processed-candle
+# outputs (``DefiSwapAdapter``, ``dex_pool_swaps`` -> ``swaps_ohlcv_{tf}``) —
+# co-located inside the MTDS tick buckets under ``processed_candles/``, but
+# produced by market-data-processing-service, not written into the MTDS
+# raw-tick manifest this enumerator seeds ``expected_unattempted``/
+# ``attempted_failed`` cells for. Seeding these 7 data_types into the MTDS
+# tick manifest's expected-universe would create a permanently-unsatisfiable
+# cell (100% ``attempted_failed`` by construction; no amount of retrying the
+# MTDS backfill will ever close it) — the IDENTICAL failure shape
+# ``_TRADFI_MTDS_TICK_MANIFEST_EXCLUDED_DATA_TYPES`` above exists to prevent
+# for tradfi's calendar data_types. Measured (bounded, read-only simulation,
+# 2026-07-28): without this guard, adding the 7 keys permanently drags defi
+# ``completeness_pct`` down ~20.6% (relative), zero recoverable via any MTDS
+# backfill; with the guard, the addition is provably inert (zero denominator
+# delta). See ``unified-trading-pm/plans/active/issues/
+# defi_swaps_ohlcv_candle_data_types_axis_gap_2026_07_22.md``.
+#
+# Scoped ONLY to this file's DEFI MTDS-tick-manifest ``data_types``
+# resolution below — deliberately NOT applied to UAC's
+# ``DATA_TYPES_BY_ASSET_GROUP["defi"]`` itself, which is a cross-cutting
+# constant consumed by many OTHER UAC modules (validity matrices, UI
+# reference-data generation, ``mvp_scope``, …) that have nothing to do with
+# the MTDS tick bucket and must keep recognising these as legitimate defi
+# data_types.
+_DEFI_MTDS_TICK_MANIFEST_EXCLUDED_DATA_TYPES: frozenset[str] = frozenset(
+    {
+        "swaps_ohlcv_15s",
+        "swaps_ohlcv_1m",
+        "swaps_ohlcv_5m",
+        "swaps_ohlcv_15m",
+        "swaps_ohlcv_1h",
+        "swaps_ohlcv_4h",
+        "swaps_ohlcv_1d",
+    }
+)
+
+
+def _defi_mtds_tick_manifest_data_types() -> list[str]:
+    """DEFI data_types this enumerator may seed into the MTDS tick manifest.
+
+    UAC ``DATA_TYPES_BY_ASSET_GROUP["defi"]`` minus
+    :data:`_DEFI_MTDS_TICK_MANIFEST_EXCLUDED_DATA_TYPES` — the MDPS-produced
+    ``swaps_ohlcv_*`` candle data_types, whose real capture pipeline writes to
+    a different bucket/service entirely (see that constant's docstring).
+    Preserves the UAC list's original order (no sort/dedup) to match the
+    pre-existing ``[str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group,
+    [])]`` construction this replaces for defi.
+    """
+    return [
+        str(dt)
+        for dt in DATA_TYPES_BY_ASSET_GROUP.get("defi", [])
+        if str(dt) not in _DEFI_MTDS_TICK_MANIFEST_EXCLUDED_DATA_TYPES
+    ]
+
+
 # Defunct / folded / MVP-descoped cefi venues that MUST NOT be seeded into the cefi
 # expected-universe (so the data-status Axis Value Census reads clean). These stay
 # REGISTERED in UAC ``VENUES_BY_ASSET_GROUP["cefi"]`` (routing/adapter keys unchanged) —
@@ -1872,7 +1927,8 @@ def _enumerate_v2_tradfi(
         else:
             # Use raw_symbol.upper() when populated to match the MTDS TradFi catalog reader
             # convention (_canonical_tradfi_id returns raw_symbol.upper() for EQUITY/ETF/INDEX
-            # types). The Massive adapter writes instrument_key="NASDAQ:EQUITY:AAPL" which
+            # types). The (now-removed 2026-08-03) Massive adapter wrote instrument_key=
+            # "NASDAQ:EQUITY:AAPL" — the Databento adapter emits the same form — which
             # becomes instr.instrument_id, while raw_symbol="AAPL" matches the MTDS writer's
             # captured-shard atom. Misalignment causes EU rows to persist as expected_unattempted
             # even after capture (different dedup keys — never collide in the consolidator).
@@ -3233,6 +3289,11 @@ def enumerate_v2(
         # lives in features-service, not MTDS. See
         # _tradfi_mtds_tick_manifest_data_types()'s docstring.
         resolved_data_types = _tradfi_mtds_tick_manifest_data_types()
+    elif asset_group == "defi":
+        # Excludes swaps_ohlcv_{15s,1m,5m,15m,1h,4h,1d} — real capture lives
+        # in MDPS (processed_candles/), not the MTDS raw-tick manifest. See
+        # _defi_mtds_tick_manifest_data_types()'s docstring.
+        resolved_data_types = _defi_mtds_tick_manifest_data_types()
     else:
         resolved_data_types = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
     enumerator_func = _V2_ENUMERATORS[asset_group]
@@ -4441,6 +4502,11 @@ def main() -> int:
         # lives in features-service, not MTDS. See
         # _tradfi_mtds_tick_manifest_data_types()'s docstring.
         data_types_list = _tradfi_mtds_tick_manifest_data_types()
+    elif asset_group == "defi":
+        # Excludes swaps_ohlcv_{15s,1m,5m,15m,1h,4h,1d} — real capture lives
+        # in MDPS (processed_candles/), not the MTDS raw-tick manifest. See
+        # _defi_mtds_tick_manifest_data_types()'s docstring.
+        data_types_list = _defi_mtds_tick_manifest_data_types()
     else:
         data_types_list = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
     # FULL-HISTORY (Part 2): enumerate the FULL --start..--end window. The

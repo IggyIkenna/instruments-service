@@ -75,7 +75,6 @@ from instruments_service.reference_data.adapters.tradfi.databento.sessions impor
     _FX_VENUES_24_7,
     _XCAL_CACHE,
     _XCAL_MAPPING,
-    EXCHANGE_HOURS,
     UndeclaredTradfiVenueError,
     _apply_early_close,
     _compute_utc_hours,
@@ -84,7 +83,6 @@ from instruments_service.reference_data.adapters.tradfi.databento.sessions impor
     _is_trading_holiday,
     _non_trading_result,
     _resolve_trading_status,
-    get_session_metadata,
     is_non_trading_day,
     non_trading_day_reason,
 )
@@ -108,7 +106,6 @@ from instruments_service.reference_data.adapters.tradfi.databento.symbology impo
 )
 
 __all__ = [
-    "EXCHANGE_HOURS",
     "FX_SPOT_PAIRS",
     "KNOWN_ETFS",
     "TRADFI_DATABENTO_INSTRUMENTS",
@@ -164,7 +161,6 @@ __all__ = [
     "date",
     "datetime",
     "db",
-    "get_session_metadata",
     "is_non_trading_day",
     "log_event",
     "logger",

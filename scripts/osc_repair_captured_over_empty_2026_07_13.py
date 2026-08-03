@@ -160,7 +160,7 @@ def _resolve_object(storage: object, data_type: str, league_id: str, day: str) -
 
 def run_repair(apply: bool) -> int:
     storage = get_storage_client(project_id=ARGS.project)
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET)
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET, per_vm_shards=True)
     verified = 0
     unverified: list[tuple[str, str, str]] = []
     for data_type, league_id, day in _ATOMS:

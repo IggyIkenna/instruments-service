@@ -735,7 +735,11 @@ def main(argv: list[str]) -> int:
         args.dry_run,
     )
 
-    manifest = None if args.dry_run else ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET)
+    manifest = (
+        None
+        if args.dry_run
+        else ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET, per_vm_shards=True)
+    )
 
     results: dict[str, EntityResult] = {s.data_type: EntityResult(s.data_type) for s in active_specs}
 

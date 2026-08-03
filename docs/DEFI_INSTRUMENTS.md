@@ -97,11 +97,36 @@ migrated in production data. Full detail, decision rationale, and open todos:
   gap... not yet shipped as a catalog-wide migration" note reflects the superseded framing — under Option A the
   divergence is by design, not a pending cleanup.)
 
+  **RE-VERIFIED 2026-08-03 — the 2026-07-09 write-back was NOT durable; root cause found + fixed at the code level
+  this time.** The population grew ~11.5x since 2026-07-09 (6,352 → 73,152 real POOL rows, mostly via
+  `scripts/expand_defi_pool_catalogue_from_manifest_2026_07_31.py`'s manifest-gap backfill, which appends
+  address-only rows with every non-identity column — including `glued_pair_id` — deliberately blank, no token
+  metadata being knowable from the manifest alone) — and a live re-check found `glued_pair_id` blank for the large
+  majority of today's rows, PLUS the "3 remaining format bugs" below had **regressed** for at least Balancer/
+  PancakeSwap_V3/Camelot_V3/GMX/Aerodrome_V3 rows that do carry a value (e.g. real: `BALANCER-AVALANCHE:POOL:
+USDC-DAI.E:0.0`, `AERODROME_V3-BASE:POOL:WBTC-WETH-30.0` — colon-before-fee back, plus a NEW `.0` float-string
+  artifact not previously documented). Root cause: `_defi_pool_dual_form()`'s fee precedence (bug 3 below) was only
+  ever fixed via the 2026-07-09 one-off SCRIPT rewriting existing catalog rows in place — the underlying CODE
+  function `_fee_from_instrument_key()` that a REGEN re-derives `glued_pair_id` from was never itself corrected, so
+  every regen since (full or incremental) re-introduced the bug for any row whose per-day `instrument_key` still
+  carries an old-format legacy value. **Fixed for real 2026-08-03** (`instruments-service`, this session):
+  `_defi_pool_dual_form()` now consults the structured `pool_fee_tier` bps column FIRST via a new `_bps_fee_str()`
+  helper (which also strips the pandas-float `.0` artifact), falling back to the legacy instrument_key extraction
+  only when `pool_fee_tier` is genuinely blank. This is a CODE fix only — it makes every FUTURE catalogue regen
+  (full or incremental) self-heal the rows it touches; it does NOT retroactively rewrite the current
+  `prod/catalog.parquet` (that requires a real per-day-corpus regen, which needs `quote_asset`/`pool_fee_tier` off
+  the by_date snapshots — NOT present in the standalone catalog.parquet file, so a lightweight string-rewrite like
+  2026-07-09's can't reach the ~66K blank gap-filler rows this time). Tracked as a proper follow-up, not attempted
+  in this session (memory-bounding guardrail — a full-corpus catalogue regen on the shared host is exactly the
+  class of operation that caused 2 prior same-host outages, `unified-trading-pm/agents/RULES.md` § 1):
+  `issues/defi_dex_pool_glued_pair_id_backfill_gap_2026_08_03.md`.
+
   **The good news**: the target structured form already exists TODAY, in a separate, already-populated column —
   `glued_pair_id` (0 nulls across all 6,352 real POOL rows for the 13 protocols, verified live against
   `prod/catalog.parquet` 2026-07-09) — built by the same `DefiPoolIdentity.glued_pair_id` property, documented as
-  "the human-readable UI form." It has 3 remaining format bugs relative to the operator's exact target grammar,
-  all cosmetic/string-level (no re-fetch needed to fix):
+  "the human-readable UI form." It has 3 remaining format bugs relative to the operator's exact target grammar
+  (2026-07-09 snapshot; see the RE-VERIFIED note above for the 2026-08-03 current state), all cosmetic/string-level
+  (no re-fetch needed to fix):
   1. Ghost/no-underscore venue-chain prefix — `UNISWAPV3-ARBITRUM` instead of `UNISWAP_V3-ARBITRUM` (UAC's
      `_strip_version_underscore()` deliberately builds this as "the glued-prefix display form"; the catalogue's own
      `venue` column is already correctly spelled with the underscore, so a rewrite can just use it directly instead

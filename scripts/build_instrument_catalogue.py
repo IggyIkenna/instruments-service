@@ -907,14 +907,40 @@ def _cefi_equity_tags(instrument_type: str, base_asset: str) -> tuple[bool, str]
     return (False, "")
 
 
+def _bps_fee_str(raw: object) -> str:
+    """Format the structured ``pool_fee_tier`` bps column as a clean integer string.
+
+    The by_date ``pool_fee_tier`` value round-trips through a pandas frame as a
+    ``float64`` (e.g. ``5.0``) even though the real fee is always a whole
+    basis-point count — a bare ``str(raw)`` bakes the float artifact straight into
+    ``glued_pair_id`` (``…-5.0`` instead of ``…-5``, confirmed live in
+    ``prod/catalog.parquet`` 2026-08-03). Returns "" for missing/blank/non-numeric.
+    """
+    if raw is None:
+        return ""
+    text = str(raw).strip()
+    if not text:
+        return ""
+    try:
+        return str(int(float(text)))
+    except (TypeError, ValueError):
+        return text
+
+
 def _fee_from_instrument_key(instrument_key: str) -> str:
     """Extract the fee token from a legacy glued ``…:POOL:PAIR:FEE`` instrument_key.
 
-    The by_date ``pool_fee_tier`` column is in BPS (Uniswap feeTier / 100, e.g.
-    ``5.0``) but the human-readable glued id the operator specified uses the RAW
-    fee amount (``:500`` / ``:3000`` / ``:100``) the adapter stamped into
-    ``instrument_key``. So prefer the instrument_key's trailing fee segment for a
-    faithful UI id; return "" when the key is not a 4-part POOL key.
+    LEGACY-COMPAT FALLBACK ONLY (instrument_id_format_canonicalization_2026_07_08.md
+    finding 2, bug 3 — corrected 2026-08-03): earlier framing had this fire FIRST,
+    preferring the instrument_key's raw on-wire fee token (``:500``/``:3000``) over
+    the already-correct bps ``pool_fee_tier`` column — that is backwards from the
+    operator's decided target grammar (a real basis-point value, dash-glued), and
+    reintroduced the retired colon-before-fee shape on every regen for any row whose
+    per-day ``instrument_key`` still carries an old-format 4-segment legacy value.
+    The caller (:func:`_defi_pool_dual_form`) now consults :func:`_bps_fee_str` on
+    ``pool_fee_tier`` FIRST; this is only reached when that structured column is
+    blank, as a best-effort recovery for pre-bps-column historical rows. Returns ""
+    when the key is not a 4-part POOL key.
     """
     parts = instrument_key.split(":")
     if len(parts) >= 4 and parts[1] == "POOL":
@@ -1373,18 +1399,23 @@ def _defi_pool_dual_form(
     base_raw = meta.get("base_asset") or ""
     quote_raw = meta.get("quote_asset") or ""
     key_raw = meta.get("instrument_key") or ""
-    # Fee/discriminator precedence for the re-derived UI ``glued_pair_id``:
-    #   1. legacy 4th-colon fee token (``...:POOL:PAIR:FEE``) — the faithful raw fee;
-    #   2. the structured ``pool_fee_tier`` bps column (uniswap/balancer);
+    # Fee/discriminator precedence for the re-derived UI ``glued_pair_id``
+    # (corrected 2026-08-03, instrument_id_format_canonicalization_2026_07_08.md
+    # finding 2 bug 3 — was legacy-key-first, backwards from the operator's decided
+    # target grammar; see ``_fee_from_instrument_key``'s docstring):
+    #   1. the structured ``pool_fee_tier`` bps column (uniswap/balancer) — the
+    #      already-correct, operator-decided basis-point value;
+    #   2. legacy 4th-colon fee token (``...:POOL:PAIR:FEE``) — best-effort recovery
+    #      for a historical row that predates the ``pool_fee_tier`` column entirely;
     #   3. the discriminator hyphen-glued into a canonical 3-seg symbol
     #      (``...:POOL:SOL-USDC-WP64`` / ``-Standard``) for the Solana-AMM adapters
     #      that fold tick-spacing / pool-type into the symbol (Wave B, orca/raydium).
     # (3) keeps the re-derived ``glued_pair_id`` byte-identical to the passthrough
     # ``canonical_instrument_id`` for those pools without touching uniswap/balancer
-    # (which resolve at step 2).
+    # (which resolve at step 1).
     fee = (
-        _fee_from_instrument_key(key_raw)
-        or (meta.get("pool_fee_tier") or "")
+        _bps_fee_str(meta.get("pool_fee_tier"))
+        or _fee_from_instrument_key(key_raw)
         or _pool_symbol_discriminator(key_raw, base_raw, quote_raw)
     )
     identity = build_pool_identity(
@@ -3268,25 +3299,58 @@ def build_sports_fixture_team_player_catalogue(
     return pd.concat([fixture_df, team_df, player_df], ignore_index=True)
 
 
+def _dedupe_by_incremental_merge_key(df: pd.DataFrame, *, asset_group: str) -> pd.DataFrame:
+    """Collapse rows sharing the SAME :func:`_incremental_merge_keys` identity to one.
+
+    **Merge-key dedup-aware guard** (DP-CATALOG-001 defi follow-up, 2026-08-02 —
+    generalises the cefi-only fix from ``dp_catalog_not_running_sports_prediction_
+    2026_07_15.md`` to EVERY asset group). Root cause this fixes: the CURRENT
+    stored catalogue can carry a handful of legacy rows that share the exact same
+    merge identity (e.g. two ``pool::<CHAIN>::<addr>`` rows for one on-chain pool,
+    left over from a pre-canonicalisation spelling drift). :func:`_merge_incremental`
+    is correct to collapse such a pair to ONE row the moment a fresh by_date window
+    re-observes that pool (branch 1 takes the single window row; both stale
+    duplicates leave the frozen tail) — but that legitimate collapse shrinks
+    ``len(df)`` by 1 per pair, and the monotonic guard was comparing that
+    ALREADY-COLLAPSED new count against a NOT-equally-collapsed current-catalogue
+    count, tripping ``CATALOGUE_SHRINK_BLOCKED`` even though zero real instruments
+    were lost. Confirmed live 2026-08-02: defi's ``lifecycle-catalogue-regen-defi``
+    daily job blocked 2 consecutive days (46h stale, DP-CATALOG-001 CRITICAL) on
+    exactly this shape — 14 duplicate ``pool::CHAIN::addr`` keys sitting in the
+    stored catalogue, 8 of them re-observed by the day's window, net -8 rows,
+    ``dropped_active: 0`` / ``dropped_delisted: 2884`` (all already-closed pool
+    rows) confirming no active instrument was actually lost. Deduping the CURRENT
+    side by its own merge key before counting makes the comparison MORE precise,
+    not looser — two rows that genuinely have DIFFERENT merge keys (a real active
+    row) are untouched and still trip the guard exactly as before.
+    """
+    if df.empty:
+        return df
+    keys = _incremental_merge_keys(df, asset_group=asset_group)
+    return df[~keys.duplicated(keep="first")]
+
+
 def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str, *, asset_group: str) -> int | None:
     """Return the row count of the current canonical catalogue, or None when absent.
 
     **Dedup-aware guard** (RULED 2026-07-28,
-    ``dp_catalog_not_running_sports_prediction_2026_07_15.md``): for
-    ``asset_group == "cefi"``, re-runs the SAME cefi-only Phase D dedup passes
-    (:func:`_apply_cefi_phase_d_dedups`, mirroring :func:`run_rollup`'s own Phase D)
-    over the current catalogue before counting. Root cause this fixes: cefi's
-    daily incremental job already runs these dedup passes on the freshly-rolled
-    side (Phase D), but the monotonic guard was comparing that ALREADY-DEDUPED new
-    count against a NOT-equally-deduped current-catalogue count — so a day whose
-    window happened to touch enough still-ambiguous historical duplicate pairs
-    could push the new count below the current baseline even though zero real
-    instruments were lost (confirmed via `dropped_active: 0` on every observed
-    occurrence, 07-16 through 07-27). Deduping BOTH sides identically before
-    comparing makes the comparison MORE precise, not looser — a genuine
-    active-row drop still trips the guard exactly as before (see
-    tests/unit/scripts/test_promote_catalogue_dedup_aware_guard.py). Every other
-    asset_group is unaffected (dedup is a cefi-only Phase D pass).
+    ``dp_catalog_not_running_sports_prediction_2026_07_15.md``; generalised
+    2026-08-02, see :func:`_dedupe_by_incremental_merge_key`): for
+    ``asset_group == "cefi"``, first re-runs the SAME cefi-only Phase D dedup
+    passes (:func:`_apply_cefi_phase_d_dedups`, mirroring :func:`run_rollup`'s own
+    Phase D) over the current catalogue before counting — that fix's own root
+    cause (cefi's daily incremental job already runs these dedup passes on the
+    freshly-rolled side, so the guard was comparing an ALREADY-DEDUPED new count
+    against a NOT-equally-deduped current-catalogue count) is unchanged. THEN,
+    for every asset group (incl. cefi), collapses the current catalogue by its
+    own :func:`_incremental_merge_keys` identity — the generic form of the same
+    apples-to-apples principle, covering the merge's OWN dedup-on-re-observation
+    behaviour rather than only cefi's Phase D passes (see
+    :func:`_dedupe_by_incremental_merge_key` for the confirmed defi incident this
+    closes). Deduping BOTH sides identically before comparing makes the
+    comparison MORE precise, not looser — a genuine active-row drop still trips
+    the guard exactly as before (see
+    tests/unit/scripts/test_promote_catalogue_dedup_aware_guard.py).
     """
     if not storage.blob_exists(bucket, blob_path):
         return None
@@ -3294,6 +3358,7 @@ def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str,
     current = pd.read_parquet(io.BytesIO(payload))
     if asset_group == "cefi":
         current = _apply_cefi_phase_d_dedups(current)
+    current = _dedupe_by_incremental_merge_key(current, asset_group=asset_group)
     return len(current)
 
 
@@ -3374,11 +3439,67 @@ def promote_catalogue(
     catalogue's row count is computed AFTER re-running the same Phase D dedup
     passes the freshly-rolled ``df`` already went through, so the comparison is
     apples-to-apples.
+
+    **Benign-shrink auto-accept** (DP-CATALOG-001 cefi, 2026-08-03 — a THIRD
+    recurrence of the dedup-asymmetry class the 07-28/08-02 fixes narrowed, this
+    time structurally undiscoverable by re-dedup-ing ``current`` alone): the
+    self-widening incremental window (``WINDOW_DAYS_MIN=21``) re-derives raw
+    by_date data for any instrument whose expiry sits near the window's start
+    boundary. For a dated CeFi contract that expired the day BEFORE
+    ``window_start``, that re-derivation can mint a fresh, transient off-by-one
+    duplicate (see :func:`_dedup_cefi_expiry_off_by_one`) whose OTHER half is an
+    already-existing frozen-tail row — Phase D correctly collapses the pair back
+    to 1 row, but the pair never existed as 2 rows in the STORED ``current``
+    catalogue, so re-running Phase D on ``current`` alone (the existing
+    dedup-aware guard) can never discover a partner to collapse there. Row COUNT
+    is therefore an inherently unreliable proxy for THIS class — live-confirmed
+    2026-08-03: ``new=431120 < current=431238``, 265 dropped ids, 100% already
+    `available_to`-stamped DERIBIT OPTION/FUTURE rows expired 2026-07-12 (one day
+    before ``window_start=2026-07-13``), ``dropped_active=0``. Rather than add a
+    4th narrow dedup-symmetry patch that will recur for tomorrow's boundary
+    batch, this enforces the guard's ACTUAL safety contract directly: reuse the
+    already-reviewed :func:`_shrink_drop_diagnostics` (same code the rejection
+    path already used to report a block) to check the DROPPED rows' identity —
+    if every dropped id was already delisted (``dropped_active == 0``, i.e. no
+    ACTIVE instrument's presence flips to absent), the shrink is provably benign
+    and is auto-accepted with a distinct ``shrink_benign_no_active_loss`` reason
+    (never silently conflated with an operator-passed ``--allow-catalogue-shrink``
+    override). A shrink touching even ONE active instrument (``dropped_active >
+    0``) still hard-blocks exactly as before — this narrows the guard's blast
+    radius, it does not weaken the real protection.
     """
     canonical_blob, temp_blob = _catalogue_object_paths(env)
     new_count = len(df)
     current_count = _read_current_row_count(storage, bucket, canonical_blob, asset_group=asset_group)
-    decision = evaluate_monotonic_guard(new_count, current_count, allow_shrink=allow_shrink)
+
+    # Diagnose WHICH instruments a candidate shrink would drop BEFORE deciding, so a
+    # provably-benign shrink (dropped_active == 0) can auto-accept instead of blocking.
+    # Best-effort + only on a (rare) shrink candidate: never masks the guard decision.
+    drop_diagnostics: dict[str, object] = {}
+    if current_count is not None and new_count < current_count:
+        previous = _load_previous_catalogue(storage, bucket, canonical_blob)
+        if previous is not None:
+            try:
+                drop_diagnostics = _shrink_drop_diagnostics(df, previous[0])
+            except (KeyError, ValueError, TypeError) as exc:
+                logger.warning("shrink drop-diagnostics failed (guard falls back to the strict count check): %s", exc)
+
+    benign_shrink = bool(drop_diagnostics) and drop_diagnostics.get("dropped_active") == 0
+    decision = evaluate_monotonic_guard(new_count, current_count, allow_shrink=allow_shrink or benign_shrink)
+    if benign_shrink and decision.accept and not allow_shrink:
+        decision = GuardDecision(accept=True, reason="shrink_benign_no_active_loss")
+        logger.info("CATALOGUE_SHRINK auto-accepted (no active instrument lost): %s", drop_diagnostics)
+        log_event(
+            "CATALOGUE_SHRINK_BENIGN_AUTO_ACCEPTED",
+            severity="INFO",
+            details={
+                "bucket": bucket,
+                "env": env,
+                "new_count": new_count,
+                "current_count": current_count,
+                "drop_diagnostics": drop_diagnostics,
+            },
+        )
 
     logger.info(
         "Monotonic guard: new=%d current=%s decision=%s (%s)",
@@ -3389,17 +3510,8 @@ def promote_catalogue(
     )
 
     if not decision.accept:
-        # Diagnose WHICH instruments the rejected catalogue would drop, so the block is
-        # reviewable rather than opaque (F8 2026-07-18). Best-effort: the diagnostic must
-        # never mask the block itself, and it pays one extra GCS read only on a (rare) block.
-        drop_diagnostics: dict[str, object] = {}
-        previous = _load_previous_catalogue(storage, bucket, canonical_blob)
-        if previous is not None:
-            try:
-                drop_diagnostics = _shrink_drop_diagnostics(df, previous[0])
-                logger.error("CATALOGUE_SHRINK_BLOCKED drop-list: %s", drop_diagnostics)
-            except (KeyError, ValueError, TypeError) as exc:
-                logger.warning("shrink drop-diagnostics failed (block still stands): %s", exc)
+        if drop_diagnostics:
+            logger.error("CATALOGUE_SHRINK_BLOCKED drop-list: %s", drop_diagnostics)
         # Real event-log emission (was best-effort logger.info-only via _emit_event —
         # cefi_monotonicity_guard_alerting_and_dark_venues_2026_07_07.md). CRITICAL
         # severity + this event name route through UAC's DP-CATALOG-002 rule to

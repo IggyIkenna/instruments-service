@@ -178,7 +178,7 @@ def main() -> int:
     log.info("bucket=%s vm=%s dry_run=%s", BUCKET, ARGS.vm_name, ARGS.dry_run)
     client = get_storage_client()
 
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET)
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET, per_vm_shards=True)
 
     grand_reconciled = 0
     grand_already_captured = 0

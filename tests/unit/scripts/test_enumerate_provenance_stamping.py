@@ -36,7 +36,8 @@ _derive = enumerator_module._derive_pm_source_transport
 def test_tradfi_trades_seed_carries_databento_batch_rest() -> None:
     """TradFi trades primary external source = databento → batch_databento / rest
     (DATABENTO-FIRST per operator 2026-06-24; supersedes 2026-06-11 massive-first).
-    massive stays secondary fallback ([1]) in SOURCE_PRIORITY."""
+    massive was dropped from SOURCE_PRIORITY entirely 2026-07-19
+    (unified-api-contracts@a2beed46) — databento is the sole tradfi source."""
     pm, source, transport = _derive("tradfi", "trades")
     assert pm == "batch_databento"
     assert source == "databento"
