@@ -64,6 +64,21 @@ def test_source_and_mode_resolution() -> None:
     assert _mod.resolve_source_and_mode("TEAMS", "footystats") == ("api_football", PipelineMode.BATCH_API_FOOTBALL)
 
 
+def test_source_and_mode_resolution_lower_case_data_type() -> None:
+    # Raw MTDS/MDPS GCS path segments arrive lower-case ("trades",
+    # "odds_horizon_bucket") but SOURCE_PRIORITY keys sports upper-case only —
+    # resolve_source_and_mode must retry .upper() rather than silently falling
+    # through to the BATCH_INSTRUMENTS_SERVICE producer-fallback.
+    assert _mod.resolve_source_and_mode("trades", "") == ("odds_api", PipelineMode.BATCH_ODDS_API)
+    assert _mod.resolve_source_and_mode("odds_horizon_bucket", "") == (
+        "mdps_odds_horizon_bucket",
+        PipelineMode.BATCH_MDPS_ODDS_HORIZON_BUCKET,
+    )
+    # No SOURCE_PRIORITY entry under any casing (TRADES_INPLAY) — falls through to
+    # the producer fallback, same as any other unregistered data_type.
+    assert _mod.resolve_source_and_mode("trades_inplay", "") == ("", PipelineMode.BATCH_INSTRUMENTS_SERVICE)
+
+
 def test_reverify_drops_now_covered_rows() -> None:
     index = _sweep.build_sports_covered_index(
         [
