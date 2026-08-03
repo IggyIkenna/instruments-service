@@ -613,7 +613,12 @@ def test_defi_v2_acquisition_pending_venue_yields_typed_empty_not_dangling() -> 
             enumerator_module._enumerate_v2_defi(
                 [pending],
                 _date_axis("2024-06-01"),
-                ["staking_yields"],
+                # LST instrument_type only ever validates against "lst_rates" in UAC
+                # PROTOCOL_CAPABILITIES (no LST protocol declares "staking_yields" —
+                # that data_type is YIELD/RESTAKING-only); "staking_yields" here would
+                # be filtered out by _row_data_types before the acquisition-pending
+                # branch is ever reached, making the assertion below vacuous.
+                ["lst_rates"],
                 present_set=set(),  # nothing captured — would otherwise dangle expected_unattempted
                 present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
             )
