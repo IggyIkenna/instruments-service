@@ -99,6 +99,30 @@ _SPORTS_LEAGUE_FLAT_RE = re.compile(
     rf"^{re.escape(INSTRUMENT_AVAILABILITY_ROOT)}/day=([^/]+)/league=([^/]+)/venue=([^/]+)/(.+)$"
 )
 
+# Prediction canonical_question_group-BEFORE-day FLAT shape (instrument_availability tree only):
+# ``<root>/canonical_question_group={G}/day={D}/venue={V}/<tail>``. This is the pre-2026-07-21
+# writer's partition-dict ALPHABETICAL sort of ``{day, venue, canonical_question_group}``
+# (``canonical_question_group`` < ``day`` < ``venue`` — see the ``a9be6ce9`` diff's removed
+# ``_write_prediction_venue`` block) — inverse-ordered from the ruled hive's day-first /
+# trailing ``canonical_question_group=`` position. Confirmed via a live GCS sample (2026-08-03)
+# that every sampled canonical group's LAST object in this shape was written 2026-07-22T00:37:29Z
+# — the batch run immediately before the ``a9be6ce9`` writer-fix deploy (03:20:56Z same day) — so
+# this shape is NOT still being written (todo 3 of
+# instrument_availability_hive_migration_unrecognized_shapes_and_content_mismatch_2026_08_03.md).
+_PREDICTION_GROUP_FIRST_FLAT_RE = re.compile(
+    rf"^{re.escape(INSTRUMENT_AVAILABILITY_ROOT)}/canonical_question_group=([^/]+)/day=([^/]+)/venue=([^/]+)/(.+)$"
+)
+
+# Prediction market_lifecycle legacy FLAT shape: ``<root>/day={D}/group={G}/venue={V}/<tail>``
+# (day first, but ``group=`` sits BEFORE ``venue=`` — venue is not immediately after ``day=``, so
+# it never matched ``_FLAT_RE`` above). Pre-2026-07-21 partition dict was
+# ``{"group": G, "day": D, "venue": V}``, alphabetically sorted (``day`` < ``group`` < ``venue``,
+# see the ``a9be6ce9`` diff's ``_write_market_lifecycle`` change). Same cutover timing as the
+# shape above — confirmed live, last write 2026-07-22T00:37:29Z, not written since.
+_PREDICTION_LIFECYCLE_DAY_GROUP_VENUE_FLAT_RE = re.compile(
+    rf"^{re.escape(MARKET_LIFECYCLE_ROOT)}/day=([^/]+)/group=([^/]+)/venue=([^/]+)/(.+)$"
+)
+
 
 def _bucket_for(asset_group: str) -> str:
     if asset_group == "prediction":
@@ -137,6 +161,23 @@ def hive_target_for(flat_path: str, asset_group: str) -> str | None:
             return (
                 f"{INSTRUMENT_AVAILABILITY_ROOT}/day={day}/pipeline_mode={pipeline_mode}/"
                 f"asset_group=sports/venue={venue}/league={league}/{tail}"
+            )
+    if asset_group == "prediction":
+        m_group_first = _PREDICTION_GROUP_FIRST_FLAT_RE.match(flat_path)
+        if m_group_first:
+            group, day, venue, tail = m_group_first.groups()
+            pipeline_mode = _pipeline_mode_for(INSTRUMENT_AVAILABILITY_ROOT, asset_group, venue)
+            return (
+                f"{INSTRUMENT_AVAILABILITY_ROOT}/day={day}/pipeline_mode={pipeline_mode}/"
+                f"asset_group=prediction/venue={venue}/canonical_question_group={group}/{tail}"
+            )
+        m_lifecycle = _PREDICTION_LIFECYCLE_DAY_GROUP_VENUE_FLAT_RE.match(flat_path)
+        if m_lifecycle:
+            day, group, venue, tail = m_lifecycle.groups()
+            pipeline_mode = _pipeline_mode_for(MARKET_LIFECYCLE_ROOT, asset_group, venue)
+            return (
+                f"{MARKET_LIFECYCLE_ROOT}/day={day}/pipeline_mode={pipeline_mode}/"
+                f"asset_group=prediction/venue={venue}/group={group}/{tail}"
             )
     return None
 
