@@ -85,6 +85,7 @@ from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
 from .adapters.sports.adapters.api_football_reference import ApiFootballReferenceDataAdapter
 from .adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
+from .adapters.tradfi.fred import FredReferenceDataAdapter
 from .adapters.tradfi.fx import FxReferenceDataAdapter
 from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
 from .adapters.tradfi.tradfi_live import TradFiLiveReferenceDataAdapter
@@ -153,6 +154,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "etherfi": EtherFiReferenceDataAdapter,
     "euler_v2": EulerV2ReferenceDataAdapter,
     "fluid": FluidReferenceDataAdapter,
+    "fred": FredReferenceDataAdapter,
     "fx": FxReferenceDataAdapter,
     "hyperliquid": HyperliquidReferenceDataAdapter,
     "idle": IdleReferenceDataAdapter,
@@ -227,6 +229,9 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "ibkr": "ibkr",
     # Curated static FX_SPOT_PAIRS list (UAC registry) — no vendor call, no API key.
     "fx": "",
+    # Curated static KEY_SERIES catalogue (mirrors MTDS's FredAdapter.KEY_SERIES) —
+    # no vendor call, no API key.
+    "fred": "",
     "polymarket": "polymarket",
     "kalshi": "kalshi",
     # Crypto-perp CLOBs — public REST endpoints for contract enumeration, no API key needed.
