@@ -196,7 +196,7 @@ def main() -> int:
         log.info("Nothing reconcilable — no writes needed.")
         return 0
 
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET)
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET, per_vm_shards=True)
     n_written = 0
     for date, venue in reconcilable:
         # source='api_football' (matching the orphan's own identity, so this write

@@ -220,7 +220,7 @@ async def _refetch_league_day(af_league_id: int, season: int, league_id: str, da
 def run_reconcile9(cells_path: str, dry_run: bool) -> int:
     cells = pd.read_csv(cells_path)
     storage = get_storage_client(project_id=ARGS.project)
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET)
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=BUCKET, per_vm_shards=True)
     n_captured = n_refetched = n_failed = 0
 
     for row in cells.itertuples(index=False):

@@ -141,7 +141,7 @@ def _dry_run_report(classification: dict[str, list[tuple[str, str, str, str]]]) 
 
 
 def _apply(bucket: str, closeable: list[tuple[str, str, str, str]]) -> int:
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket, per_vm_shards=True)
     attempt_ts = datetime.now(UTC)
     closed = 0
     for date, data_type, league_id, reason in closeable:
