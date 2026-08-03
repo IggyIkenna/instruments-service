@@ -79,7 +79,10 @@ def _run_coverage_status(argv: list[str] | None = None) -> None:  # pragma: no c
     bucket: str = str(args.bucket) if args.bucket else get_instruments_bucket_for_asset_group(asset_group or "defi")  # pyright: ignore[reportAny]
 
     try:
-        index: pd.DataFrame = read_availability_index(bucket)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+        # Only `data_type` is ever read below (the unique-value scan feeding
+        # per-data_type coverage rows) — projected to avoid decoding the
+        # ~1.58GB+ defi consolidated index in full.
+        index: pd.DataFrame = read_availability_index(bucket, columns=["data_type"])  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
     except Exception as exc:
         print(json.dumps({"error": str(exc), "bucket": bucket}), file=sys.stderr)
         sys.exit(1)
@@ -151,7 +154,11 @@ def _run_refresh_league_entity_coverage(argv: list[str] | None = None) -> None: 
     uac_json = Path(str(args.uac_json)) if args.uac_json else _default_json  # pyright: ignore[reportAny]
 
     bucket: str = get_write_bucket_name("instruments", "sports")
-    index: pd.DataFrame = read_availability_index(bucket)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+    # Only data_type/capture_status/league_id are read below (entity/league
+    # coverage scan) — projected per this doc's caution against a bare read.
+    index: pd.DataFrame = read_availability_index(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+        bucket, columns=["data_type", "capture_status", "league_id"]
+    )
     if index.empty or "data_type" not in index.columns:  # pyright: ignore[reportUnknownMemberType]
         print(json.dumps({"error": "empty or schema-less _index", "bucket": bucket}), file=sys.stderr)
         sys.exit(1)
@@ -291,7 +298,15 @@ def _run_reprocess_shards(argv: list[str] | None = None) -> None:  # pragma: no 
     error_reason_predicate = _make_contains_predicate(reason_contains) if reason_contains is not None else None
 
     try:
-        index: pd.DataFrame = read_availability_index(bucket)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+        # Bare read is intentional: reprocess_shards() writes this exact
+        # DataFrame back to GCS VERBATIM (df.to_parquet(...)) on --apply —
+        # projecting columns here would silently truncate the production
+        # manifest's full schema on write-back, a correctness regression, not
+        # a memory win (same class as this doc's unified-trading-library P2
+        # finding for reconcile_manifest()/rebuild_manifest()).
+        index: pd.DataFrame = read_availability_index(  # QG-allow: bare-read-availability-index
+            bucket
+        )  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
     except Exception as exc:
         print(json.dumps({"error": str(exc), "bucket": bucket}), file=sys.stderr)
         sys.exit(1)
