@@ -719,12 +719,14 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             tick_val = Decimal(str(tick_raw)) if tick_raw else Decimal("0.01")
             tick_size = tick_val if tick_val.is_finite() and tick_val > 0 else Decimal("0.01")
         except Exception as _exc:
+            _db.logger.warning("Failed to parse tick size %r: %s", tick_raw, _exc)
             tick_size = Decimal("0.01")
         lot_raw = getattr(row, "min_lot_size_round_lot", None)
         try:
             lot_val = Decimal(str(lot_raw)) if lot_raw else Decimal("1")
             lot_size = lot_val if lot_val.is_finite() and lot_val > 0 else Decimal("1")
         except Exception as _exc:
+            _db.logger.warning("Failed to parse lot size %r: %s", lot_raw, _exc)
             lot_size = Decimal("1")
         return tick_size, lot_size
 
