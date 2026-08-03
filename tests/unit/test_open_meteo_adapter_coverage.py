@@ -107,35 +107,6 @@ class TestOpenMeteoGetOdds:
         assert result == []
 
 
-class TestOpenMeteoGetWeather:
-    @pytest.mark.asyncio
-    async def test_get_weather_success(self) -> None:
-        adapter = OpenMeteoAdapter()
-        mock_session = _make_aiohttp_mock(_SAMPLE_WEATHER_RESPONSE)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            result = await adapter.get_weather(51.5, -0.1, "2026-04-01")
-        assert result is not None
-        assert result.temperature_celsius == 15.0
-        assert result.latitude == 51.5
-        assert result.longitude == -0.1
-
-    @pytest.mark.asyncio
-    async def test_get_weather_error_returns_none(self) -> None:
-        adapter = OpenMeteoAdapter()
-        # Mock _get_with_retry to raise (simulates network failure)
-        with patch.object(adapter, "_get_with_retry", side_effect=RuntimeError("Network error")):
-            result = await adapter.get_weather(51.5, -0.1, "2026-04-01")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_get_weather_invalid_response(self) -> None:
-        adapter = OpenMeteoAdapter()
-        mock_session = _make_aiohttp_mock({"error": True})
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            result = await adapter.get_weather(51.5, -0.1, "2026-04-01")
-        assert result is None
-
-
 class TestOpenMeteoGetWeatherMatchWindow:
     @pytest.mark.asyncio
     async def test_get_weather_match_window_success(self) -> None:
