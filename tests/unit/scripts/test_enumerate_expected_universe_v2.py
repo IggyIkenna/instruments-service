@@ -952,10 +952,16 @@ def test_tradfi_v2_bundle_capture_suppresses_via_full_enumerate_v2() -> None:
     axis = _date_axis("2024-06-03")
     # Writer-shape captures (instrument_id="", underlying=<U>) for ES futures_chain
     # and ES combo only — CL options_chain stays UN-captured so it must seed.
+    # Manifest-column casing (tradfi_combo_casing_direction_ssot_contradiction_
+    # 2026_08_03.md): futures_chain/options_chain are the PERMANENT bundle-grain
+    # exclusion (stay lowercase); combo is a real InstrumentType member and is
+    # canonicalized UPPERCASE at the manifest seam — this present_set mirrors what
+    # a real capture now writes (a stale lowercase "combo" here would silently stop
+    # suppressing the seed — the exact regression this fixture guards against).
     cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "underlying", "league_id", "date"]
     present = {
         ("CME", "", "ohlcv_1m", "futures_chain", "", "ES", "", "2024-06-03"),
-        ("CME", "", "ohlcv_1m", "combo", "", "ES", "", "2024-06-03"),
+        ("CME", "", "ohlcv_1m", "COMBO", "", "ES", "", "2024-06-03"),
     }
     rows = list(
         enumerator_module.enumerate_v2(
@@ -970,11 +976,11 @@ def test_tradfi_v2_bundle_capture_suppresses_via_full_enumerate_v2() -> None:
     seeded = {(r.instrument_type, r.instrument_id, r.underlying) for r in rows}
     # ES futures_chain + ES combo captured → suppressed.
     assert ("futures_chain", "", "ES") not in seeded, "captured futures_chain must be suppressed"
-    assert ("combo", "", "ES") not in seeded, "captured combo must be suppressed"
+    assert ("COMBO", "", "ES") not in seeded, "captured combo must be suppressed"
     # CL options_chain un-captured → seeded with blank instrument_id + underlying=CL.
     assert ("options_chain", "", "CL") in seeded, "un-captured options_chain must seed at writer grain"
     # No bundle seed ever carries a non-blank instrument_id.
-    bundle_types = {"futures_chain", "combo", "options_chain"}
+    bundle_types = {"futures_chain", "COMBO", "options_chain"}
     assert all(r.instrument_id == "" for r in rows if r.instrument_type in bundle_types), (
         "every bundle seed must carry a blank instrument_id"
     )
@@ -4332,7 +4338,10 @@ def test_build_present_set_rolls_up_leaf_combo_capture_to_bundle_grain() -> None
     """A LEAF-shaped tradfi COMBO capture (real per-contract instrument_id, blank
     underlying) rolls up to the writer's bundle key — blank instrument_id +
     derived underlying — the SAME grain ``_rollup_bundle_grain`` produces on the
-    seed side."""
+    seed side. The rolled-up ``instrument_type`` is manifest-canonicalized
+    UPPERCASE (tradfi_combo_casing_direction_ssot_contradiction_2026_08_03.md)
+    regardless of the input row's own casing — combo is NOT a permanently-excluded
+    bundle-grain token like futures_chain/options_chain."""
     df = _underlying_aware_present_df(
         [
             {
@@ -4345,7 +4354,7 @@ def test_build_present_set_rolls_up_leaf_combo_capture_to_bundle_grain() -> None
         ]
     )
     got = enumerator_module._build_present_set(df, "tradfi")
-    assert got == {("CME", "", "ohlcv_1m", "combo", "", "ES", "", "2024-06-03")}
+    assert got == {("CME", "", "ohlcv_1m", "COMBO", "", "ES", "", "2024-06-03")}
 
 
 def test_build_present_set_rolls_up_leaf_option_capture_to_options_chain_bundle_grain() -> None:
@@ -4485,7 +4494,7 @@ def test_build_captured_set_rolls_up_leaf_bundle_capture() -> None:
     )
     df["capture_status"] = "captured"
     got = enumerator_module._build_captured_set(df, "tradfi")
-    assert got == {("CME", "", "ohlcv_1m", "combo", "", "ES", "", "2024-06-03")}
+    assert got == {("CME", "", "ohlcv_1m", "COMBO", "", "ES", "", "2024-06-03")}
 
 
 def test_enumerate_v2_tradfi_leaf_shaped_combo_capture_suppresses_phantom_seed() -> None:
@@ -4532,7 +4541,7 @@ def test_enumerate_v2_tradfi_leaf_shaped_combo_capture_suppresses_phantom_seed()
         )
     )
     seeded = {(r.instrument_type, r.instrument_id, r.underlying) for r in rows}
-    assert ("combo", "", "ES") not in seeded, (
+    assert ("COMBO", "", "ES") not in seeded, (
         "LEAF-shaped combo capture for underlying ES must suppress the rolled-up combo seed "
         "(present-set symmetry fix) — phantom expected_unattempted regression"
     )
@@ -4602,11 +4611,15 @@ def test_derive_underlying_blank_raw_underlying_still_derives_from_instrument_id
 
 def test_build_present_set_reconciles_already_populated_spelled_out_underlying() -> None:
     """End-to-end proof for the naming-mismatch fix: a real captured tradfi COMBO
-    row (legacy-cased ``COMBO``, blank instrument_id, ALREADY-POPULATED but
-    spelled-out ``underlying="HEATING-OIL"``) now rolls up to the catalog's short
-    root ``HO`` — the present-set key can match a ``HO``-seeded combo bundle
-    instead of permanently phantom-``expected_unattempted``ing every HO combo
-    date because the raw manifest spelling never matched the catalog convention.
+    row (blank instrument_id, ALREADY-POPULATED but spelled-out
+    ``underlying="HEATING-OIL"``) now rolls up to the catalog's short root ``HO``
+    — the present-set key can match a ``HO``-seeded combo bundle instead of
+    permanently phantom-``expected_unattempted``ing every HO combo date because
+    the raw manifest spelling never matched the catalog convention. The rolled-up
+    ``instrument_type`` is manifest-canonicalized UPPERCASE
+    (tradfi_combo_casing_direction_ssot_contradiction_2026_08_03.md) — combo is
+    not a permanently-excluded bundle-grain token, so the input's own casing
+    (uppercase here) doesn't matter; the output is always the canon value.
     """
     df = _underlying_aware_present_df(
         [
@@ -4621,4 +4634,4 @@ def test_build_present_set_reconciles_already_populated_spelled_out_underlying()
         ]
     )
     got = enumerator_module._build_present_set(df, "tradfi")
-    assert got == {("CME", "", "ohlcv_1m", "combo", "", "HO", "", "2024-06-03")}
+    assert got == {("CME", "", "ohlcv_1m", "COMBO", "", "HO", "", "2024-06-03")}
