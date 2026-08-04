@@ -22,9 +22,11 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
+from unified_api_contracts.registry.chain_env import get_chain_genesis_date
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -38,8 +40,11 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CHAIN = "SOLANA"
 
-# Solana mainnet genesis block: 2020-03-16 (epoch 0 start).
-_SOLANA_GENESIS_DATE = datetime(2020, 3, 16, tzinfo=UTC)
+# Solana mainnet genesis — SSOT is UAC CHAIN_GENESIS_DATES.
+# Resolved at import time from the canonical source (chain_env.py).
+_SOLANA_GENESIS_DATE: datetime = datetime.fromisoformat(
+    cast(str, get_chain_genesis_date(_DEFAULT_CHAIN))
+).replace(tzinfo=UTC)
 
 # Venue tag for Solana native staking (distinct from LST venues).
 _VENUE_TAG = "SOLANA-NATIVE"

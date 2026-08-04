@@ -10,13 +10,17 @@ from datetime import UTC, datetime
 
 import pytest
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.registry.chain_env import get_chain_genesis_date
 
 from instruments_service.reference_data.adapters.defi.solana_native_staking import (
     _SOL_MINT,
     SolanaNativeStakingAdapter,
 )
 
-_EXPECTED_GENESIS_DATE = datetime(2020, 3, 16, tzinfo=UTC)
+# Shape-lock: adapter's genesis date must match UAC CHAIN_GENESIS_DATES SSOT.
+_EXPECTED_GENESIS_DATE: datetime = datetime.fromisoformat(
+    get_chain_genesis_date("SOLANA") or "2020-03-16"
+).replace(tzinfo=UTC)
 
 
 def test_venue() -> None:
