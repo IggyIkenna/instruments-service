@@ -582,11 +582,16 @@ class TestCanonNormalisers:
     def test_cefi_venue_suffix_fold(self, mod: ModuleType) -> None:
         """Tardis-suffix + legacy venue dialects fold to the UAC canonical venue
         (Decision 6, check-folds-suffixes); UAC-canonical suffixed venues do NOT fold.
-        OKX-SPOT stopped folding 2026-07-10 (Option A follow-through) — it is now
-        its own declared cefi venue with its own EXPECTED entry, same as BYBIT-SPOT."""
-        assert mod._canon_venue("cefi", "OKX-SWAP") == "OKX"
+        OKX-SPOT stopped folding 2026-07-10 (Option A follow-through); bare "OKX"
+        itself was REMOVED 2026-08-04 (unified-api-contracts@d67a226f — never
+        MVP, 2,475+ permanently-failing capture attempts) so OKX-SWAP/OKX-FUTURES
+        stopped folding too — each is now its own declared cefi venue with its
+        own EXPECTED entry, same as OKX-SPOT/BYBIT-SPOT. Legacy raw-Tardis
+        dialects (OKEX/OKEX-SWAP/OKEX-FUTURES) still fold, now to the specific
+        product-typed canonical venue instead of bare OKX."""
+        assert mod._canon_venue("cefi", "OKX-SWAP") == "OKX-SWAP"
         assert mod._canon_venue("cefi", "OKX-SPOT") == "OKX-SPOT"
-        assert mod._canon_venue("cefi", "okex-futures") == "OKX"
+        assert mod._canon_venue("cefi", "okex-futures") == "OKX-FUTURES"
         assert mod._canon_venue("cefi", "CRYPTOFACILITIES") == "KRAKEN-FUTURES"
         assert mod._canon_venue("cefi", "BITFINEX-DERIVATIVES") == "BITFINEX-FUTURES"
         assert mod._canon_venue("cefi", "BYBIT-SPOT") == "BYBIT-SPOT"

@@ -261,7 +261,15 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # real capture was verified (18 manifest rows, venue=AAVE_V3/chain=PLASMA).
 # Verified via the same enumerate_cells + _dedupe_shard_targets call this
 # test itself makes.
-_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 101, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
+# CEFI 26->25 (2026-08-04, unified-api-contracts@d67a226f): -1 for bare
+# "OKX", removed entirely from VENUES_BY_ASSET_GROUP["cefi"] — never MVP
+# (0 real captured rows across its surviving capability, options_chain;
+# 2,475+ permanently-failing capture attempts since May). OKX-SPOT/
+# OKX-SWAP/OKX-FUTURES remain as their own declared venues and each already
+# had their own dedup'd target, so this is a pure -1, not a repoint.
+# Verified via the same enumerate_cells + _dedupe_shard_targets call this
+# test itself makes.
+_PER_AG_TARGET_COUNTS = {"CEFI": 25, "DEFI": 101, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:
