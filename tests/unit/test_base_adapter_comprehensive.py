@@ -233,7 +233,10 @@ class TestGetWithRetry:
         mock_session = MagicMock()
         mock_session.get.side_effect = aiohttp.ClientError("connection refused")
 
-        with pytest.raises(RuntimeError, match="All 3 attempts failed"):
+        with (
+            patch("unified_trading_library.utils.retry.asyncio.sleep"),
+            pytest.raises(RuntimeError, match="All 3 attempts failed"),
+        ):
             await adapter._get_with_retry(mock_session, "https://test")
 
     @pytest.mark.asyncio
@@ -257,7 +260,8 @@ class TestGetWithRetry:
         mock_session = MagicMock()
         mock_session.get.side_effect = [mock_cm_429, mock_cm_200]
 
-        result = await adapter._get_with_retry(mock_session, "https://test")
+        with patch("unified_trading_library.utils.retry.asyncio.sleep"):
+            result = await adapter._get_with_retry(mock_session, "https://test")
         assert result == {"ok": True}
 
     @pytest.mark.asyncio
@@ -275,7 +279,10 @@ class TestGetWithRetry:
         mock_session = MagicMock()
         mock_session.get.side_effect = [_make_503_cm() for _ in range(_RETRY_ATTEMPTS)]
 
-        with pytest.raises(RuntimeError, match=f"HTTP 503 from https://test after {_RETRY_ATTEMPTS} attempts"):
+        with (
+            patch("unified_trading_library.utils.retry.asyncio.sleep"),
+            pytest.raises(RuntimeError, match=f"HTTP 503 from https://test after {_RETRY_ATTEMPTS} attempts"),
+        ):
             await adapter._get_with_retry(mock_session, "https://test")
 
     @pytest.mark.asyncio
