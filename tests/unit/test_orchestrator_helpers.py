@@ -154,6 +154,31 @@ class TestRejectJunkInstruments:
         kept = reject_junk_instruments(records)
         assert kept == records
 
+    def test_vietnamese_and_azerbaijani_names_are_kept(self) -> None:
+        """Vietnamese tone-mark + Azerbaijani/Turkic schwa names must NOT be rejected.
+
+        Regression for `sports_satellite_ao_dispatch_batch8_2026_07_30.md` todo 4
+        (2026-08-04 follow-up): the 2026-07-30 Latin-script narrowing still rejected
+        Vietnamese (Công An Nhân Dân vs Bóng đá Huế, VIETNAM_V_LEAGUE_2) and
+        Azerbaijani (Zira vs Səbail, AZERBAIJAN_PREMYER_LIQA) — Latin Extended
+        Additional + IPA Extensions ranges were missing from the allow-list.
+        Pins the exact 2 names the DIAG recapture measured live (2021-11-20).
+        """
+        records = [
+            _make_record(
+                instrument_key="VIETNAM_V_LEAGUE_2:CONG_AN_NHAN_DAN_v_BONG_DA_HUE",
+                venue="API_FOOTBALL",
+                base_asset="Công An Nhân Dân vs Bóng đá Huế",
+            ),
+            _make_record(
+                instrument_key="AZERBAIJAN_PREMYER_LIQA:ZIRA_v_SABAIL",
+                venue="API_FOOTBALL",
+                base_asset="Zira vs Səbail",
+            ),
+        ]
+        kept = reject_junk_instruments(records)
+        assert kept == records
+
     def test_cjk_junk_still_rejected_after_latin_script_narrowing(self) -> None:
         """The narrowed guard must still reject the original CJK/meme junk it was built for."""
         records = [
