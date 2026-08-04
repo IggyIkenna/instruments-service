@@ -154,22 +154,25 @@ class TestFactoryTardisRouting:
         assert adapter.venue == "tardis"
 
     def test_okx_bare_venue_resolves_all_itype_exchanges(self) -> None:
-        """OKX spans 4 real Tardis exchanges depending on instrument_type
-        (okex/okex-swap/okex-futures/okex-options) — the itype-aware gather
-        must resolve ALL of them (not just one via the venue-only lookup),
-        and the adapter must be told to tag every parsed instrument
+        """OKX spans 3 real Tardis exchanges depending on instrument_type
+        (okex/okex-swap/okex-futures) — the itype-aware gather must resolve
+        ALL of them (not just one via the venue-only lookup), and the
+        adapter must be told to tag every parsed instrument
         canonical_venue="OKX" (not the per-exchange reverse-map values like
         OKX-SPOT/OKX-SWAP). Regression guard for
         cefi_deribit_combo_and_okx_bare_venue_gaps_2026_07_12.md — bare "OKX"
         used to raise ValueError here (no direct tardis_to_venue value, and
-        no "-" in "OKX" to trigger the suffixed-venue fallback)."""
+        no "-" in "OKX" to trigger the suffixed-venue fallback).
+        okex-options dropped 2026-08-04 (cefi_bare_okx_venue_removal_2026_08_04.md,
+        unified-api-contracts@d67a226f) — the OPTION capability it routed was
+        dead (zero real data, a stray registry member), so bare OKX's
+        itype-aware gather now spans exactly the 3 live exchanges."""
         clear_adapter_pool()
         adapter = get_adapter_for_canonical_venue("OKX", mode="batch")
         assert adapter.venue == "tardis"
         assert sorted(adapter._exchanges) == [
             "okex",
             "okex-futures",
-            "okex-options",
             "okex-swap",
         ]
         assert adapter._canonical_venue_override == "OKX"
