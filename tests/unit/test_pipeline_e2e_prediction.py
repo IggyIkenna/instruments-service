@@ -261,7 +261,15 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # real capture was verified (18 manifest rows, venue=AAVE_V3/chain=PLASMA).
 # Verified via the same enumerate_cells + _dedupe_shard_targets call this
 # test itself makes.
-_PER_AG_TARGET_COUNTS = {"CEFI": 26, "DEFI": 101, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
+# CEFI 26->25 (cefi_bare_okx_venue_removal_2026_08_04.md, 2026-08-04): bare
+# "OKX" removed entirely from VENUES_BY_ASSET_GROUP["cefi"]
+# (unified-api-contracts@d67a226f) — OKX-SWAP's real data now enumerates
+# under its own venue instead of folding through bare OKX, so dedup'd
+# (asset_group, venue) targets go from 4 OKX-family venues (OKX, OKX-SPOT,
+# OKX-SWAP, OKX-FUTURES) to 3 (OKX-SPOT, OKX-SWAP, OKX-FUTURES), -1 net.
+# Verified via the same enumerate_cells + _dedupe_shard_targets call this
+# test itself makes.
+_PER_AG_TARGET_COUNTS = {"CEFI": 25, "DEFI": 101, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:
