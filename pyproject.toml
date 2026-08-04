@@ -77,6 +77,17 @@ Repository = "https://github.com/iggyikenna/instruments-service"
 
 [tool.uv]
 constraint-dependencies = ["setuptools>=83.0.0"]
+# Transitive security pins (pip-audit) — keep at or above fix versions.
+# cryptography>=50.0.0 closes CVE-2026-69247 (PKCS#7 EnvelopedData decryption
+# Bleichenbacher oracle via distinguishable errors/timing, introduced in 44.0.0)
+# found in 49.0.0. No BACKWARDS INCOMPATIBLE changes in the 50.0.0 changelog.
+# instruments-service DOES have a direct `cryptography` import (kalshi.py RSA-PSS
+# signing) but the package itself is not declared as a project dependency — it
+# reaches this repo only transitively (via web3/ib_insync/etc), so the resolver
+# floor is forced here rather than via an inline pyproject.toml dependency pin.
+override-dependencies = [
+    "cryptography>=50.0.0,<51.0.0",
+]
 
 [tool.uv.sources.unified-trading-library]
 path = "../unified-trading-library"
