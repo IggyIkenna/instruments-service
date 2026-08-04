@@ -14,6 +14,16 @@ mirrors emit_empty_gaps_for_entity's own expected-set logic
 (sports_reference_core.py:338-341), so this reports the same "needed" gap
 the writer's own empty-gap emission targets.
 
+A shard is "resolved" (not needed) once its capture_status is EITHER
+`captured` (real data) OR `empty_confirmed` (writer already checked and
+recorded honest absence, e.g. EXPECTED_NO_PROVIDER_COVERAGE) -- treating
+only `captured` as done (2026-08-03 first cut of this script) silently
+counted hundreds of thousands of already-resolved empty_confirmed shards
+as still needed. Found 2026-08-04 while investigating why FIXTURE_STATS
+showed zero shard-count movement after a real, multi-hour backfill run;
+confirmed the same blind spot applies to every entity here. SSOT:
+plans/active/issues/sports_af_full_entity_completion_2026_08_03.md.
+
 Single-walk discipline: ONE UTL-client-backed read of the consolidated
 availability_index.parquet (see census_fixture_events_schema_variants_2026_07_25.py
 for the ADC-staleness gotcha this avoids).
@@ -57,6 +67,7 @@ def main() -> int:
     print(f"manifest rows (post-floor, <=today): {len(manifest)}", file=sys.stderr)
 
     captured = manifest[manifest["capture_status"] == "captured"]
+    resolved = manifest[manifest["capture_status"].isin(("captured", "empty_confirmed"))]
     fixtures = captured[captured["data_type"].isin(SCHEDULE_DEFINING_DATA_TYPES)].drop_duplicates(
         subset=["date", "league_id"]
     )
@@ -75,12 +86,12 @@ def main() -> int:
     grand_total_needed = 0
     for entity, mvp_only in ENTITIES.items():
         denom = fixtures_mvp_only if mvp_only else fixtures_all
-        ent_rows = captured[captured["data_type"] == entity].drop_duplicates(subset=["date", "league_id"])
+        ent_rows = resolved[resolved["data_type"] == entity].drop_duplicates(subset=["date", "league_id"])
         ent_shards = set(zip(ent_rows["date"], ent_rows["league_id"], strict=False))
         needed = denom - ent_shards
         scope_label = "MVP-96" if mvp_only else "all-383"
         print(
-            f"\n{entity} (scope={scope_label}): expected={len(denom)} already_captured={len(ent_shards & denom)} "
+            f"\n{entity} (scope={scope_label}): expected={len(denom)} already_resolved={len(ent_shards & denom)} "
             f"needed={len(needed)}",
             file=sys.stderr,
         )
