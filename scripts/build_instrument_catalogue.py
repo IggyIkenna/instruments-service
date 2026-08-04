@@ -1279,7 +1279,17 @@ _CATALOGUE_KNOWN_CHAINS = frozenset(
 #: removed 2026-07-16, MANGO-SOLANA/ZETA-SOLANA/FLASH-SOLANA removed 2026-07-15
 #: (all Solana perp DEXes except Jupiter, which is not integrated; operator ruling).
 #: DRIFT alone carried 3,556 stale rows in the IS defi availability index as of
-#: 2026-07-18 (0 in MTDS — never had live market-data capture).
+#: 2026-07-18 (0 in MTDS — never had live market-data capture). GMX/GMX-ARBITRUM
+#: removed 2026-07-25 (operator ruling: GMX perp_funding's entire 2022-2023
+#: captured history turned out to be a synthetic OI-imbalance proxy, not real
+#: funding-rate observations — plan defi_gmx_venue_removal_2026_07_25.md). This is
+#: a BUSINESS-decision removal, not an on-chain one (the GMX pool contract is
+#: still live), so it does NOT qualify for the ``_load_defi_removal_map()``
+#: on-chain-absence probe below — it belongs in this denylist instead, exactly
+#: like the other operator-ruling removals above. The raw by_date ``venue`` column
+#: carries the glued ``GMX-ARBITRUM`` form (confirmed live via GCS listing,
+#: 2026-08-04); the bare ``GMX`` form is included defensively, matching the
+#: DRIFT/PACIFICA precedent of denylisting both spellings.
 _REMOVED_VENUES: frozenset[str] = frozenset(
     {
         "DRIFT",
@@ -1292,6 +1302,8 @@ _REMOVED_VENUES: frozenset[str] = frozenset(
         "ZETA",
         "FLASH-SOLANA",
         "FLASH",
+        "GMX",
+        "GMX-ARBITRUM",
     }
 )
 
