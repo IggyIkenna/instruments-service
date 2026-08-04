@@ -23,6 +23,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
+import pandas as pd
 from unified_api_contracts import (
     FX_SPOT_PAIRS,
     KNOWN_ETFS,
@@ -547,7 +548,13 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         # CME does not — leg_count=0 for all CME instruments).
         combo_legs: dict[str, list[InstrumentLeg]] = {}
         if "leg_count" in df.columns:
-            spread_rows = df[df["leg_count"] > 0]
+            # Normalise leg_count to numeric before comparison — Databento may return
+            # the column as a string/object dtype, and ``df["leg_count"] > 0`` would
+            # then raise ``'<=' not supported between instances of 'str' and 'int'``
+            # (same bug class as DP_NOT_V9 string-vs-int comparison).  Coerce safely,
+            # treating unparseable values as 0 (not a spread).
+            leg_count_numeric = pd.to_numeric(df["leg_count"], errors="coerce").fillna(0)
+            spread_rows = df[leg_count_numeric > 0]
             for sym, grp in spread_rows.groupby("raw_symbol"):
                 legs: list[InstrumentLeg] = []
                 for _, leg_row in grp.sort_values("leg_index").iterrows():
