@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from unified_api_contracts.internal import InstrumentRecord
@@ -124,7 +124,10 @@ class TestGetWithRetry:
         mock_cm.__aexit__ = AsyncMock(return_value=None)
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=mock_cm)
-        with pytest.raises(RuntimeError, match="All 3 attempts failed"):
+        with (
+            patch("unified_trading_library.utils.retry.asyncio.sleep"),
+            pytest.raises(RuntimeError, match="All 3 attempts failed"),
+        ):
             await adapter._get_with_retry(mock_session, "http://test.com/api")
 
 
