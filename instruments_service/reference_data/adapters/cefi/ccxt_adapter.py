@@ -449,8 +449,13 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
                 # Use the canonical close boundary (right/close edge of bar).
                 _, ts, _ = compute_bar_close_boundary(open_ts, tf)
             else:
-                # Unsupported timeframe: fall back to open edge (logs left for future fix).
-                ts = open_ts
+                # Unsupported timeframe — raise; silently falling back to open edge
+                # produces a bar whose timestamp is at the wrong edge, which breaks
+                # bar-edge determinism everywhere downstream.
+                raise ValueError(
+                    f"Unsupported timeframe {interval!r} for venue={self.venue} symbol={symbol}: "
+                    f"cannot compute canonical close-boundary timestamp"
+                )
             results.append(
                 OHLCVRef(
                     venue=self.venue,
