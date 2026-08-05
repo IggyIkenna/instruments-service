@@ -161,13 +161,82 @@ def test_prediction_seed_with_no_venue_falls_back_to_source_priority_unchanged()
     assert source == "polymarket_clob"
 
 
-def test_non_prediction_asset_groups_are_unreachable_by_the_kalshi_branch() -> None:
-    """The new venue-first branch is gated on ``asset_group == "prediction"`` only
-    — every other asset_group's scaffold-row stamping is BYTE-IDENTICAL to before
-    the fix (same code path, unreachable new branch). Spot-check a venue that IS in
-    ``_VENUE_OVERRIDES`` (IBKR) to prove the SOURCE_PRIORITY-first behavior for
-    tradfi is untouched."""
+def test_ibkr_tradfi_scaffold_rows_carry_ibkr_provenance_not_fred() -> None:
+    """Venue-aware scaffold-provenance fix (2026-08-05, todo 4): the original
+    ``asset_group == "prediction"`` guard was generalised to ALL asset_groups.
+    ``_VENUE_OVERRIDES["IBKR"] = BATCH_IBKR`` but the venue-blind ``external[0]``
+    branch for ``SOURCE_PRIORITY[("tradfi","ohlcv_1d")]`` returns fred-first,
+    so IBKR was mis-stamped as fred. With the fix, venue-resolve via
+    ``derive_pipeline_mode_for_row`` FIRST finds the correct IBKR override."""
     pm, source, transport = _derive("tradfi", "ohlcv_1d", venue="IBKR")
+    assert pm == "batch_ibkr"
+    assert source == "ibkr"
+    assert transport
+
+
+def test_ecb_and_ofr_tradfi_venue_overrides() -> None:
+    """Same bug class: ECB and OFR have ``_VENUE_OVERRIDES`` entries that differ
+    from ``SOURCE_PRIORITY[("tradfi","ohlcv_1d")][0]`` (fred-first)."""
+    for venue, expected_source in (("ECB", "ecb"), ("OFR", "ofr")):
+        pm, source, transport = _derive("tradfi", "ohlcv_1d", venue=venue)
+        assert pm == f"batch_{expected_source}", venue
+        assert source == expected_source, venue
+        assert transport, venue
+
+
+def test_fred_override_equals_source_priority_first_no_regression() -> None:
+    """FRED's ``_VENUE_OVERRIDES`` happens to match SOURCE_PRIORITY[0] for
+    ohlcv_1d (fred-first). The venue-aware path finds the same answer —
+    zero behavior change."""
+    pm, source, transport = _derive("tradfi", "ohlcv_1d", venue="FRED")
     assert pm == "batch_fred"
     assert source == "fred"
+    assert transport
+
+
+def test_hyperliquid_cefi_scaffold_rows_carry_hyperliquid_not_tardis() -> None:
+    """``_VENUE_OVERRIDES["HYPERLIQUID"] = BATCH_HYPERLIQUID`` but cefi
+    SOURCE_PRIORITY[0] is tardis-first — the venue-blind branch stamped
+    batch_tardis on Hyperliquid's own self-archived data."""
+    for dt in ("book_snapshot_5", "trades", "ohlcv_1m"):
+        pm, source, transport = _derive("cefi", dt, venue="HYPERLIQUID")
+        assert pm == "batch_hyperliquid", dt
+        assert source == "hyperliquid", dt
+        assert transport, dt
+
+
+def test_aster_and_extended_cefi_venue_overrides() -> None:
+    """ASTER/EXTENDED_STARKNET self-archive via their own REST APIs — must not
+    be mis-stamped as tardis (SOURCE_PRIORITY[0] for cefi)."""
+    for venue, expected_source in (("ASTER", "aster"), ("EXTENDED_STARKNET", "extended")):
+        pm, source, transport = _derive("cefi", "trades", venue=venue)
+        assert pm == f"batch_{expected_source}", venue
+        assert source == expected_source, venue
+        assert transport, venue
+
+
+def test_defi_venue_overrides_chainlink_pyth_aave_solana_helius() -> None:
+    """DeFi venues with ``_VENUE_OVERRIDES`` must resolve to their own sources,
+    not whatever SOURCE_PRIORITY[0] is for the data_type."""
+    for venue, expected_source in (
+        ("CHAINLINK", "chainlink"),
+        ("PYTH", "pyth_hermes"),
+        ("PYTH_HERMES", "pyth_hermes"),
+        ("AAVE", "aave"),
+        ("SOLANA_RPC", "solana_rpc"),
+        ("HELIUS", "helius_rpc"),
+        ("HELIUS_RPC", "helius_rpc"),
+    ):
+        pm, source, _transport = _derive("defi", "token_price", venue=venue)
+        assert pm == f"batch_{expected_source}", venue
+        assert source == expected_source, venue
+
+
+def test_venue_without_override_falls_through_to_source_priority_unchanged() -> None:
+    """A venue NOT in ``_VENUE_OVERRIDES`` (e.g. BINANCE for cefi) must still
+    get SOURCE_PRIORITY[0] resolution — the venue-aware path returns None for
+    the override and falls through, zero behavior change."""
+    pm, source, transport = _derive("cefi", "trades", venue="BINANCE")
+    assert pm == "batch_tardis"
+    assert source == "tardis"
     assert transport
