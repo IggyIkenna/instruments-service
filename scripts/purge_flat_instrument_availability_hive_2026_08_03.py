@@ -279,7 +279,7 @@ def purge_asset_group(*, asset_group: str, apply: bool, workers: int = 32) -> Pu
         for done, fut in enumerate(as_completed(futures), start=1):
             src, outcome, detail = fut.result()
             _record_outcome(result, src, outcome, detail)
-            if done % 5000 == 0:
+            if done == 1 or done % 500 == 0:
                 print(f"  progress: {done:,}/{scanned.candidate_count:,} objects processed", flush=True)
     return result
 
