@@ -124,7 +124,14 @@ _SOURCE_RETURNED_ZERO = "SOURCE_RETURNED_ZERO"
 
 
 def _bucket_for(asset_group: str) -> str:
-    """Resolve the instruments-store bucket for an asset_group via the bucket-name SSOT."""
+    """Resolve the instruments-store bucket for an asset_group via the bucket-name SSOT.
+
+    Prediction uses a dedicated flat kind (``instruments-store-prediction``) with no
+    per-AG sub-key — its bucket name doesn't follow the ``instruments-store-{ag}``
+    convention the other 4 AGs share.
+    """
+    if asset_group == "prediction":
+        return resolve_bucket_name(cloud="gcp", kind="instruments-store-prediction", asset_group=None)
     return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=asset_group)
 
 
