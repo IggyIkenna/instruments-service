@@ -1044,7 +1044,7 @@ class TestKalshiParseMarket:
         now = datetime.now(UTC)
         result = adapter._parse_market(raw, now)
         assert result is not None
-        assert result.canonical_instrument_id == "MLB:CLEVELAND_v_SEATTLE:20260626"
+        assert result.canonical_instrument_id == "MLB:CLEVELAND_GUARDIANS_v_SEATTLE_MARINERS:20260626"
 
     def test_sports_season_future_leaves_canonical_instrument_id_none(self) -> None:
         """A season-future/award ticker (no GAME/MATCH token) parses to no fixture —
