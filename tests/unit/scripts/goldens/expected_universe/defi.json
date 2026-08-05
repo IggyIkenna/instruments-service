@@ -1,7 +1,7 @@
 {
   "asset_group": "defi",
-  "captured_at": "2026-08-03",
-  "tuple_count": 317,
+  "captured_at": "2026-08-05",
+  "tuple_count": 320,
   "tuples": [
     ["AAVE_V3-ARBITRUM", "a_token", "flash_loan_events"],
     ["AAVE_V3-ARBITRUM", "a_token", "lending_indices"],
@@ -196,6 +196,9 @@
     ["FLUID-ETHEREUM", "lending", "lending_indices"],
     ["FLUID-ETHEREUM", "lending", "liquidations"],
     ["FLUID-ETHEREUM", "lending", "risk_params"],
+    ["FLUID-PLASMA", "lending", "lending_indices"],
+    ["FLUID-PLASMA", "lending", "liquidations"],
+    ["FLUID-PLASMA", "lending", "risk_params"],
     ["IDLE-ETHEREUM", "yield_bearing", "staking_yields"],
     ["JITO-SOLANA", "staking", "lst_rates"],
     ["JITO-SOLANA", "staking", "oracle_prices"],
