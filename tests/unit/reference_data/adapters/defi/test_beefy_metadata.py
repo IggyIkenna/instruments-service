@@ -29,8 +29,8 @@ _AVAX_DEPLOY_DATE = datetime(2021, 3, 15, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert BeefyReferenceDataAdapter().venue == "beefy"
-    assert BeefyReferenceDataAdapter(chain="ARBITRUM").venue == "beefy"
+    assert BeefyReferenceDataAdapter().venue == "BEEFY-ETHEREUM"
+    assert BeefyReferenceDataAdapter(chain="ARBITRUM").venue == "BEEFY-ARBITRUM"
 
 
 @pytest.mark.asyncio

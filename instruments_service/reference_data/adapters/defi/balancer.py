@@ -132,7 +132,7 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "balancer"
+        return f"BALANCER-{self._chain}"
 
     async def get_instruments(
         self,

@@ -129,7 +129,7 @@ class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "sanctum"
+        return f"SANCTUM-{self._chain}"
 
     async def get_instruments(
         self,

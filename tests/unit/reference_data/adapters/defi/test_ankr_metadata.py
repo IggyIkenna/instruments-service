@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2020, 12, 1, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert AnkrReferenceDataAdapter().venue == "ankr"
+    assert AnkrReferenceDataAdapter().venue == "ANKR-ETHEREUM"
 
 
 @pytest.mark.asyncio

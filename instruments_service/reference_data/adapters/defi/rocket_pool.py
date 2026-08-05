@@ -67,7 +67,7 @@ class RocketPoolReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "rocket_pool"
+        return f"ROCKETPOOL-{self._chain}"
 
     async def get_instruments(
         self,

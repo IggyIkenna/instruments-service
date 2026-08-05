@@ -1,10 +1,8 @@
 """CCXT generic reference data adapter — wraps ccxt for multi-venue support."""
 
-# Reuses the tardis package's shared @LIN/@INV canonical-key builders (private,
-# underscore-prefixed by convention within that package) so live (CCXT) and
-# batch (Tardis) construct the IDENTICAL instrument_key for the identical
+# Routes through build_instrument_id (the shared UAC builder) so live (CCXT)
+# and batch (Tardis) construct the IDENTICAL instrument_key for the identical
 # instrument — see _build_instrument_key below.
-# pyright: reportPrivateUsage=false
 
 import logging
 from collections.abc import Callable
@@ -13,15 +11,9 @@ from decimal import Decimal
 from typing import cast
 
 import ccxt.async_support as ccxta
-from unified_api_contracts import BAR_TIMEFRAMES, BarTimeframe, VenueMapping
+from unified_api_contracts import BAR_TIMEFRAMES, BarTimeframe, VenueMapping, build_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType, OptionType
 from unified_trading_library.availability_stamping import compute_bar_close_boundary  # noqa: qg-deep-import
-
-from instruments_service.reference_data.adapters.cefi.tardis.parsing import (
-    _build_canonical_future_key,
-    _build_canonical_option_key,
-    _build_canonical_perpetual_key,
-)
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -140,35 +132,22 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> str:
         """Build the canonical ``instrument_key`` for a live-mode CCXT market.
 
-        Mirrors the construction ``TardisReferenceDataAdapter._parse_tardis_
-        instrument`` uses for the SAME 13 canonical CeFi venues in batch mode
-        (``instruments_service/reference_data/adapters/cefi/tardis/adapter.py``)
-        so live and batch converge on an identical id for the identical
-        instrument — this is the workspace's ``paper(W) == batch-rerun(W)``
-        determinism invariant (canonical_id_p0_ccxt_live_batch_divergence
-        2026-07-08). Routes through the literal SAME shared @LIN/@INV builders
-        Tardis uses (``instrument_id_format_canonicalization_2026_07_08.md``
-        finding 1, ``tardis/parsing.py``'s ``_build_canonical_perpetual_key``/
-        ``_build_canonical_future_key``/``_build_canonical_option_key``) —
-        identical functions, not a duplicated construction, so live and batch
-        can never drift apart on this again.
+        Routes through ``build_instrument_id`` — the same shared builder every
+        CeFi/DeFi/TradFi/Prediction adapter uses
+        (``instrument_id_format_canonicalization_2026_07_08.md``). This is a
+        P3 cosmetic remove-the-intermediary refactor
+        (``canonical_id_builder_retrofit_checklist_2026_07_08.md`` todo 9):
+        the previous implementation called Tardis private builders which
+        themselves already delegated to ``build_instrument_id(passthrough=True)``
+        — calling the shared builder directly removes one level of indirection
+        with no output change.
 
-        * PERPETUAL with a resolved ``margin_type``: shared
-          ``_build_canonical_perpetual_key`` → ``VENUE:PERPETUAL:BASE-QUOTE@LIN|INV``.
-        * FUTURE/OPTION with ``margin_type`` + ``expiry`` resolved (OPTION also
-          needs ``strike``/``option_type``): shared ``_build_canonical_future_key``/
-          ``_build_canonical_option_key`` → ``VENUE:TYPE:BASE-QUOTE@LIN|INV-
-          YYYYMMDD[-STRIKE-C|P]``. The quote is ALWAYS present — DERIBIT included
-          (operator ruling 2026-07-18, superseding the earlier "Deribit drops the
-          quote for dated derivatives" special case; mirrors the same removal in
-          ``tardis/adapter.py``). ccxt usually populates ``market["quote"]``
-          ("USD" inverse / "USDC" linear for Deribit); a DERIBIT-scoped fallback
-          derives it from the margin type when ccxt left it blank, so a marked id
-          never reaches the fail-loud builder without a quote.
-        * Falls back to the legacy ``VENUE:TYPE:BASE-QUOTE`` /
-          ``VENUE:TYPE:RAW_SYMBOL`` shape (unchanged from before this wiring)
-          when the margin/expiry/strike/right inputs the target format needs
-          aren't resolvable — shard-level isolation, never raise.
+        * PERPETUAL/FUTURE/OPTION with a resolved ``margin_type`` →
+          ``VENUE:TYPE:BASE-QUOTE@LIN|INV[-YYYYMMDD[-STRIKE-C|P]]`` via
+          ``margin_marker=``.
+        * Falls back to ``VENUE:TYPE:SYMBOL`` via ``passthrough=True`` when
+          the margin/expiry/strike/right inputs the target format needs aren't
+          resolvable — shard-level isolation, never raise.
         """
         # Deribit's quote resolves to USDC (linear, USDC-settled) / USD (inverse,
         # coin-settled). Fallback ONLY when ccxt didn't populate the quote and a
@@ -177,27 +156,52 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         resolved_quote = quote
         if canonical_venue == "DERIBIT" and not resolved_quote and margin_type is not None:
             resolved_quote = "USDC" if margin_type is MarginType.LINEAR else "USD"
-        if instrument_type is InstrumentType.PERPETUAL and margin_type is not None and base and resolved_quote:
-            return _build_canonical_perpetual_key(canonical_venue, base, resolved_quote, margin_type)
-        if instrument_type is InstrumentType.FUTURE and margin_type is not None and expiry is not None and base:
-            return _build_canonical_future_key(canonical_venue, base, resolved_quote, margin_type, expiry)
-        if (
-            instrument_type is InstrumentType.OPTION
-            and margin_type is not None
-            and expiry is not None
-            and strike is not None
-            and option_type is not None
-            and base
-        ):
-            option_right = "C" if option_type is OptionType.CALL else "P"
-            return _build_canonical_option_key(
-                canonical_venue, base, resolved_quote, margin_type, expiry, strike, option_right
-            )
+        # PERPETUAL/FUTURE/OPTION with margin_type: use margin_marker for @LIN/@INV
+        if margin_type is not None and base and resolved_quote:
+            base_symbol = f"{base.upper()}-{resolved_quote.upper()}"
+            margin_str = margin_type.value  # "linear" / "inverse"
+            if instrument_type is InstrumentType.PERPETUAL:
+                return build_instrument_id(
+                    canonical_venue,
+                    instrument_type,
+                    base_symbol,
+                    margin_marker=margin_str,
+                )
+            if instrument_type is InstrumentType.FUTURE and expiry is not None:
+                return build_instrument_id(
+                    canonical_venue,
+                    instrument_type,
+                    base_symbol,
+                    margin_marker=margin_str,
+                    expiry_date=expiry.date(),
+                )
+            if (
+                instrument_type is InstrumentType.OPTION
+                and expiry is not None
+                and strike is not None
+                and option_type is not None
+            ):
+                option_right = "C" if option_type is OptionType.CALL else "P"
+                return build_instrument_id(
+                    canonical_venue,
+                    instrument_type,
+                    base_symbol,
+                    margin_marker=margin_str,
+                    expiry_date=expiry.date(),
+                    strike=strike,
+                    option_right=option_right,
+                )
+        # Fallback: simple VENUE:TYPE:SYMBOL via passthrough
         if instrument_type in (InstrumentType.SPOT_PAIR, InstrumentType.PERPETUAL) and base and quote:
             symbol = f"{base.upper()}-{quote.upper()}"
         else:
             symbol = raw_symbol.upper()
-        return f"{canonical_venue}:{instrument_type.value}:{symbol}"
+        return build_instrument_id(
+            canonical_venue,
+            instrument_type,
+            symbol,
+            passthrough=True,
+        )
 
     @staticmethod
     def _extract_market_sizes(

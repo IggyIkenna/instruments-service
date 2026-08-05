@@ -90,7 +90,7 @@ class EthFiGovernanceReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "etherfi-governance"
+        return f"ETHERFI-GOV-{self._chain}"
 
     async def get_instruments(
         self,

@@ -46,9 +46,9 @@ _RESOLVER_PATHS = {
 
 
 def test_venue_identifiers() -> None:
-    assert VenusReferenceDataAdapter().venue == "venus"
-    assert FluidReferenceDataAdapter().venue == "fluid"
-    assert RadiantReferenceDataAdapter().venue == "radiant"
+    assert VenusReferenceDataAdapter().venue == "VENUS-BSC"
+    assert FluidReferenceDataAdapter().venue == "FLUID-ETHEREUM"
+    assert RadiantReferenceDataAdapter().venue == "RADIANT-ARBITRUM"
 
 
 def test_chain_is_uppercased() -> None:

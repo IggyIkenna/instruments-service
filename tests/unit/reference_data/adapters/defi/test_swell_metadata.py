@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2023, 4, 25, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert SwellReferenceDataAdapter().venue == "swell"
+    assert SwellReferenceDataAdapter().venue == "SWELL-ETHEREUM"
 
 
 @pytest.mark.asyncio

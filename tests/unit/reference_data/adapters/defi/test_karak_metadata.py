@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2024, 4, 8, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert KarakReferenceDataAdapter().venue == "karak"
+    assert KarakReferenceDataAdapter().venue == "KARAK-ETHEREUM"
 
 
 @pytest.mark.asyncio
