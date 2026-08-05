@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2021, 11, 8, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert RocketPoolReferenceDataAdapter().venue == "rocket_pool"
+    assert RocketPoolReferenceDataAdapter().venue == "ROCKETPOOL-ETHEREUM"
 
 
 @pytest.mark.asyncio

@@ -238,7 +238,7 @@ class BeefyReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "beefy"
+        return f"BEEFY-{self._chain}"
 
     async def get_instruments(
         self,

@@ -101,7 +101,7 @@ class RenzoReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "renzo"
+        return f"RENZO-{self._chain}"
 
     async def get_instruments(
         self,

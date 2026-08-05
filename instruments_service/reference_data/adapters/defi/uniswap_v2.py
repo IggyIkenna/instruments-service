@@ -93,7 +93,7 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "uniswap_v2"
+        return f"UNISWAP_V2-{self._chain}"
 
     async def get_instruments(
         self,

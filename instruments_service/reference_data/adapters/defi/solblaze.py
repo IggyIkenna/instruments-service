@@ -80,7 +80,7 @@ class SolblazeReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "solblaze"
+        return f"SOLBLAZE-{self._chain}"
 
     async def get_instruments(
         self,

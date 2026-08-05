@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2024, 5, 9, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert PufferReferenceDataAdapter().venue == "puffer"
+    assert PufferReferenceDataAdapter().venue == "PUFFER-ETHEREUM"
 
 
 @pytest.mark.asyncio

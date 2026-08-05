@@ -28,8 +28,8 @@ _SNAPSHOT_DATE = datetime(2026, 5, 12, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert PendleReferenceDataAdapter().venue == "pendle"
-    assert PendleReferenceDataAdapter(chain="ARBITRUM").venue == "pendle"
+    assert PendleReferenceDataAdapter().venue == "PENDLE-ETHEREUM"
+    assert PendleReferenceDataAdapter(chain="ARBITRUM").venue == "PENDLE-ARBITRUM"
 
 
 @pytest.mark.asyncio

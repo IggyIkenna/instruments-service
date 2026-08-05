@@ -166,8 +166,8 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
-        """Return the venue identifier."""
-        return self._protocol_slug
+        """Return the venue identifier (PROTOCOL-CHAIN grain, e.g. ``UNISWAP_V3-ETHEREUM``)."""
+        return f"{self._venue_prefix}-{self._chain}"
 
     async def get_instruments(
         self,

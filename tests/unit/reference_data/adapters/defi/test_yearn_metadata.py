@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2024, 3, 20, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert YearnReferenceDataAdapter().venue == "yearn"
+    assert YearnReferenceDataAdapter().venue == "YEARN_V3-ETHEREUM"
 
 
 @pytest.mark.asyncio

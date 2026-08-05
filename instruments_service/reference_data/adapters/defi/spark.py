@@ -108,8 +108,8 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
-        """Return the venue identifier."""
-        return _PROTOCOL_SLUG
+        """Return the venue identifier (PROTOCOL-CHAIN grain, e.g. ``SPARK-ETHEREUM``)."""
+        return f"{_VENUE_PREFIX}-{self._chain}"
 
     def _resolve_api_url(self) -> str | None:
         """Return the subgraph URL or None if API key / subgraph ID is missing."""

@@ -87,7 +87,7 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "compound_v3"
+        return f"COMPOUND_V3-{self._chain}"
 
     def _resolve_api_url(self) -> str | None:
         """Return the subgraph URL or None if API key / subgraph ID is missing."""

@@ -98,7 +98,7 @@ class KarakReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "karak"
+        return f"KARAK-{self._chain}"
 
     async def get_instruments(
         self,

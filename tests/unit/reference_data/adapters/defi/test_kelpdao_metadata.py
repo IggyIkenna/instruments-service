@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2023, 11, 9, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert KelpDaoReferenceDataAdapter().venue == "kelpdao"
+    assert KelpDaoReferenceDataAdapter().venue == "KELPDAO-ETHEREUM"
 
 
 @pytest.mark.asyncio
