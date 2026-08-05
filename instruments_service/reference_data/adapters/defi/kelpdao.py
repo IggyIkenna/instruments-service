@@ -72,7 +72,7 @@ class KelpDaoReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "kelpdao"
+        return f"KELPDAO-{self._chain}"
 
     async def get_instruments(
         self,

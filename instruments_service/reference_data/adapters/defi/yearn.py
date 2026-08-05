@@ -123,7 +123,7 @@ class YearnReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "yearn"
+        return f"YEARN_V3-{self._chain}"
 
     async def get_instruments(
         self,

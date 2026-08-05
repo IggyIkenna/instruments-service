@@ -99,7 +99,7 @@ class WbethReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "wbeth"
+        return f"BINANCE-{self._chain}"
 
     async def get_instruments(
         self,

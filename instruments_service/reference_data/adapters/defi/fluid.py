@@ -89,7 +89,7 @@ class FluidReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "fluid"
+        return f"FLUID-{self._chain}"
 
     async def get_instruments(
         self,

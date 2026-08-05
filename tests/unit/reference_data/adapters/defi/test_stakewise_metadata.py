@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2023, 11, 28, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert StakewiseReferenceDataAdapter().venue == "stakewise"
+    assert StakewiseReferenceDataAdapter().venue == "STAKEWISE-ETHEREUM"
 
 
 @pytest.mark.asyncio

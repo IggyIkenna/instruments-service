@@ -103,19 +103,19 @@ class TestDefiAdapterVenueProperty:
     # Phase-4 lending protocols.
     def test_euler_v2_venue(self) -> None:
         adapter = EulerV2ReferenceDataAdapter()
-        assert adapter.venue == "euler_v2"
+        assert adapter.venue == "EULER_V2-ETHEREUM"
 
     def test_radiant_venue(self) -> None:
         adapter = RadiantReferenceDataAdapter()
-        assert adapter.venue == "radiant"
+        assert adapter.venue == "RADIANT-ARBITRUM"
 
     def test_venus_venue(self) -> None:
         adapter = VenusReferenceDataAdapter()
-        assert adapter.venue == "venus"
+        assert adapter.venue == "VENUS-BSC"
 
     def test_benqi_venue(self) -> None:
         adapter = BenqiReferenceDataAdapter()
-        assert adapter.venue == "benqi"
+        assert adapter.venue == "BENQI-AVALANCHE"
 
 
 class TestPhase4LendingAdaptersBehaviour:

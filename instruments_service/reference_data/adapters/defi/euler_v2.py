@@ -70,7 +70,7 @@ class EulerV2ReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "euler_v2"
+        return f"EULER_V2-{self._chain}"
 
     async def get_instruments(
         self,

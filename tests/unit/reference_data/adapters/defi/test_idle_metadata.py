@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2019, 8, 13, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert IdleReferenceDataAdapter().venue == "idle"
+    assert IdleReferenceDataAdapter().venue == "IDLE-ETHEREUM"
 
 
 @pytest.mark.asyncio

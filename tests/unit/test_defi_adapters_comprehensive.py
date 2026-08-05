@@ -187,13 +187,13 @@ class TestUniswapV3Adapter:
         from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 
         adapter = UniswapV3ReferenceDataAdapter()
-        assert adapter.venue == "uniswap_v3"
+        assert adapter.venue == "UNISWAP_V3-ETHEREUM"
 
     def test_venue_with_protocol_slug(self) -> None:
         from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 
         adapter = UniswapV3ReferenceDataAdapter(protocol_slug="pancakeswap_v3")
-        assert adapter.venue == "pancakeswap_v3"
+        assert adapter.venue == "PANCAKESWAP_V3-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type_returns_empty(self) -> None:
@@ -1040,13 +1040,13 @@ class TestAaveV3Adapter:
         from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 
         adapter = AaveV3ReferenceDataAdapter()
-        assert adapter.venue == "aave_v3"
+        assert adapter.venue == "AAVE_V3-ETHEREUM"
 
     def test_venue_with_protocol_slug(self) -> None:
         from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 
         adapter = AaveV3ReferenceDataAdapter(protocol_slug="spark_v3")
-        assert adapter.venue == "spark_v3"
+        assert adapter.venue == "SPARK_V3-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -1447,7 +1447,7 @@ class TestUniswapV4Adapter:
         from instruments_service.reference_data.adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
 
         adapter = UniswapV4ReferenceDataAdapter()
-        assert adapter.venue == "uniswap_v4"
+        assert adapter.venue == "UNISWAP_V4-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -1577,7 +1577,7 @@ class TestCompoundV3Adapter:
         from instruments_service.reference_data.adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 
         adapter = CompoundV3ReferenceDataAdapter()
-        assert adapter.venue == "compound_v3"
+        assert adapter.venue == "COMPOUND_V3-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -2020,7 +2020,7 @@ class TestUniswapV2Adapter:
         from instruments_service.reference_data.adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 
         adapter = UniswapV2ReferenceDataAdapter()
-        assert adapter.venue == "uniswap_v2"
+        assert adapter.venue == "UNISWAP_V2-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -2156,7 +2156,7 @@ class TestMorphoAdapter:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
         adapter = MorphoReferenceDataAdapter()
-        assert adapter.venue == "morpho"
+        assert adapter.venue == "MORPHO-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -2318,7 +2318,7 @@ class TestBalancerAdapter:
         from instruments_service.reference_data.adapters.defi.balancer import BalancerReferenceDataAdapter
 
         adapter = BalancerReferenceDataAdapter()
-        assert adapter.venue == "balancer"
+        assert adapter.venue == "BALANCER-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -2622,7 +2622,7 @@ class TestCurveAdapter:
         from instruments_service.reference_data.adapters.defi.curve import CurveReferenceDataAdapter
 
         adapter = CurveReferenceDataAdapter()
-        assert adapter.venue == "curve"
+        assert adapter.venue == "CURVE-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -2805,7 +2805,7 @@ class TestFluidAdapter:
         from instruments_service.reference_data.adapters.defi.fluid import FluidReferenceDataAdapter
 
         adapter = FluidReferenceDataAdapter()
-        assert adapter.venue == "fluid"
+        assert adapter.venue == "FLUID-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -2857,7 +2857,7 @@ class TestEigenLayerAdapter:
         from instruments_service.reference_data.adapters.defi.eigenlayer import EigenLayerReferenceDataAdapter
 
         adapter = EigenLayerReferenceDataAdapter()
-        assert adapter.venue == "eigenlayer"
+        assert adapter.venue == "EIGENLAYER-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -2920,7 +2920,7 @@ class TestLidoAdapter:
         from instruments_service.reference_data.adapters.defi.lido import LidoReferenceDataAdapter
 
         adapter = LidoReferenceDataAdapter()
-        assert adapter.venue == "lido"
+        assert adapter.venue == "LIDO-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -2982,7 +2982,7 @@ class TestEtherFiAdapter:
         from instruments_service.reference_data.adapters.defi.etherfi import EtherFiReferenceDataAdapter
 
         adapter = EtherFiReferenceDataAdapter()
-        assert adapter.venue == "etherfi"
+        assert adapter.venue == "ETHERFI-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -3060,7 +3060,7 @@ class TestEthFiGovernanceAdapter:
         from instruments_service.reference_data.adapters.defi.ethfi import EthFiGovernanceReferenceDataAdapter
 
         adapter = EthFiGovernanceReferenceDataAdapter()
-        assert adapter.venue == "etherfi-governance"
+        assert adapter.venue == "ETHERFI-GOV-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:
@@ -3122,7 +3122,7 @@ class TestEthenaAdapter:
         from instruments_service.reference_data.adapters.defi.ethena import EthenaReferenceDataAdapter
 
         adapter = EthenaReferenceDataAdapter()
-        assert adapter.venue == "ethena"
+        assert adapter.venue == "ETHENA-ETHEREUM"
 
     @pytest.mark.asyncio
     async def test_get_instruments_wrong_type(self) -> None:

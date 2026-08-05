@@ -74,7 +74,7 @@ class BenqiReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "benqi"
+        return f"BENQI-{self._chain}"
 
     async def get_instruments(
         self,

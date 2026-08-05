@@ -101,7 +101,7 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "morpho"
+        return f"MORPHO-{self._chain}"
 
     async def get_instruments(
         self,

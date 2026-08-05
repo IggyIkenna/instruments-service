@@ -51,7 +51,7 @@ class EthenaReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "ethena"
+        return f"ETHENA-{self._chain}"
 
     async def get_instruments(
         self,

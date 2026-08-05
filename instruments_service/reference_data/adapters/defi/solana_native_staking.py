@@ -85,7 +85,7 @@ class SolanaNativeStakingAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "solana_native"
+        return f"SOLANA-NATIVE-{self._chain}"
 
     async def get_instruments(
         self,

@@ -79,7 +79,7 @@ class ConvexReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "convex"
+        return f"CONVEX-{self._chain}"
 
     async def get_instruments(
         self,
