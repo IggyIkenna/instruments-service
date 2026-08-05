@@ -25,7 +25,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2023, 1, 18, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert MakerReferenceDataAdapter().venue == "maker"
+    assert MakerReferenceDataAdapter().venue == "MAKER-ETHEREUM"
 
 
 @pytest.mark.asyncio

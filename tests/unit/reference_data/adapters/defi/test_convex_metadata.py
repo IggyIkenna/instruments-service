@@ -21,7 +21,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2021, 5, 17, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert ConvexReferenceDataAdapter().venue == "convex"
+    assert ConvexReferenceDataAdapter().venue == "CONVEX-ETHEREUM"
 
 
 @pytest.mark.asyncio

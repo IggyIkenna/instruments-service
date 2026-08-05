@@ -20,7 +20,7 @@ _EXPECTED_GENESIS_DATE = datetime(2020, 3, 16, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert SolanaNativeStakingAdapter().venue == "solana_native"
+    assert SolanaNativeStakingAdapter().venue == "SOLANA-NATIVE-SOLANA"
 
 
 @pytest.mark.asyncio

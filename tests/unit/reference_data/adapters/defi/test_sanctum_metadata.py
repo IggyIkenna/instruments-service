@@ -26,7 +26,7 @@ _EXPECTED_INF_DEPLOY_DATE = datetime(2021, 10, 15, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert SanctumReferenceDataAdapter().venue == "sanctum"
+    assert SanctumReferenceDataAdapter().venue == "SANCTUM-SOLANA"
 
 
 @pytest.mark.asyncio

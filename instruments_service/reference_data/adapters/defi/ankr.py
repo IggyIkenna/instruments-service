@@ -65,7 +65,7 @@ class AnkrReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "ankr"
+        return f"ANKR-{self._chain}"
 
     async def get_instruments(
         self,

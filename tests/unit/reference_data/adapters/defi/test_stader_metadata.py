@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2023, 7, 10, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert StaderReferenceDataAdapter().venue == "stader"
+    assert StaderReferenceDataAdapter().venue == "STADER-ETHEREUM"
 
 
 @pytest.mark.asyncio

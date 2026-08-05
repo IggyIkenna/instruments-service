@@ -76,7 +76,7 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "etherfi"
+        return f"ETHERFI-{self._chain}"
 
     async def get_instruments(
         self,

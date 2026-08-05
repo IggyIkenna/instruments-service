@@ -65,7 +65,7 @@ class SwellReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "swell"
+        return f"SWELL-{self._chain}"
 
     async def get_instruments(
         self,

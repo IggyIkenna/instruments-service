@@ -78,7 +78,7 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "lido"
+        return f"LIDO-{self._chain}"
 
     async def get_instruments(
         self,
