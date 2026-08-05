@@ -2464,8 +2464,11 @@ def test_sports_catalogue_from_manifest_excludes_sentinel_and_unregistered_leagu
             {"league_id": "UNKNOWN", "data_type": "FIXTURES", "date": "2025-12-15"},
             {"league_id": "unknown", "data_type": "XG", "date": "2025-12-16"},
             # De-registered long-tail / alias league_ids (2026-07-13 ruling) — excluded.
+            # 2026-08-05: LA_LIGA_2 was promoted to a full LEAGUE_REGISTRY member
+            # (resolves via canonicalize_league_id alias → SEGUNDA_DIVISION which
+            # IS registered).  Replaced with a truly unregistered numeric id.
             {"league_id": "15066", "data_type": "MATCHES", "date": "2024-03-01"},
-            {"league_id": "LA_LIGA_2", "data_type": "ODDS", "date": "2024-03-02"},
+            {"league_id": "99999", "data_type": "ODDS", "date": "2024-03-02"},
             {"league_id": "RFPL", "data_type": "XG", "date": "2024-03-03"},
         ]
     )
