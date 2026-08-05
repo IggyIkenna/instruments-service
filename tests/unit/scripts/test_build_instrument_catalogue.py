@@ -2653,7 +2653,7 @@ def test_sports_could_exist_denominator_never_shrinks(rollup: ModuleType) -> Non
 
 # ---------------------------------------------------------------------------
 # build_sports_fixture_team_player_catalogue — FIXTURE/TEAM/PLAYER-grain
-# roll-up from REAL captured entity=fixtures/teams/injuries by_date data
+# roll-up from REAL captured entity=fixtures_schedule/teams/fixture_lineups by_date data
 # (2026-07-09, extends the sports catalogue past league-grain-only).
 # ---------------------------------------------------------------------------
 
@@ -2688,7 +2688,7 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
 
     Covers: canonical fixture_id construction (LEAGUE:HOME_v_AWAY:DATE), team
     lifecycle (available_to=None when present on the latest scanned day),
-    player_id construction from a real injuries row's ``player_name``, sentinel
+    player_id construction from a real lineup row's ``player_name``, sentinel
     league_id exclusion, and that a non-FTP entity (``entity=leagues``) is
     never picked up by this walk.
     """
@@ -2712,7 +2712,7 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
             ),
             _sports_blob(
                 d1,
-                "injuries",
+                "fixture_lineups",
                 "EPL",
                 [{"player_id": 1, "player_name": "Bukayo Saka", "team_id": 1, "league_id": 39}],
             ),
@@ -2739,7 +2739,7 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
             ),
             _sports_blob(
                 d1,
-                "injuries",
+                "fixture_lineups",
                 "SCOTTISH_LEAGUE_CUP_185",
                 [{"player_id": 9, "player_name": "Some Player", "team_id": 9, "league_id": 185}],
             ),
@@ -2885,7 +2885,9 @@ def test_ftp_rollup_team_and_player_grains_get_no_fixture_display_fields(rollup:
         [
             _sports_blob(d1, _FIXTURE_ENTITY, "EPL", [_fixture_snapshot_row()]),
             _sports_blob(d1, "teams", "EPL", [{"team_id": "ARSENAL", "name": "Arsenal", "league_id": "EPL"}]),
-            _sports_blob(d1, "injuries", "EPL", [{"player_id": 1, "player_name": "Bukayo Saka", "league_id": 39}]),
+            _sports_blob(
+                d1, "fixture_lineups", "EPL", [{"player_id": 1, "player_name": "Bukayo Saka", "league_id": 39}]
+            ),
         ]
     )
     storage = _FakeStorage({p: _parquet_bytes(f.to_dict("records")) for p, f in blobs.items()})

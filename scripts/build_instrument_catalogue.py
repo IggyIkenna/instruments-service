@@ -226,21 +226,16 @@ SPORTS_PLAYER_INSTRUMENT_TYPE = "player"
 # SSOT: sports_features_layer_findings_sweep_2026_07_18 section R.
 SPORTS_FIXTURE_ENTITY = "fixtures_schedule"
 SPORTS_TEAM_ENTITY = "teams"
-#: Real captured per-player source. API-Football ``entity=injuries`` rows carry
-#: a real ``player_id``/``player_name``/``team_id`` (verified against real prod
-#: GCS 2026-07-09). ``entity=fixture_lineups`` was considered first — it is the
-#: full-roster source the SPORTS_INSTRUMENTS.md 11-step pipeline table implies —
-#: but its real per-league parquet on GCS carries ONLY
-#: ``formation``/``fixture_id``/``available_at``: the per-fixture-entity writer's
-#: nested-column-drop guard (``sports_reference_fixtures.py::_write_per_fixture_entities``,
-#: "Dropping N nested columns") strips the ``player_id``/``player_name`` fields
-#: (nested under raw ``startXI``/``substitutes`` blocks) before they ever reach
-#: GCS, so no player identity survives there today — a real, separate
-#: data-completeness gap in the LINEUPS writer, not something this roll-up can
-#: paper over. INJURIES is therefore the honest source: real, but a NARROWER
-#: slice than a full roster (currently-injured players only). See
+#: Real captured per-player source. ``entity=fixture_lineups`` is the full-roster
+#: source (starters + substitutes) carrying flat ``player_id``/``player_name``/
+#: ``team_id``/``coach_id``/``coach_name`` columns via UAC
+#: ``normalize_api_football_lineup`` (2026-08-05: the normalizer now flattens the
+#: nested ``startXI``/``substitutes`` blocks to one row per player, so the
+#: per-fixture-entity writer's nested-column-drop guard no longer strips player
+#: identity — the prior ``entity=injuries`` source worked correctly but was
+#: injured-players-only; ``fixture_lineups`` gives the full roster). See
 #: SPORTS_INSTRUMENTS.md's "Known gaps" section.
-SPORTS_PLAYER_SOURCE_ENTITY = "injuries"
+SPORTS_PLAYER_SOURCE_ENTITY = "fixture_lineups"
 
 #: The three entities :func:`_iter_sports_ftp_snapshots` walks in one pass.
 _SPORTS_FTP_ENTITIES = frozenset({SPORTS_FIXTURE_ENTITY, SPORTS_TEAM_ENTITY, SPORTS_PLAYER_SOURCE_ENTITY})
@@ -2585,7 +2580,7 @@ def _read_sports_manifest_index(storage: StorageClient, bucket: str) -> pd.DataF
 # Distinct from the league-grain could-exist system above (which is seeded
 # from the MANIFEST — a theoretical "should exist" universe used to compute
 # expected_unattempted gaps). These three grains are seeded from real OBSERVED
-# captures only (the entity=fixtures / entity=teams / entity=injuries parquets
+# captures only (the entity=fixtures_schedule / entity=teams / entity=fixture_lineups parquets
 # the 11-step pipeline in SPORTS_INSTRUMENTS.md already writes) — a roll-up of
 # what actually got captured, mirroring build_catalogue_dataframe's cefi/defi/
 # tradfi by_date-snapshot pattern, NOT a could-exist projection. They therefore
@@ -3111,14 +3106,14 @@ def _iter_sports_ftp_snapshots(
     max_blobs: int | None = None,
     max_workers: int = MAX_DOWNLOAD_WORKERS,
 ) -> Iterator[tuple[str, date, str, pd.DataFrame]]:
-    """Yield ``(entity, day, league_id, frame)`` for fixture/team/injuries by_date parquets.
+    """Yield ``(entity, day, league_id, frame)`` for fixture/team/lineups by_date parquets.
 
     ONE combined prefix walk covers all three :data:`_SPORTS_FTP_ENTITIES`
     (single-walk discipline — a separate whole-corpus walk per entity is
     review-blocking per codex/02-data/availability-manifest-and-data-status.md)
     — mirrors :func:`_iter_sports_by_date_snapshots` (the existing
     ``entity=leagues`` walk) but additionally parses the ``league={L}``
-    partition segment, which fixtures/teams/injuries all carry (``leagues``
+    partition segment, which fixtures/teams/fixture_lineups all carry (``leagues``
     does not — that entity is a bare per-day file with ``league_id`` on the
     FRAME instead, which is why it keeps its own dedicated walk function).
 
@@ -3127,7 +3122,7 @@ def _iter_sports_ftp_snapshots(
     :func:`_iter_by_date_snapshots`'s ``since`` window read. This is NOT just a
     download-time optimisation: an UNWINDOWED ``since=None`` walk lists the
     ENTIRE ``sports_reference/by_date/`` tree (every entity — footystats/
-    understat/transfermarkt/standings/etc., not just fixtures/teams/injuries),
+    understat/transfermarkt/standings/etc., not just fixtures/teams/fixture_lineups),
     because the ``entity=`` segment sits AFTER ``day=``/``pipeline_mode=`` in
     the path, so GCS cannot prefix-scope the LISTING itself to just these three
     entities — only client-side filtering AFTER listing. Measured against real
@@ -3138,9 +3133,7 @@ def _iter_sports_ftp_snapshots(
     always passes a bounded ``since``.
 
     ``league_id`` here is always the PATH value: fixtures carries no canonical
-    ``league_id`` column at all, and injuries' own ``league_id`` column is the
-    RAW numeric api-football id (never overwritten with the canonical value the
-    partition path already carries) — reading the path uniformly for all three
+    ``league_id`` column at all — reading the path uniformly for all three
     entities avoids a silent canonical/raw mismatch between them. A raw numeric
     path value (no canonical name mapping) is a DE-REGISTERED league since the
     2026-07-13 ruling — the caller drops it via
@@ -3326,7 +3319,7 @@ def build_sports_fixture_team_player_catalogue(
                 if tid not in team_last or day > team_last[tid]:
                     team_last[tid] = day
                 team_league[tid] = league_id
-        else:  # SPORTS_PLAYER_SOURCE_ENTITY ("injuries")
+        else:  # SPORTS_PLAYER_SOURCE_ENTITY ("fixture_lineups")
             for row in records:
                 raw_name = str(row.get("player_name") or "").strip()
                 if not raw_name:
