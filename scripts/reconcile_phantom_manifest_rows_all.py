@@ -1236,6 +1236,185 @@ def _apply_delete_pyth_oracle_prices_ghost_failures(
     return n_delete
 
 
+def _lending_indices_ghost_failure_mask(df: pd.DataFrame) -> pd.Series:
+    """Boolean mask for the lending_indices stale ``attempted_failed`` ghost-row
+    phantom set (SSOT predicate).
+
+    Root cause (see the G2 P2 finding in
+    ``plans/active/mvp_backfill_defi_onchain_v10_2026_06_27.md``):
+    the 2026-07-26 catalogue-residual wiring
+    (``market-tick-data-service@eae703b0``) diffed two DIFFERENT id spaces —
+    ``market_count_map()`` keys captured markets by raw on-chain ADDRESS, but
+    the IS catalogue's ``instrument_id`` for ``instrument_type="lending"`` is
+    the canonical ``VENUE-CHAIN:TYPE:SYMBOL`` glued form — so
+    ``record_catalogue_residual_empty_typed()``'s residual set always
+    evaluated to the FULL catalogue and wrongly tried to claim
+    ``SOURCE_RETURNED_ZERO`` even on days with real captured data; the
+    honest-absence gate correctly rejected the unsubstantiated claim, routing
+    the shard through ``record_shard_failure`` despite the write having
+    already succeeded. Fixed in ``market-tick-data-service@d36e2498``
+    (removed the structurally-invalid ``record_catalogue_residual()`` call).
+    Post-fix, a later re-attempt succeeded for every affected cell, producing
+    a genuine ``captured`` row alongside the stale ``attempted_failed`` row.
+
+    A row is a phantom IFF: ``data_type=='lending_indices'``,
+    ``venue`` is one of ``MORPHO`` / ``COMPOUND_V3``,
+    ``capture_status=='attempted_failed'``, AND a ``captured`` row exists
+    for the same ``(venue, chain, date)`` cell (i.e. the post-fix
+    re-attempt already captured real data, superseding the stale
+    guard-rejection failure marker). Scoped to MORPHO/COMPOUND_V3 only per
+    the plan's explicit finding scope — the catalogue-residual bug pattern is
+    specific to these two venues' handler code path, not assumed to generalize.
+    """
+    status = df["capture_status"].fillna("").astype(str)
+    dt_col = df["data_type"].fillna("").astype(str)
+    venue = df["venue"].fillna("").astype(str)
+    chain = df["chain"].fillna("").astype(str) if "chain" in df.columns else pd.Series("", index=df.index)
+
+    target_venues = {"MORPHO", "COMPOUND_V3"}
+    is_lending = (dt_col == "lending_indices") & venue.isin(target_venues)
+    ghost_candidates = is_lending & (status == "attempted_failed")
+    if not int(ghost_candidates.sum()):
+        return ghost_candidates
+
+    # Build the set of (venue, chain, date) tuples that already have a
+    # captured row — these supersede any attempted_failed row for the
+    # same cell.
+    captured_mask = is_lending & (status == "captured")
+    if not int(captured_mask.sum()):
+        return ghost_candidates  # no captured rows at all → nothing supersedes
+    superseding_cells: set[tuple[str, str, str]] = set(
+        zip(
+            df.loc[captured_mask, "venue"].astype(str),
+            df.loc[captured_mask, "chain"].astype(str),
+            df.loc[captured_mask, "date"].astype(str),
+            strict=True,
+        )
+    )
+    cell_keys = venue.str.cat([chain, df["date"].astype(str)], sep="|")
+    superseding_keys: set[str] = {"|".join(t) for t in superseding_cells}
+    return ghost_candidates & cell_keys.isin(superseding_keys)
+
+
+def _report_lending_indices_ghost_failures(df: pd.DataFrame) -> None:
+    """DRY-RUN report (no mutation): lending_indices stale ``attempted_failed``
+    ghost rows (MORPHO/COMPOUND_V3) superseded by a ``captured`` row for the
+    same ``(venue, chain, date)`` cell. Single-walk — reads only the
+    already-loaded ``_index`` ``df``."""
+    mask = _lending_indices_ghost_failure_mask(df)
+    n = int(mask.sum())
+    logger.info("=== DRY-RUN: lending_indices stale attempted_failed ghost-row report (MORPHO/COMPOUND_V3) ===")
+    logger.info(
+        "GHOST rows (lending_indices MORPHO/COMPOUND_V3, attempted_failed, "
+        "same (venue, chain, date) cell superseded by a captured row): %d",
+        n,
+    )
+    if n:
+        ghost = df[mask]
+        if "error_reason" in ghost.columns:
+            logger.info(
+                "    by error_reason: %s",
+                ghost["error_reason"].fillna("").astype(str).value_counts().to_dict(),
+            )
+        if "venue" in ghost.columns:
+            logger.info(
+                "    by venue: %s",
+                ghost["venue"].fillna("").astype(str).value_counts().to_dict(),
+            )
+        logger.info("    date range: %s .. %s", ghost["date"].min(), ghost["date"].max())
+    logger.info(
+        "DECISION: DELETE (stale attempted_failed ghost superseded by real "
+        "captured rows for the same (venue, chain, date) cell — the actual "
+        "lending_indices data for these cells IS captured; "
+        "see plans/active/mvp_backfill_defi_onchain_v10_2026_06_27.md G2 P2). "
+        "Dry-run only — no writes."
+    )
+
+
+def _apply_delete_lending_indices_ghost_failures(
+    storage_client: StorageClient,
+    bucket_name: str,
+    index_blob: str,
+    df: pd.DataFrame,
+) -> int:
+    """APPLY mode: DELETE the lending_indices stale ``attempted_failed`` ghost
+    rows (MORPHO/COMPOUND_V3) superseded by a ``captured`` row for the same
+    ``(venue, chain, date)`` cell, and write the trimmed ``_index`` back.
+    No whole-corpus GCS walk — the predicate is a cheap boolean mask over the
+    already-loaded index. Re-fetches fresh via
+    ``merge_canonical_with_outstanding_shards`` immediately before the
+    write-back (staleness guard, same pattern as the PYTH oracle_prices pass).
+
+    This pass deletes ``attempted_failed`` rows BY DESIGN — the invariant
+    is ``captured`` unchanged and ``attempted_failed`` decreases by EXACTLY
+    the deleted count (never more, and the predicate must never select a
+    non-``attempted_failed`` row).
+    """
+    mask = _lending_indices_ghost_failure_mask(df)
+    n_delete = int(mask.sum())
+    logger.info(
+        "APPLY lending_indices ghost-failure DELETE (MORPHO/COMPOUND_V3): %d rows match the predicate",
+        n_delete,
+    )
+    if n_delete == 0:
+        logger.info("Nothing to delete — lending_indices ghost-failure set is empty. No write.")
+        return 0
+
+    # Staleness guard: re-fetch fresh + re-derive the delete predicate
+    # immediately before the write-back so any per-VM shard written since
+    # the initial read above isn't silently discarded by this bulk re-upload.
+    df = merge_canonical_with_outstanding_shards(storage_client, bucket_name, index_blob)
+    status_before = df["capture_status"].fillna("").astype(str)
+    captured_before = int((status_before == "captured").sum())
+    attempted_failed_before = int((status_before == "attempted_failed").sum())
+
+    mask = _lending_indices_ghost_failure_mask(df)
+    n_delete = int(mask.sum())
+    if n_delete == 0:
+        logger.info("Nothing to delete after fresh re-check — ghost-failure set is empty. No write.")
+        return 0
+
+    # Defensive guard: the predicate must never select a non-attempted_failed row.
+    deleting = df[mask]
+    deleting_status = deleting["capture_status"].fillna("").astype(str)
+    bad = int((deleting_status != "attempted_failed").sum())
+    if bad:
+        raise RuntimeError(
+            f"REFUSING DELETE — predicate selected {bad} non-attempted_failed rows (would destroy captured data)"
+        )
+
+    kept = df[~mask].copy()
+    status_after = kept["capture_status"].fillna("").astype(str)
+    captured_after = int((status_after == "captured").sum())
+    attempted_failed_after = int((status_after == "attempted_failed").sum())
+    if captured_after != captured_before:
+        raise RuntimeError(
+            f"REFUSING WRITE — captured count changed {captured_before} -> {captured_after} (delete bug)"
+        )
+    expected_attempted_failed_after = attempted_failed_before - n_delete
+    if attempted_failed_after != expected_attempted_failed_after:
+        raise RuntimeError(
+            f"REFUSING WRITE — attempted_failed count {attempted_failed_after} != expected "
+            f"{expected_attempted_failed_after} (before={attempted_failed_before}, deleted={n_delete})"
+        )
+
+    out = io.BytesIO()
+    kept.to_parquet(out, index=False)
+    out.seek(0)
+    logger.info(
+        "Writing trimmed index: %d -> %d rows (%d deleted; captured=%d unchanged; attempted_failed=%d -> %d)",
+        len(df),
+        len(kept),
+        n_delete,
+        captured_after,
+        attempted_failed_before,
+        attempted_failed_after,
+    )
+    storage_client.upload_from_file_obj(bucket_name, index_blob, out)
+    logger.info("Done — lending_indices ghost-failure DELETE applied (MORPHO/COMPOUND_V3).")
+    return n_delete
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--asset-group", required=True, choices=list(ASSET_GROUP_CONFIG.keys()))
@@ -1384,6 +1563,22 @@ def main() -> int:
             "plans/active/issues/pyth_oracle_prices_stale_ghost_failure_rows_2026_07_28.md."
         ),
     )
+    p.add_argument(
+        "--report-lending-indices-ghost-failures",
+        action="store_true",
+        help=(
+            "lending_indices stale attempted_failed ghost-failure pass "
+            "(MORPHO/COMPOUND_V3; single _index read). WITHOUT --apply: DRY-RUN "
+            "report of attempted_failed rows superseded by a captured row for the "
+            "same (venue, chain, date) cell — a catalogue-residual bug "
+            "(market-tick-data-service@eae703b0, fixed @d36e2498) caused "
+            "honest-absence guard-rejections that later re-attempts succeeded for. "
+            "WITH --apply: DELETE that ghost set and write the trimmed _index back "
+            "(preserves captured; attempted_failed decreases by exactly the deleted "
+            "count). See plans/active/mvp_backfill_defi_onchain_v10_2026_06_27.md "
+            "G2 P2."
+        ),
+    )
     args = p.parse_args()
 
     # --unphantom-only implies --unphantom (it runs the reverse re-validation only).
@@ -1464,6 +1659,20 @@ def main() -> int:
         _report_pyth_oracle_prices_ghost_failures(df)
         if args.apply:
             _apply_delete_pyth_oracle_prices_ghost_failures(storage_client, bucket_name, str(cfg["index"]), df)
+        else:
+            logger.info("DRY-RUN — pass --apply to DELETE the ghost-failure set. No writes.")
+        return 0
+
+    # lending_indices stale attempted_failed ghost-failure pass
+    # (MORPHO/COMPOUND_V3) — single-walk (reuses the index read above).
+    # Returns before any disk-audit / mutation path.
+    if args.report_lending_indices_ghost_failures:
+        if args.asset_group != "defi":
+            logger.error("--report-lending-indices-ghost-failures requires --asset-group defi")
+            return 2
+        _report_lending_indices_ghost_failures(df)
+        if args.apply:
+            _apply_delete_lending_indices_ghost_failures(storage_client, bucket_name, str(cfg["index"]), df)
         else:
             logger.info("DRY-RUN — pass --apply to DELETE the ghost-failure set. No writes.")
         return 0
