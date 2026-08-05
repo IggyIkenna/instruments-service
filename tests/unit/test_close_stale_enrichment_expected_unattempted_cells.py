@@ -192,6 +192,143 @@ class TestSourceReturnedZeroIsNeverMirrored:
         assert manifest.record_empty.call_args.kwargs["row_key"]["league_id"] == "SOME_OFF_SEASON_LEAGUE"
 
 
+class TestSeasonCalendarGate3:
+    """Gate 3 (new as of 2026-08-05): when FIXTURES itself is ``expected_unattempted``
+    (never fetched) for a (date, league), the season calendar
+    (``get_league_fixture_calendar``) is consulted. If it returns ZERO scheduled
+    dates → ``EXPECTED_PAUSED_LEAGUE`` (off-season / no-fixture-that-date,
+    independently provable without a live fetch). This closes the Christmas/
+    holiday/today false-positive class diagnosed in
+    ``sports_enrichment_closer_holiday_and_today_false_gaps_2026_08_03.md``."""
+
+    def test_calendar_empty_closes_as_expected_paused_league(self) -> None:
+        """Off-season date for a recognized league → close via gate 3."""
+        manifest = MagicMock()
+        stuck = _stuck_df([("2024-12-25", "FIXTURE_EVENTS", "EPL")])
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.is_league_entity_covered",
+                return_value=True,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.get_league_fixture_calendar",
+                return_value=[],
+            ),
+        ):
+            counts = close_stale_cells(
+                manifest=manifest,
+                stuck_cells=stuck,
+                fixtures_empty_reason_by_date_league={},
+                fixtures_expected_unattempted_by_date_league={
+                    ("2024-12-25", "EPL"): None,
+                },
+            )
+
+        assert counts == {"2024-12-25/FIXTURE_EVENTS": 1}
+        manifest.record_empty.assert_called_once()
+        kwargs = manifest.record_empty.call_args.kwargs
+        assert kwargs["reason"] == "EXPECTED_PAUSED_LEAGUE"
+        assert kwargs["row_key"] == {
+            "date": "2024-12-25",
+            "data_type": "FIXTURE_EVENTS",
+            "league_id": "EPL",
+        }
+
+    def test_calendar_non_empty_leaves_cell_untouched(self) -> None:
+        """In-season date (calendar returns dates) → leave untouched (genuine gap)."""
+        manifest = MagicMock()
+        stuck = _stuck_df([("2026-07-14", "FIXTURE_EVENTS", "EPL")])
+
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.is_league_entity_covered",
+                return_value=True,
+            ),
+            patch(
+                "instruments_service.engine.orchestrator.get_league_fixture_calendar",
+                return_value=["2026-07-14"],
+            ),
+        ):
+            counts = close_stale_cells(
+                manifest=manifest,
+                stuck_cells=stuck,
+                fixtures_empty_reason_by_date_league={},
+                fixtures_expected_unattempted_by_date_league={
+                    ("2026-07-14", "EPL"): None,
+                },
+            )
+
+        assert counts == {}
+        manifest.record_empty.assert_not_called()
+
+    def test_unrecognized_numeric_league_skipped(self) -> None:
+        """Unresolved numeric league_id → gate 3 skipped (false-positive guard).
+        ``_canonical_league_id`` passes through unresolved numerics unchanged,
+        and ``get_league_fixture_calendar`` returns [] for unknown leagues —
+        skipping avoids a false-positive close."""
+        manifest = MagicMock()
+        stuck = _stuck_df([("2024-12-25", "FIXTURE_EVENTS", "9999")])
+
+        with patch(
+            "instruments_service.engine.orchestrator.is_league_entity_covered",
+            return_value=True,
+        ):
+            counts = close_stale_cells(
+                manifest=manifest,
+                stuck_cells=stuck,
+                fixtures_empty_reason_by_date_league={},
+                fixtures_expected_unattempted_by_date_league={
+                    ("2024-12-25", "9999"): None,
+                },
+            )
+
+        assert counts == {}
+        manifest.record_empty.assert_not_called()
+
+    def test_gate3_not_in_set_leaves_untouched(self) -> None:
+        """(date, league) not in fixtures_expected_unattempted → gate 3 not entered."""
+        manifest = MagicMock()
+        stuck = _stuck_df([("2024-12-25", "FIXTURE_EVENTS", "EPL")])
+
+        with patch(
+            "instruments_service.engine.orchestrator.is_league_entity_covered",
+            return_value=True,
+        ):
+            counts = close_stale_cells(
+                manifest=manifest,
+                stuck_cells=stuck,
+                fixtures_empty_reason_by_date_league={},
+                fixtures_expected_unattempted_by_date_league={
+                    ("2024-12-24", "EPL"): None,  # different date
+                },
+            )
+
+        assert counts == {}
+        manifest.record_empty.assert_not_called()
+
+    def test_none_fixtures_expected_unattempted_skips_gate3_entirely(self) -> None:
+        """Backward compatibility: when fixtures_expected_unattempted_by_date_league
+        is None (default), gate 3 is never entered — identical to pre-2026-08-05
+        behavior."""
+        manifest = MagicMock()
+        stuck = _stuck_df([("2024-12-25", "FIXTURE_EVENTS", "EPL")])
+
+        with patch(
+            "instruments_service.engine.orchestrator.is_league_entity_covered",
+            return_value=True,
+        ):
+            counts = close_stale_cells(
+                manifest=manifest,
+                stuck_cells=stuck,
+                fixtures_empty_reason_by_date_league={},
+                # fixtures_expected_unattempted_by_date_league omitted → None
+            )
+
+        assert counts == {}
+        manifest.record_empty.assert_not_called()
+
+
 class TestEmptyInput:
     def test_empty_stuck_cells_returns_empty_counts(self) -> None:
         manifest = MagicMock()
