@@ -105,7 +105,7 @@ class IdleReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "idle"
+        return f"IDLE-{self._chain}"
 
     async def get_instruments(
         self,

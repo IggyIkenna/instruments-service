@@ -215,8 +215,8 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
-        """Return the venue identifier."""
-        return self._protocol_slug
+        """Return the venue identifier (PROTOCOL-CHAIN grain, e.g. ``AAVE_V3-ETHEREUM``)."""
+        return f"{self._venue_prefix}-{self._chain}"
 
     def _resolve_api_url(self) -> str | None:
         """Return the subgraph URL or None if API key / subgraph ID is missing."""

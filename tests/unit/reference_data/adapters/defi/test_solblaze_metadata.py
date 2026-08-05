@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2022, 2, 17, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert SolblazeReferenceDataAdapter().venue == "solblaze"
+    assert SolblazeReferenceDataAdapter().venue == "SOLBLAZE-SOLANA"
 
 
 @pytest.mark.asyncio

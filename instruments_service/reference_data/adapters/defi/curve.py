@@ -97,7 +97,7 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "curve"
+        return f"CURVE-{self._chain}"
 
     async def get_instruments(
         self,

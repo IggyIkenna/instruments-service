@@ -236,7 +236,7 @@ class PendleReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "pendle"
+        return f"PENDLE-{self._chain}"
 
     async def get_instruments(
         self,

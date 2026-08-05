@@ -22,8 +22,8 @@ _EXPECTED_ARB_DEPLOY_DATE = datetime(2024, 2, 29, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert RenzoReferenceDataAdapter().venue == "renzo"
-    assert RenzoReferenceDataAdapter(chain="ARBITRUM").venue == "renzo"
+    assert RenzoReferenceDataAdapter().venue == "RENZO-ETHEREUM"
+    assert RenzoReferenceDataAdapter(chain="ARBITRUM").venue == "RENZO-ARBITRUM"
 
 
 @pytest.mark.asyncio

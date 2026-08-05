@@ -122,7 +122,7 @@ class JitoRestakingReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "jito_restaking"
+        return f"JITORESTAKING-{self._chain}"
 
     async def get_instruments(
         self,

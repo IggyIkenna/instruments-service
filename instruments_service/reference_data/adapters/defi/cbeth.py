@@ -84,7 +84,7 @@ class CbethReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "cbeth"
+        return f"COINBASE-{self._chain}"
 
     async def get_instruments(
         self,

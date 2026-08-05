@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2024, 6, 11, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert SymbioticReferenceDataAdapter().venue == "symbiotic"
+    assert SymbioticReferenceDataAdapter().venue == "SYMBIOTIC-ETHEREUM"
 
 
 @pytest.mark.asyncio

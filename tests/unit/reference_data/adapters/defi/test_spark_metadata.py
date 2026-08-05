@@ -301,7 +301,7 @@ class TestSparkMetadataPopulation:
 class TestSparkAdapterIdentity:
     def test_venue_property(self) -> None:
         adapter = SparkReferenceDataAdapter(chain="ETHEREUM")
-        assert adapter.venue == "spark"
+        assert adapter.venue == "SPARK-ETHEREUM"
 
     def test_chain_uppercased(self) -> None:
         adapter = SparkReferenceDataAdapter(chain="ethereum")

@@ -20,7 +20,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2023, 12, 4, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert MantleReferenceDataAdapter().venue == "mantle"
+    assert MantleReferenceDataAdapter().venue == "MANTLE-ETHEREUM"
 
 
 @pytest.mark.asyncio

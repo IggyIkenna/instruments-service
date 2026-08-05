@@ -64,7 +64,7 @@ class StaderReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "stader"
+        return f"STADER-{self._chain}"
 
     async def get_instruments(
         self,

@@ -27,7 +27,7 @@ _EXPECTED_DEPLOY_DATE = datetime(2024, 8, 1, tzinfo=UTC)
 
 
 def test_venue() -> None:
-    assert JitoRestakingReferenceDataAdapter().venue == "jito_restaking"
+    assert JitoRestakingReferenceDataAdapter().venue == "JITORESTAKING-SOLANA"
 
 
 @pytest.mark.asyncio
@@ -81,7 +81,7 @@ async def test_distinct_from_jito_lst_venue() -> None:
     lst_adapter = JitoReferenceDataAdapter()
 
     # `venue` property — registry key — must be distinct.
-    assert restaking_adapter.venue == "jito_restaking"
+    assert restaking_adapter.venue == "JITORESTAKING-SOLANA"
     assert lst_adapter.venue == "JITO-SOLANA"
     assert restaking_adapter.venue != lst_adapter.venue
 

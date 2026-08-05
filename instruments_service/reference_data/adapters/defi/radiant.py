@@ -94,7 +94,7 @@ class RadiantReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "radiant"
+        return f"RADIANT-{self._chain}"
 
     async def get_instruments(
         self,

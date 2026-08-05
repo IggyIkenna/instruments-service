@@ -89,7 +89,7 @@ class EigenLayerReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "eigenlayer"
+        return f"EIGENLAYER-{self._chain}"
 
     async def get_instruments(
         self,

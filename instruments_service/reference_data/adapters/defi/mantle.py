@@ -65,7 +65,7 @@ class MantleReferenceDataAdapter(BaseReferenceDataAdapter):
     @property
     def venue(self) -> str:
         """Return the venue identifier."""
-        return "mantle"
+        return f"MANTLE-{self._chain}"
 
     async def get_instruments(
         self,
