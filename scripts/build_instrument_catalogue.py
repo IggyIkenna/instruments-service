@@ -3266,6 +3266,7 @@ def build_sports_fixture_team_player_catalogue(
     player_last: dict[str, date] = {}
     player_league: dict[str, str] = {}
     all_days: set[date] = set()
+    junk_name_skips = 0
 
     for entity, day, league_id, frame in _iter_sports_ftp_snapshots(
         storage, bucket, by_date_prefix, since=since, max_blobs=max_blobs
@@ -3288,8 +3289,12 @@ def build_sports_fixture_team_player_catalogue(
                 date_str = str(row.get("date") or "").strip()
                 if not home or not away or not date_str:
                     continue
-                home_id = build_team_id(home)
-                away_id = build_team_id(away)
+                try:
+                    home_id = build_team_id(home)
+                    away_id = build_team_id(away)
+                except ValueError:
+                    junk_name_skips += 1
+                    continue
                 if not home_id or not away_id:
                     continue
                 fid = build_fixture_id(league_id, home_id, away_id, date_str)
@@ -3325,7 +3330,11 @@ def build_sports_fixture_team_player_catalogue(
                 if not raw_name:
                     continue
                 last_name, first_name = _split_full_name(raw_name)
-                pid = build_player_id(last_name, first_name)
+                try:
+                    pid = build_player_id(last_name, first_name)
+                except ValueError:
+                    junk_name_skips += 1
+                    continue
                 if not pid:
                     continue
                 if pid not in player_first or day < player_first[pid]:
@@ -3334,6 +3343,13 @@ def build_sports_fixture_team_player_catalogue(
                     player_last[pid] = day
                 player_league[pid] = league_id
 
+    if junk_name_skips:
+        logger.warning(
+            "Skipped %d sports fixture/team/player row(s) with a corrupted (mojibake/control-char) "
+            "display name — see JunkSymbolError; the source-side capture that produced the name should "
+            "be fixed upstream, but the catalogue rollup itself must not crash on one bad row",
+            junk_name_skips,
+        )
     fixture_df = _sports_grain_rollup_to_df(
         fixture_first,
         fixture_last,

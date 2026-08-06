@@ -2778,6 +2778,58 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
     assert by_id["SAKA_B"]["league_id"] == "EPL"
 
 
+def test_ftp_rollup_skips_junk_name_row_instead_of_crashing_whole_run(rollup: ModuleType) -> None:
+    """A single corrupted (mojibake/control-char) display name must not crash the
+    ENTIRE catalogue rollup — the 2026-08-06 `lifecycle-catalogue-regen-sports`
+    production incident: one player row with a mis-decoded name ("JeleÅ\x84", a
+    UTF-8-as-latin-1 mojibake of "Jeleń") raised `JunkSymbolError` out of
+    `build_player_id`, uncaught, killing the whole 99k-blob rollup and freezing
+    `prod/catalog.parquet` past the DP-CATALOG-001 staleness budget. The junk row
+    (and a junk home/away team name, same failure class via `build_team_id`) must
+    be skipped, not fatal — every other row still rolls up normally."""
+    d = "2026-08-06"
+    blobs = dict(
+        [
+            # Same (day, entity, league) blob carries a clean fixture AND one
+            # whose home team name is itself corrupted — the junk fixture must
+            # be skipped, not crash the walk (build_team_id funnels through the
+            # same _slug junk-symbol gate as build_player_id), while the clean
+            # fixture in the SAME blob still rolls up.
+            _sports_blob(
+                d,
+                _FIXTURE_ENTITY,
+                "EPL",
+                [
+                    {"af_fixture_id": 1, "date": d, "af_home_name": "Arsenal", "af_away_name": "Chelsea"},
+                    {"af_fixture_id": 2, "date": d, "af_home_name": "JeleÅ\x84 FC", "af_away_name": "Chelsea"},
+                ],
+            ),
+            _sports_blob(
+                d,
+                "fixture_lineups",
+                "EPL",
+                [
+                    {"player_id": 1, "player_name": "Bukayo Saka", "team_id": 1, "league_id": 39},
+                    # The exact live mojibake string from the incident.
+                    {"player_id": 2, "player_name": "JeleÅ\x84", "team_id": 2, "league_id": 39},
+                ],
+            ),
+        ]
+    )
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records")) for path, frame in blobs.items()})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(
+        storage, "test-bucket", by_date_prefix=rollup.SPORTS_BY_DATE_PREFIX, since=date(2026, 8, 1)
+    )
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+
+    # The good rows still roll up — the junk player and the junk-named fixture
+    # are silently dropped from the output, not raised out of the function.
+    assert "EPL:ARSENAL_v_CHELSEA:20260806" in by_id
+    assert "SAKA_B" in by_id
+    assert not any("JELE" in str(row["instrument_id"]) for row in df.to_dict("records"))
+
+
 def test_ftp_rollup_empty_walk_returns_catalog_columns(rollup: ModuleType) -> None:
     storage = _FakeStorage({})
     df = rollup.build_sports_fixture_team_player_catalogue(storage, "test-bucket", since=date(2026, 1, 1))
