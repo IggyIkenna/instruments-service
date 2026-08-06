@@ -32,9 +32,12 @@ DATA_FLOOR = "2020-06-06"  # SSOT: codex/02-data/sports-2020-06-data-floor.md
 SCHEDULE_DEFINING_DATA_TYPES = frozenset({"FIXTURES", "FIXTURES_SCHEDULE"})
 
 # entity -> source_key (LeagueDefinition.data_sources key) for the Prediction-tier lookup
+# SFI_LEAGUES deliberately excluded: retired 2026-05-05 (unified-api-contracts@b5210c2b, same commit as
+# TRANSFERMARKT_LEAGUES) -- catalog mapping now lives in UAC SOCCER_FOOTBALL_INFO_IDS, not captured data. A
+# census against it always reports a false-positive gap (100% empty_confirmed/EXPECTED_DEPRECATED_DATA_TYPE
+# forever, real needed=0) -- confirmed 2026-08-06 after a live VM launch against it correctly wrote nothing new.
 ENTITY_SOURCE: dict[str, str] = {
     "WEATHER": "open_meteo",
-    "SFI_LEAGUES": "soccer_football_info",
     "SFI_PROGRESSIVE_STATS": "soccer_football_info",
     "MATCHES": "footystats",
     "PREDICTIONS": "footystats",
