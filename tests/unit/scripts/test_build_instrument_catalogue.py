@@ -2781,12 +2781,21 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
 def test_ftp_rollup_skips_junk_name_row_instead_of_crashing_whole_run(rollup: ModuleType) -> None:
     """A single corrupted (mojibake/control-char) display name must not crash the
     ENTIRE catalogue rollup — the 2026-08-06 `lifecycle-catalogue-regen-sports`
-    production incident: one player row with a mis-decoded name ("JeleÅ\x84", a
+    production incident: one player row with a mis-decoded name (a
     UTF-8-as-latin-1 mojibake of "Jeleń") raised `JunkSymbolError` out of
     `build_player_id`, uncaught, killing the whole 99k-blob rollup and freezing
     `prod/catalog.parquet` past the DP-CATALOG-001 staleness budget. The junk row
     (and a junk home/away team name, same failure class via `build_team_id`) must
-    be skipped, not fatal — every other row still rolls up normally."""
+    be skipped, not fatal — every other row still rolls up normally.
+
+    The junk marker here is the Unicode replacement char U+FFFD ("�") — the
+    canonical decode-failure marker that `unified-api-contracts._reject_junk_symbols`
+    RAISES on (JunkSymbolError, a ValueError subclass the 497c4f5e try/except
+    catches). Note: the original incident's literal "\\x84" (C1 control U+0084) is
+    NO LONGER a raise-case — UAC@b3db68b5 deliberately STRIPS C1 controls
+    (U+0080-U+009F) instead, so a C1-mojibake row survives sanitized (e.g. "JeleÅ"
+    → "JELEA") rather than being skipped. That sanitize path is covered separately;
+    this test exercises the genuine junk (U+FFFD) skip path."""
     d = "2026-08-06"
     blobs = dict(
         [
@@ -2801,7 +2810,7 @@ def test_ftp_rollup_skips_junk_name_row_instead_of_crashing_whole_run(rollup: Mo
                 "EPL",
                 [
                     {"af_fixture_id": 1, "date": d, "af_home_name": "Arsenal", "af_away_name": "Chelsea"},
-                    {"af_fixture_id": 2, "date": d, "af_home_name": "JeleÅ\x84 FC", "af_away_name": "Chelsea"},
+                    {"af_fixture_id": 2, "date": d, "af_home_name": "Jele� FC", "af_away_name": "Chelsea"},
                 ],
             ),
             _sports_blob(
@@ -2810,8 +2819,10 @@ def test_ftp_rollup_skips_junk_name_row_instead_of_crashing_whole_run(rollup: Mo
                 "EPL",
                 [
                     {"player_id": 1, "player_name": "Bukayo Saka", "team_id": 1, "league_id": 39},
-                    # The exact live mojibake string from the incident.
-                    {"player_id": 2, "player_name": "JeleÅ\x84", "team_id": 2, "league_id": 39},
+                    # The junk marker: Unicode replacement char U+FFFD (the
+                    # decode-failure marker that still RAISES JunkSymbolError
+                    # under current UAC — C1 controls are stripped, not raised).
+                    {"player_id": 2, "player_name": "Jele�", "team_id": 2, "league_id": 39},
                 ],
             ),
         ]
