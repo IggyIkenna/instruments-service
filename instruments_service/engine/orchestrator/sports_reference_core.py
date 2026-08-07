@@ -348,6 +348,7 @@ def _close_stale_enrichment_expected_unattempted_cells(
     manifest: _orch.ManifestWriter,
     stuck_cells: _orch.pd.DataFrame,
     fixtures_empty_reason_by_date_league: dict[tuple[str, str], str],
+    fixtures_expected_unattempted_by_date_league: dict[tuple[str, str], None] | None = None,
 ) -> dict[str, int]:
     """Close residual ``expected_unattempted`` cells for the 4 per-fixture ENRICHMENT
     entities (FIXTURE_EVENTS/FIXTURE_LINEUPS/FIXTURE_STATS/PLAYER_STATS) — but ONLY the
@@ -392,10 +393,21 @@ def _close_stale_enrichment_expected_unattempted_cells(
          ``UnprovenHonestAbsenceError`` for exactly this case, `date=2024-12-24,
          data_type=FIXTURE_EVENTS, league_id=DANISH_1ST_DIVISION`; 36 of ~5,300 mirror
          candidates carry this reason).
-      3. Otherwise (coverage says yes AND FIXTURES shows ``captured``/``SOURCE_RETURNED_ZERO``,
-         or is itself still pending) → **do not touch the cell**. It is left
-         ``expected_unattempted`` exactly as it is today — a genuine pending-fetch gap that
-         needs a real re-fetch, not a classification.
+      3. Else, when ``fixtures_expected_unattempted_by_date_league`` is provided and FIXTURES'
+         OWN row for the SAME (date, league) is ``expected_unattempted`` (blank reason — i.e.
+         FIXTURES was never fetched for that cell), the season calendar
+         (``get_league_fixture_calendar``, backed by ``SEASON_BY_COUNTRY``) is consulted. If it
+         returns ZERO scheduled dates for the (league, date) pair → ``EXPECTED_PAUSED_LEAGUE``
+         (off-season / no-fixture-that-date, independently provable without a live fetch). This
+         closes the Christmas/holiday/today false-positive class
+         (``sports_enrichment_closer_holiday_and_today_false_gaps_2026_08_03.md``). Only
+         recognized (non-numeric) canonical league IDs are checked — an unresolved numeric ID
+         is left untouched rather than risk a false-positive close from an empty calendar
+         returned for an unknown league.
+      4. Otherwise (coverage says yes AND FIXTURES shows ``captured``/``SOURCE_RETURNED_ZERO``,
+         or is itself still pending but the calendar shows in-season) → **do not touch the
+         cell**. It is left ``expected_unattempted`` exactly as it is today — a genuine
+         pending-fetch gap that needs a real re-fetch, not a classification.
 
     Args:
         manifest: Writer for the ``record_empty`` calls emitted per closeable league.
@@ -406,6 +418,11 @@ def _close_stale_enrichment_expected_unattempted_cells(
         fixtures_empty_reason_by_date_league: ``{(date, league_id): error_reason}`` for every
             FIXTURES row that is ``empty_confirmed`` — the caller's single manifest read
             already covers this alongside ``stuck_cells`` (no extra corpus walk).
+        fixtures_expected_unattempted_by_date_league: ``{(date, league_id): None}`` for every
+            FIXTURES row that is ``expected_unattempted`` (blank reason) — the set of (date,
+            league) pairs where FIXTURES itself was never fetched. When provided, gate 3
+            (season-calendar check) is applied for cells that survive gates 1-2. Optional
+            for backward compatibility; when ``None``, gate 3 is skipped entirely.
 
     Returns:
         ``{f"{date}/{data_type}": n_leagues_closed}`` per (date, entity) group that had at
@@ -444,9 +461,31 @@ def _close_stale_enrichment_expected_unattempted_cells(
                     source=_orch._sports_ref_source(_dt_str.lower()),
                 )
                 _closed += 1
-            # else: FIXTURES shows captured, is itself still pending, or is empty_confirmed via
-            # SOURCE_RETURNED_ZERO (no provable evidence for THIS entity) — a genuine
-            # pending-fetch gap. Leave untouched.
+                continue
+            # Gate 3 — FIXTURES is expected_unattempted (never fetched) for this (date, league).
+            # Consult the season calendar: if zero fixtures were scheduled that day, the
+            # enrichment cell is provably off-season/no-fixture — safe to close.
+            if (
+                fixtures_expected_unattempted_by_date_league is not None
+                and (_date_str, _lid) in fixtures_expected_unattempted_by_date_league
+            ):
+                _canon_lid = _orch._canonical_league_id(_lid)
+                # Guard: unresolved numeric IDs passthrough _canonical_league_id unchanged
+                # (e.g. "9999" → "9999"), and get_league_fixture_calendar returns [] for
+                # unknown leagues — skip the check rather than risk a false-positive close.
+                if not _canon_lid.isdigit() and not _orch.get_league_fixture_calendar(_canon_lid, _date_str, _date_str):
+                    manifest.record_empty(
+                        row_key={"date": _date_str, "data_type": _dt_str, "league_id": _lid},
+                        attempted_at=_attempt_ts,
+                        reason=_orch.EmptyConfirmedReason.EXPECTED_PAUSED_LEAGUE,
+                        pipeline_mode=_orch.PipelineMode.BATCH_API_FOOTBALL,
+                        source=_orch._sports_ref_source(_dt_str.lower()),
+                    )
+                    _closed += 1
+                    continue
+            # else: FIXTURES shows captured, is itself still pending (and the calendar shows
+            # in-season), or is empty_confirmed via SOURCE_RETURNED_ZERO (no provable evidence
+            # for THIS entity) — a genuine pending-fetch gap. Leave untouched.
         if _closed:
             counts[f"{_date_str}/{_dt_str}"] = _closed
     return counts

@@ -179,6 +179,11 @@ class TestCheckApiFootballDependency:
         assert f"--start-date {date}" in message
         assert f"--end-date {date}" in message
 
+        # The remediation path must be the LIVE split-entity prefix
+        # (entity=fixtures_schedule), not the FROZEN bare entity=fixtures path.
+        assert "entity=fixtures_schedule/" in message
+        assert "entity=fixtures/fixtures.parquet" not in message
+
     def test_storage_error_surfaces_as_dependency_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If the storage probe blows up, we still surface a DependencyError
         — not a leaked 500 / transport exception. Callers upstream can always

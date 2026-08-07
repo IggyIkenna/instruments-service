@@ -252,15 +252,21 @@ def test_row_data_types_aster_capability_profile() -> None:
 
 
 def test_row_data_types_capability_absent_venue_not_gated() -> None:
-    """A cefi venue wholly absent from VENUE_DATA_TYPE_CAPABILITIES (e.g.
-    BINANCE-DELIVERY) carries no carve-out information — it must NOT be
-    blanket-blocked by the capability gate (denominator semantics for
-    capability-absent venues are a separate open finding)."""
+    """A cefi venue wholly absent from VENUE_DATA_TYPE_CAPABILITIES carries no
+    carve-out information — it must NOT be blanket-blocked by the capability
+    gate (denominator semantics for capability-absent venues are a separate
+    open finding). Uses a SYNTHETIC venue name (never a real one) so this
+    assertion stays evergreen: BINANCE-DELIVERY was the prior example until it
+    gained a real VENUE_DATA_TYPE_CAPABILITIES entry (uac@f2214c09, 2026-08-05),
+    which broke this exact test — a real venue is not a stable "absent"
+    fixture since it can legitimately gain a capability declaration at any
+    time (ldr_qg_failure agt-93bf7f, 2026-08-06)."""
     from unified_api_contracts.registry import VENUE_DATA_TYPE_CAPABILITIES
 
-    assert "BINANCE-DELIVERY" not in VENUE_DATA_TYPE_CAPABILITIES
+    synthetic_venue = "ZZZ-SYNTHETIC-NO-CAPABILITY-ENTRY"
+    assert synthetic_venue not in VENUE_DATA_TYPE_CAPABILITIES
     cefi_dts = ["trades", "book_snapshot_5"]
-    row_dts = enumerator_module._row_data_types("cefi", _entry("BINANCE-DELIVERY", "PERPETUAL"), cefi_dts)
+    row_dts = enumerator_module._row_data_types("cefi", _entry(synthetic_venue, "PERPETUAL"), cefi_dts)
     assert "trades" in row_dts
 
 
@@ -415,8 +421,11 @@ def test_row_data_types_non_mvp_venue_skips_intersection() -> None:
     assert get_mvp_data_types_for_cefi_venue("BINANCE-DELIVERY") == frozenset()
     cefi_dts = ["trades", "book_snapshot_5"]
     row_dts = enumerator_module._row_data_types("cefi", _entry("BINANCE-DELIVERY", "PERPETUAL"), cefi_dts)
-    # Both survive: validity matrix admits them + no cap entry to gate + MVP
-    # gate is inactive for a non-MVP-scoped venue → unchanged.
+    # Both survive: validity matrix admits them + BINANCE-DELIVERY's
+    # VENUE_DATA_TYPE_CAPABILITIES entry (added uac@f2214c09, 2026-08-05) also
+    # declares both trades + book_snapshot_5 as capabilities, so the capability
+    # gate passes them through too + the MVP gate is inactive for a
+    # non-MVP-scoped venue → unchanged.
     assert row_dts == ["trades", "book_snapshot_5"], (
         f"MVP gate must NOT blanket-block a non-MVP-scoped cefi venue; got {row_dts}"
     )

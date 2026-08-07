@@ -46,6 +46,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal.reference.canonical_id_builder import build_instrument_id
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -271,7 +272,9 @@ class PendleReferenceDataAdapter(BaseReferenceDataAdapter):
                 # 2026_07_08.md todo 2, same key-vs-field mismatch class as AAVE_V3/SPARK/COMPOUND_V3;
                 # MTDS's own vault_pendle_adapter.py already made this exact fix independently). The
                 # role stays in the symbol segment (still unique per market) so PT/YT/SY don't collide.
-                instrument_key = f"{venue_tag}:YIELD_BEARING:{role}-{symbol}"
+                instrument_key = build_instrument_id(
+                    venue_tag, InstrumentType.YIELD_BEARING, f"{role}-{symbol}", passthrough=True
+                )
                 results.append(
                     InstrumentRecord(
                         instrument_key=instrument_key,

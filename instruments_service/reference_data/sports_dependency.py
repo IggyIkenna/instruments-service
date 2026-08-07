@@ -164,11 +164,15 @@ def _prefix_has_object(bucket: str, prefix: str) -> bool:
         return False
 
 
-def _build_remediation_message(date: str, bucket: str, path: str) -> str:
-    """Build the actionable error message shown to operators."""
+def _build_remediation_message(date: str, bucket: str, prefix: str) -> str:
+    """Build the actionable error message shown to operators.
+
+    ``prefix`` is the live split-entity ``entity=fixtures_schedule`` GCS prefix
+    (the pre-2026-05-23 bare ``entity=fixtures/fixtures.parquet`` path is FROZEN).
+    """
     return (
-        f"api-football reference data missing for date {date} in {bucket}\n"  # noqa: gs-uri — multi-line f-string concat; gs:// is on line 101
-        f"(expected gs://{bucket}/{path}).\n"
+        f"api-football reference data missing for date {date} in {bucket}\n"  # noqa: gs-uri — resolved bucket from config; operator-facing remediation message
+        f"(no objects found under gs://{bucket}/{prefix}).\n"
         f"Run this first:\n"
         f"  python -m instruments_service --operation instruments --mode batch \\\n"
         f"    --asset-group SPORTS --sports-provider API_FOOTBALL \\\n"
@@ -309,7 +313,9 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
         )
         return
 
-    message = _build_remediation_message(date, resolved_bucket, canonical_path)
+    # Pass the live split-entity prefix (entity=fixtures_schedule), not the
+    # FROZEN bare entity=fixtures/fixtures.parquet path (dead since 2026-05-23).
+    message = _build_remediation_message(date, resolved_bucket, canonical_schedule_prefix)
     raise DependencyError(message)
 
 

@@ -176,6 +176,15 @@ _STATIC_DEFI_VENUES: list[str] = [
     # listing it here restores the denominator drift guard
     # (set(_build_defi_venues()) == VENUES_BY_ASSET_GROUP["defi"]).
     "AAVE-PLASMA",
+    # FLUID-PLASMA (2026-08-05): FLUID lending markets on Plasma chain. Uses
+    # the same fluid adapter as every other FLUID-* venue. Plasma has no
+    # subgraph_id (RPC-only), so the subgraph auto-gen loop above can never
+    # discover it — must be listed here manually to keep the denominator drift
+    # guard green (set(_build_defi_venues()) == VENUES_BY_ASSET_GROUP["defi"]).
+    # See unified-api-contracts registry/venue_adapter_keys.py: "FLUID-PLASMA":
+    # "fluid", flipped defi_venues.py's DEFI_VENUE_PHASE to "live" in the
+    # same window.
+    "FLUID-PLASMA",
 ]
 
 
@@ -184,12 +193,12 @@ _STATIC_DEFI_VENUES: list[str] = [
 # dropped except Jupiter, not integrated). SSOT: unified-trading-pm/codex/
 # 04-architecture/solana-defi-coverage.md.
 _SOLANA_DEFI_VENUES: list[str] = [
+    "JUPITER-SOLANA",
     "KAMINO-SOLANA",
     "RAYDIUM-SOLANA",
     "ORCA-SOLANA",
     "MARINADE-SOLANA",
     "JITO-SOLANA",
-    # Jupiter is execution-only (swap aggregator), not instrument discovery.
     # MarginFi + Solend Solana lending adapters (2026-07-09) — real public
     # REST/JSON APIs, now IS-producible (marginfi.py / solend.py).
     "MARGINFI-SOLANA",

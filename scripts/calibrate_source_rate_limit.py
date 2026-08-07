@@ -113,7 +113,7 @@ class CalibrationResult:
 def _maybe_api_key(source: str, project_id: str | None) -> str | None:
     """Resolve a Secret-Manager key for sources that need auth (never os.environ)."""
     secret_name = {
-        "soccer_football_info": "rapidapi-key",
+        "soccer_football_info": "soccer-football-info-api-key",
     }.get(source)
     if secret_name is None:
         return None

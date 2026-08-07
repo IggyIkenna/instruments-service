@@ -502,28 +502,26 @@ def _derive_pm_source_transport(asset_group: str, data_type: str, venue: str = "
     Sports data_types are registered upper-case in ``SOURCE_PRIORITY`` while the
     enumerator carries them lower-case, so both are tried.
 
-    KALSHI scaffold-provenance fix (2026-08-03,
-    ``prediction_phantom_reconciler_wipes_bundle_atom_2026_07_10.md`` todo 3):
-    ``prediction`` is venue-disambiguated — Kalshi rows must stamp ``kalshi``,
-    Polymarket rows ``polymarket_clob``/``polymarket_gamma_api`` — but
-    ``SOURCE_PRIORITY[("prediction", <data_type>)]`` lists Polymarket sources
-    FIRST for read-time resolution, so the plain ``external[0]`` branch below
-    (venue-blind) was stamping every KALSHI scaffold row with Polymarket's
-    provenance. For ``asset_group="prediction"`` specifically, venue-resolve via
-    ``derive_pipeline_mode_for_row`` FIRST (its ``_VENUE_OVERRIDES["KALSHI"] ==
-    BATCH_KALSHI`` — the same table the already-fixed real capture writer,
-    ``rebuild_prediction_manifest.py`` @ ``market-tick-data-service@3397e7ae``,
-    uses) and only fall through to ``external[0]`` when that is unresolvable.
-    For POLYMARKET rows this is a no-op: POLYMARKET is deliberately absent from
-    ``_VENUE_OVERRIDES`` (multi-source venue), so ``derive_pipeline_mode_for_row``
-    itself falls through to the identical ``SOURCE_PRIORITY`` lookup and returns
-    the same answer ``external[0]`` would have.
+    Venue-aware scaffold-provenance fix (generalised 2026-08-05,
+    ``prediction_phantom_reconciler_wipes_bundle_atom_2026_07_10.md`` todo 4):
+    the plain ``external[0]`` branch below is venue-blind — it stamps the FIRST
+    ``SOURCE_PRIORITY`` source regardless of ``_VENUE_OVERRIDES``. This was first
+    fixed for ``prediction`` (Kalshi rows stamped Polymarket, 2026-08-03 todo 3)
+    but the SAME bug class affects every other asset_group whose venues have
+    overrides: tradfi (IBKR/ECB/OFR/YAHOO/EIA), cefi (HYPERLIQUID/ASTER/
+    EXTENDED_STARKNET), defi (CHAINLINK/PYTH/AAVE/SOLANA_RPC/HELIUS). For ANY
+    asset_group with a venue, resolve via ``derive_pipeline_mode_for_row`` FIRST
+    (its ``_VENUE_OVERRIDES`` table is the SSOT, shared with the real capture
+    writer) and only fall through to ``external[0]`` when that is unresolvable.
+    For venues WITHOUT overrides this is a no-op: ``derive_pipeline_mode_for_row``
+    falls through to the identical ``SOURCE_PRIORITY`` lookup and returns the
+    same answer ``external[0]`` would have.
     """
     ag = asset_group.lower() if asset_group else ""
     if not ag or not data_type:
         return "", "", ""
 
-    if ag == "prediction" and venue:
+    if venue:
         from unified_trading_library import derive_pipeline_mode_for_row
 
         venue_pm = derive_pipeline_mode_for_row(venue=venue, asset_group=ag, data_type=data_type)

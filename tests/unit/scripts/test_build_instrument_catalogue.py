@@ -2464,8 +2464,11 @@ def test_sports_catalogue_from_manifest_excludes_sentinel_and_unregistered_leagu
             {"league_id": "UNKNOWN", "data_type": "FIXTURES", "date": "2025-12-15"},
             {"league_id": "unknown", "data_type": "XG", "date": "2025-12-16"},
             # De-registered long-tail / alias league_ids (2026-07-13 ruling) — excluded.
+            # 2026-08-05: LA_LIGA_2 was promoted to a full LEAGUE_REGISTRY member
+            # (resolves via canonicalize_league_id alias → SEGUNDA_DIVISION which
+            # IS registered).  Replaced with a truly unregistered numeric id.
             {"league_id": "15066", "data_type": "MATCHES", "date": "2024-03-01"},
-            {"league_id": "LA_LIGA_2", "data_type": "ODDS", "date": "2024-03-02"},
+            {"league_id": "99999", "data_type": "ODDS", "date": "2024-03-02"},
             {"league_id": "RFPL", "data_type": "XG", "date": "2024-03-03"},
         ]
     )
@@ -2773,6 +2776,69 @@ def test_ftp_rollup_builds_fixture_team_player_rows_from_real_shaped_paths(rollu
 
     assert by_id["SAKA_B"]["instrument_type"] == rollup.SPORTS_PLAYER_INSTRUMENT_TYPE
     assert by_id["SAKA_B"]["league_id"] == "EPL"
+
+
+def test_ftp_rollup_skips_junk_name_row_instead_of_crashing_whole_run(rollup: ModuleType) -> None:
+    """A single corrupted (mojibake/control-char) display name must not crash the
+    ENTIRE catalogue rollup — the 2026-08-06 `lifecycle-catalogue-regen-sports`
+    production incident: one player row with a mis-decoded name (a
+    UTF-8-as-latin-1 mojibake of "Jeleń") raised `JunkSymbolError` out of
+    `build_player_id`, uncaught, killing the whole 99k-blob rollup and freezing
+    `prod/catalog.parquet` past the DP-CATALOG-001 staleness budget. The junk row
+    (and a junk home/away team name, same failure class via `build_team_id`) must
+    be skipped, not fatal — every other row still rolls up normally.
+
+    The junk marker here is the Unicode replacement char U+FFFD ("�") — the
+    canonical decode-failure marker that `unified-api-contracts._reject_junk_symbols`
+    RAISES on (JunkSymbolError, a ValueError subclass the 497c4f5e try/except
+    catches). Note: the original incident's literal "\\x84" (C1 control U+0084) is
+    NO LONGER a raise-case — UAC@b3db68b5 deliberately STRIPS C1 controls
+    (U+0080-U+009F) instead, so a C1-mojibake row survives sanitized (e.g. "JeleÅ"
+    → "JELEA") rather than being skipped. That sanitize path is covered separately;
+    this test exercises the genuine junk (U+FFFD) skip path."""
+    d = "2026-08-06"
+    blobs = dict(
+        [
+            # Same (day, entity, league) blob carries a clean fixture AND one
+            # whose home team name is itself corrupted — the junk fixture must
+            # be skipped, not crash the walk (build_team_id funnels through the
+            # same _slug junk-symbol gate as build_player_id), while the clean
+            # fixture in the SAME blob still rolls up.
+            _sports_blob(
+                d,
+                _FIXTURE_ENTITY,
+                "EPL",
+                [
+                    {"af_fixture_id": 1, "date": d, "af_home_name": "Arsenal", "af_away_name": "Chelsea"},
+                    {"af_fixture_id": 2, "date": d, "af_home_name": "Jele� FC", "af_away_name": "Chelsea"},
+                ],
+            ),
+            _sports_blob(
+                d,
+                "fixture_lineups",
+                "EPL",
+                [
+                    {"player_id": 1, "player_name": "Bukayo Saka", "team_id": 1, "league_id": 39},
+                    # The junk marker: Unicode replacement char U+FFFD (the
+                    # decode-failure marker that still RAISES JunkSymbolError
+                    # under current UAC — C1 controls are stripped, not raised).
+                    {"player_id": 2, "player_name": "Jele�", "team_id": 2, "league_id": 39},
+                ],
+            ),
+        ]
+    )
+    storage = _FakeStorage({path: _parquet_bytes(frame.to_dict("records")) for path, frame in blobs.items()})
+
+    df = rollup.build_sports_fixture_team_player_catalogue(
+        storage, "test-bucket", by_date_prefix=rollup.SPORTS_BY_DATE_PREFIX, since=date(2026, 8, 1)
+    )
+    by_id = {row["instrument_id"]: row for row in df.to_dict("records")}
+
+    # The good rows still roll up — the junk player and the junk-named fixture
+    # are silently dropped from the output, not raised out of the function.
+    assert "EPL:ARSENAL_v_CHELSEA:20260806" in by_id
+    assert "SAKA_B" in by_id
+    assert not any("JELE" in str(row["instrument_id"]) for row in df.to_dict("records"))
 
 
 def test_ftp_rollup_empty_walk_returns_catalog_columns(rollup: ModuleType) -> None:

@@ -1257,7 +1257,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     pipeline_report.finished_at = datetime.now(UTC).isoformat()
-    out_path = write_report(pipeline_report, args.report_dir)
+    out_path = write_report(pipeline_report, args.report_dir, project_id=project_id)
     print(render_markdown(pipeline_report))
     print(f"report written to {out_path}")
 

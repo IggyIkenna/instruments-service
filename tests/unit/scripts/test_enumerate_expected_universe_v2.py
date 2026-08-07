@@ -4197,8 +4197,10 @@ def test_oscillation_guard_inert_without_present_cols() -> None:
 # SPORTS_ENTITY_LEAGUE_COVERAGE mapped MATCHES/PREDICTIONS to ``None`` ("all
 # leagues") and ODDS wasn't even a key — so the enumerator had NO footystats
 # subscription gate at all and kept seeding fresh expected_unattempted rows
-# for PRED_NO_FOOTYSTATS leagues (CHILE_PRIMERA/K_LEAGUE_1/LIGA_MX/
-# ARGENTINA_PRIMERA + related cup/lower-division leagues) forever, regardless
+# for footystats-excluded leagues (at the time: CHILE_PRIMERA/K_LEAGUE_1/
+# LIGA_MX/ARGENTINA_PRIMERA + related cup/lower-division leagues; those 4 were
+# added to the footystats subscription 2026-08-07, see A_LEAGUE below for a
+# league still excluded) forever, regardless
 # of the fetch-loop write-gate (instruments-service@1af6c92, which only stops
 # NEW incidental captured writes) or how many times the non-covered-league
 # typing scripts were re-applied (their covered-league check is purely
@@ -4212,17 +4214,18 @@ def test_oscillation_guard_inert_without_present_cols() -> None:
 
 
 def test_sports_v2_footystats_excluded_league_yields_no_provider_coverage() -> None:
-    """A PRED_NO_FOOTYSTATS league (CHILE_PRIMERA) must never seed a fresh
+    """A footystats-excluded league (A_LEAGUE -- a SPORTS_STRUCTURAL_GAPS entry,
+    footystats doesn't carry it at any subscription tier) must never seed a fresh
     expected_unattempted row for MATCHES/PREDICTIONS/ODDS -- the entity-coverage
     gate must emit EXPECTED_NO_PROVIDER_COVERAGE (empty_confirmed) instead,
     for every one of the 3 footystats-backed data_types."""
     for dt in ("MATCHES", "PREDICTIONS", "ODDS"):
-        catalog = [_make_sports_entry(league_id="CHILE_PRIMERA", available_from="2024-01-01", available_to=None)]
+        catalog = [_make_sports_entry(league_id="A_LEAGUE", available_from="2024-01-01", available_to=None)]
         rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-06-05"), [dt], present_set=set()))
         assert len(rows) == 1, f"{dt}: expected exactly one row"
         assert rows[0].reason == "EXPECTED_NO_PROVIDER_COVERAGE", f"{dt}: {rows[0].reason!r}"
         assert rows[0].capture_status == "empty_confirmed"
-        assert rows[0].league_id == "CHILE_PRIMERA"
+        assert rows[0].league_id == "A_LEAGUE"
 
 
 def test_sports_v2_footystats_covered_league_still_seeds_normally() -> None:

@@ -269,7 +269,12 @@ def test_grain_cells_skip_requires_skip_signal(monkeypatch) -> None:
 # OKX-SWAP, OKX-FUTURES) to 3 (OKX-SPOT, OKX-SWAP, OKX-FUTURES), -1 net.
 # Verified via the same enumerate_cells + _dedupe_shard_targets call this
 # test itself makes.
-_PER_AG_TARGET_COUNTS = {"CEFI": 25, "DEFI": 101, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
+# DEFI 101->102 (2026-08-05): +1 for FLUID-PLASMA, added to UAC DeFi
+# denominator (unified-api-contracts). Verified via the same
+# enumerate_cells + _dedupe_shard_targets call this test itself makes.
+# DEFI 102->103 (2026-08-07): +1 for JUPITER-SOLANA, registered as live DeFi
+# venue in UAC and wired into _SOLANA_DEFI_VENUES in IS defi.py.
+_PER_AG_TARGET_COUNTS = {"CEFI": 25, "DEFI": 103, "TRADFI": 8, "SPORTS": 7, "PREDICTION": 2}
 
 
 def test_rule11_per_ag_dedup_target_counts_byte_unchanged() -> None:
