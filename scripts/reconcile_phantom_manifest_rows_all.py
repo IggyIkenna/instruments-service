@@ -168,6 +168,29 @@ _TRADFI_DATABENTO_PAIRED_SCHEMAS: dict[str, list[str]] = {
 # data_type probe alone decides real-vs-phantom.
 _VENUE_UNKNOWN_SENTINELS: frozenset[str] = frozenset({"UNKNOWN"})
 
+# Axis-10b (cross-bucket sports market-data probe, 2026-08-07): ``trades`` and
+# ``odds_horizon_bucket`` rows appear in the sports REFERENCE manifest
+# (instruments-store-sports) because sports routes all data_types to one canonical
+# manifest, but their real parquet bytes live in ``market-data-tick-sports``.
+# ``candidate_parquet_paths()`` only knows sports_reference/ paths → empty candidate
+# list → guaranteed phantom flag. The fix: probe these data_types against the
+# market-data-tick-sports bucket using the actual writer path templates.
+_SPORTS_CROSS_BUCKET_DATA_TYPES: frozenset[str] = frozenset({"trades", "odds_horizon_bucket"})
+# Per-pipeline_mode day-level prefix templates for raw odds ticks (trades).
+# Sourced from market-data-processing-service/scripts/reprocess_sports_odds.py
+# ``_CANONICAL_ODDS_PREFIX_TEMPLATES``.
+_SPORTS_TRADES_PREFIXES: list[str] = [
+    "raw_tick_data/by_date/day={date}/pipeline_mode=batch_odds_api/asset_group=sports/",
+    "raw_tick_data/by_date/day={date}/pipeline_mode=live_odds_api/asset_group=sports/",
+]
+# Day-level prefix for MDPS bucketed odds output (odds_horizon_bucket).
+# Sourced from reprocess_sports_odds.py ``_OUTPUT_DATE_PREFIX_TEMPLATE``.
+_SPORTS_OHB_DAY_PREFIX: str = (
+    "processed/by_date/day={date}"
+    "/pipeline_mode=batch_mdps_odds_horizon_bucket/asset_group=sports"
+    "/data_type=odds_horizon_bucket/"
+)
+
 
 def _defi_protocol_variants(venue: str) -> list[str]:
     """Return deduped list of venue spellings for DeFi.
@@ -285,6 +308,7 @@ def _audit_sports(
     df: pd.DataFrame,
     captured_idx: pd.Index,
     workers: int,
+    cloud: str = "gcp",
 ) -> dict[int, bool]:
     """Sports uses per-league + bare path layout — delegate to UAC SSOT.
 
@@ -295,6 +319,15 @@ def _audit_sports(
     ``bucket.blob(c).exists()`` probes — without that step every
     singleton row false-flags as phantom because it can't be in the
     day-partition listing by construction.
+
+    **Axis-10b — cross-bucket probe for sports market-data types**: ``trades``
+    and ``odds_horizon_bucket`` rows live in the reference manifest
+    (instruments-store-sports) but their real parquet bytes are in
+    ``market-data-tick-sports``.  ``candidate_parquet_paths()`` returns an
+    empty list for these data_types (no sports_reference/ template) → guaranteed
+    false-positive phantom flag under the reference-bucket path.  These rows are
+    routed here to the market-data bucket using the actual writer path templates
+    (see ``_SPORTS_CROSS_BUCKET_DATA_TYPES``).
     """
     from unified_api_contracts.sports import (
         candidate_parquet_paths,
@@ -314,6 +347,60 @@ def _audit_sports(
         for fut in as_completed([ex.submit(_list_day, d) for d in days]):
             day, blobs = fut.result()
             day_blobs[day] = blobs
+
+    # ----- Axis-10b: pre-fetch market-data-tick-sports listings -----
+    # For trades/odds_horizon_bucket rows, the parquet lives in a different
+    # bucket. Pre-fetch per-day listings from market-data-tick-sports so each
+    # row's probe is a cheap dict/set lookup (no per-row GCS calls).
+    dt_series = df.loc[captured_idx, "data_type"].fillna("").astype(str)
+    cb_mask = dt_series.isin(_SPORTS_CROSS_BUCKET_DATA_TYPES)
+    cb_idx = captured_idx[cb_mask]
+
+    # trades: day → True if any consumable ticks.parquet exists
+    trades_day_real: dict[str, bool] = {}
+    # odds_horizon_bucket: day → set of blob names under the OHB day prefix
+    ohb_day_blobs: dict[str, set[str]] = {}
+
+    if len(cb_idx) > 0:
+        mkt_bucket = resolve_bucket_name(cloud=cloud, kind="market-data", asset_group="sports")
+        logger.info(
+            "sports phantom (cross-bucket): %d market-data rows → %s",
+            len(cb_idx),
+            mkt_bucket,
+        )
+        cb_df = df.loc[cb_idx]
+        trades_days = sorted({str(d) for d in cb_df.loc[cb_df["data_type"] == "trades", "date"].unique()})
+        ohb_days = sorted({str(d) for d in cb_df.loc[cb_df["data_type"] == "odds_horizon_bucket", "date"].unique()})
+
+        def _list_trades_day(day: str) -> tuple[str, bool]:
+            for prefix in [t.format(date=day) for t in _SPORTS_TRADES_PREFIXES]:
+                for blob in client.list_blobs(mkt_bucket, prefix=prefix):
+                    if blob.name.endswith("ticks.parquet") and "_migrated_" not in blob.name:
+                        return day, True
+            return day, False
+
+        def _list_ohb_day(day: str) -> tuple[str, set[str]]:
+            prefix = _SPORTS_OHB_DAY_PREFIX.format(date=day)
+            return day, {
+                b.name for b in client.list_blobs(mkt_bucket, prefix=prefix) if b.name.endswith("bucketed.parquet")
+            }
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            trades_futs = [ex.submit(_list_trades_day, d) for d in trades_days]
+            ohb_futs = [ex.submit(_list_ohb_day, d) for d in ohb_days]
+            for fut in as_completed(trades_futs):
+                day, has_real = fut.result()
+                trades_day_real[day] = has_real
+            for fut in as_completed(ohb_futs):
+                day, blobs = fut.result()
+                ohb_day_blobs[day] = blobs
+
+        logger.info(
+            "sports cross-bucket summary: trades_days=%d (days_with_real=%d) ohb_days=%d",
+            len(trades_days),
+            sum(1 for v in trades_day_real.values() if v),
+            len(ohb_days),
+        )
 
     # Per-singleton-path existence cache — populated lazily as rows are
     # audited so we only probe each unique singleton path once.
@@ -345,6 +432,15 @@ def _audit_sports(
         if is_pre_launch_date(data_type, date):
             real_or_phantom[idx] = True
             _axis9_pre_coverage += 1
+            continue
+        # Axis-10b: market-data types probe market-data-tick-sports (pre-fetched above).
+        if data_type in _SPORTS_CROSS_BUCKET_DATA_TYPES:
+            if data_type == "trades":
+                real_or_phantom[idx] = trades_day_real.get(date, False)
+            else:  # odds_horizon_bucket
+                day_ohb = ohb_day_blobs.get(date, set())
+                league_needle = f"league_id={league_id}/"
+                real_or_phantom[idx] = any(league_needle in b for b in day_ohb)
             continue
         # Pass the row's pipeline_mode so the CANONICAL pipeline_mode= path is probed.
         # Post-Phase-3 migration the parquet lives at
@@ -1693,7 +1789,9 @@ def main() -> int:
     real_or_phantom: dict[int, bool] = {}
     if forward_pass_enabled and len(captured_idx) > 0:
         if args.asset_group == "sports":
-            real_or_phantom = _audit_sports(storage_client, bucket_name, df, captured_idx, args.workers)
+            real_or_phantom = _audit_sports(
+                storage_client, bucket_name, df, captured_idx, args.workers, cloud=args.cloud
+            )
         else:
             real_or_phantom = _audit_generic(
                 args.asset_group, storage_client, bucket_name, df, captured_idx, args.workers
@@ -1733,7 +1831,9 @@ def main() -> int:
         logger.info("Unphantom: re-validating %d previously phantom-flagged rows", len(phantom_flagged_idx))
         if len(phantom_flagged_idx) > 0:
             if args.asset_group == "sports":
-                rev = _audit_sports(storage_client, bucket_name, df, phantom_flagged_idx, args.workers)
+                rev = _audit_sports(
+                    storage_client, bucket_name, df, phantom_flagged_idx, args.workers, cloud=args.cloud
+                )
             else:
                 rev = _audit_generic(
                     args.asset_group, storage_client, bucket_name, df, phantom_flagged_idx, args.workers
