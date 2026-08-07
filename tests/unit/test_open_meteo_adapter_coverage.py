@@ -162,6 +162,64 @@ class TestOpenMeteoGetWeatherMatchWindow:
         # Should have keys for forecast_t24h, forecast_t0, and actual
         assert "forecast_t24h_ko_temp" in result or "actual_ko_temp" in result
 
+    @pytest.mark.asyncio
+    async def test_prev_runs_400_falls_back_to_actuals(self) -> None:
+        """Previous Runs API 400 must NOT abort the fetch — actuals must still be returned.
+
+        Root-cause fix for the 16,241 ClientResponseError rows (2024-01-03→2026-08-07):
+        the inner except block previously re-raised the error, causing the entire
+        get_weather_match_window call to fail instead of skipping forecasts and
+        continuing to fetch actual weather.
+        """
+        actual_hourly = {
+            "time": [f"2024-06-15T{h:02d}:00" for h in range(24)],
+            "temperature_2m": [18.0] * 24,
+            "precipitation": [0.0] * 24,
+            "wind_speed_10m": [12.0] * 24,
+            "relative_humidity_2m": [65] * 24,
+            "cloud_cover": [30] * 24,
+            "weather_code": [1] * 24,
+        }
+        call_count = 0
+
+        def mock_get(*_args: object, **_kwargs: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            resp = AsyncMock()
+            if call_count == 1:
+                # Simulate Previous Runs API 400 Bad Request
+                resp.status = 400
+                resp.raise_for_status = MagicMock(side_effect=Exception("400 Bad Request"))
+                resp.json = AsyncMock(return_value={})
+            else:
+                # Actual weather endpoint succeeds
+                resp.status = 200
+                resp.raise_for_status = MagicMock()
+                resp.json = AsyncMock(return_value={"hourly": actual_hourly})
+            resp.headers = {}
+            cm = MagicMock()
+            cm.__aenter__ = AsyncMock(return_value=resp)
+            cm.__aexit__ = AsyncMock(return_value=None)
+            return cm
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(side_effect=mock_get)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        adapter = OpenMeteoAdapter()
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            # Must not raise even though Previous Runs API returned 400
+            result = await adapter.get_weather_match_window(51.5, -0.1, "2024-06-15", kickoff_hour=15)
+
+        assert isinstance(result, dict)
+        # Actual weather must be present
+        assert "actual_ko_temp" in result
+        assert result["actual_ko_temp"] == 18.0
+        # Forecast keys absent (prev runs failed) — not populated, not an error
+        assert result.get("forecast_t24h_ko_temp") is None
+
 
 class TestOpenMeteoHelpers:
     def test_parse_weather_response_valid(self) -> None:

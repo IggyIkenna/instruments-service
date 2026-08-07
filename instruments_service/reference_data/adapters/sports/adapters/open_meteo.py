@@ -153,13 +153,12 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                                         results[f"{lead}_{hlabel}_{cname}"] = val
                     except Exception as exc:
                         logger.warning(
-                            "Previous Runs API failed for (%.2f, %.2f) on %s: %s",
+                            "Previous Runs API failed for (%.2f, %.2f) on %s: %s — skipping forecasts, fetching actuals",
                             venue_lat,
                             venue_lon,
                             date,
                             exc,
                         )
-                        raise
 
                 # 2. Actual weather across match window (archive for >90d, forecast for recent)
                 cutoff = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
