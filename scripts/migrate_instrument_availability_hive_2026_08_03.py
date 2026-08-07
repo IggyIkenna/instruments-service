@@ -396,6 +396,7 @@ def apply_asset_group(*, asset_group: str, workers: int = 32) -> ApplyResult:
 
 
 _FUTURES_CONTRACTS_IDENTITY_COLUMN = "contract_symbol"
+_MARKET_LIFECYCLE_IDENTITY_COLUMN = "market_id"
 _DEFAULT_IDENTITY_COLUMN = "raw_symbol"
 
 
@@ -406,13 +407,15 @@ def _identity_column_for(path: str) -> str:
     content_mismatch_2026_08_03.md): ``instrument_key`` is NOT a stable identity across writer
     generations (e.g. flat ``DERIBIT:FUTURE:BTC-27SEP19`` vs hive ``DERIBIT:FUTURE:BTC@INV-20190927``
     are the SAME instrument) -- ``raw_symbol`` (``contract_symbol`` for ``futures_contracts.parquet``,
-    a distinct 16-column schema with no ``raw_symbol``) is the stable cross-generation identity key.
+    a distinct 16-column schema with no ``raw_symbol``; ``market_id`` for ``market_lifecycle.parquet``
+    which has no ``raw_symbol`` column) is the stable cross-generation identity key.
     """
-    return (
-        _FUTURES_CONTRACTS_IDENTITY_COLUMN
-        if path.rsplit("/", 1)[-1] == "futures_contracts.parquet"
-        else _DEFAULT_IDENTITY_COLUMN
-    )
+    filename = path.rsplit("/", 1)[-1]
+    if filename == "futures_contracts.parquet":
+        return _FUTURES_CONTRACTS_IDENTITY_COLUMN
+    if filename == "market_lifecycle.parquet":
+        return _MARKET_LIFECYCLE_IDENTITY_COLUMN
+    return _DEFAULT_IDENTITY_COLUMN
 
 
 def _identity_set(data: bytes, column: str) -> frozenset[str]:
