@@ -99,7 +99,7 @@ def _extract_prediction_canonical_group(row: _orch.pd.Series) -> str:
         # composite id through made every lookup miss and silently routed
         # ~79% of daily Kalshi volume to OTHER since >=2026-07-12. Extract the
         # bare ticker (the trailing SYMBOL segment) before classifying.
-        instrument_key = str(row.get("instrument_key", "") or "")
+        instrument_key = str(row.get("instrument_key", "") or "")  # noqa: qg-empty-fallback — DataFrame row: NaN/None absent, empty → rsplit → "" ticker → classifier → OTHER
         ticker = instrument_key.rsplit(":", 1)[-1]
         group = _orch.classify_kalshi_to_canonical_group(ticker=ticker)
         return (group or _orch.CanonicalQuestionGroup.OTHER).value

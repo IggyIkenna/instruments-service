@@ -470,3 +470,266 @@ class TestResolveContentMismatches:
         mock_resolve.assert_not_called()
         assert result.flat_wins == 0
         assert result.ok
+
+
+# ---------------------------------------------------------------------------
+# todo 8 — market-bucket reclassify (DEFAULT-RULED 2026-08-06, option (a))
+# ---------------------------------------------------------------------------
+
+_PRED_MARKET_FLAT = "instrument_availability/by_date/day=2025-03-15/market=BTC/venue=POLYMARKET/instruments.parquet"
+_PRED_MARKET_FLAT_KALSHI = "instrument_availability/by_date/day=2025-03-15/market=ETH/venue=KALSHI/instruments.parquet"
+
+
+class TestPredictionMarketFlatRe:
+    def test_matches_market_flat_shape(self) -> None:
+        m = _mod._PREDICTION_MARKET_FLAT_RE.match(_PRED_MARKET_FLAT)
+        assert m is not None
+        day, market, venue, tail = m.groups()
+        assert day == "2025-03-15"
+        assert market == "BTC"
+        assert venue == "POLYMARKET"
+        assert tail == "instruments.parquet"
+
+    def test_does_not_match_already_hive(self) -> None:
+        assert _mod._PREDICTION_MARKET_FLAT_RE.match(_ALREADY_HIVE) is None
+
+    def test_does_not_match_flat_re_shape(self) -> None:
+        assert _mod._PREDICTION_MARKET_FLAT_RE.match(_CEFI_FLAT) is None
+
+    def test_does_not_match_group_first_shape(self) -> None:
+        assert _mod._PREDICTION_MARKET_FLAT_RE.match(_PRED_GROUP_FIRST_FLAT) is None
+
+
+class TestScanMarketShape:
+    def _mock_client(self, names: list[str]) -> MagicMock:
+        blobs = []
+        for n in names:
+            b = MagicMock()
+            b.name = n
+            blobs.append(b)
+        client = MagicMock()
+        client.list_blobs.side_effect = lambda bucket, prefix: [b for b in blobs if b.name.startswith(prefix)]
+        return client
+
+    def test_market_flat_goes_to_market_reclassify_not_candidates(self) -> None:
+        client = self._mock_client([_PRED_MARKET_FLAT, _PRED_POLY_FLAT])
+        result = _mod.scan(client, "instruments-store-prediction-prd", "prediction")
+        assert result.market_reclassify_count == 1
+        assert result.market_reclassify == [_PRED_MARKET_FLAT]
+        # _PRED_POLY_FLAT is the old flat shape (recognized by _FLAT_RE), becomes a regular candidate
+        assert result.candidate_count == 1
+
+    def test_market_flat_not_counted_as_unrecognized(self) -> None:
+        client = self._mock_client([_PRED_MARKET_FLAT])
+        result = _mod.scan(client, "instruments-store-prediction-prd", "prediction")
+        assert result.unrecognized == 0
+
+    def test_market_flat_not_recognized_for_non_prediction_asset_groups(self) -> None:
+        # market= is a prediction-only legacy shape; must not be misclassified for other asset_groups.
+        client = self._mock_client([_PRED_MARKET_FLAT])
+        result = _mod.scan(client, "instruments-store-cefi-prd", "cefi")
+        assert result.market_reclassify_count == 0
+        assert result.unrecognized == 1
+
+
+class TestClassifyMarketRowGroup:
+    @staticmethod
+    def _row(**kwargs: object) -> MagicMock:
+        row = MagicMock()
+        row.get = lambda k, default=None: kwargs.get(k, default)
+        return row
+
+    def test_polymarket_delegates_to_uac_classifier(self) -> None:
+        row = self._row(raw_symbol="bitcoin-up-or-down-2025-03-15", instrument_key="0xabc")
+        with patch.object(
+            _mod, "classify_polymarket_to_canonical_group", return_value=MagicMock(value="BTC_UP_DOWN_DAILY")
+        ) as mock_cls:
+            result = _mod._classify_market_row_group(row, "POLYMARKET")
+        mock_cls.assert_called_once_with(
+            title="", slug="bitcoin-up-or-down-2025-03-15", event_slug="", outcome="", condition_id="0xabc"
+        )
+        assert result == "BTC_UP_DOWN_DAILY"
+
+    def test_kalshi_strips_composite_key_before_classifying(self) -> None:
+        row = self._row(instrument_key="KALSHI:PREDICTION_MARKET:KXBTCD-25JUL30-B12345")
+        with patch.object(
+            _mod, "classify_kalshi_to_canonical_group", return_value=MagicMock(value="BTC_UP_DOWN_DAILY")
+        ) as mock_cls:
+            result = _mod._classify_market_row_group(row, "KALSHI")
+        mock_cls.assert_called_once_with(ticker="KXBTCD-25JUL30-B12345")
+        assert result == "BTC_UP_DOWN_DAILY"
+
+    def test_polymarket_none_return_defaults_to_other(self) -> None:
+        row = self._row(raw_symbol="unknown-slug", instrument_key="")
+        with patch.object(_mod, "classify_polymarket_to_canonical_group", return_value=None):
+            result = _mod._classify_market_row_group(row, "POLYMARKET")
+        assert result == _mod.CanonicalQuestionGroup.OTHER.value
+
+    def test_unknown_venue_defaults_to_other(self) -> None:
+        row = self._row(raw_symbol="something")
+        result = _mod._classify_market_row_group(row, "UNKNOWN_VENUE")
+        assert result == _mod.CanonicalQuestionGroup.OTHER.value
+
+
+class TestReclassifyOneMarketObject:
+    @staticmethod
+    def _parquet(rows: list[dict[str, object]]) -> bytes:
+        import pandas as pd
+
+        return pd.DataFrame(rows).to_parquet(index=False)
+
+    def test_writes_one_hive_target_per_group(self) -> None:
+        data = self._parquet(
+            [
+                {"raw_symbol": "btc-up-2025-03-15", "instrument_key": "0xabc"},
+                {"raw_symbol": "spx-up-2025-03-15", "instrument_key": "0xdef"},
+            ]
+        )
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", return_value=(data, 1)),
+            patch.object(
+                _mod,
+                "classify_polymarket_to_canonical_group",
+                side_effect=[
+                    MagicMock(value="BTC_UP_DOWN_DAILY"),
+                    MagicMock(value="SPX_UP_DOWN_DAILY"),
+                ],
+            ),
+            patch.object(_mod, "gcs_conditional_put", return_value=42) as mock_put,
+        ):
+            written, already_present, failed = _mod._reclassify_one_market_object("bkt", _PRED_MARKET_FLAT)
+        assert written == 2
+        assert already_present == 0
+        assert failed == []
+        assert mock_put.call_count == 2
+        # Verify both target paths contain the expected canonical_question_group
+        call_args = [c.args[0] for c in mock_put.call_args_list]
+        assert any("canonical_question_group=BTC_UP_DOWN_DAILY" in p for p in call_args)
+        assert any("canonical_question_group=SPX_UP_DOWN_DAILY" in p for p in call_args)
+
+    def test_already_present_when_conditional_put_returns_none(self) -> None:
+        data = self._parquet([{"raw_symbol": "btc-up", "instrument_key": "0xabc"}])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", return_value=(data, 1)),
+            patch.object(
+                _mod, "classify_polymarket_to_canonical_group", return_value=MagicMock(value="BTC_UP_DOWN_DAILY")
+            ),
+            patch.object(_mod, "gcs_conditional_put", return_value=None),
+        ):
+            written, already_present, failed = _mod._reclassify_one_market_object("bkt", _PRED_MARKET_FLAT)
+        assert written == 0
+        assert already_present == 1
+        assert failed == []
+
+    def test_download_failure_reported_as_failed(self) -> None:
+        with patch.object(_mod, "gcs_read_object_with_generation", side_effect=RuntimeError("network")):
+            written, already_present, failed = _mod._reclassify_one_market_object("bkt", _PRED_MARKET_FLAT)
+        assert written == 0
+        assert already_present == 0
+        assert len(failed) == 1
+        assert "download failed" in failed[0][2]
+
+    def test_vanished_source_reported_as_failed(self) -> None:
+        with patch.object(_mod, "gcs_read_object_with_generation", return_value=(None, 0)):
+            _written, _already_present, failed = _mod._reclassify_one_market_object("bkt", _PRED_MARKET_FLAT)
+        assert len(failed) == 1
+        assert "vanished" in failed[0][2]
+
+    def test_empty_dataframe_returns_zero_counts(self) -> None:
+        import pandas as pd
+
+        data = pd.DataFrame({"raw_symbol": [], "instrument_key": []}).to_parquet(index=False)
+        with patch.object(_mod, "gcs_read_object_with_generation", return_value=(data, 1)):
+            written, already_present, failed = _mod._reclassify_one_market_object("bkt", _PRED_MARKET_FLAT)
+        assert written == 0
+        assert already_present == 0
+        assert failed == []
+
+    def test_target_path_structure(self) -> None:
+        data = self._parquet([{"raw_symbol": "btc-up", "instrument_key": "0xabc"}])
+        captured_uris: list[str] = []
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", return_value=(data, 1)),
+            patch.object(
+                _mod, "classify_polymarket_to_canonical_group", return_value=MagicMock(value="BTC_UP_DOWN_DAILY")
+            ),
+            patch.object(
+                _mod, "gcs_conditional_put", side_effect=lambda uri, *a, **kw: captured_uris.append(uri) or 42
+            ),
+        ):
+            _mod._reclassify_one_market_object("bkt", _PRED_MARKET_FLAT)
+        assert len(captured_uris) == 1
+        uri = captured_uris[0]
+        assert "gs://bkt/" in uri
+        assert "day=2025-03-15" in uri
+        assert "pipeline_mode=batch_polymarket_clob" in uri
+        assert "asset_group=prediction" in uri
+        assert "venue=POLYMARKET" in uri
+        assert "canonical_question_group=BTC_UP_DOWN_DAILY" in uri
+        assert uri.endswith("instruments.parquet")
+
+    def test_write_failure_collected(self) -> None:
+        data = self._parquet([{"raw_symbol": "btc-up", "instrument_key": "0xabc"}])
+        with (
+            patch.object(_mod, "gcs_read_object_with_generation", return_value=(data, 1)),
+            patch.object(
+                _mod, "classify_polymarket_to_canonical_group", return_value=MagicMock(value="BTC_UP_DOWN_DAILY")
+            ),
+            patch.object(_mod, "gcs_conditional_put", side_effect=RuntimeError("quota")),
+        ):
+            written, _already_present, failed = _mod._reclassify_one_market_object("bkt", _PRED_MARKET_FLAT)
+        assert written == 0
+        assert len(failed) == 1
+        assert "write failed" in failed[0][2]
+
+
+class TestReclassifyMarketShapeObjects:
+    def test_aggregates_written_and_already_present(self) -> None:
+        scan_result = _mod.ScanResult(market_reclassify=[_PRED_MARKET_FLAT, _PRED_MARKET_FLAT_KALSHI])
+        with (
+            patch.object(_mod, "_bucket_for", return_value="bkt"),
+            patch.object(_mod, "get_storage_client"),
+            patch.object(_mod, "scan", return_value=scan_result),
+            patch.object(
+                _mod,
+                "_reclassify_one_market_object",
+                side_effect=[
+                    (2, 0, []),
+                    (0, 1, []),
+                ],
+            ),
+        ):
+            result = _mod.reclassify_market_shape_objects(asset_group="prediction", workers=2)
+        assert result.objects_processed == 2
+        assert result.groups_written == 2
+        assert result.groups_already_present == 1
+        assert result.ok
+
+    def test_failed_groups_collected(self) -> None:
+        scan_result = _mod.ScanResult(market_reclassify=[_PRED_MARKET_FLAT])
+        with (
+            patch.object(_mod, "_bucket_for", return_value="bkt"),
+            patch.object(_mod, "get_storage_client"),
+            patch.object(_mod, "scan", return_value=scan_result),
+            patch.object(
+                _mod,
+                "_reclassify_one_market_object",
+                return_value=(0, 0, [(_PRED_MARKET_FLAT, "BTC_UP_DOWN_DAILY", "boom")]),
+            ),
+        ):
+            result = _mod.reclassify_market_shape_objects(asset_group="prediction", workers=1)
+        assert len(result.groups_failed) == 1
+        assert not result.ok
+
+    def test_empty_market_reclassify_list_returns_early(self) -> None:
+        scan_result = _mod.ScanResult()
+        with (
+            patch.object(_mod, "_bucket_for", return_value="bkt"),
+            patch.object(_mod, "get_storage_client"),
+            patch.object(_mod, "scan", return_value=scan_result),
+            patch.object(_mod, "_reclassify_one_market_object") as mock_reclassify,
+        ):
+            result = _mod.reclassify_market_shape_objects(asset_group="prediction", workers=1)
+        mock_reclassify.assert_not_called()
+        assert result.objects_processed == 0
+        assert result.ok

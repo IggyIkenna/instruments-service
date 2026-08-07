@@ -81,7 +81,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 import pandas as pd
+from unified_api_contracts.predictions import (
+    CanonicalQuestionGroup,
+    classify_kalshi_to_canonical_group,
+    classify_polymarket_to_canonical_group,
+)
 from unified_trading_library import (
+    gcs_conditional_put,
     gcs_copy_object,
     gcs_describe_object,
     gcs_read_object_with_generation,
@@ -137,6 +143,21 @@ _PREDICTION_LIFECYCLE_DAY_GROUP_VENUE_FLAT_RE = re.compile(
     rf"^{re.escape(MARKET_LIFECYCLE_ROOT)}/day=([^/]+)/group=([^/]+)/venue=([^/]+)/(.+)$"
 )
 
+# Prediction market-bucket FLAT shape (todo 8 of instrument_availability_hive_migration_
+# unrecognized_shapes_and_content_mismatch_2026_08_03.md): ``<root>/day={D}/market={M}/venue={V}/<tail>``
+# (``market=BTC``/``market=ETH``/``market=OTHER``, ~12,463 objects sampled from 2025-03). Predates
+# the ``canonical_question_group`` bundling scheme entirely — no ``canonical_question_group`` column in
+# the parquet. A single market-bucket file is COARSER than one canonical group (a ``market=BTC`` file
+# can contain rows that classify to ``BTC_UP_DOWN_DAILY``, ``BTC_UP_DOWN_HOURLY``,
+# ``BTC_PRICE_RANGE_DAILY``, etc. simultaneously) — a simple path rename is NOT safe; this shape
+# requires content-level reclassification (option (a), DEFAULT-RULED 2026-08-06): download, classify
+# each row via ``_classify_market_row_group``, group by ``canonical_question_group``, write one hive
+# target per group. This shape is NOT handled by ``hive_target_for`` (which returns a single target
+# path) — use ``reclassify_market_shape_objects`` instead.
+_PREDICTION_MARKET_FLAT_RE = re.compile(
+    rf"^{re.escape(INSTRUMENT_AVAILABILITY_ROOT)}/day=([^/]+)/market=([^/]+)/venue=([^/]+)/(.+)$"
+)
+
 
 def _bucket_for(asset_group: str) -> str:
     if asset_group == "prediction":
@@ -158,6 +179,32 @@ def _pipeline_mode_for(root: str, asset_group: str, venue: str) -> str:
     if asset_group == "sports" and venue_upper == "API_FOOTBALL":
         return "batch_api_football"
     return "batch_instruments_service"
+
+
+def _classify_market_row_group(row: pd.Series, venue_upper: str) -> str:
+    """Map one row from a legacy ``market=`` flat parquet to its ``canonical_question_group`` value.
+
+    Mirrors ``instruments_service.engine.orchestrator.prediction._extract_prediction_canonical_group``
+    but imports UAC classifiers directly, avoiding the service-package dependency.
+
+    For POLYMARKET rows: classifies via ``classify_polymarket_to_canonical_group`` on ``raw_symbol``
+    (the slug-prefix rule covers ~95% of real Polymarket slugs) + ``instrument_key`` (condition_id
+    override path). For KALSHI rows: extracts the bare ticker from ``instrument_key`` and classifies
+    via ``classify_kalshi_to_canonical_group``. All other venues default to ``OTHER``.
+    """
+    if venue_upper == "POLYMARKET":
+        slug = str(row.get("raw_symbol", "") or "")  # noqa: qg-empty-fallback — DataFrame row: NaN/None legitimately absent, empty string == "no data" for classifier
+        condition_id = str(row.get("instrument_key", "") or "")  # noqa: qg-empty-fallback — same: NaN/None absent, empty == "no data"
+        group = classify_polymarket_to_canonical_group(
+            title="", slug=slug, event_slug="", outcome="", condition_id=condition_id
+        )
+        return (group or CanonicalQuestionGroup.OTHER).value
+    if venue_upper == "KALSHI":
+        instrument_key = str(row.get("instrument_key", "") or "")  # noqa: qg-empty-fallback — DataFrame row: NaN/None absent, empty → rsplit → "" ticker → classifier → OTHER
+        ticker = instrument_key.rsplit(":", 1)[-1]
+        group = classify_kalshi_to_canonical_group(ticker=ticker)
+        return (group or CanonicalQuestionGroup.OTHER).value
+    return CanonicalQuestionGroup.OTHER.value
 
 
 def hive_target_for(flat_path: str, asset_group: str) -> str | None:
@@ -201,10 +248,18 @@ class ScanResult:
     candidates: list[tuple[str, str]] = field(default_factory=list)  # (src_path, dst_path)
     already_hive: int = 0
     unrecognized: int = 0
+    # Prediction market-bucket flat shapes (day=/market=/venue=) — recognized but require content-level
+    # reclassification (1 src -> N hive targets, one per canonical_question_group); NOT added to
+    # candidates (which expect a single dst per src). Use reclassify_market_shape_objects to process.
+    market_reclassify: list[str] = field(default_factory=list)
 
     @property
     def candidate_count(self) -> int:
         return len(self.candidates)
+
+    @property
+    def market_reclassify_count(self) -> int:
+        return len(self.market_reclassify)
 
 
 def _scan_prefixes_for(asset_group: str) -> list[str]:
@@ -223,6 +278,11 @@ def scan(client: object, bucket: str, asset_group: str) -> ScanResult:
             if "/pipeline_mode=" in name:
                 result.already_hive += 1
                 continue
+            # Market-bucket shape requires content-level reclassification (1:N src→dst, one hive
+            # target per canonical_question_group). Cannot be added to candidates (1:1 only).
+            if asset_group == "prediction" and _PREDICTION_MARKET_FLAT_RE.match(name):
+                result.market_reclassify.append(name)
+                continue
             target = hive_target_for(name, asset_group)
             if target is None:
                 result.unrecognized += 1
@@ -237,11 +297,17 @@ def dry_run(*, asset_group: str) -> int:
     t0 = time.monotonic()
     result = scan(client, bucket, asset_group)
     elapsed = time.monotonic() - t0
+    market_line = (
+        f"\n  market-shape (need reclassify):  {result.market_reclassify_count:,}"
+        if result.market_reclassify_count
+        else ""
+    )
     print(
         f"=== DRY-RUN asset_group={asset_group} bucket={bucket} ({elapsed:.1f}s) ===\n"
         f"  flat candidates (need copy-up): {result.candidate_count:,}\n"
         f"  already full-hive:              {result.already_hive:,}\n"
-        f"  unrecognized shapes (ignored):  {result.unrecognized:,}",
+        f"  unrecognized shapes (ignored):  {result.unrecognized:,}"
+        f"{market_line}",
         flush=True,
     )
     return 0
@@ -447,6 +513,105 @@ def resolve_content_mismatches(*, asset_group: str, workers: int = 16) -> Resolv
     return result
 
 
+@dataclass
+class ReclassifyMarketResult:
+    asset_group: str
+    objects_processed: int = 0
+    groups_written: int = 0
+    groups_already_present: int = 0
+    groups_failed: list[tuple[str, str, str | None]] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.groups_failed
+
+
+def _reclassify_one_market_object(bucket: str, src: str) -> tuple[int, int, list[tuple[str, str, str | None]]]:
+    """Content-level reclassify one ``market=`` flat object into hive targets.
+
+    Downloads the source parquet, classifies each row via ``_classify_market_row_group``, groups
+    rows by ``canonical_question_group``, and writes each group to its hive target via
+    ``gcs_conditional_put(if_generation_match=0)`` (create-only-if-absent — never overwrites an
+    existing hive target, since existing content from a post-2026-07-21 writer run is authoritative
+    over this ~2025-03 era snapshot).
+
+    Returns ``(groups_written, groups_already_present, failed_details)`` where ``failed_details``
+    is a list of ``(src, group, error_message)`` triples.
+    """
+    src_uri = f"gs://{bucket}/{src}"
+    try:
+        data, _ = gcs_read_object_with_generation(src_uri)
+    except Exception as exc:
+        return 0, 0, [(src, "ALL", f"download failed: {type(exc).__name__}: {exc}")]
+    if data is None:
+        return 0, 0, [(src, "ALL", "source object vanished before download")]
+    try:
+        df = pd.read_parquet(io.BytesIO(data))
+    except Exception as exc:
+        return 0, 0, [(src, "ALL", f"parquet parse failed: {type(exc).__name__}: {exc}")]
+    if df.empty:
+        return 0, 0, []
+
+    m = _PREDICTION_MARKET_FLAT_RE.match(src)
+    if m is None:
+        return 0, 0, [(src, "ALL", "path no longer matches _PREDICTION_MARKET_FLAT_RE")]
+    day, _market, venue, tail = m.groups()
+    venue_upper = venue.upper()
+    pipeline_mode = _pipeline_mode_for(INSTRUMENT_AVAILABILITY_ROOT, "prediction", venue)
+
+    group_labels = df.apply(lambda row: _classify_market_row_group(row, venue_upper), axis=1)
+
+    written = already_present = 0
+    failed: list[tuple[str, str, str | None]] = []
+    for group_name, group_df in df.groupby(group_labels, sort=False):
+        dst = (
+            f"{INSTRUMENT_AVAILABILITY_ROOT}/day={day}/pipeline_mode={pipeline_mode}/"
+            f"asset_group=prediction/venue={venue}/canonical_question_group={group_name}/{tail}"
+        )
+        dst_uri = f"gs://{bucket}/{dst}"
+        try:
+            group_bytes = group_df.reset_index(drop=True).to_parquet(index=False)
+            gen = gcs_conditional_put(dst_uri, group_bytes, if_generation_match=0)
+            if gen is None:
+                already_present += 1
+            else:
+                written += 1
+        except Exception as exc:
+            failed.append((src, str(group_name), f"write failed: {type(exc).__name__}: {exc}"))
+
+    return written, already_present, failed
+
+
+def reclassify_market_shape_objects(*, asset_group: str, workers: int = 16) -> ReclassifyMarketResult:
+    """Content-level reclassify all ``market=`` flat objects in *asset_group*'s bucket.
+
+    Scans for objects matching ``_PREDICTION_MARKET_FLAT_RE``, then for each: downloads + parses the
+    parquet, classifies every row by ``canonical_question_group``, and writes one hive-target parquet
+    per group (create-only-if-absent via ``gcs_conditional_put(if_generation_match=0)`` — existing hive
+    targets from post-2026-07-21 writer runs are NOT overwritten).
+    """
+    bucket = _bucket_for(asset_group)
+    client = get_storage_client()
+    scanned = scan(client, bucket, asset_group)
+    srcs = scanned.market_reclassify
+    result = ReclassifyMarketResult(asset_group=asset_group)
+    if not srcs:
+        print(f"  no market-shape objects found in {bucket}", flush=True)
+        return result
+    print(f"  reclassifying {len(srcs):,} market-shape objects in {bucket}...", flush=True)
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = [pool.submit(_reclassify_one_market_object, bucket, src) for src in srcs]
+        for done, fut in enumerate(as_completed(futures), start=1):
+            written, already_present, failed = fut.result()
+            result.objects_processed += 1
+            result.groups_written += written
+            result.groups_already_present += already_present
+            result.groups_failed.extend(failed)
+            if done == 1 or done % 500 == 0:
+                print(f"  progress: {done:,}/{len(srcs):,} objects processed", flush=True)
+    return result
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--asset-group", required=True, choices=ASSET_GROUPS)
@@ -459,7 +624,35 @@ def main() -> int:
         help="Resolve todo-4's ruled 'superset wins' content_mismatch population instead of the copy-up "
         "(requires --apply-prod --confirm-prod-write; downloads + parses both sides per pair).",
     )
+    ap.add_argument(
+        "--reclassify-market-shape",
+        action="store_true",
+        help="Content-level reclassify the prediction market-bucket (day=/market=/venue=) flat shape "
+        "into canonical hive targets (todo 8, DEFAULT-RULED 2026-08-06 option (a)). "
+        "Downloads + parses each source parquet, classifies rows by canonical_question_group, writes "
+        "one hive target per group (create-only-if-absent). "
+        "Requires --apply-prod --confirm-prod-write; --asset-group must be 'prediction'.",
+    )
     args = ap.parse_args()
+
+    if args.apply_prod and args.confirm_prod_write and args.reclassify_market_shape:
+        if args.asset_group != "prediction":
+            print("ERROR: --reclassify-market-shape is only valid for --asset-group prediction", flush=True)
+            return 1
+        t0 = time.monotonic()
+        rr = reclassify_market_shape_objects(asset_group=args.asset_group, workers=args.workers)
+        elapsed = time.monotonic() - t0
+        print(
+            f"\n=== RECLASSIFY MARKET SHAPE asset_group={rr.asset_group} ({elapsed:.1f}s) ===\n"
+            f"  objects_processed:    {rr.objects_processed:,}\n"
+            f"  groups_written:       {rr.groups_written:,}\n"
+            f"  groups_already_pres.: {rr.groups_already_present:,}\n"
+            f"  groups_failed:        {len(rr.groups_failed):,}",
+            flush=True,
+        )
+        if rr.groups_failed:
+            print(f"  !!! FAILED: {rr.groups_failed[:5]}")
+        return 0 if rr.ok else 1
 
     if args.apply_prod and args.confirm_prod_write and args.resolve_content_mismatch:
         t0 = time.monotonic()
