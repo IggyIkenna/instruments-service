@@ -45,6 +45,7 @@ from .adapters.defi.fluid import FluidReferenceDataAdapter
 from .adapters.defi.idle import IdleReferenceDataAdapter
 from .adapters.defi.jito import JitoReferenceDataAdapter
 from .adapters.defi.jito_restaking import JitoRestakingReferenceDataAdapter
+from .adapters.defi.jupiter import JupiterReferenceDataAdapter
 from .adapters.defi.kamino import KaminoReferenceDataAdapter
 from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
@@ -160,6 +161,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "idle": IdleReferenceDataAdapter,
     "jito": JitoReferenceDataAdapter,
     "jito_restaking": JitoRestakingReferenceDataAdapter,
+    "jupiter": JupiterReferenceDataAdapter,
     "kelpdao": KelpDaoReferenceDataAdapter,
     "kamino": KaminoReferenceDataAdapter,
     "karak": KarakReferenceDataAdapter,
@@ -274,6 +276,7 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     # Solana adapters use public REST APIs (no API key needed)
     # "drift" removed 2026-07-16 (operator ruling: all Solana perp DEXes
     # dropped except Jupiter, not integrated).
+    "jupiter": "",  # Jupiter lite API (lite-api.jup.ag) — public, no API key needed
     "kamino": "",
     "raydium": "",
     "orca": "",
@@ -402,6 +405,7 @@ _DEFI_GRAPH_ADAPTERS: frozenset[str] = frozenset(
         # Solana adapters
         # "drift" removed 2026-07-16 (operator ruling: all Solana perp DEXes
         # dropped except Jupiter, not integrated).
+        "jupiter",
         "kamino",
         "raydium",
         "orca",

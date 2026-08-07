@@ -193,12 +193,12 @@ _STATIC_DEFI_VENUES: list[str] = [
 # dropped except Jupiter, not integrated). SSOT: unified-trading-pm/codex/
 # 04-architecture/solana-defi-coverage.md.
 _SOLANA_DEFI_VENUES: list[str] = [
+    "JUPITER-SOLANA",
     "KAMINO-SOLANA",
     "RAYDIUM-SOLANA",
     "ORCA-SOLANA",
     "MARINADE-SOLANA",
     "JITO-SOLANA",
-    # Jupiter is execution-only (swap aggregator), not instrument discovery.
     # MarginFi + Solend Solana lending adapters (2026-07-09) — real public
     # REST/JSON APIs, now IS-producible (marginfi.py / solend.py).
     "MARGINFI-SOLANA",
