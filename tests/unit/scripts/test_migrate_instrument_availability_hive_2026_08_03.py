@@ -338,6 +338,11 @@ class TestIdentityColumnFor:
     def test_instruments_parquet_uses_raw_symbol(self) -> None:
         assert _mod._identity_column_for(_CEFI_FLAT) == "raw_symbol"
 
+    def test_market_lifecycle_parquet_uses_market_id(self) -> None:
+        # market_lifecycle.parquet has no raw_symbol column (schema: market_id,
+        # canonical_question_group, ...) — must not fall back to raw_symbol default.
+        assert _mod._identity_column_for(_PRED_LIFECYCLE_DAY_GROUP_VENUE_FLAT_KALSHI) == "market_id"
+
 
 class TestIdentitySet:
     def test_extracts_non_null_values(self) -> None:
