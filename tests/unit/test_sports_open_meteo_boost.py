@@ -51,9 +51,16 @@ class TestGetWeatherMatchWindow:
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
-    async def test_previous_runs_api_exception_propagates(self) -> None:
-        """Lines 201-215: Previous Runs API raises → warning + re-raise (attempted_failed, not a
-        silent partial result — see adapter-dead-code-and-fallback-ban.md rule 2)."""
+    async def test_previous_runs_api_exception_does_not_abort_fetch(self) -> None:
+        """Previous Runs API raises → warning logged, code continues to actual-weather fetch.
+
+        The prior test asserted call_count==1 (exception propagated, actual weather never
+        attempted). That was the bug: the inner except had a spurious `raise` that aborted the
+        whole fetch for 16,241 shards (2024-01-03→2026-08-07). Fix: remove the re-raise so the
+        code falls through to the archive/forecast endpoint, as the comment at line 136 always
+        described. When actual weather ALSO fails (as in this test's mock), the failure propagates
+        via the outer except — but only after attempting actual weather (call_count==2).
+        """
         adapter = _make_adapter()
 
         cm = MagicMock()
@@ -65,7 +72,7 @@ class TestGetWeatherMatchWindow:
         async def retry_side_effect(session: object, url: str, **kwargs: object) -> object:
             nonlocal call_count
             call_count += 1
-            # Previous Runs API call fails
+            # Both Previous Runs API and actual weather fail in this test
             raise ConnectionError("previous runs down")
 
         with (
@@ -79,7 +86,8 @@ class TestGetWeatherMatchWindow:
                 venue_lat=51.5, venue_lon=-0.1, date="2026-01-01"
             )
 
-        assert call_count == 1
+        # call_count==2: Previous Runs API tried first (raises, no abort), then actual weather tried
+        assert call_count == 2
         mock_emit.assert_called_once()
 
     @pytest.mark.asyncio
