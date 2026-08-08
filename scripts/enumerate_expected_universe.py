@@ -304,7 +304,10 @@ def _sports_data_types() -> list[str]:
 # ``unified-trading-pm/plans/active/sports_data_sources_canonical_completion_2026_07_13.md``
 # §1 "mdps_odds_horizon_bucket expected-universe grain realignment".
 _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE: dict[str, str] = {
-    "ODDS_HORIZON_BUCKET": "odds_horizon_bucket",
+    # odds_horizon_bucket: UAC key is now lowercase (sports_taxonomy_p1, 2026-08-08);
+    # MDPS writer already stamps lowercase "odds_horizon_bucket" on disk — identity
+    # mapping kept for explicitness.
+    "odds_horizon_bucket": "odds_horizon_bucket",
     # Fixtures manifest atom migration (instruments-service@e19c5a7a,
     # sports_closeout_batch1_ao_ready_2026_07_24.md todo 1) moved every real
     # writer/reader from the legacy "FIXTURES" literal to "FIXTURES_SCHEDULE" —
@@ -314,7 +317,9 @@ _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE: dict[str, str] = {
     # "FIXTURES" expected_unattempted rows daily, growing the restamp's residual
     # from 55,233 to 100,801 in 2 days even after the sports_fixture_status_refresh
     # trigger leak (instruments-service@47c1ffb3) was fixed.
-    "FIXTURES": "FIXTURES_SCHEDULE",
+    # Key lowercased 2026-08-08 (sports_taxonomy_p1): UAC axis key is now "fixtures".
+    # Value stays "fixtures_schedule" — IS fixture writer uses this atom name.
+    "fixtures": "fixtures_schedule",
 }
 
 
@@ -362,7 +367,9 @@ def _sports_manifest_data_type(dt: str) -> str:
 # ``unified-trading-pm/plans/active/sports_data_sources_canonical_completion_2026_07_13.md``
 # §1 (venue-grain follow-up) for the full diagnosis + before/after counts.
 _SPORTS_MANIFEST_VENUE_OVERRIDE: dict[str, str] = {
-    "ODDS_HORIZON_BUCKET": "ODDS_API",
+    # Key lowercased 2026-08-08 (sports_taxonomy_p1): UAC axis key is now lowercase.
+    # Value "ODDS_API" stays — it is a venue token, not a data_type.
+    "odds_horizon_bucket": "ODDS_API",
 }
 
 
@@ -2156,7 +2163,7 @@ _UNDERSTAT_FIXTURES_TPL = "sports_reference/by_date/day={day}/entity=fixtures/fi
 # read per artifact (single-walk-safe), so it applies on EVERY window incl.
 # full-history runs — no ``_MATCHDAY_INDEX_MAX_DAYS`` bound needed.
 _AF_TRUTHSET_PREFIX = "_audits/fixtures_truthset_"
-_AF_FIXTURES_DATA_TYPE = "FIXTURES"
+_AF_FIXTURES_DATA_TYPE = "fixtures"
 
 # Producer-stamped run timestamp embedded in every truthset artifact name
 # (``audit_fixtures_via_api_football.py``: ``run_ts =
