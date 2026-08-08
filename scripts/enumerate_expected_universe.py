@@ -304,6 +304,8 @@ def _sports_data_types() -> list[str]:
 # ``unified-trading-pm/plans/active/sports_data_sources_canonical_completion_2026_07_13.md``
 # §1 "mdps_odds_horizon_bucket expected-universe grain realignment".
 _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE: dict[str, str] = {
+    # Legacy uppercase UAC keys → on-disk manifest strings (pre-P1 entries kept for
+    # safety during any callers still using old uppercase keys).
     "ODDS_HORIZON_BUCKET": "odds_horizon_bucket",
     # Fixtures manifest atom migration (instruments-service@e19c5a7a,
     # sports_closeout_batch1_ao_ready_2026_07_24.md todo 1) moved every real
@@ -315,6 +317,31 @@ _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE: dict[str, str] = {
     # from 55,233 to 100,801 in 2 days even after the sports_fixture_status_refresh
     # trigger leak (instruments-service@47c1ffb3) was fixed.
     "FIXTURES": "FIXTURES_SCHEDULE",
+    # P1 2026-08-08: UAC axis keys lowercased (operator ruling). The manifest data
+    # still carries uppercase strings until P2 corpus migration. These entries
+    # translate the new lowercase UAC keys → unchanged uppercase manifest strings.
+    # Drop each entry only after P2 verifies the on-disk atom has been migrated.
+    "fixtures": "FIXTURES_SCHEDULE",  # same as FIXTURES above — maps to new atom
+    "standings": "STANDINGS",
+    "matches": "MATCHES",
+    "player_stats": "PLAYER_STATS",
+    "injuries": "INJURIES",
+    "fixture_events": "FIXTURE_EVENTS",
+    "fixture_stats": "FIXTURE_STATS",
+    "fixture_lineups": "FIXTURE_LINEUPS",
+    "weather": "WEATHER",
+    "predictions": "PREDICTIONS",
+    "xg": "XG",
+    "xg_shots": "XG_SHOTS",
+    "teams": "TEAMS",
+    "player_values": "PLAYER_VALUES",
+    "sfi_progressive_stats": "SFI_PROGRESSIVE_STATS",
+    "fixtures_schedule": "FIXTURES_SCHEDULE",
+    "fixtures_outcomes": "FIXTURES_OUTCOMES",
+    # odds_horizon_bucket is ALREADY lowercase on-disk (pre-P1 exception)
+    "odds_horizon_bucket": "odds_horizon_bucket",
+    # odds manifest atom stays uppercase until P2
+    "odds": "ODDS",
 }
 
 
@@ -328,7 +355,7 @@ def _sports_manifest_data_type(dt: str) -> str:
     every UAC lookup (``SPORTS_DATA_TYPE_TO_SOURCE``,
     ``_RETIRED_SPORTS_DATA_TYPES``, ``get_source_coverage_start``,
     ``get_entity_league_coverage``, ``is_expected_for_source``) stays keyed on
-    the ORIGINAL UAC-uppercase ``dt``.
+    the lowercase UAC ``dt`` (post-P1 2026-08-08).
     """
     return _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE.get(dt, dt)
 
@@ -2156,7 +2183,7 @@ _UNDERSTAT_FIXTURES_TPL = "sports_reference/by_date/day={day}/entity=fixtures/fi
 # read per artifact (single-walk-safe), so it applies on EVERY window incl.
 # full-history runs — no ``_MATCHDAY_INDEX_MAX_DAYS`` bound needed.
 _AF_TRUTHSET_PREFIX = "_audits/fixtures_truthset_"
-_AF_FIXTURES_DATA_TYPE = "FIXTURES"
+_AF_FIXTURES_DATA_TYPE = "fixtures"  # lowercase post-P1 (UAC axis key)
 
 # Producer-stamped run timestamp embedded in every truthset artifact name
 # (``audit_fixtures_via_api_football.py``: ``run_ts =
