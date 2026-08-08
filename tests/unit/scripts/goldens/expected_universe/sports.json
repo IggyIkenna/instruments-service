@@ -1,7 +1,7 @@
 {
   "asset_group": "sports",
   "captured_at": "2026-08-08",
-  "tuple_count": 33,
+  "tuple_count": 31,
   "tuples": [
     ["BET888SPORT", "odds", "trades"],
     ["BETFAIR_EX_EU", "odds", "trades"],
@@ -25,8 +25,6 @@
     ["NOVIG", "odds", "trades"],
     ["ONEXBET", "odds", "trades"],
     ["PADDYPOWER", "odds", "trades"],
-    ["PINNACLE", "odds", "odds_movement"],
-    ["PINNACLE", "odds", "odds_snapshot"],
     ["PINNACLE", "odds", "trades"],
     ["PROPHETX", "odds", "trades"],
     ["SKYBET", "odds", "trades"],
