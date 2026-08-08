@@ -682,6 +682,17 @@ SAFE-TO-DELETE audit + delete-list script, same pattern as MTDS's own
 in this pass — out of THIS audit's "naming convention" scope (nothing here is mis-named; it's a write path that was
 never read) and a genuinely separate, large, operator-notify-worthy finding on its own.
 
+**CORRECTION (2026-08-08, per `plans/active/issues/backfill_smoke_write_path_canonical_audit_2026_07_20.md` todo
+3): "stopped ~2026-06-30 ... already dead going-forward" no longer describes the live write path.**
+`plans/archive/issues/instrument_availability_hive_canonicalisation_2026_07_21.md` (operator HARD RULE R2) moved
+the LIVE `instrument_availability` writer — every asset_group, defi included — onto the full canonical hive shape
+via the sink PREFIX mechanism, in force since `instruments-service@a9be6ce9` (2026-07-22). Since that date the
+hive-shaped tree is the ONLY shape written going forward (the flat tree is the one that stopped, not the hive
+one); this Finding's "orphaned duplicate" framing described the pre-2026-07-22 state only. The reader-side gap
+this cutover briefly created for MTDS's own DeFi catalogue consumer (`_instruments_metadata.py`, silently
+returning empty for ~4 days) was found and fully fixed — see
+`plans/active/issues/mtds_instruments_metadata_hive_canonicalisation_reader_gap_2026_07_26.md`.
+
 ---
 
 ## DEX pools

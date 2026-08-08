@@ -30,10 +30,20 @@ the LEGACY object = 2,826 (OPTION 2,566 / COMBO 228 / FUTURE 32) — exactly wha
 ``plans/active/issues/backfill_smoke_write_path_canonical_audit_2026_07_20.md`` Section 3b): "CANONICAL" above
 describes the state of the 2026-07-16 tradfi migration's OWN snapshot, not the ongoing live write path.** The
 live ``instrument_availability`` writer (``instruments_service/engine/orchestrator/process_write.py`` +
-``writers.py``) emits the FLAT ``day=/venue=`` shape today, same as before and after this migration — the
+``writers.py``) emitted the FLAT ``day=/venue=`` shape at the time this correction was written (2026-07-30) — the
 "canonical, source-aware" hive path this script prefers only ever got populated for tradfi by the one-time
-2026-07-16 batch migration itself, not by any ongoing capture. Do not read this docstring as evidence the live
-writer emits the hive shape; it does not.
+2026-07-16 batch migration itself, not by any ongoing capture, AS OF THEN.
+
+**SECOND CORRECTION (2026-08-08, per
+``plans/active/issues/backfill_smoke_write_path_canonical_audit_2026_07_20.md`` todo 3): the correction above is
+itself now stale.** The live writer was fixed the day BEFORE that correction was written —
+``plans/archive/issues/instrument_availability_hive_canonicalisation_2026_07_21.md`` (operator HARD RULE R2) moved
+every ``instrument_availability`` write, tradfi included, onto the full canonical hive shape via the sink PREFIX
+mechanism, in force since ``instruments-service@a9be6ce9`` (2026-07-22). So as of that date the live writer DOES
+emit the hive shape, for every asset_group, not only via one-time migrations. This script's own repair target —
+objects written by the 2026-07-16 migration and any tradfi capture before 2026-07-22 — remains at the flat legacy
+path; that part of this docstring is unaffected. Read the two corrections together, not either in isolation: flat
+before 2026-07-22, hive from 2026-07-22 onward.
 
 =============================================================================================
 WHY THE TWO OBVIOUS REPAIRS ARE BOTH WRONG (each measured, 2026-07-17 — re-verify at run time)
