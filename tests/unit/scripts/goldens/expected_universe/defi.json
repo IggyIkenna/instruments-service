@@ -1,6 +1,6 @@
 {
   "asset_group": "defi",
-  "captured_at": "2026-08-05",
+  "captured_at": "2026-08-08",
   "tuple_count": 360,
   "tuples": [
     ["AAVE_V3-ARBITRUM", "a_token", "flash_loan_events"],

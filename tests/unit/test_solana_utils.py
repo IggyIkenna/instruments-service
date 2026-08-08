@@ -12,6 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
+from instruments_service.reference_data.adapters.defi._solana_pool_discovery import (
+    _load_discovered_pools,
+    _save_discovered_pools,
+    discover_program_pool_accounts,
+)
 from instruments_service.reference_data.adapters.defi._solana_utils import (
     SOLANA_PROTOCOL_DEPLOY_DATES,
     SolanaCacheSession,
@@ -19,13 +24,10 @@ from instruments_service.reference_data.adapters.defi._solana_utils import (
     _get_solana_rpc_url,
     _is_public_rpc,
     _load_cache,
-    _load_discovered_pools,
     _save_cache,
-    _save_discovered_pools,
     _update_cache,
     _use_fast_resolve,
     batch_resolve_creation_timestamps,
-    discover_program_pool_accounts,
     fill_solana_cache,
     get_account_creation_timestamp,
     get_protocol_floor_date,
@@ -707,7 +709,7 @@ class TestLoadDiscoveredPools:
                 return_value=mock_storage,
             ),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._get_gcs_bucket",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._get_gcs_bucket",
                 return_value="test-bucket",
             ),
         ):
@@ -723,7 +725,7 @@ class TestLoadDiscoveredPools:
                 side_effect=ImportError("no GCS"),
             ),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._POOL_DISCOVERY_LOCAL_DIR",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._POOL_DISCOVERY_LOCAL_DIR",
                 tmp_path,
             ),
         ):
@@ -737,7 +739,7 @@ class TestLoadDiscoveredPools:
                 side_effect=ImportError("no GCS"),
             ),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._POOL_DISCOVERY_LOCAL_DIR",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._POOL_DISCOVERY_LOCAL_DIR",
                 MagicMock(**{"__truediv__": MagicMock(return_value=MagicMock(exists=MagicMock(return_value=False)))}),
             ),
         ):
@@ -756,11 +758,11 @@ class TestSaveDiscoveredPools:
                 return_value=mock_storage,
             ),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._get_gcs_bucket",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._get_gcs_bucket",
                 return_value="test-bucket",
             ),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._POOL_DISCOVERY_LOCAL_DIR",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._POOL_DISCOVERY_LOCAL_DIR",
                 MagicMock(),
             ),
         ):
@@ -772,7 +774,7 @@ class TestDiscoverProgramPoolAccounts:
     @pytest.mark.asyncio
     async def test_returns_cached_pools(self) -> None:
         with patch(
-            "instruments_service.reference_data.adapters.defi._solana_utils._load_discovered_pools",
+            "instruments_service.reference_data.adapters.defi._solana_pool_discovery._load_discovered_pools",
             return_value=["cached_pool1", "cached_pool2"],
         ):
             result = await discover_program_pool_accounts("ProgramID", "raydium", 752)
@@ -801,15 +803,15 @@ class TestDiscoverProgramPoolAccounts:
 
         with (
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._load_discovered_pools",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._load_discovered_pools",
                 return_value=[],
             ),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._save_discovered_pools",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._save_discovered_pools",
             ),
             patch("aiohttp.ClientSession", return_value=mock_session_cm),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._get_solana_rpc_url",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._get_solana_rpc_url",
                 return_value="https://test.rpc",
             ),
         ):
@@ -831,12 +833,12 @@ class TestDiscoverProgramPoolAccounts:
 
         with (
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._load_discovered_pools",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._load_discovered_pools",
                 return_value=[],
             ),
             patch("aiohttp.ClientSession", return_value=mock_session_cm),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._get_solana_rpc_url",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._get_solana_rpc_url",
                 return_value="https://test.rpc",
             ),
         ):
@@ -853,12 +855,12 @@ class TestDiscoverProgramPoolAccounts:
 
         with (
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._load_discovered_pools",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._load_discovered_pools",
                 return_value=[],
             ),
             patch("aiohttp.ClientSession", return_value=mock_session_cm),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._get_solana_rpc_url",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._get_solana_rpc_url",
                 return_value="https://test.rpc",
             ),
         ):
@@ -881,12 +883,12 @@ class TestDiscoverProgramPoolAccounts:
 
         with (
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._load_discovered_pools",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._load_discovered_pools",
                 return_value=[],
             ),
             patch("aiohttp.ClientSession", return_value=mock_session_cm),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._get_solana_rpc_url",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._get_solana_rpc_url",
                 return_value="https://test.rpc",
             ),
         ):
@@ -909,12 +911,12 @@ class TestDiscoverProgramPoolAccounts:
 
         with (
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._load_discovered_pools",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._load_discovered_pools",
                 return_value=[],
             ),
             patch("aiohttp.ClientSession", return_value=mock_session_cm),
             patch(
-                "instruments_service.reference_data.adapters.defi._solana_utils._get_solana_rpc_url",
+                "instruments_service.reference_data.adapters.defi._solana_pool_discovery._get_solana_rpc_url",
                 return_value="https://test.rpc",
             ),
         ):
