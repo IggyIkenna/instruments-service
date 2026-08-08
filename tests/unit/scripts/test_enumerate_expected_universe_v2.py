@@ -488,6 +488,19 @@ def test_defi_v2_delisted_instrument() -> None:
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
+def test_defi_v2_pre_launch_alias_key_not_duplicated() -> None:
+    """PROTOCOL_LAUNCH_DATES carries both ("ETHEREUM", "AAVE_V3") and its legacy no-underscore
+    alias ("ETHEREUM", "AAVEV3") (chain_env.py) — both canonicalise to the same venue_label, so
+    the venue-grain pre-launch pass must emit each (chain, venue, date, data_type) row exactly
+    ONCE, not once per dict key (defi_aavev3_bare_alias_enumerator_bug_2026_08_08.md: iterating
+    the alias key raw previously seeded 46,300 duplicate ``venue=AAVEV3`` phantom rows)."""
+    dates = _date_axis("2020-01-01", "2020-06-15", "2021-01-01")  # well before the 2023-01-27 launch
+    rows = list(enumerator_module._yield_v2_defi_pre_launch_rows(dates, ["lending_indices"]))
+    aave_rows = [r for r in rows if r.chain == "ETHEREUM" and r.venue == "AAVE_V3"]
+    assert len(aave_rows) == len(dates)  # deduped: one row per date, not one per (date, dict-key)
+    assert not any(r.venue == "AAVEV3" for r in rows)  # the raw un-canonicalised alias never leaks out
+
+
 def test_defi_v2_pool_seeds_canonical_pool_address_id_and_lowercase_type() -> None:
     """POOL seed atoms MUST match the MTDS writer grain (canonical pool_address + lowercase type).
 
