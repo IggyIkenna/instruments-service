@@ -393,7 +393,10 @@ def expected_write_prefix(cell: SmokeCell, smoke_date: str) -> str:
     # every non-sports/non-prediction cell — 2026-07-23, tradfi Phase D investigation).
     # pipeline_mode is always BATCH_INSTRUMENTS_SERVICE here (producer-emitted instrument
     # definitions; see writers.py::_classify_venue_write's non-sports-ref branch).
-    asset_group = VENUE_TO_ASSET_GROUP.get(cell.venue, "cefi")
+    # Use cell.asset_group directly (set by enumerate_cells from UAC VENUES_BY_ASSET_GROUP
+    # or by the explicit BETFAIR hardcode) — VENUE_TO_ASSET_GROUP can miss venues that have
+    # been removed from UAC's registry but still have instruments-service adapters.
+    asset_group = cell.asset_group.lower()
     pipeline_mode = PipelineMode.BATCH_INSTRUMENTS_SERVICE.value
     return (
         f"instrument_availability/by_date/day={smoke_date}/pipeline_mode={pipeline_mode}/"

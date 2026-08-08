@@ -34,11 +34,8 @@ from ...schemas import (
     OHLCVRef,
 )
 from ...utils.defi_utils import order_base_quote, parse_created_timestamp
-from ._solana_utils import (
-    batch_resolve_creation_timestamps,
-    discover_program_pool_accounts,
-    get_protocol_floor_date,
-)
+from ._solana_pool_discovery import discover_program_pool_accounts
+from ._solana_utils import batch_resolve_creation_timestamps, get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
