@@ -45,7 +45,10 @@ from unified_api_contracts import (
     get_mvp_data_types_for_cefi_venue_itype,
     venue_data_type_has_batch_source,
 )
-from unified_api_contracts.registry import TRADFI_VENUE_INSTRUMENT_TYPES
+from unified_api_contracts.registry import (
+    TRADFI_VENUE_INSTRUMENT_TYPES,
+    is_prediction_market_venue,
+)
 from unified_api_contracts.registry.market_data_categories import (
     VALID_DATA_TYPES_BY_AG_AND_INSTRUMENT_TYPE,
     VENUE_DATA_TYPE_CAPABILITIES,
@@ -247,6 +250,13 @@ def _expected_sports() -> set[tuple[str, str, str]]:
     """
     expected: set[tuple[str, str, str]] = set()
     for venue in VENUES_BY_ASSET_GROUP.get("sports", []):
+        if is_prediction_market_venue(venue):
+            # Defense-in-depth: KALSHI/POLYMARKET/... belong to asset_group=prediction.
+            # Their presence in VENUES_BY_ASSET_GROUP["sports"] is a registry contradiction
+            # (root-caused 2026-07-24, unified-api-contracts@f8e0d8d8 fixed
+            # VENUE_CATEGORY_MAP[KALSHI/POLYMARKET] → "prediction"). Guard here so a future
+            # regression cannot re-seed prediction-market venues into the sports expected-universe.
+            continue
         caps = VENUE_DATA_TYPE_CAPABILITIES.get(venue, {})
         for dt in caps:
             expected.add((venue, "odds", dt))
