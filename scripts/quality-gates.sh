@@ -43,6 +43,7 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/reference_data/adapters/defi/orca.py"
     "!**/reference_data/adapters/defi/kamino.py"
     "!**/reference_data/adapters/defi/_solana_utils.py"
+    "!**/reference_data/adapters/defi/_solana_pool_discovery.py"
     "!**/reference_data/adapters/tradfi/tradfi_live.py"
     "!**/reference_data/base_adapter.py"
     "!**/reference_data/factory.py"
@@ -77,6 +78,7 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
 # wide, unenumerable auth/network exception surfaces).
 BE_EXCLUDE_GLOBS=(
     "**/reference_data/adapters/defi/_solana_utils.py"
+    "**/reference_data/adapters/defi/_solana_pool_discovery.py"
     "**/reference_data/utils/evm_creation_resolver.py"
 )
 
@@ -161,6 +163,7 @@ DEEP_IMPORT_EXCLUDE_GLOBS=(
 # utility modules are not cloud protocol coupling in service orchestration paths.
 HARDCODED_PROTO_EXCLUDE_GLOBS=(
     "--glob=!**/reference_data/adapters/defi/_solana_utils.py"
+    "--glob=!**/reference_data/adapters/defi/_solana_pool_discovery.py"
     "--glob=!**/reference_data/utils/evm_creation_resolver.py"
 )
 
