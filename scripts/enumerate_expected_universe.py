@@ -271,8 +271,9 @@ def _sports_data_types() -> list[str]:
 
     The could-exist sports denominator iterates the data_types that actually
     appear in the captured manifest AND carry a UAC source-coverage window —
-    i.e. the keys of ``SPORTS_DATA_TYPE_TO_SOURCE`` (FIXTURES / STANDINGS / XG /
-    …). This is a DIFFERENT axis from ``DATA_TYPES_BY_ASSET_GROUP["sports"]``
+    i.e. the keys of ``SPORTS_DATA_TYPE_TO_SOURCE`` (fixtures / standings / xg /
+    …). Keys are LOWERCASE from 2026-08-08 (P1 operator ruling). This is a
+    DIFFERENT axis from ``DATA_TYPES_BY_ASSET_GROUP["sports"]``
     (the MTDS market-data odds types) — the reference-data league manifest is
     keyed by these provider data_types, verified on the canonical _index
     (slot-4 2026-06-07). Sorted for deterministic output.
@@ -282,53 +283,68 @@ def _sports_data_types() -> list[str]:
     return sorted(SPORTS_DATA_TYPE_TO_SOURCE.keys())
 
 
-# ``ODDS_HORIZON_BUCKET``'s writer (market-data-processing-service's
-# ``reprocess_sports_odds.py``, ``_MANIFEST_DATA_TYPE``) stamps the manifest
-# ``data_type`` column lower-case (``"odds_horizon_bucket"``) — a DIFFERENT
-# on-disk convention from every other sports source (footystats / api_football /
-# understat / transfermarkt / soccer_football_info / open_meteo all write the
-# UAC ``SPORTS_DATA_TYPE_TO_SOURCE`` key verbatim UPPERCASE — confirmed via a
-# live manifest read 2026-07-13, 0 exceptions across 570k+ captured rows). The
-# v2 sports enumerator (:func:`_enumerate_v2_sports`) iterates the
-# UAC-uppercase ``SPORTS_DATA_TYPE_TO_SOURCE`` axis for every LOOKUP (coverage
-# windows, retired-set membership, per-source rules) — that stays uppercase,
-# those dicts are keyed by the UAC constant. But the OUTPUT/matching
-# ``data_type`` value — the present-set match key AND the ``data_type`` field
-# stamped onto a newly-seeded row — must mirror the writer's REAL on-disk
-# string, or a seeded ``expected_unattempted`` cell can never match (or ever
-# again match) the real captured atom. Confirmed root cause via a live
-# dry-run: 0 identity overlap between the (pre-fix) 209,526
-# ``ODDS_HORIZON_BUCKET``-cased ``expected_unattempted`` rows and the 123,642
-# real ``odds_horizon_bucket``-cased captured rows for
-# ``source=mdps_odds_horizon_bucket``. See
+# The v2 sports enumerator (:func:`_enumerate_v2_sports`) iterates the
+# UAC-LOWERCASE ``SPORTS_DATA_TYPE_TO_SOURCE`` axis (lowercase from 2026-08-08
+# P1 operator ruling) for every LOOKUP (coverage windows, retired-set membership,
+# per-source rules). But the OUTPUT/matching ``data_type`` value — the
+# present-set match key AND the ``data_type`` field stamped onto a newly-seeded
+# row — must mirror the writer's REAL on-disk string, or a seeded
+# ``expected_unattempted`` cell can never match (or ever again match) the real
+# captured atom. This override dict maps lowercase UAC axis key → current
+# on-disk manifest string.
+#
+# IS writer (instruments-service orchestrator) still stamps UPPERCASE data_types
+# (e.g. "PLAYER_STATS", "STANDINGS") until P2 re-stamps the corpus. Remove each
+# entry below once P2 has re-stamped all rows for that data_type to lowercase.
+#
+# ``odds_horizon_bucket`` is the one exception: MDPS already writes lowercase
+# "odds_horizon_bucket" (confirmed 2026-07-13), so the lowercase UAC key maps to
+# the lowercase on-disk string — no effective override needed (identity).
+#
+# Confirmed root cause pattern: a 2026-07-13 live dry-run found 0 identity
+# overlap between 209,526 "ODDS_HORIZON_BUCKET"-cased ``expected_unattempted``
+# rows and 123,642 real "odds_horizon_bucket"-cased captured rows. Override
+# prevents recurrence. See
 # ``unified-trading-pm/plans/active/sports_data_sources_canonical_completion_2026_07_13.md``
 # §1 "mdps_odds_horizon_bucket expected-universe grain realignment".
 _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE: dict[str, str] = {
-    "ODDS_HORIZON_BUCKET": "odds_horizon_bucket",
-    # Fixtures manifest atom migration (instruments-service@e19c5a7a,
-    # sports_closeout_batch1_ao_ready_2026_07_24.md todo 1) moved every real
-    # writer/reader from the legacy "FIXTURES" literal to "FIXTURES_SCHEDULE" —
-    # this enumerator was the 10th call site the migration missed, confirmed
-    # 2026-07-26 (issues/fixtures_manifest_legacy_backfill_2026_07_24.md):
-    # enum-universe-sports-* runs kept re-seeding tens of thousands of legacy
-    # "FIXTURES" expected_unattempted rows daily, growing the restamp's residual
-    # from 55,233 to 100,801 in 2 days even after the sports_fixture_status_refresh
-    # trigger leak (instruments-service@47c1ffb3) was fixed.
-    "FIXTURES": "FIXTURES_SCHEDULE",
+    # IS-sourced types: writer stamps UPPERCASE until P2 re-stamps. Remove each
+    # entry when P2 confirms all rows for that data_type are lowercase on-disk.
+    "fixtures": "FIXTURES_SCHEDULE",  # IS writer uses FIXTURES_SCHEDULE (cutover 2026-07-14)
+    "fixtures_schedule": "FIXTURES_SCHEDULE",
+    "fixtures_outcomes": "FIXTURES_OUTCOMES",
+    "fixture_events": "FIXTURE_EVENTS",
+    "fixture_stats": "FIXTURE_STATS",
+    "fixture_lineups": "FIXTURE_LINEUPS",
+    "player_stats": "PLAYER_STATS",
+    "injuries": "INJURIES",
+    "matches": "MATCHES",
+    "standings": "STANDINGS",
+    "teams": "TEAMS",
+    "player_values": "PLAYER_VALUES",
+    "sfi_progressive_stats": "SFI_PROGRESSIVE_STATS",
+    "weather": "WEATHER",
+    "xg": "XG",
+    "xg_shots": "XG_SHOTS",
+    "predictions": "PREDICTIONS",
+    "odds": "ODDS",  # footystats pre-match snapshot; IS-sourced, NOT MTDS tick data
+    # MDPS-sourced: already writes lowercase; identity mapping (no actual override).
+    "odds_horizon_bucket": "odds_horizon_bucket",
 }
 
 
 def _sports_manifest_data_type(dt: str) -> str:
     """Translate a UAC sports data_type AXIS key to its real on-disk manifest string.
 
-    Identity for every data_type except the ones in
-    :data:`_SPORTS_MANIFEST_DATA_TYPE_OVERRIDE` above. Apply this ONLY at the
-    point a per-league v2 sports row is emitted or matched (the ``data_type=``
-    field on a yielded :class:`ExpectedRow`, and the present-set match key) —
-    every UAC lookup (``SPORTS_DATA_TYPE_TO_SOURCE``,
-    ``_RETIRED_SPORTS_DATA_TYPES``, ``get_source_coverage_start``,
-    ``get_entity_league_coverage``, ``is_expected_for_source``) stays keyed on
-    the ORIGINAL UAC-uppercase ``dt``.
+    UAC axis keys are LOWERCASE from 2026-08-08 (P1 operator ruling). IS writer
+    still stamps UPPERCASE until P2 re-stamps, so most entries in
+    :data:`_SPORTS_MANIFEST_DATA_TYPE_OVERRIDE` map lowercase key → uppercase
+    on-disk string. Apply this ONLY at the point a per-league v2 sports row is
+    emitted or matched (the ``data_type=`` field on a yielded
+    :class:`ExpectedRow`, and the present-set match key) — every UAC lookup
+    (``SPORTS_DATA_TYPE_TO_SOURCE``, ``_RETIRED_SPORTS_DATA_TYPES``,
+    ``get_source_coverage_start``, ``get_entity_league_coverage``,
+    ``is_expected_for_source``) stays keyed on the lowercase UAC ``dt``.
     """
     return _SPORTS_MANIFEST_DATA_TYPE_OVERRIDE.get(dt, dt)
 
@@ -362,7 +378,7 @@ def _sports_manifest_data_type(dt: str) -> str:
 # ``unified-trading-pm/plans/active/sports_data_sources_canonical_completion_2026_07_13.md``
 # §1 (venue-grain follow-up) for the full diagnosis + before/after counts.
 _SPORTS_MANIFEST_VENUE_OVERRIDE: dict[str, str] = {
-    "ODDS_HORIZON_BUCKET": "ODDS_API",
+    "odds_horizon_bucket": "ODDS_API",  # key lowercased to match new UAC axis (P1)
 }
 
 
