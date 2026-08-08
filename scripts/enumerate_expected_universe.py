@@ -1466,6 +1466,12 @@ def _yield_v2_defi_pre_launch_rows(
     per_protocol_dts = [dt for dt in data_types if dt not in _DEFI_CHAIN_LEVEL_DATA_TYPES]
     if not per_protocol_dts:
         return
+    # Canonicalised (chain, venue) pairs already emitted this pass — PROTOCOL_LAUNCH_DATES
+    # carries legacy no-underscore alias keys (chain_env.py, e.g. ("ETHEREUM", "AAVEV3"))
+    # alongside the canonical form ("ETHEREUM", "AAVE_V3"); both canonicalise to the SAME
+    # venue_label, so without this guard the alias key would re-emit every row the canonical
+    # key already emitted (defi_aavev3_bare_alias_enumerator_bug_2026_08_08.md).
+    _emitted_chain_venues: set[tuple[str, str]] = set()
     for (chain, protocol), launch_date_str in PROTOCOL_LAUNCH_DATES.items():
         chain_upper = chain.upper()
         chain_genesis = CHAIN_GENESIS_DATES.get(chain_upper)
@@ -1473,7 +1479,12 @@ def _yield_v2_defi_pre_launch_rows(
             continue
         effective_start_str = max(chain_genesis, launch_date_str)
         eff_ts = pd.Timestamp(effective_start_str)
-        venue_label = protocol.upper()  # canonical: venue=PROTOCOL only; chain= carries chain separately
+        # Canonicalise protocol spelling (AAVEV3→AAVE_V3 etc.) — same fix already applied to
+        # the per-instrument v2 path below (VenueMapping._canonicalise_defi_protocol_spelling).
+        venue_label = VenueMapping._canonicalise_defi_protocol_spelling(protocol.upper())
+        if (chain_upper, venue_label) in _emitted_chain_venues:
+            continue
+        _emitted_chain_venues.add((chain_upper, venue_label))
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             if d_ts >= eff_ts:
