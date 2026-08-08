@@ -2103,6 +2103,7 @@ def _yield_v2_sports_pre_source_coverage_rows(
     ``plans/active/issues/v1_enumerator_dispatch_not_deletable_2026_07_06.md``
     (v1 retired 2026-07-09 once this pass subsumed its output).
     """
+    from unified_api_contracts.registry.sports_bookmaker_league_coverage import is_prediction_market_venue
     from unified_api_contracts.sports import SPORTS_DATA_TYPE_TO_SOURCE, get_source_coverage_start
 
     if not date_axis or not data_types:
@@ -2110,6 +2111,12 @@ def _yield_v2_sports_pre_source_coverage_rows(
     for dt in data_types:
         source = SPORTS_DATA_TYPE_TO_SOURCE.get(dt)
         if source is None:
+            continue
+        # Cross-AG bleed guard (2026-08-08): a prediction-market source has no place in the
+        # sports expected-universe. If SPORTS_DATA_TYPE_TO_SOURCE ever maps a data_type to a
+        # prediction-market source (e.g. polymarket_clob/kalshi), skip it — seeding such rows
+        # would replicate the 20,785-row KALSHI phantom the P2 migration is cleaning up.
+        if is_prediction_market_venue(source):
             continue
         coverage_start = get_source_coverage_start(source, dt)
         if coverage_start is None:
@@ -2462,6 +2469,9 @@ def _enumerate_v2_sports(
     coverage filter AND no pre-source-coverage sentinel.
     """
     yield from _yield_v2_sports_pre_source_coverage_rows(date_axis, data_types)
+    from unified_api_contracts.registry.sports_bookmaker_league_coverage import (
+        is_prediction_market_venue as _is_pm_venue,
+    )
     from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
     from unified_api_contracts.sports import (
         LEAGUE_REGISTRY,
@@ -2543,6 +2553,14 @@ def _enumerate_v2_sports(
             # FIXTURE/TEAM/PLAYER-grain catalogue row (2026-07-09) — not a
             # per-league lifecycle window. See _SPORTS_LEAGUE_GRAIN_INSTRUMENT_TYPE's
             # docstring for why this MUST be excluded from the loop below.
+            continue
+        # Cross-AG bleed guard (2026-08-08): a prediction-market venue (KALSHI,
+        # POLYMARKET, …) must never seed sports expected rows, even if one somehow
+        # ends up in the sports catalogue parquet. Mirrors the _SPORTS_LEAGUE_ID_SENTINELS
+        # and de-registration guards above — defence-in-depth so a stale/mislabelled
+        # catalogue row cannot amplify the 20,785-row phantom population that the P2
+        # migration (sports_taxonomy_p2_migration_2026_08_08.md) is cleaning up.
+        if _is_pm_venue(instr.venue):
             continue
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
